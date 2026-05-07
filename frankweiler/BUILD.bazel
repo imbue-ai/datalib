@@ -1,8 +1,18 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
+# Backend-only: launch frankweiler_http_bin and open browser at /api/health.
 sh_binary(
     name = "serve",
     srcs = ["serve_dev.sh"],
+    data = ["//frankweiler/backend/http:frankweiler_http_bin"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# Full dev: backend + Vite UI, browser opens at the Vite URL. Vite proxies
+# /api → 127.0.0.1:8731. Requires pnpm on PATH.
+sh_binary(
+    name = "dev",
+    srcs = ["dev.sh"],
     data = ["//frankweiler/backend/http:frankweiler_http_bin"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

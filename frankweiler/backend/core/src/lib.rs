@@ -2,7 +2,9 @@
 
 pub mod config;
 pub mod deeplink;
+pub mod qmd;
 pub mod query;
+pub mod search;
 
 #[cfg(test)]
 mod tests {
