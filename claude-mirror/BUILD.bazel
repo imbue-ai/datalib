@@ -1,0 +1,30 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@claude_mirror_pip//:requirements.bzl", "requirement")
+
+exports_files(["requirements.txt"])
+
+py_library(
+    name = "claude_mirror",
+    srcs = glob(["src/claude_mirror/**/*.py"]),
+    imports = ["src"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("pydantic"),
+        requirement("pyyaml"),
+        requirement("typer"),
+        requirement("pymysql"),
+    ],
+)
+
+py_test(
+    name = "test_smoke",
+    srcs = [
+        "tests/test_smoke.py",
+        "tests/conftest.py",
+    ],
+    main = "tests/conftest.py",
+    deps = [
+        ":claude_mirror",
+        requirement("pytest"),
+    ],
+)
