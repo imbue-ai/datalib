@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from curl_cffi import requests as curl_requests
+from tqdm import tqdm
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
 SLEEP_BETWEEN = 0.5
@@ -189,30 +190,42 @@ def fetch(args: argparse.Namespace) -> None:
 
     # Per-conversation incremental fetch: skip when the cached detail's
     # update_time matches the listing's (so we don't refetch unchanged convs).
+    # Reorder so missing conversations come first — if we 429 partway through,
+    # we want our rate-limit budget spent on actual fetches, not on iterating
+    # through already-cached items.
+    missing = [it for it in listing if not (convs_dir / f"{it['id']}.json").exists()]
+    present = [it for it in listing if (convs_dir / f"{it['id']}.json").exists()]
+    ordered = missing + present
+    print(f"prioritizing {len(missing)} missing before {len(present)} cached")
+
     fetched = skipped = errors = 0
-    for item in listing:
+    pbar = tqdm(ordered, unit="conv")
+    for item in pbar:
         cid = item["id"]
         api_update = item.get("update_time")
         cache_path = convs_dir / f"{cid}.json"
         cached = _read_json(cache_path)
         if cached is not None and cached.get("update_time") == api_update:
             skipped += 1
+            pbar.set_postfix(fetched=fetched, skipped=skipped, errors=errors)
             continue
         try:
             full = client.get_conversation(cid)
         except RateLimited as e:
+            pbar.close()
             print(f"\n    ⏸ rate-limited; stopping early ({fetched} fetched). {e}")
             break
         except RuntimeError as e:
-            print(f"    ! {cid[:8]} failed: {e}")
+            tqdm.write(f"    ! {cid[:8]} failed: {e}")
             errors += 1
+            pbar.set_postfix(fetched=fetched, skipped=skipped, errors=errors)
             continue
         # Stamp our own provenance/fetch timestamp so we can audit later.
         full["_fetched_at"] = started_at
         _write_json(cache_path, full)
         fetched += 1
-        title = (item.get("title") or "")[:60]
-        print(f"    + {cid[:8]} {title!r}")
+        title = (item.get("title") or "")[:40]
+        pbar.set_postfix_str(f"{fetched=} {skipped=} {errors=} | {title}")
         time.sleep(SLEEP_BETWEEN)
 
     _write_json(index_path, listing)
