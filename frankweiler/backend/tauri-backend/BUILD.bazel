@@ -16,6 +16,7 @@ rust_library(
 
 rust_test(
     name = "tauri_backend_unittests",
+    size = "small",
     crate = ":frankweiler_tauri_backend",
     edition = "2021",
 )

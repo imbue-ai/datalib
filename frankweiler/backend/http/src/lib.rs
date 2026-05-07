@@ -44,7 +44,7 @@ pub fn router() -> Router {
         .route("/api/health", get(health))
         .route("/api/search", get(search))
         .route("/api/columns", get(columns))
-        .route("/api/chat/:conversation_uuid", get(chat))
+        .route("/api/chat/{conversation_uuid}", get(chat))
         .layer(CorsLayer::permissive())
 }
 

@@ -1,5 +1,12 @@
 """Repo-root Bzlmod module for the personal-data mirror.
 
+Version policy: 7-day burn-in. We avoid versions released in the last 7
+days because hot releases are where regressions hide. When bumping a
+bazel_dep or a toolchain, check the upstream release date and prefer
+the newest version that is at least 7 days old. Today's working
+reference (2026-05-07): rules_python 2.0.0, rules_rust 0.70.0,
+Rust 1.95.0, Bazel 9.1.0.
+
 Bazel owns:
   - `claude-mirror/`  Python ingestion (deps from uv.lock via rules_python)
   - (later) `schemas/` cross-language types
@@ -18,7 +25,7 @@ module(
 )
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
-bazel_dep(name = "rules_python", version = "1.7.0")
+bazel_dep(name = "rules_python", version = "2.0.0")
 
 PYTHON_VERSION = "3.13"
 
@@ -37,12 +44,12 @@ pip.parse(
 use_repo(pip, "claude_mirror_pip")
 
 # Rust — rules_rust + crate_universe ingesting frankweiler/backend Cargo workspace.
-bazel_dep(name = "rules_rust", version = "0.66.0")
+bazel_dep(name = "rules_rust", version = "0.70.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2021",
-    versions = ["1.93.0"],
+    versions = ["1.95.0"],
 )
 use_repo(rust, "rust_toolchains")
 

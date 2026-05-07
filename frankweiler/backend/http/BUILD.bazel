@@ -22,6 +22,7 @@ rust_library(
 
 rust_test(
     name = "http_unittests",
+    size = "small",
     crate = ":frankweiler_http",
     edition = "2021",
     deps = ["@frankweiler_crates//:tokio"],

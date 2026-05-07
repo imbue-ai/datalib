@@ -21,6 +21,7 @@ rust_library(
 
 rust_test(
     name = "core_unittests",
+    size = "small",
     crate = ":frankweiler_core",
     edition = "2021",
 )

@@ -102,6 +102,31 @@ cp bazel-bin/schemas/anthropic.py claude-mirror/src/claude_mirror/generated_sche
 (A future `bazel run //schemas:update_generated` will fold these copies into
 one command.)
 
+## Version policy: 7-day burn-in
+
+Toolchain and dependency versions are pinned to the newest release that is
+**at least 7 days old at the time of the bump**. Hot releases are where
+regressions hide; a week of community shake-out is a cheap insurance policy.
+
+When upgrading, check the upstream release date before pinning. If a useful
+version exists but is too new, pin the previous patch and revisit next week.
+
+Current pins (set 2026-05-07):
+
+| Component       | Version        | Released   |
+|-----------------|----------------|------------|
+| Bazel           | 9.1.0          | 2026-04-20 |
+| rules_python    | 2.0.0          | 2026-04-28 |
+| rules_rust      | 0.70.0         | 2026-04-22 |
+| Rust toolchain  | 1.95.0         | 2026-04-16 |
+| Vite            | 8.0.10 (exact) | 2026-04-23 |
+| Vitest          | 4.1.5 (exact)  | 2026-04-21 |
+| vue-tsc         | 3.2.7 (exact)  | 2026-04-19 |
+
+Other deps follow standard semver caret ranges; `cargo update`, `pnpm
+update`, and `uv lock --upgrade` are safe within those ranges (Cargo.lock and
+pnpm-lock are committed).
+
 ## uv ↔ Bazel — the honest story
 
 `rules_python` 1.x ingests `uv.lock` indirectly through a `requirements.txt`

@@ -18,6 +18,7 @@ py_library(
 
 py_test(
     name = "test_smoke",
+    size = "small",
     srcs = [
         "tests/test_smoke.py",
         "tests/conftest.py",

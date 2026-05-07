@@ -19,6 +19,7 @@ rust_library(
 
 rust_test(
     name = "schema_unittests",
+    size = "small",
     crate = ":frankweiler_schema",
     edition = "2021",
 )
