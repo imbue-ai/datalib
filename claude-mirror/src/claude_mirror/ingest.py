@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any
 
-from claude_mirror.config import AnthropicExportDirSource, Config
+from claude_mirror.config import (
+    AnthropicExportDirSource,
+    ChatGPTApiDirSource,
+    Config,
+)
 from claude_mirror.dolt_service import DoltService
 from claude_mirror.providers.anthropic.ingest import (
     AnthropicIngestStats,
     ingest_export_dir,
+)
+from claude_mirror.providers.openai.ingest import (
+    OpenAIIngestStats,
+    ingest_api_dir,
 )
 from claude_mirror.render import render_all
 
@@ -17,7 +26,7 @@ class SourceResult:
     name: str
     provider: str
     kind: str
-    stats: AnthropicIngestStats
+    stats: Any  # AnthropicIngestStats | OpenAIIngestStats
 
 
 @dataclass
@@ -39,16 +48,20 @@ def ingest(config: Config) -> IngestSummary:
                     _, stats = ingest_export_dir(
                         conn, src.path, started_at, source=src.provenance
                     )
-                    summary.sources.append(
-                        SourceResult(
-                            name=src.name,
-                            provider=src.provider,
-                            kind=src.kind,
-                            stats=stats,
-                        )
+                elif isinstance(src, ChatGPTApiDirSource):
+                    _, stats = ingest_api_dir(
+                        conn, src.path, started_at, source=src.provenance
                     )
                 else:
                     raise NotImplementedError(f"unknown source: {src!r}")
+                summary.sources.append(
+                    SourceResult(
+                        name=src.name,
+                        provider=src.provider,
+                        kind=src.kind,
+                        stats=stats,
+                    )
+                )
 
         names = ",".join(s.name for s in summary.sources) or "<none>"
         summary.commit_hash = dolt.commit(f"ingest {names} {started_at}")

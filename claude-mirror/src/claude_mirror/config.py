@@ -42,8 +42,22 @@ class AnthropicExportDirSource(_SourceBase):
         return Path(v).expanduser().resolve()
 
 
+class ChatGPTApiDirSource(_SourceBase):
+    provider: Literal["openai"]
+    kind: Literal["chatgpt_api_dir"]
+    path: Path
+    # 'api' for the scraper output (scripts/sync_chatgpt_web.py). Only 'api'
+    # is supported today — there's no bulk-export equivalent for ChatGPT.
+    provenance: Literal["export", "api"] = "api"
+
+    @field_validator("path", mode="after")
+    @classmethod
+    def _expand(cls, v: Path) -> Path:
+        return Path(v).expanduser().resolve()
+
+
 SourceConfig = Annotated[
-    AnthropicExportDirSource,
+    AnthropicExportDirSource | ChatGPTApiDirSource,
     Field(discriminator="provider"),
 ]
 
@@ -67,7 +81,7 @@ class Config(BaseModel):
         return self
 
     @property
-    def enabled_sources(self) -> list[AnthropicExportDirSource]:
+    def enabled_sources(self) -> list[AnthropicExportDirSource | ChatGPTApiDirSource]:
         return [s for s in self.sources if s.enabled]
 
 
