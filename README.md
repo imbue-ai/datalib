@@ -77,6 +77,16 @@ Runs:
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 
+### Launch the backend in a browser
+
+```sh
+bazelisk run //frankweiler:serve
+```
+
+Builds and runs `frankweiler_http_bin`, then opens your default browser at
+`http://127.0.0.1:8731/api/health`. Override with `FRANKWEILER_URL=...`.
+Ctrl-C tears the server down.
+
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |

@@ -24,6 +24,9 @@ module(
     version = "0.0.1",
 )
 
+# Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
+bazel_dep(name = "rules_shell", version = "0.6.1")
+
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.0.0")
 
