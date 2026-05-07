@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from claude_mirror.config import (
@@ -38,8 +38,10 @@ class IngestSummary:
 
 
 def ingest(config: Config) -> IngestSummary:
-    # Project convention: ISO-8601 with explicit timezone offset (see AGENTS.md).
-    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Project convention: ISO-8601 with explicit timezone offset, in *local*
+    # time so the offset preserves the human-meaningful "wall clock" of when
+    # the ingest happened (see AGENTS.md).
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     summary = IngestSummary()
 
     with DoltService(config) as dolt:

@@ -62,7 +62,10 @@ timezone offset present in the source**.
   Use `datetime.fromtimestamp(t, tz=timezone.utc).isoformat()` —
   *not* `.strftime("...Z")`.
 - For our own "now" timestamps (`first_seen_at`, `last_seen_at`,
-  ingest-started markers): same rule — `datetime.now(timezone.utc).isoformat()`.
+  ingest-started markers, `_fetched_at`): use **local** time with explicit
+  offset, `datetime.now().astimezone().isoformat()`. The local offset is
+  itself information — it tells future-you what wall-clock time the ingest
+  happened in the zone where it actually ran. Don't normalize to UTC.
 
 If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
 use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for

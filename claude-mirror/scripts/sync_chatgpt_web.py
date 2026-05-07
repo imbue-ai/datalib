@@ -28,7 +28,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -173,7 +173,8 @@ def fetch(args: argparse.Namespace) -> None:
     convs_dir.mkdir(exist_ok=True)
     index_path = out_dir / "conversations.json"
     me_path = out_dir / "me.json"
-    started_at = datetime.now(timezone.utc).isoformat()
+    # Local time with explicit offset, per the project timestamp convention.
+    started_at = datetime.now().astimezone().isoformat()
 
     headers = get_auth_headers()
     client = ChatGPTWebClient(headers)
