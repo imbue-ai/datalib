@@ -63,26 +63,24 @@ watch(
   margin: 0 auto;
 }
 .meta {
-  color: #777;
+  color: var(--fw-muted);
   font-size: 0.85rem;
 }
 .summary {
   font-style: italic;
-  color: #444;
+  color: var(--fw-muted);
 }
 .message {
   margin: 1.25rem 0;
   padding: 0.75rem 1rem;
-  border-left: 3px solid #ccc;
-  background: #fafafa;
+  border-left: 3px solid var(--fw-border);
+  background: var(--fw-card-bg);
 }
 .message.human {
-  border-left-color: #2563eb;
-  background: #f5f8ff;
+  border-left-color: var(--fw-accent);
 }
 .message.assistant {
   border-left-color: #16a34a;
-  background: #f5fbf6;
 }
 .msg-header {
   display: flex;
@@ -90,7 +88,7 @@ watch(
   align-items: baseline;
 }
 .when {
-  color: #777;
+  color: var(--fw-muted);
   font-size: 0.85rem;
 }
 .body {
@@ -99,6 +97,6 @@ watch(
   margin: 0.5rem 0 0;
 }
 .error {
-  color: #b00020;
+  color: #e35d6a;
 }
 </style>

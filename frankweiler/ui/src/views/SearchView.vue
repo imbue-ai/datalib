@@ -1,8 +1,23 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from "vue";
-import { RouterLink } from "vue-router";
+import { ref, watch, onMounted, computed } from "vue";
+import { useRouter } from "vue-router";
+import { AgGridVue } from "ag-grid-vue3";
+import {
+  ModuleRegistry,
+  AllCommunityModule,
+  themeQuartz,
+  colorSchemeVariable,
+  type ColDef,
+  type GridOptions,
+  type ICellRendererParams,
+} from "ag-grid-community";
 import { fetchHealth, fetchSearch, type Health, type SearchRow } from "@/api";
 
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const gridTheme = themeQuartz.withPart(colorSchemeVariable);
+
+const router = useRouter();
 const query = ref("");
 const rows = ref<SearchRow[]>([]);
 const total = ref(0);
@@ -19,7 +34,7 @@ async function runSearch(q: string) {
   loading.value = true;
   error.value = null;
   try {
-    const r = await fetchSearch(q, 200, inflight.signal);
+    const r = await fetchSearch(q, 1000, inflight.signal);
     rows.value = r.rows;
     total.value = r.total_estimated;
   } catch (e) {
@@ -43,6 +58,68 @@ onMounted(async () => {
   }
   runSearch("");
 });
+
+function openRow(row: SearchRow) {
+  router.push({
+    name: "chat",
+    params: { conversationUuid: row.conversation_uuid },
+    hash: row.message_index != null ? `#m${row.message_index}` : undefined,
+  });
+}
+
+const columnDefs = computed<ColDef<SearchRow>[]>(() => [
+  { field: "source", headerName: "Source", width: 110 },
+  { field: "kind", headerName: "Type", width: 130 },
+  {
+    field: "when",
+    headerName: "Time",
+    width: 180,
+    sort: "desc",
+  },
+  {
+    field: "snippet",
+    headerName: "Contents",
+    flex: 1,
+    minWidth: 280,
+    wrapText: true,
+    autoHeight: true,
+    cellStyle: { whiteSpace: "normal", lineHeight: "1.3em" },
+  },
+  { field: "author", headerName: "Author", width: 160 },
+  { field: "account", headerName: "Account", width: 200 },
+  {
+    headerName: "Open",
+    width: 80,
+    sortable: false,
+    filter: false,
+    cellRenderer: (params: ICellRendererParams<SearchRow>) => {
+      const btn = document.createElement("button");
+      btn.className = "open-btn";
+      btn.title = "Open";
+      btn.textContent = "→";
+      btn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (params.data) openRow(params.data);
+      });
+      return btn;
+    },
+  },
+]);
+
+const defaultColDef: ColDef = {
+  resizable: true,
+  sortable: true,
+  filter: true,
+};
+
+const gridOptions: GridOptions<SearchRow> = {
+  theme: gridTheme,
+  animateRows: false,
+  rowHeight: 56,
+  onRowDoubleClicked: (e) => {
+    if (e.data) openRow(e.data);
+  },
+};
 </script>
 
 <template>
@@ -62,89 +139,76 @@ onMounted(async () => {
     </div>
 
     <p v-if="error" class="error">error: {{ error }}</p>
-    <p v-else-if="loading && rows.length === 0" class="empty">searching…</p>
-    <p v-else-if="rows.length === 0" class="empty">no matches.</p>
 
-    <table v-else class="results">
-      <thead>
-        <tr>
-          <th>Snippet</th>
-          <th>Sender</th>
-          <th>When</th>
-          <th>Conversation</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="(r, i) in rows"
-          :key="`${r.conversation_uuid}:${r.message_index ?? '-'}:${i}`"
-          class="row"
-        >
-          <td class="snippet">{{ r.snippet }}</td>
-          <td class="sender">{{ r.sender }}</td>
-          <td class="when">{{ r.when }}</td>
-          <td class="conv">
-            <RouterLink :to="{ name: 'chat', params: { conversationUuid: r.conversation_uuid } }">
-              {{ r.conversation_name || r.conversation_uuid }}
-            </RouterLink>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="grid-wrap">
+      <AgGridVue
+        class="grid"
+        :rowData="rows"
+        :columnDefs="columnDefs"
+        :defaultColDef="defaultColDef"
+        :gridOptions="gridOptions"
+      />
+    </div>
+    <p v-if="loading && rows.length === 0" class="empty">searching…</p>
+    <p v-else-if="!loading && rows.length === 0 && !error" class="empty">no matches.</p>
   </section>
 </template>
 
 <style scoped>
+.search-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 6rem);
+  gap: 0.5rem;
+}
 .search-input {
   width: 100%;
   padding: 0.5rem 0.75rem;
   font-size: 1rem;
   box-sizing: border-box;
+  background: var(--fw-input-bg);
+  color: var(--fw-fg);
+  border: 1px solid var(--fw-border);
+  border-radius: 4px;
 }
 .health {
-  margin-top: 0.5rem;
   font-size: 0.85rem;
-  color: #666;
+  color: var(--fw-muted);
 }
 .health code {
-  background: #f4f4f4;
+  background: var(--fw-code-bg);
   padding: 0 0.25rem;
+  border-radius: 2px;
 }
 .warn {
-  color: #b15a00;
+  color: #d18a3a;
   margin-left: 0.5rem;
 }
 .empty,
 .error {
-  margin-top: 1rem;
-  color: #888;
+  color: var(--fw-muted);
 }
 .error {
-  color: #b00020;
+  color: #e35d6a;
 }
-.results {
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 300px;
+}
+.grid {
   width: 100%;
-  margin-top: 1rem;
-  border-collapse: collapse;
-  font-size: 0.9rem;
+  height: 100%;
 }
-.results th,
-.results td {
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid #eee;
-  vertical-align: top;
+:deep(.open-btn) {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--fw-border);
+  border-radius: 4px;
+  padding: 0.1rem 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
 }
-.results th {
-  font-weight: 600;
-  background: #fafafa;
-}
-.snippet {
-  max-width: 60ch;
-}
-.sender,
-.when {
-  white-space: nowrap;
-  color: #555;
+:deep(.open-btn:hover) {
+  background: var(--fw-hover);
 }
 </style>

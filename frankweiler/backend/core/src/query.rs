@@ -34,6 +34,7 @@ impl Field {
 pub enum RowType {
     Chat,
     Message,
+    All,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +60,8 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     let resolved_type = match filters.get(&Field::Type).and_then(|v| v.first()) {
         Some(t) if t == "chat" => RowType::Chat,
         Some(t) if t == "message" => RowType::Message,
-        _ if free_text.is_empty() => RowType::Chat,
+        Some(t) if t == "all" => RowType::All,
+        _ if free_text.is_empty() => RowType::All,
         _ => RowType::Message,
     };
     ParsedQuery {
@@ -102,9 +104,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_resolves_to_chat() {
+    fn empty_query_resolves_to_all() {
         let q = parse_query("");
-        assert_eq!(q.resolved_type, RowType::Chat);
+        assert_eq!(q.resolved_type, RowType::All);
         assert_eq!(q.free_text, "");
         assert!(q.filters.is_empty());
     }

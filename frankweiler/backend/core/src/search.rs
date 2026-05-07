@@ -21,6 +21,26 @@ pub struct SearchRow {
     pub project: String,
     pub account: String,
     pub entire_chat: String,
+    pub source: String,
+    pub kind: String,
+    pub author: String,
+}
+
+fn source_label(provider: &str) -> String {
+    match provider.to_ascii_lowercase().as_str() {
+        "anthropic" | "claude" => "Claude".into(),
+        "openai" | "chatgpt" => "ChatGPT".into(),
+        other if other.is_empty() => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn message_kind(sender: &str) -> &'static str {
+    match sender.to_ascii_lowercase().as_str() {
+        "human" | "user" => "User Input",
+        "assistant" | "model" | "claude" | "chatgpt" | "gpt" => "LLM Response",
+        _ => "Tool Call",
+    }
 }
 
 pub fn search(convs: &[Conversation], q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
@@ -34,6 +54,21 @@ pub fn search(convs: &[Conversation], q: &ParsedQuery, limit: usize) -> Vec<Sear
             RowType::Chat => {
                 if needle.is_empty() || conversation_matches(c, &needle) {
                     rows.push(chat_row(c, &needle));
+                }
+            }
+            RowType::All => {
+                rows.push(chat_row(c, &needle));
+                if rows.len() >= limit {
+                    break;
+                }
+                for (i, m) in c.messages.iter().enumerate() {
+                    if !needle.is_empty() && !m.text.to_lowercase().contains(&needle) {
+                        continue;
+                    }
+                    rows.push(message_row(c, i, &needle));
+                    if rows.len() >= limit {
+                        return rows;
+                    }
                 }
             }
             RowType::Message => {
@@ -149,6 +184,9 @@ fn chat_row(c: &Conversation, needle: &str) -> SearchRow {
         project: fm.project_uuid.clone().unwrap_or_default(),
         account: fm.account_uuid.clone().unwrap_or_default(),
         entire_chat: format!("/chat/{}", fm.uuid),
+        source: source_label(&fm.provider),
+        kind: "Chat".into(),
+        author: String::new(),
     }
 }
 
@@ -160,6 +198,11 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
     } else {
         snippet_around(&m.text, needle).unwrap_or_else(|| first_n_chars(&m.text, SNIPPET_RADIUS * 2))
     };
+    let kind = message_kind(&m.sender);
+    let author = match kind {
+        "User Input" => fm.account_uuid.clone().unwrap_or_else(|| m.sender.clone()),
+        _ => m.sender.clone(),
+    };
     SearchRow {
         conversation_uuid: fm.uuid.clone(),
         message_index: Some(idx),
@@ -170,6 +213,9 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
         project: fm.project_uuid.clone().unwrap_or_default(),
         account: fm.account_uuid.clone().unwrap_or_default(),
         entire_chat: format!("/chat/{}", fm.uuid),
+        source: source_label(&fm.provider),
+        kind: kind.to_string(),
+        author,
     }
 }
 
@@ -255,12 +301,15 @@ mod tests {
     }
 
     #[test]
-    fn empty_query_returns_chats() {
+    fn empty_query_returns_chat_and_messages() {
         let c = vec![conv("a", "Treemap", &[("Human", "hi")])];
         let rows = search(&c, &parse_query(""), 50);
-        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].conversation_uuid, "a");
         assert!(rows[0].message_index.is_none());
+        assert_eq!(rows[0].kind, "Chat");
+        assert_eq!(rows[1].message_index, Some(0));
+        assert_eq!(rows[1].kind, "User Input");
     }
 
     #[test]
@@ -296,8 +345,8 @@ mod tests {
         let mut b = conv("b", "Y", &[("Human", "hi")]);
         b.frontmatter.account_uuid = Some("acct-2".into());
         let rows = search(&[a, b], &parse_query("account:acct-1"), 50);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].conversation_uuid, "a");
+        assert!(rows.iter().all(|r| r.conversation_uuid == "a"));
+        assert!(rows.iter().any(|r| r.message_index.is_none()));
     }
 
     #[test]
@@ -307,8 +356,8 @@ mod tests {
         let mut b = conv("b", "Y", &[("Human", "hi")]);
         b.frontmatter.created_at = Some("2026-01-01 00:00:00".into());
         let rows = search(&[a, b], &parse_query("before:2025-01-01"), 50);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].conversation_uuid, "a");
+        assert!(rows.iter().all(|r| r.conversation_uuid == "a"));
+        assert!(rows.iter().any(|r| r.message_index.is_none()));
     }
 
     #[test]

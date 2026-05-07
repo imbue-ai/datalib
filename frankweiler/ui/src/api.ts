@@ -14,6 +14,9 @@ export type SearchRow = {
   project: string;
   account: string;
   entire_chat: string;
+  source: string;
+  kind: string;
+  author: string;
 };
 
 export type SearchResponse = {
