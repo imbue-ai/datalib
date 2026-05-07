@@ -8,7 +8,8 @@ reference (2026-05-07): rules_python 2.0.0, rules_rust 0.70.0,
 Rust 1.95.0, Bazel 9.1.0.
 
 Bazel owns:
-  - `claude-mirror/`  Python ingestion (deps from uv.lock via rules_python)
+  - `src/download/`   Python provider downloaders (chatgpt.com, claude.ai)
+  - `src/ingest/`     Python ingestion (deps from uv.lock via rules_python)
   - (later) `schemas/` cross-language types
   - (later) `frankweiler/backend/*` Rust crates
   - (later) `frankweiler/ui/` Vue + Vitest
@@ -37,11 +38,11 @@ python.toolchain(
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
-    hub_name = "claude_mirror_pip",
+    hub_name = "py_pip",
     python_version = PYTHON_VERSION,
-    requirements_lock = "//claude-mirror:requirements.txt",
+    requirements_lock = "//:requirements.txt",
 )
-use_repo(pip, "claude_mirror_pip")
+use_repo(pip, "py_pip")
 
 # Rust — rules_rust + crate_universe ingesting frankweiler/backend Cargo workspace.
 bazel_dep(name = "rules_rust", version = "0.70.0")

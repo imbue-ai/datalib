@@ -2,8 +2,11 @@
 
 Two coupled projects that mirror personal data into a queryable local store:
 
-- **`claude-mirror/`** — Python CLI that ingests Anthropic claude.ai exports
-  into a Dolt DB and renders one QMD per conversation.
+- **`src/`** — Python packages that download and ingest LLM chat exports
+  (Anthropic + OpenAI) into a Dolt DB and render one QMD per conversation:
+  - `src/download/` — per-provider incremental downloaders.
+  - `src/ingest/` — config-driven CLI that ingests raw + takeout-style
+    inputs into Dolt and emits qmd markdown.
 - **`frankweiler/`** — Vue 3 UI + Rust (axum/Polars) backend that searches and
   views the mirrored data, packaged as a Tauri desktop app and an Open Host
   container.
@@ -22,12 +25,12 @@ Schema.
 │   ├── anthropic.schema.json
 │   ├── codegen.py            JSON Schema → Rust/Python/TS types
 │   └── BUILD.bazel           genrules per language
-├── claude-mirror/            Python ingestion CLI
-│   ├── src/claude_mirror/
-│   ├── tests/
-│   ├── pyproject.toml + uv.lock
-│   ├── requirements.txt      uv-exported, consumed by Bazel pip.parse
-│   └── BUILD.bazel
+├── pyproject.toml + uv.lock  Python project (claude-mirror) — src layout
+├── requirements.txt          uv-exported, consumed by Bazel pip.parse
+├── src/
+│   ├── download/             per-provider downloaders (claude.ai, chatgpt.com)
+│   └── ingest/               Dolt ingest + qmd renderer CLI
+├── tests/                    pytest suite + fixtures + golden snapshots
 └── frankweiler/
     ├── backend/              Cargo workspace
     │   ├── Cargo.toml
@@ -72,7 +75,7 @@ bazelisk test //...
 ```
 
 Runs:
-- Python smoke tests (`//claude-mirror:test_smoke`)
+- Python smoke tests (`//tests:test_smoke`)
 - Rust unit tests (`//frankweiler/backend/{schema,core,tauri-backend}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
@@ -81,7 +84,7 @@ Runs:
 
 | Language       | Command (run in the package dir)                |
 |----------------|--------------------------------------------------|
-| Python         | `cd claude-mirror && uv run pytest`              |
+| Python         | `uv run pytest`                                  |
 | Rust           | `cd frankweiler/backend && cargo test`           |
 | Vue / Vitest   | `cd frankweiler/ui && pnpm test`                 |
 | Vite dev UI    | `cd frankweiler/ui && pnpm dev`                  |
@@ -89,14 +92,14 @@ Runs:
 ### Regenerating the cross-language types
 
 The generated files (`frankweiler/backend/schema/src/generated/anthropic.rs`,
-`claude-mirror/src/claude_mirror/generated_schema.py`,
-`frankweiler/ui/src/generated/anthropic.ts` once wired) are checked in. To
-regenerate after editing `schemas/anthropic.schema.json`:
+`src/ingest/generated_schema.py`, `frankweiler/ui/src/generated/anthropic.ts`
+once wired) are checked in. To regenerate after editing
+`schemas/anthropic.schema.json`:
 
 ```sh
 bazelisk build //schemas:anthropic_all
 cp bazel-bin/schemas/anthropic.rs frankweiler/backend/schema/src/generated/
-cp bazel-bin/schemas/anthropic.py claude-mirror/src/claude_mirror/generated_schema.py
+cp bazel-bin/schemas/anthropic.py src/ingest/generated_schema.py
 ```
 
 (A future `bazel run //schemas:update_generated` will fold these copies into
@@ -132,7 +135,7 @@ pnpm-lock are committed).
 `rules_python` 1.x ingests `uv.lock` indirectly through a `requirements.txt`
 that we commit. Procedure when adding a Python dep:
 
-1. `cd claude-mirror && uv add <pkg>`
+1. `uv add <pkg>`
 2. `uv export --no-emit-project --no-emit-workspace
    --format requirements-txt > requirements.txt`
    (Hashes are kept — `rules_python` warns loudly if absent.)

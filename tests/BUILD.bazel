@@ -1,0 +1,67 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@py_pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "test_smoke",
+    size = "small",
+    srcs = [
+        "test_smoke.py",
+        "test_fixtures.py",
+        "conftest.py",
+    ],
+    main = "conftest.py",
+    data = ["//tests/fixtures:source_json"],
+    deps = [
+        "//src/ingest",
+        requirement("pytest"),
+    ],
+)
+
+# Tests that consume the cached genrule output. Inherits the genrule's
+# `requires-dolt` constraint transitively (the artifact can only be
+# produced where dolt is on PATH), so the test is similarly tagged.
+py_test(
+    name = "test_ingested_artifact",
+    size = "small",
+    srcs = [
+        "test_ingested_artifact.py",
+        "conftest_ingested.py",
+    ],
+    main = "conftest_ingested.py",
+    data = ["//tests/fixtures:ingested_tng"],
+    tags = [
+        "requires-dolt",
+        "no-remote",
+    ],
+    deps = [
+        "//src/ingest",
+        requirement("pytest"),
+    ],
+)
+
+# Golden-file snapshot tests: per-table SQL and per-conversation Markdown
+# from the cached genrule output. Custom syrupy extensions store goldens
+# as plain `.md` / `.sql` so they render natively (no `.ambr` framing).
+py_test(
+    name = "test_snapshots",
+    size = "small",
+    srcs = [
+        "test_snapshots.py",
+        "snapshot_extensions.py",
+        "conftest_snapshots.py",
+    ],
+    main = "conftest_snapshots.py",
+    imports = ["."],
+    data = [
+        "//tests/fixtures:ingested_tng",
+    ] + glob(["__snapshots__/test_snapshots/*"]),
+    tags = [
+        "requires-dolt",
+        "no-remote",
+    ],
+    deps = [
+        "//src/ingest",
+        requirement("pytest"),
+        requirement("syrupy"),
+    ],
+)
