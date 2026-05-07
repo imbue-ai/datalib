@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""Incrementally fetch chatgpt.com web conversations and cache them as JSON.
+
+This is the OpenAI/ChatGPT counterpart to scripts/sync_claude_web.py. For now
+it only fetches and caches; ingest into Dolt under an `openai_*` schema is a
+separate (forthcoming) step.
+
+Auth: assumes `latchkey curl` is configured for the `chatgpt` service. We
+read the injected `Authorization: Bearer <accessToken>` and `Cookie`
+(includes `cf_clearance` + `__Secure-next-auth.session-token`) out of
+latchkey's `-v` output, then issue the real requests via `curl_cffi` so we
+get a Chrome TLS fingerprint and clear Cloudflare's managed challenges.
+
+Usage:
+    uv run python scripts/sync_chatgpt_web.py fetch [options]
+
+Output layout (default ~/backups/chatgpt_api/):
+    me.json                       # current user profile
+    conversations.json            # combined paginated listing index
+    conversations/<id>.json       # full conversation tree (mapping/DAG)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from curl_cffi import requests as curl_requests
+
+DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
+SLEEP_BETWEEN = 0.3
+PAGE_SIZE = 100
+IMPERSONATE = "chrome"
+BASE = "https://chatgpt.com"
+
+
+# ---------------------------------------------------------------------------
+# Auth: pull Authorization + Cookie out of latchkey at run time.
+# ---------------------------------------------------------------------------
+
+def get_auth_headers() -> dict[str, str]:
+    """Run `latchkey curl -v` against /api/auth/session and harvest the
+    Authorization/Cookie/User-Agent headers latchkey injects."""
+    proc = subprocess.run(
+        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s",
+         f"{BASE}/api/auth/session"],
+        capture_output=True, text=True, check=False,
+    )
+    headers: dict[str, str] = {}
+    for name in ("Authorization", "Cookie", "User-Agent"):
+        m = re.search(rf"^> {name}: (.+)$", proc.stderr, flags=re.MULTILINE)
+        if not m:
+            raise RuntimeError(
+                f"Could not extract {name!r} from `latchkey curl -v`. "
+                "Is the `chatgpt` service registered with `latchkey auth set`?\n"
+                f"latchkey stderr tail:\n{proc.stderr[-500:]}"
+            )
+        headers[name] = m.group(1).strip()
+    headers["Accept"] = "application/json"
+    return headers
+
+
+# ---------------------------------------------------------------------------
+# Web API client (curl_cffi with Chrome TLS fingerprint).
+# ---------------------------------------------------------------------------
+
+class ChatGPTWebClient:
+    def __init__(self, headers: dict[str, str]) -> None:
+        self._headers = headers
+
+    def _get(self, path: str) -> Any:
+        url = f"{BASE}{path}"
+        r = curl_requests.get(url, impersonate=IMPERSONATE, headers=self._headers)
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"GET {path} -> HTTP {r.status_code} "
+                f"cf-mitigated={r.headers.get('cf-mitigated')} body={r.text[:300]}"
+            )
+        return r.json()
+
+    def me(self) -> dict:
+        return self._get("/backend-api/me")
+
+    def list_conversations_page(self, offset: int, limit: int) -> dict:
+        return self._get(
+            f"/backend-api/conversations?offset={offset}&limit={limit}&order=updated"
+        )
+
+    def get_conversation(self, conv_id: str) -> dict:
+        return self._get(f"/backend-api/conversation/{conv_id}")
+
+
+# ---------------------------------------------------------------------------
+# Fetch logic.
+# ---------------------------------------------------------------------------
+
+def _read_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
+def _write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def _list_all_conversations(client: ChatGPTWebClient,
+                            max_pages: int | None) -> list[dict]:
+    """Walk the paginated /backend-api/conversations listing until exhausted."""
+    items: list[dict] = []
+    offset = 0
+    pages = 0
+    while True:
+        page = client.list_conversations_page(offset, PAGE_SIZE)
+        page_items = page.get("items") or []
+        items.extend(page_items)
+        total = page.get("total")
+        print(f"    page offset={offset:>5} got={len(page_items):>3} "
+              f"total={total} cum={len(items)}")
+        offset += len(page_items)
+        pages += 1
+        if not page_items:
+            break
+        if total is not None and offset >= total:
+            break
+        if max_pages is not None and pages >= max_pages:
+            print(f"    (stopping at --max-pages={max_pages})")
+            break
+        time.sleep(SLEEP_BETWEEN)
+    return items
+
+
+def fetch(args: argparse.Namespace) -> None:
+    out_dir: Path = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    convs_dir = out_dir / "conversations"
+    convs_dir.mkdir(exist_ok=True)
+    index_path = out_dir / "conversations.json"
+    me_path = out_dir / "me.json"
+    started_at = datetime.now(timezone.utc).isoformat()
+
+    headers = get_auth_headers()
+    client = ChatGPTWebClient(headers)
+
+    me = client.me()
+    _write_json(me_path, me)
+    print(f"me: {me.get('email')} ({me.get('id')})")
+
+    print("listing conversations...")
+    listing = _list_all_conversations(client, args.max_pages)
+    print(f"listing total: {len(listing)}")
+
+    # Per-conversation incremental fetch: skip when the cached detail's
+    # update_time matches the listing's (so we don't refetch unchanged convs).
+    fetched = skipped = errors = 0
+    for item in listing:
+        cid = item["id"]
+        api_update = item.get("update_time")
+        cache_path = convs_dir / f"{cid}.json"
+        cached = _read_json(cache_path)
+        if cached is not None and cached.get("update_time") == api_update:
+            skipped += 1
+            continue
+        try:
+            full = client.get_conversation(cid)
+        except RuntimeError as e:
+            print(f"    ! {cid[:8]} failed: {e}")
+            errors += 1
+            continue
+        # Stamp our own provenance/fetch timestamp so we can audit later.
+        full["_fetched_at"] = started_at
+        _write_json(cache_path, full)
+        fetched += 1
+        title = (item.get("title") or "")[:60]
+        print(f"    + {cid[:8]} {title!r}")
+        time.sleep(SLEEP_BETWEEN)
+
+    _write_json(index_path, listing)
+    print(f"\nfetched={fetched} skipped={skipped} errors={errors}")
+    print(f"index: {index_path} ({len(listing)} rows)")
+    print(f"details dir: {convs_dir}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point.
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_fetch = sub.add_parser("fetch", help="Pull from chatgpt.com web API.")
+    p_fetch.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
+                         help=f"API-fetched dir (default {DEFAULT_OUT_DIR})")
+    p_fetch.add_argument("--max-pages", type=int, default=None,
+                         help="Cap the listing walk (debugging).")
+    p_fetch.set_defaults(func=fetch)
+
+    args = parser.parse_args(argv)
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
