@@ -77,6 +77,31 @@ Runs:
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 
+### Launch the dev UI
+
+```sh
+bazelisk run //frankweiler:dev
+```
+
+Builds and runs `frankweiler_http_bin` (Rust) **and** Vite (`pnpm dev`) at
+the same time, and opens your browser at the Vite URL
+(`http://127.0.0.1:5173/`). Vite proxies `/api/*` to the backend on
+`127.0.0.1:8731`. Ctrl-C tears both down.
+
+Data root resolution (the QMDs feed the search index — Dolt remains the
+source of truth):
+
+1. `$FRANKWEILER_ROOT`
+2. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
+3. `~/Documents/personal-mirror`
+
+The backend starts even if the root is missing — `/api/health` reports
+`root_exists: false` and the search grid shows zero rows.
+
+For a backend-only launch (no Vite), use `bazelisk run //frankweiler:serve`,
+which opens the browser at `/api/health`. Override the URL with
+`FRANKWEILER_URL=...`.
+
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |
