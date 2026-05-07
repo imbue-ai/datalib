@@ -83,8 +83,12 @@ Runs:
 ### Launch the dev UI
 
 ```sh
-bazelisk run //frankweiler:dev
+bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad
 ```
+
+The trailing path is the data root (see resolution order below). It can
+be omitted if `$FRANKWEILER_ROOT` or `~/.config/frankweiler/config.yaml`
+already points where you want.
 
 Builds and runs `frankweiler_http_bin` (Rust) **and** Vite (`pnpm dev`) at
 the same time, and opens your browser at the Vite URL
@@ -94,9 +98,10 @@ the same time, and opens your browser at the Vite URL
 Data root resolution (the QMDs feed the search index — Dolt remains the
 source of truth):
 
-1. `$FRANKWEILER_ROOT`
-2. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
-3. `~/Documents/personal-mirror`
+1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
+2. `$FRANKWEILER_ROOT`
+3. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
+4. `~/Documents/personal-mirror`
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.

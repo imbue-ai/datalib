@@ -19,6 +19,17 @@ BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 
 URL="${FRANKWEILER_URL:-http://127.0.0.1:8731/api/health}"
 
+# Optional positional data-root arg → exported as FRANKWEILER_ROOT.
+if [[ $# -ge 1 && -n "$1" ]]; then
+  ROOT_ARG="$1"
+  case "$ROOT_ARG" in
+    "~")     ROOT_ARG="$HOME" ;;
+    "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
+  esac
+  export FRANKWEILER_ROOT="$ROOT_ARG"
+  echo "data root: $FRANKWEILER_ROOT"
+fi
+
 "$BIN" &
 BIN_PID=$!
 trap 'kill "$BIN_PID" 2>/dev/null || true' EXIT INT TERM

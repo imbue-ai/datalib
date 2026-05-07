@@ -5,8 +5,12 @@
 # Invoked via `bazelisk run //frankweiler:dev`.
 #
 # Configuration:
-#   FRANKWEILER_ROOT  data root (default: ~/Documents/personal-mirror or
-#                     whatever ~/.config/frankweiler/config.yaml says)
+#   $1 (positional)   data root (overrides FRANKWEILER_ROOT). Leading
+#                     tildes are expanded relative to $HOME.
+#                     e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
+#   FRANKWEILER_ROOT  data root when no positional arg given. Falls back
+#                     to root: in ~/.config/frankweiler/config.yaml, else
+#                     ~/Documents/personal-mirror.
 #   FRANKWEILER_PORT  Vite port (default: 5173)
 #
 # Bazel sets BUILD_WORKSPACE_DIRECTORY when invoked via `bazel run`; we use it
@@ -40,6 +44,19 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 PORT="${FRANKWEILER_PORT:-5173}"
+
+# Optional positional data-root arg → exported as FRANKWEILER_ROOT for the
+# backend. Manual tilde expansion: shells handle ~ in unquoted args, but if
+# someone double-quotes the argument we still honor a leading ~/ or bare ~.
+if [[ $# -ge 1 && -n "$1" ]]; then
+  ROOT_ARG="$1"
+  case "$ROOT_ARG" in
+    "~")     ROOT_ARG="$HOME" ;;
+    "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
+  esac
+  export FRANKWEILER_ROOT="$ROOT_ARG"
+  echo "data root: $FRANKWEILER_ROOT"
+fi
 
 # Ensure UI deps are installed.
 if [[ ! -d "$UI_DIR/node_modules" ]]; then
