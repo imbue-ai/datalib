@@ -279,10 +279,10 @@ def verify(args: argparse.Namespace) -> None:
     try:
         with DoltService(cfg) as dolt:
             with dolt.connect() as conn:
-                ingest_export_dir(conn, export_dir, started_export)
+                ingest_export_dir(conn, export_dir, started_export, source="export")
             commit_a = dolt.commit(f"export: {export_dir}")
             with dolt.connect() as conn:
-                ingest_export_dir(conn, api_dir, started_api)
+                ingest_export_dir(conn, api_dir, started_api, source="api")
             commit_b = dolt.commit(f"api: {api_dir}") or commit_a
 
             print(f"\ncommits: A={commit_a[:10] if commit_a else None} "
