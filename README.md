@@ -133,8 +133,9 @@ pnpm-lock are committed).
 that we commit. Procedure when adding a Python dep:
 
 1. `cd claude-mirror && uv add <pkg>`
-2. `uv export --no-emit-project --no-emit-workspace --no-hashes
+2. `uv export --no-emit-project --no-emit-workspace
    --format requirements-txt > requirements.txt`
+   (Hashes are kept — `rules_python` warns loudly if absent.)
 3. `bazelisk test //...` to refresh the Bazel hub repo.
 
 `uv` continues to own the local `.venv` for editor / inner-loop work. Bazel
