@@ -3,6 +3,7 @@ test_suite(
     tests = [
         "//claude-mirror:test_smoke",
         "//frankweiler/backend/core:core_unittests",
+        "//frankweiler/backend/http:http_unittests",
         "//frankweiler/backend/schema:schema_unittests",
         "//frankweiler/backend/tauri-backend:tauri_backend_unittests",
     ],
