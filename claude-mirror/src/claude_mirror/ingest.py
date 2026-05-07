@@ -36,7 +36,9 @@ def ingest(config: Config) -> IngestSummary:
         with dolt.connect() as conn:
             for src in config.enabled_sources:
                 if isinstance(src, AnthropicExportDirSource):
-                    _, stats = ingest_export_dir(conn, src.path, started_at)
+                    _, stats = ingest_export_dir(
+                        conn, src.path, started_at, source=src.provenance
+                    )
                     summary.sources.append(
                         SourceResult(
                             name=src.name,

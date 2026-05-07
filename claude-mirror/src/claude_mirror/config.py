@@ -31,6 +31,10 @@ class AnthropicExportDirSource(_SourceBase):
     provider: Literal["anthropic"]
     kind: Literal["export_dir"]
     path: Path
+    # 'export' for the bulk-download zip; 'api' for an incrementally-fetched
+    # mirror (see scripts/sync_claude_web.py). API rows are authoritative
+    # and survive an export re-ingest. See CLAUDE_WEB_SCHEMA.md.
+    provenance: Literal["export", "api"] = "export"
 
     @field_validator("path", mode="after")
     @classmethod
