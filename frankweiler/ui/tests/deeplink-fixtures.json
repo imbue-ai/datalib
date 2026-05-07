@@ -1,0 +1,26 @@
+[
+  {
+    "name": "search_basic",
+    "deeplink": "frankweiler://search?q=treemap",
+    "hash": "search?q=treemap",
+    "route": {"kind": "search", "params": {"q": "treemap"}}
+  },
+  {
+    "name": "search_with_type",
+    "deeplink": "frankweiler://search?q=hello%20world&type=message",
+    "hash": "search?q=hello%20world&type=message",
+    "route": {"kind": "search", "params": {"q": "hello world", "type": "message"}}
+  },
+  {
+    "name": "chat_with_msg",
+    "deeplink": "frankweiler://chat/abc-123?msg=def-456",
+    "hash": "chat/abc-123?msg=def-456",
+    "route": {"kind": "chat", "conversationUuid": "abc-123", "params": {"msg": "def-456"}}
+  },
+  {
+    "name": "prefs",
+    "deeplink": "frankweiler://prefs",
+    "hash": "prefs",
+    "route": {"kind": "prefs"}
+  }
+]

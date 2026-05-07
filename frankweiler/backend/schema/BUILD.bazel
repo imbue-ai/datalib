@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_schema",
+    srcs = [
+        "src/lib.rs",
+        "src/generated/anthropic.rs",
+    ],
+    crate_name = "frankweiler_schema",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "schema_unittests",
+    crate = ":frankweiler_schema",
+    edition = "2021",
+)

@@ -11,8 +11,22 @@ from claude_mirror.config import (
     DoltConfig,
     load_config,
 )
+from claude_mirror.generated_schema import TABLES, Account
 from claude_mirror.providers.anthropic.parse import parse_export
 from claude_mirror.render import _slugify
+
+
+def test_generated_schema_round_trip() -> None:
+    a = Account(
+        account_uuid="u-1",
+        full_name="Test",
+        email_address=None,
+        first_seen_at="2026-01-01T00:00:00Z",
+        last_seen_at="2026-01-01T00:00:00Z",
+    )
+    assert a.account_uuid == "u-1"
+    assert "anthropic_accounts" in TABLES
+    assert TABLES["anthropic_accounts"] == "Account"
 
 
 def test_slugify_basic() -> None:

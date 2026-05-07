@@ -1,0 +1,16 @@
+# Frankweiler — Open Host packaging manifest (v0 stub, not deployed)
+
+[app]
+name = "frankweiler"
+version = "0.1.0"
+
+[network]
+bind = "0.0.0.0:8731"
+
+[mounts]
+# Reads from the host's mirror data root; never writes.
+root = { source = "${MIRROR_DATA_ROOT}", target = "/data/mirror", mode = "ro" }
+
+[auth]
+# Single-tenant for v0; JWT verification deferred.
+mode = "none"

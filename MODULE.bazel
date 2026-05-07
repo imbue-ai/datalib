@@ -35,3 +35,29 @@ pip.parse(
     requirements_lock = "//claude-mirror:requirements.txt",
 )
 use_repo(pip, "claude_mirror_pip")
+
+# Rust — rules_rust + crate_universe ingesting frankweiler/backend Cargo workspace.
+bazel_dep(name = "rules_rust", version = "0.66.0")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.83.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains("@rust_toolchains//:all")
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.from_cargo(
+    name = "frankweiler_crates",
+    cargo_lockfile = "//frankweiler/backend:Cargo.lock",
+    manifests = [
+        "//frankweiler/backend:Cargo.toml",
+        "//frankweiler/backend/schema:Cargo.toml",
+        "//frankweiler/backend/core:Cargo.toml",
+        "//frankweiler/backend/http:Cargo.toml",
+        "//frankweiler/backend/tauri-backend:Cargo.toml",
+    ],
+)
+use_repo(crate, "frankweiler_crates")

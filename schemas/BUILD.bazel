@@ -1,0 +1,49 @@
+load("@rules_python//python:defs.bzl", "py_binary")
+
+exports_files([
+    "anthropic.schema.json",
+    "codegen.py",
+])
+
+py_binary(
+    name = "codegen",
+    srcs = ["codegen.py"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "anthropic_rs",
+    srcs = ["anthropic.schema.json"],
+    outs = ["anthropic.rs"],
+    cmd = "$(execpath :codegen) $(execpath anthropic.schema.json) --rust $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "anthropic_py",
+    srcs = ["anthropic.schema.json"],
+    outs = ["anthropic.py"],
+    cmd = "$(execpath :codegen) $(execpath anthropic.schema.json) --python $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "anthropic_ts",
+    srcs = ["anthropic.schema.json"],
+    outs = ["anthropic.ts"],
+    cmd = "$(execpath :codegen) $(execpath anthropic.schema.json) --typescript $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "anthropic_all",
+    srcs = [
+        ":anthropic_py",
+        ":anthropic_rs",
+        ":anthropic_ts",
+    ],
+    visibility = ["//visibility:public"],
+)

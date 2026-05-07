@@ -1,0 +1,16 @@
+[package]
+name = "frankweiler-http"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "frankweiler-http"
+path = "src/main.rs"
+
+[dependencies]
+frankweiler-core = { path = "../core" }
+frankweiler-schema = { path = "../schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

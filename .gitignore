@@ -8,3 +8,6 @@ __pycache__/
 dist/
 build/
 bazel-*
+node_modules/
+target/
+dolt_repo/
