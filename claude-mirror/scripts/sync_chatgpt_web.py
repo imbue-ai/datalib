@@ -35,10 +35,18 @@ from typing import Any
 from curl_cffi import requests as curl_requests
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
-SLEEP_BETWEEN = 0.3
+SLEEP_BETWEEN = 0.5
 PAGE_SIZE = 100
 IMPERSONATE = "chrome"
 BASE = "https://chatgpt.com"
+
+# When ChatGPT 429s us, it does so for many minutes. After this much total
+# wait without a successful retry, give up and let the user resume later.
+RATE_LIMIT_GIVE_UP_AFTER = 300.0  # seconds
+
+
+class RateLimited(RuntimeError):
+    """Raised when /backend-api keeps returning HTTP 429 after backoff."""
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +85,33 @@ class ChatGPTWebClient:
 
     def _get(self, path: str) -> Any:
         url = f"{BASE}{path}"
-        r = curl_requests.get(url, impersonate=IMPERSONATE, headers=self._headers)
-        if r.status_code != 200:
+        waited = 0.0
+        while True:
+            r = curl_requests.get(url, impersonate=IMPERSONATE,
+                                  headers=self._headers)
+            if r.status_code == 200:
+                return r.json()
+            if r.status_code == 429:
+                # Honor Retry-After when present; otherwise exponential backoff
+                # capped at 60s. Give up after RATE_LIMIT_GIVE_UP_AFTER total.
+                ra = r.headers.get("Retry-After")
+                try:
+                    wait = float(ra) if ra else min(60.0, 5.0 * (2 ** min(4, int(waited / 5))))
+                except ValueError:
+                    wait = 30.0
+                if waited + wait > RATE_LIMIT_GIVE_UP_AFTER:
+                    raise RateLimited(
+                        f"429 for {path}; gave up after {waited:.0f}s of backoff. "
+                        "Re-run later — incremental skip will resume from here."
+                    )
+                print(f"    (429 on {path[:60]}; sleeping {wait:.0f}s)")
+                time.sleep(wait)
+                waited += wait
+                continue
             raise RuntimeError(
                 f"GET {path} -> HTTP {r.status_code} "
                 f"cf-mitigated={r.headers.get('cf-mitigated')} body={r.text[:300]}"
             )
-        return r.json()
 
     def me(self) -> dict:
         return self._get("/backend-api/me")
@@ -171,6 +199,9 @@ def fetch(args: argparse.Namespace) -> None:
             continue
         try:
             full = client.get_conversation(cid)
+        except RateLimited as e:
+            print(f"\n    ⏸ rate-limited; stopping early ({fetched} fetched). {e}")
+            break
         except RuntimeError as e:
             print(f"    ! {cid[:8]} failed: {e}")
             errors += 1
