@@ -1,0 +1,32 @@
+# Personal dev config for thad. Points at the three real downloaded
+# datasets under ~/backups and writes the ingested mirror (Dolt repo +
+# rendered qmd tree) under ~/mixed_up_files.thad/.
+#
+# Usage:
+#   uv run python -m ingest --config ingest_configs/thad_dev.yaml
+
+root: ~/mixed_up_files.thad
+
+sources:
+  # Anthropic bulk export (claude.ai "Export data" zip, unpacked).
+  - name: claude-export
+    provider: anthropic
+    kind: export_dir
+    path: ~/backups/claude
+    provenance: export
+
+  # Anthropic web-API scrape (src/download/claude_web.py output).
+  # 'api' rows are authoritative and won't be clobbered by a later
+  # export ingest -- see src/download/CLAUDE_WEB_SCHEMA.md.
+  - name: claude-api
+    provider: anthropic
+    kind: export_dir
+    path: ~/backups/claude_api
+    provenance: api
+
+  # ChatGPT web-API scrape (src/download/chatgpt_web.py output).
+  - name: chatgpt-api
+    provider: openai
+    kind: chatgpt_api_dir
+    path: ~/backups/chatgpt_api
+    provenance: api
