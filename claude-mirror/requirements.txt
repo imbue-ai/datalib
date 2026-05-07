@@ -4,12 +4,18 @@ annotated-doc==0.0.4
     # via typer
 annotated-types==0.7.0
     # via pydantic
+certifi==2026.4.22
+    # via curl-cffi
+cffi==2.0.0
+    # via curl-cffi
 click==8.3.3
     # via typer
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
     #   click
     #   pytest
+curl-cffi==0.15.0
+    # via claude-mirror
 iniconfig==2.3.0
     # via pytest
 markdown-it-py==4.2.0
@@ -20,6 +26,8 @@ packaging==26.2
     # via pytest
 pluggy==1.6.0
     # via pytest
+pycparser==3.0 ; implementation_name != 'PyPy'
+    # via cffi
 pydantic==2.13.4
     # via claude-mirror
 pydantic-core==2.46.4
@@ -34,7 +42,9 @@ pytest==9.0.3
 pyyaml==6.0.3
     # via claude-mirror
 rich==15.0.0
-    # via typer
+    # via
+    #   curl-cffi
+    #   typer
 shellingham==1.5.4
     # via typer
 typer==0.25.1
