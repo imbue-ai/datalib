@@ -45,6 +45,29 @@ sources:
   - { name: web-api,     provider: anthropic, kind: export_dir, path: ~/backups/claude_api, provenance: api    }
 ```
 
+## Timestamp convention
+
+Every timestamp stored anywhere in this project — Dolt columns, JSON cache
+files, QMD frontmatter — is an **ISO-8601 string that preserves the
+timezone offset present in the source**.
+
+- If the upstream API gave us `2026-05-04T03:42:05-07:00`, we store
+  `2026-05-04T03:42:05-07:00` verbatim. Don't normalize to UTC — the local
+  offset itself carries information (it's how the timestamp would have
+  rendered to the human who saw it), and once dropped we can't get it back.
+- If the upstream gave us `...Z`, leave it as `Z` — that's still a valid
+  offset.
+- If the upstream gave us a unix-epoch number (no source offset), render
+  it as UTC with an explicit `+00:00` suffix, e.g. `2026-05-04T10:42:05.123456+00:00`.
+  Use `datetime.fromtimestamp(t, tz=timezone.utc).isoformat()` —
+  *not* `.strftime("...Z")`.
+- For our own "now" timestamps (`first_seen_at`, `last_seen_at`,
+  ingest-started markers): same rule — `datetime.now(timezone.utc).isoformat()`.
+
+If you find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop and
+use `isoformat()` instead. The columns are `VARCHAR(40)`, wide enough for
+the longest offset-suffixed form including microseconds.
+
 ## Auth (web API)
 
 `scripts/sync_claude_web.py` reads the `sessionKey` cookie out of

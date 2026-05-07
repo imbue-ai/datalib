@@ -273,8 +273,10 @@ def verify(args: argparse.Namespace) -> None:
     print(f"temp dolt root: {tmp}")
     cfg = Config(root=tmp, dolt=DoltConfig(port=args.port), sources=[])
 
-    started_export = "1970-01-01T00:00:00Z"  # synthetic timestamps so commits diff cleanly
-    started_api = "1970-01-01T00:00:01Z"
+    # Synthetic timestamps so the two ingest commits diff cleanly. Use the
+    # project's ISO-with-explicit-offset convention (see AGENTS.md).
+    started_export = "1970-01-01T00:00:00+00:00"
+    started_api = "1970-01-01T00:00:01+00:00"
 
     try:
         with DoltService(cfg) as dolt:

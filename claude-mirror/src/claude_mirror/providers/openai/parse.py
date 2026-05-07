@@ -69,18 +69,24 @@ class ParsedChatGPTApi:
 
 
 def _epoch_to_iso(v: Any) -> str | None:
-    """Normalize ChatGPT timestamps to ISO-8601 strings.
+    """Normalize ChatGPT timestamps to ISO-8601 strings, preserving any
+    timezone offset already present in the source.
 
-    The listing endpoint returns ISO strings ('2026-03-19T18:42:53.847024Z');
-    the conversation detail endpoint returns float epochs. We coerce both to
-    ISO so they round-trip into the schema's VARCHAR(40) columns and match
-    the convention used by the anthropic_* tables."""
+    Project convention (see AGENTS.md): every stored timestamp is an ISO-8601
+    string carrying its original timezone offset, so that timestamps which
+    were ever rendered in a human's local zone keep that meaning forever.
+
+    - String input is passed through verbatim — if it already carries an
+      offset (`...-07:00`, `...+09:00`, or `...Z`) we don't touch it.
+    - Numeric (epoch) input has no source offset, so we render it in UTC
+      with an explicit `+00:00` suffix (rather than `Z`) for consistency
+      with other timestamps the project generates."""
     if v is None or v == "":
         return None
     if isinstance(v, (int, float)):
         try:
             return datetime.fromtimestamp(float(v), tz=timezone.utc) \
-                .strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+                .isoformat(timespec="microseconds")
         except (OverflowError, OSError, ValueError):
             return None
     if isinstance(v, str):

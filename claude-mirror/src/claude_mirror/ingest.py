@@ -38,7 +38,8 @@ class IngestSummary:
 
 
 def ingest(config: Config) -> IngestSummary:
-    started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Project convention: ISO-8601 with explicit timezone offset (see AGENTS.md).
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     summary = IngestSummary()
 
     with DoltService(config) as dolt:
