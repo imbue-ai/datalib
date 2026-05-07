@@ -1,0 +1,35 @@
+{
+  "conversation_uuid": "c0000003-1701-4d00-8000-00000000c003",
+  "name": "Klingon Diplomatic Greeting Drafting",
+  "account": {"uuid": "00000001-1701-4d00-8000-000000000001", "full_name": "Jean-Luc Picard"},
+  "project": null,
+  "messages": [
+    {
+      "message_uuid": "30000001-1701-4d00-8000-000000030001",
+      "sender": "human",
+      "created_at": "2369-04-14T10:00:00.000000+00:00",
+      "blocks": [
+        {"type": "text", "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec."}
+      ]
+    },
+    {
+      "message_uuid": "30000002-1701-4d00-8000-000000030002",
+      "sender": "assistant",
+      "created_at": "2369-04-14T10:01:00.000000+00:00",
+      "blocks": [
+        {"type": "thinking", "text": "\"nuqneH\" literally means \"what do you want\" \u2014 it's blunt by Federation standards but standard among Klingons."},
+        {"type": "tool_use", "name": "web_fetch", "input": {"url": "https://memory-alpha.test/wiki/Klingon_language"}},
+        {"type": "tool_result", "name": "web_fetch", "text": "nuqneH is the standard Klingon greeting. In formal diplomatic contexts it is paired with \"qaleghneS\"."},
+        {"type": "text", "text": "For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor \u2014 nuqneH?\" The honorific softens the bluntness; together they read as warm-but-direct, which Klingons respect."}
+      ]
+    },
+    {
+      "message_uuid": "30000003-1701-4d00-8000-000000030003",
+      "sender": "human",
+      "created_at": "2369-04-14T10:02:00.000000+00:00",
+      "blocks": [
+        {"type": "text", "text": "Perfect. Make it so."}
+      ]
+    }
+  ]
+}

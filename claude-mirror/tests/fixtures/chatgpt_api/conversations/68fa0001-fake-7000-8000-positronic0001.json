@@ -1,0 +1,103 @@
+{
+  "title": "Sonnet on a Cat Named Spot",
+  "create_time": 12648384000.0,
+  "update_time": 12648384300.0,
+  "conversation_id": "68fa0001-fake-7000-8000-positronic0001",
+  "is_archived": false,
+  "is_starred": true,
+  "default_model_slug": "gpt-5",
+  "current_node": "msg-fake-spot-0003",
+  "mapping": {
+    "client-created-root": {
+      "id": "client-created-root",
+      "message": null,
+      "parent": null,
+      "children": ["msg-fake-spot-0000"]
+    },
+    "msg-fake-spot-0000": {
+      "id": "msg-fake-spot-0000",
+      "message": {
+        "id": "msg-fake-spot-0000",
+        "author": {"role": "system", "name": null, "metadata": {}},
+        "create_time": null,
+        "update_time": null,
+        "content": {
+          "content_type": "model_editable_context",
+          "model_set_context": "User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.",
+          "repository": null
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 0.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "client-created-root",
+      "children": ["msg-fake-spot-0001"]
+    },
+    "msg-fake-spot-0001": {
+      "id": "msg-fake-spot-0001",
+      "message": {
+        "id": "msg-fake-spot-0001",
+        "author": {"role": "user", "name": null, "metadata": {}},
+        "create_time": 12648384000.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": ["Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles."]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-spot-0000",
+      "children": ["msg-fake-spot-0002"]
+    },
+    "msg-fake-spot-0002": {
+      "id": "msg-fake-spot-0002",
+      "message": {
+        "id": "msg-fake-spot-0002",
+        "author": {"role": "assistant", "name": null, "metadata": {}},
+        "create_time": 12648384120.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": ["Upon the bridge, where duty bids us stand,\nA tabby of the warmest tangerine,\nWith feline grace defies the captain's hand\nAnd treads the helm with footfall light, serene.\n\nNo Klingon foe nor anomaly arrayed\nCan match the menace of his sudden leap;\nThe console glows where Spot in mirth has played,\nAnd alarms ring out where he chose to sleep.\n\nYet Data, faithful keeper, smiles unseen \u2014\nAn android's joy, though circuited and spare \u2014\nFor in this beast a mystery serene\nReflects the very life he hopes to share.\n\nSo bless thee, Spot, of fur and quiet purr:\nThou art my muse, my console saboteur."]
+        },
+        "status": "finished_successfully",
+        "end_turn": false,
+        "weight": 1.0,
+        "metadata": {"model_slug": "gpt-5"},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-spot-0001",
+      "children": ["msg-fake-spot-0003"]
+    },
+    "msg-fake-spot-0003": {
+      "id": "msg-fake-spot-0003",
+      "message": {
+        "id": "msg-fake-spot-0003",
+        "author": {"role": "user", "name": null, "metadata": {}},
+        "create_time": 12648384300.0,
+        "update_time": null,
+        "content": {
+          "content_type": "text",
+          "parts": ["Curious. The closing couplet is satisfying. Thank you."]
+        },
+        "status": "finished_successfully",
+        "end_turn": true,
+        "weight": 1.0,
+        "metadata": {},
+        "recipient": "all",
+        "channel": null
+      },
+      "parent": "msg-fake-spot-0002",
+      "children": []
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "object": "user",
+  "id": "user-FAKE0DATAANDROID0POSITRONIC1",
+  "email": "data@enterprise.starfleet.test",
+  "name": "Lt. Cmdr. Data",
+  "first_name": "Data",
+  "picture": "https://avatars.test/data.png",
+  "phone_number": null,
+  "country": "Federation",
+  "orgs": {
+    "data": [
+      {
+        "object": "organization",
+        "id": "org-FAKE0ENTERPRISE0OPS0CRW1",
+        "name": "USS Enterprise NCC-1701-D",
+        "title": "Operations Officer"
+      }
+    ]
+  }
+}

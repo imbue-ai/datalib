@@ -1,0 +1,16 @@
+[
+  {
+    "uuid": "00000001-1701-4d00-8000-000000000001",
+    "full_name": "Jean-Luc Picard",
+    "email_address": "jlpicard@enterprise.starfleet.test",
+    "verified_phone_number": null,
+    "settings": {"preferred_model": "claude-opus-4-7"}
+  },
+  {
+    "uuid": "00000002-1701-4d00-8000-000000000002",
+    "full_name": "Geordi La Forge",
+    "email_address": "lt.laforge@enterprise.starfleet.test",
+    "verified_phone_number": null,
+    "settings": {}
+  }
+]

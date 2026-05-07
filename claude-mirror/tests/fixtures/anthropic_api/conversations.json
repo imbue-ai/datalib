@@ -1,0 +1,198 @@
+[
+  {
+    "uuid": "c0000003-1701-4d00-8000-00000000c003",
+    "name": "Klingon Diplomatic Greeting Drafting",
+    "summary": "Drafting an opening for a Klingon diplomatic exchange.",
+    "model": "claude-opus-4-7",
+    "created_at": "2369-04-14T10:00:00.000000+00:00",
+    "updated_at": "2369-04-14T10:02:00.000000+00:00",
+    "settings": {
+      "enabled_web_search": true,
+      "paprika_mode": "extended",
+      "preview_feature_uses_artifacts": true
+    },
+    "is_starred": true,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "current_leaf_message_uuid": "30000003-1701-4d00-8000-000000030003",
+    "account": {"uuid": "00000001-1701-4d00-8000-000000000001"},
+    "project": null,
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+    },
+    "chat_messages": [
+      {
+        "uuid": "30000001-1701-4d00-8000-000000030001",
+        "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-04-14T10:00:00.000000+00:00",
+        "updated_at": "2369-04-14T10:00:00.000000+00:00",
+        "parent_message_uuid": null,
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-14T10:00:00.000000+00:00",
+            "stop_timestamp": "2369-04-14T10:00:00.000000+00:00",
+            "type": "text",
+            "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "30000002-1701-4d00-8000-000000030002",
+        "text": "",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-04-14T10:01:00.000000+00:00",
+        "updated_at": "2369-04-14T10:01:00.000000+00:00",
+        "parent_message_uuid": "30000001-1701-4d00-8000-000000030001",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-14T10:00:30.000000+00:00",
+            "stop_timestamp": "2369-04-14T10:00:31.000000+00:00",
+            "type": "thinking",
+            "thinking": "\"nuqneH\" literally means \"what do you want\" \u2014 it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.",
+            "summaries": [{"summary": "Verifying register of nuqneH before recommending."}],
+            "cut_off": false,
+            "truncated": false
+          },
+          {
+            "start_timestamp": "2369-04-14T10:00:32.000000+00:00",
+            "stop_timestamp": "2369-04-14T10:00:32.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_FAKE0001ngfedcba9876543210",
+            "name": "web_fetch",
+            "input": {"url": "https://memory-alpha.test/wiki/Klingon_language"},
+            "message": "Fetching: Klingon language reference",
+            "integration_name": "Web Fetch",
+            "icon_name": "globe"
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_FAKE0001ngfedcba9876543210",
+            "name": "web_fetch",
+            "content": [
+              {
+                "type": "knowledge",
+                "title": "Klingon language \u2014 Memory Alpha (test mirror)",
+                "url": "https://memory-alpha.test/wiki/Klingon_language",
+                "metadata": {"site_domain": "memory-alpha.test"},
+                "is_missing": false,
+                "text": "nuqneH (lit. \"what do you want\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \"qaleghneS\" (\"I am honored to see you\")."
+              }
+            ],
+            "is_error": false
+          },
+          {
+            "start_timestamp": "2369-04-14T10:00:55.000000+00:00",
+            "stop_timestamp": "2369-04-14T10:01:00.000000+00:00",
+            "type": "text",
+            "text": "For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor \u2014 nuqneH?\" (\"I am honored to see you \u2014 what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "30000003-1701-4d00-8000-000000030003",
+        "text": "Perfect. Make it so.",
+        "sender": "human",
+        "index": 2,
+        "created_at": "2369-04-14T10:02:00.000000+00:00",
+        "updated_at": "2369-04-14T10:02:00.000000+00:00",
+        "parent_message_uuid": "30000002-1701-4d00-8000-000000030002",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-14T10:02:00.000000+00:00",
+            "stop_timestamp": "2369-04-14T10:02:00.000000+00:00",
+            "type": "text",
+            "text": "Perfect. Make it so.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      }
+    ]
+  },
+  {
+    "uuid": "c0000004-1701-4d00-8000-00000000c004",
+    "name": "Tricorder Image Diagnostic",
+    "summary": "Pasted a tricorder readout image; asked for interpretation.",
+    "model": "claude-opus-4-7",
+    "created_at": "2369-04-15T08:30:00.000000+00:00",
+    "updated_at": "2369-04-15T08:30:45.000000+00:00",
+    "settings": {},
+    "is_starred": false,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "account": {"uuid": "00000003-1701-4d00-8000-000000000003"},
+    "project": null,
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+    },
+    "chat_messages": [
+      {
+        "uuid": "40000001-1701-4d00-8000-000000040001",
+        "text": "What's wrong with this medical-tricorder readout?",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-04-15T08:30:00.000000+00:00",
+        "updated_at": "2369-04-15T08:30:00.000000+00:00",
+        "parent_message_uuid": null,
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-15T08:30:00.000000+00:00",
+            "stop_timestamp": "2369-04-15T08:30:00.000000+00:00",
+            "type": "text",
+            "text": "What's wrong with this medical-tricorder readout?",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": [
+          {
+            "success": true,
+            "file_kind": "image",
+            "file_uuid": "f0000001-1701-4d00-8000-0000000f0001",
+            "file_name": "tricorder-readout.png",
+            "created_at": "2369-04-15T08:29:55.000000+00:00",
+            "thumbnail_url": "/api/fake/files/f0000001-1701-4d00-8000-0000000f0001/thumbnail",
+            "preview_url": "/api/fake/files/f0000001-1701-4d00-8000-0000000f0001/preview"
+          }
+        ]
+      },
+      {
+        "uuid": "40000002-1701-4d00-8000-000000040002",
+        "text": "The readout shows elevated isoboramine (62 ng/mL; reference 35\u201340) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-04-15T08:30:45.000000+00:00",
+        "updated_at": "2369-04-15T08:30:45.000000+00:00",
+        "parent_message_uuid": "40000001-1701-4d00-8000-000000040001",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-15T08:30:30.000000+00:00",
+            "stop_timestamp": "2369-04-15T08:30:45.000000+00:00",
+            "type": "text",
+            "text": "The readout shows elevated isoboramine (62 ng/mL; reference 35\u201340) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      }
+    ]
+  }
+]

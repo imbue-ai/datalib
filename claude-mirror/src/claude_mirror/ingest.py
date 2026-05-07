@@ -37,11 +37,15 @@ class IngestSummary:
     rendered_orphans_removed: int = 0
 
 
-def ingest(config: Config) -> IngestSummary:
+def ingest(config: Config, now: str | None = None) -> IngestSummary:
     # Project convention: ISO-8601 with explicit timezone offset, in *local*
     # time so the offset preserves the human-meaningful "wall clock" of when
     # the ingest happened (see AGENTS.md).
-    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    #
+    # `now` may be passed explicitly to make the run deterministic (used by
+    # the Bazel fixture genrule and by tests). Production runs leave it None
+    # and pick up wall-clock time.
+    started_at = now or datetime.now().astimezone().isoformat(timespec="seconds")
     summary = IngestSummary()
 
     with DoltService(config) as dolt:

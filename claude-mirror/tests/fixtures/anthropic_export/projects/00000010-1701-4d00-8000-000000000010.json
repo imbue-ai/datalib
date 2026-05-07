@@ -1,0 +1,21 @@
+{
+  "uuid": "00000010-1701-4d00-8000-000000000010",
+  "name": "Holodeck Program Library",
+  "description": "Notes and prompt templates for designing safe holodeck programs. Used as a sandbox for testing new historical-simulation scenarios before deployment to the recreation deck.",
+  "is_private": false,
+  "is_starter_project": false,
+  "prompt_template": "You are an expert holodeck program designer. Always include safety overrides.",
+  "created_at": "2369-04-12T08:00:00.000000+00:00",
+  "updated_at": "2369-04-15T17:30:00.000000+00:00",
+  "creator": {
+    "uuid": "00000001-1701-4d00-8000-000000000001",
+    "full_name": "Jean-Luc Picard"
+  },
+  "docs": [
+    {
+      "uuid": "000000d0-1701-4d00-8000-0000000000d0",
+      "filename": "safety-protocols.md",
+      "content": "Holodeck safety protocols must remain engaged at all times. Emergency override: Computer, end program."
+    }
+  ]
+}

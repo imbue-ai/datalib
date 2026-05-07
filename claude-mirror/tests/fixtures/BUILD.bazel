@@ -1,0 +1,63 @@
+# Cacheable, ingested-fixture artifact.
+#
+# `bazelisk build //claude-mirror/tests/fixtures:ingested_tng` runs the full
+# pipeline (ingest -> commit -> render) against the checked-in TNG-themed
+# source JSON and emits two byte-stable outputs:
+#
+#   * dump.sql -- deterministic CREATE TABLE + sorted INSERT statements,
+#                 loadable into a fresh Dolt or any MySQL-compatible engine.
+#   * qmd.tar  -- the rendered conversation markdown tree.
+#
+# Determinism guarantees:
+#   * --now is fixed (a TNG-era ISO-8601 stamp).
+#   * Source JSON is checked in.
+#   * The dumper sorts rows by PK and canonicalizes JSON.
+#   * The tar normalizes mtime/uid/gid.
+#
+# Caveats:
+#   * Requires `dolt` on PATH (tagged `requires-dolt` and `no-remote` so
+#     it doesn't run on RBE where dolt isn't part of the toolchain).
+#   * Uses an ephemeral port chosen at action time, so parallel actions
+#     don't collide.
+#   * Dolt commit hashes themselves are *not* deterministic and are
+#     intentionally not included in either output.
+
+filegroup(
+    name = "source_json",
+    srcs = glob([
+        "anthropic_export/**/*.json",
+        "anthropic_api/**/*.json",
+        "chatgpt_api/**/*.json",
+    ]),
+    visibility = ["//claude-mirror:__subpackages__"],
+)
+
+genrule(
+    name = "ingested_tng",
+    srcs = [":source_json"],
+    outs = [
+        "ingested/dump.sql",
+        "ingested/qmd.tar",
+    ],
+    tools = [
+        "//claude-mirror:cli",
+        "build_ingested.py",
+    ],
+    cmd = " ".join([
+        "python3 $(execpath build_ingested.py)",
+        "$(execpath //claude-mirror:cli)",
+        # Genrules execute with cwd at the execroot; this is the fixture
+        # package's directory inside the sandbox.
+        "claude-mirror/tests/fixtures",
+        "$(RULEDIR)/ingested",
+        "'2369-04-15T00:00:00+00:00'",
+    ]),
+    tags = [
+        # Dolt isn't a hermetic toolchain in this repo; rule needs the host
+        # binary on PATH and a free TCP port.
+        "requires-dolt",
+        "no-remote",
+        "no-sandbox",
+    ],
+    visibility = ["//visibility:public"],
+)
