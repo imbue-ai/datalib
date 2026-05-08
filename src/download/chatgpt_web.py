@@ -36,7 +36,10 @@ from curl_cffi import requests as curl_requests
 from tqdm import tqdm
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
-SLEEP_BETWEEN = 0.5
+# Inter-fetch sleep. We don't have evidence ChatGPT throttles us at any
+# polite rate; 0.1s is enough to stop us from looking like a tight loop
+# while not doubling per-conv latency on top of ~0.4s GETs.
+SLEEP_BETWEEN = 0.1
 PAGE_SIZE = 100
 IMPERSONATE = "chrome"
 BASE = "https://chatgpt.com"
@@ -83,13 +86,27 @@ def get_auth_headers() -> dict[str, str]:
 class ChatGPTWebClient:
     def __init__(self, headers: dict[str, str]) -> None:
         self._headers = headers
+        # Persisted session so the underlying curl handle reuses its TCP +
+        # TLS connection across requests. Without this, every GET pays a
+        # full TLS handshake to chatgpt.com (~1s round trip), which
+        # dominates the per-request budget. Measured impact in the wild:
+        # ~1.08s/req without, ~0.4s/req with.
+        self._session = curl_requests.Session(
+            impersonate=IMPERSONATE,
+            headers=headers,
+        )
+        # Cumulative network time (excludes sleeps), updated by _get.
+        self.network_seconds: float = 0.0
+        self.requests: int = 0
 
     def _get(self, path: str) -> Any:
         url = f"{BASE}{path}"
         waited = 0.0
         while True:
-            r = curl_requests.get(url, impersonate=IMPERSONATE,
-                                  headers=self._headers)
+            t0 = time.perf_counter()
+            r = self._session.get(url)
+            self.network_seconds += time.perf_counter() - t0
+            self.requests += 1
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 429:
@@ -199,8 +216,15 @@ def fetch(args: argparse.Namespace) -> None:
     print(f"prioritizing {len(missing)} missing before {len(present)} cached")
 
     fetched = skipped = errors = 0
+    sleep_between: float = args.sleep_between
+    limit: int | None = args.limit
+    loop_t0 = time.perf_counter()
+    sleep_seconds = 0.0
     pbar = tqdm(ordered, unit="conv")
     for item in pbar:
+        if limit is not None and fetched + errors >= limit:
+            tqdm.write(f"    (--limit {limit} reached; stopping)")
+            break
         cid = item["id"]
         api_update = item.get("update_time")
         cache_path = convs_dir / f"{cid}.json"
@@ -226,10 +250,20 @@ def fetch(args: argparse.Namespace) -> None:
         fetched += 1
         title = (item.get("title") or "")[:40]
         pbar.set_postfix_str(f"{fetched=} {skipped=} {errors=} | {title}")
-        time.sleep(SLEEP_BETWEEN)
+        if sleep_between > 0:
+            time.sleep(sleep_between)
+            sleep_seconds += sleep_between
 
     _write_json(index_path, listing)
+    loop_total = time.perf_counter() - loop_t0
+    net = client.network_seconds
+    other = max(0.0, loop_total - net - sleep_seconds)
     print(f"\nfetched={fetched} skipped={skipped} errors={errors}")
+    print(
+        f"timing: loop={loop_total:.1f}s  network={net:.1f}s "
+        f"({client.requests} req, {net / max(1, client.requests):.2f}s/req)  "
+        f"sleep={sleep_seconds:.1f}s  other={other:.1f}s"
+    )
     print(f"index: {index_path} ({len(listing)} rows)")
     print(f"details dir: {convs_dir}")
 
@@ -244,6 +278,12 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"API-fetched dir (default {DEFAULT_OUT_DIR})")
     parser.add_argument("--max-pages", type=int, default=None,
                         help="Cap the listing walk (debugging).")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Stop after N successful conversation fetches "
+                             "(skipped/cached items don't count). For debugging.")
+    parser.add_argument("--sleep-between", type=float, default=SLEEP_BETWEEN,
+                        help=f"Seconds to sleep between successful fetches "
+                             f"(default {SLEEP_BETWEEN}). 0 disables.")
     args = parser.parse_args(argv)
     fetch(args)
     return 0
