@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import sys
 import time
@@ -40,6 +41,7 @@ DEFAULT_OUT_DIR = Path.home() / "backups" / "slack"
 DEFAULT_SINCE = "2024-01-01"
 DEFAULT_REFRESH_WINDOW_DAYS = 30
 LATCHKEY_TIMEOUT = 60
+LATCHKEY_FILE_TIMEOUT = 600  # large attachments can take a while
 RATE_LIMIT_MAX_RETRIES = 7
 RATE_LIMIT_INITIAL_BACKOFF = 2.0
 RATE_LIMIT_MAX_BACKOFF = 60.0
@@ -243,6 +245,113 @@ def _key_self(rec: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Media download: walk `files` arrays in messages/replies, fetch via latchkey.
+# ---------------------------------------------------------------------------
+
+def _extract_file_auth() -> dict[str, str]:
+    """Pull Authorization/Cookie/User-Agent out of `latchkey curl -v` stderr.
+
+    Slack's `files.slack.com` host is not in latchkey's URL-pattern allowlist
+    for the `slack` service ("No service matches URL"), so we cannot just
+    `latchkey curl <file_url>`. Instead, harvest the Bearer + d-cookie that
+    latchkey injects on a known-good slack.com call and replay them ourselves
+    with plain curl. The d-cookie is required by some workspaces; the Bearer
+    alone is enough for most.
+    """
+    proc = subprocess.run(
+        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s",
+         "https://slack.com/api/auth.test"],
+        capture_output=True, text=True, timeout=LATCHKEY_TIMEOUT, check=False,
+    )
+    headers: dict[str, str] = {}
+    for name in ("Authorization", "Cookie", "User-Agent"):
+        m = re.search(rf"^> {name}: (.+)$", proc.stderr, flags=re.MULTILINE)
+        if m:
+            headers[name] = m.group(1).strip()
+    if "Authorization" not in headers:
+        raise SlackError(
+            "could not extract Authorization header from `latchkey curl -v`. "
+            "Is the `slack` service registered with `latchkey auth set`?"
+        )
+    return headers
+
+
+def _safe_filename(name: str | None, fallback: str) -> str:
+    """Sanitize a Slack-supplied filename: keep it filesystem-safe, drop slashes,
+    fall back to the file id if Slack didn't give us a name."""
+    if not name:
+        return fallback
+    cleaned = "".join(c if c.isalnum() or c in "-._ " else "_" for c in name).strip()
+    return cleaned or fallback
+
+
+def _download_one_file(
+    file_obj: dict[str, Any], media_dir: Path, headers: dict[str, str],
+) -> str:
+    """Download a single Slack file to media/<file_id>/<filename>.
+
+    Returns: 'skipped' (already on disk), 'tombstone' (deleted/no URL),
+    'external' (hosted elsewhere — can't auth), 'downloaded', or 'error'.
+    """
+    file_id = file_obj.get("id")
+    if not file_id:
+        return "tombstone"
+    if file_obj.get("mode") == "tombstone":
+        return "tombstone"
+    # External files (Google Drive etc.) point url_private at a third-party
+    # host that doesn't accept our Slack Bearer — skip them rather than 401.
+    if file_obj.get("is_external"):
+        return "external"
+    url = file_obj.get("url_private_download") or file_obj.get("url_private")
+    if not url:
+        return "external"
+
+    name = _safe_filename(file_obj.get("name"), fallback=file_id)
+    target_dir = media_dir / file_id
+    target = target_dir / name
+    if target.exists() and target.stat().st_size > 0:
+        return "skipped"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # files.slack.com isn't in latchkey's `slack` URL allowlist, so we replay
+    # the headers latchkey injects (Bearer + d-cookie) using plain curl. -L
+    # follows the redirect to the signed S3 URL; -f turns HTTP errors into a
+    # non-zero exit instead of writing the error body to disk.
+    args = ["curl", "-fSL", "-o", str(target)]
+    for k, v in headers.items():
+        args += ["-H", f"{k}: {v}"]
+    args.append(url)
+    proc = subprocess.run(
+        args, capture_output=True, text=True,
+        timeout=LATCHKEY_FILE_TIMEOUT, check=False,
+    )
+    if proc.returncode != 0:
+        target.unlink(missing_ok=True)
+        logger.warning("media: %s (%s) failed exit=%d %s",
+                       file_id, name, proc.returncode, proc.stderr[-200:].strip())
+        return "error"
+    return "downloaded"
+
+
+def _download_files_for_records(
+    records: list[dict[str, Any]], media_dir: Path, headers: dict[str, str],
+) -> dict[str, int]:
+    """Walk each record's raw['files'] array and download each file."""
+    counts = {"downloaded": 0, "skipped": 0, "tombstone": 0,
+              "external": 0, "error": 0}
+    targets: list[dict[str, Any]] = []
+    for rec in records:
+        for f in rec["raw"].get("files") or []:
+            targets.append(f)
+    if not targets:
+        return counts
+    for f in targets:
+        outcome = _download_one_file(f, media_dir, headers)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # Fetch logic: channels, users, messages, replies, reactions.
 # ---------------------------------------------------------------------------
 
@@ -392,10 +501,15 @@ def _export_channel(
     channel_latest_ts: str | None,
     latest_reply_by_thread: dict[tuple[str, str], str],
     now: datetime,
-) -> tuple[int, int, int]:
+    media_dir: Path | None,
+    media_headers: dict[str, str] | None,
+) -> tuple[int, int, int, dict[str, int]]:
     """Forward-fetch new messages, refresh-window pass, then replies + reactions.
 
-    Returns (new_messages, new_replies, new_reactions).
+    When `media_dir` is set, also walk `files` on each message/reply and
+    download any not yet on disk.
+
+    Returns (new_messages, new_replies, new_reactions, media_counts).
     """
     # 1. Forward fetch from cursor (or `since_ts` if no prior data for channel).
     if channel_latest_ts:
@@ -473,7 +587,18 @@ def _export_channel(
         out_dir, ENTITY_REACTION, msg_reactions + reply_reactions,
         existing_reactions, _key_reaction,
     )
-    return new_msgs, new_reply_count, new_react
+
+    media_counts: dict[str, int] = {}
+    if media_dir is not None:
+        assert media_headers is not None
+        media_counts = _download_files_for_records(
+            forward_records + refresh_records + all_reply_records,
+            media_dir, media_headers,
+        )
+        if any(v for k, v in media_counts.items() if k != "skipped"):
+            logger.info("  media: %s",
+                        " ".join(f"{k}={v}" for k, v in media_counts.items() if v))
+    return new_msgs, new_reply_count, new_react, media_counts
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +629,12 @@ def fetch(
     all_channels: bool = typer.Option(
         False, "--all/--members-only",
         help="Include channels you are not a member of (default: members-only).",
+    ),
+    media: bool = typer.Option(
+        True, "--media/--no-media",
+        help=("Download attached files (images, PDFs, etc.) to "
+              "<out-dir>/media/<file_id>/<filename>. Tombstones and externally-"
+              "hosted files are skipped. Default: on."),
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging."),
 ) -> None:
@@ -564,13 +695,18 @@ def fetch(
     else:
         targets = [(c["channel_id"], c["channel_name"]) for c in fresh_channels]
 
-    typer.echo(f"exporting {len(targets)} channels")
+    media_dir = (out_dir / "media") if media else None
+    media_headers: dict[str, str] | None = None
+    if media:
+        media_headers = _extract_file_auth()
+    typer.echo(f"exporting {len(targets)} channels (media: {'on' if media else 'off'})")
     totals = {"messages": 0, "replies": 0, "reactions": 0}
+    media_totals: dict[str, int] = {}
     pbar = tqdm(targets, unit="ch")
     for cid, name in pbar:
         pbar.set_postfix_str(name[:30])
         try:
-            n_msg, n_reply, n_react = _export_channel(
+            n_msg, n_reply, n_react, m_counts = _export_channel(
                 out_dir=out_dir,
                 channel_id=cid,
                 channel_name=name,
@@ -582,6 +718,8 @@ def fetch(
                 channel_latest_ts=channel_latest_ts.get(cid),
                 latest_reply_by_thread=latest_reply_by_thread,
                 now=now,
+                media_dir=media_dir,
+                media_headers=media_headers,
             )
         except SlackError as e:
             tqdm.write(f"  ! {name}: {e}")
@@ -589,9 +727,32 @@ def fetch(
         totals["messages"] += n_msg
         totals["replies"] += n_reply
         totals["reactions"] += n_react
+        for k, v in m_counts.items():
+            media_totals[k] = media_totals.get(k, 0) + v
+
+    # Self-healing media sweep: walk every cached message/reply for each
+    # target channel and (re)download any file not on disk. Idempotent — files
+    # already on disk return 'skipped'. This catches files that errored on a
+    # prior run (e.g. before the auth fix) without re-fetching the events.
+    if media_dir is not None and media_headers is not None:
+        target_cids = {cid for cid, _ in targets}
+        cached: list[dict[str, Any]] = []
+        for (cid, _ts), rec in existing_messages.items():
+            if cid in target_cids:
+                cached.append(rec)
+        for (cid, _tts, _rts), rec in existing_replies.items():
+            if cid in target_cids:
+                cached.append(rec)
+        if cached:
+            typer.echo(f"media sweep: {len(cached)} cached records")
+            sweep = _download_files_for_records(cached, media_dir, media_headers)
+            for k, v in sweep.items():
+                media_totals[k] = media_totals.get(k, 0) + v
 
     typer.echo(f"\nnew: {totals['messages']} messages  {totals['replies']} replies  "
                f"{totals['reactions']} reactions")
+    if media_dir is not None and media_totals:
+        typer.echo("media: " + " ".join(f"{k}={v}" for k, v in media_totals.items() if v))
 
 
 def main() -> None:
