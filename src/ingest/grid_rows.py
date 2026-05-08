@@ -27,6 +27,7 @@ from typing import Iterable
 from pymysql.connections import Connection
 
 from ingest.generated_grid_rows import COLUMNS, DDL
+from ingest.render import _slugify
 
 
 _GRID_ROWS_COLUMNS = COLUMNS["grid_rows"]
@@ -63,6 +64,7 @@ class _Row:
     entire_chat: str
     text: str
     slack_link: str | None
+    qmd_path: str | None
 
 
 def _bump_micros(ts: str, n: int) -> str:
@@ -120,6 +122,42 @@ def _extract_model_from_raw(raw_json: str | None) -> str:
     return m.group(1) if m else ""
 
 
+# ----- qmd path computation -------------------------------------------------
+#
+# The grid row points the preview pane at a specific QMD on disk by carrying
+# the file's path (relative to the data root) in `qmd_path`. We compute the
+# path by mirroring exactly what the renderer in `ingest/render.py` writes,
+# so every grid row knows the file without globbing or frontmatter scanning.
+# Chat-level rows carry their own path; message/block rows inherit their
+# parent thread's path so a click anywhere opens the right QMD.
+
+
+def _anthropic_qmd_path(
+    account_uuid: str | None, conversation_uuid: str, name: str | None
+) -> str:
+    return (
+        f"anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{_slugify(name)}.qmd"
+    )
+
+
+def _openai_qmd_path(
+    account_id: str | None, conversation_id: str, title: str | None
+) -> str:
+    return f"openai/{account_id or 'unknown'}/llm_chats/{conversation_id}__{_slugify(title)}.qmd"
+
+
+def _slack_thread_title(root_text: str | None) -> str:
+    snippet = (root_text or "").strip().splitlines()
+    title = snippet[0] if snippet else "(empty thread)"
+    return title[:80]
+
+
+def _slack_qmd_path(
+    team_id: str, channel_name: str, thread_uuid: str, root_text: str | None
+) -> str:
+    return f"slack/{team_id}/{channel_name}/threads/{thread_uuid}__{_slugify(_slack_thread_title(root_text))}.qmd"
+
+
 # ----- row builders ---------------------------------------------------------
 
 
@@ -150,6 +188,7 @@ def _anthropic_chat_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/chat/{cuuid}",
                 text=text,
                 slack_link=None,
+                qmd_path=_anthropic_qmd_path(account, cuuid, name),
             )
 
 
@@ -205,6 +244,7 @@ def _anthropic_message_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/chat/{cuuid}",
                 text=text or "",
                 slack_link=None,
+                qmd_path=_anthropic_qmd_path(account, cuuid, cname),
             )
 
 
@@ -264,6 +304,7 @@ def _anthropic_block_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/chat/{cuuid}",
                 text=row_text,
                 slack_link=None,
+                qmd_path=_anthropic_qmd_path(account, cuuid, cname),
             )
 
 
@@ -293,6 +334,7 @@ def _openai_chat_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/chat/{cid}",
                 text=title or "",
                 slack_link=None,
+                qmd_path=_openai_qmd_path(account, cid, title),
             )
 
 
@@ -352,6 +394,7 @@ def _openai_message_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/chat/{cid}",
                 text=text or "",
                 slack_link=None,
+                qmd_path=_openai_qmd_path(account, cid, ctitle),
             )
 
 
@@ -420,6 +463,7 @@ def _slack_thread_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/slack/{thread_uuid}",
                 text=text or "",
                 slack_link=_slack_link(team_id, channel_id, ts),
+                qmd_path=_slack_qmd_path(team_id, channel_name, thread_uuid, text),
             )
 
 
@@ -442,10 +486,13 @@ def _slack_message_rows(conn: Connection) -> Iterable[_Row]:
             SELECT m.uuid, m.team_id, m.channel_id, m.ts, m.thread_uuid,
                    m.user_id, m.text, m.ts_iso, m.msg_idx,
                    c.name AS channel_name,
-                   u.real_name, u.name
+                   u.real_name, u.name,
+                   r.text AS root_text
             FROM m
             JOIN slack_channels c ON c.channel_id = m.channel_id
             LEFT JOIN slack_users u ON u.user_id = m.user_id
+            LEFT JOIN slack_messages r ON r.thread_uuid = m.thread_uuid
+                                      AND r.is_thread_root = TRUE
             """
         )
         for (
@@ -461,6 +508,7 @@ def _slack_message_rows(conn: Connection) -> Iterable[_Row]:
             channel_name,
             user_real,
             user_name,
+            root_text,
         ) in cur.fetchall():
             author = user_real or user_name or user_id
             yield _Row(
@@ -479,6 +527,7 @@ def _slack_message_rows(conn: Connection) -> Iterable[_Row]:
                 entire_chat=f"/slack/{thread_uuid}",
                 text=text or "",
                 slack_link=_slack_link(team_id, channel_id, ts),
+                qmd_path=_slack_qmd_path(team_id, channel_name, thread_uuid, root_text),
             )
 
 
@@ -526,6 +575,7 @@ def populate_grid_rows(conn: Connection) -> int:
                         r.entire_chat,
                         r.text,
                         r.slack_link,
+                        r.qmd_path,
                     )
                     for r in rows
                 ],

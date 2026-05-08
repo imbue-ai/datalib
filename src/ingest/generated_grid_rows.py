@@ -132,6 +132,14 @@ class GridRow:
     """
     slack_link: str | None
     """Deep link of the form `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or the https equivalent). Populated only for Slack rows; drives the 'Open in Slack' right-click context menu item."""
+    qmd_path: str | None
+    """Path to the rendered QMD file for this row's conversation/thread, relative to the data root. Set on every row (chat-level rows point at their own QMD; message/block rows inherit their parent thread's). The chat preview pane uses this to load the conversation directly — no glob, no frontmatter scan.
+
+    Per-provider mapping:
+      anthropic: anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{slug(name)}.qmd
+      openai: openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.qmd
+      slack: slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.qmd
+    """
 
 
 TABLES: dict[str, str] = {
@@ -159,6 +167,7 @@ CREATE TABLE IF NOT EXISTS grid_rows (
     entire_chat VARCHAR(255) NOT NULL,
     text LONGTEXT NOT NULL,
     slack_link VARCHAR(512),
+    qmd_path VARCHAR(512),
     PRIMARY KEY (uuid)
 )
     """,
@@ -183,5 +192,6 @@ COLUMNS: dict[str, list[str]] = {
         "entire_chat",
         "text",
         "slack_link",
+        "qmd_path",
     ],
 }

@@ -17,7 +17,7 @@ use axum::{
     routing::get,
     Router,
 };
-use frankweiler_core::db::grid_rows;
+use frankweiler_core::db::{grid_rows, qmd_path_for_conversation};
 use frankweiler_core::qmd::{self, Conversation};
 use frankweiler_core::query::parse_query;
 use frankweiler_core::search::SearchRow;
@@ -141,13 +141,15 @@ async fn chat(
     State(s): State<AppState>,
     Path(conversation_uuid): Path<String>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    let convs = qmd::load_all(&s.root);
-    let conv = convs
-        .into_iter()
-        .find(|c: &Conversation| c.frontmatter.uuid == conversation_uuid)
-        .ok_or(StatusCode::NOT_FOUND)?;
+    // The grid row carries `qmd_path` — a relative path to the rendered
+    // QMD computed at ingest time from the same slug fn the renderer
+    // uses. Look it up by conversation_uuid; no globbing, no frontmatter.
+    let path =
+        qmd_path_for_conversation(&s.root, &conversation_uuid).ok_or(StatusCode::NOT_FOUND)?;
+    let conv: Conversation =
+        qmd::parse_qmd(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(ChatResponse {
-        conversation_uuid: conv.frontmatter.uuid,
+        conversation_uuid,
         name: conv.frontmatter.name,
         account_uuid: conv.frontmatter.account_uuid,
         project_uuid: conv.frontmatter.project_uuid,

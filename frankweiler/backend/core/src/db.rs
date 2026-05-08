@@ -76,6 +76,29 @@ fn first_chars(s: &str, n: usize) -> String {
     out
 }
 
+/// Look up the `qmd_path` for a conversation/thread, relative to the data
+/// root. The grid populates this column at ingest time so the chat preview
+/// can read the right QMD file directly — no globbing, no frontmatter scan.
+/// Prefers the chat-level row (`Chat` / `Slack Thread`) but any row in the
+/// conversation will have the same `qmd_path` value.
+pub fn qmd_path_for_conversation(
+    root: &Path,
+    conversation_uuid: &str,
+) -> Option<std::path::PathBuf> {
+    let conn = open_mirror(root)?;
+    let qmd_rel: String = conn
+        .query_row(
+            "SELECT qmd_path FROM grid_rows \
+             WHERE conversation_uuid = ?1 AND qmd_path IS NOT NULL \
+             ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
+             LIMIT 1",
+            [conversation_uuid],
+            |r| r.get(0),
+        )
+        .ok()?;
+    Some(root.join(qmd_rel))
+}
+
 pub fn grid_rows(root: &Path, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     let Some(conn) = open_mirror(root) else {
         return Vec::new();
