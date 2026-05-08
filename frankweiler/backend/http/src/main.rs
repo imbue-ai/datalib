@@ -5,6 +5,10 @@
 //!   2. `root:` from $FRANKWEILER_CONFIG or ~/.config/frankweiler/config.yaml
 //!   3. ~/Documents/personal-mirror (default)
 //!
+//! Bind address is $FRANKWEILER_BIND if set, else backend.bind from the
+//! config file, else 127.0.0.1:8731. The env override exists primarily for
+//! tests that need a non-default port without writing a config file.
+//!
 //! The server starts even if the root doesn't exist yet — `/api/search` will
 //! just return zero rows. `/api/health` reports the resolved root and whether
 //! it exists, which is handy when wiring up the UI.
@@ -27,10 +31,11 @@ async fn main() -> anyhow::Result<()> {
 
 fn resolve_bind_and_root() -> (String, PathBuf) {
     let cfg = load_config(Some(&default_config_path())).ok();
-    let bind = cfg
-        .as_ref()
-        .map(|c| c.backend.bind.clone())
-        .unwrap_or_else(|| BackendConfig::default().bind);
+    let bind = std::env::var("FRANKWEILER_BIND").ok().unwrap_or_else(|| {
+        cfg.as_ref()
+            .map(|c| c.backend.bind.clone())
+            .unwrap_or_else(|| BackendConfig::default().bind)
+    });
     let root = if let Ok(env) = std::env::var("FRANKWEILER_ROOT") {
         expand_tilde(&env)
     } else if let Some(c) = cfg {

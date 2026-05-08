@@ -134,6 +134,7 @@ Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
 | Rust           | `cd frankweiler/backend && cargo test`           |
 | Vue / Vitest   | `cd frankweiler/ui && pnpm test`                 |
 | Vite dev UI    | `cd frankweiler/ui && pnpm dev`                  |
+| Playwright e2e | `bazelisk run //frankweiler/ui:e2e`              |
 
 ### Regenerating the cross-language types
 
