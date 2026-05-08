@@ -79,6 +79,11 @@ Runs:
 - Rust unit tests (`//frankweiler/backend/{schema,core,tauri-backend}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
+- Playwright e2e suite (`//frankweiler/ui:e2e_test`) — non-hermetic by
+  design: the test shells out to host `pnpm` / `node` / Playwright
+  browser cache rather than wiring `rules_js`. The contract is "`bazel
+  test //...` actually exercises the e2e suite", not full Bazel
+  ownership of the JS toolchain.
 
 ### Launch the dev UI
 
