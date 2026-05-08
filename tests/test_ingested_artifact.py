@@ -42,6 +42,7 @@ def test_dump_sql_has_expected_tables_and_rows() -> None:
         "c0000002-1701-4d00-8000",  # Warp plasma
         "c0000003-1701-4d00-8000",  # Klingon dispatch
         "c0000004-1701-4d00-8000",  # Tricorder
+        "c0000005-1701-4d00-8000",  # Borg encryption signature
         "68fa0001-fake-7000-8000",  # Sonnet
         "68fa0002-fake-7000-8000",  # Polyfit
     ):
@@ -68,9 +69,9 @@ def test_qmd_tar_contains_expected_files() -> None:
     with tarfile.open(tar_path) as tf:
         names = sorted(tf.getnames())
 
-    # Six rendered conversations across two providers.
+    # Seven rendered conversations across two providers.
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 6, qmd_files
+    assert len(qmd_files) == 7, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -88,7 +89,7 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
 
     # Row counts match what the genrule logged.
     assert conn.execute("SELECT COUNT(*) FROM anthropic_accounts").fetchone()[0] == 3
-    assert conn.execute("SELECT COUNT(*) FROM anthropic_conversations").fetchone()[0] == 4
+    assert conn.execute("SELECT COUNT(*) FROM anthropic_conversations").fetchone()[0] == 5
     assert conn.execute("SELECT COUNT(*) FROM openai_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM openai_conversations").fetchone()[0] == 2
 
