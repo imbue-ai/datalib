@@ -229,7 +229,12 @@ def fetch(args: argparse.Namespace) -> None:
         api_update = item.get("update_time")
         cache_path = convs_dir / f"{cid}.json"
         cached = _read_json(cache_path)
-        if cached is not None and cached.get("update_time") == api_update:
+        # The listing endpoint returns update_time as an ISO-8601 string,
+        # but the detail endpoint returns it as a Unix-epoch float — so we
+        # can't compare the listing value against cached["update_time"]
+        # directly. Stash the listing value under a separate key so future
+        # runs have a like-for-like comparison.
+        if cached is not None and cached.get("_listing_update_time") == api_update:
             skipped += 1
             pbar.set_postfix(fetched=fetched, skipped=skipped, errors=errors)
             continue
@@ -246,6 +251,10 @@ def fetch(args: argparse.Namespace) -> None:
             continue
         # Stamp our own provenance/fetch timestamp so we can audit later.
         full["_fetched_at"] = started_at
+        # Preserve the listing's update_time verbatim so the next run can
+        # do a string-equality skip check (listing ISO-8601 vs detail float
+        # would otherwise never match).
+        full["_listing_update_time"] = api_update
         _write_json(cache_path, full)
         fetched += 1
         title = (item.get("title") or "")[:40]
