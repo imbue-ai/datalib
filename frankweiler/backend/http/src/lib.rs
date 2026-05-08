@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -79,12 +80,16 @@ pub struct ChatResponse {
 }
 
 pub fn router(state: AppState) -> Router {
+    // Slack image attachments are symlinked into `<root>/media/slack/<file_id>/`
+    // by ingest; serve them verbatim so QMD-embedded `![](...)` URLs resolve.
+    let media_dir = state.root.join("media");
     Router::new()
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))
         .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
         .route("/api/chat/{conversation_uuid}", get(chat))
+        .nest_service("/api/media", ServeDir::new(media_dir))
         .with_state(state)
         .layer(CorsLayer::permissive())
 }

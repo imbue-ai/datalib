@@ -451,15 +451,83 @@ def _slack_message_link(team_id: str, channel_id: str, ts: str) -> str:
     return f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
 
 
-def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
+def _publish_slack_image(
+    file_obj: dict,
+    media_dirs: list[Path],
+    root: Path,
+) -> str | None:
+    """If `file_obj` is an image we can serve, ensure a symlink under
+    `<root>/media/slack/<file_id>/<filename>` points at the source file
+    and return the URL path the UI should use. Returns None for
+    non-images, externals, or files we can't locate on disk."""
+    mimetype = (file_obj.get("mimetype") or "").lower()
+    if not mimetype.startswith("image/"):
+        return None
+    file_id = file_obj.get("id")
+    if (
+        not file_id
+        or file_obj.get("mode") == "tombstone"
+        or file_obj.get("is_external")
+    ):
+        return None
+    name = file_obj.get("name") or file_id
+    safe_name = (
+        "".join(c if c.isalnum() or c in "-._ " else "_" for c in name).strip()
+        or file_id
+    )
+    src: Path | None = None
+    for md in media_dirs:
+        candidate = md / file_id / safe_name
+        if candidate.exists():
+            src = candidate
+            break
+        # Fallback: any file in the file_id dir (filename mismatch).
+        d = md / file_id
+        if d.is_dir():
+            files = [p for p in d.iterdir() if p.is_file()]
+            if files:
+                src = files[0]
+                safe_name = files[0].name
+                break
+    if src is None:
+        return None
+    dst_dir = root / "media" / "slack" / file_id
+    dst = dst_dir / safe_name
+    if not dst.exists():
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dst.symlink_to(src.resolve())
+        except OSError:
+            # Fall back to copy on filesystems that disallow symlinks.
+            import shutil
+
+            shutil.copy2(src, dst)
+    from urllib.parse import quote
+
+    return f"/api/media/slack/{quote(file_id)}/{quote(safe_name)}"
+
+
+def render_slack_thread(
+    conn: Connection,
+    thread_uuid: str,
+    root: Path,
+    media_dirs: list[Path] | None = None,
+) -> Path:
     """Render one Slack thread (one root + zero-or-more replies) into a
     single QMD. Standalone messages without replies are still threads of
-    length 1, so this function handles them too."""
+    length 1, so this function handles them too.
+
+    `media_dirs` is the list of `<slack_source>/media` directories to
+    search for image attachments referenced in `raw_json['files']`. When
+    found, an image is symlinked into `<root>/media/slack/<file_id>/`
+    and embedded as a markdown image."""
+    media_dirs = media_dirs or []
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT m.uuid, m.team_id, m.channel_id, m.ts, m.thread_ts, m.user_id,
-                   m.text, m.ts_iso, m.is_thread_root, c.name AS channel_name
+                   m.text, m.ts_iso, m.is_thread_root, c.name AS channel_name,
+                   m.raw_json
             FROM slack_messages m
             JOIN slack_channels c ON c.channel_id = m.channel_id
             WHERE m.thread_uuid = %s
@@ -500,9 +568,19 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
             reactions_by_msg.setdefault(mid, []).append((name, uid))
 
     root_row = next((r for r in rows if r[8]), rows[0])
-    _, team_id, channel_id, root_ts, _, _, root_text, root_ts_iso, _, channel_name = (
-        root_row
-    )
+    (
+        _,
+        team_id,
+        channel_id,
+        root_ts,
+        _,
+        _,
+        root_text,
+        root_ts_iso,
+        _,
+        channel_name,
+        _,
+    ) = root_row
 
     # Use the root message's text (truncated) as the thread's display name.
     # Mirrors how the Slack UI labels threads when no explicit title exists.
@@ -546,6 +624,7 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
         ts_iso,
         _is_root,
         _,
+        raw_json,
     ) in enumerate(rows):
         author = user_labels.get(user_id, user_id or "unknown")
         link = _slack_message_link(team_id, channel_id, ts)
@@ -563,6 +642,23 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
         parts.append("")
         parts.append(_slack_to_commonmark((text or "").rstrip(), user_labels))
         parts.append("")
+        files = []
+        if raw_json:
+            try:
+                raw = (
+                    json.loads(raw_json)
+                    if isinstance(raw_json, (str, bytes))
+                    else raw_json
+                )
+                files = raw.get("files") or []
+            except (ValueError, TypeError):
+                files = []
+        for f in files:
+            url = _publish_slack_image(f, media_dirs, root)
+            if url:
+                alt = (f.get("title") or f.get("name") or "image").replace("]", "")
+                parts.append(f"![{alt}]({url})")
+                parts.append("")
         rxs = reactions_by_msg.get(msg_uuid)
         if rxs:
             # Group reactions by emoji name to render `:thumbsup: ×2` instead
@@ -616,8 +712,16 @@ def _write_accounts_index(conn: Connection, root: Path) -> None:
     )
 
 
-def render_all(conn: Connection, root: Path) -> RenderSummary:
+def render_all(
+    conn: Connection,
+    root: Path,
+    slack_media_dirs: list[Path] | None = None,
+) -> RenderSummary:
+    """`slack_media_dirs` lists `<slack_source>/media` directories whose
+    image attachments should be symlinked into `<root>/media/slack/` and
+    embedded in rendered Slack QMDs. Empty/None disables image embedding."""
     summary = RenderSummary()
+    slack_media_dirs = slack_media_dirs or []
 
     if _table_exists(conn, "anthropic_conversations"):
         with conn.cursor() as cur:
@@ -687,7 +791,7 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
             live_threads.add(thread_uuid)
             cname = channel_names.get(channel_id) or channel_id
             slack_dirs.add((team_id, cname))
-            render_slack_thread(conn, thread_uuid, root)
+            render_slack_thread(conn, thread_uuid, root, media_dirs=slack_media_dirs)
             summary.rendered += 1
         for team_id, cname in slack_dirs:
             threads_dir = root / "slack" / team_id / cname / "threads"

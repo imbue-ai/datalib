@@ -29,6 +29,7 @@ filegroup(
         "anthropic_api/**/*.json",
         "chatgpt_api/**/*.json",
         "slack_api/**/*.jsonl",
+        "slack_api/media/**/*",
     ]),
     visibility = ["//visibility:public"],
 )

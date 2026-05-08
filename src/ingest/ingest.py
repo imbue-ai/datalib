@@ -109,8 +109,13 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         names = ",".join(s.name for s in summary.sources) or "<none>"
         summary.commit_hash = dolt.commit(f"ingest {names} {started_at}")
 
+        slack_media_dirs = [
+            s.path / "media"
+            for s in config.enabled_sources
+            if isinstance(s, SlackApiDirSource) and (s.path / "media").is_dir()
+        ]
         with dolt.connect() as conn:
-            r = render_all(conn, config.root)
+            r = render_all(conn, config.root, slack_media_dirs=slack_media_dirs)
             summary.rendered = r.rendered
             summary.rendered_orphans_removed = r.orphans_removed
 
