@@ -16,3 +16,19 @@ sh_binary(
     data = ["//frankweiler/backend/http:frankweiler_http_bin"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
+
+# Same as :dev, but materializes a one-shot data root from the
+# checked-in TNG fixtures (`//tests/fixtures:ingested_tng`) into a
+# tmpdir and points the backend at it. Useful for eyeballing the grid
+# without needing a real on-disk personal-mirror. Requires sqlite3
+# on PATH (Bazel runs the genrule as `requires-dolt`, so dolt must
+# also be available the first time the artifact is built).
+sh_binary(
+    name = "dev_tng",
+    srcs = ["dev_tng.sh"],
+    data = [
+        ":dev",
+        "//tests/fixtures:ingested_tng",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
