@@ -103,26 +103,35 @@ pub fn grid_rows(root: &Path, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     let Some(conn) = open_mirror(root) else {
         return Vec::new();
     };
+    grid_rows_with_conn(&conn, q, limit)
+}
+
+pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     let mut rows: Vec<SearchRow> = Vec::new();
     let needle = q.free_text.to_lowercase();
     let want_chats = matches!(q.resolved_type, RowType::Chat | RowType::All);
     let want_messages = matches!(q.resolved_type, RowType::Message | RowType::All);
 
+    // Data is small; fetch everything from each source, then sort globally.
+    // Per-section LIMITs caused later sections (e.g. openai messages) to be
+    // starved of budget when earlier sections filled the cap.
     if want_chats {
-        push_anthropic_chats(&conn, q, &needle, limit, &mut rows);
-        if rows.len() < limit {
-            push_openai_chats(&conn, q, &needle, limit, &mut rows);
-        }
+        push_anthropic_chats(conn, q, &needle, &mut rows);
+        push_openai_chats(conn, q, &needle, &mut rows);
     }
-    if want_messages && rows.len() < limit {
-        push_anthropic_messages(&conn, q, &needle, limit, &mut rows);
-        if rows.len() < limit {
-            push_anthropic_blocks(&conn, q, &needle, limit, &mut rows);
-        }
-        if rows.len() < limit {
-            push_openai_messages(&conn, q, &needle, limit, &mut rows);
-        }
+    if want_messages {
+        push_anthropic_messages(conn, q, &needle, &mut rows);
+        push_anthropic_blocks(conn, q, &needle, &mut rows);
+        push_openai_messages(conn, q, &needle, &mut rows);
     }
+    // Global ascending sort by time. Chat rows tie-break ahead of messages
+    // so each conversation's Chat row precedes its own messages when their
+    // timestamps coincide.
+    rows.sort_by(|a, b| {
+        a.when
+            .cmp(&b.when)
+            .then_with(|| (a.kind != "Chat").cmp(&(b.kind != "Chat")))
+    });
     rows.truncate(limit);
     rows
 }
@@ -190,25 +199,24 @@ fn push_anthropic_chats(
     conn: &Connection,
     q: &ParsedQuery,
     needle: &str,
-    limit: usize,
     out: &mut Vec<SearchRow>,
 ) {
+    // Use created_at as the chat's effective time so the Chat row sorts
+    // ahead of its own messages under a global ascending time order.
     let (where_sql, params) = build_filter_clause(
         q,
         "account_uuid",
         Some("project_uuid"),
-        "IFNULL(updated_at, created_at)",
+        "IFNULL(created_at, updated_at)",
         &["name", "summary"],
         needle,
     );
     let sql = format!(
         "SELECT conversation_uuid, account_uuid, project_uuid, name, summary, \
-                IFNULL(updated_at, created_at) AS when_ts \
-         FROM anthropic_conversations{} ORDER BY when_ts DESC LIMIT ?",
+                IFNULL(created_at, updated_at) AS when_ts \
+         FROM anthropic_conversations{}",
         where_sql
     );
-    let mut params: Vec<String> = params;
-    params.push((limit - out.len()).to_string());
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
@@ -238,9 +246,6 @@ fn push_anthropic_chats(
             kind: "Chat".into(),
             author: String::new(),
         });
-        if out.len() >= limit {
-            return;
-        }
     }
 }
 
@@ -248,25 +253,22 @@ fn push_openai_chats(
     conn: &Connection,
     q: &ParsedQuery,
     needle: &str,
-    limit: usize,
     out: &mut Vec<SearchRow>,
 ) {
     let (where_sql, params) = build_filter_clause(
         q,
         "account_id",
         None,
-        "IFNULL(update_time, create_time)",
+        "IFNULL(create_time, update_time)",
         &["title"],
         needle,
     );
     let sql = format!(
         "SELECT conversation_id, account_id, title, default_model_slug, \
-                IFNULL(update_time, create_time) AS when_ts \
-         FROM openai_conversations{} ORDER BY when_ts DESC LIMIT ?",
+                IFNULL(create_time, update_time) AS when_ts \
+         FROM openai_conversations{}",
         where_sql
     );
-    let mut params = params;
-    params.push((limit - out.len()).to_string());
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
@@ -294,9 +296,6 @@ fn push_openai_chats(
             kind: "Chat".into(),
             author: String::new(),
         });
-        if out.len() >= limit {
-            return;
-        }
     }
 }
 
@@ -304,7 +303,6 @@ fn push_anthropic_messages(
     conn: &Connection,
     q: &ParsedQuery,
     needle: &str,
-    limit: usize,
     out: &mut Vec<SearchRow>,
 ) {
     let (where_sql, params) = build_filter_clause(
@@ -320,12 +318,9 @@ fn push_anthropic_messages(
                 c.name, c.project_uuid, c.account_uuid, \
                 json_extract(c.raw_json, '$.model') AS conv_model \
          FROM anthropic_messages m JOIN anthropic_conversations c \
-              ON m.conversation_uuid = c.conversation_uuid{} \
-         ORDER BY m.created_at DESC LIMIT ?",
+              ON m.conversation_uuid = c.conversation_uuid{}",
         where_sql
     );
-    let mut params = params;
-    params.push((limit - out.len()).to_string());
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
@@ -369,9 +364,6 @@ fn push_anthropic_messages(
             kind: kind.into(),
             author,
         });
-        if out.len() >= limit {
-            return;
-        }
     }
 }
 
@@ -379,7 +371,6 @@ fn push_anthropic_blocks(
     conn: &Connection,
     q: &ParsedQuery,
     needle: &str,
-    limit: usize,
     out: &mut Vec<SearchRow>,
 ) {
     let (where_sql, params) = build_filter_clause(
@@ -403,12 +394,9 @@ fn push_anthropic_blocks(
                 json_extract(c.raw_json, '$.model') AS conv_model \
          FROM anthropic_content_blocks b \
               JOIN anthropic_messages m ON b.message_uuid = m.message_uuid \
-              JOIN anthropic_conversations c ON m.conversation_uuid = c.conversation_uuid{} \
-         ORDER BY b.start_timestamp DESC LIMIT ?",
+              JOIN anthropic_conversations c ON m.conversation_uuid = c.conversation_uuid{}",
         where_sql
     );
-    let mut params = params;
-    params.push((limit - out.len()).to_string());
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
@@ -443,9 +431,6 @@ fn push_anthropic_blocks(
             kind: kind.into(),
             author,
         });
-        if out.len() >= limit {
-            return;
-        }
     }
 }
 
@@ -453,7 +438,6 @@ fn push_openai_messages(
     conn: &Connection,
     q: &ParsedQuery,
     needle: &str,
-    limit: usize,
     out: &mut Vec<SearchRow>,
 ) {
     let (where_sql, params) = build_filter_clause(
@@ -468,12 +452,9 @@ fn push_openai_messages(
         "SELECT m.message_id, m.conversation_id, m.role, m.text, m.create_time, m.model_slug, \
                 c.title, c.account_id \
          FROM openai_messages m JOIN openai_conversations c \
-              ON m.conversation_id = c.conversation_id{} \
-         ORDER BY m.create_time DESC LIMIT ?",
+              ON m.conversation_id = c.conversation_id{}",
         where_sql
     );
-    let mut params = params;
-    params.push((limit - out.len()).to_string());
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
@@ -516,8 +497,200 @@ fn push_openai_messages(
             kind: kind.into(),
             author,
         });
-        if out.len() >= limit {
-            return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::parse_query;
+    use rusqlite::Connection;
+
+    /// Minimal schema mirror — just the columns the grid query reads.
+    /// Keep it in sync with `src/ingest/providers/*/schema.py`.
+    fn build_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE anthropic_accounts (
+                account_uuid TEXT PRIMARY KEY, email TEXT, full_name TEXT,
+                raw_json TEXT, source TEXT, first_seen_at TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE anthropic_projects (
+                account_uuid TEXT, project_uuid TEXT PRIMARY KEY, name TEXT,
+                description TEXT, is_starter INT, created_at TEXT, updated_at TEXT,
+                raw_json TEXT, source TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE anthropic_conversations (
+                account_uuid TEXT, conversation_uuid TEXT PRIMARY KEY,
+                project_uuid TEXT, name TEXT, summary TEXT,
+                created_at TEXT, updated_at TEXT, raw_json TEXT,
+                source TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE anthropic_messages (
+                conversation_uuid TEXT, message_uuid TEXT PRIMARY KEY,
+                parent_message_uuid TEXT, sender TEXT, text TEXT,
+                created_at TEXT, updated_at TEXT, raw_json TEXT,
+                source TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE anthropic_content_blocks (
+                message_uuid TEXT, block_index INT, type TEXT, text TEXT,
+                start_timestamp TEXT, stop_timestamp TEXT, raw_json TEXT,
+                source TEXT, PRIMARY KEY (message_uuid, block_index)
+            );
+            CREATE TABLE anthropic_attachments (
+                message_uuid TEXT, attachment_index INT, kind TEXT,
+                raw_json TEXT, source TEXT,
+                PRIMARY KEY (message_uuid, attachment_index, kind)
+            );
+            CREATE TABLE openai_accounts (
+                account_id TEXT PRIMARY KEY, email TEXT, name TEXT,
+                raw_json TEXT, source TEXT, first_seen_at TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE openai_conversations (
+                account_id TEXT, conversation_id TEXT PRIMARY KEY, title TEXT,
+                create_time TEXT, update_time TEXT, current_node TEXT,
+                default_model_slug TEXT, gizmo_id TEXT, gizmo_type TEXT,
+                is_archived INT, is_starred INT, raw_json TEXT,
+                source TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE openai_messages (
+                conversation_id TEXT, message_id TEXT PRIMARY KEY,
+                parent_id TEXT, role TEXT, recipient TEXT, channel TEXT,
+                content_type TEXT, text TEXT, status TEXT, end_turn INT,
+                weight REAL, model_slug TEXT, create_time TEXT,
+                update_time TEXT, raw_json TEXT, source TEXT, last_seen_at TEXT
+            );
+            CREATE TABLE openai_content_parts (
+                message_id TEXT, part_index INT, kind TEXT, language TEXT,
+                text TEXT, raw_json TEXT, source TEXT,
+                PRIMARY KEY (message_id, part_index)
+            );
+            ",
+        )
+        .unwrap();
+
+        // Many anthropic chats and messages so they crowd a small overall budget.
+        // 5 chats × 4 messages each = 5 chat rows + 20 message rows.
+        for i in 0..5 {
+            let cuuid = format!("a-conv-{i:02}");
+            conn.execute(
+                "INSERT INTO anthropic_conversations (account_uuid, conversation_uuid, name, \
+                 created_at, updated_at, raw_json, source, last_seen_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, 'export', ?)",
+                rusqlite::params![
+                    "acct-a",
+                    &cuuid,
+                    &format!("Anthropic chat {i}"),
+                    &format!("2026-04-{:02}T10:00:00Z", i + 1),
+                    &format!("2026-04-{:02}T10:30:00Z", i + 1),
+                    "{\"model\":\"claude-opus-4-7\"}",
+                    &format!("2026-04-{:02}T10:30:00Z", i + 1),
+                ],
+            )
+            .unwrap();
+            for j in 0..4 {
+                conn.execute(
+                    "INSERT INTO anthropic_messages (conversation_uuid, message_uuid, sender, \
+                     text, created_at, updated_at, raw_json, source, last_seen_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, '{}', 'export', ?)",
+                    rusqlite::params![
+                        &cuuid,
+                        &format!("a-msg-{i:02}-{j:02}"),
+                        if j % 2 == 0 { "human" } else { "assistant" },
+                        &format!("anthropic msg {i}-{j} body text"),
+                        &format!("2026-04-{:02}T10:{:02}:00Z", i + 1, j),
+                        &format!("2026-04-{:02}T10:{:02}:00Z", i + 1, j),
+                        &format!("2026-04-{:02}T10:{:02}:00Z", i + 1, j),
+                    ],
+                )
+                .unwrap();
+            }
         }
+        // One March-2025 ChatGPT conversation with several messages.
+        conn.execute(
+            "INSERT INTO openai_conversations (account_id, conversation_id, title, create_time, \
+             update_time, raw_json, source, last_seen_at) \
+             VALUES (?, ?, ?, ?, ?, '{}', 'api', ?)",
+            rusqlite::params![
+                "acct-o",
+                "o-conv-01",
+                "Defaults in Program Design",
+                "2025-03-31T22:02:49Z",
+                "2025-03-31T22:02:56Z",
+                "2025-03-31T22:02:56Z",
+            ],
+        )
+        .unwrap();
+        for (j, role) in ["user", "assistant", "user", "assistant"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO openai_messages (conversation_id, message_id, role, text, \
+                 create_time, model_slug, raw_json, source, last_seen_at) \
+                 VALUES (?, ?, ?, ?, ?, 'gpt-5', '{}', 'api', ?)",
+                rusqlite::params![
+                    "o-conv-01",
+                    &format!("o-msg-{j:02}"),
+                    role,
+                    &format!("openai msg {j} body text"),
+                    &format!("2025-03-31T22:02:5{}Z", j),
+                    &format!("2025-03-31T22:02:5{}Z", j),
+                ],
+            )
+            .unwrap();
+        }
+        conn
+    }
+
+    /// Bug #3 contract: results are globally sorted by time ascending,
+    /// with each Chat row appearing immediately before its own messages.
+    /// The current implementation enumerates source-by-source (anthropic
+    /// chats, openai chats, anthropic messages, …) so the older March-
+    /// 2025 ChatGPT chat ends up *after* the April-2026 anthropic chats,
+    /// and its messages may be cut off entirely. This test pins the
+    /// desired behavior; it should fail until the bug is fixed.
+    #[test]
+    fn rows_sorted_by_time_ascending_with_chat_before_its_messages() {
+        let conn = build_fixture();
+        let rows = grid_rows_with_conn(&conn, &parse_query(""), 1000);
+
+        // Every ChatGPT message must surface (no per-source budget eviction).
+        let openai_msg_count = rows
+            .iter()
+            .filter(|r| r.source == "ChatGPT" && r.kind != "Chat")
+            .count();
+        assert_eq!(
+            openai_msg_count, 4,
+            "expected all 4 ChatGPT messages; rows: {:?}",
+            rows.iter()
+                .map(|r| (r.source.clone(), r.kind.clone(), r.when.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        // Globally ascending by `when`.
+        let times: Vec<&str> = rows.iter().map(|r| r.when.as_str()).collect();
+        for w in times.windows(2) {
+            assert!(
+                w[0] <= w[1],
+                "rows not sorted ascending by when: {:?}",
+                times
+            );
+        }
+
+        // The oldest entries belong to the March-2025 ChatGPT conversation,
+        // and its Chat row must come before any of its messages.
+        let first_chatgpt_chat = rows
+            .iter()
+            .position(|r| r.source == "ChatGPT" && r.kind == "Chat")
+            .expect("no ChatGPT Chat row found");
+        let first_chatgpt_msg = rows
+            .iter()
+            .position(|r| r.source == "ChatGPT" && r.kind != "Chat")
+            .expect("no ChatGPT message rows found");
+        assert!(
+            first_chatgpt_chat < first_chatgpt_msg,
+            "ChatGPT Chat row must precede its messages (chat at {}, msg at {})",
+            first_chatgpt_chat,
+            first_chatgpt_msg,
+        );
     }
 }
