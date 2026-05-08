@@ -1,25 +1,53 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-# Playwright e2e suite. Run via:
-#   bazelisk run //frankweiler/ui:e2e
+# Playwright e2e suite, exposed two ways from the same wrapper script:
+#   bazelisk run  //frankweiler/ui:e2e        — interactive
+#   bazelisk test //frankweiler/ui:e2e_test   — picked up by `bazel test //...`
 #
-# Why sh_binary and not sh_test: the suite runs `pnpm exec playwright`
-# against the workspace UI tree (so it picks up the un-bazeled
-# node_modules + browser cache). `bazelisk run` exposes
-# BUILD_WORKSPACE_DIRECTORY, which the wrapper uses to cd into
-# frankweiler/ui. `bazelisk test` does not, and Playwright/pnpm aren't
-# wired into rules_js here, so a hermetic `sh_test` would require a
-# substantial node toolchain integration.
+# The wrapper does NOT manage node / pnpm / Playwright browsers itself —
+# it shells out to the host pnpm and reuses the source-tree node_modules
+# + ~/Library/Caches/ms-playwright. That's deliberately non-hermetic:
+# the goal here is "bazel test //... actually exercises the e2e suite",
+# not full Bazel ownership of the JS toolchain.
 #
-# The wrapper passes the bazel-built backend binary path through to the
-# Playwright config so e2e runs exercise the same artifact that `bazelisk
-# run //frankweiler:dev` does.
+# In `run` mode the wrapper uses BUILD_WORKSPACE_DIRECTORY; in `test`
+# mode it resolves the source UI dir by following the runfiles symlink
+# of frankweiler/ui/package.json back to its origin.
+
+_E2E_DATA = [
+    "//frankweiler/backend/http:frankweiler_http_bin",
+    "//tests/fixtures:ingested_tng",
+    "package.json",
+]
+
+_E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
+
 sh_binary(
     name = "e2e",
     srcs = ["run_e2e.sh"],
-    data = [
-        "//frankweiler/backend/http:frankweiler_http_bin",
-        "//tests/fixtures:ingested_tng",
+    data = _E2E_DATA,
+    deps = _E2E_DEPS,
+)
+
+sh_test(
+    name = "e2e_test",
+    srcs = ["run_e2e.sh"],
+    data = _E2E_DATA,
+    deps = _E2E_DEPS,
+    # Needs network (Playwright may fetch browser binary) and the host's
+    # pnpm / node / Playwright cache. Skipped in sandboxed CI runs that
+    # don't pass --test_tag_filters=-requires-network or similar.
+    tags = [
+        "external",
+        "no-sandbox",
+        "requires-network",
     ],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
+    # Inherit the user's PATH and HOME so the script can find pnpm / node
+    # and reuse ~/Library/Caches/ms-playwright (the browser cache) /
+    # ~/.local/share/pnpm. Bazel scrubs the test env otherwise.
+    env_inherit = [
+        "PATH",
+        "HOME",
+    ],
 )
