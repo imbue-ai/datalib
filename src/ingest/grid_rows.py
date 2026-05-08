@@ -355,6 +355,133 @@ def _openai_message_rows(conn: Connection) -> Iterable[_Row]:
             )
 
 
+def _slack_link(team_id: str, channel_id: str, ts: str) -> str:
+    ts_no_dot = ts.replace(".", "")
+    return f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+
+
+def _table_exists(conn: Connection, name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT DATABASE()")
+        (db,) = cur.fetchone()  # type: ignore[misc]
+        cur.execute(
+            "SELECT COUNT(*) FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name = %s",
+            (db, name),
+        )
+        (n,) = cur.fetchone()  # type: ignore[misc]
+        return bool(n)
+
+
+def _slack_thread_rows(conn: Connection) -> Iterable[_Row]:
+    """One Slack Thread row per distinct thread_uuid. The row's `text` is
+    the root message's body (which is what the user searches against);
+    when_ts is the root's ts_iso so the thread sorts by its origin time."""
+    if not _table_exists(conn, "slack_messages"):
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT m.thread_uuid, m.team_id, m.channel_id, m.ts, m.user_id,
+                   m.text, m.ts_iso, c.name AS channel_name,
+                   u.real_name, u.name
+            FROM slack_messages m
+            JOIN slack_channels c ON c.channel_id = m.channel_id
+            LEFT JOIN slack_users u ON u.user_id = m.user_id
+            WHERE m.is_thread_root = TRUE
+            """
+        )
+        for (
+            thread_uuid,
+            team_id,
+            channel_id,
+            ts,
+            user_id,
+            text,
+            ts_iso,
+            channel_name,
+            user_real,
+            user_name,
+        ) in cur.fetchall():
+            author = user_real or user_name or user_id
+            yield _Row(
+                uuid=thread_uuid,
+                provider="slack",
+                kind="Slack Thread",
+                source_label="Slack",
+                when_ts=ts_iso or "",
+                author=author,
+                account=team_id,
+                project=None,
+                channel=channel_name,
+                conversation_name=f"#{channel_name}",
+                conversation_uuid=thread_uuid,
+                message_index=None,
+                entire_chat=f"/slack/{thread_uuid}",
+                text=text or "",
+                slack_link=_slack_link(team_id, channel_id, ts),
+            )
+
+
+def _slack_message_rows(conn: Connection) -> Iterable[_Row]:
+    """One Slack Message row per slack_messages row (root + replies). Each
+    carries the parent thread's uuid in `conversation_uuid` so clicking a
+    message scrolls into the thread QMD at the right anchor."""
+    if not _table_exists(conn, "slack_messages"):
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH m AS (
+                SELECT uuid, team_id, channel_id, ts, thread_uuid, user_id, text,
+                       ts_iso,
+                       ROW_NUMBER() OVER (PARTITION BY thread_uuid
+                                          ORDER BY ts_iso, ts) - 1 AS msg_idx
+                FROM slack_messages
+            )
+            SELECT m.uuid, m.team_id, m.channel_id, m.ts, m.thread_uuid,
+                   m.user_id, m.text, m.ts_iso, m.msg_idx,
+                   c.name AS channel_name,
+                   u.real_name, u.name
+            FROM m
+            JOIN slack_channels c ON c.channel_id = m.channel_id
+            LEFT JOIN slack_users u ON u.user_id = m.user_id
+            """
+        )
+        for (
+            mid,
+            team_id,
+            channel_id,
+            ts,
+            thread_uuid,
+            user_id,
+            text,
+            ts_iso,
+            msg_idx,
+            channel_name,
+            user_real,
+            user_name,
+        ) in cur.fetchall():
+            author = user_real or user_name or user_id
+            yield _Row(
+                uuid=mid,
+                provider="slack",
+                kind="Slack Message",
+                source_label="Slack",
+                when_ts=ts_iso or "",
+                author=author,
+                account=team_id,
+                project=None,
+                channel=channel_name,
+                conversation_name=f"#{channel_name}",
+                conversation_uuid=thread_uuid,
+                message_index=int(msg_idx),
+                entire_chat=f"/slack/{thread_uuid}",
+                text=text or "",
+                slack_link=_slack_link(team_id, channel_id, ts),
+            )
+
+
 # ----- entry point ----------------------------------------------------------
 
 
@@ -368,6 +495,8 @@ def populate_grid_rows(conn: Connection) -> int:
         _anthropic_block_rows,
         _openai_chat_rows,
         _openai_message_rows,
+        _slack_thread_rows,
+        _slack_message_rows,
     )
     rows: list[_Row] = []
     for builder in builders:

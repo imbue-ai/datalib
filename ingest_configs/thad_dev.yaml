@@ -30,3 +30,9 @@ sources:
     kind: chatgpt_api_dir
     path: ~/backups/chatgpt_api
     provenance: api
+
+  # Slack web-API scrape (src/download/slack_web.py output).
+  - name: slack-api
+    provider: slack
+    kind: slack_api_dir
+    path: ~/backups/slack

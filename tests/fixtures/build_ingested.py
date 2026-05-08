@@ -71,6 +71,10 @@ sources:
     provider: openai
     kind: chatgpt_api_dir
     path: {fixtures / "chatgpt_api"}
+  - name: slack_api_tng
+    provider: slack
+    kind: slack_api_dir
+    path: {fixtures / "slack_api"}
 """
     )
 
@@ -110,7 +114,7 @@ sources:
     # its internal chunk store / journal files are not byte-stable across
     # runs (commit hashes, packing differences) and would bust the cache.
     qmd_tar = out / "qmd.tar"
-    qmd_subtrees = [d for d in ("anthropic", "openai") if (root / d).is_dir()]
+    qmd_subtrees = [d for d in ("anthropic", "openai", "slack") if (root / d).is_dir()]
     with tarfile.open(qmd_tar, "w") as tf:
         entries: list[Path] = []
         for sub in qmd_subtrees:

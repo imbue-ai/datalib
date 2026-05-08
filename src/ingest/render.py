@@ -411,6 +411,138 @@ def render_openai_conversation(
     return target
 
 
+def _slack_message_link(team_id: str, channel_id: str, ts: str) -> str:
+    """Slack web deep-link of the form
+    `https://slack.com/archives/{channel}/p{ts_no_dot}`. The `team` param
+    is appended so cross-workspace clicks land in the right org."""
+    ts_no_dot = ts.replace(".", "")
+    return f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+
+
+def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
+    """Render one Slack thread (one root + zero-or-more replies) into a
+    single QMD. Standalone messages without replies are still threads of
+    length 1, so this function handles them too."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT m.uuid, m.team_id, m.channel_id, m.ts, m.thread_ts, m.user_id,
+                   m.text, m.ts_iso, m.is_thread_root, c.name AS channel_name
+            FROM slack_messages m
+            JOIN slack_channels c ON c.channel_id = m.channel_id
+            WHERE m.thread_uuid = %s
+            ORDER BY m.ts_iso, m.ts
+            """,
+            (thread_uuid,),
+        )
+        rows = list(cur.fetchall())
+        if not rows:
+            raise KeyError(f"slack thread not found: {thread_uuid}")
+
+        # Resolve user_id -> display label once for the whole thread.
+        user_ids = {r[5] for r in rows if r[5]}
+        user_labels: dict[str, str] = {}
+        if user_ids:
+            placeholders = ",".join(["%s"] * len(user_ids))
+            cur.execute(
+                f"SELECT user_id, real_name, name FROM slack_users "
+                f"WHERE user_id IN ({placeholders})",
+                tuple(user_ids),
+            )
+            for uid, real_name, name in cur.fetchall():
+                user_labels[uid] = real_name or name or uid
+
+        cur.execute(
+            """
+            SELECT message_uuid, name, user_id
+            FROM slack_reactions
+            WHERE message_uuid IN (
+                SELECT uuid FROM slack_messages WHERE thread_uuid = %s
+            )
+            ORDER BY message_uuid, name, user_id
+            """,
+            (thread_uuid,),
+        )
+        reactions_by_msg: dict[str, list[tuple[str, str]]] = {}
+        for mid, name, uid in cur.fetchall():
+            reactions_by_msg.setdefault(mid, []).append((name, uid))
+
+    root_row = next((r for r in rows if r[8]), rows[0])
+    _, team_id, channel_id, root_ts, _, _, root_text, root_ts_iso, _, channel_name = (
+        root_row
+    )
+
+    # Use the root message's text (truncated) as the thread's display name.
+    # Mirrors how the Slack UI labels threads when no explicit title exists.
+    snippet = (root_text or "").strip().splitlines()
+    title = snippet[0] if snippet else "(empty thread)"
+    title = title[:80]
+
+    out_dir = root / "slack" / team_id / channel_name / "threads"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    slug = _slugify(title)
+    target = out_dir / f"{thread_uuid}__{slug}.qmd"
+    for existing in out_dir.glob(f"{thread_uuid}__*.qmd"):
+        if existing != target:
+            existing.unlink()
+
+    parts: list[str] = []
+    parts.append("---")
+    parts.append("provider: slack")
+    parts.append(f"thread_uuid: {_yaml_scalar(thread_uuid)}")
+    parts.append(f"team_id: {_yaml_scalar(team_id)}")
+    parts.append(f"channel_id: {_yaml_scalar(channel_id)}")
+    parts.append(f"channel_name: {_yaml_scalar(channel_name)}")
+    parts.append(f"root_ts: {_yaml_scalar(root_ts)}")
+    parts.append(f"root_ts_iso: {_yaml_scalar(root_ts_iso)}")
+    parts.append(
+        f"slack_link: {_yaml_scalar(_slack_message_link(team_id, channel_id, root_ts))}"
+    )
+    parts.append("---")
+    parts.append("")
+    parts.append(f"# #{channel_name}: {title}")
+    parts.append("")
+
+    for (
+        msg_uuid,
+        _,
+        _,
+        ts,
+        _,
+        user_id,
+        text,
+        ts_iso,
+        _is_root,
+        _,
+    ) in rows:
+        author = user_labels.get(user_id, user_id or "unknown")
+        link = _slack_message_link(team_id, channel_id, ts)
+        parts.append(f'<a id="m-{msg_uuid}"></a>')
+        parts.append(f"## {author}")
+        parts.append("")
+        parts.append(f"*{ts_iso} — [view in Slack]({link})*")
+        parts.append("")
+        parts.append((text or "").rstrip())
+        parts.append("")
+        rxs = reactions_by_msg.get(msg_uuid)
+        if rxs:
+            # Group reactions by emoji name to render `:thumbsup: ×2` instead
+            # of one line per reactor. The (name, user) tuples are already
+            # sorted by name from the SELECT above.
+            counts: dict[str, int] = {}
+            for name, _uid in rxs:
+                counts[name] = counts.get(name, 0) + 1
+            emoji_strs = [
+                f":{n}: ×{c}" if c > 1 else f":{n}:" for n, c in counts.items()
+            ]
+            parts.append("> Reactions: " + " ".join(emoji_strs))
+            parts.append("")
+
+    body = "\n".join(parts).rstrip() + "\n"
+    target.write_text(body)
+    return target
+
+
 def _write_accounts_index(conn: Connection, root: Path) -> None:
     """Emit `<root>/accounts.json` mapping account UUIDs → human labels.
 
@@ -489,6 +621,33 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
             for f in chats_dir.glob("*.qmd"):
                 id_prefix = f.name.split("__", 1)[0]
                 if id_prefix not in live_ids:
+                    f.unlink()
+                    summary.orphans_removed += 1
+
+    if _table_exists(conn, "slack_messages"):
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT thread_uuid, team_id, channel_id FROM slack_messages"
+            )
+            slack_rows = list(cur.fetchall())
+        live_threads: set[str] = set()
+        slack_dirs: set[tuple[str, str]] = set()
+        with conn.cursor() as cur:
+            cur.execute("SELECT channel_id, name FROM slack_channels")
+            channel_names = {cid: name for cid, name in cur.fetchall()}
+        for thread_uuid, team_id, channel_id in slack_rows:
+            live_threads.add(thread_uuid)
+            cname = channel_names.get(channel_id) or channel_id
+            slack_dirs.add((team_id, cname))
+            render_slack_thread(conn, thread_uuid, root)
+            summary.rendered += 1
+        for team_id, cname in slack_dirs:
+            threads_dir = root / "slack" / team_id / cname / "threads"
+            if not threads_dir.is_dir():
+                continue
+            for f in threads_dir.glob("*.qmd"):
+                tid_prefix = f.name.split("__", 1)[0]
+                if tid_prefix not in live_threads:
                     f.unlink()
                     summary.orphans_removed += 1
 

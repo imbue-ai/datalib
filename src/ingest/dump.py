@@ -33,6 +33,7 @@ from pymysql.connections import Connection
 from ingest.generated_grid_rows import DDL as _GRID_ROWS_DDL
 from ingest.providers.anthropic.schema import DDL as _ANTHROPIC_DDL
 from ingest.providers.openai.schema import DDL as _OPENAI_DDL
+from ingest.providers.slack.schema import DDL as _SLACK_DDL
 
 
 def _portable_ddl_for(table: str) -> str:
@@ -41,7 +42,7 @@ def _portable_ddl_for(table: str) -> str:
     `DROP TABLE IF EXISTS` first, so a plain CREATE is what we want for a
     fresh load) and normalizes whitespace so the output is stable regardless
     of how the source string was formatted."""
-    for stmt in (*_ANTHROPIC_DDL, *_OPENAI_DDL, *_GRID_ROWS_DDL):
+    for stmt in (*_ANTHROPIC_DDL, *_OPENAI_DDL, *_SLACK_DDL, *_GRID_ROWS_DDL):
         normalized = textwrap.dedent(stmt).strip()
         if re.search(
             rf"\bCREATE TABLE\b\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
@@ -69,6 +70,11 @@ _TABLES = (
     "openai_content_parts",
     "openai_conversations",
     "openai_messages",
+    "slack_workspaces",
+    "slack_users",
+    "slack_channels",
+    "slack_messages",
+    "slack_reactions",
     "grid_rows",
 )
 

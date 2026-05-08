@@ -93,6 +93,11 @@ _TABLES = (
     "openai_content_parts",
     "openai_conversations",
     "openai_messages",
+    "slack_workspaces",
+    "slack_users",
+    "slack_channels",
+    "slack_messages",
+    "slack_reactions",
     "grid_rows",
 )
 

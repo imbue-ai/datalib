@@ -60,6 +60,11 @@ def test_dump_sql_has_expected_tables_and_rows() -> None:
         "openai_conversations",
         "openai_messages",
         "openai_content_parts",
+        "slack_workspaces",
+        "slack_users",
+        "slack_channels",
+        "slack_messages",
+        "slack_reactions",
     ):
         assert f"CREATE TABLE {table}" in dump, f"missing table {table}"
 
@@ -69,15 +74,18 @@ def test_qmd_tar_contains_expected_files() -> None:
     with tarfile.open(tar_path) as tf:
         names = sorted(tf.getnames())
 
-    # Seven rendered conversations across two providers.
+    # 7 LLM conversations + 4 Slack threads (3 in #bridge / #engineering /
+    # #ten-forward + 1 standalone Worf message in #bridge) across three
+    # providers.
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 7, qmd_files
+    assert len(qmd_files) == 11, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
 
-    # Spot-check one slug.
+    # Spot-check one slug from each provider.
     assert any("tea-earl-grey-hot.qmd" in n for n in qmd_files)
+    assert any("anyone-up-for-poker-tonight.qmd" in n for n in qmd_files)
 
 
 def test_dump_sql_loads_into_in_memory_sqlite() -> None:

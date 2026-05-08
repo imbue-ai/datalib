@@ -56,8 +56,19 @@ class ChatGPTApiDirSource(_SourceBase):
         return Path(v).expanduser().resolve()
 
 
+class SlackApiDirSource(_SourceBase):
+    provider: Literal["slack"]
+    kind: Literal["slack_api_dir"]
+    path: Path
+
+    @field_validator("path", mode="after")
+    @classmethod
+    def _expand(cls, v: Path) -> Path:
+        return Path(v).expanduser().resolve()
+
+
 SourceConfig = Annotated[
-    AnthropicExportDirSource | ChatGPTApiDirSource,
+    AnthropicExportDirSource | ChatGPTApiDirSource | SlackApiDirSource,
     Field(discriminator="provider"),
 ]
 
@@ -81,7 +92,9 @@ class Config(BaseModel):
         return self
 
     @property
-    def enabled_sources(self) -> list[AnthropicExportDirSource | ChatGPTApiDirSource]:
+    def enabled_sources(
+        self,
+    ) -> list[AnthropicExportDirSource | ChatGPTApiDirSource | SlackApiDirSource]:
         return [s for s in self.sources if s.enabled]
 
 

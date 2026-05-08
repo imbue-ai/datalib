@@ -8,6 +8,7 @@ from ingest.config import (
     AnthropicExportDirSource,
     ChatGPTApiDirSource,
     Config,
+    SlackApiDirSource,
 )
 from ingest.dolt_service import DoltService
 from ingest.grid_rows import populate_grid_rows
@@ -16,6 +17,9 @@ from ingest.providers.anthropic.ingest import (
 )
 from ingest.providers.openai.ingest import (
     ingest_api_dir,
+)
+from ingest.providers.slack.ingest import (
+    ingest_api_dir as ingest_slack_api_dir,
 )
 from ingest.render import render_all
 
@@ -64,6 +68,8 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                     _, stats = ingest_api_dir(
                         conn, src.path, started_at, source=src.provenance
                     )
+                elif isinstance(src, SlackApiDirSource):
+                    _, stats = ingest_slack_api_dir(conn, src.path, started_at)
                 else:
                     raise NotImplementedError(f"unknown source: {src!r}")
                 conn.commit()
