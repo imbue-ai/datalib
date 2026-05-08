@@ -30,10 +30,12 @@ import {
 import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
+import slackIconUrl from "@/assets/slack.svg";
 
 const SOURCE_ICONS: Record<string, string> = {
   Claude: claudeIconUrl,
   ChatGPT: chatgptIconUrl,
+  Slack: slackIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule]);
