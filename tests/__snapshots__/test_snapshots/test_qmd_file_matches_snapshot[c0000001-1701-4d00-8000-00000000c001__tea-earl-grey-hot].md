@@ -11,20 +11,23 @@ summary: Replicator dialing-in technique for proper Earl Grey concentration.
 
 # Tea, Earl Grey, Hot
 
+<a id="m-10000001-1701-4d00-8000-000000010001"></a>
 ## Human
 
 *2369-04-12T09:15:00.000000+00:00*
 
-Computer, why does the replicator give weak Earl Grey at quarters preset 4?
+<a id="b-10000001-1701-4d00-8000-000000010001-0"></a>Computer, why does the replicator give weak Earl Grey at quarters preset 4?
 
+<a id="m-10000002-1701-4d00-8000-000000010002"></a>
 ## Assistant
 
 *2369-04-12T09:15:30.000000+00:00*
 
-Preset 4 caps tannin extraction at 38%. Try preset 7 (the canonical "hot") which targets 52% and 88°C.
+<a id="b-10000002-1701-4d00-8000-000000010002-0"></a>Preset 4 caps tannin extraction at 38%. Try preset 7 (the canonical "hot") which targets 52% and 88°C.
 
+<a id="m-10000003-1701-4d00-8000-000000010003"></a>
 ## Human
 
 *2369-04-12T09:18:30.000000+00:00*
 
-Engage. Thank you.
+<a id="b-10000003-1701-4d00-8000-000000010003-0"></a>Engage. Thank you.

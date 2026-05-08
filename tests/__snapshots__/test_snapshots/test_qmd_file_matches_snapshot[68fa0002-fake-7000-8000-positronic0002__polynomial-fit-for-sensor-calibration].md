@@ -10,16 +10,19 @@ default_model_slug: gpt-5
 
 # Polynomial Fit for Sensor Calibration
 
+<a id="m-msg-fake-poly-0001"></a>
 ## User
 
 *2370-10-25T08:00:00.000000+00:00*
 
-Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.
+<a id="b-msg-fake-poly-0001-0"></a>Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.
 
+<a id="m-msg-fake-poly-0002"></a>
 ## Assistant
 
 *2370-10-25T08:03:20.000000+00:00 · gpt-5*
 
+<a id="b-msg-fake-poly-0002-0"></a>
 ```python
 import numpy as np
 x = np.array([1,2,3,4,5])
@@ -28,8 +31,9 @@ coeffs = np.polyfit(x, y, 2)
 print(coeffs)
 ```
 
+<a id="m-msg-fake-poly-0003"></a>
 ## Assistant
 
 *2370-10-25T08:05:20.000000+00:00 · gpt-5*
 
-The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.
+<a id="b-msg-fake-poly-0003-0"></a>The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.
