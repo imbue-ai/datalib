@@ -381,7 +381,7 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <Splitpanes class="split" :dbl-click-splitter="false">
       <Pane size="55" min-size="25" class="left-pane">
-        <div class="grid-wrap">
+        <div class="grid-wrap" @contextmenu.prevent>
           <AgGridVue
             class="grid"
             :rowData="rows"
