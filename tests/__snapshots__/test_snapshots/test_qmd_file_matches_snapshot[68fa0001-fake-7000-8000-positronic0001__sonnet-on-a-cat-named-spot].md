@@ -10,17 +10,19 @@ default_model_slug: gpt-5
 
 # Sonnet on a Cat Named Spot
 
+<a id="m-msg-fake-spot-0001"></a>
 ## User
 
 *2370-10-24T08:00:00.000000+00:00*
 
-Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.
+<a id="b-msg-fake-spot-0001-0"></a>Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.
 
+<a id="m-msg-fake-spot-0002"></a>
 ## Assistant
 
 *2370-10-24T08:02:00.000000+00:00 · gpt-5*
 
-Upon the bridge, where duty bids us stand,
+<a id="b-msg-fake-spot-0002-0"></a>Upon the bridge, where duty bids us stand,
 A tabby of the warmest tangerine,
 With feline grace defies the captain's hand
 And treads the helm with footfall light, serene.
@@ -38,8 +40,9 @@ Reflects the very life he hopes to share.
 So bless thee, Spot, of fur and quiet purr:
 Thou art my muse, my console saboteur.
 
+<a id="m-msg-fake-spot-0003"></a>
 ## User
 
 *2370-10-24T08:05:00.000000+00:00*
 
-Curious. The closing couplet is satisfying. Thank you.
+<a id="b-msg-fake-spot-0003-0"></a>Curious. The closing couplet is satisfying. Thank you.

@@ -1,11 +1,12 @@
 //! QMD scanner / parser.
 //!
-//! claude-mirror writes one .qmd per conversation under
-//! `<root>/anthropic/<account_uuid>/llm_chats/<conversation_uuid>__<slug>.qmd`.
-//! The QMD has YAML frontmatter (provider, uuid, name, account_uuid,
-//! project_uuid, created_at, updated_at, summary) followed by H1 title and a
-//! sequence of `## <Sender>` sections, each with an italics timestamp line and
-//! the message body.
+//! The ingest pipeline writes one .qmd per conversation under
+//! `<root>/<provider>/<account>/llm_chats/<conversation_id>__<slug>.qmd`,
+//! where `<provider>` is `anthropic` or `openai`. The frontmatter shape
+//! differs slightly between providers (anthropic uses `uuid` /
+//! `account_uuid` / `created_at`, openai uses `id` / `account_id` /
+//! `create_time`); we accept both via serde aliases so a single
+//! `Frontmatter` covers both.
 //!
 //! Dolt is the source of truth, but the QMDs are the search index.
 
@@ -17,17 +18,17 @@ use std::path::{Path, PathBuf};
 pub struct Frontmatter {
     #[serde(default)]
     pub provider: String,
-    #[serde(default)]
+    #[serde(default, alias = "id")]
     pub uuid: String,
-    #[serde(default)]
+    #[serde(default, alias = "title")]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "account_id")]
     pub account_uuid: Option<String>,
     #[serde(default)]
     pub project_uuid: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "create_time")]
     pub created_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "update_time")]
     pub updated_at: Option<String>,
     #[serde(default)]
     pub summary: Option<String>,
@@ -37,6 +38,7 @@ pub struct Frontmatter {
 pub struct Message {
     pub sender: String,
     pub when: Option<String>,
+    pub model: Option<String>,
     pub text: String,
 }
 
@@ -81,9 +83,12 @@ fn split_frontmatter(text: &str) -> Option<(&str, &str)> {
     Some((fm, body))
 }
 
-/// Body is `# Title\n\n## Sender\n\n*ts*\n\n<text>\n\n## Sender\n...`.
+/// Body is `# Title\n\n## Sender\n\n*ts[ · model]*\n\n<text>\n\n## Sender\n...`.
+/// The OpenAI renderer joins extra metadata (model slug) onto the timestamp
+/// line with " · "; we split the first segment off as `when` and stash the
+/// rest as `model` so the UI can show e.g. "gpt-4o" in the Author column.
 fn parse_messages(body: &str) -> Vec<Message> {
-    let mut out = Vec::new();
+    let mut out: Vec<Message> = Vec::new();
     let mut iter = body.split("\n## ").peekable();
     // First chunk before the first `## ` is the H1 title block — skip it.
     iter.next();
@@ -92,6 +97,7 @@ fn parse_messages(body: &str) -> Vec<Message> {
         let mut lines = chunk.lines();
         let sender = lines.next().unwrap_or("").trim().to_string();
         let mut when: Option<String> = None;
+        let mut model: Option<String> = None;
         let mut content_lines: Vec<&str> = Vec::new();
         let mut consumed_ts = false;
         for line in lines {
@@ -101,7 +107,9 @@ fn parse_messages(body: &str) -> Vec<Message> {
                     continue;
                 }
                 if let Some(ts) = t.strip_prefix('*').and_then(|s| s.strip_suffix('*')) {
-                    when = Some(ts.to_string());
+                    let mut bits = ts.splitn(2, " · ");
+                    when = bits.next().map(str::trim).map(str::to_owned);
+                    model = bits.next().map(str::trim).map(str::to_owned);
                     consumed_ts = true;
                     continue;
                 }
@@ -110,25 +118,35 @@ fn parse_messages(body: &str) -> Vec<Message> {
             content_lines.push(line);
         }
         let text = content_lines.join("\n").trim().to_string();
-        out.push(Message { sender, when, text });
+        // Inherit timestamp from the previous message if this one has none —
+        // tool/system messages routinely arrive timestampless. The Python
+        // renderer does this with a microsecond bump for sort stability;
+        // this is the file-level safety net for QMDs that pre-date that.
+        if when.is_none() {
+            when = out.last().and_then(|m| m.when.clone());
+        }
+        out.push(Message { sender, when, model, text });
     }
     out
 }
 
-/// Scan `<root>/anthropic/*/llm_chats/*.qmd`. Missing dirs yield an empty Vec.
+/// Scan `<root>/{anthropic,openai}/*/llm_chats/*.qmd`. Missing dirs yield
+/// an empty Vec.
 pub fn scan_root(root: &Path) -> Vec<PathBuf> {
-    let anthropic = root.join("anthropic");
     let mut out = Vec::new();
-    let Ok(accounts) = fs::read_dir(&anthropic) else {
-        return out;
-    };
-    for acct in accounts.flatten() {
-        let chats = acct.path().join("llm_chats");
-        let Ok(files) = fs::read_dir(&chats) else { continue };
-        for f in files.flatten() {
-            let p = f.path();
-            if p.extension().is_some_and(|e| e == "qmd") {
-                out.push(p);
+    for provider in ["anthropic", "openai"] {
+        let provider_dir = root.join(provider);
+        let Ok(accounts) = fs::read_dir(&provider_dir) else {
+            continue;
+        };
+        for acct in accounts.flatten() {
+            let chats = acct.path().join("llm_chats");
+            let Ok(files) = fs::read_dir(&chats) else { continue };
+            for f in files.flatten() {
+                let p = f.path();
+                if p.extension().is_some_and(|e| e == "qmd") {
+                    out.push(p);
+                }
             }
         }
     }

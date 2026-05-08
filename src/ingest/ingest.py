@@ -50,6 +50,11 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
 
     with DoltService(config) as dolt:
         with dolt.connect() as conn:
+            # Batch each source's writes into one transaction. Per-row
+            # autocommit against Dolt's SQL server adds ~8ms/row of
+            # round-trip + flush; for ~5k rows that's tens of seconds we
+            # don't need to spend.
+            conn.autocommit(False)
             for src in config.enabled_sources:
                 if isinstance(src, AnthropicExportDirSource):
                     _, stats = ingest_export_dir(
@@ -61,6 +66,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                     )
                 else:
                     raise NotImplementedError(f"unknown source: {src!r}")
+                conn.commit()
                 summary.sources.append(
                     SourceResult(
                         name=src.name,

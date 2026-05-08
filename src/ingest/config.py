@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "claude-mirror" / "config.yaml"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "personal-mirror" / "config.yaml"
 
 
 class DoltConfig(BaseModel):

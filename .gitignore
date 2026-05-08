@@ -11,3 +11,5 @@ bazel-*
 node_modules/
 target/
 dolt_repo/
+playwright-report/
+test-results/

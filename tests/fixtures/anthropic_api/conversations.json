@@ -194,5 +194,104 @@
         "files": []
       }
     ]
+  },
+  {
+    "uuid": "c0000005-1701-4d00-8000-00000000c005",
+    "name": "Borg Encryption Signature Lookup",
+    "summary": "Looking up a Borg adaptive-shield signature; first lookup errors out, retry succeeds.",
+    "model": "claude-opus-4-7",
+    "created_at": "2369-04-16T09:00:00.000000+00:00",
+    "updated_at": "2369-04-16T09:01:30.000000+00:00",
+    "settings": {},
+    "is_starred": false,
+    "is_temporary": false,
+    "platform": "CLAUDE_AI",
+    "account": {"uuid": "00000001-1701-4d00-8000-000000000001"},
+    "project": null,
+    "_source": {
+      "via": "claude.ai/api",
+      "org_uuid": "0aa00000-1701-4d00-8000-0000000000aa"
+    },
+    "chat_messages": [
+      {
+        "uuid": "50000001-1701-4d00-8000-000000050001",
+        "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.",
+        "sender": "human",
+        "index": 0,
+        "created_at": "2369-04-16T09:00:00.000000+00:00",
+        "updated_at": "2369-04-16T09:00:00.000000+00:00",
+        "parent_message_uuid": null,
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-16T09:00:00.000000+00:00",
+            "stop_timestamp": "2369-04-16T09:00:00.000000+00:00",
+            "type": "text",
+            "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      },
+      {
+        "uuid": "50000002-1701-4d00-8000-000000050002",
+        "text": "",
+        "sender": "assistant",
+        "index": 1,
+        "created_at": "2369-04-16T09:01:30.000000+00:00",
+        "updated_at": "2369-04-16T09:01:30.000000+00:00",
+        "parent_message_uuid": "50000001-1701-4d00-8000-000000050001",
+        "truncated": false,
+        "content": [
+          {
+            "start_timestamp": "2369-04-16T09:00:10.000000+00:00",
+            "stop_timestamp": "2369-04-16T09:00:10.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_FAKE0002borgsigfirstattempt0",
+            "name": "starfleet_db_query",
+            "input": {"signature": "7-of-9-alpha", "table": "borg_shield_signatures"},
+            "message": "Querying Starfleet tactical DB"
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_FAKE0002borgsigfirstattempt0",
+            "name": "starfleet_db_query",
+            "content": "ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)",
+            "is_error": true
+          },
+          {
+            "start_timestamp": "2369-04-16T09:00:30.000000+00:00",
+            "stop_timestamp": "2369-04-16T09:00:30.000000+00:00",
+            "type": "tool_use",
+            "id": "toolu_FAKE0003borgsigsecondtry00",
+            "name": "starfleet_db_query",
+            "input": {"signature": "7-of-9-alpha", "table": "borg_shield_signatures", "relay": "backup-2"},
+            "message": "Retrying via backup relay"
+          },
+          {
+            "type": "tool_result",
+            "tool_use_id": "toolu_FAKE0003borgsigsecondtry00",
+            "name": "starfleet_db_query",
+            "content": [
+              {
+                "type": "text",
+                "text": "Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz \u00b1 0.6. Effective rounds: 2 before re-adaptation."
+              }
+            ],
+            "is_error": false
+          },
+          {
+            "start_timestamp": "2369-04-16T09:01:00.000000+00:00",
+            "stop_timestamp": "2369-04-16T09:01:30.000000+00:00",
+            "type": "text",
+            "text": "Yes \u2014 we have a counter on file. Rotating phaser modulation at 257.4 MHz (\u00b10.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.",
+            "citations": []
+          }
+        ],
+        "attachments": [],
+        "files": []
+      }
+    ]
   }
 ]

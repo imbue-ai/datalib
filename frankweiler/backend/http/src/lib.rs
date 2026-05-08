@@ -17,9 +17,10 @@ use axum::{
     routing::get,
     Router,
 };
+use frankweiler_core::db::grid_rows;
 use frankweiler_core::qmd::{self, Conversation};
 use frankweiler_core::query::parse_query;
-use frankweiler_core::search::{search, SearchRow};
+use frankweiler_core::search::SearchRow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,9 +84,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))
         .route("/api/columns", get(columns))
+        .route("/api/accounts", get(accounts))
         .route("/api/chat/{conversation_uuid}", get(chat))
         .with_state(state)
         .layer(CorsLayer::permissive())
+}
+
+async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
+    // Ingest writes `<root>/accounts.json` mapping account UUIDs → display
+    // names. We surface it verbatim so the UI can do UUID → label lookups
+    // late, in render code, with the UUID still in hand.
+    let path = s.root.join("accounts.json");
+    let v: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    Json(v)
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
@@ -103,9 +117,8 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(200).min(2000);
-    let convs = qmd::load_all(&s.root);
-    let total = convs.len() as u64;
-    let rows = search(&convs, &parsed, limit);
+    let rows = grid_rows(&s.root, &parsed, limit);
+    let total = rows.len() as u64;
     Json(SearchResponse {
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,

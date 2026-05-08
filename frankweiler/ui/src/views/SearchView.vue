@@ -1,29 +1,100 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from "vue";
-import { useRouter } from "vue-router";
+import { ref, watch, onMounted, computed, nextTick } from "vue";
+import { useRouter, useRoute } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
+import { Splitpanes, Pane } from "splitpanes";
+import "splitpanes/dist/splitpanes.css";
 import {
   ModuleRegistry,
   AllCommunityModule,
   themeQuartz,
   colorSchemeVariable,
   type ColDef,
+  type ColumnState,
+  type GridApi,
   type GridOptions,
+  type GridReadyEvent,
   type ICellRendererParams,
+  type RowSelectedEvent,
 } from "ag-grid-community";
-import { fetchHealth, fetchSearch, type Health, type SearchRow } from "@/api";
+import {
+  fetchAccounts,
+  fetchHealth,
+  fetchSearch,
+  type AccountsMap,
+  type Health,
+  type SearchRow,
+} from "@/api";
+import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
 const router = useRouter();
-const query = ref("");
+const route = useRoute();
+const query = ref(typeof route.query.q === "string" ? route.query.q : "");
 const rows = ref<SearchRow[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const health = ref<Health | null>(null);
+const accounts = ref<AccountsMap>({});
+const selectedRow = ref<SearchRow | null>(null);
+
+// AG Grid handle for applying / reading column state. Set by onGridReady.
+let gridApi: GridApi<SearchRow> | null = null;
+
+// Suppress hash writes while we're applying state from the URL ourselves
+// — otherwise the grid's column-events would clobber the URL we just read.
+let restoring = false;
+
+function encodeColumnState(state: ColumnState[]): string {
+  // Compact base64url so the URL stays vaguely readable when it shows up
+  // in dev tools / shared links.
+  const json = JSON.stringify(state);
+  return btoa(unescape(encodeURIComponent(json)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function decodeColumnState(s: string): ColumnState[] | null {
+  try {
+    const padded = s.replace(/-/g, "+").replace(/_/g, "/");
+    const json = decodeURIComponent(escape(atob(padded)));
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? (parsed as ColumnState[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function rowKey(row: SearchRow): string {
+  // conversation_uuid alone isn't unique once message rows enter the mix;
+  // include kind + message_index so a chat row vs. one of its message
+  // rows round-trip distinctly.
+  const idx = row.message_index ?? "";
+  return `${row.conversation_uuid}:${row.kind}:${idx}`;
+}
+
+function syncHash() {
+  if (restoring) return;
+  const q: Record<string, string> = {};
+  if (query.value) q.q = query.value;
+  if (selectedRow.value) q.sel = rowKey(selectedRow.value);
+  if (gridApi) {
+    const state = gridApi.getColumnState();
+    if (state.length > 0) q.cols = encodeColumnState(state);
+  }
+  // replace, not push — selection / column tweaks are not history events.
+  router.replace({ name: "search", query: q });
+}
+
+function accountLabel(uuid: string): string {
+  if (!uuid) return "";
+  return accounts.value[uuid]?.label ?? uuid;
+}
 
 let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -48,7 +119,37 @@ async function runSearch(q: string) {
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => runSearch(q), 150);
+  syncHash();
 });
+
+// Restore the selected row from the URL after rows load (or after the
+// grid first becomes ready, whichever happens last — onGridReady can
+// race with the initial fetch). Selection state outlives the result
+// set: searches that drop the selected row leave selection cleared,
+// which is the right behavior for a deep-link.
+async function tryRestoreSelection() {
+  const sel = route.query.sel;
+  if (typeof sel !== "string" || !gridApi || rows.value.length === 0) return;
+  if (selectedRow.value && rowKey(selectedRow.value) === sel) return;
+  const target = rows.value.find((r) => rowKey(r) === sel);
+  if (!target) return;
+  // AG Grid creates row nodes from rowData asynchronously after Vue
+  // pushes the prop. Wait one tick so forEachNode actually sees them.
+  await nextTick();
+  restoring = true;
+  let found = false;
+  gridApi.forEachNode((node) => {
+    if (node.data && rowKey(node.data) === sel) {
+      node.setSelected(true);
+      gridApi!.ensureNodeVisible(node, "middle");
+      found = true;
+    }
+  });
+  if (found) selectedRow.value = target;
+  restoring = false;
+}
+
+watch(rows, tryRestoreSelection);
 
 onMounted(async () => {
   try {
@@ -56,7 +157,12 @@ onMounted(async () => {
   } catch {
     /* health is best-effort */
   }
-  runSearch("");
+  try {
+    accounts.value = await fetchAccounts();
+  } catch {
+    /* accounts mapping is best-effort */
+  }
+  runSearch(query.value);
 });
 
 function openRow(row: SearchRow) {
@@ -68,34 +174,48 @@ function openRow(row: SearchRow) {
 }
 
 const columnDefs = computed<ColDef<SearchRow>[]>(() => [
-  { field: "source", headerName: "Source", width: 110 },
-  { field: "kind", headerName: "Type", width: 130 },
+  { field: "source", headerName: "Source", width: 90 },
+  { field: "kind", headerName: "Type", width: 110 },
   {
     field: "when",
     headerName: "Time",
-    width: 180,
+    width: 165,
     sort: "desc",
   },
   {
     field: "snippet",
     headerName: "Contents",
     flex: 1,
-    minWidth: 280,
+    minWidth: 200,
     wrapText: true,
     autoHeight: true,
     cellStyle: { whiteSpace: "normal", lineHeight: "1.3em" },
   },
-  { field: "author", headerName: "Author", width: 160 },
-  { field: "account", headerName: "Account", width: 200 },
+  {
+    field: "author",
+    headerName: "Author",
+    width: 130,
+    valueFormatter: (p) => {
+      const v = p.value as string | undefined;
+      if (!v) return "";
+      return accounts.value[v]?.label ?? v;
+    },
+  },
+  {
+    field: "account",
+    headerName: "Account",
+    width: 150,
+    valueFormatter: (p) => accountLabel(p.value as string),
+  },
   {
     headerName: "Open",
-    width: 80,
+    width: 70,
     sortable: false,
     filter: false,
     cellRenderer: (params: ICellRendererParams<SearchRow>) => {
       const btn = document.createElement("button");
       btn.className = "open-btn";
-      btn.title = "Open";
+      btn.title = "Open full view";
       btn.textContent = "→";
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -116,9 +236,47 @@ const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
   rowHeight: 56,
+  // Single-row selection drives the right preview pane. Cell text
+  // selection is intentionally NOT enabled here: AG Grid's text-selection
+  // mode swallows row clicks, breaking the preview wiring.
+  rowSelection: { mode: "singleRow", checkboxes: false, enableClickSelection: true },
+  ensureDomOrder: true,
+  onGridReady: (e: GridReadyEvent<SearchRow>) => {
+    gridApi = e.api;
+    // Expose the grid api so e2e tests can scroll virtualized rows
+    // into view before clicking.
+    (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
+      e.api;
+    const cols = route.query.cols;
+    if (typeof cols === "string") {
+      const state = decodeColumnState(cols);
+      if (state) {
+        restoring = true;
+        gridApi.applyColumnState({ state, applyOrder: true });
+        restoring = false;
+      }
+    }
+    // Rows may already be loaded by the time the grid is ready.
+    tryRestoreSelection();
+  },
+  onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
+    if (e.node.isSelected() && e.data) {
+      selectedRow.value = e.data;
+      syncHash();
+    }
+  },
   onRowDoubleClicked: (e) => {
     if (e.data) openRow(e.data);
   },
+  // Any change a user can make to columns gets reflected in the URL.
+  onColumnVisible: () => syncHash(),
+  onColumnResized: (e) => {
+    if (e.finished) syncHash();
+  },
+  onColumnMoved: (e) => {
+    if (e.finished) syncHash();
+  },
+  onSortChanged: () => syncHash(),
 };
 </script>
 
@@ -140,17 +298,29 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <div class="grid-wrap">
-      <AgGridVue
-        class="grid"
-        :rowData="rows"
-        :columnDefs="columnDefs"
-        :defaultColDef="defaultColDef"
-        :gridOptions="gridOptions"
-      />
-    </div>
-    <p v-if="loading && rows.length === 0" class="empty">searching…</p>
-    <p v-else-if="!loading && rows.length === 0 && !error" class="empty">no matches.</p>
+    <Splitpanes class="split" :dbl-click-splitter="false">
+      <Pane size="55" min-size="25" class="left-pane">
+        <div class="grid-wrap">
+          <AgGridVue
+            class="grid"
+            :rowData="rows"
+            :columnDefs="columnDefs"
+            :defaultColDef="defaultColDef"
+            :gridOptions="gridOptions"
+          />
+        </div>
+        <p v-if="loading && rows.length === 0" class="empty">searching…</p>
+        <p v-else-if="!loading && rows.length === 0 && !error" class="empty">
+          no matches.
+        </p>
+      </Pane>
+      <Pane size="45" min-size="20" class="right-pane">
+        <ChatPreviewPane
+          :conversation-uuid="selectedRow?.conversation_uuid ?? null"
+          :message-index="selectedRow?.message_index ?? null"
+        />
+      </Pane>
+    </Splitpanes>
   </section>
 </template>
 
@@ -191,9 +361,25 @@ const gridOptions: GridOptions<SearchRow> = {
 .error {
   color: #e35d6a;
 }
-.grid-wrap {
+.split {
   flex: 1 1 auto;
   min-height: 300px;
+}
+.left-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.right-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--fw-border);
+  background: var(--fw-bg);
+}
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 200px;
 }
 .grid {
   width: 100%;
@@ -210,5 +396,18 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 :deep(.open-btn:hover) {
   background: var(--fw-hover);
+}
+</style>
+
+<style>
+/* Splitter styling — outside scoped block so it reaches splitpanes' DOM. */
+.splitpanes__splitter {
+  background: var(--fw-border);
+  position: relative;
+  width: 6px;
+  cursor: col-resize;
+}
+.splitpanes__splitter:hover {
+  background: var(--fw-accent);
 }
 </style>

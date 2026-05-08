@@ -12,6 +12,7 @@ rust_library(
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:rusqlite",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",

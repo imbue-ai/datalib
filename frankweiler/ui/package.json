@@ -8,16 +8,22 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "ag-grid-community": "35.2.1",
     "ag-grid-vue3": "35.2.1",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.1",
     "pinia": "^3.0.4",
+    "splitpanes": "^4.0.4",
     "vue": "^3.5.0",
     "vue-router": "^5.0.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/markdown-it": "^14.1.2",
     "@vitejs/plugin-vue": "^6.0.6",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^29.1.1",

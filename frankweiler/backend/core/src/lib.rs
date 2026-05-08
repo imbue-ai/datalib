@@ -1,6 +1,7 @@
 //! Frankweiler core: query engine. v0 skeleton.
 
 pub mod config;
+pub mod db;
 pub mod deeplink;
 pub mod qmd;
 pub mod query;

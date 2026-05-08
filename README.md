@@ -25,7 +25,7 @@ Schema.
 │   ├── anthropic.schema.json
 │   ├── codegen.py            JSON Schema → Rust/Python/TS types
 │   └── BUILD.bazel           genrules per language
-├── pyproject.toml + uv.lock  Python project (claude-mirror) — src layout
+├── pyproject.toml + uv.lock  Python project (personal-mirror) — src layout
 ├── requirements.txt          uv-exported, consumed by Bazel pip.parse
 ├── src/
 │   ├── download/             per-provider downloaders (claude.ai, chatgpt.com)
@@ -50,8 +50,8 @@ Schema.
                           │
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
-   claude-mirror   frankweiler/        frankweiler/ui
-   (Python)         backend/schema      (TS types)
+       src/           frankweiler/        frankweiler/ui
+   (Python ingest)    backend/schema      (TS types)
                           │
                           ▼
                    frankweiler/backend/core ──► dolt + qmd + polars
@@ -63,8 +63,8 @@ Schema.
                        openhost/     tauri/  ◄── ui/
 ```
 
-`claude-mirror` and `frankweiler/` may **only** share things via `schemas/`.
-Cargo workspace + Bazel `visibility` enforce this.
+`src/` (download + ingest) and `frankweiler/` may **only** share things
+via `schemas/`. Cargo workspace + Bazel `visibility` enforce this.
 
 ## Building & testing
 
@@ -110,6 +110,22 @@ For a backend-only launch (no Vite), use `bazelisk run //frankweiler:serve`,
 which opens the browser at `/api/health`. Override the URL with
 `FRANKWEILER_URL=...`.
 
+### Re-run ingestion
+
+Re-ingests every enabled source from the config, commits to Dolt, and
+re-renders the qmd tree. Run after editing the renderer, the schema, or
+your downloads.
+
+```sh
+# Bazel (uses an absolute path so the binary's CWD doesn't matter)
+bazelisk run //src/ingest:cli -- ingest --config $(pwd)/ingest_configs/thad_dev.yaml
+
+# uv (paths are repo-relative)
+uv run python -m ingest --config ingest_configs/thad_dev.yaml
+```
+
+Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
+
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |
@@ -118,6 +134,7 @@ which opens the browser at `/api/health`. Override the URL with
 | Rust           | `cd frankweiler/backend && cargo test`           |
 | Vue / Vitest   | `cd frankweiler/ui && pnpm test`                 |
 | Vite dev UI    | `cd frankweiler/ui && pnpm dev`                  |
+| Playwright e2e | `bazelisk run //frankweiler/ui:e2e`              |
 
 ### Regenerating the cross-language types
 
