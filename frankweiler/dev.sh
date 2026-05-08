@@ -64,6 +64,15 @@ if [[ ! -d "$UI_DIR/node_modules" ]]; then
   (cd "$UI_DIR" && pnpm install)
 fi
 
+# Bail early if the Vite port is already taken — otherwise pnpm dev will
+# crash a few seconds in and we'd open a browser tab pointed at whatever
+# *other* server is on that port. lsof is on every macOS / typical Linux.
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "ERROR: port $PORT is already in use. Stop the other process or set FRANKWEILER_PORT." >&2
+  lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >&2 || true
+  exit 1
+fi
+
 # Start the backend.
 "$BIN" &
 BACKEND_PID=$!
