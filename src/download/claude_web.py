@@ -44,10 +44,21 @@ CLAUDE_BASE = "https://claude.ai/api"
 # Auth: pull the sessionKey cookie out of latchkey at run time.
 # ---------------------------------------------------------------------------
 
+
 def get_session_cookie() -> str:
     proc = subprocess.run(
-        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s", f"{CLAUDE_BASE}/organizations"],
-        capture_output=True, text=True, check=False,
+        [
+            "latchkey",
+            "curl",
+            "-v",
+            "-o",
+            "/dev/null",
+            "-s",
+            f"{CLAUDE_BASE}/organizations",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     # latchkey writes its injected request headers to stderr (curl -v).
     m = re.search(r"^> Cookie: (.+)$", proc.stderr, flags=re.MULTILINE)
@@ -63,15 +74,18 @@ def get_session_cookie() -> str:
 # Web API client (curl_cffi with Chrome TLS fingerprint).
 # ---------------------------------------------------------------------------
 
+
 class ClaudeWebClient:
     def __init__(self, cookie: str) -> None:
         self._cookie = cookie
 
     def _get(self, path: str) -> Any:
         url = f"{CLAUDE_BASE}{path}"
-        r = curl_requests.get(url, impersonate=IMPERSONATE,
-                              headers={"Cookie": self._cookie,
-                                       "Accept": "application/json"})
+        r = curl_requests.get(
+            url,
+            impersonate=IMPERSONATE,
+            headers={"Cookie": self._cookie, "Accept": "application/json"},
+        )
         if r.status_code != 200:
             raise RuntimeError(f"GET {path} -> HTTP {r.status_code}: {r.text[:300]}")
         return r.json()
@@ -84,12 +98,15 @@ class ClaudeWebClient:
 
     def get_conversation(self, org_uuid: str, conv_uuid: str) -> dict:
         q = "tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong"
-        return self._get(f"/organizations/{org_uuid}/chat_conversations/{conv_uuid}?{q}")
+        return self._get(
+            f"/organizations/{org_uuid}/chat_conversations/{conv_uuid}?{q}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Fetch logic.
 # ---------------------------------------------------------------------------
+
 
 def _load_conv_index(path: Path) -> dict[str, dict]:
     if not path.exists():
@@ -98,8 +115,9 @@ def _load_conv_index(path: Path) -> dict[str, dict]:
     return {c["uuid"]: c for c in data if c.get("uuid")}
 
 
-def _normalize_to_export_shape(api_conv: dict, account_uuid: str | None,
-                               org_uuid: str) -> dict:
+def _normalize_to_export_shape(
+    api_conv: dict, account_uuid: str | None, org_uuid: str
+) -> dict:
     """Coerce the /chat_conversations/{id}?tree=True response into the export
     shape. The API:
       - omits `account` (we synthesize from a known account_uuid)
@@ -153,15 +171,19 @@ def _account_uuid_from_users(export_dir: Path) -> str | None:
 
 def fetch(
     export_dir: Path = typer.Option(
-        DEFAULT_EXPORT_DIR, "--export-dir",
+        DEFAULT_EXPORT_DIR,
+        "--export-dir",
         help=f"Anthropic bulk-export dir (default {DEFAULT_EXPORT_DIR}).",
     ),
     out_dir: Path = typer.Option(
-        DEFAULT_OUT_DIR, "--out-dir", "--api-dir",
+        DEFAULT_OUT_DIR,
+        "--out-dir",
+        "--api-dir",
         help=f"API-fetched dir (default {DEFAULT_OUT_DIR}).",
     ),
     overlap: int = typer.Option(
-        DEFAULT_OVERLAP, "--overlap",
+        DEFAULT_OVERLAP,
+        "--overlap",
         help="N most-recent export convs to refetch as overlap.",
     ),
 ) -> None:
@@ -178,8 +200,9 @@ def fetch(
 
     # Overlap: N most-recently-updated conversations from the export, refetched
     # so we can verify the API and export agree.
-    export_sorted = sorted(existing_export.values(),
-                           key=lambda c: c.get("updated_at") or "", reverse=True)
+    export_sorted = sorted(
+        existing_export.values(), key=lambda c: c.get("updated_at") or "", reverse=True
+    )
     overlap_uuids = {c["uuid"] for c in export_sorted[:overlap]}
     print(f"overlap (refetch from API): {len(overlap_uuids)} most-recent export convs")
 
@@ -188,8 +211,9 @@ def fetch(
     if src_users.exists() and not out_users_path.exists():
         shutil.copy(src_users, out_users_path)
 
-    account_uuid = _account_uuid_from_users(export_dir) or \
-                   _account_uuid_from_users(out_dir)
+    account_uuid = _account_uuid_from_users(export_dir) or _account_uuid_from_users(
+        out_dir
+    )
     if not account_uuid:
         print("warning: no users.json found — conversation.account.uuid will be empty")
 
@@ -209,7 +233,9 @@ def fetch(
             listing = client.list_conversations(org_uuid)
         except RuntimeError as e:
             if "HTTP 403" in str(e):
-                print(f"  [{org_name}] 403 — skipping (no chat permission for this org)")
+                print(
+                    f"  [{org_name}] 403 — skipping (no chat permission for this org)"
+                )
                 forbidden += 1
                 continue
             raise
@@ -232,8 +258,11 @@ def fetch(
                 plan.append(("overlap", item, ""))
             elif in_api is not None and in_api.get("updated_at") != api_updated:
                 plan.append(("updated", item, ""))
-            elif in_api is None and in_export is not None and \
-                 in_export.get("updated_at") != api_updated:
+            elif (
+                in_api is None
+                and in_export is not None
+                and in_export.get("updated_at") != api_updated
+            ):
                 plan.append(("export-stale", item, ""))
             else:
                 skipped += 1
@@ -257,16 +286,21 @@ def fetch(
             time.sleep(SLEEP_BETWEEN)
         pbar.close()
 
-    sorted_convs = sorted(merged.values(),
-                          key=lambda c: c.get("updated_at") or "", reverse=True)
+    sorted_convs = sorted(
+        merged.values(), key=lambda c: c.get("updated_at") or "", reverse=True
+    )
     out_conv_path.write_text(json.dumps(sorted_convs, ensure_ascii=False, indent=2))
 
-    print(f"\nfetched={fetched} skipped={skipped} forbidden_orgs={forbidden} errors={errors}")
+    print(
+        f"\nfetched={fetched} skipped={skipped} forbidden_orgs={forbidden} errors={errors}"
+    )
     print(f"total in {out_conv_path}: {len(sorted_convs)}")
+
 
 # ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     typer.run(fetch)

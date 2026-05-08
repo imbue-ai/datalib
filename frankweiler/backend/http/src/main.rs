@@ -22,9 +22,14 @@ use std::sync::Arc;
 async fn main() -> anyhow::Result<()> {
     let (bind, root) = resolve_bind_and_root();
     let listener = tokio::net::TcpListener::bind(&bind).await?;
-    eprintln!("frankweiler-http listening on http://{}", listener.local_addr()?);
+    eprintln!(
+        "frankweiler-http listening on http://{}",
+        listener.local_addr()?
+    );
     eprintln!("data root: {} (exists={})", root.display(), root.exists());
-    let state = AppState { root: Arc::new(root) };
+    let state = AppState {
+        root: Arc::new(root),
+    };
     axum::serve(listener, router(state)).await?;
     Ok(())
 }

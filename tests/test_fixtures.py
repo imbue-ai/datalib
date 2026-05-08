@@ -19,7 +19,10 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_anthropic_export_fixture_parses() -> None:
     parsed = parse_export(FIXTURES / "anthropic_export")
 
-    assert {a.full_name for a in parsed.accounts} == {"Jean-Luc Picard", "Geordi La Forge"}
+    assert {a.full_name for a in parsed.accounts} == {
+        "Jean-Luc Picard",
+        "Geordi La Forge",
+    }
 
     assert len(parsed.projects) == 1
     proj = parsed.projects[0]
@@ -27,7 +30,10 @@ def test_anthropic_export_fixture_parses() -> None:
     assert proj.account_uuid == "00000001-1701-4d00-8000-000000000001"
 
     convs_by_name = {c.name: c for c in parsed.conversations}
-    assert set(convs_by_name) == {"Tea, Earl Grey, Hot", "Warp Plasma Conduit Resonance"}
+    assert set(convs_by_name) == {
+        "Tea, Earl Grey, Hot",
+        "Warp Plasma Conduit Resonance",
+    }
 
     tea = convs_by_name["Tea, Earl Grey, Hot"]
     assert tea.project_uuid == "00000010-1701-4d00-8000-000000000010"
@@ -38,8 +44,7 @@ def test_anthropic_export_fixture_parses() -> None:
     # The CSV attachment on the warp conversation must round-trip.
     warp_atch = [a for a in parsed.attachments if a.kind == "attachment"]
     assert any(
-        "conduit-17-telemetry" in (a.raw_json.get("file_name") or "")
-        for a in warp_atch
+        "conduit-17-telemetry" in (a.raw_json.get("file_name") or "") for a in warp_atch
     )
 
     # Threading: every non-root message has a parent that is also a message.
@@ -68,11 +73,15 @@ def test_chatgpt_api_fixture_parses() -> None:
     assert parsed.accounts[0].name == "Lt. Cmdr. Data"
 
     titles = {c.title for c in parsed.conversations}
-    assert titles == {"Sonnet on a Cat Named Spot", "Polynomial Fit for Sensor Calibration"}
+    assert titles == {
+        "Sonnet on a Cat Named Spot",
+        "Polynomial Fit for Sensor Calibration",
+    }
 
     # The system message in the sonnet thread is content_type model_editable_context.
     sonnet_msgs = [
-        m for m in parsed.messages
+        m
+        for m in parsed.messages
         if m.conversation_id == "68fa0001-fake-7000-8000-positronic0001"
     ]
     assert any(m.content_type == "model_editable_context" for m in sonnet_msgs)

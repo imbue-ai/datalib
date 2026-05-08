@@ -37,6 +37,7 @@ def _materialize_mirror_sqlite(conn, out_path: Path) -> None:
     finally:
         tmp_path.unlink(missing_ok=True)
 
+
 app = typer.Typer(help="Personal mirror of LLM chat history into Dolt + QMD.")
 
 
@@ -48,7 +49,10 @@ def _root() -> None:
 @app.command()
 def ingest(
     config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to YAML config (default: ~/.config/personal-mirror/config.yaml)"
+        None,
+        "--config",
+        "-c",
+        help="Path to YAML config (default: ~/.config/personal-mirror/config.yaml)",
     ),
     now: str | None = typer.Option(
         None,
@@ -100,7 +104,9 @@ def ingest(
         if dump_sql is not None:
             run_dump(conn, dump_sql)
         rep = (
-            diff_commits(conn, from_ref=f"{summary.commit_hash}~1", to_ref=summary.commit_hash)
+            diff_commits(
+                conn, from_ref=f"{summary.commit_hash}~1", to_ref=summary.commit_hash
+            )
             if report and summary.commit_hash
             else None
         )

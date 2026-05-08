@@ -23,7 +23,9 @@ from ingest.dump import _TABLES, _columns, _primary_key, _table_exists
 # Columns whose changes are noise -- bookkeeping fields that the ingest
 # updates on every run regardless of whether the underlying record
 # actually changed.
-COSMETIC_COLUMNS: frozenset[str] = frozenset({"raw_json", "first_seen_at", "last_seen_at"})
+COSMETIC_COLUMNS: frozenset[str] = frozenset(
+    {"raw_json", "first_seen_at", "last_seen_at"}
+)
 
 
 @dataclass
@@ -122,7 +124,9 @@ def _diff_table(conn: Connection, table: str, from_ref: str, to_ref: str) -> Tab
     return out
 
 
-def format_report(report: DiffReport, max_samples: int = 3, max_value_len: int = 80) -> str:
+def format_report(
+    report: DiffReport, max_samples: int = 3, max_value_len: int = 80
+) -> str:
     """Render a `DiffReport` as plain text suitable for terminals."""
     lines: list[str] = []
     lines.append(f"Diff: {report.from_ref} → {report.to_ref}")
@@ -164,7 +168,9 @@ def format_report(report: DiffReport, max_samples: int = 3, max_value_len: int =
             if shown:
                 more = len(tdiff.modified) - shown
                 tail = f" (and {more} more)" if more > 0 else ""
-                lines.append(f"  Sample modifications (showing {shown} of {len(tdiff.modified)}{tail}):")
+                lines.append(
+                    f"  Sample modifications (showing {shown} of {len(tdiff.modified)}{tail}):"
+                )
                 for rd in tdiff.modified[:shown]:
                     pk_str = ", ".join(repr(p) for p in rd.pk)
                     lines.append(f"    [{pk_str}]")
@@ -180,7 +186,9 @@ def format_report(report: DiffReport, max_samples: int = 3, max_value_len: int =
             shown = min(max_samples, len(tdiff.added))
             more = len(tdiff.added) - shown
             tail = f" (and {more} more)" if more > 0 else ""
-            lines.append(f"  Sample inserts (showing {shown} of {len(tdiff.added)}{tail}):")
+            lines.append(
+                f"  Sample inserts (showing {shown} of {len(tdiff.added)}{tail}):"
+            )
             for rd in tdiff.added[:shown]:
                 pk_str = ", ".join(repr(p) for p in rd.pk)
                 lines.append(f"    [{pk_str}]")
@@ -189,7 +197,9 @@ def format_report(report: DiffReport, max_samples: int = 3, max_value_len: int =
             shown = min(max_samples, len(tdiff.removed))
             more = len(tdiff.removed) - shown
             tail = f" (and {more} more)" if more > 0 else ""
-            lines.append(f"  Sample removals (showing {shown} of {len(tdiff.removed)}{tail}):")
+            lines.append(
+                f"  Sample removals (showing {shown} of {len(tdiff.removed)}{tail}):"
+            )
             for rd in tdiff.removed[:shown]:
                 pk_str = ", ".join(repr(p) for p in rd.pk)
                 lines.append(f"    [{pk_str}]")

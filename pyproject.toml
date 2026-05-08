@@ -36,3 +36,18 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["bazel-*", ".venv"]
+
+[tool.pyright]
+include = ["src", "tests", "schemas"]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    "**/bazel-*",
+    "**/node_modules",
+    "**/dist",
+    "**/target",
+    "frankweiler",
+]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"

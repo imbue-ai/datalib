@@ -50,7 +50,10 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     for tok in tokenize(s) {
         if let Some((k, v)) = tok.split_once(':') {
             if !k.is_empty() && !v.is_empty() {
-                filters.entry(Field::from_key(k)).or_default().push(v.to_string());
+                filters
+                    .entry(Field::from_key(k))
+                    .or_default()
+                    .push(v.to_string());
                 continue;
             }
         }
@@ -136,10 +139,7 @@ mod tests {
     #[test]
     fn unknown_field_preserved_as_other() {
         let q = parse_query("custom:foo");
-        assert_eq!(
-            q.filters,
-            one(Field::Other("custom".into()), "foo")
-        );
+        assert_eq!(q.filters, one(Field::Other("custom".into()), "foo"));
     }
 
     #[test]
@@ -152,6 +152,9 @@ mod tests {
     #[test]
     fn duplicate_filters_accumulate() {
         let q = parse_query("author:a author:b");
-        assert_eq!(q.filters[&Field::Author], vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            q.filters[&Field::Author],
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 }

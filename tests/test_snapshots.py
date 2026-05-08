@@ -69,7 +69,7 @@ def _split_dump_by_table(dump_text: str) -> dict[str, str]:
     matches = list(_TABLE_HEADER_RE.finditer(dump_text))
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(dump_text)
-        sections[m.group(1)] = dump_text[m.start():end].rstrip() + "\n"
+        sections[m.group(1)] = dump_text[m.start() : end].rstrip() + "\n"
     return sections
 
 
@@ -140,7 +140,9 @@ def _discover_qmd_params() -> list:
     if _ARTIFACT_DIR is None:
         return []
     with tarfile.open(_ARTIFACT_DIR / "qmd.tar") as tf:
-        names = sorted(m.name for m in tf.getmembers() if m.isfile() and m.name.endswith(".qmd"))
+        names = sorted(
+            m.name for m in tf.getmembers() if m.isfile() and m.name.endswith(".qmd")
+        )
     return [pytest.param(n, id=Path(n).stem) for n in names]
 
 

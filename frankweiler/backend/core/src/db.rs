@@ -139,8 +139,8 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
     rows
 }
 
-fn build_filter_clause<'a>(
-    q: &'a ParsedQuery,
+fn build_filter_clause(
+    q: &ParsedQuery,
     account_col: &str,
     project_col: Option<&str>,
     when_col: &str,
@@ -220,7 +220,9 @@ fn push_anthropic_chats(
          FROM anthropic_conversations{}",
         where_sql
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else { return };
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return;
+    };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -234,7 +236,11 @@ fn push_anthropic_chats(
     let Ok(it) = it else { return };
     for row in it.flatten() {
         let (uuid, account, project, name, summary, when) = row;
-        let snip = if !summary.is_empty() { summary.clone() } else { name.clone() };
+        let snip = if !summary.is_empty() {
+            summary.clone()
+        } else {
+            name.clone()
+        };
         out.push(SearchRow {
             uuid: uuid.clone(),
             conversation_uuid: uuid.clone(),
@@ -253,12 +259,7 @@ fn push_anthropic_chats(
     }
 }
 
-fn push_openai_chats(
-    conn: &Connection,
-    q: &ParsedQuery,
-    needle: &str,
-    out: &mut Vec<SearchRow>,
-) {
+fn push_openai_chats(conn: &Connection, q: &ParsedQuery, needle: &str, out: &mut Vec<SearchRow>) {
     let (where_sql, params) = build_filter_clause(
         q,
         "account_id",
@@ -273,7 +274,9 @@ fn push_openai_chats(
          FROM openai_conversations{}",
         where_sql
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else { return };
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return;
+    };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -335,7 +338,9 @@ fn push_anthropic_messages(
               ON m.conversation_uuid = c.conversation_uuid{}",
         where_sql
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else { return };
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return;
+    };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -425,7 +430,9 @@ fn push_anthropic_blocks(
          ORDER BY m.conversation_uuid, m.created_at, b.message_uuid, b.block_index",
         where_sql
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else { return };
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return;
+    };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -444,10 +451,31 @@ fn push_anthropic_blocks(
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (mid, cuuid, btype, text, when, cname, project, account, model, msg_idx, msg_created, block_index) = row;
+        let (
+            mid,
+            cuuid,
+            btype,
+            text,
+            when,
+            cname,
+            project,
+            account,
+            model,
+            msg_idx,
+            msg_created,
+            block_index,
+        ) = row;
         let kind = anthropic_kind_for_block(&btype);
-        let author = if !model.is_empty() { model.clone() } else { btype.clone() };
-        let snippet_text = if text.is_empty() { btype.clone() } else { snippet(&text, needle) };
+        let author = if !model.is_empty() {
+            model.clone()
+        } else {
+            btype.clone()
+        };
+        let snippet_text = if text.is_empty() {
+            btype.clone()
+        } else {
+            snippet(&text, needle)
+        };
         // Synthesize a timestamp when the block has none: parent message's
         // created_at plus a microsecond bump per block_index, so blocks
         // within a message keep their export-order ordering.
@@ -518,7 +546,9 @@ fn push_openai_messages(
               ON m.conversation_id = c.conversation_id{}",
         where_sql
     );
-    let Ok(mut stmt) = conn.prepare(&sql) else { return };
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return;
+    };
     let it = stmt.query_map(params_from_iter(params.iter()), |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -536,7 +566,19 @@ fn push_openai_messages(
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (mid, cuuid, role, text, when, model, ctitle, account, msg_idx, conv_time, content_type) = row;
+        let (
+            mid,
+            cuuid,
+            role,
+            text,
+            when,
+            model,
+            ctitle,
+            account,
+            msg_idx,
+            conv_time,
+            content_type,
+        ) = row;
         // Persona/system messages and other rows can be missing create_time;
         // fall back to the parent conversation's create_time plus a per-row
         // microsecond bump so ordering within the conversation stays stable.
@@ -697,7 +739,10 @@ mod tests {
             ],
         )
         .unwrap();
-        for (j, role) in ["user", "assistant", "user", "assistant"].iter().enumerate() {
+        for (j, role) in ["user", "assistant", "user", "assistant"]
+            .iter()
+            .enumerate()
+        {
             conn.execute(
                 "INSERT INTO openai_messages (conversation_id, message_id, role, text, \
                  create_time, model_slug, raw_json, source, last_seen_at) \
@@ -734,7 +779,8 @@ mod tests {
             .filter(|r| r.source == "ChatGPT" && r.kind != "Chat")
             .count();
         assert_eq!(
-            openai_msg_count, 4,
+            openai_msg_count,
+            4,
             "expected all 4 ChatGPT messages; rows: {:?}",
             rows.iter()
                 .map(|r| (r.source.clone(), r.kind.clone(), r.when.clone()))

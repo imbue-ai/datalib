@@ -9,8 +9,13 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Route {
-    Search { params: BTreeMap<String, String> },
-    Chat { conversation_uuid: String, params: BTreeMap<String, String> },
+    Search {
+        params: BTreeMap<String, String>,
+    },
+    Chat {
+        conversation_uuid: String,
+        params: BTreeMap<String, String>,
+    },
     Prefs,
 }
 
@@ -50,7 +55,10 @@ pub fn parse(url: &str) -> Result<Route, ParseError> {
             if uuid.is_empty() {
                 return Err(ParseError::MissingChatUuid);
             }
-            Ok(Route::Chat { conversation_uuid: uuid, params })
+            Ok(Route::Chat {
+                conversation_uuid: uuid,
+                params,
+            })
         }
         other => Err(ParseError::UnknownRoute(other.to_string())),
     }
@@ -60,9 +68,10 @@ pub fn parse(url: &str) -> Result<Route, ParseError> {
 pub fn to_hash(route: &Route) -> String {
     match route {
         Route::Search { params } => with_query("search", params),
-        Route::Chat { conversation_uuid, params } => {
-            with_query(&format!("chat/{}", conversation_uuid), params)
-        }
+        Route::Chat {
+            conversation_uuid,
+            params,
+        } => with_query(&format!("chat/{}", conversation_uuid), params),
         Route::Prefs => "prefs".to_string(),
     }
 }
@@ -105,8 +114,8 @@ fn with_query(path: &str, params: &BTreeMap<String, String>) -> String {
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
-        let safe = b.is_ascii_alphanumeric()
-            || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b',');
+        let safe =
+            b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b',');
         if safe {
             out.push(b as char);
         } else {
@@ -122,10 +131,9 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(
-                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                16,
-            ) {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
                 out.push(byte);
                 i += 3;
                 continue;
@@ -146,12 +154,16 @@ mod tests {
     use super::*;
 
     fn p(kvs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        kvs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect()
+        kvs.iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
     }
 
     #[test]
     fn parses_search_hash_and_deeplink() {
-        let want = Route::Search { params: p(&[("q", "treemap")]) };
+        let want = Route::Search {
+            params: p(&[("q", "treemap")]),
+        };
         assert_eq!(parse("#search?q=treemap").unwrap(), want);
         assert_eq!(parse("frankweiler://search?q=treemap").unwrap(), want);
     }
@@ -169,7 +181,9 @@ mod tests {
 
     #[test]
     fn round_trip_search() {
-        let r = Route::Search { params: p(&[("q", "hello world"), ("type", "message")]) };
+        let r = Route::Search {
+            params: p(&[("q", "hello world"), ("type", "message")]),
+        };
         assert_eq!(parse(&format!("#{}", to_hash(&r))).unwrap(), r);
         assert_eq!(parse(&to_deeplink(&r)).unwrap(), r);
     }

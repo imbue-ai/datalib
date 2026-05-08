@@ -57,13 +57,15 @@ class RateLimited(RuntimeError):
 # Auth: pull Authorization + Cookie out of latchkey at run time.
 # ---------------------------------------------------------------------------
 
+
 def get_auth_headers() -> dict[str, str]:
     """Run `latchkey curl -v` against /api/auth/session and harvest the
     Authorization/Cookie/User-Agent headers latchkey injects."""
     proc = subprocess.run(
-        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s",
-         f"{BASE}/api/auth/session"],
-        capture_output=True, text=True, check=False,
+        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s", f"{BASE}/api/auth/session"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     headers: dict[str, str] = {}
     for name in ("Authorization", "Cookie", "User-Agent"):
@@ -82,6 +84,7 @@ def get_auth_headers() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Web API client (curl_cffi with Chrome TLS fingerprint).
 # ---------------------------------------------------------------------------
+
 
 class ChatGPTWebClient:
     def __init__(self, headers: dict[str, str]) -> None:
@@ -114,7 +117,11 @@ class ChatGPTWebClient:
                 # capped at 60s. Give up after RATE_LIMIT_GIVE_UP_AFTER total.
                 ra = r.headers.get("Retry-After")
                 try:
-                    wait = float(ra) if ra else min(60.0, 5.0 * (2 ** min(4, int(waited / 5))))
+                    wait = (
+                        float(ra)
+                        if ra
+                        else min(60.0, 5.0 * (2 ** min(4, int(waited / 5))))
+                    )
                 except ValueError:
                     wait = 30.0
                 if waited + wait > RATE_LIMIT_GIVE_UP_AFTER:
@@ -147,6 +154,7 @@ class ChatGPTWebClient:
 # Fetch logic.
 # ---------------------------------------------------------------------------
 
+
 def _read_json(path: Path) -> Any:
     if not path.exists():
         return None
@@ -158,8 +166,9 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _list_all_conversations(client: ChatGPTWebClient,
-                            max_pages: int | None) -> list[dict]:
+def _list_all_conversations(
+    client: ChatGPTWebClient, max_pages: int | None
+) -> list[dict]:
     """Walk the paginated /backend-api/conversations listing until exhausted."""
     items: list[dict] = []
     offset = 0
@@ -169,8 +178,10 @@ def _list_all_conversations(client: ChatGPTWebClient,
         page_items = page.get("items") or []
         items.extend(page_items)
         total = page.get("total")
-        print(f"    page offset={offset:>5} got={len(page_items):>3} "
-              f"total={total} cum={len(items)}")
+        print(
+            f"    page offset={offset:>5} got={len(page_items):>3} "
+            f"total={total} cum={len(items)}"
+        )
         offset += len(page_items)
         pages += 1
         if not page_items:
@@ -186,19 +197,24 @@ def _list_all_conversations(client: ChatGPTWebClient,
 
 def fetch(
     out_dir: Path = typer.Option(
-        DEFAULT_OUT_DIR, "--out-dir",
+        DEFAULT_OUT_DIR,
+        "--out-dir",
         help=f"API-fetched dir (default {DEFAULT_OUT_DIR}).",
     ),
     max_pages: int | None = typer.Option(
         None, "--max-pages", help="Cap the listing walk (debugging)."
     ),
     limit: int | None = typer.Option(
-        None, "--limit",
-        help=("Stop after N successful conversation fetches (skipped/cached "
-              "items don't count). For debugging."),
+        None,
+        "--limit",
+        help=(
+            "Stop after N successful conversation fetches (skipped/cached "
+            "items don't count). For debugging."
+        ),
     ),
     sleep_between: float = typer.Option(
-        SLEEP_BETWEEN, "--sleep-between",
+        SLEEP_BETWEEN,
+        "--sleep-between",
         help=f"Seconds between successful fetches (default {SLEEP_BETWEEN}). 0 disables.",
     ),
 ) -> None:
@@ -296,6 +312,7 @@ def fetch(
 # ---------------------------------------------------------------------------
 # Entry point.
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     typer.run(fetch)

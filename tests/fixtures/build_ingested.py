@@ -97,7 +97,9 @@ sources:
         "/usr/bin",
         "/bin",
     ]
-    parent_path = os.environ.get("CLAUDE_MIRROR_HOST_PATH") or os.environ.get("PATH", "")
+    parent_path = os.environ.get("CLAUDE_MIRROR_HOST_PATH") or os.environ.get(
+        "PATH", ""
+    )
     env["PATH"] = ":".join([p for p in extra_paths + parent_path.split(":") if p])
     r = subprocess.run(cmd, env=env)
     if r.returncode != 0:
@@ -112,7 +114,9 @@ sources:
     with tarfile.open(qmd_tar, "w") as tf:
         entries: list[Path] = []
         for sub in qmd_subtrees:
-            entries.extend(p for p in (root / sub).rglob("*") if p.is_file() or p.is_dir())
+            entries.extend(
+                p for p in (root / sub).rglob("*") if p.is_file() or p.is_dir()
+            )
         entries.sort()
         for p in entries:
             arcname = "qmd/" + str(p.relative_to(root))

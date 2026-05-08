@@ -11,11 +11,9 @@ from ingest.config import (
 )
 from ingest.dolt_service import DoltService
 from ingest.providers.anthropic.ingest import (
-    AnthropicIngestStats,
     ingest_export_dir,
 )
 from ingest.providers.openai.ingest import (
-    OpenAIIngestStats,
     ingest_api_dir,
 )
 from ingest.render import render_all

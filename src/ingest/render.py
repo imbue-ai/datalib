@@ -26,6 +26,7 @@ def _bump_iso(ts: str) -> str:
         bumped = bumped[:-6] + "Z"
     return bumped
 
+
 SLUG_MAX_LEN = 60
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -59,7 +60,12 @@ def _render_anthropic_block(
     btext: str | None,
     braw: object,
 ) -> list[str]:
-    raw = braw if isinstance(braw, dict) else (json.loads(braw) if braw else {})
+    if isinstance(braw, dict):
+        raw = braw
+    elif isinstance(braw, (str, bytes, bytearray)) and braw:
+        raw = json.loads(braw)
+    else:
+        raw = {}
     # Block-scoped anchor; tool blocks also get a content-id anchor below
     # so tool_result can link back to its tool_use across messages.
     anchors = [f'<a id="b-{msg_uuid}-{block_index}"></a>']
@@ -109,10 +115,19 @@ def _render_anthropic_block(
             out += ["```", content.rstrip(), "```"]
         elif isinstance(content, list):
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "text"
+                    and item.get("text")
+                ):
                     out += [str(item["text"]).rstrip(), ""]
                 elif isinstance(item, dict):
-                    out += ["```json", json.dumps(item, indent=2, ensure_ascii=False), "```", ""]
+                    out += [
+                        "```json",
+                        json.dumps(item, indent=2, ensure_ascii=False),
+                        "```",
+                        "",
+                    ]
                 else:
                     out += ["```", str(item).rstrip(), "```", ""]
         elif content is not None:
@@ -172,7 +187,7 @@ def render_conversation(conn: Connection, conversation_uuid: str, root: Path) ->
 
     parts: list[str] = []
     parts.append("---")
-    parts.append(f"provider: anthropic")
+    parts.append("provider: anthropic")
     parts.append(f"uuid: {_yaml_scalar(conversation_uuid)}")
     parts.append(f"name: {_yaml_scalar(name)}")
     parts.append(f"account_uuid: {_yaml_scalar(account_uuid)}")
@@ -257,8 +272,9 @@ def _table_exists(conn: Connection, name: str) -> bool:
         return bool(n)
 
 
-def render_openai_conversation(conn: Connection, conversation_id: str,
-                               root: Path) -> Path:
+def render_openai_conversation(
+    conn: Connection, conversation_id: str, root: Path
+) -> Path:
     """Render one ChatGPT conversation into QMD.
 
     The DAG is collapsed to the chat's "current" leaf-to-root path
@@ -457,9 +473,7 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
 
     if _table_exists(conn, "openai_conversations"):
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT conversation_id, account_id FROM openai_conversations"
-            )
+            cur.execute("SELECT conversation_id, account_id FROM openai_conversations")
             rows = list(cur.fetchall())
         live_ids: set[str] = set()
         accts: set[str] = set()

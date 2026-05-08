@@ -54,7 +54,10 @@ pub enum ConfigError {
 impl Config {
     /// Resolve `${root}` and `~` in derived paths after load.
     pub fn resolved_qmd_index(&self) -> PathBuf {
-        let s = self.qmd.index_path.replace("${root}", &self.root.display().to_string());
+        let s = self
+            .qmd
+            .index_path
+            .replace("${root}", &self.root.display().to_string());
         expand_tilde(&s)
     }
 }
@@ -109,11 +112,7 @@ mod tests {
         let root = tmp.join("data");
         std::fs::create_dir_all(&root).unwrap();
         let cfg_path = tmp.join("config.yaml");
-        std::fs::write(
-            &cfg_path,
-            format!("root: {}\n", root.display()),
-        )
-        .unwrap();
+        std::fs::write(&cfg_path, format!("root: {}\n", root.display())).unwrap();
         let cfg = load_config(Some(&cfg_path)).unwrap();
         assert_eq!(cfg.root, root);
         assert_eq!(cfg.backend.bind, "127.0.0.1:8731");

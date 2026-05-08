@@ -62,8 +62,8 @@ pub enum QmdError {
 /// Parse a single QMD file.
 pub fn parse_qmd(path: &Path) -> Result<Conversation, QmdError> {
     let text = fs::read_to_string(path)?;
-    let (fm, body) = split_frontmatter(&text)
-        .ok_or_else(|| QmdError::MissingFrontmatter(path.to_path_buf()))?;
+    let (fm, body) =
+        split_frontmatter(&text).ok_or_else(|| QmdError::MissingFrontmatter(path.to_path_buf()))?;
     let frontmatter: Frontmatter = serde_yaml::from_str(fm)?;
     let messages = parse_messages(body);
     Ok(Conversation {
@@ -125,7 +125,12 @@ fn parse_messages(body: &str) -> Vec<Message> {
         if when.is_none() {
             when = out.last().and_then(|m| m.when.clone());
         }
-        out.push(Message { sender, when, model, text });
+        out.push(Message {
+            sender,
+            when,
+            model,
+            text,
+        });
     }
     out
 }
@@ -141,7 +146,9 @@ pub fn scan_root(root: &Path) -> Vec<PathBuf> {
         };
         for acct in accounts.flatten() {
             let chats = acct.path().join("llm_chats");
-            let Ok(files) = fs::read_dir(&chats) else { continue };
+            let Ok(files) = fs::read_dir(&chats) else {
+                continue;
+            };
             for f in files.flatten() {
                 let p = f.path();
                 if p.extension().is_some_and(|e| e == "qmd") {
@@ -228,9 +235,17 @@ Multiple paragraphs work.
     #[test]
     fn scan_finds_qmd_under_account_dirs() {
         let root = tempdir();
-        let p = root.join("anthropic").join("acct-1").join("llm_chats").join("a.qmd");
+        let p = root
+            .join("anthropic")
+            .join("acct-1")
+            .join("llm_chats")
+            .join("a.qmd");
         write(&p, SAMPLE);
-        let other = root.join("anthropic").join("acct-1").join("llm_chats").join("notes.txt");
+        let other = root
+            .join("anthropic")
+            .join("acct-1")
+            .join("llm_chats")
+            .join("notes.txt");
         write(&other, "ignore");
         let scanned = scan_root(&root);
         assert_eq!(scanned.len(), 1);

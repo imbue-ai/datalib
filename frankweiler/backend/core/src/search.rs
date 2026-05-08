@@ -35,7 +35,7 @@ fn source_label(provider: &str) -> String {
     match provider.to_ascii_lowercase().as_str() {
         "anthropic" | "claude" => "Claude".into(),
         "openai" | "chatgpt" => "ChatGPT".into(),
-        other if other.is_empty() => String::new(),
+        "" => String::new(),
         other => other.to_string(),
     }
 }
@@ -170,9 +170,9 @@ fn chat_row(c: &Conversation, needle: &str) -> SearchRow {
     let fm = &c.frontmatter;
     let snippet = if !needle.is_empty() {
         first_snippet_in_messages(c, needle).unwrap_or_else(|| {
-            fm.summary.clone().unwrap_or_else(|| {
-                fm.name.clone().unwrap_or_default()
-            })
+            fm.summary
+                .clone()
+                .unwrap_or_else(|| fm.name.clone().unwrap_or_default())
         })
     } else {
         fm.summary
@@ -202,7 +202,8 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
     let snippet = if needle.is_empty() {
         first_n_chars(&m.text, SNIPPET_RADIUS * 2)
     } else {
-        snippet_around(&m.text, needle).unwrap_or_else(|| first_n_chars(&m.text, SNIPPET_RADIUS * 2))
+        snippet_around(&m.text, needle)
+            .unwrap_or_else(|| first_n_chars(&m.text, SNIPPET_RADIUS * 2))
     };
     let kind = message_kind(&m.sender);
     let author = match kind {
@@ -254,21 +255,17 @@ fn snippet_around(haystack: &str, needle: &str) -> Option<String> {
         .unwrap_or(haystack.len());
     let mut out = String::new();
     if start > 0 {
-        out.push_str("…");
+        out.push('…');
     }
     out.push_str(&haystack[start..end]);
     if end < haystack.len() {
-        out.push_str("…");
+        out.push('…');
     }
     Some(out.replace('\n', " "))
 }
 
 fn first_n_chars(s: &str, n: usize) -> String {
-    let end = s
-        .char_indices()
-        .nth(n)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
+    let end = s.char_indices().nth(n).map(|(i, _)| i).unwrap_or(s.len());
     let truncated = &s[..end];
     let mut out = truncated.replace('\n', " ");
     if end < s.len() {

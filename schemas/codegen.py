@@ -117,8 +117,23 @@ def emit_rust(schema: dict) -> str:
         "",
     ]
     rust_keywords = {
-        "type", "match", "ref", "move", "fn", "let", "mut", "use", "mod",
-        "self", "super", "trait", "impl", "as", "where", "while", "loop",
+        "type",
+        "match",
+        "ref",
+        "move",
+        "fn",
+        "let",
+        "mut",
+        "use",
+        "mod",
+        "self",
+        "super",
+        "trait",
+        "impl",
+        "as",
+        "where",
+        "while",
+        "loop",
     }
     for name, defn in schema["definitions"].items():
         out.append("#[derive(Debug, Clone, Serialize, Deserialize)]")

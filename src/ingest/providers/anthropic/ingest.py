@@ -24,7 +24,9 @@ class AnthropicIngestStats:
 # 'api' or the existing row is not api-locked. The `source` column itself
 # upgrades export→api but never downgrades api→export.
 def _api_wins(col: str) -> str:
-    return f"{col} = IF(VALUES(source) = 'api' OR source != 'api', VALUES({col}), {col})"
+    return (
+        f"{col} = IF(VALUES(source) = 'api' OR source != 'api', VALUES({col}), {col})"
+    )
 
 
 def _source_merge() -> str:

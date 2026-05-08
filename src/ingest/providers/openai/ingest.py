@@ -17,14 +17,16 @@ class OpenAIIngestStats:
     conversations: int = 0
     messages: int = 0
     content_blocks: int = 0  # populated from content_parts; kept named for parity
-    attachments: int = 0     # always 0 today (chatgpt API surfaces none)
+    attachments: int = 0  # always 0 today (chatgpt API surfaces none)
 
 
 # UPSERT helper: per-column gating. ChatGPT today is api-only, but we keep
 # the same shape as the anthropic ingest so a future export transport can
 # land here without touching the SQL.
 def _api_wins(col: str) -> str:
-    return f"{col} = IF(VALUES(source) = 'api' OR source != 'api', VALUES({col}), {col})"
+    return (
+        f"{col} = IF(VALUES(source) = 'api' OR source != 'api', VALUES({col}), {col})"
+    )
 
 
 def _source_merge() -> str:
@@ -59,9 +61,13 @@ def ingest_api_dir(
                     last_seen_at = VALUES(last_seen_at)
                 """,
                 (
-                    a.account_id, a.email, a.name,
+                    a.account_id,
+                    a.email,
+                    a.name,
                     json.dumps(a.raw_json, ensure_ascii=False),
-                    source, ingest_started_at, ingest_started_at,
+                    source,
+                    ingest_started_at,
+                    ingest_started_at,
                 ),
             )
             stats.accounts += 1
@@ -90,12 +96,20 @@ def ingest_api_dir(
                     last_seen_at = VALUES(last_seen_at)
                 """,
                 (
-                    c.account_id, c.conversation_id, c.title,
-                    c.create_time, c.update_time, c.current_node,
-                    c.default_model_slug, c.gizmo_id, c.gizmo_type,
-                    c.is_archived, c.is_starred,
+                    c.account_id,
+                    c.conversation_id,
+                    c.title,
+                    c.create_time,
+                    c.update_time,
+                    c.current_node,
+                    c.default_model_slug,
+                    c.gizmo_id,
+                    c.gizmo_type,
+                    c.is_archived,
+                    c.is_starred,
                     json.dumps(c.raw_json, ensure_ascii=False),
-                    source, ingest_started_at,
+                    source,
+                    ingest_started_at,
                 ),
             )
             stats.conversations += 1
@@ -140,12 +154,23 @@ def ingest_api_dir(
                     last_seen_at = VALUES(last_seen_at)
                 """,
                 (
-                    m.conversation_id, m.message_id, m.parent_id, m.role,
-                    m.recipient, m.channel, m.content_type, m.text, m.status,
-                    m.end_turn, m.weight, m.model_slug,
-                    m.create_time, m.update_time,
+                    m.conversation_id,
+                    m.message_id,
+                    m.parent_id,
+                    m.role,
+                    m.recipient,
+                    m.channel,
+                    m.content_type,
+                    m.text,
+                    m.status,
+                    m.end_turn,
+                    m.weight,
+                    m.model_slug,
+                    m.create_time,
+                    m.update_time,
                     json.dumps(m.raw_json, ensure_ascii=False),
-                    source, ingest_started_at,
+                    source,
+                    ingest_started_at,
                 ),
             )
             stats.messages += 1
@@ -177,8 +202,13 @@ def ingest_api_dir(
                         {_source_merge()}
                     """,
                     (
-                        p.message_id, p.part_index, p.kind, p.language, p.text,
-                        json.dumps(p.raw_json, ensure_ascii=False), source,
+                        p.message_id,
+                        p.part_index,
+                        p.kind,
+                        p.language,
+                        p.text,
+                        json.dumps(p.raw_json, ensure_ascii=False),
+                        source,
                     ),
                 )
                 stats.content_blocks += 1

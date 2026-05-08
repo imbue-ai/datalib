@@ -17,7 +17,9 @@ struct Fixture {
 #[derive(serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 enum RouteJson {
-    Search { params: BTreeMap<String, String> },
+    Search {
+        params: BTreeMap<String, String>,
+    },
     Chat {
         #[serde(rename = "conversationUuid")]
         conversation_uuid: String,
@@ -30,9 +32,13 @@ impl From<RouteJson> for Route {
     fn from(r: RouteJson) -> Self {
         match r {
             RouteJson::Search { params } => Route::Search { params },
-            RouteJson::Chat { conversation_uuid, params } => {
-                Route::Chat { conversation_uuid, params }
-            }
+            RouteJson::Chat {
+                conversation_uuid,
+                params,
+            } => Route::Chat {
+                conversation_uuid,
+                params,
+            },
             RouteJson::Prefs => Route::Prefs,
         }
     }
@@ -45,7 +51,12 @@ fn parses_all_fixtures() {
     for f in fixtures {
         let want: Route = f.route.into();
         assert_eq!(parse(&f.deeplink).unwrap(), want, "deeplink: {}", f.name);
-        assert_eq!(parse(&format!("#{}", f.hash)).unwrap(), want, "hash: {}", f.name);
+        assert_eq!(
+            parse(&format!("#{}", f.hash)).unwrap(),
+            want,
+            "hash: {}",
+            f.name
+        );
         assert_eq!(to_hash(&want), f.hash, "to_hash: {}", f.name);
         assert_eq!(to_deeplink(&want), f.deeplink, "to_deeplink: {}", f.name);
     }

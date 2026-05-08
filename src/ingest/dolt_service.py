@@ -13,7 +13,9 @@ from pymysql.connections import Connection
 
 from ingest.config import Config
 
-DOLT_REPO_DIRNAME = "dolt_repo"  # dolt exposes the dir as a database; avoid leading dot/dash
+DOLT_REPO_DIRNAME = (
+    "dolt_repo"  # dolt exposes the dir as a database; avoid leading dot/dash
+)
 
 
 def _port_open(host: str, port: int, timeout: float = 0.3) -> bool:
@@ -78,7 +80,14 @@ class DoltService:
         self._repo_dir.mkdir(parents=True, exist_ok=True)
         if not (self._repo_dir / ".dolt").exists():
             subprocess.run(
-                ["dolt", "init", "--name", "personal-mirror", "--email", "personal-mirror@local"],
+                [
+                    "dolt",
+                    "init",
+                    "--name",
+                    "personal-mirror",
+                    "--email",
+                    "personal-mirror@local",
+                ],
                 cwd=self._repo_dir,
                 check=True,
                 capture_output=True,

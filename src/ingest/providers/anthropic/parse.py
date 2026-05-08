@@ -129,7 +129,9 @@ def parse_export(export_dir: Path) -> ParsedExport:
             ConversationRow(
                 account_uuid=account_uuid,
                 conversation_uuid=c["uuid"],
-                project_uuid=(c.get("project") or {}).get("uuid") if c.get("project") else None,
+                project_uuid=(c.get("project") or {}).get("uuid")
+                if c.get("project")
+                else None,
                 name=c.get("name"),
                 summary=c.get("summary"),
                 created_at=c.get("created_at"),
@@ -147,7 +149,11 @@ def parse_export(export_dir: Path) -> ParsedExport:
                     text=m.get("text"),
                     created_at=m.get("created_at"),
                     updated_at=m.get("updated_at"),
-                    raw_json={k: v for k, v in m.items() if k not in ("content", "attachments", "files")},
+                    raw_json={
+                        k: v
+                        for k, v in m.items()
+                        if k not in ("content", "attachments", "files")
+                    },
                 )
             )
             for i, blk in enumerate(m.get("content") or []):

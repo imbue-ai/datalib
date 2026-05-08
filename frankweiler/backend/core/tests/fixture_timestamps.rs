@@ -13,9 +13,9 @@
 //!     to the runfiles path of the genrule output.
 //!   * Under plain `cargo test`: set the env var manually after building
 //!     the fixture, e.g.
-//!       bazelisk build //tests/fixtures:ingested_tng
-//!       FRANKWEILER_TEST_DUMP_SQL=$(pwd)/bazel-bin/tests/fixtures/ingested/dump.sql \
-//!         cargo test -p frankweiler-core --test fixture_timestamps
+//!     bazelisk build //tests/fixtures:ingested_tng
+//!     FRANKWEILER_TEST_DUMP_SQL=$(pwd)/bazel-bin/tests/fixtures/ingested/dump.sql \
+//!     cargo test -p frankweiler-core --test fixture_timestamps
 //!     If the env var is unset the test prints a skip notice and passes,
 //!     so the inner `cargo test` loop stays unblocked.
 //!
@@ -111,8 +111,8 @@ fn mysql_to_sqlite(text: &str) -> String {
 }
 
 fn load_dump(path: &PathBuf) -> Connection {
-    let sql = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let sql =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
     let translated = mysql_to_sqlite(&sql);
     let conn = Connection::open_in_memory().expect("open in-memory sqlite");
     conn.execute_batch(&translated)
@@ -136,7 +136,10 @@ fn every_grid_row_has_a_timestamp() {
     // openai chats, openai messages).
     let q = parse_query("");
     let rows = grid_rows_with_conn(&conn, &q, 100_000);
-    assert!(!rows.is_empty(), "fixture produced zero rows — broken setup");
+    assert!(
+        !rows.is_empty(),
+        "fixture produced zero rows — broken setup"
+    );
 
     let missing: Vec<String> = rows
         .iter()

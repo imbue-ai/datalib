@@ -85,8 +85,9 @@ def _epoch_to_iso(v: Any) -> str | None:
         return None
     if isinstance(v, (int, float)):
         try:
-            return datetime.fromtimestamp(float(v), tz=timezone.utc) \
-                .isoformat(timespec="microseconds")
+            return datetime.fromtimestamp(float(v), tz=timezone.utc).isoformat(
+                timespec="microseconds"
+            )
         except (OverflowError, OSError, ValueError):
             return None
     if isinstance(v, str):
@@ -147,32 +148,50 @@ def _content_parts(message_id: str, content: dict | None) -> list[OAContentPartR
     if ct == "text":
         for i, p in enumerate(content.get("parts") or []):
             if isinstance(p, str):
-                rows.append(OAContentPartRow(
-                    message_id=message_id, part_index=i,
-                    kind="text", language=None, text=p,
-                    raw_json={"content_type": "text", "value": p},
-                ))
+                rows.append(
+                    OAContentPartRow(
+                        message_id=message_id,
+                        part_index=i,
+                        kind="text",
+                        language=None,
+                        text=p,
+                        raw_json={"content_type": "text", "value": p},
+                    )
+                )
             else:
                 txt = (p.get("text") if isinstance(p, dict) else None) or ""
-                rows.append(OAContentPartRow(
-                    message_id=message_id, part_index=i,
-                    kind="text", language=None, text=txt,
-                    raw_json=p if isinstance(p, dict) else {"value": p},
-                ))
+                rows.append(
+                    OAContentPartRow(
+                        message_id=message_id,
+                        part_index=i,
+                        kind="text",
+                        language=None,
+                        text=txt,
+                        raw_json=p if isinstance(p, dict) else {"value": p},
+                    )
+                )
     elif ct == "code":
-        rows.append(OAContentPartRow(
-            message_id=message_id, part_index=0,
-            kind="code", language=content.get("language"),
-            text=content.get("text") or "",
-            raw_json=content,
-        ))
+        rows.append(
+            OAContentPartRow(
+                message_id=message_id,
+                part_index=0,
+                kind="code",
+                language=content.get("language"),
+                text=content.get("text") or "",
+                raw_json=content,
+            )
+        )
     elif ct == "execution_output":
-        rows.append(OAContentPartRow(
-            message_id=message_id, part_index=0,
-            kind="execution_output", language=None,
-            text=content.get("text") or "",
-            raw_json=content,
-        ))
+        rows.append(
+            OAContentPartRow(
+                message_id=message_id,
+                part_index=0,
+                kind="execution_output",
+                language=None,
+                text=content.get("text") or "",
+                raw_json=content,
+            )
+        )
     elif ct == "thoughts":
         for i, t in enumerate(content.get("thoughts") or []):
             if not isinstance(t, dict):
@@ -180,32 +199,52 @@ def _content_parts(message_id: str, content: dict | None) -> list[OAContentPartR
             txt = "\n\n".join(
                 str(t.get(k) or "") for k in ("summary", "content") if t.get(k)
             )
-            rows.append(OAContentPartRow(
-                message_id=message_id, part_index=i,
-                kind="thoughts", language=None, text=txt,
-                raw_json=t,
-            ))
+            rows.append(
+                OAContentPartRow(
+                    message_id=message_id,
+                    part_index=i,
+                    kind="thoughts",
+                    language=None,
+                    text=txt,
+                    raw_json=t,
+                )
+            )
     elif ct == "reasoning_recap":
-        rows.append(OAContentPartRow(
-            message_id=message_id, part_index=0,
-            kind="reasoning_recap", language=None,
-            text=content.get("content") if isinstance(content.get("content"), str) else "",
-            raw_json=content,
-        ))
+        rows.append(
+            OAContentPartRow(
+                message_id=message_id,
+                part_index=0,
+                kind="reasoning_recap",
+                language=None,
+                text=content.get("content")
+                if isinstance(content.get("content"), str)
+                else "",
+                raw_json=content,
+            )
+        )
     elif ct == "model_editable_context":
-        rows.append(OAContentPartRow(
-            message_id=message_id, part_index=0,
-            kind="model_editable_context", language=None,
-            text=content.get("model_set_context") or "",
-            raw_json=content,
-        ))
+        rows.append(
+            OAContentPartRow(
+                message_id=message_id,
+                part_index=0,
+                kind="model_editable_context",
+                language=None,
+                text=content.get("model_set_context") or "",
+                raw_json=content,
+            )
+        )
     else:
         # Unknown shape — store one opaque row so we don't lose data.
-        rows.append(OAContentPartRow(
-            message_id=message_id, part_index=0,
-            kind=ct or "unknown", language=None,
-            text=None, raw_json=content,
-        ))
+        rows.append(
+            OAContentPartRow(
+                message_id=message_id,
+                part_index=0,
+                kind=ct or "unknown",
+                language=None,
+                text=None,
+                raw_json=content,
+            )
+        )
     return rows
 
 
@@ -226,12 +265,14 @@ def parse_api_dir(api_dir: Path) -> ParsedChatGPTApi:
         me = json.loads(me_path.read_text())
         account_id = me.get("id")
         if account_id:
-            out.accounts.append(OAAccountRow(
-                account_id=account_id,
-                email=me.get("email"),
-                name=me.get("name"),
-                raw_json=me,
-            ))
+            out.accounts.append(
+                OAAccountRow(
+                    account_id=account_id,
+                    email=me.get("email"),
+                    name=me.get("name"),
+                    raw_json=me,
+                )
+            )
 
     listing_path = api_dir / "conversations.json"
     listing_by_id: dict[str, dict] = {}
@@ -252,24 +293,26 @@ def parse_api_dir(api_dir: Path) -> ParsedChatGPTApi:
         cid = d.get("conversation_id") or d.get("id") or f.stem
         listing_row = listing_by_id.get(cid, {})
 
-        out.conversations.append(OAConversationRow(
-            account_id=account_id,
-            conversation_id=cid,
-            title=d.get("title") or listing_row.get("title"),
-            create_time=_epoch_to_iso(d.get("create_time"))
+        out.conversations.append(
+            OAConversationRow(
+                account_id=account_id,
+                conversation_id=cid,
+                title=d.get("title") or listing_row.get("title"),
+                create_time=_epoch_to_iso(d.get("create_time"))
                 or _epoch_to_iso(listing_row.get("create_time")),
-            update_time=_epoch_to_iso(d.get("update_time"))
+                update_time=_epoch_to_iso(d.get("update_time"))
                 or _epoch_to_iso(listing_row.get("update_time")),
-            current_node=d.get("current_node"),
-            default_model_slug=d.get("default_model_slug"),
-            gizmo_id=d.get("gizmo_id"),
-            gizmo_type=d.get("gizmo_type"),
-            is_archived=d.get("is_archived"),
-            is_starred=d.get("is_starred"),
-            # raw_json carries everything *except* the mapping (which we
-            # explode into rows). Keeps the row payload reasonable.
-            raw_json={k: v for k, v in d.items() if k != "mapping"},
-        ))
+                current_node=d.get("current_node"),
+                default_model_slug=d.get("default_model_slug"),
+                gizmo_id=d.get("gizmo_id"),
+                gizmo_type=d.get("gizmo_type"),
+                is_archived=d.get("is_archived"),
+                is_starred=d.get("is_starred"),
+                # raw_json carries everything *except* the mapping (which we
+                # explode into rows). Keeps the row payload reasonable.
+                raw_json={k: v for k, v in d.items() if k != "mapping"},
+            )
+        )
 
         mapping = d.get("mapping") or {}
         for node_id, node in mapping.items():
@@ -280,23 +323,26 @@ def parse_api_dir(api_dir: Path) -> ParsedChatGPTApi:
             content = m.get("content")
             author = m.get("author") or {}
             meta = m.get("metadata") or {}
-            out.messages.append(OAMessageRow(
-                conversation_id=cid,
-                message_id=mid,
-                parent_id=node.get("parent"),
-                role=author.get("role"),
-                recipient=m.get("recipient"),
-                channel=m.get("channel"),
-                content_type=(content or {}).get("content_type")
-                    if isinstance(content, dict) else None,
-                text=_synthesize_text(content),
-                status=m.get("status"),
-                end_turn=m.get("end_turn"),
-                weight=m.get("weight"),
-                model_slug=meta.get("model_slug"),
-                create_time=_epoch_to_iso(m.get("create_time")),
-                update_time=_epoch_to_iso(m.get("update_time")),
-                raw_json={k: v for k, v in m.items() if k != "content"},
-            ))
+            out.messages.append(
+                OAMessageRow(
+                    conversation_id=cid,
+                    message_id=mid,
+                    parent_id=node.get("parent"),
+                    role=author.get("role"),
+                    recipient=m.get("recipient"),
+                    channel=m.get("channel"),
+                    content_type=(content or {}).get("content_type")
+                    if isinstance(content, dict)
+                    else None,
+                    text=_synthesize_text(content),
+                    status=m.get("status"),
+                    end_turn=m.get("end_turn"),
+                    weight=m.get("weight"),
+                    model_slug=meta.get("model_slug"),
+                    create_time=_epoch_to_iso(m.get("create_time")),
+                    update_time=_epoch_to_iso(m.get("update_time")),
+                    raw_json={k: v for k, v in m.items() if k != "content"},
+                )
+            )
             out.content_parts.extend(_content_parts(mid, content))
     return out

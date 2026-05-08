@@ -89,7 +89,9 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
 
     # Row counts match what the genrule logged.
     assert conn.execute("SELECT COUNT(*) FROM anthropic_accounts").fetchone()[0] == 3
-    assert conn.execute("SELECT COUNT(*) FROM anthropic_conversations").fetchone()[0] == 5
+    assert (
+        conn.execute("SELECT COUNT(*) FROM anthropic_conversations").fetchone()[0] == 5
+    )
     assert conn.execute("SELECT COUNT(*) FROM openai_accounts").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM openai_conversations").fetchone()[0] == 2
 
