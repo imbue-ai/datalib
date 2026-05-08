@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from pymysql.connections import Connection
+from tqdm import tqdm
 
 from ingest.providers.slack.parse import ParsedSlackApi, parse_api_dir
 from ingest.providers.slack.schema import ensure_schema
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,6 +38,14 @@ def ingest_api_dir(
     consistent with whatever the latest Slack snapshot shows."""
     ensure_schema(conn)
     parsed = parse_api_dir(api_dir)
+    log.info(
+        "slack: parsed workspaces=%d users=%d channels=%d messages=%d reactions=%d",
+        len(parsed.workspaces),
+        len(parsed.users),
+        len(parsed.channels),
+        len(parsed.messages),
+        len(parsed.reactions),
+    )
     stats = SlackIngestStats()
 
     with conn.cursor() as cur:
@@ -125,7 +137,7 @@ def ingest_api_dir(
             )
             stats.channels += 1
 
-        for m in parsed.messages:
+        for m in tqdm(parsed.messages, desc="slack messages", unit="msg", leave=False):
             cur.execute(
                 """
                 INSERT INTO slack_messages
@@ -169,7 +181,7 @@ def ingest_api_dir(
         msg_ids_with_reactions = {r.message_uuid for r in parsed.reactions}
         for mid in msg_ids_with_reactions:
             cur.execute("DELETE FROM slack_reactions WHERE message_uuid = %s", (mid,))
-        for r in parsed.reactions:
+        for r in tqdm(parsed.reactions, desc="slack reactions", unit="rx", leave=False):
             cur.execute(
                 """
                 INSERT INTO slack_reactions

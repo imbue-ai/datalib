@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -22,6 +24,8 @@ from ingest.providers.slack.ingest import (
     ingest_api_dir as ingest_slack_api_dir,
 )
 from ingest.render import render_all
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -59,7 +63,16 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
             # round-trip + flush; for ~5k rows that's tens of seconds we
             # don't need to spend.
             conn.autocommit(False)
+            log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
             for src in config.enabled_sources:
+                log.info(
+                    "[%s] %s/%s: ingesting from %s",
+                    src.name,
+                    src.provider,
+                    src.kind,
+                    src.path,
+                )
+                t0 = time.monotonic()
                 if isinstance(src, AnthropicExportDirSource):
                     _, stats = ingest_export_dir(
                         conn, src.path, started_at, source=src.provenance
@@ -73,6 +86,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                 else:
                     raise NotImplementedError(f"unknown source: {src!r}")
                 conn.commit()
+                log.info("[%s] done in %.1fs", src.name, time.monotonic() - t0)
                 summary.sources.append(
                     SourceResult(
                         name=src.name,
@@ -82,8 +96,15 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                     )
                 )
 
+            log.info("populating grid_rows")
+            t0 = time.monotonic()
             summary.grid_rows = populate_grid_rows(conn)
             conn.commit()
+            log.info(
+                "grid_rows: %d rows in %.1fs",
+                summary.grid_rows,
+                time.monotonic() - t0,
+            )
 
         names = ",".join(s.name for s in summary.sources) or "<none>"
         summary.commit_hash = dolt.commit(f"ingest {names} {started_at}")

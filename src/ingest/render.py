@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from pymysql.connections import Connection
+from tqdm import tqdm
+
+log = logging.getLogger(__name__)
 
 
 def _bump_iso(ts: str) -> str:
@@ -585,9 +589,12 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
             )
             rows = list(cur.fetchall())
 
+        log.info("rendering anthropic: %d conversations", len(rows))
         live_uuids: set[str] = set()
         accounts: set[str] = set()
-        for conv_uuid, acct in rows:
+        for conv_uuid, acct in tqdm(
+            rows, desc="render anthropic", unit="conv", leave=False
+        ):
             live_uuids.add(conv_uuid)
             accounts.add(acct)
             render_conversation(conn, conv_uuid, root)
@@ -607,9 +614,10 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
         with conn.cursor() as cur:
             cur.execute("SELECT conversation_id, account_id FROM openai_conversations")
             rows = list(cur.fetchall())
+        log.info("rendering openai: %d conversations", len(rows))
         live_ids: set[str] = set()
         accts: set[str] = set()
-        for cid, acct in rows:
+        for cid, acct in tqdm(rows, desc="render openai", unit="conv", leave=False):
             live_ids.add(cid)
             accts.add(acct or "unknown")
             render_openai_conversation(conn, cid, root)
@@ -635,7 +643,10 @@ def render_all(conn: Connection, root: Path) -> RenderSummary:
         with conn.cursor() as cur:
             cur.execute("SELECT channel_id, name FROM slack_channels")
             channel_names = {cid: name for cid, name in cur.fetchall()}
-        for thread_uuid, team_id, channel_id in slack_rows:
+        log.info("rendering slack: %d threads", len(slack_rows))
+        for thread_uuid, team_id, channel_id in tqdm(
+            slack_rows, desc="render slack", unit="thr", leave=False
+        ):
             live_threads.add(thread_uuid)
             cname = channel_names.get(channel_id) or channel_id
             slack_dirs.add((team_id, cname))

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from pymysql.connections import Connection
+from tqdm import tqdm
 
 from ingest.providers.openai.parse import ParsedChatGPTApi, parse_api_dir
 from ingest.providers.openai.schema import ensure_schema
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +47,14 @@ def ingest_api_dir(
         raise ValueError(f"source must be 'export' or 'api', got {source!r}")
     ensure_schema(conn)
     parsed = parse_api_dir(api_dir)
+    log.info(
+        "openai[%s]: parsed accounts=%d conversations=%d messages=%d content_parts=%d",
+        source,
+        len(parsed.accounts),
+        len(parsed.conversations),
+        len(parsed.messages),
+        len(parsed.content_parts),
+    )
     stats = OpenAIIngestStats()
 
     with conn.cursor() as cur:
@@ -127,7 +139,7 @@ def ingest_api_dir(
             )
             api_locked_msg_ids = {r[0] for r in cur.fetchall()}
 
-        for m in parsed.messages:
+        for m in tqdm(parsed.messages, desc="openai messages", unit="msg", leave=False):
             cur.execute(
                 f"""
                 INSERT INTO openai_messages
@@ -180,7 +192,12 @@ def ingest_api_dir(
         for p in parsed.content_parts:
             parts_by_msg.setdefault(p.message_id, []).append(p)
 
-        for msg_id, parts in parts_by_msg.items():
+        for msg_id, parts in tqdm(
+            parts_by_msg.items(),
+            desc="openai content_parts",
+            unit="msg",
+            leave=False,
+        ):
             if source == "export" and msg_id in api_locked_msg_ids:
                 continue
             if source == "api":

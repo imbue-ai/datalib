@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
+import sys
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -12,6 +14,21 @@ from ingest.diff import diff_commits, format_report
 from ingest.dolt_service import DoltService
 from ingest.dump import dump_sql as run_dump
 from ingest.ingest import ingest as run_ingest
+
+
+def _configure_logging(verbose: bool = False) -> None:
+    """Idempotent logger setup. tqdm writes its bars to stderr, so we send
+    log records to stderr too; that way redirecting stdout still leaves the
+    user-facing summary clean while progress + logs share one channel."""
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
 
 
 def _materialize_mirror_sqlite(conn, out_path: Path) -> None:
@@ -54,6 +71,7 @@ def ingest(
         "-c",
         help="Path to YAML config (default: ~/.config/personal-mirror/config.yaml)",
     ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="DEBUG-level logging."),
     now: str | None = typer.Option(
         None,
         "--now",
@@ -85,6 +103,7 @@ def ingest(
     ),
 ) -> None:
     """Ingest every enabled source from the config; commit to Dolt; render QMD."""
+    _configure_logging(verbose)
     cfg = load_config(config)
     if port is not None:
         cfg.dolt.port = port

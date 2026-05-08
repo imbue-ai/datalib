@@ -11,6 +11,7 @@ py_library(
         requirement("pyyaml"),
         requirement("typer"),
         requirement("pymysql"),
+        requirement("tqdm"),
     ],
 )
 

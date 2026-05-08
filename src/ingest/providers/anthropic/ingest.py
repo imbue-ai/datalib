@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from pymysql.connections import Connection
+from tqdm import tqdm
 
 from ingest.providers.anthropic.parse import ParsedExport, parse_export
 from ingest.providers.anthropic.schema import ensure_schema
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,6 +55,17 @@ def ingest_export_dir(
         raise ValueError(f"source must be 'export' or 'api', got {source!r}")
     ensure_schema(conn)
     parsed = parse_export(export_dir)
+    log.info(
+        "anthropic[%s]: parsed accounts=%d projects=%d conversations=%d "
+        "messages=%d content_blocks=%d attachments=%d",
+        source,
+        len(parsed.accounts),
+        len(parsed.projects),
+        len(parsed.conversations),
+        len(parsed.messages),
+        len(parsed.content_blocks),
+        len(parsed.attachments),
+    )
     stats = AnthropicIngestStats()
 
     with conn.cursor() as cur:
@@ -158,7 +173,9 @@ def ingest_export_dir(
             )
             api_locked_msg_uuids = {r[0] for r in cur.fetchall()}
 
-        for m in parsed.messages:
+        for m in tqdm(
+            parsed.messages, desc="anthropic messages", unit="msg", leave=False
+        ):
             cur.execute(
                 f"""
                 INSERT INTO anthropic_messages
@@ -198,7 +215,12 @@ def ingest_export_dir(
         for b in parsed.content_blocks:
             blocks_by_msg.setdefault(b.message_uuid, []).append(b)
 
-        for msg_uuid, blocks in blocks_by_msg.items():
+        for msg_uuid, blocks in tqdm(
+            blocks_by_msg.items(),
+            desc="anthropic content_blocks",
+            unit="msg",
+            leave=False,
+        ):
             if source == "export" and msg_uuid in api_locked_msg_uuids:
                 continue
             if source == "api":
