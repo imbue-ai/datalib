@@ -230,6 +230,23 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
     rows
 }
 
+/// Map a query Field to the underlying `grid_rows` column it constrains,
+/// or None for fields that aren't single-column equality filters
+/// (Before/After are range, Type is a row-class classifier, Subj/Other
+/// have no column yet).
+fn column_for_field(f: &Field) -> Option<&'static str> {
+    match f {
+        Field::Source => Some("source_label"),
+        Field::Kind => Some("kind"),
+        Field::Channel => Some("channel"),
+        Field::ConvoName => Some("conversation_name"),
+        Field::Author => Some("author"),
+        Field::Account => Some("account"),
+        Field::Project => Some("project"),
+        Field::Before | Field::After | Field::Type | Field::Subj | Field::Other(_) => None,
+    }
+}
+
 fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -244,24 +261,24 @@ fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         RowType::All => {}
     }
 
-    if let Some(vals) = q.filters.get(&Field::Account) {
-        if !vals.is_empty() {
-            let qs = vec!["?"; vals.len()].join(",");
-            clauses.push(format!("account IN ({})", qs));
-            for v in vals {
-                params.push(v.clone());
-            }
+    // Per-term AND filters. Each occurrence is its own clause — repeating
+    // the same field with different values produces an empty result, which
+    // matches the "keep only X then keep only Y" tree-zoom UX.
+    for term in &q.terms {
+        let Some(col) = column_for_field(&term.field) else {
+            continue;
+        };
+        if term.negate {
+            // Nullable columns: NULL would pass `col != ?` as unknown and
+            // be dropped, which surprises users who didn't ask to exclude
+            // unset values. Explicitly keep nulls.
+            clauses.push(format!("({col} IS NULL OR {col} != ?)"));
+        } else {
+            clauses.push(format!("{col} = ?"));
         }
+        params.push(term.value.clone());
     }
-    if let Some(vals) = q.filters.get(&Field::Project) {
-        if !vals.is_empty() {
-            let qs = vec!["?"; vals.len()].join(",");
-            clauses.push(format!("project IN ({})", qs));
-            for v in vals {
-                params.push(v.clone());
-            }
-        }
-    }
+
     if let Some(vals) = q.filters.get(&Field::Before) {
         if let Some(v) = vals.first() {
             clauses.push("when_ts < ?".into());
@@ -420,5 +437,45 @@ mod tests {
             .position(|r| r.source == "ChatGPT" && r.kind != "Chat")
             .expect("no ChatGPT message rows found");
         assert!(first_chatgpt_chat < first_chatgpt_msg);
+    }
+
+    #[test]
+    fn source_filter_keeps_only_matching_rows() {
+        let conn = build_fixture();
+        let rows = grid_rows_with_conn(&conn, &parse_query("source:Claude type:all"), 1000);
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|r| r.source == "Claude"));
+    }
+
+    #[test]
+    fn negated_source_excludes_matching_rows() {
+        let conn = build_fixture();
+        let rows = grid_rows_with_conn(&conn, &parse_query("-source:ChatGPT type:all"), 1000);
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|r| r.source != "ChatGPT"));
+    }
+
+    #[test]
+    fn same_field_repeated_with_different_values_is_empty() {
+        // "Keep only Source=Claude, then keep only Source=ChatGPT" → AND →
+        // empty. Tree-zoom semantics, deliberate.
+        let conn = build_fixture();
+        let rows = grid_rows_with_conn(
+            &conn,
+            &parse_query("source:Claude source:ChatGPT type:all"),
+            1000,
+        );
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn negated_filter_keeps_null_values() {
+        // None of the fixture rows have a channel set; excluding a specific
+        // channel must NOT drop rows whose channel is NULL.
+        let conn = build_fixture();
+        let baseline = grid_rows_with_conn(&conn, &parse_query("type:all"), 1000).len();
+        let filtered =
+            grid_rows_with_conn(&conn, &parse_query("-channel:announce type:all"), 1000).len();
+        assert_eq!(baseline, filtered);
     }
 }

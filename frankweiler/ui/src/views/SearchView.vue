@@ -104,10 +104,75 @@ function resolveTargetRows(
 const contextMenuVisible = ref(false);
 const contextMenuPos = ref({ x: 0, y: 0 });
 const contextMenuTargets = ref<SearchRow[]>([]);
+// Filter context: which column the user right-clicked on, and the raw
+// cell value to filter by. Null when the right-click happened on a
+// non-filterable column (Time, Contents) or a row with no value there.
+type FilterCtx = {
+  // Query-language key (e.g. "source", "channel"); maps to a backend Field.
+  key: string;
+  // Friendly column header for the menu label ("Source", "Channel", ...).
+  header: string;
+  // Raw value to filter by (UUIDs for author/account, not display labels).
+  value: string;
+};
+const contextFilter = ref<FilterCtx | null>(null);
+
+// Map AG Grid colId → query-language key + header. Keep in sync with
+// `column_for_field` in backend/core/src/db.rs.
+const FILTER_COLUMNS: Record<string, { key: string; header: string }> = {
+  source: { key: "source", header: "Source" },
+  kind: { key: "kind", header: "Type" },
+  channel: { key: "channel", header: "Channel" },
+  author: { key: "author", header: "Author" },
+  account: { key: "account", header: "Account" },
+  project: { key: "project", header: "Project" },
+  conversation_name: { key: "convo", header: "Conversation Name" },
+};
 
 function closeContextMenu() {
   contextMenuVisible.value = false;
   contextMenuTargets.value = [];
+  contextFilter.value = null;
+}
+
+/// Quote a value for the search bar. Quotes when it contains whitespace,
+/// `:`, leading `-`, or is empty. Mirrors the backend tokenizer's
+/// quoted-span handling (`\"` and `\\` escapes inside quotes).
+function quoteValue(v: string): string {
+  const needsQuotes =
+    v === "" ||
+    /[\s:"]/.test(v) ||
+    v.startsWith("-") ||
+    v.startsWith('"');
+  if (!needsQuotes) return v;
+  const escaped = v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return `"${escaped}"`;
+}
+
+function formatFilterToken(key: string, value: string, exclude: boolean): string {
+  return `${exclude ? "-" : ""}${key}:${quoteValue(value)}`;
+}
+
+function appendFilterToQuery(token: string) {
+  const current = query.value.trim();
+  // Skip if the exact token is already present as its own whitespace-
+  // delimited word (cheap dedupe; doesn't try to canonicalize quoting
+  // variants, which is fine — duplicates only widen on free-text and
+  // these tokens are field-prefixed, so they collapse on a re-click).
+  const re = new RegExp(`(^|\\s)${escapeRegExp(token)}(\\s|$)`);
+  if (re.test(current)) return;
+  query.value = current.length === 0 ? token : `${current} ${token}`;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function applyContextFilter(exclude: boolean) {
+  const ctx = contextFilter.value;
+  if (!ctx) return;
+  appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, exclude));
+  closeContextMenu();
 }
 
 const slackLinkTargets = computed(() =>
@@ -347,6 +412,22 @@ const gridOptions: GridOptions<SearchRow> = {
       e.node.setSelected(true);
     }
     contextMenuTargets.value = targets;
+    // Capture which column was clicked so we can offer "Keep only" /
+    // "Exclude" entries for filterable columns. Use the raw row value
+    // (e.g. UUID for author/account), not the formatted display label —
+    // filtering on labels is ambiguous.
+    const colId = e.column?.getColId() ?? "";
+    const meta = FILTER_COLUMNS[colId];
+    if (meta && e.data) {
+      const raw = (e.data as Record<string, unknown>)[colId];
+      if (typeof raw === "string" && raw.length > 0) {
+        contextFilter.value = { key: meta.key, header: meta.header, value: raw };
+      } else {
+        contextFilter.value = null;
+      }
+    } else {
+      contextFilter.value = null;
+    }
     contextMenuVisible.value = true;
   },
   // Any change a user can make to columns gets reflected in the URL.
@@ -365,7 +446,7 @@ const gridOptions: GridOptions<SearchRow> = {
   <section class="search-view">
     <input
       v-model="query"
-      placeholder="search messages…  (try: type:chat, account:…, before:2025-01-01)"
+      placeholder="search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)"
       class="search-input"
       data-testid="search-input"
       autofocus
@@ -417,6 +498,15 @@ const gridOptions: GridOptions<SearchRow> = {
         <div class="ctx-header">
           Targeting {{ contextMenuTargets.length }} row{{ contextMenuTargets.length === 1 ? '' : 's' }}
         </div>
+        <template v-if="contextFilter">
+          <div class="ctx-item" @click="applyContextFilter(false)">
+            Keep only {{ contextFilter.header }}={{ contextFilter.value }}
+          </div>
+          <div class="ctx-item" @click="applyContextFilter(true)">
+            Exclude all {{ contextFilter.header }}={{ contextFilter.value }}
+          </div>
+          <div class="ctx-divider" />
+        </template>
         <div class="ctx-item" @click="copyTargetUuids">
           Copy UUID{{ contextMenuTargets.length === 1 ? '' : 's' }}
         </div>
@@ -529,6 +619,11 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 .ctx-item:hover {
   background: var(--fw-accent, #eee);
+}
+.ctx-divider {
+  height: 1px;
+  background: var(--fw-border, #ccc);
+  margin: 4px 0;
 }
 </style>
 
