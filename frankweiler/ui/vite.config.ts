@@ -25,5 +25,9 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    // Playwright owns tests/e2e/*.spec.ts; without this exclusion vitest
+    // grabs them via its default `**/*.spec.ts` glob and crashes on
+    // Playwright's `test.describe` (different test runner).
+    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**"],
   },
 });
