@@ -78,7 +78,7 @@ class DoltService:
         self._repo_dir.mkdir(parents=True, exist_ok=True)
         if not (self._repo_dir / ".dolt").exists():
             subprocess.run(
-                ["dolt", "init", "--name", "claude-mirror", "--email", "claude-mirror@local"],
+                ["dolt", "init", "--name", "personal-mirror", "--email", "personal-mirror@local"],
                 cwd=self._repo_dir,
                 check=True,
                 capture_output=True,

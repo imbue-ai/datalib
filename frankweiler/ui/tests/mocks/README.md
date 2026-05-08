@@ -10,11 +10,11 @@ useful as a drop-in mock for offline UI development.
 | `chat-response.json`   | `GET /api/chat/{conversation_uuid}`   |
 
 The content mirrors the ingestion fixtures under
-`claude-mirror/tests/fixtures/` (same UUIDs and names) so demos and
+`tests/fixtures/` (same UUIDs and names) so demos and
 tests across layers tell a coherent story.
 
 These mocks are **hand-edited** — see
-`claude-mirror/tests/fixtures/README.md` for the maintenance philosophy.
+`tests/fixtures/README.md` for the maintenance philosophy.
 When the HTTP backend's response shape changes, update these files to match.
 
 > Note: as of this commit, `/api/search` and `/api/chat` return

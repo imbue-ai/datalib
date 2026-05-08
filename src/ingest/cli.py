@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -10,6 +12,30 @@ from ingest.diff import diff_commits, format_report
 from ingest.dolt_service import DoltService
 from ingest.dump import dump_sql as run_dump
 from ingest.ingest import ingest as run_ingest
+
+
+def _materialize_mirror_sqlite(conn, out_path: Path) -> None:
+    """Write `<root>/mirror.sqlite` from a fresh dump of the live Dolt conn.
+
+    Backend (frankweiler) reads this for grid queries — it's the schema-driven
+    counterpart to the QMD prose. Always rewritten from scratch so it stays a
+    pure function of current Dolt state.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        run_dump(conn, tmp_path)
+        if out_path.exists():
+            out_path.unlink()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        sconn = sqlite3.connect(str(out_path))
+        try:
+            sconn.executescript(tmp_path.read_text())
+            sconn.commit()
+        finally:
+            sconn.close()
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 app = typer.Typer(help="Personal mirror of LLM chat history into Dolt + QMD.")
 
@@ -22,7 +48,7 @@ def _root() -> None:
 @app.command()
 def ingest(
     config: Path | None = typer.Option(
-        None, "--config", "-c", help="Path to YAML config (default: ~/.config/claude-mirror/config.yaml)"
+        None, "--config", "-c", help="Path to YAML config (default: ~/.config/personal-mirror/config.yaml)"
     ),
     now: str | None = typer.Option(
         None,
@@ -68,14 +94,20 @@ def ingest(
         f"rendered: {summary.rendered} qmd files (removed {summary.rendered_orphans_removed} orphans)"
     )
 
-    if dump_sql is not None:
-        with DoltService(cfg) as dolt, dolt.connect() as conn:
+    mirror_path = cfg.root / "mirror.sqlite"
+    with DoltService(cfg) as dolt, dolt.connect() as conn:
+        _materialize_mirror_sqlite(conn, mirror_path)
+        if dump_sql is not None:
             run_dump(conn, dump_sql)
+        rep = (
+            diff_commits(conn, from_ref=f"{summary.commit_hash}~1", to_ref=summary.commit_hash)
+            if report and summary.commit_hash
+            else None
+        )
+    typer.echo(f"mirror.sqlite: wrote {mirror_path}")
+    if dump_sql is not None:
         typer.echo(f"dump-sql: wrote {dump_sql}")
-
-    if report and summary.commit_hash:
-        with DoltService(cfg) as dolt, dolt.connect() as conn:
-            rep = diff_commits(conn, from_ref=f"{summary.commit_hash}~1", to_ref=summary.commit_hash)
+    if rep is not None:
         typer.echo("")
         typer.echo(format_report(rep, max_samples=max_samples))
 

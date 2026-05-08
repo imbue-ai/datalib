@@ -1,4 +1,4 @@
-# claude-mirror — agent runbook
+# personal-mirror — agent runbook
 
 Quick references for AI/human contributors. See
 `src/download/CLAUDE_WEB_SCHEMA.md` for the conceptual model and
@@ -22,7 +22,7 @@ tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 # Run unit + smoke tests
 uv run pytest
 
-# Ingest configured sources into the Dolt repo (per ~/.config/claude-mirror/config.yaml)
+# Ingest configured sources into the Dolt repo (per ~/.config/personal-mirror/config.yaml)
 uv run python -m ingest
 
 # Incrementally fetch new conversations from the claude.ai web API

@@ -11,7 +11,14 @@ import {
   type GridOptions,
   type ICellRendererParams,
 } from "ag-grid-community";
-import { fetchHealth, fetchSearch, type Health, type SearchRow } from "@/api";
+import {
+  fetchAccounts,
+  fetchHealth,
+  fetchSearch,
+  type AccountsMap,
+  type Health,
+  type SearchRow,
+} from "@/api";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -24,6 +31,12 @@ const total = ref(0);
 const loading = ref(false);
 const error = ref<string | null>(null);
 const health = ref<Health | null>(null);
+const accounts = ref<AccountsMap>({});
+
+function accountLabel(uuid: string): string {
+  if (!uuid) return "";
+  return accounts.value[uuid]?.label ?? uuid;
+}
 
 let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +69,11 @@ onMounted(async () => {
   } catch {
     /* health is best-effort */
   }
+  try {
+    accounts.value = await fetchAccounts();
+  } catch {
+    /* accounts mapping is best-effort */
+  }
   runSearch("");
 });
 
@@ -85,8 +103,22 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     autoHeight: true,
     cellStyle: { whiteSpace: "normal", lineHeight: "1.3em" },
   },
-  { field: "author", headerName: "Author", width: 160 },
-  { field: "account", headerName: "Account", width: 200 },
+  {
+    field: "author",
+    headerName: "Author",
+    width: 160,
+    valueFormatter: (p) => {
+      const v = p.value as string | undefined;
+      if (!v) return "";
+      return accounts.value[v]?.label ?? v;
+    },
+  },
+  {
+    field: "account",
+    headerName: "Account",
+    width: 200,
+    valueFormatter: (p) => accountLabel(p.value as string),
+  },
   {
     headerName: "Open",
     width: 80,
@@ -116,6 +148,11 @@ const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
   rowHeight: 56,
+  // Allow click-and-drag selection of cell text so users can Cmd+C the
+  // contents of a row. Without this, AG Grid treats clicks as row
+  // selection and the browser never gets a text selection to copy.
+  enableCellTextSelection: true,
+  ensureDomOrder: true,
   onRowDoubleClicked: (e) => {
     if (e.data) openRow(e.data);
   },

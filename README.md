@@ -25,7 +25,7 @@ Schema.
 │   ├── anthropic.schema.json
 │   ├── codegen.py            JSON Schema → Rust/Python/TS types
 │   └── BUILD.bazel           genrules per language
-├── pyproject.toml + uv.lock  Python project (claude-mirror) — src layout
+├── pyproject.toml + uv.lock  Python project (personal-mirror) — src layout
 ├── requirements.txt          uv-exported, consumed by Bazel pip.parse
 ├── src/
 │   ├── download/             per-provider downloaders (claude.ai, chatgpt.com)
@@ -50,8 +50,8 @@ Schema.
                           │
         ┌─────────────────┼─────────────────┐
         ▼                 ▼                 ▼
-   claude-mirror   frankweiler/        frankweiler/ui
-   (Python)         backend/schema      (TS types)
+       src/           frankweiler/        frankweiler/ui
+   (Python ingest)    backend/schema      (TS types)
                           │
                           ▼
                    frankweiler/backend/core ──► dolt + qmd + polars
@@ -63,8 +63,8 @@ Schema.
                        openhost/     tauri/  ◄── ui/
 ```
 
-`claude-mirror` and `frankweiler/` may **only** share things via `schemas/`.
-Cargo workspace + Bazel `visibility` enforce this.
+`src/` (download + ingest) and `frankweiler/` may **only** share things
+via `schemas/`. Cargo workspace + Bazel `visibility` enforce this.
 
 ## Building & testing
 

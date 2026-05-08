@@ -1,5 +1,5 @@
 [project]
-name = "claude-mirror"
+name = "personal-mirror"
 version = "0.1.0"
 description = "Download + ingest LLM chat exports into a Dolt-backed mirror"
 authors = [

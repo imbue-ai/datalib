@@ -201,7 +201,8 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
     let kind = message_kind(&m.sender);
     let author = match kind {
         "User Input" => fm.account_uuid.clone().unwrap_or_else(|| m.sender.clone()),
-        _ => m.sender.clone(),
+        "LLM Response" => m.model.clone().unwrap_or_else(|| m.sender.clone()),
+        _ => m.model.clone().unwrap_or_else(|| m.sender.clone()),
     };
     SearchRow {
         conversation_uuid: fm.uuid.clone(),
@@ -294,6 +295,7 @@ mod tests {
                 .map(|(sender, text)| Message {
                     sender: (*sender).into(),
                     when: Some("2025-04-10 14:00:00".into()),
+                    model: None,
                     text: (*text).into(),
                 })
                 .collect(),

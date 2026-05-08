@@ -46,6 +46,18 @@ export type Health = {
   root_exists: boolean;
 };
 
+export type AccountInfo = {
+  provider?: string;
+  label?: string;
+  email?: string | null;
+};
+
+export type AccountsMap = Record<string, AccountInfo>;
+
+export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
+  return getJson<AccountsMap>("/api/accounts", signal);
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const r = await fetch(url, { signal });
   if (!r.ok) throw new Error(`${url} → ${r.status}`);

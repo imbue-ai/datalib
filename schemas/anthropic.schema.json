@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://imbue.com/schemas/anthropic.schema.json",
   "title": "AnthropicMirrorSchema",
-  "description": "Source-of-truth row shapes for the anthropic_* tables produced by claude-mirror and consumed by frankweiler.",
+  "description": "Source-of-truth row shapes for the anthropic_* tables produced by the ingest pipeline and consumed by frankweiler.",
   "type": "object",
   "definitions": {
     "Account": {
