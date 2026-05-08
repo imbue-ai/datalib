@@ -5,6 +5,7 @@
 // embedded backend.
 
 export type SearchRow = {
+  uuid: string;
   conversation_uuid: string;
   message_index: number | null;
   snippet: string;

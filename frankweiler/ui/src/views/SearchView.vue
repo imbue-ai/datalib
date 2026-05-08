@@ -14,8 +14,10 @@ import {
   type GridApi,
   type GridOptions,
   type GridReadyEvent,
-  type ICellRendererParams,
   type RowSelectedEvent,
+  type CellContextMenuEvent,
+  type IRowNode,
+  type GetRowIdParams,
 } from "ag-grid-community";
 import {
   fetchAccounts,
@@ -26,6 +28,13 @@ import {
   type SearchRow,
 } from "@/api";
 import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
+import claudeIconUrl from "@/assets/claude.svg";
+import chatgptIconUrl from "@/assets/chatgpt.svg";
+
+const SOURCE_ICONS: Record<string, string> = {
+  Claude: claudeIconUrl,
+  ChatGPT: chatgptIconUrl,
+};
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -71,11 +80,48 @@ function decodeColumnState(s: string): ColumnState[] | null {
 }
 
 function rowKey(row: SearchRow): string {
-  // conversation_uuid alone isn't unique once message rows enter the mix;
-  // include kind + message_index so a chat row vs. one of its message
-  // rows round-trip distinctly.
-  const idx = row.message_index ?? "";
-  return `${row.conversation_uuid}:${row.kind}:${idx}`;
+  return row.uuid;
+}
+
+// Lightroom-style: if multiple rows are selected and the right-click anchor
+// is part of that selection, the action targets all selected rows;
+// otherwise it targets only the anchor row.
+function resolveTargetRows(
+  api: GridApi<SearchRow>,
+  anchor: IRowNode<SearchRow> | null | undefined,
+): SearchRow[] {
+  if (!anchor?.data) return [];
+  const selected = api.getSelectedNodes() as IRowNode<SearchRow>[];
+  if (selected.length > 1 && anchor.isSelected()) {
+    return selected.map((n) => n.data).filter((d): d is SearchRow => d != null);
+  }
+  return [anchor.data];
+}
+
+// Context menu state
+const contextMenuVisible = ref(false);
+const contextMenuPos = ref({ x: 0, y: 0 });
+const contextMenuTargets = ref<SearchRow[]>([]);
+
+function closeContextMenu() {
+  contextMenuVisible.value = false;
+  contextMenuTargets.value = [];
+}
+
+async function copyTargetUuids() {
+  const text = contextMenuTargets.value.map((r) => r.uuid).join(",");
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Fallback for non-secure contexts.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+  closeContextMenu();
 }
 
 function syncHash() {
@@ -105,7 +151,7 @@ async function runSearch(q: string) {
   loading.value = true;
   error.value = null;
   try {
-    const r = await fetchSearch(q, 1000, inflight.signal);
+    const r = await fetchSearch(q, 100_000, inflight.signal);
     rows.value = r.rows;
     total.value = r.total_estimated;
   } catch (e) {
@@ -166,15 +212,31 @@ onMounted(async () => {
 });
 
 function openRow(row: SearchRow) {
-  router.push({
+  const href = router.resolve({
     name: "chat",
     params: { conversationUuid: row.conversation_uuid },
     hash: row.message_index != null ? `#m${row.message_index}` : undefined,
-  });
+  }).href;
+  window.open(href, "_blank", "noopener");
 }
 
 const columnDefs = computed<ColDef<SearchRow>[]>(() => [
-  { field: "source", headerName: "Source", width: 90 },
+  {
+    field: "source",
+    headerName: "Source",
+    width: 90,
+    cellRenderer: (params: { value: unknown }) => {
+      const v = typeof params.value === "string" ? params.value : "";
+      const icon = SOURCE_ICONS[v];
+      if (!icon) return v;
+      const img = document.createElement("img");
+      img.src = icon;
+      img.alt = v;
+      img.title = v;
+      img.className = "source-icon";
+      return img;
+    },
+  },
   { field: "kind", headerName: "Type", width: 110 },
   {
     field: "when",
@@ -205,24 +267,8 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     field: "account",
     headerName: "Account",
     width: 150,
+    hide: true,
     valueFormatter: (p) => accountLabel(p.value as string),
-  },
-  {
-    headerName: "Open",
-    width: 70,
-    sortable: false,
-    filter: false,
-    cellRenderer: (params: ICellRendererParams<SearchRow>) => {
-      const btn = document.createElement("button");
-      btn.className = "open-btn";
-      btn.title = "Open full view";
-      btn.textContent = "→";
-      btn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        if (params.data) openRow(params.data);
-      });
-      return btn;
-    },
   },
 ]);
 
@@ -239,8 +285,12 @@ const gridOptions: GridOptions<SearchRow> = {
   // Single-row selection drives the right preview pane. Cell text
   // selection is intentionally NOT enabled here: AG Grid's text-selection
   // mode swallows row clicks, breaking the preview wiring.
-  rowSelection: { mode: "singleRow", checkboxes: false, enableClickSelection: true },
+  // multiRow so right-click "Copy UUID(s)" can target several rows, like
+  // Lightroom. Single-click still narrows to one row; preview pane follows
+  // whichever row was most recently toggled on.
+  rowSelection: { mode: "multiRow", checkboxes: false, enableClickSelection: true },
   ensureDomOrder: true,
+  getRowId: (p: GetRowIdParams<SearchRow>) => p.data.uuid,
   onGridReady: (e: GridReadyEvent<SearchRow>) => {
     gridApi = e.api;
     // Expose the grid api so e2e tests can scroll virtualized rows
@@ -267,6 +317,23 @@ const gridOptions: GridOptions<SearchRow> = {
   },
   onRowDoubleClicked: (e) => {
     if (e.data) openRow(e.data);
+  },
+  onCellContextMenu: (e: CellContextMenuEvent<SearchRow>) => {
+    if (!gridApi) return;
+    const targets = resolveTargetRows(gridApi, e.node);
+    if (targets.length === 0) return;
+    const me = e.event as MouseEvent | null;
+    if (me) {
+      me.preventDefault();
+      contextMenuPos.value = { x: me.clientX, y: me.clientY };
+    }
+    // Lightroom: right-clicking an unselected row narrows selection to it.
+    if (!e.node.isSelected()) {
+      gridApi.deselectAll();
+      e.node.setSelected(true);
+    }
+    contextMenuTargets.value = targets;
+    contextMenuVisible.value = true;
   },
   // Any change a user can make to columns gets reflected in the URL.
   onColumnVisible: () => syncHash(),
@@ -321,6 +388,26 @@ const gridOptions: GridOptions<SearchRow> = {
         />
       </Pane>
     </Splitpanes>
+
+    <div
+      v-if="contextMenuVisible"
+      class="ctx-overlay"
+      @click="closeContextMenu"
+      @contextmenu.prevent="closeContextMenu"
+    >
+      <div
+        class="ctx-menu"
+        :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
+        @click.stop
+      >
+        <div class="ctx-header">
+          Targeting {{ contextMenuTargets.length }} row{{ contextMenuTargets.length === 1 ? '' : 's' }}
+        </div>
+        <div class="ctx-item" @click="copyTargetUuids">
+          Copy UUID{{ contextMenuTargets.length === 1 ? '' : 's' }}
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -385,17 +472,42 @@ const gridOptions: GridOptions<SearchRow> = {
   width: 100%;
   height: 100%;
 }
-:deep(.open-btn) {
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
   background: transparent;
-  color: inherit;
-  border: 1px solid var(--fw-border);
-  border-radius: 4px;
-  padding: 0.1rem 0.5rem;
-  cursor: pointer;
-  font-size: 1rem;
 }
-:deep(.open-btn:hover) {
-  background: var(--fw-hover);
+.ctx-menu {
+  position: fixed;
+  background: var(--fw-input-bg, #fff);
+  color: var(--fw-fg, #000);
+  border: 1px solid var(--fw-border, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 1501;
+  font-size: 14px;
+}
+.ctx-header {
+  padding: 6px 12px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fw-fg-muted, #888);
+  border-bottom: 1px solid var(--fw-border, #ccc);
+  margin-bottom: 2px;
+  user-select: none;
+}
+.ctx-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover {
+  background: var(--fw-accent, #eee);
 }
 </style>
 
@@ -409,5 +521,11 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 .splitpanes__splitter:hover {
   background: var(--fw-accent);
+}
+.source-icon {
+  width: 20px;
+  height: 20px;
+  vertical-align: middle;
+  display: inline-block;
 }
 </style>

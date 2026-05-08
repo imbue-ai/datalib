@@ -1,0 +1,50 @@
+#!/bin/bash
+# Pre-commit hook for mixed_up_files
+# Runs linting and type checking before commits.
+#
+# To install: ./scripts/setup-hooks.sh
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "Running pre-commit checks..."
+
+# --- Python (ruff + pyright via uv) ---
+echo "[python] ruff check"
+uv run ruff check .
+
+echo "[python] ruff format"
+uv run ruff format .
+# Re-stage any files ruff just reformatted (only those already dirty in the
+# working tree). Avoid `git add -u` which can fold unrelated deletions into
+# the commit in sparse worktrees.
+git diff --name-only | xargs -r git add --
+
+echo "[python] pyright"
+uv run pyright
+
+# --- TypeScript (frankweiler/ui) ---
+if [ -d frankweiler/ui ]; then
+    echo "[ui] vue-tsc"
+    (
+        cd frankweiler/ui
+        if [ ! -d node_modules ]; then
+            echo "  installing pnpm deps..."
+            pnpm install --frozen-lockfile
+        fi
+        npx vue-tsc --noEmit
+    )
+fi
+
+# --- Rust (frankweiler/backend) ---
+if [ -d frankweiler/backend ]; then
+    echo "[rust] cargo fmt --check"
+    (cd frankweiler/backend && cargo fmt --all -- --check)
+
+    echo "[rust] cargo clippy"
+    (cd frankweiler/backend && cargo clippy --all-targets --all-features -- -D warnings)
+fi
+
+echo "All pre-commit checks passed."

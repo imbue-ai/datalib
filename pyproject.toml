@@ -29,6 +29,8 @@ where = ["src"]
 dev = [
     "pytest>=9.0.3",
     "syrupy>=4.10.1",
+    "ruff>=0.14.0",
+    "pyright>=1.1.400",
 ]
 
 [tool.pytest.ini_options]

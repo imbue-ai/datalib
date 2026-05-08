@@ -116,7 +116,7 @@ async fn search_handler(
     Query(p): Query<SearchParams>,
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
-    let limit = p.limit.unwrap_or(200).min(2000);
+    let limit = p.limit.unwrap_or(200).min(100_000);
     let rows = grid_rows(&s.root, &parsed, limit);
     let total = rows.len() as u64;
     Json(SearchResponse {

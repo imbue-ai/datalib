@@ -26,8 +26,8 @@ fn open_mirror(root: &Path) -> Option<Connection> {
 
 fn anthropic_kind_for_block(block_type: &str) -> &'static str {
     match block_type {
+        "thinking" => "LLM Thinking",
         "tool_use" | "tool_result" => "Tool Call",
-        "thinking" => "LLM Response",
         _ => "Tool Call",
     }
 }
@@ -40,10 +40,13 @@ fn anthropic_kind_for_sender(sender: &str) -> &'static str {
     }
 }
 
-fn openai_kind_for_role(role: &str) -> &'static str {
+fn openai_kind_for_role_and_type(role: &str, content_type: &str) -> &'static str {
     match role.to_ascii_lowercase().as_str() {
         "user" => "User Input",
-        "assistant" => "LLM Response",
+        "assistant" => match content_type {
+            "thoughts" | "reasoning_recap" => "LLM Thinking",
+            _ => "LLM Response",
+        },
         "system" => "Tool Call",
         _ => "Tool Call",
     }
@@ -233,6 +236,7 @@ fn push_anthropic_chats(
         let (uuid, account, project, name, summary, when) = row;
         let snip = if !summary.is_empty() { summary.clone() } else { name.clone() };
         out.push(SearchRow {
+            uuid: uuid.clone(),
             conversation_uuid: uuid.clone(),
             message_index: None,
             snippet: snip,
@@ -283,6 +287,7 @@ fn push_openai_chats(
     for row in it.flatten() {
         let (uuid, account, title, _model, when) = row;
         out.push(SearchRow {
+            uuid: uuid.clone(),
             conversation_uuid: uuid.clone(),
             message_index: None,
             snippet: title.clone(),
@@ -347,7 +352,7 @@ fn push_anthropic_messages(
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, sender, text, when, cname, project, account, model, msg_idx) = row;
+        let (mid, cuuid, sender, text, when, cname, project, account, model, msg_idx) = row;
         let kind = anthropic_kind_for_sender(&sender);
         let author = match kind {
             "User Input" => account.clone(),
@@ -361,6 +366,7 @@ fn push_anthropic_messages(
             _ => sender.clone(),
         };
         out.push(SearchRow {
+            uuid: mid.clone(),
             conversation_uuid: cuuid.clone(),
             message_index: Some(msg_idx as usize),
             snippet: snippet(&text, needle),
@@ -402,17 +408,21 @@ fn push_anthropic_blocks(
     // inline inside their parent in the QMD/preview output.
     let sql = format!(
         "WITH m AS (\
-            SELECT message_uuid, conversation_uuid, \
+            SELECT message_uuid, conversation_uuid, created_at, \
                    ROW_NUMBER() OVER (PARTITION BY conversation_uuid \
                                       ORDER BY created_at, message_uuid) - 1 AS msg_idx \
             FROM anthropic_messages\
          ) \
-         SELECT b.message_uuid, m.conversation_uuid, b.type, b.text, b.start_timestamp, \
+         SELECT b.message_uuid, m.conversation_uuid, b.type, \
+                COALESCE(NULLIF(b.text, ''), json_extract(b.raw_json, '$.thinking')) AS btext, \
+                b.start_timestamp, \
                 c.name, c.project_uuid, c.account_uuid, \
-                json_extract(c.raw_json, '$.model') AS conv_model, m.msg_idx \
+                json_extract(c.raw_json, '$.model') AS conv_model, m.msg_idx, \
+                m.created_at, b.block_index \
          FROM anthropic_content_blocks b \
               JOIN m ON b.message_uuid = m.message_uuid \
-              JOIN anthropic_conversations c ON m.conversation_uuid = c.conversation_uuid{}",
+              JOIN anthropic_conversations c ON m.conversation_uuid = c.conversation_uuid{} \
+         ORDER BY m.conversation_uuid, m.created_at, b.message_uuid, b.block_index",
         where_sql
     );
     let Ok(mut stmt) = conn.prepare(&sql) else { return };
@@ -428,15 +438,26 @@ fn push_anthropic_blocks(
             r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             r.get::<_, Option<String>>(8)?.unwrap_or_default(),
             r.get::<_, i64>(9)?,
+            r.get::<_, Option<String>>(10)?.unwrap_or_default(),
+            r.get::<_, i64>(11)?,
         ))
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, btype, text, when, cname, project, account, model, msg_idx) = row;
+        let (mid, cuuid, btype, text, when, cname, project, account, model, msg_idx, msg_created, block_index) = row;
         let kind = anthropic_kind_for_block(&btype);
         let author = if !model.is_empty() { model.clone() } else { btype.clone() };
         let snippet_text = if text.is_empty() { btype.clone() } else { snippet(&text, needle) };
+        // Synthesize a timestamp when the block has none: parent message's
+        // created_at plus a microsecond bump per block_index, so blocks
+        // within a message keep their export-order ordering.
+        let when = if when.is_empty() && !msg_created.is_empty() {
+            bump_micros(&msg_created, block_index + 1)
+        } else {
+            when
+        };
         out.push(SearchRow {
+            uuid: format!("{}:{}", mid, block_index),
             conversation_uuid: cuuid.clone(),
             message_index: Some(msg_idx as usize),
             snippet: snippet_text,
@@ -450,6 +471,21 @@ fn push_anthropic_blocks(
             kind: kind.into(),
             author,
         });
+    }
+}
+
+/// Add `n` microseconds to an ISO-8601 timestamp string, preserving the
+/// `+00:00` / `Z` suffix. Falls back to returning the input unchanged if
+/// the format isn't recognized — synthetic ordering is best-effort.
+fn bump_micros(ts: &str, n: i64) -> String {
+    use chrono::{DateTime, FixedOffset};
+    match DateTime::<FixedOffset>::parse_from_rfc3339(ts) {
+        Ok(dt) => {
+            let bumped = dt + chrono::Duration::microseconds(n);
+            // Match the export format ("...+00:00") rather than the default "...Z".
+            bumped.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
+        }
+        Err(_) => ts.to_string(),
     }
 }
 
@@ -469,13 +505,15 @@ fn push_openai_messages(
     );
     let sql = format!(
         "WITH m AS (\
-            SELECT message_id, conversation_id, role, text, create_time, model_slug, \
+            SELECT message_id, conversation_id, role, content_type, text, create_time, model_slug, \
                    ROW_NUMBER() OVER (PARTITION BY conversation_id \
                                       ORDER BY create_time, message_id) - 1 AS msg_idx \
             FROM openai_messages\
          ) \
          SELECT m.message_id, m.conversation_id, m.role, m.text, m.create_time, m.model_slug, \
-                c.title, c.account_id, m.msg_idx \
+                c.title, c.account_id, m.msg_idx, \
+                IFNULL(c.create_time, c.update_time) AS conv_time, \
+                IFNULL(m.content_type, '') AS content_type \
          FROM m JOIN openai_conversations c \
               ON m.conversation_id = c.conversation_id{}",
         where_sql
@@ -492,15 +530,25 @@ fn push_openai_messages(
             r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             r.get::<_, i64>(8)?,
+            r.get::<_, Option<String>>(9)?.unwrap_or_default(),
+            r.get::<_, Option<String>>(10)?.unwrap_or_default(),
         ))
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, role, text, when, model, ctitle, account, msg_idx) = row;
-        let kind = openai_kind_for_role(&role);
+        let (mid, cuuid, role, text, when, model, ctitle, account, msg_idx, conv_time, content_type) = row;
+        // Persona/system messages and other rows can be missing create_time;
+        // fall back to the parent conversation's create_time plus a per-row
+        // microsecond bump so ordering within the conversation stays stable.
+        let when = if when.is_empty() && !conv_time.is_empty() {
+            bump_micros(&conv_time, msg_idx + 1)
+        } else {
+            when
+        };
+        let kind = openai_kind_for_role_and_type(&role, &content_type);
         let author = match kind {
             "User Input" => account.clone(),
-            "LLM Response" => {
+            "LLM Response" | "LLM Thinking" => {
                 if model.is_empty() {
                     role.clone()
                 } else {
@@ -510,6 +558,7 @@ fn push_openai_messages(
             _ => role.clone(),
         };
         out.push(SearchRow {
+            uuid: mid.clone(),
             conversation_uuid: cuuid.clone(),
             message_index: Some(msg_idx as usize),
             snippet: snippet(&text, needle),

@@ -12,6 +12,11 @@ const SNIPPET_RADIUS: usize = 80;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchRow {
+    /// Stable per-row identifier:
+    ///   chat row    → conversation_uuid
+    ///   message row → message_uuid (DB) or `{conv_uuid}#m{idx}` (QMD fallback)
+    ///   block row   → `{message_uuid}:{block_index}`
+    pub uuid: String,
     pub conversation_uuid: String,
     pub message_index: Option<usize>,
     pub snippet: String,
@@ -175,6 +180,7 @@ fn chat_row(c: &Conversation, needle: &str) -> SearchRow {
             .unwrap_or_else(|| fm.name.clone().unwrap_or_default())
     };
     SearchRow {
+        uuid: fm.uuid.clone(),
         conversation_uuid: fm.uuid.clone(),
         message_index: None,
         snippet,
@@ -205,6 +211,7 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
         _ => m.model.clone().unwrap_or_else(|| m.sender.clone()),
     };
     SearchRow {
+        uuid: format!("{}#m{}", fm.uuid, idx),
         conversation_uuid: fm.uuid.clone(),
         message_index: Some(idx),
         snippet,
