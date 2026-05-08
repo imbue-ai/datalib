@@ -30,6 +30,9 @@ uv run python -m download.claude_web
 
 # Same for chatgpt.com
 uv run python -m download.chatgpt_web
+
+# Incrementally export Slack channels/threads/messages/reactions to JSONL
+uv run python -m download.slack_web --channels general engineering
 ```
 
 ## Provenance / "API wins"

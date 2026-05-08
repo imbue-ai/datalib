@@ -18,15 +18,16 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
+import typer
 from curl_cffi import requests as curl_requests
 from tqdm import tqdm
 
@@ -150,13 +151,27 @@ def _account_uuid_from_users(export_dir: Path) -> str | None:
     return None
 
 
-def fetch(args: argparse.Namespace) -> None:
-    out_dir: Path = args.out_dir
+def fetch(
+    export_dir: Path = typer.Option(
+        DEFAULT_EXPORT_DIR, "--export-dir",
+        help=f"Anthropic bulk-export dir (default {DEFAULT_EXPORT_DIR}).",
+    ),
+    out_dir: Path = typer.Option(
+        DEFAULT_OUT_DIR, "--out-dir", "--api-dir",
+        help=f"API-fetched dir (default {DEFAULT_OUT_DIR}).",
+    ),
+    overlap: int = typer.Option(
+        DEFAULT_OVERLAP, "--overlap",
+        help="N most-recent export convs to refetch as overlap.",
+    ),
+) -> None:
+    """Incrementally fetch claude.ai conversations into the export shape."""
+    out_dir = out_dir.expanduser()
+    export_dir = export_dir.expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     out_conv_path = out_dir / "conversations.json"
     out_users_path = out_dir / "users.json"
 
-    export_dir: Path = args.export_dir
     existing_export = _load_conv_index(export_dir / "conversations.json")
     existing_api = _load_conv_index(out_conv_path)
     print(f"export: {len(existing_export)} convs | api-cache: {len(existing_api)}")
@@ -165,7 +180,7 @@ def fetch(args: argparse.Namespace) -> None:
     # so we can verify the API and export agree.
     export_sorted = sorted(existing_export.values(),
                            key=lambda c: c.get("updated_at") or "", reverse=True)
-    overlap_uuids = {c["uuid"] for c in export_sorted[: args.overlap]}
+    overlap_uuids = {c["uuid"] for c in export_sorted[:overlap]}
     print(f"overlap (refetch from API): {len(overlap_uuids)} most-recent export convs")
 
     # users.json: copy from export verbatim if available (preserves account_uuid).
@@ -253,23 +268,9 @@ def fetch(args: argparse.Namespace) -> None:
 # Entry point.
 # ---------------------------------------------------------------------------
 
-def _add_common(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--export-dir", type=Path, default=DEFAULT_EXPORT_DIR,
-                   help=f"Anthropic bulk-export dir (default {DEFAULT_EXPORT_DIR})")
-    p.add_argument("--out-dir", "--api-dir", dest="out_dir", type=Path,
-                   default=DEFAULT_OUT_DIR,
-                   help=f"API-fetched dir (default {DEFAULT_OUT_DIR})")
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    _add_common(parser)
-    parser.add_argument("--overlap", type=int, default=DEFAULT_OVERLAP,
-                        help="N most-recent export convs to refetch as overlap")
-    args = parser.parse_args(argv)
-    fetch(args)
-    return 0
+def main() -> None:
+    typer.run(fetch)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or 0)

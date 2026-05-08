@@ -28,7 +28,7 @@ Schema.
 ├── pyproject.toml + uv.lock  Python project (personal-mirror) — src layout
 ├── requirements.txt          uv-exported, consumed by Bazel pip.parse
 ├── src/
-│   ├── download/             per-provider downloaders (claude.ai, chatgpt.com)
+│   ├── download/             per-provider downloaders (claude.ai, chatgpt.com, slack)
 │   └── ingest/               Dolt ingest + qmd renderer CLI
 ├── tests/                    pytest suite + fixtures + golden snapshots
 └── frankweiler/

@@ -9,5 +9,6 @@ py_library(
     deps = [
         requirement("curl-cffi"),
         requirement("tqdm"),
+        requirement("typer"),
     ],
 )

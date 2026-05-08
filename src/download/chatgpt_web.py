@@ -22,7 +22,6 @@ Output layout (default ~/backups/chatgpt_api/):
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import subprocess
@@ -32,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import typer
 from curl_cffi import requests as curl_requests
 from tqdm import tqdm
 
@@ -184,8 +184,26 @@ def _list_all_conversations(client: ChatGPTWebClient,
     return items
 
 
-def fetch(args: argparse.Namespace) -> None:
-    out_dir: Path = args.out_dir
+def fetch(
+    out_dir: Path = typer.Option(
+        DEFAULT_OUT_DIR, "--out-dir",
+        help=f"API-fetched dir (default {DEFAULT_OUT_DIR}).",
+    ),
+    max_pages: int | None = typer.Option(
+        None, "--max-pages", help="Cap the listing walk (debugging)."
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit",
+        help=("Stop after N successful conversation fetches (skipped/cached "
+              "items don't count). For debugging."),
+    ),
+    sleep_between: float = typer.Option(
+        SLEEP_BETWEEN, "--sleep-between",
+        help=f"Seconds between successful fetches (default {SLEEP_BETWEEN}). 0 disables.",
+    ),
+) -> None:
+    """Incrementally fetch chatgpt.com conversations to JSON cache."""
+    out_dir = out_dir.expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
     convs_dir = out_dir / "conversations"
     convs_dir.mkdir(exist_ok=True)
@@ -202,7 +220,7 @@ def fetch(args: argparse.Namespace) -> None:
     print(f"me: {me.get('email')} ({me.get('id')})")
 
     print("listing conversations...")
-    listing = _list_all_conversations(client, args.max_pages)
+    listing = _list_all_conversations(client, max_pages)
     print(f"listing total: {len(listing)}")
 
     # Per-conversation incremental fetch: skip when the cached detail's
@@ -216,8 +234,6 @@ def fetch(args: argparse.Namespace) -> None:
     print(f"prioritizing {len(missing)} missing before {len(present)} cached")
 
     fetched = skipped = errors = 0
-    sleep_between: float = args.sleep_between
-    limit: int | None = args.limit
     loop_t0 = time.perf_counter()
     sleep_seconds = 0.0
     pbar = tqdm(ordered, unit="conv")
@@ -281,22 +297,9 @@ def fetch(args: argparse.Namespace) -> None:
 # Entry point.
 # ---------------------------------------------------------------------------
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR,
-                        help=f"API-fetched dir (default {DEFAULT_OUT_DIR})")
-    parser.add_argument("--max-pages", type=int, default=None,
-                        help="Cap the listing walk (debugging).")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="Stop after N successful conversation fetches "
-                             "(skipped/cached items don't count). For debugging.")
-    parser.add_argument("--sleep-between", type=float, default=SLEEP_BETWEEN,
-                        help=f"Seconds to sleep between successful fetches "
-                             f"(default {SLEEP_BETWEEN}). 0 disables.")
-    args = parser.parse_args(argv)
-    fetch(args)
-    return 0
+def main() -> None:
+    typer.run(fetch)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main() or 0)
