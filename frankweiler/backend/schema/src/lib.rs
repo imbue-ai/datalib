@@ -1,16 +1,25 @@
 //! Frankweiler schema crate — re-exports the row types generated from
-//! `//schemas/anthropic.schema.json`.
+//! the JSON Schemas under `//schemas/`.
 //!
-//! Regenerate the included file with:
+//! Each schema becomes a submodule:
+//!   * `anthropic` — anthropic_* tables (raw provider rows)
+//!   * `grid_rows` — grid_rows union table (one row per displayable entity)
+//!
+//! Regenerate by running:
 //!     bazelisk run //schemas:update_generated
-//! (or directly: `python schemas/codegen.py schemas/anthropic.schema.json
-//! --rust frankweiler/backend/schema/src/generated/anthropic.rs`)
+//! (or directly with `python schemas/codegen.py <schema.json> --rust ...`).
 
-include!("generated/anthropic.rs");
+pub mod anthropic {
+    include!("generated/anthropic.rs");
+}
+
+pub mod grid_rows {
+    include!("generated/grid_rows.rs");
+}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::anthropic::*;
 
     #[test]
     fn account_round_trips() {
@@ -27,7 +36,16 @@ mod tests {
     }
 
     #[test]
-    fn tables_lists_all_six() {
-        assert_eq!(TABLES.len(), 6);
+    fn anthropic_tables_lists_all_six() {
+        assert_eq!(super::anthropic::TABLES.len(), 6);
+    }
+
+    #[test]
+    fn grid_rows_table_present() {
+        assert_eq!(super::grid_rows::TABLES.len(), 1);
+        assert_eq!(super::grid_rows::DDL.len(), 1);
+        let (_, cols) = super::grid_rows::COLUMNS[0];
+        assert!(cols.contains(&"uuid"));
+        assert!(cols.contains(&"channel"));
     }
 }

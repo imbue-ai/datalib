@@ -22,9 +22,12 @@ Schema.
 ├── MODULE.bazel              Bzlmod root (rules_python + rules_rust)
 ├── BUILD.bazel               :all_tests aggregator
 ├── schemas/                  cross-language source of truth
-│   ├── anthropic.schema.json
-│   ├── codegen.py            JSON Schema → Rust/Python/TS types
+│   ├── anthropic.schema.json provider-table row shapes (anthropic_*)
+│   ├── grid_rows.schema.json union row shape backing the grid (see docs/grid_rows.md)
+│   ├── codegen.py            JSON Schema → Rust/Python/TS types + DDL
 │   └── BUILD.bazel           genrules per language
+├── docs/                     architecture notes
+│   └── grid_rows.md          how the grid_rows union table works
 ├── pyproject.toml + uv.lock  Python project (personal-mirror) — src layout
 ├── requirements.txt          uv-exported, consumed by Bazel pip.parse
 ├── src/
@@ -143,15 +146,17 @@ Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
 
 ### Regenerating the cross-language types
 
-The generated files (`frankweiler/backend/schema/src/generated/anthropic.rs`,
-`src/ingest/generated_schema.py`, `frankweiler/ui/src/generated/anthropic.ts`
-once wired) are checked in. To regenerate after editing
-`schemas/anthropic.schema.json`:
+The generated files (`frankweiler/backend/schema/src/generated/{anthropic,grid_rows}.rs`,
+`src/ingest/generated_schema.py`, `src/ingest/generated_grid_rows.py`,
+`frankweiler/ui/src/generated/anthropic.ts` once wired) are checked in.
+To regenerate after editing a `schemas/*.schema.json`:
 
 ```sh
-bazelisk build //schemas:anthropic_all
-cp bazel-bin/schemas/anthropic.rs frankweiler/backend/schema/src/generated/
-cp bazel-bin/schemas/anthropic.py src/ingest/generated_schema.py
+bazelisk build //schemas:anthropic_all //schemas:grid_rows_all
+cp bazel-bin/schemas/anthropic.rs   frankweiler/backend/schema/src/generated/
+cp bazel-bin/schemas/anthropic.py   src/ingest/generated_schema.py
+cp bazel-bin/schemas/grid_rows.rs   frankweiler/backend/schema/src/generated/
+cp bazel-bin/schemas/grid_rows.py   src/ingest/generated_grid_rows.py
 ```
 
 (A future `bazel run //schemas:update_generated` will fold these copies into

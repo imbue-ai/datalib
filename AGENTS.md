@@ -7,14 +7,41 @@ field-level diffs between the bulk-export and web-API transports.
 ## Repo layout
 
 ```
+schemas/         cross-language source of truth. Each *.schema.json gets
+                 codegen-emitted Python (DDL + dataclass), Rust (struct +
+                 const DDL), and TypeScript artifacts. See docs/grid_rows.md.
 src/
   download/    Per-provider incremental downloaders (claude.ai, chatgpt.com).
                Output a "raw" tree on disk; not under our control schema.
   ingest/      Config-driven CLI that takes raw + takeout dirs and writes
                into Dolt + renders qmd markdown. The "owned" output.
+               `grid_rows.py` populates the denormalized grid_rows union
+               table from the per-provider tables on every ingest.
 tests/         pytest suite; Bazel-only goldens under tests/__snapshots__/
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
+docs/          architecture notes (grid_rows.md, ...).
 ```
+
+## The grid_rows union table
+
+The Vue grid is backed by a single denormalized table, `grid_rows`,
+populated at the end of every ingest from the authoritative per-provider
+tables. The Rust backend (`frankweiler/backend/core/src/db.rs`) issues
+*one* SELECT against `grid_rows` to render the grid — no per-provider
+branches in the query path. Schema (column names, types, per-provider
+mappings) lives in `schemas/grid_rows.schema.json`; codegen produces
+matching Python/Rust/TypeScript types. See `docs/grid_rows.md` for the
+full architecture.
+
+When you add or change a `grid_rows` column:
+
+1. Edit `schemas/grid_rows.schema.json` (don't forget `x-mapping`).
+2. Re-run codegen (see README).
+3. Update `src/ingest/grid_rows.py` to populate the new column from each
+   provider's per-provider tables.
+4. Update the row mapper in `frankweiler/backend/core/src/db.rs` to read
+   it back, plus `SearchRow` in `search.rs` if the column reaches the API.
+5. Re-bake snapshots: `uv run pytest tests/test_snapshots.py --snapshot-update`.
 
 ## Common commands
 

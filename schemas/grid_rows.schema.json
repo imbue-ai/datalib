@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imbue.com/schemas/grid_rows.schema.json",
+  "title": "GridRowsSchema",
+  "description": "Provider-agnostic union table that backs the AG Grid in frankweiler. Every searchable entity in the system (chat conversations, individual messages, content blocks, slack messages, ...) emits one row here at ingest time, keyed by a provider-namespaced UUID. The Rust grid backend reads this table from <root>/mirror.sqlite with a single query and renders rows directly. Per-provider tables (anthropic_*, openai_*, slack_*) remain the authoritative store for raw payloads + render input; grid_rows is the denormalized projection. Single source of truth for column names, types, and per-provider mappings — codegen produces matching Python dataclass + DDL, Rust struct, and TypeScript interface.",
+  "type": "object",
+  "definitions": {
+    "GridRow": {
+      "type": "object",
+      "description": "One row in the grid_rows table. Producers (provider ingesters in src/ingest/providers/<p>/ingest.py) emit one or more GridRow per source entity; consumers (frankweiler/backend/core/src/db.rs and frankweiler/ui/src/SearchView.vue) read them as a single union.",
+      "x-primary-key": ["uuid"],
+      "required": [
+        "uuid",
+        "provider",
+        "kind",
+        "source_label",
+        "when_ts",
+        "conversation_uuid",
+        "entire_chat",
+        "text"
+      ],
+      "properties": {
+        "uuid": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Stable, globally-unique row identifier. Must be deterministic from the source entity so re-ingest is idempotent.",
+          "x-mapping": {
+            "anthropic.chat":    "anthropic_conversations.conversation_uuid",
+            "anthropic.message": "anthropic_messages.message_uuid",
+            "anthropic.block":   "format!('{}:{}', message_uuid, block_index)",
+            "openai.chat":       "openai_conversations.conversation_id",
+            "openai.message":    "openai_messages.message_id",
+            "slack.thread":      "uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')",
+            "slack.message":     "uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')"
+          }
+        },
+        "provider": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(32)",
+          "enum": ["anthropic", "openai", "slack"],
+          "description": "Which provider this row originated from. Determines which per-provider table to consult for the raw payload."
+        },
+        "kind": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(32)",
+          "enum": ["Chat", "User Input", "LLM Response", "LLM Thinking", "Tool Call", "Slack Thread", "Slack Message"],
+          "description": "Row category as displayed in the Kind column. Drives the row-type filter (chat: vs message:) and the icon.",
+          "x-mapping": {
+            "anthropic.chat":            "'Chat'",
+            "anthropic.message.human":   "'User Input'",
+            "anthropic.message.assistant": "'LLM Response'",
+            "anthropic.block.thinking":  "'LLM Thinking'",
+            "anthropic.block.tool_*":    "'Tool Call'",
+            "openai.chat":               "'Chat'",
+            "openai.message.user":       "'User Input'",
+            "openai.message.assistant.thoughts|reasoning_recap": "'LLM Thinking'",
+            "openai.message.assistant.*": "'LLM Response'",
+            "openai.message.system|*":   "'Tool Call'",
+            "slack.thread":              "'Slack Thread'",
+            "slack.message":             "'Slack Message'"
+          }
+        },
+        "source_label": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(32)",
+          "description": "Human-friendly provider label shown in the Source column.",
+          "x-mapping": {
+            "anthropic": "'Claude'",
+            "openai":    "'ChatGPT'",
+            "slack":     "'Slack'"
+          }
+        },
+        "when_ts": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(40)",
+          "format": "date-time",
+          "description": "ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable.",
+          "x-mapping": {
+            "anthropic.chat":    "IFNULL(created_at, updated_at)",
+            "anthropic.message": "messages.created_at",
+            "anthropic.block":   "blocks.start_timestamp OR bump_micros(parent_msg.created_at, block_index+1)",
+            "openai.chat":       "IFNULL(create_time, update_time)",
+            "openai.message":    "messages.create_time OR bump_micros(parent_conv.create_time, msg_idx+1)",
+            "slack.message":     "slack_messages.ts (Slack ts is unix-seconds-with-fractional, formatted as ISO-8601 in UTC)"
+          }
+        },
+        "author": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(255)",
+          "description": "Display name of the message author. For LLM responses this is typically the model slug; for user inputs, the account; for Slack, the user real_name.",
+          "x-mapping": {
+            "anthropic.chat":            "''",
+            "anthropic.message.human":   "account_uuid",
+            "anthropic.message.assistant": "conversation.raw_json.model OR sender",
+            "openai.message.user":       "account_id",
+            "openai.message.assistant":  "model_slug OR role",
+            "slack.message":             "users.real_name OR users.name"
+          }
+        },
+        "account": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Account identifier (provider-native). Drives the account: filter.",
+          "x-mapping": {
+            "anthropic": "anthropic_conversations.account_uuid",
+            "openai":    "openai_conversations.account_id",
+            "slack":     "slack_workspaces.team_id"
+          }
+        },
+        "project": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Project identifier. Currently only Anthropic has projects; null for everyone else.",
+          "x-mapping": {
+            "anthropic": "anthropic_conversations.project_uuid",
+            "openai":    "null",
+            "slack":     "null"
+          }
+        },
+        "channel": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(255)",
+          "description": "Slack channel display name (e.g. 'bridge', 'engineering'). Null for non-Slack rows. Drives the Channel column and a future channel: filter.",
+          "x-mapping": {
+            "anthropic": "null",
+            "openai":    "null",
+            "slack":     "slack_channels.channel_name"
+          }
+        },
+        "conversation_name": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(512)",
+          "description": "Human-readable parent conversation title — drives the Conversation Name grid column. For Chat rows this duplicates the row's own title; for messages/blocks it carries the parent thread's title so each grid row stands alone without a join.",
+          "x-mapping": {
+            "anthropic": "anthropic_conversations.name",
+            "openai":    "openai_conversations.title",
+            "slack":     "slack_channels.channel_name + thread root snippet"
+          }
+        },
+        "conversation_uuid": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Parent conversation / thread UUID. For Chat / Slack Thread rows this equals `uuid`. For Message / block rows it points at the parent so the chat preview pane knows which thread to open.",
+          "x-mapping": {
+            "anthropic.chat":    "= uuid (conversation_uuid)",
+            "anthropic.message": "messages.conversation_uuid",
+            "anthropic.block":   "parent_message.conversation_uuid",
+            "openai.chat":       "= uuid (conversation_id)",
+            "openai.message":    "messages.conversation_id",
+            "slack.thread":      "= uuid (thread root uuid)",
+            "slack.message":     "thread root uuid"
+          }
+        },
+        "message_index": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `#m-idx-{index}`. Null for Chat / Slack Thread rows."
+        },
+        "entire_chat": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(255)",
+          "description": "Path used by the row to open the full thread in the right-hand preview. Today: `/chat/{conversation_uuid}`."
+        },
+        "text": {
+          "type": "string",
+          "x-sql-type": "LONGTEXT",
+          "description": "Full searchable body for this row. The Rust backend computes the displayed snippet from `text` + the user's free-text needle at query time, so we store the full body here rather than a pre-truncated snippet.",
+          "x-mapping": {
+            "anthropic.chat":    "summary OR name",
+            "anthropic.message": "messages.text",
+            "anthropic.block":   "blocks.text OR raw_json.thinking OR type",
+            "openai.chat":       "title",
+            "openai.message":    "messages.text",
+            "slack.thread":      "root message text",
+            "slack.message":     "messages.text (with mention/emoji rendering)"
+          }
+        },
+        "slack_link": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(512)",
+          "description": "Deep link of the form `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or the https equivalent). Populated only for Slack rows; drives the 'Open in Slack' right-click context menu item."
+        }
+      }
+    }
+  },
+  "tables": {
+    "grid_rows": "#/definitions/GridRow"
+  }
+}

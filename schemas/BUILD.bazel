@@ -2,6 +2,7 @@ load("@rules_python//python:defs.bzl", "py_binary")
 
 exports_files([
     "anthropic.schema.json",
+    "grid_rows.schema.json",
     "codegen.py",
 ])
 
@@ -44,6 +45,43 @@ filegroup(
         ":anthropic_py",
         ":anthropic_rs",
         ":anthropic_ts",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "grid_rows_rs",
+    srcs = ["grid_rows.schema.json"],
+    outs = ["grid_rows.rs"],
+    cmd = "$(execpath :codegen) $(execpath grid_rows.schema.json) --rust $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "grid_rows_py",
+    srcs = ["grid_rows.schema.json"],
+    outs = ["grid_rows.py"],
+    cmd = "$(execpath :codegen) $(execpath grid_rows.schema.json) --python $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+genrule(
+    name = "grid_rows_ts",
+    srcs = ["grid_rows.schema.json"],
+    outs = ["grid_rows.ts"],
+    cmd = "$(execpath :codegen) $(execpath grid_rows.schema.json) --typescript $@",
+    tools = [":codegen"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "grid_rows_all",
+    srcs = [
+        ":grid_rows_py",
+        ":grid_rows_rs",
+        ":grid_rows_ts",
     ],
     visibility = ["//visibility:public"],
 )

@@ -93,6 +93,7 @@ _TABLES = (
     "openai_content_parts",
     "openai_conversations",
     "openai_messages",
+    "grid_rows",
 )
 
 

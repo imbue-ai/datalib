@@ -174,8 +174,6 @@ fn every_grid_row_has_a_timestamp() {
 
     // Sanity: confirm tool blocks are represented — they're the row type
     // most likely to lack an intrinsic timestamp.
-    let saw_tool = rows
-        .iter()
-        .any(|r| r.sender == "tool_use" || r.sender == "tool_result");
-    assert!(saw_tool, "no tool_use/tool_result blocks in fixture output");
+    let saw_tool = rows.iter().any(|r| r.kind == "Tool Call");
+    assert!(saw_tool, "no Tool Call rows in fixture output");
 }

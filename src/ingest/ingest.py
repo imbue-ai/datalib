@@ -10,6 +10,7 @@ from ingest.config import (
     Config,
 )
 from ingest.dolt_service import DoltService
+from ingest.grid_rows import populate_grid_rows
 from ingest.providers.anthropic.ingest import (
     ingest_export_dir,
 )
@@ -33,6 +34,7 @@ class IngestSummary:
     commit_hash: str | None = None
     rendered: int = 0
     rendered_orphans_removed: int = 0
+    grid_rows: int = 0
 
 
 def ingest(config: Config, now: str | None = None) -> IngestSummary:
@@ -73,6 +75,9 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                         stats=stats,
                     )
                 )
+
+            summary.grid_rows = populate_grid_rows(conn)
+            conn.commit()
 
         names = ",".join(s.name for s in summary.sources) or "<none>"
         summary.commit_hash = dolt.commit(f"ingest {names} {started_at}")
