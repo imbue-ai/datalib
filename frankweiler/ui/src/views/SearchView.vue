@@ -108,6 +108,17 @@ function closeContextMenu() {
   contextMenuTargets.value = [];
 }
 
+const slackLinkTargets = computed(() =>
+  contextMenuTargets.value.filter((r) => r.slack_link),
+);
+
+function openTargetsInSlack() {
+  for (const r of slackLinkTargets.value) {
+    window.open(r.slack_link, "_blank", "noopener");
+  }
+  closeContextMenu();
+}
+
 async function copyTargetUuids() {
   const text = contextMenuTargets.value.map((r) => r.uuid).join(",");
   try {
@@ -238,6 +249,7 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     },
   },
   { field: "kind", headerName: "Type", width: 110 },
+  { field: "channel", headerName: "Channel", width: 130 },
   {
     field: "when",
     headerName: "Time",
@@ -405,6 +417,13 @@ const gridOptions: GridOptions<SearchRow> = {
         </div>
         <div class="ctx-item" @click="copyTargetUuids">
           Copy UUID{{ contextMenuTargets.length === 1 ? '' : 's' }}
+        </div>
+        <div
+          v-if="slackLinkTargets.length > 0"
+          class="ctx-item"
+          @click="openTargetsInSlack"
+        >
+          Open in Slack{{ slackLinkTargets.length === 1 ? '' : ` (${slackLinkTargets.length})` }}
         </div>
       </div>
     </div>

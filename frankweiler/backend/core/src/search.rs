@@ -29,6 +29,10 @@ pub struct SearchRow {
     pub source: String,
     pub kind: String,
     pub author: String,
+    /// Slack channel display name for Slack rows; empty otherwise.
+    pub channel: String,
+    /// Deep-link URL to open this row in Slack; empty for non-Slack rows.
+    pub slack_link: String,
 }
 
 fn source_label(provider: &str) -> String {
@@ -193,6 +197,8 @@ fn chat_row(c: &Conversation, needle: &str) -> SearchRow {
         source: source_label(&fm.provider),
         kind: "Chat".into(),
         author: String::new(),
+        channel: String::new(),
+        slack_link: String::new(),
     }
 }
 
@@ -225,6 +231,8 @@ fn message_row(c: &Conversation, idx: usize, needle: &str) -> SearchRow {
         source: source_label(&fm.provider),
         kind: kind.to_string(),
         author,
+        channel: String::new(),
+        slack_link: String::new(),
     }
 }
 

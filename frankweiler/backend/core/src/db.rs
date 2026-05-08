@@ -134,13 +134,13 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
             author,
             account,
             project,
-            _channel,
+            channel,
             conversation_name,
             conversation_uuid,
             message_index,
             entire_chat,
             text,
-            _slack_link,
+            slack_link,
         ) = row;
         let snip = if kind == "Chat" {
             text.clone()
@@ -162,6 +162,8 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
             source: source_label,
             kind,
             author,
+            channel,
+            slack_link,
         });
     }
     rows

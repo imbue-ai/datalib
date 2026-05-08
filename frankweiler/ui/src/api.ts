@@ -18,6 +18,8 @@ export type SearchRow = {
   source: string;
   kind: string;
   author: string;
+  channel: string;
+  slack_link: string;
 };
 
 export type SearchResponse = {
