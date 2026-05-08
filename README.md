@@ -110,6 +110,22 @@ For a backend-only launch (no Vite), use `bazelisk run //frankweiler:serve`,
 which opens the browser at `/api/health`. Override the URL with
 `FRANKWEILER_URL=...`.
 
+### Re-run ingestion
+
+Re-ingests every enabled source from the config, commits to Dolt, and
+re-renders the qmd tree. Run after editing the renderer, the schema, or
+your downloads.
+
+```sh
+# Bazel (uses an absolute path so the binary's CWD doesn't matter)
+bazelisk run //src/ingest:cli -- ingest --config $(pwd)/ingest_configs/thad_dev.yaml
+
+# uv (paths are repo-relative)
+uv run python -m ingest --config ingest_configs/thad_dev.yaml
+```
+
+Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
+
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |
