@@ -1,3 +1,6 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 exports_files(["requirements.txt"])
 
 test_suite(
@@ -9,4 +12,48 @@ test_suite(
         "//frankweiler/backend/schema:schema_unittests",
         "//frankweiler/backend/tauri-backend:tauri_backend_unittests",
     ],
+)
+
+# Pre-commit checks exposed two ways from the same wrapper script,
+# matching the //frankweiler/ui:e2e pattern:
+#   bazelisk run  //:precommit       — interactive, uses BUILD_WORKSPACE_DIRECTORY
+#   bazelisk test //:precommit_test  — picked up by `bazel test //...`
+#
+# The script is intentionally non-hermetic: it shells out to host
+# `uv`, `pnpm`, `cargo`, and runs against the source tree (not the
+# sandbox) so it can reuse .venv / node_modules / target. Goal here
+# is "bazel test //... catches lint/type problems early", not full
+# Bazel ownership of the toolchains.
+_PRECOMMIT_DATA = ["pyproject.toml"]
+
+_PRECOMMIT_DEPS = ["@bazel_tools//tools/bash/runfiles"]
+
+sh_binary(
+    name = "precommit",
+    srcs = ["scripts/run_checks.sh"],
+    data = _PRECOMMIT_DATA,
+    deps = _PRECOMMIT_DEPS,
+)
+
+sh_test(
+    name = "precommit_test",
+    srcs = ["scripts/run_checks.sh"],
+    data = _PRECOMMIT_DATA,
+    # Pyright + clippy + vue-tsc together can take a couple of minutes
+    # on a cold cache.
+    timeout = "long",
+    # Needs host uv/pnpm/cargo + network for first-time tool fetches.
+    # Skipped in sandboxed CI runs via --test_tag_filters=-requires-network.
+    tags = [
+        "external",
+        "no-sandbox",
+        "requires-network",
+    ],
+    # Inherit the user's PATH and HOME so the script can find uv / pnpm /
+    # cargo and reuse their caches. Bazel scrubs the test env otherwise.
+    env_inherit = [
+        "PATH",
+        "HOME",
+    ],
+    deps = _PRECOMMIT_DEPS,
 )
