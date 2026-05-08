@@ -52,6 +52,7 @@ logger = logging.getLogger("slack_web")
 # Auth + transport: latchkey curl with rate-limit + transient-error retries.
 # ---------------------------------------------------------------------------
 
+
 class SlackError(RuntimeError):
     """Raised when api.slack.com returns ok:false (excluding rate limits, which retry)."""
 
@@ -62,12 +63,17 @@ def _call_slack_once(method: str, params: dict[str, str] | None) -> dict[str, An
         url = f"{url}?{urlencode(params)}"
     proc = subprocess.run(
         ["latchkey", "curl", url],
-        capture_output=True, text=True, timeout=LATCHKEY_TIMEOUT, check=False,
+        capture_output=True,
+        text=True,
+        timeout=LATCHKEY_TIMEOUT,
+        check=False,
     )
     if proc.returncode != 0:
         # curl exit codes 7/28/35/56 are transient; the caller retries.
-        raise SlackError(f"latchkey curl {method} exit={proc.returncode} "
-                         f"stderr={proc.stderr[-200:]!r}")
+        raise SlackError(
+            f"latchkey curl {method} exit={proc.returncode} "
+            f"stderr={proc.stderr[-200:]!r}"
+        )
     try:
         data: dict[str, Any] = json.loads(proc.stdout)
     except json.JSONDecodeError as e:
@@ -94,16 +100,26 @@ def call_slack(method: str, params: dict[str, str] | None = None) -> dict[str, A
         except _RateLimited:
             if attempt == RATE_LIMIT_MAX_RETRIES:
                 raise SlackError(f"{method}: rate-limited after {attempt} retries")
-            logger.warning("rate-limited on %s; sleeping %.0fs (attempt %d/%d)",
-                           method, backoff, attempt + 1, RATE_LIMIT_MAX_RETRIES)
+            logger.warning(
+                "rate-limited on %s; sleeping %.0fs (attempt %d/%d)",
+                method,
+                backoff,
+                attempt + 1,
+                RATE_LIMIT_MAX_RETRIES,
+            )
         except SlackError as e:
             # Retry only on transient curl exit codes (subset of network errors).
-            if "exit=7" in str(e) or "exit=28" in str(e) or "exit=35" in str(e) \
-                    or "exit=56" in str(e):
+            if (
+                "exit=7" in str(e)
+                or "exit=28" in str(e)
+                or "exit=35" in str(e)
+                or "exit=56" in str(e)
+            ):
                 if attempt == RATE_LIMIT_MAX_RETRIES:
                     raise
-                logger.warning("transient on %s (%s); sleeping %.0fs",
-                               method, e, backoff)
+                logger.warning(
+                    "transient on %s (%s); sleeping %.0fs", method, e, backoff
+                )
             else:
                 raise
         time.sleep(backoff)
@@ -172,7 +188,9 @@ def _now_iso() -> str:
     return datetime.now().astimezone().isoformat()
 
 
-def _make_record(entity: str, key: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+def _make_record(
+    entity: str, key: dict[str, Any], raw: dict[str, Any]
+) -> dict[str, Any]:
     return {"_recorded_at": _now_iso(), **key, "raw": raw}
 
 
@@ -199,7 +217,9 @@ def _diff_and_save(
         elif prior.get("raw") != rec.get("raw"):
             updated_records.append(rec)
     _append_jsonl(_events_path(out_dir, entity, "created"), new_records)
-    _append_jsonl(_events_path(out_dir, entity, "updated"), new_records + updated_records)
+    _append_jsonl(
+        _events_path(out_dir, entity, "updated"), new_records + updated_records
+    )
     if new_records:
         logger.info("  + %d new %s", len(new_records), entity)
     if updated_records:
@@ -207,7 +227,9 @@ def _diff_and_save(
     return len(new_records), len(updated_records)
 
 
-def _load_latest_by_key(out_dir: Path, entity: str, key_of: Any) -> dict[Any, dict[str, Any]]:
+def _load_latest_by_key(
+    out_dir: Path, entity: str, key_of: Any
+) -> dict[Any, dict[str, Any]]:
     """Walk created/ then updated/ so updated/ entries shadow earlier ones."""
     latest: dict[Any, dict[str, Any]] = {}
     for stream in ("created", "updated"):
@@ -220,17 +242,22 @@ def _load_latest_by_key(out_dir: Path, entity: str, key_of: Any) -> dict[Any, di
 # Per-entity helpers (key extraction + record assembly).
 # ---------------------------------------------------------------------------
 
+
 def _key_channel(rec: dict) -> str:
     return rec["channel_id"]
+
 
 def _key_user(rec: dict) -> str:
     return rec["user_id"]
 
+
 def _key_message(rec: dict) -> tuple[str, str]:
     return (rec["channel_id"], rec["message_ts"])
 
+
 def _key_reply(rec: dict) -> tuple[str, str, str]:
     return (rec["channel_id"], rec["thread_ts"], rec["reply_ts"])
+
 
 def _key_reaction(rec: dict) -> tuple[str, str, str | None]:
     # A reaction snapshot is keyed by (channel, message_ts, thread_ts). The
@@ -240,6 +267,7 @@ def _key_reaction(rec: dict) -> tuple[str, str, str | None]:
     # of the same emoji counts and we want both cached.
     return (rec["channel_id"], rec["message_ts"], rec.get("thread_ts"))
 
+
 def _key_self(rec: dict) -> str:
     return rec["user_id"]
 
@@ -247,6 +275,7 @@ def _key_self(rec: dict) -> str:
 # ---------------------------------------------------------------------------
 # Media download: walk `files` arrays in messages/replies, fetch via latchkey.
 # ---------------------------------------------------------------------------
+
 
 def _extract_file_auth() -> dict[str, str]:
     """Pull Authorization/Cookie/User-Agent out of `latchkey curl -v` stderr.
@@ -259,9 +288,19 @@ def _extract_file_auth() -> dict[str, str]:
     alone is enough for most.
     """
     proc = subprocess.run(
-        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s",
-         "https://slack.com/api/auth.test"],
-        capture_output=True, text=True, timeout=LATCHKEY_TIMEOUT, check=False,
+        [
+            "latchkey",
+            "curl",
+            "-v",
+            "-o",
+            "/dev/null",
+            "-s",
+            "https://slack.com/api/auth.test",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=LATCHKEY_TIMEOUT,
+        check=False,
     )
     headers: dict[str, str] = {}
     for name in ("Authorization", "Cookie", "User-Agent"):
@@ -286,7 +325,9 @@ def _safe_filename(name: str | None, fallback: str) -> str:
 
 
 def _download_one_file(
-    file_obj: dict[str, Any], media_dir: Path, headers: dict[str, str],
+    file_obj: dict[str, Any],
+    media_dir: Path,
+    headers: dict[str, str],
 ) -> str:
     """Download a single Slack file to media/<file_id>/<filename>.
 
@@ -322,23 +363,32 @@ def _download_one_file(
         args += ["-H", f"{k}: {v}"]
     args.append(url)
     proc = subprocess.run(
-        args, capture_output=True, text=True,
-        timeout=LATCHKEY_FILE_TIMEOUT, check=False,
+        args,
+        capture_output=True,
+        text=True,
+        timeout=LATCHKEY_FILE_TIMEOUT,
+        check=False,
     )
     if proc.returncode != 0:
         target.unlink(missing_ok=True)
-        logger.warning("media: %s (%s) failed exit=%d %s",
-                       file_id, name, proc.returncode, proc.stderr[-200:].strip())
+        logger.warning(
+            "media: %s (%s) failed exit=%d %s",
+            file_id,
+            name,
+            proc.returncode,
+            proc.stderr[-200:].strip(),
+        )
         return "error"
     return "downloaded"
 
 
 def _download_files_for_records(
-    records: list[dict[str, Any]], media_dir: Path, headers: dict[str, str],
+    records: list[dict[str, Any]],
+    media_dir: Path,
+    headers: dict[str, str],
 ) -> dict[str, int]:
     """Walk each record's raw['files'] array and download each file."""
-    counts = {"downloaded": 0, "skipped": 0, "tombstone": 0,
-              "external": 0, "error": 0}
+    counts = {"downloaded": 0, "skipped": 0, "tombstone": 0, "external": 0, "error": 0}
     targets: list[dict[str, Any]] = []
     for rec in records:
         for f in rec["raw"].get("files") or []:
@@ -355,6 +405,7 @@ def _download_files_for_records(
 # Fetch logic: channels, users, messages, replies, reactions.
 # ---------------------------------------------------------------------------
 
+
 def _fetch_self(out_dir: Path) -> dict[str, Any]:
     data = call_slack("auth.test")
     rec = _make_record(
@@ -370,15 +421,19 @@ def _fetch_self(out_dir: Path) -> dict[str, Any]:
 def _fetch_channels(out_dir: Path, members_only: bool) -> list[dict[str, Any]]:
     raw_channels = paginate(
         "conversations.list",
-        {"exclude_archived": "true", "limit": "200",
-         "types": "public_channel,private_channel"},
+        {
+            "exclude_archived": "true",
+            "limit": "200",
+            "types": "public_channel,private_channel",
+        },
         "channels",
     )
     if members_only:
         raw_channels = [c for c in raw_channels if c.get("is_member")]
     records = [
-        _make_record(ENTITY_CHANNEL,
-                     {"channel_id": c["id"], "channel_name": c["name"]}, c)
+        _make_record(
+            ENTITY_CHANNEL, {"channel_id": c["id"], "channel_name": c["name"]}, c
+        )
         for c in raw_channels
     ]
     existing = _load_latest_by_key(out_dir, ENTITY_CHANNEL, _key_channel)
@@ -388,9 +443,7 @@ def _fetch_channels(out_dir: Path, members_only: bool) -> list[dict[str, Any]]:
 
 def _fetch_users(out_dir: Path) -> list[dict[str, Any]]:
     raw_users = paginate("users.list", {"limit": "200"}, "members")
-    records = [
-        _make_record(ENTITY_USER, {"user_id": u["id"]}, u) for u in raw_users
-    ]
+    records = [_make_record(ENTITY_USER, {"user_id": u["id"]}, u) for u in raw_users]
     existing = _load_latest_by_key(out_dir, ENTITY_USER, _key_user)
     _diff_and_save(out_dir, ENTITY_USER, records, existing, _key_user)
     return records
@@ -400,8 +453,9 @@ def _datetime_to_slack_ts(dt: datetime) -> str:
     return f"{dt.timestamp():.6f}"
 
 
-def _fetch_history(channel_id: str, oldest_ts: str, *, inclusive: bool,
-                   latest_ts: str | None = None) -> list[dict]:
+def _fetch_history(
+    channel_id: str, oldest_ts: str, *, inclusive: bool, latest_ts: str | None = None
+) -> list[dict]:
     params = {
         "channel": channel_id,
         "oldest": oldest_ts,
@@ -422,47 +476,67 @@ def _fetch_replies(channel_id: str, thread_ts: str) -> list[dict]:
     )
 
 
-def _make_message_records(channel_id: str, channel_name: str,
-                          raws: list[dict]) -> list[dict[str, Any]]:
+def _make_message_records(
+    channel_id: str, channel_name: str, raws: list[dict]
+) -> list[dict[str, Any]]:
     return [
         _make_record(
             ENTITY_MESSAGE,
-            {"channel_id": channel_id, "channel_name": channel_name,
-             "message_ts": raw["ts"]},
+            {
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "message_ts": raw["ts"],
+            },
             raw,
         )
-        for raw in raws if raw.get("ts")
+        for raw in raws
+        if raw.get("ts")
     ]
 
 
-def _make_reply_records(channel_id: str, channel_name: str, thread_ts: str,
-                        raws: list[dict]) -> list[dict[str, Any]]:
+def _make_reply_records(
+    channel_id: str, channel_name: str, thread_ts: str, raws: list[dict]
+) -> list[dict[str, Any]]:
     return [
         _make_record(
             ENTITY_REPLY,
-            {"channel_id": channel_id, "channel_name": channel_name,
-             "thread_ts": thread_ts, "reply_ts": raw["ts"]},
+            {
+                "channel_id": channel_id,
+                "channel_name": channel_name,
+                "thread_ts": thread_ts,
+                "reply_ts": raw["ts"],
+            },
             raw,
         )
-        for raw in raws if raw.get("ts") and raw["ts"] != thread_ts
+        for raw in raws
+        if raw.get("ts") and raw["ts"] != thread_ts
     ]
 
 
-def _extract_reactions(channel_id: str, channel_name: str,
-                       message_records: list[dict[str, Any]],
-                       thread_ts: str | None = None) -> list[dict[str, Any]]:
+def _extract_reactions(
+    channel_id: str,
+    channel_name: str,
+    message_records: list[dict[str, Any]],
+    thread_ts: str | None = None,
+) -> list[dict[str, Any]]:
     """Pull inline reaction snapshots out of message/reply payloads (free)."""
     out: list[dict[str, Any]] = []
     for r in message_records:
         reactions = r["raw"].get("reactions")
         if not reactions:
             continue
-        out.append(_make_record(
-            ENTITY_REACTION,
-            {"channel_id": channel_id, "channel_name": channel_name,
-             "message_ts": r["raw"]["ts"], "thread_ts": thread_ts},
-            {"reactions": reactions},
-        ))
+        out.append(
+            _make_record(
+                ENTITY_REACTION,
+                {
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "message_ts": r["raw"]["ts"],
+                    "thread_ts": thread_ts,
+                },
+                {"reactions": reactions},
+            )
+        )
     return out
 
 
@@ -471,7 +545,7 @@ def _channel_latest_ts_map(
 ) -> dict[str, str]:
     """For each channel, find the most recent message_ts we already have."""
     latest: dict[str, str] = {}
-    for (cid, ts) in existing_messages.keys():
+    for cid, ts in existing_messages.keys():
         if cid not in latest or ts > latest[cid]:
             latest[cid] = ts
     return latest
@@ -482,7 +556,7 @@ def _latest_reply_ts_map(
 ) -> dict[tuple[str, str], str]:
     """For each (channel, thread), find the most recent reply_ts we already have."""
     latest: dict[tuple[str, str], str] = {}
-    for (cid, thread_ts, reply_ts) in existing_replies.keys():
+    for cid, thread_ts, reply_ts in existing_replies.keys():
         key = (cid, thread_ts)
         if key not in latest or reply_ts > latest[key]:
             latest[key] = reply_ts
@@ -533,14 +607,22 @@ def _export_channel(
             effective = max(window_oldest_ts, since_ts)
             logger.info("  refresh window [%s, %s]", effective, channel_latest_ts)
             refresh_raws = _fetch_history(
-                channel_id, effective, inclusive=True, latest_ts=channel_latest_ts,
+                channel_id,
+                effective,
+                inclusive=True,
+                latest_ts=channel_latest_ts,
             )
-            refresh_records = _make_message_records(channel_id, channel_name, refresh_raws)
+            refresh_records = _make_message_records(
+                channel_id, channel_name, refresh_raws
+            )
 
     # 3. Persist messages (forward = always-new; refresh may produce updates).
     new_msgs, _ = _diff_and_save(
-        out_dir, ENTITY_MESSAGE, forward_records + refresh_records,
-        existing_messages, _key_message,
+        out_dir,
+        ENTITY_MESSAGE,
+        forward_records + refresh_records,
+        existing_messages,
+        _key_message,
     )
 
     # 4. For each thread parent we just fetched, fetch missing replies.
@@ -567,13 +649,18 @@ def _export_channel(
         reply_records = _make_reply_records(channel_id, channel_name, thread_ts, raws)
         all_reply_records.extend(reply_records)
         n_new, _ = _diff_and_save(
-            out_dir, ENTITY_REPLY, reply_records, existing_replies, _key_reply,
+            out_dir,
+            ENTITY_REPLY,
+            reply_records,
+            existing_replies,
+            _key_reply,
         )
         new_reply_count += n_new
 
     # 5. Reactions: free extraction from messages and replies we already loaded.
-    msg_reactions = _extract_reactions(channel_id, channel_name,
-                                       forward_records + refresh_records, thread_ts=None)
+    msg_reactions = _extract_reactions(
+        channel_id, channel_name, forward_records + refresh_records, thread_ts=None
+    )
     # group reply reactions per thread
     reply_reactions: list[dict[str, Any]] = []
     by_thread: dict[str, list[dict[str, Any]]] = {}
@@ -584,8 +671,11 @@ def _export_channel(
             _extract_reactions(channel_id, channel_name, replies, thread_ts=thread_ts)
         )
     new_react, _ = _diff_and_save(
-        out_dir, ENTITY_REACTION, msg_reactions + reply_reactions,
-        existing_reactions, _key_reaction,
+        out_dir,
+        ENTITY_REACTION,
+        msg_reactions + reply_reactions,
+        existing_reactions,
+        _key_reaction,
     )
 
     media_counts: dict[str, int] = {}
@@ -593,11 +683,14 @@ def _export_channel(
         assert media_headers is not None
         media_counts = _download_files_for_records(
             forward_records + refresh_records + all_reply_records,
-            media_dir, media_headers,
+            media_dir,
+            media_headers,
         )
         if any(v for k, v in media_counts.items() if k != "skipped"):
-            logger.info("  media: %s",
-                        " ".join(f"{k}={v}" for k, v in media_counts.items() if v))
+            logger.info(
+                "  media: %s",
+                " ".join(f"{k}={v}" for k, v in media_counts.items() if v),
+            )
     return new_msgs, new_reply_count, new_react, media_counts
 
 
@@ -605,36 +698,52 @@ def _export_channel(
 # Entry point: typer-driven CLI.
 # ---------------------------------------------------------------------------
 
+
 def fetch(
     out_dir: Path = typer.Option(
-        DEFAULT_OUT_DIR, "--out-dir",
+        DEFAULT_OUT_DIR,
+        "--out-dir",
         help=f"Where to write the JSONL streams (default {DEFAULT_OUT_DIR}).",
     ),
     channels: list[str] = typer.Option(
-        None, "--channels", "-c",
-        help=("Channel names to export (e.g. 'general' or '#general'). May be "
-              "passed multiple times. Default: all channels you are a member of."),
+        None,
+        "--channels",
+        "-c",
+        help=(
+            "Channel names to export (e.g. 'general' or '#general'). May be "
+            "passed multiple times. Default: all channels you are a member of."
+        ),
     ),
     since: str = typer.Option(
-        DEFAULT_SINCE, "--since",
-        help=("ISO date for how far back to look on first export of each "
-              "channel (default 2024-01-01). Ignored once a channel has prior data."),
+        DEFAULT_SINCE,
+        "--since",
+        help=(
+            "ISO date for how far back to look on first export of each "
+            "channel (default 2024-01-01). Ignored once a channel has prior data."
+        ),
     ),
     refresh_window_days: int = typer.Option(
-        DEFAULT_REFRESH_WINDOW_DAYS, "--refresh-window-days",
-        help=("Re-fetch the last N days of history each run, so edits / new "
-              "replies / new reactions on already-exported messages are noticed. "
-              "Pass 0 to disable. Default: 30."),
+        DEFAULT_REFRESH_WINDOW_DAYS,
+        "--refresh-window-days",
+        help=(
+            "Re-fetch the last N days of history each run, so edits / new "
+            "replies / new reactions on already-exported messages are noticed. "
+            "Pass 0 to disable. Default: 30."
+        ),
     ),
     all_channels: bool = typer.Option(
-        False, "--all/--members-only",
+        False,
+        "--all/--members-only",
         help="Include channels you are not a member of (default: members-only).",
     ),
     media: bool = typer.Option(
-        True, "--media/--no-media",
-        help=("Download attached files (images, PDFs, etc.) to "
-              "<out-dir>/media/<file_id>/<filename>. Tombstones and externally-"
-              "hosted files are skipped. Default: on."),
+        True,
+        "--media/--no-media",
+        help=(
+            "Download attached files (images, PDFs, etc.) to "
+            "<out-dir>/media/<file_id>/<filename>. Tombstones and externally-"
+            "hosted files are skipped. Default: on."
+        ),
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging."),
 ) -> None:
@@ -665,9 +774,11 @@ def fetch(
     latest_reply_by_thread = _latest_reply_ts_map(existing_replies)
 
     typer.echo(f"out: {out_dir}")
-    typer.echo(f"existing: channels={len(existing_channels)} users={len(existing_users)} "
-               f"messages={len(existing_messages)} replies={len(existing_replies)} "
-               f"reactions={len(existing_reactions)}")
+    typer.echo(
+        f"existing: channels={len(existing_channels)} users={len(existing_users)} "
+        f"messages={len(existing_messages)} replies={len(existing_replies)} "
+        f"reactions={len(existing_reactions)}"
+    )
 
     # Self identity, channels, users (always re-fetched: cheap & monotonic).
     self_rec = _fetch_self(out_dir)
@@ -688,8 +799,10 @@ def fetch(
             name = spec.lstrip("#")
             cid = name_to_id.get(name)
             if cid is None:
-                typer.echo(f"warning: channel '{name}' not found in listing — skipping",
-                           err=True)
+                typer.echo(
+                    f"warning: channel '{name}' not found in listing — skipping",
+                    err=True,
+                )
                 continue
             targets.append((cid, name))
     else:
@@ -749,10 +862,14 @@ def fetch(
             for k, v in sweep.items():
                 media_totals[k] = media_totals.get(k, 0) + v
 
-    typer.echo(f"\nnew: {totals['messages']} messages  {totals['replies']} replies  "
-               f"{totals['reactions']} reactions")
+    typer.echo(
+        f"\nnew: {totals['messages']} messages  {totals['replies']} replies  "
+        f"{totals['reactions']} reactions"
+    )
     if media_dir is not None and media_totals:
-        typer.echo("media: " + " ".join(f"{k}={v}" for k, v in media_totals.items() if v))
+        typer.echo(
+            "media: " + " ".join(f"{k}={v}" for k, v in media_totals.items() if v)
+        )
 
 
 def main() -> None:
