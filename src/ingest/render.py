@@ -10,7 +10,27 @@ from pathlib import Path
 from pymysql.connections import Connection
 from tqdm import tqdm
 
+from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
+
 log = logging.getLogger(__name__)
+
+
+def _msg_div_open(msg_uuid: str, msg_index: int, provider: str) -> str:
+    """Per-message wrapper used by the chat preview/detail views.
+
+    The UI renders the QMD body verbatim (no parsing); each message becomes
+    a `<div id="m-{uuid}" data-msg-index="{i}" class="msg msg--{provider}">`
+    so the UI can scroll to and highlight a specific message by uuid OR by
+    index without round-tripping through a structured chat schema. Blank
+    line on either side keeps the inner content rendered as CommonMark
+    (CommonMark HTML-block-type-6 ends at the blank line)."""
+    return (
+        f'<div id="m-{msg_uuid}" data-msg-index="{msg_index}" '
+        f'class="msg msg--{provider}">'
+    )
+
+
+_MSG_DIV_CLOSE = "</div>"
 
 
 def _bump_iso(ts: str) -> str:
@@ -207,13 +227,14 @@ def render_conversation(conn: Connection, conversation_uuid: str, root: Path) ->
 
     last_ts = created_at
     with conn.cursor() as cur:
-        for msg_uuid, sender, msg_created in messages:
+        for msg_index, (msg_uuid, sender, msg_created) in enumerate(messages):
             if not msg_created and last_ts:
                 msg_created = _bump_iso(last_ts)
             if msg_created:
                 last_ts = msg_created
             heading = (sender or "unknown").capitalize()
-            parts.append(f'<a id="m-{msg_uuid}"></a>')
+            parts.append(_msg_div_open(msg_uuid, msg_index, "anthropic"))
+            parts.append("")
             parts.append(f"## {heading}")
             if msg_created:
                 parts.append("")
@@ -257,6 +278,8 @@ def render_conversation(conn: Connection, conversation_uuid: str, root: Path) ->
                     )
                     parts.append(f"- [{kind}] {label}")
                 parts.append("")
+            parts.append(_MSG_DIV_CLOSE)
+            parts.append("")
 
     body = "\n".join(parts).rstrip() + "\n"
     target.write_text(body)
@@ -351,6 +374,7 @@ def render_openai_conversation(
     parts.append("")
 
     last_ts = create_time
+    msg_index = 0
     with conn.cursor() as cur:
         for msg_id, _parent, role, content_type, text, msg_created, msg_model in path:
             # Skip system / model_editable_context fluff in the rendered
@@ -362,8 +386,10 @@ def render_openai_conversation(
             if msg_created:
                 last_ts = msg_created
             heading = (role or "unknown").capitalize()
-            parts.append(f'<a id="m-{msg_id}"></a>')
+            parts.append(_msg_div_open(msg_id, msg_index, "openai"))
+            parts.append("")
             parts.append(f"## {heading}")
+            msg_index += 1
             meta_bits = []
             if msg_created:
                 meta_bits.append(msg_created)
@@ -409,6 +435,8 @@ def render_openai_conversation(
                     parts.append(f"{anchor}<!-- {kind} -->")
                     parts.append((ptext or "").rstrip())
                     parts.append("")
+            parts.append(_MSG_DIV_CLOSE)
+            parts.append("")
 
     body = "\n".join(parts).rstrip() + "\n"
     target.write_text(body)
@@ -507,7 +535,7 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
     parts.append(f"# #{channel_name}: {title}")
     parts.append("")
 
-    for (
+    for msg_index, (
         msg_uuid,
         _,
         _,
@@ -518,15 +546,22 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
         ts_iso,
         _is_root,
         _,
-    ) in rows:
+    ) in enumerate(rows):
         author = user_labels.get(user_id, user_id or "unknown")
         link = _slack_message_link(team_id, channel_id, ts)
-        parts.append(f'<a id="m-{msg_uuid}"></a>')
+        parts.append(_msg_div_open(msg_uuid, msg_index, "slack"))
+        parts.append("")
         parts.append(f"## {author}")
         parts.append("")
-        parts.append(f"*{ts_iso} — [view in Slack]({link})*")
+        # Plain HTML for the meta line so the link renders even though the
+        # surrounding span is italic — markdown's `*…[label](url)…*` parsed
+        # the link inconsistently inside emphasis.
+        parts.append(
+            f'<div class="msg-meta"><em>{ts_iso}</em> · '
+            f'<a href="{link}">view in Slack ↗</a></div>'
+        )
         parts.append("")
-        parts.append((text or "").rstrip())
+        parts.append(_slack_to_commonmark((text or "").rstrip(), user_labels))
         parts.append("")
         rxs = reactions_by_msg.get(msg_uuid)
         if rxs:
@@ -541,6 +576,8 @@ def render_slack_thread(conn: Connection, thread_uuid: str, root: Path) -> Path:
             ]
             parts.append("> Reactions: " + " ".join(emoji_strs))
             parts.append("")
+        parts.append(_MSG_DIV_CLOSE)
+        parts.append("")
 
     body = "\n".join(parts).rstrip() + "\n"
     target.write_text(body)

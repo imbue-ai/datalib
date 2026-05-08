@@ -11,9 +11,12 @@ slack_link: "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC17
 
 # #bridge: I recommend raising shields, Captain.
 
-<a id="m-78ad2e40-fc0b-58d0-a6a6-2acb4300003b"></a>
+<div id="m-78ad2e40-fc0b-58d0-a6a6-2acb4300003b" data-msg-index="0" class="msg msg--slack">
+
 ## Worf
 
-*2369-05-28T15:13:20.000401+00:00 — [view in Slack](https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D)*
+<div class="msg-meta"><em>2369-05-28T15:13:20.000401+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D">view in Slack ↗</a></div>
 
 I recommend raising shields, Captain.
+
+</div>

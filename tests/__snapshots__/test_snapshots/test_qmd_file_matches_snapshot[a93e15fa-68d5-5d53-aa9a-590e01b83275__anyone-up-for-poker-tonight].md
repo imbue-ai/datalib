@@ -11,18 +11,24 @@ slack_link: "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC17
 
 # #ten-forward: Anyone up for poker tonight?
 
-<a id="m-712dd3b9-7df4-59b6-ab50-ce709b0ab747"></a>
+<div id="m-712dd3b9-7df4-59b6-ab50-ce709b0ab747" data-msg-index="0" class="msg msg--slack">
+
 ## William T. Riker
 
-*2369-05-28T15:16:40.000601+00:00 — [view in Slack](https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D)*
+<div class="msg-meta"><em>2369-05-28T15:16:40.000601+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D">view in Slack ↗</a></div>
 
 Anyone up for poker tonight?
 
-<a id="m-c26c0b71-66a5-535c-9b46-e64351034dc6"></a>
+</div>
+
+<div id="m-c26c0b71-66a5-535c-9b46-e64351034dc6" data-msg-index="1" class="msg msg--slack">
+
 ## Worf
 
-*2369-05-28T15:18:20.000700+00:00 — [view in Slack](https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D)*
+<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D">view in Slack ↗</a></div>
 
 I do not understand the appeal of this Earth game.
 
 > Reactions: :joy:
+
+</div>

@@ -1,42 +1,17 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from "vue";
+import { ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import MarkdownIt from "markdown-it";
-import hljs from "highlight.js";
-import "highlight.js/styles/github-dark.css";
 import { fetchChat, type ChatResponse } from "@/api";
+import ChatBody from "./ChatBody.vue";
 
 const props = defineProps<{
   conversationUuid: string | null;
   messageIndex: number | null;
 }>();
 
-function highlight(code: string, lang: string): string {
-  if (lang && hljs.getLanguage(lang)) {
-    try {
-      return hljs.highlight(code, { language: lang }).value;
-    } catch {
-      /* fall through to escape */
-    }
-  }
-  // Minimal HTML escape for fallback paths
-  return code
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-const md: MarkdownIt = new MarkdownIt({
-  html: true,
-  linkify: true,
-  breaks: false,
-  highlight,
-});
-
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
-const scroller = ref<HTMLElement | null>(null);
 
 watch(
   () => props.conversationUuid,
@@ -49,8 +24,6 @@ watch(
     error.value = null;
     try {
       chat.value = await fetchChat(uuid);
-      await nextTick();
-      scrollToSelected();
     } catch (e) {
       error.value = (e as Error).message;
     } finally {
@@ -59,32 +32,10 @@ watch(
   },
   { immediate: true },
 );
-
-watch(() => props.messageIndex, () => scrollToSelected());
-
-function scrollToSelected() {
-  if (!scroller.value || props.messageIndex == null) return;
-  const target = scroller.value.querySelector(
-    `#m-idx-${props.messageIndex}`,
-  ) as HTMLElement | null;
-  if (target) {
-    target.scrollIntoView({ block: "start", behavior: "auto" });
-  }
-}
-
-const renderedMessages = computed(() => {
-  if (!chat.value) return [];
-  return chat.value.messages.map((m, i) => ({
-    index: i,
-    sender: m.sender,
-    when: m.when,
-    html: md.render(m.text || ""),
-  }));
-});
 </script>
 
 <template>
-  <section class="chat-preview" ref="scroller">
+  <section class="chat-preview">
     <p v-if="!conversationUuid" class="empty">
       Select a row to preview the conversation.
     </p>
@@ -103,21 +54,8 @@ const renderedMessages = computed(() => {
           >
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
-        <p v-if="chat.summary" class="summary">{{ chat.summary }}</p>
       </header>
-      <article
-        v-for="m in renderedMessages"
-        :key="m.index"
-        :id="`m-idx-${m.index}`"
-        class="message"
-        :class="[m.sender.toLowerCase(), { selected: m.index === messageIndex }]"
-      >
-        <header class="msg-header">
-          <strong>{{ m.sender }}</strong>
-          <span v-if="m.when" class="when">{{ m.when }}</span>
-        </header>
-        <div class="body markdown-body" v-html="m.html"></div>
-      </article>
+      <ChatBody :body="chat.body" :selected-message-index="messageIndex" />
     </template>
   </section>
 </template>
@@ -137,37 +75,6 @@ const renderedMessages = computed(() => {
   font-size: 0.8rem;
   color: var(--fw-muted);
   margin: 0 0 0.25rem;
-}
-.summary {
-  font-style: italic;
-  color: var(--fw-muted);
-  margin: 0 0 0.75rem;
-  font-size: 0.9rem;
-}
-.message {
-  margin: 0.75rem 0;
-  padding: 0.5rem 0.75rem;
-  border-left: 3px solid var(--fw-border);
-  background: var(--fw-card-bg);
-  scroll-margin-top: 0.5rem;
-}
-.message.human {
-  border-left-color: var(--fw-accent);
-}
-.message.assistant {
-  border-left-color: #16a34a;
-}
-.message.selected {
-  outline: 2px solid var(--fw-accent);
-}
-.msg-header {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  font-size: 0.85rem;
-}
-.when {
-  color: var(--fw-muted);
 }
 .empty,
 .error {

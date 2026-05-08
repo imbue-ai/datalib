@@ -99,6 +99,44 @@ pub fn qmd_path_for_conversation(
     Some(root.join(qmd_rel))
 }
 
+/// Per-conversation header data fetched from `grid_rows`. The chat preview
+/// renders the QMD body verbatim and pulls metadata for the header from
+/// here — no QMD parsing.
+#[derive(Debug, Default)]
+pub struct ChatMeta {
+    pub name: Option<String>,
+    pub account: Option<String>,
+    pub project: Option<String>,
+    pub channel: Option<String>,
+    pub when_ts: Option<String>,
+    pub source_label: Option<String>,
+}
+
+/// Fetch the chat-level row for a conversation. Returns `None` when the
+/// mirror DB is missing or no chat row exists (e.g. mid-ingest).
+pub fn chat_meta(root: &Path, conversation_uuid: &str) -> Option<ChatMeta> {
+    let conn = open_mirror(root)?;
+    conn.query_row(
+        "SELECT conversation_name, account, project, channel, when_ts, source_label \
+         FROM grid_rows \
+         WHERE conversation_uuid = ?1 \
+         ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
+         LIMIT 1",
+        [conversation_uuid],
+        |r| {
+            Ok(ChatMeta {
+                name: r.get::<_, Option<String>>(0)?,
+                account: r.get::<_, Option<String>>(1)?,
+                project: r.get::<_, Option<String>>(2)?,
+                channel: r.get::<_, Option<String>>(3)?,
+                when_ts: r.get::<_, Option<String>>(4)?,
+                source_label: r.get::<_, Option<String>>(5)?,
+            })
+        },
+    )
+    .ok()
+}
+
 pub fn grid_rows(root: &Path, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     let Some(conn) = open_mirror(root) else {
         return Vec::new();

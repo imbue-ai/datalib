@@ -11,14 +11,18 @@ summary: Looking up a Borg adaptive-shield signature; first lookup errors out, r
 
 # Borg Encryption Signature Lookup
 
-<a id="m-50000001-1701-4d00-8000-000000050001"></a>
+<div id="m-50000001-1701-4d00-8000-000000050001" data-msg-index="0" class="msg msg--anthropic">
+
 ## Human
 
 *2369-04-16T09:00:00.000000+00:00*
 
 <a id="b-50000001-1701-4d00-8000-000000050001-0"></a>Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
 
-<a id="m-50000002-1701-4d00-8000-000000050002"></a>
+</div>
+
+<div id="m-50000002-1701-4d00-8000-000000050002" data-msg-index="1" class="msg msg--anthropic">
+
 ## Assistant
 
 *2369-04-16T09:01:30.000000+00:00*
@@ -58,3 +62,5 @@ Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulatio
 </details>
 
 <a id="b-50000002-1701-4d00-8000-000000050002-4"></a>Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+
+</div>

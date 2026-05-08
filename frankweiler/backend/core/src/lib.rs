@@ -3,7 +3,6 @@
 pub mod config;
 pub mod db;
 pub mod deeplink;
-pub mod qmd;
 pub mod query;
 pub mod search;
 

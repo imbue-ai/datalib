@@ -10,14 +10,18 @@ default_model_slug: gpt-5
 
 # Sonnet on a Cat Named Spot
 
-<a id="m-msg-fake-spot-0001"></a>
+<div id="m-msg-fake-spot-0001" data-msg-index="0" class="msg msg--openai">
+
 ## User
 
 *2370-10-24T08:00:00.000000+00:00*
 
 <a id="b-msg-fake-spot-0001-0"></a>Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.
 
-<a id="m-msg-fake-spot-0002"></a>
+</div>
+
+<div id="m-msg-fake-spot-0002" data-msg-index="1" class="msg msg--openai">
+
 ## Assistant
 
 *2370-10-24T08:02:00.000000+00:00 · gpt-5*
@@ -40,9 +44,14 @@ Reflects the very life he hopes to share.
 So bless thee, Spot, of fur and quiet purr:
 Thou art my muse, my console saboteur.
 
-<a id="m-msg-fake-spot-0003"></a>
+</div>
+
+<div id="m-msg-fake-spot-0003" data-msg-index="2" class="msg msg--openai">
+
 ## User
 
 *2370-10-24T08:05:00.000000+00:00*
 
 <a id="b-msg-fake-spot-0003-0"></a>Curious. The closing couplet is satisfying. Thank you.
+
+</div>

@@ -2,13 +2,15 @@
 //!
 //! Endpoints:
 //!   GET /api/health
-//!   GET /api/search?q=…&limit=…  → searches the QMD corpus under `root`
+//!   GET /api/search?q=…&limit=…  → grid_rows query against `<root>/mirror.sqlite`
 //!   GET /api/columns             → grid column metadata
-//!   GET /api/chat/{uuid}         → full conversation parsed from QMD
+//!   GET /api/chat/{uuid}         → conversation header (from grid_rows) + raw QMD body
 //!
-//! Dolt is the source of truth, but the QMDs are the search index — we read
-//! them directly here. v0 reloads the corpus on each query; introduce caching
-//! once the corpus warrants it.
+//! Dolt is the source of truth; ingest writes a portable `mirror.sqlite`
+//! mirror that this service reads. **QMDs are write-only output** — the
+//! `/api/chat` endpoint serves the file body verbatim (sans frontmatter)
+//! and lets the UI render markdown once. We never parse a QMD back into
+//! structured data; structured fields come from `grid_rows`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -17,8 +19,7 @@ use axum::{
     routing::get,
     Router,
 };
-use frankweiler_core::db::{grid_rows, qmd_path_for_conversation};
-use frankweiler_core::qmd::{self, Conversation};
+use frankweiler_core::db::{chat_meta, grid_rows, qmd_path_for_conversation};
 use frankweiler_core::query::parse_query;
 use frankweiler_core::search::SearchRow;
 use serde::{Deserialize, Serialize};
@@ -60,23 +61,21 @@ pub struct ColumnSpec {
     pub default_visible: bool,
 }
 
+/// Response shape for `/api/chat/{uuid}`. The body is the raw QMD content
+/// minus the YAML frontmatter — the UI runs markdown-it on it directly. We
+/// do **not** ship a structured `messages[]` array; per-message scrolling
+/// uses the `<div id="m-{uuid}" data-msg-index="…">` wrappers the renderer
+/// emits in the body.
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub conversation_uuid: String,
     pub name: Option<String>,
-    pub account_uuid: Option<String>,
-    pub project_uuid: Option<String>,
+    pub account: Option<String>,
+    pub project: Option<String>,
+    pub channel: Option<String>,
     pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-    pub summary: Option<String>,
-    pub messages: Vec<ChatMessage>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ChatMessage {
-    pub sender: String,
-    pub when: Option<String>,
-    pub text: String,
+    pub source_label: Option<String>,
+    pub body: String,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -141,31 +140,39 @@ async fn chat(
     State(s): State<AppState>,
     Path(conversation_uuid): Path<String>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    // The grid row carries `qmd_path` — a relative path to the rendered
-    // QMD computed at ingest time from the same slug fn the renderer
-    // uses. Look it up by conversation_uuid; no globbing, no frontmatter.
+    // QMDs are write-only output. We read the file just to ship its body
+    // to the UI as-is; structured metadata comes from grid_rows. Per-message
+    // anchors in the body (<div id="m-{uuid}" data-msg-index="…">) let the
+    // UI scroll-and-highlight without a structured chat schema.
     let path =
         qmd_path_for_conversation(&s.root, &conversation_uuid).ok_or(StatusCode::NOT_FOUND)?;
-    let conv: Conversation =
-        qmd::parse_qmd(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let body = strip_frontmatter(&raw).to_string();
+    let meta = chat_meta(&s.root, &conversation_uuid).unwrap_or_default();
     Ok(Json(ChatResponse {
         conversation_uuid,
-        name: conv.frontmatter.name,
-        account_uuid: conv.frontmatter.account_uuid,
-        project_uuid: conv.frontmatter.project_uuid,
-        created_at: conv.frontmatter.created_at,
-        updated_at: conv.frontmatter.updated_at,
-        summary: conv.frontmatter.summary,
-        messages: conv
-            .messages
-            .into_iter()
-            .map(|m| ChatMessage {
-                sender: m.sender,
-                when: m.when,
-                text: m.text,
-            })
-            .collect(),
+        name: meta.name,
+        account: meta.account,
+        project: meta.project,
+        channel: meta.channel,
+        created_at: meta.when_ts,
+        source_label: meta.source_label,
+        body,
     }))
+}
+
+/// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
+/// trimming, not parsing — we don't look at the YAML contents and we don't
+/// care if it's malformed; the body is whatever's after the closing `---`.
+fn strip_frontmatter(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return text;
+    };
+    let Some(end) = rest.find("\n---") else {
+        return text;
+    };
+    let after = &rest[end + 4..];
+    after.strip_prefix('\n').unwrap_or(after)
 }
 
 fn default_columns() -> Vec<ColumnSpec> {

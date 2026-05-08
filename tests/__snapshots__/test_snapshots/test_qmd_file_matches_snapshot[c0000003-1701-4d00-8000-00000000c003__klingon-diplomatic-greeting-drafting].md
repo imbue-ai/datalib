@@ -11,14 +11,18 @@ summary: Drafting an opening for a Klingon diplomatic exchange.
 
 # Klingon Diplomatic Greeting Drafting
 
-<a id="m-30000001-1701-4d00-8000-000000030001"></a>
+<div id="m-30000001-1701-4d00-8000-000000030001" data-msg-index="0" class="msg msg--anthropic">
+
 ## Human
 
 *2369-04-14T10:00:00.000000+00:00*
 
 <a id="b-30000001-1701-4d00-8000-000000030001-0"></a>Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
 
-<a id="m-30000002-1701-4d00-8000-000000030002"></a>
+</div>
+
+<div id="m-30000002-1701-4d00-8000-000000030002" data-msg-index="1" class="msg msg--anthropic">
+
 ## Assistant
 
 *2369-04-14T10:01:00.000000+00:00*
@@ -57,9 +61,14 @@ summary: Drafting an opening for a Klingon diplomatic exchange.
 
 <a id="b-30000002-1701-4d00-8000-000000030002-3"></a>For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
 
-<a id="m-30000003-1701-4d00-8000-000000030003"></a>
+</div>
+
+<div id="m-30000003-1701-4d00-8000-000000030003" data-msg-index="2" class="msg msg--anthropic">
+
 ## Human
 
 *2369-04-14T10:02:00.000000+00:00*
 
 <a id="b-30000003-1701-4d00-8000-000000030003-0"></a>Perfect. Make it so.
+
+</div>

@@ -29,17 +29,19 @@ export type SearchResponse = {
   total_estimated: number;
 };
 
-export type ChatMessage = { sender: string; when: string | null; text: string };
-
+// QMDs are write-only output. The backend ships the body verbatim
+// (frontmatter stripped) and the UI runs markdown-it on it. Per-message
+// scrolling/highlighting uses the `<div id="m-{uuid}" data-msg-index="…">`
+// wrappers the renderer already emits in the body.
 export type ChatResponse = {
   conversation_uuid: string;
   name: string | null;
-  account_uuid: string | null;
-  project_uuid: string | null;
+  account: string | null;
+  project: string | null;
+  channel: string | null;
   created_at: string | null;
-  updated_at: string | null;
-  summary: string | null;
-  messages: ChatMessage[];
+  source_label: string | null;
+  body: string;
 };
 
 export type Health = {

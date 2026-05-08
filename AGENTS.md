@@ -43,6 +43,18 @@ When you add or change a `grid_rows` column:
    it back, plus `SearchRow` in `search.rs` if the column reaches the API.
 5. Re-bake snapshots: `uv run pytest tests/test_snapshots.py --snapshot-update`.
 
+## QMDs are write-only
+
+Ingest renders QMD markdown files for human/Quarto consumption. The
+backend serves those files **verbatim** (frontmatter stripped) at
+`/api/chat/{uuid}` — it never parses them back. Structured fields
+(name, account, project, channel, created_at, source_label) come from
+`grid_rows` in `mirror.sqlite`. Per-message anchors used by the UI
+(scroll-to-message, highlight) come from `<div id="m-{uuid}"
+data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
+emits in the body. If you find yourself writing a QMD parser in the
+backend, stop — add the field to `grid_rows` instead.
+
 ## Common commands
 
 ```bash
