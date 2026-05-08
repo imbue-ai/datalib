@@ -313,11 +313,20 @@ fn push_anthropic_messages(
         &["m.text"],
         needle,
     );
+    // Per-conversation `msg_idx` mirrors the QMD render order (created_at,
+    // tie-break by message_uuid) so the chat preview pane can use it as the
+    // index into `chat.messages` for `scrollIntoView('#m-idx-N')`.
     let sql = format!(
-        "SELECT m.message_uuid, m.conversation_uuid, m.sender, m.text, m.created_at, \
+        "WITH m AS (\
+            SELECT message_uuid, conversation_uuid, sender, text, created_at, \
+                   ROW_NUMBER() OVER (PARTITION BY conversation_uuid \
+                                      ORDER BY created_at, message_uuid) - 1 AS msg_idx \
+            FROM anthropic_messages\
+         ) \
+         SELECT m.message_uuid, m.conversation_uuid, m.sender, m.text, m.created_at, \
                 c.name, c.project_uuid, c.account_uuid, \
-                json_extract(c.raw_json, '$.model') AS conv_model \
-         FROM anthropic_messages m JOIN anthropic_conversations c \
+                json_extract(c.raw_json, '$.model') AS conv_model, m.msg_idx \
+         FROM m JOIN anthropic_conversations c \
               ON m.conversation_uuid = c.conversation_uuid{}",
         where_sql
     );
@@ -333,11 +342,12 @@ fn push_anthropic_messages(
             r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+            r.get::<_, i64>(9)?,
         ))
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, sender, text, when, cname, project, account, model) = row;
+        let (_mid, cuuid, sender, text, when, cname, project, account, model, msg_idx) = row;
         let kind = anthropic_kind_for_sender(&sender);
         let author = match kind {
             "User Input" => account.clone(),
@@ -352,7 +362,7 @@ fn push_anthropic_messages(
         };
         out.push(SearchRow {
             conversation_uuid: cuuid.clone(),
-            message_index: Some(0),
+            message_index: Some(msg_idx as usize),
             snippet: snippet(&text, needle),
             sender: sender.clone(),
             when,
@@ -388,12 +398,20 @@ fn push_anthropic_blocks(
     } else {
         format!("{} AND {}", where_sql, type_clause)
     };
+    // Block rows scroll to their *parent message*, since blocks render
+    // inline inside their parent in the QMD/preview output.
     let sql = format!(
-        "SELECT b.message_uuid, m.conversation_uuid, b.type, b.text, b.start_timestamp, \
+        "WITH m AS (\
+            SELECT message_uuid, conversation_uuid, \
+                   ROW_NUMBER() OVER (PARTITION BY conversation_uuid \
+                                      ORDER BY created_at, message_uuid) - 1 AS msg_idx \
+            FROM anthropic_messages\
+         ) \
+         SELECT b.message_uuid, m.conversation_uuid, b.type, b.text, b.start_timestamp, \
                 c.name, c.project_uuid, c.account_uuid, \
-                json_extract(c.raw_json, '$.model') AS conv_model \
+                json_extract(c.raw_json, '$.model') AS conv_model, m.msg_idx \
          FROM anthropic_content_blocks b \
-              JOIN anthropic_messages m ON b.message_uuid = m.message_uuid \
+              JOIN m ON b.message_uuid = m.message_uuid \
               JOIN anthropic_conversations c ON m.conversation_uuid = c.conversation_uuid{}",
         where_sql
     );
@@ -409,17 +427,18 @@ fn push_anthropic_blocks(
             r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             r.get::<_, Option<String>>(7)?.unwrap_or_default(),
             r.get::<_, Option<String>>(8)?.unwrap_or_default(),
+            r.get::<_, i64>(9)?,
         ))
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, btype, text, when, cname, project, account, model) = row;
+        let (_mid, cuuid, btype, text, when, cname, project, account, model, msg_idx) = row;
         let kind = anthropic_kind_for_block(&btype);
         let author = if !model.is_empty() { model.clone() } else { btype.clone() };
         let snippet_text = if text.is_empty() { btype.clone() } else { snippet(&text, needle) };
         out.push(SearchRow {
             conversation_uuid: cuuid.clone(),
-            message_index: Some(0),
+            message_index: Some(msg_idx as usize),
             snippet: snippet_text,
             sender: btype.clone(),
             when,
@@ -449,9 +468,15 @@ fn push_openai_messages(
         needle,
     );
     let sql = format!(
-        "SELECT m.message_id, m.conversation_id, m.role, m.text, m.create_time, m.model_slug, \
-                c.title, c.account_id \
-         FROM openai_messages m JOIN openai_conversations c \
+        "WITH m AS (\
+            SELECT message_id, conversation_id, role, text, create_time, model_slug, \
+                   ROW_NUMBER() OVER (PARTITION BY conversation_id \
+                                      ORDER BY create_time, message_id) - 1 AS msg_idx \
+            FROM openai_messages\
+         ) \
+         SELECT m.message_id, m.conversation_id, m.role, m.text, m.create_time, m.model_slug, \
+                c.title, c.account_id, m.msg_idx \
+         FROM m JOIN openai_conversations c \
               ON m.conversation_id = c.conversation_id{}",
         where_sql
     );
@@ -466,11 +491,12 @@ fn push_openai_messages(
             r.get::<_, Option<String>>(5)?.unwrap_or_default(),
             r.get::<_, Option<String>>(6)?.unwrap_or_default(),
             r.get::<_, Option<String>>(7)?.unwrap_or_default(),
+            r.get::<_, i64>(8)?,
         ))
     });
     let Ok(it) = it else { return };
     for row in it.flatten() {
-        let (_mid, cuuid, role, text, when, model, ctitle, account) = row;
+        let (_mid, cuuid, role, text, when, model, ctitle, account, msg_idx) = row;
         let kind = openai_kind_for_role(&role);
         let author = match kind {
             "User Input" => account.clone(),
@@ -485,7 +511,7 @@ fn push_openai_messages(
         };
         out.push(SearchRow {
             conversation_uuid: cuuid.clone(),
-            message_index: Some(0),
+            message_index: Some(msg_idx as usize),
             snippet: snippet(&text, needle),
             sender: role.clone(),
             when,
