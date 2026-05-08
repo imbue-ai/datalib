@@ -2,6 +2,8 @@
 import { ref, watch, onMounted, computed } from "vue";
 import { useRouter } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
+import { Splitpanes, Pane } from "splitpanes";
+import "splitpanes/dist/splitpanes.css";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -10,6 +12,7 @@ import {
   type ColDef,
   type GridOptions,
   type ICellRendererParams,
+  type RowSelectedEvent,
 } from "ag-grid-community";
 import {
   fetchAccounts,
@@ -19,6 +22,7 @@ import {
   type Health,
   type SearchRow,
 } from "@/api";
+import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -32,6 +36,7 @@ const loading = ref(false);
 const error = ref<string | null>(null);
 const health = ref<Health | null>(null);
 const accounts = ref<AccountsMap>({});
+const selectedRow = ref<SearchRow | null>(null);
 
 function accountLabel(uuid: string): string {
   if (!uuid) return "";
@@ -86,19 +91,19 @@ function openRow(row: SearchRow) {
 }
 
 const columnDefs = computed<ColDef<SearchRow>[]>(() => [
-  { field: "source", headerName: "Source", width: 110 },
-  { field: "kind", headerName: "Type", width: 130 },
+  { field: "source", headerName: "Source", width: 90 },
+  { field: "kind", headerName: "Type", width: 110 },
   {
     field: "when",
     headerName: "Time",
-    width: 180,
+    width: 165,
     sort: "desc",
   },
   {
     field: "snippet",
     headerName: "Contents",
     flex: 1,
-    minWidth: 280,
+    minWidth: 200,
     wrapText: true,
     autoHeight: true,
     cellStyle: { whiteSpace: "normal", lineHeight: "1.3em" },
@@ -106,7 +111,7 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   {
     field: "author",
     headerName: "Author",
-    width: 160,
+    width: 130,
     valueFormatter: (p) => {
       const v = p.value as string | undefined;
       if (!v) return "";
@@ -116,18 +121,18 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   {
     field: "account",
     headerName: "Account",
-    width: 200,
+    width: 150,
     valueFormatter: (p) => accountLabel(p.value as string),
   },
   {
     headerName: "Open",
-    width: 80,
+    width: 70,
     sortable: false,
     filter: false,
     cellRenderer: (params: ICellRendererParams<SearchRow>) => {
       const btn = document.createElement("button");
       btn.className = "open-btn";
-      btn.title = "Open";
+      btn.title = "Open full view";
       btn.textContent = "→";
       btn.addEventListener("click", (ev) => {
         ev.stopPropagation();
@@ -148,11 +153,16 @@ const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
   rowHeight: 56,
-  // Allow click-and-drag selection of cell text so users can Cmd+C the
-  // contents of a row. Without this, AG Grid treats clicks as row
-  // selection and the browser never gets a text selection to copy.
-  enableCellTextSelection: true,
+  // Single-row selection drives the right preview pane. Cell text
+  // selection is intentionally NOT enabled here: AG Grid's text-selection
+  // mode swallows row clicks, breaking the preview wiring.
+  rowSelection: "single",
   ensureDomOrder: true,
+  onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
+    if (e.node.isSelected() && e.data) {
+      selectedRow.value = e.data;
+    }
+  },
   onRowDoubleClicked: (e) => {
     if (e.data) openRow(e.data);
   },
@@ -177,17 +187,29 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <div class="grid-wrap">
-      <AgGridVue
-        class="grid"
-        :rowData="rows"
-        :columnDefs="columnDefs"
-        :defaultColDef="defaultColDef"
-        :gridOptions="gridOptions"
-      />
-    </div>
-    <p v-if="loading && rows.length === 0" class="empty">searching…</p>
-    <p v-else-if="!loading && rows.length === 0 && !error" class="empty">no matches.</p>
+    <Splitpanes class="split" :dbl-click-splitter="false">
+      <Pane size="55" min-size="25" class="left-pane">
+        <div class="grid-wrap">
+          <AgGridVue
+            class="grid"
+            :rowData="rows"
+            :columnDefs="columnDefs"
+            :defaultColDef="defaultColDef"
+            :gridOptions="gridOptions"
+          />
+        </div>
+        <p v-if="loading && rows.length === 0" class="empty">searching…</p>
+        <p v-else-if="!loading && rows.length === 0 && !error" class="empty">
+          no matches.
+        </p>
+      </Pane>
+      <Pane size="45" min-size="20" class="right-pane">
+        <ChatPreviewPane
+          :conversation-uuid="selectedRow?.conversation_uuid ?? null"
+          :message-index="selectedRow?.message_index ?? null"
+        />
+      </Pane>
+    </Splitpanes>
   </section>
 </template>
 
@@ -228,9 +250,25 @@ const gridOptions: GridOptions<SearchRow> = {
 .error {
   color: #e35d6a;
 }
-.grid-wrap {
+.split {
   flex: 1 1 auto;
   min-height: 300px;
+}
+.left-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.right-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--fw-border);
+  background: var(--fw-bg);
+}
+.grid-wrap {
+  flex: 1 1 auto;
+  min-height: 200px;
 }
 .grid {
   width: 100%;
@@ -247,5 +285,18 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 :deep(.open-btn:hover) {
   background: var(--fw-hover);
+}
+</style>
+
+<style>
+/* Splitter styling — outside scoped block so it reaches splitpanes' DOM. */
+.splitpanes__splitter {
+  background: var(--fw-border);
+  position: relative;
+  width: 6px;
+  cursor: col-resize;
+}
+.splitpanes__splitter:hover {
+  background: var(--fw-accent);
 }
 </style>
