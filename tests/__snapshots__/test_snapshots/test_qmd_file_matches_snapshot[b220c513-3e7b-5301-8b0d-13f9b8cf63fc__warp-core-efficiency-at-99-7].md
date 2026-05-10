@@ -15,7 +15,7 @@ slack_link: "https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D
 
 ## Lt. Cmdr. Data
 
-<div class="msg-meta"><em>2369-05-28T15:15:00.000500+00:00</em> · <a href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:15:00.000500+00:00</em> · <a href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
 
 Warp core efficiency at 99.7%.
 
