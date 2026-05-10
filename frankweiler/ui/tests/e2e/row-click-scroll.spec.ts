@@ -115,15 +115,15 @@ test("row click selects the right message in the preview pane", async ({
 
   await scrollToAndClick(chosen!.idxA);
   const preview = page.locator(".chat-preview");
-  await expect(preview.locator(`#m-idx-${chosen!.idxA}.selected`)).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(
+    preview.locator(`[data-msg-index="${chosen!.idxA}"].selected`),
+  ).toBeVisible({ timeout: 10_000 });
 
   await scrollToAndClick(chosen!.idxB);
-  await expect(preview.locator(`#m-idx-${chosen!.idxB}.selected`)).toBeVisible({
-    timeout: 10_000,
-  });
   await expect(
-    preview.locator(`#m-idx-${chosen!.idxA}.selected`),
+    preview.locator(`[data-msg-index="${chosen!.idxB}"].selected`),
+  ).toBeVisible({ timeout: 10_000 });
+  await expect(
+    preview.locator(`[data-msg-index="${chosen!.idxA}"].selected`),
   ).toHaveCount(0);
 });

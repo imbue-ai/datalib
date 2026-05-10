@@ -154,7 +154,7 @@
         "message_index": {
           "type": ["integer", "null"],
           "minimum": 0,
-          "description": "Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `#m-idx-{index}`. Null for Chat / Slack Thread rows."
+          "description": "Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `[data-msg-index=\"{index}\"]`. Null for Chat / Slack Thread rows."
         },
         "entire_chat": {
           "type": "string",
