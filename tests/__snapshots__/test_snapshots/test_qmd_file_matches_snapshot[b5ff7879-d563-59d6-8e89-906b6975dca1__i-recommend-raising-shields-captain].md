@@ -15,7 +15,7 @@ slack_link: "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC17
 
 ## Worf
 
-<div class="msg-meta"><em>2369-05-28T15:13:20.000401+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:13:20.000401+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D">view in Slack ↗</a></div>
 
 I recommend raising shields, Captain.
 
