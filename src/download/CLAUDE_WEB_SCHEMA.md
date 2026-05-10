@@ -61,22 +61,23 @@ placeholders, pre-flattened `text`) that the API does not.
 
 ## Precedence: API wins
 
-Every row in `anthropic_*` carries a `source` column with values
-`'export'` or `'api'`. The ingest UPSERTs enforce:
+Each ingested directory is tagged `'export'` or `'api'`, and
+`merge_anthropic` (in `providers/anthropic/ingest.py`) applies api-wins
+precedence in memory before anything reaches SQL:
 
-- **API ingest is authoritative.** When `source='api'`, every column
-  (including `raw_json`) overwrites whatever the export wrote, and
-  `content_blocks` / `attachments` are delete-and-reinserted per
-  `message_uuid` so trimmed/reordered API blocks don't leave orphans.
-- **Export ingest never clobbers API.** If a row's existing `source` is
-  `'api'`, an `'export'` re-ingest leaves data columns untouched and
-  does not touch its content blocks or attachments. `last_seen_at` still
-  bumps so we know the export still references the row.
-- The `source` column itself only ever upgrades `export → api`; it is
-  never downgraded.
+- **API ingest is authoritative.** For every keyed entity (account,
+  project, conversation, message), an api-tagged row beats an
+  export-tagged row on the same primary key — every field (including
+  `raw_json`) comes from the api parse. `content_blocks` and
+  `attachments` are owned wholesale by api for any `message_uuid` an api
+  ingest provided, so trimmed/reordered API blocks don't leave orphans.
+- **Export ingest never clobbers API.** If an api ingest claimed a key
+  earlier in the merge, a later export ingest can't displace it.
+- Within the same precedence class, later in the input list wins.
 
-The mechanism is a per-column `IF(VALUES(source) = 'api' OR source != 'api', VALUES(col), col)`
-gate in the ingest UPSERTs (see `providers/anthropic/ingest.py`).
+The merged dataclasses then drive QMD rendering and the `grid_rows`
+union table directly; per-provider Dolt tables don't exist anymore
+(there is nothing to UPSERT against).
 
 Provenance is plumbed end-to-end via the config:
 
@@ -94,11 +95,6 @@ sources:
     provenance: api
 ```
 
-## Cross-checking the two transports
-
-`scripts/sync_claude_web.py verify` ingests both directories into a
-throwaway Dolt repo and runs `dolt_diff_<table>` over the overlap. See
-`AGENTS.md` for the runbook.
 
 Cosmetic diffs (`raw_json`, `last_seen_at`, `first_seen_at`) are
 classified separately from real diffs. Current state: ~157 cosmetic-only

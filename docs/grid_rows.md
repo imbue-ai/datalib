@@ -51,16 +51,18 @@ The generated `DDL` constant is used both at ingest time
 
 ## Producer side: `src/ingest/grid_rows.py`
 
-`populate_grid_rows(conn)` is invoked by `src/ingest/ingest.py` after all
-sources have been ingested into their per-provider tables and **before**
-the Dolt commit. It:
+`populate_grid_rows(conn, anthropic, openai, slack)` is invoked by
+`src/ingest/ingest.py` after each provider has been parsed and merged in
+memory, and **before** the Dolt commit. It:
 
-1. Drops + recreates `grid_rows` (the table is fully derived from the
-   per-provider tables, so dropping is always safe — and it lets schema
+1. Drops + recreates `grid_rows` (it's the only SQL artifact the ingest
+   pipeline writes, so dropping is always safe — and it lets schema
    changes take effect without explicit migrations).
-2. Walks each per-provider table, builds `_Row` instances, and emits one
-   `executemany` INSERT per ingest.
+2. Walks each provider's merged `Parsed*` dataclass, builds `_Row`
+   instances, and emits one `executemany` INSERT per ingest.
 
+Provider-specific Dolt tables don't exist anymore: the parsed dataclasses
+ARE the source of truth for both QMD rendering and grid_rows population.
 Re-population strategy is full delete + reinsert per ingest. Cheap at
 our scale (~5k rows), avoids row-level UPSERT complexity, and guarantees
 consistency with any column-mapping changes.

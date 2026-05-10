@@ -108,7 +108,7 @@ on RBE.
 ## Maintenance
 
 These fixtures are **hand-edited** at every layer. When you change
-`schemas/anthropic.schema.json` or any parser:
+any provider parser or `schemas/grid_rows.schema.json`:
 
 1. Run `uv run pytest tests/test_fixtures.py` —
    the parser tests will break first if a new required field is added.

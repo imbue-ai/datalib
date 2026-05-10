@@ -76,11 +76,14 @@ uv run python -m download.slack_web --channels general engineering
 
 ## Provenance / "API wins"
 
-Every row in the `anthropic_*` tables has a `source` column. API rows are
-authoritative: a later export ingest will not clobber them, and an API
-ingest deletes-and-reinserts content blocks/attachments per message so
-trimmed blocks don't leave orphans. See `CLAUDE_WEB_SCHEMA.md` for the
-SQL pattern.
+Each parsed source carries an `"export"` / `"api"` tag. The
+`merge_anthropic` step in `src/ingest/providers/anthropic/ingest.py`
+applies api-wins precedence in memory: api-tagged rows beat export-tagged
+rows on the same primary key, and api ingests own content
+blocks/attachments wholesale per message (replacing any earlier export
+blocks for that message) so trimmed blocks don't leave orphans. The
+union `grid_rows` table is the only SQL artifact this produces; per-
+provider Dolt tables no longer exist.
 
 Configure provenance in `config.yaml` per source:
 
