@@ -22,11 +22,31 @@ fixtures/
 │   ├── users.json
 │   └── conversations.json
 │
-└── chatgpt_api/               `provider: openai, kind: chatgpt_api_dir, provenance: api`
-    ├── me.json                user record
-    ├── conversations.json     listing index
-    └── conversations/<id>.json   per-conversation node tree (message mapping with parent/children)
+├── chatgpt_api/               `provider: openai, kind: chatgpt_api_dir, provenance: api`
+│   ├── me.json                user record
+│   ├── conversations.json     listing index
+│   └── conversations/<id>.json   per-conversation node tree (message mapping with parent/children)
+│
+├── github_api/                event-store JSONL written by `download/github_web.py`.
+│   └── <entity>/{created,updated}/events.jsonl
+│   Entities: self_identity, pull_request, issue_comment, pr_review,
+│   pr_review_comment. Repo: `enterprise-d/replicator-firmware`. Two PRs
+│   (#42 Earl-Grey-temp merged; #43 holodeck-safety open) with threaded
+│   review comments — #42 has a Riker → Picard reply pair anchored to
+│   src/replicator/tea.c:17 to exercise `in_reply_to_id` tree-rebuilding.
+│
+└── gitlab_api/                event-store JSONL written by `download/gitlab_web.py`.
+    └── <entity>/{created,updated}/events.jsonl
+    Entities: self_identity, merge_request, discussion. Project:
+    `enterprise-d/holodeck`. Two MRs (!17 merged; !18 open) with a mix
+    of position-anchored discussions (line-level diff threads with
+    `position.new_path`/`new_line`) and free-form discussions
+    (`individual_note: true`) so consumers see both shapes.
 ```
+
+Neither github_api nor gitlab_api is wired into the ingest pipeline yet —
+these are checked-in samples that mirror the on-disk shape of the
+downloaders' output, available for future parser tests and UI mocks.
 
 ## Coverage of source variation
 
