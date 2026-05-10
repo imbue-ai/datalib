@@ -16,14 +16,27 @@ from ingest.dolt_service import DoltService
 from ingest.grid_rows import populate_grid_rows
 from ingest.providers.anthropic.ingest import (
     ingest_export_dir,
+    merge_anthropic,
 )
+from ingest.providers.anthropic.parse import ParsedExport
 from ingest.providers.openai.ingest import (
     ingest_api_dir,
+    merge_openai,
 )
+from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.ingest import (
     ingest_api_dir as ingest_slack_api_dir,
 )
-from ingest.render import render_all
+from ingest.providers.slack.ingest import (
+    merge_slack,
+)
+from ingest.providers.slack.parse import ParsedSlackApi
+from ingest.render import (
+    render_anthropic,
+    render_openai,
+    render_slack,
+    write_accounts_json,
+)
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +46,7 @@ class SourceResult:
     name: str
     provider: str
     kind: str
-    stats: Any  # AnthropicIngestStats | OpenAIIngestStats
+    stats: Any  # AnthropicIngestStats | OpenAIIngestStats | SlackIngestStats
 
 
 @dataclass
@@ -49,56 +62,74 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     # Project convention: ISO-8601 with explicit timezone offset, in *local*
     # time so the offset preserves the human-meaningful "wall clock" of when
     # the ingest happened (see AGENTS.md).
-    #
-    # `now` may be passed explicitly to make the run deterministic (used by
-    # the Bazel fixture genrule and by tests). Production runs leave it None
-    # and pick up wall-clock time.
     started_at = now or datetime.now().astimezone().isoformat(timespec="seconds")
     summary = IngestSummary()
 
+    anthropic_inputs: list[tuple[ParsedExport, str]] = []
+    openai_inputs: list[ParsedChatGPTApi] = []
+    slack_inputs: list[ParsedSlackApi] = []
+    slack_media_dirs: list = []
+
+    log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
+    for src in config.enabled_sources:
+        log.info(
+            "[%s] %s/%s: parsing from %s",
+            src.name,
+            src.provider,
+            src.kind,
+            src.path,
+        )
+        t0 = time.monotonic()
+        if isinstance(src, AnthropicExportDirSource):
+            parsed_a, stats = ingest_export_dir(src.path, source=src.provenance)
+            anthropic_inputs.append((parsed_a, src.provenance))
+        elif isinstance(src, ChatGPTApiDirSource):
+            parsed_o, stats = ingest_api_dir(src.path, source=src.provenance)
+            openai_inputs.append(parsed_o)
+        elif isinstance(src, SlackApiDirSource):
+            parsed_s, stats = ingest_slack_api_dir(src.path)
+            slack_inputs.append(parsed_s)
+            media = src.path / "media"
+            if media.is_dir():
+                slack_media_dirs.append(media)
+        else:
+            raise NotImplementedError(f"unknown source: {src!r}")
+        log.info("[%s] parsed in %.1fs", src.name, time.monotonic() - t0)
+        summary.sources.append(
+            SourceResult(
+                name=src.name,
+                provider=src.provider,
+                kind=src.kind,
+                stats=stats,
+            )
+        )
+
+    anthropic = merge_anthropic(anthropic_inputs) if anthropic_inputs else None
+    openai = merge_openai(openai_inputs) if openai_inputs else None
+    slack = merge_slack(slack_inputs) if slack_inputs else None
+
+    # Render QMDs and accounts.json directly from parsed data — no SQL.
+    if anthropic is not None:
+        r = render_anthropic(anthropic, config.root)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
+    if openai is not None:
+        r = render_openai(openai, config.root)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
+    if slack is not None:
+        r = render_slack(slack, config.root, media_dirs=slack_media_dirs)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
+    write_accounts_json(anthropic, openai, config.root)
+
+    # Write grid_rows to Dolt — the only structured table that survives.
     with DoltService(config) as dolt:
         with dolt.connect() as conn:
-            # Batch each source's writes into one transaction. Per-row
-            # autocommit against Dolt's SQL server adds ~8ms/row of
-            # round-trip + flush; for ~5k rows that's tens of seconds we
-            # don't need to spend.
             conn.autocommit(False)
-            log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
-            for src in config.enabled_sources:
-                log.info(
-                    "[%s] %s/%s: ingesting from %s",
-                    src.name,
-                    src.provider,
-                    src.kind,
-                    src.path,
-                )
-                t0 = time.monotonic()
-                if isinstance(src, AnthropicExportDirSource):
-                    _, stats = ingest_export_dir(
-                        conn, src.path, started_at, source=src.provenance
-                    )
-                elif isinstance(src, ChatGPTApiDirSource):
-                    _, stats = ingest_api_dir(
-                        conn, src.path, started_at, source=src.provenance
-                    )
-                elif isinstance(src, SlackApiDirSource):
-                    _, stats = ingest_slack_api_dir(conn, src.path, started_at)
-                else:
-                    raise NotImplementedError(f"unknown source: {src!r}")
-                conn.commit()
-                log.info("[%s] done in %.1fs", src.name, time.monotonic() - t0)
-                summary.sources.append(
-                    SourceResult(
-                        name=src.name,
-                        provider=src.provider,
-                        kind=src.kind,
-                        stats=stats,
-                    )
-                )
-
             log.info("populating grid_rows")
             t0 = time.monotonic()
-            summary.grid_rows = populate_grid_rows(conn)
+            summary.grid_rows = populate_grid_rows(conn, anthropic, openai, slack)
             conn.commit()
             log.info(
                 "grid_rows: %d rows in %.1fs",
@@ -108,15 +139,5 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
 
         names = ",".join(s.name for s in summary.sources) or "<none>"
         summary.commit_hash = dolt.commit(f"ingest {names} {started_at}")
-
-        slack_media_dirs = [
-            s.path / "media"
-            for s in config.enabled_sources
-            if isinstance(s, SlackApiDirSource) and (s.path / "media").is_dir()
-        ]
-        with dolt.connect() as conn:
-            r = render_all(conn, config.root, slack_media_dirs=slack_media_dirs)
-            summary.rendered = r.rendered
-            summary.rendered_orphans_removed = r.orphans_removed
 
     return summary

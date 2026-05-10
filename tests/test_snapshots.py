@@ -82,24 +82,7 @@ def table_sections() -> dict[str, str]:
 # Table list mirrors `ingest.dump._TABLES` — kept hard-coded here so
 # the parametrize ids are visible at collection time without importing the
 # genrule's working set.
-_TABLES = (
-    "anthropic_accounts",
-    "anthropic_attachments",
-    "anthropic_content_blocks",
-    "anthropic_conversations",
-    "anthropic_messages",
-    "anthropic_projects",
-    "openai_accounts",
-    "openai_content_parts",
-    "openai_conversations",
-    "openai_messages",
-    "slack_workspaces",
-    "slack_users",
-    "slack_channels",
-    "slack_messages",
-    "slack_reactions",
-    "grid_rows",
-)
+_TABLES = ("grid_rows",)
 
 
 @pytest.fixture

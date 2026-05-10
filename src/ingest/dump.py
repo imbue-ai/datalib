@@ -7,17 +7,18 @@ fixture); it's a portable `CREATE TABLE` + sorted `INSERT INTO` script.
 
 Portability target: anything that speaks the SQL subset shared by Dolt,
 MySQL, and SQLite. The DDL we emit is the same text that
-`providers/<p>/schema.py` declares \u2014 not the engine-specific output of
+`generated_grid_rows.DDL` declares \u2014 not the engine-specific output of
 `SHOW CREATE TABLE` \u2014 so the dump can be loaded into in-memory SQLite
 for fast hermetic tests as well as into a fresh Dolt for end-to-end
 fidelity. See `ingest.sqlite_load` for the SQLite loader.
 
+Only `grid_rows` is dumped: per-provider tables no longer exist; the
+ingest pipeline now flows entirely through in-memory parsed dataclasses
+and writes only the union projection to SQL.
+
 Determinism rules:
-  * Tables are emitted in a fixed order.
-  * Rows within a table are ordered by primary key.
-  * Each row is one INSERT, columns listed explicitly. JSON columns are
-    canonicalized (sorted keys, no whitespace) so logically equal payloads
-    diff identically.
+  * Rows are ordered by primary key.
+  * Each row is one INSERT, columns listed explicitly.
 """
 
 from __future__ import annotations
@@ -31,18 +32,15 @@ from typing import Any
 from pymysql.connections import Connection
 
 from ingest.generated_grid_rows import DDL as _GRID_ROWS_DDL
-from ingest.providers.anthropic.schema import DDL as _ANTHROPIC_DDL
-from ingest.providers.openai.schema import DDL as _OPENAI_DDL
-from ingest.providers.slack.schema import DDL as _SLACK_DDL
 
 
 def _portable_ddl_for(table: str) -> str:
-    """Return the portable CREATE TABLE for `table`, sourced from
-    `providers/<p>/schema.py`. Strips the `IF NOT EXISTS` clause (we emit
-    `DROP TABLE IF EXISTS` first, so a plain CREATE is what we want for a
-    fresh load) and normalizes whitespace so the output is stable regardless
-    of how the source string was formatted."""
-    for stmt in (*_ANTHROPIC_DDL, *_OPENAI_DDL, *_SLACK_DDL, *_GRID_ROWS_DDL):
+    """Return the portable CREATE TABLE for `table`. Strips the
+    `IF NOT EXISTS` clause (we emit `DROP TABLE IF EXISTS` first, so a
+    plain CREATE is what we want for a fresh load) and normalizes
+    whitespace so the output is stable regardless of how the source
+    string was formatted."""
+    for stmt in _GRID_ROWS_DDL:
         normalized = textwrap.dedent(stmt).strip()
         if re.search(
             rf"\bCREATE TABLE\b\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
@@ -56,27 +54,7 @@ def _portable_ddl_for(table: str) -> str:
     raise KeyError(f"no portable DDL declared for table {table!r}")
 
 
-# Tables we know about. Hard-coded rather than discovered from Dolt's catalog
-# so a stray dolt internal table can't sneak into the dump and bust the
-# byte-stable guarantee.
-_TABLES = (
-    "anthropic_accounts",
-    "anthropic_attachments",
-    "anthropic_content_blocks",
-    "anthropic_conversations",
-    "anthropic_messages",
-    "anthropic_projects",
-    "openai_accounts",
-    "openai_content_parts",
-    "openai_conversations",
-    "openai_messages",
-    "slack_workspaces",
-    "slack_users",
-    "slack_channels",
-    "slack_messages",
-    "slack_reactions",
-    "grid_rows",
-)
+_TABLES = ("grid_rows",)
 
 
 def _quote_ident(name: str) -> str:

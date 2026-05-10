@@ -48,25 +48,11 @@ def test_dump_sql_has_expected_tables_and_rows() -> None:
     ):
         assert uuid_prefix in dump, f"missing conversation {uuid_prefix} in dump.sql"
 
-    # Cross-table sanity: every Anthropic table represented.
-    for table in (
-        "anthropic_accounts",
-        "anthropic_conversations",
-        "anthropic_messages",
-        "anthropic_content_blocks",
-        "anthropic_attachments",
-        "anthropic_projects",
-        "openai_accounts",
-        "openai_conversations",
-        "openai_messages",
-        "openai_content_parts",
-        "slack_workspaces",
-        "slack_users",
-        "slack_channels",
-        "slack_messages",
-        "slack_reactions",
-    ):
-        assert f"CREATE TABLE {table}" in dump, f"missing table {table}"
+    # Only grid_rows is dumped now; per-provider tables don't exist.
+    assert "CREATE TABLE grid_rows" in dump
+    assert "CREATE TABLE anthropic_" not in dump
+    assert "CREATE TABLE openai_" not in dump
+    assert "CREATE TABLE slack_" not in dump
 
 
 def test_qmd_tar_contains_expected_files() -> None:
@@ -74,11 +60,12 @@ def test_qmd_tar_contains_expected_files() -> None:
     with tarfile.open(tar_path) as tf:
         names = sorted(tf.getnames())
 
-    # 7 LLM conversations + 4 Slack threads (3 in #bridge / #engineering /
-    # #ten-forward + 1 standalone Worf message in #bridge) across three
+    # 7 LLM conversations + 5 Slack threads (Picard's tea thread, Worf
+    # standalone, Data standalone in #engineering, Riker's #ten-forward
+    # poker thread, and Picard's combadge thread in #bridge) across three
     # providers.
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 11, qmd_files
+    assert len(qmd_files) == 12, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -95,18 +82,24 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
 
     conn = load_dump_into_memory(_runfile("tests/fixtures/ingested/dump.sql"))
 
-    # Row counts match what the genrule logged.
-    assert conn.execute("SELECT COUNT(*) FROM anthropic_accounts").fetchone()[0] == 3
-    assert (
-        conn.execute("SELECT COUNT(*) FROM anthropic_conversations").fetchone()[0] == 5
-    )
-    assert conn.execute("SELECT COUNT(*) FROM openai_accounts").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM openai_conversations").fetchone()[0] == 2
+    # Sanity check expected counts on the union projection.
+    # 5 anthropic chats + 2 openai chats = 7 chat rows.
+    chats = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Chat'"
+    ).fetchone()[0]
+    assert chats == 7
 
-    # Picard's UUID is a stable provider key; he should be present.
+    # 5 Slack thread rows (from render fixture).
+    threads = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Slack Thread'"
+    ).fetchone()[0]
+    assert threads == 5
+
+    # Picard's account_uuid is a stable provider key; he should appear in
+    # the account column on Anthropic rows.
     row = conn.execute(
-        "SELECT full_name FROM anthropic_accounts "
-        "WHERE account_uuid = '00000001-1701-4d00-8000-000000000001'"
+        "SELECT COUNT(*) FROM grid_rows "
+        "WHERE provider = 'anthropic' "
+        "AND account = '00000001-1701-4d00-8000-000000000001'"
     ).fetchone()
-    assert row is not None
-    assert "Picard" in row["full_name"]
+    assert row[0] > 0

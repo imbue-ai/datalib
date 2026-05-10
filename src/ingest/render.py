@@ -1,3 +1,12 @@
+"""Render parsed provider data to QMD markdown files on disk.
+
+Inputs are the in-memory `Parsed*` dataclasses produced by each provider's
+`parse` module. We do not query SQL here — provider-specific tables no
+longer exist; the parsed structs ARE the source of truth for rendering.
+The only Dolt/sqlite table that survives is `grid_rows`, populated
+elsewhere from the same parsed data.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,11 +15,14 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from pymysql.connections import Connection
 from tqdm import tqdm
 
+from ingest.providers.anthropic.parse import ParsedExport
+from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
+from ingest.providers.slack.parse import ParsedSlackApi
 
 log = logging.getLogger(__name__)
 
@@ -124,7 +136,9 @@ def _render_anthropic_block(
         out = [f"{head}<details><summary>{summary}</summary>", ""]
         if tool_input:
             out.append("```json")
-            out.append(json.dumps(tool_input, indent=2, ensure_ascii=False))
+            out.append(
+                json.dumps(tool_input, indent=2, ensure_ascii=False, sort_keys=True)
+            )
             out.append("```")
         out.extend(["</details>", ""])
         return out
@@ -148,14 +162,18 @@ def _render_anthropic_block(
                 elif isinstance(item, dict):
                     out += [
                         "```json",
-                        json.dumps(item, indent=2, ensure_ascii=False),
+                        json.dumps(item, indent=2, ensure_ascii=False, sort_keys=True),
                         "```",
                         "",
                     ]
                 else:
                     out += ["```", str(item).rstrip(), "```", ""]
         elif content is not None:
-            out += ["```json", json.dumps(content, indent=2, ensure_ascii=False), "```"]
+            out += [
+                "```json",
+                json.dumps(content, indent=2, ensure_ascii=False, sort_keys=True),
+                "```",
+            ]
         out.extend(["</details>", ""])
         return out
 
@@ -171,276 +189,275 @@ class RenderSummary:
     orphans_removed: int = 0
 
 
-def render_conversation(conn: Connection, conversation_uuid: str, root: Path) -> Path:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT account_uuid, conversation_uuid, project_uuid, name, summary,
-                   created_at, updated_at
-            FROM anthropic_conversations
-            WHERE conversation_uuid = %s
-            """,
-            (conversation_uuid,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise KeyError(f"conversation not found: {conversation_uuid}")
-        account_uuid, _, project_uuid, name, summary, created_at, updated_at = row
+# ---------------- Anthropic ----------------
 
-        cur.execute(
-            """
-            SELECT message_uuid, sender, created_at
-            FROM anthropic_messages
-            WHERE conversation_uuid = %s
-            ORDER BY created_at, message_uuid
-            """,
-            (conversation_uuid,),
-        )
-        messages = list(cur.fetchall())
 
-    out_dir = root / "anthropic" / account_uuid / "llm_chats"
+def _render_one_anthropic(
+    parsed: ParsedExport,
+    conv_uuid: str,
+    blocks_by_msg: dict[str, list],
+    atts_by_msg: dict[str, list],
+    msgs_by_conv: dict[str, list],
+    root: Path,
+) -> Path:
+    conv = next(c for c in parsed.conversations if c.conversation_uuid == conv_uuid)
+    out_dir = root / "anthropic" / conv.account_uuid / "llm_chats"
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    slug = _slugify(name)
-    target = out_dir / f"{conversation_uuid}__{slug}.qmd"
-
-    # If an older file exists with the same UUID prefix but different slug, remove it.
-    for existing in out_dir.glob(f"{conversation_uuid}__*.qmd"):
+    slug = _slugify(conv.name)
+    target = out_dir / f"{conv_uuid}__{slug}.qmd"
+    for existing in out_dir.glob(f"{conv_uuid}__*.qmd"):
         if existing != target:
             existing.unlink()
 
     parts: list[str] = []
     parts.append("---")
     parts.append("provider: anthropic")
-    parts.append(f"uuid: {_yaml_scalar(conversation_uuid)}")
-    parts.append(f"name: {_yaml_scalar(name)}")
-    parts.append(f"account_uuid: {_yaml_scalar(account_uuid)}")
-    parts.append(f"project_uuid: {_yaml_scalar(project_uuid)}")
-    parts.append(f"created_at: {_yaml_scalar(created_at)}")
-    parts.append(f"updated_at: {_yaml_scalar(updated_at)}")
-    if summary:
-        parts.append(f"summary: {_yaml_scalar(summary)}")
+    parts.append(f"uuid: {_yaml_scalar(conv_uuid)}")
+    parts.append(f"name: {_yaml_scalar(conv.name)}")
+    parts.append(f"account_uuid: {_yaml_scalar(conv.account_uuid)}")
+    parts.append(f"project_uuid: {_yaml_scalar(conv.project_uuid)}")
+    parts.append(f"created_at: {_yaml_scalar(conv.created_at)}")
+    parts.append(f"updated_at: {_yaml_scalar(conv.updated_at)}")
+    if conv.summary:
+        parts.append(f"summary: {_yaml_scalar(conv.summary)}")
     parts.append("---")
     parts.append("")
-    parts.append(f"# {name or '(untitled)'}")
+    parts.append(f"# {conv.name or '(untitled)'}")
     parts.append("")
 
-    last_ts = created_at
-    with conn.cursor() as cur:
-        for msg_index, (msg_uuid, sender, msg_created) in enumerate(messages):
-            if not msg_created and last_ts:
-                msg_created = _bump_iso(last_ts)
-            if msg_created:
-                last_ts = msg_created
-            heading = (sender or "unknown").capitalize()
-            parts.append(_msg_div_open(msg_uuid, msg_index, "anthropic"))
+    msgs = sorted(
+        msgs_by_conv.get(conv_uuid, []),
+        key=lambda m: (m.created_at or "", m.message_uuid),
+    )
+    last_ts = conv.created_at
+    for msg_index, m in enumerate(msgs):
+        msg_created = m.created_at
+        if not msg_created and last_ts:
+            msg_created = _bump_iso(last_ts)
+        if msg_created:
+            last_ts = msg_created
+        heading = (m.sender or "unknown").capitalize()
+        parts.append(_msg_div_open(m.message_uuid, msg_index, "anthropic"))
+        parts.append("")
+        parts.append(f"## {heading}")
+        if msg_created:
             parts.append("")
-            parts.append(f"## {heading}")
-            if msg_created:
-                parts.append("")
-                parts.append(f"*{msg_created}*")
-            parts.append("")
-            cur.execute(
-                """
-                SELECT block_index, type, text, raw_json
-                FROM anthropic_content_blocks
-                WHERE message_uuid = %s
-                ORDER BY block_index
-                """,
-                (msg_uuid,),
+            parts.append(f"*{msg_created}*")
+        parts.append("")
+        for b in sorted(
+            blocks_by_msg.get(m.message_uuid, []), key=lambda x: x.block_index
+        ):
+            parts.extend(
+                _render_anthropic_block(
+                    m.message_uuid, b.block_index, b.type, b.text, b.raw_json
+                )
             )
-            blocks = list(cur.fetchall())
-            if blocks:
-                for bidx, btype, btext, braw in blocks:
-                    parts.extend(
-                        _render_anthropic_block(msg_uuid, bidx, btype, btext, braw)
-                    )
-            cur.execute(
-                """
-                SELECT attachment_index, kind, raw_json
-                FROM anthropic_attachments
-                WHERE message_uuid = %s
-                ORDER BY attachment_index
-                """,
-                (msg_uuid,),
-            )
-            atts = list(cur.fetchall())
-            if atts:
-                parts.append("**Attachments:**")
-                parts.append("")
-                for _, kind, raw in atts:
-                    raw_obj = raw if isinstance(raw, dict) else json.loads(raw)
-                    label = (
-                        raw_obj.get("file_name")
-                        or raw_obj.get("name")
-                        or raw_obj.get("file_kind")
-                        or "(unnamed)"
-                    )
-                    parts.append(f"- [{kind}] {label}")
-                parts.append("")
-            parts.append(_MSG_DIV_CLOSE)
+        atts = sorted(
+            atts_by_msg.get(m.message_uuid, []), key=lambda x: x.attachment_index
+        )
+        if atts:
+            parts.append("**Attachments:**")
             parts.append("")
+            for at in atts:
+                raw_obj = at.raw_json
+                label = (
+                    raw_obj.get("file_name")
+                    or raw_obj.get("name")
+                    or raw_obj.get("file_kind")
+                    or "(unnamed)"
+                )
+                parts.append(f"- [{at.kind}] {label}")
+            parts.append("")
+        parts.append(_MSG_DIV_CLOSE)
+        parts.append("")
 
     body = "\n".join(parts).rstrip() + "\n"
     target.write_text(body)
     return target
 
 
-def _table_exists(conn: Connection, name: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute("SELECT DATABASE()")
-        (db,) = cur.fetchone()  # type: ignore[misc]
-        cur.execute(
-            "SELECT COUNT(*) FROM information_schema.tables "
-            "WHERE table_schema = %s AND table_name = %s",
-            (db, name),
+def render_anthropic(parsed: ParsedExport, root: Path) -> RenderSummary:
+    summary = RenderSummary()
+    blocks_by_msg: dict[str, list] = {}
+    for b in parsed.content_blocks:
+        blocks_by_msg.setdefault(b.message_uuid, []).append(b)
+    atts_by_msg: dict[str, list] = {}
+    for at in parsed.attachments:
+        atts_by_msg.setdefault(at.message_uuid, []).append(at)
+    msgs_by_conv: dict[str, list] = {}
+    for m in parsed.messages:
+        msgs_by_conv.setdefault(m.conversation_uuid, []).append(m)
+
+    log.info("rendering anthropic: %d conversations", len(parsed.conversations))
+    live_uuids: set[str] = set()
+    accounts: set[str] = set()
+    for conv in tqdm(
+        parsed.conversations, desc="render anthropic", unit="conv", leave=False
+    ):
+        live_uuids.add(conv.conversation_uuid)
+        accounts.add(conv.account_uuid)
+        _render_one_anthropic(
+            parsed,
+            conv.conversation_uuid,
+            blocks_by_msg,
+            atts_by_msg,
+            msgs_by_conv,
+            root,
         )
-        (n,) = cur.fetchone()  # type: ignore[misc]
-        return bool(n)
+        summary.rendered += 1
+
+    for acct in accounts:
+        chats_dir = root / "anthropic" / acct / "llm_chats"
+        if not chats_dir.is_dir():
+            continue
+        for f in chats_dir.glob("*.qmd"):
+            if f.name.split("__", 1)[0] not in live_uuids:
+                f.unlink()
+                summary.orphans_removed += 1
+    return summary
 
 
-def render_openai_conversation(
-    conn: Connection, conversation_id: str, root: Path
+# ---------------- OpenAI ----------------
+
+
+def _render_one_openai(
+    conv: Any,
+    msgs_by_conv: dict[str, list],
+    parts_by_msg: dict[str, list],
+    root: Path,
 ) -> Path:
-    """Render one ChatGPT conversation into QMD.
-
-    The DAG is collapsed to the chat's "current" leaf-to-root path
-    (`current_node` walked back through `parent_id`), so the rendered file
-    matches what the user actually sees in chatgpt.com — siblings/edits
-    that were not in the kept branch are not emitted, but they remain in
-    Dolt for later analysis."""
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT account_id, conversation_id, title, create_time, update_time,
-                   current_node, default_model_slug
-            FROM openai_conversations
-            WHERE conversation_id = %s
-            """,
-            (conversation_id,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise KeyError(f"conversation not found: {conversation_id}")
-        account_id, _, title, create_time, update_time, current_node, model_slug = row
-
-        cur.execute(
-            """
-            SELECT message_id, parent_id, role, content_type, text,
-                   create_time, model_slug
-            FROM openai_messages
-            WHERE conversation_id = %s
-            """,
-            (conversation_id,),
-        )
-        msgs = {r[0]: r for r in cur.fetchall()}
-
-    # Walk current_node → root via parent_id to get the displayed path.
-    path: list[tuple] = []
-    seen: set[str] = set()
-    cursor = current_node
-    while cursor and cursor in msgs and cursor not in seen:
-        seen.add(cursor)
-        path.append(msgs[cursor])
-        cursor = msgs[cursor][1]  # parent_id
-    path.reverse()
-    # If current_node is None or its message isn't recorded (e.g. it points
-    # at a node with no `message`, like the synthetic root), fall back to
-    # rendering messages in create_time order so we still surface content.
-    if not path:
-        path = sorted(msgs.values(), key=lambda r: r[5] or "")
-
-    out_dir = root / "openai" / (account_id or "unknown") / "llm_chats"
+    out_dir = root / "openai" / (conv.account_id or "unknown") / "llm_chats"
     out_dir.mkdir(parents=True, exist_ok=True)
-    slug = _slugify(title)
-    target = out_dir / f"{conversation_id}__{slug}.qmd"
-    for existing in out_dir.glob(f"{conversation_id}__*.qmd"):
+    slug = _slugify(conv.title)
+    target = out_dir / f"{conv.conversation_id}__{slug}.qmd"
+    for existing in out_dir.glob(f"{conv.conversation_id}__*.qmd"):
         if existing != target:
             existing.unlink()
+
+    msgs = msgs_by_conv.get(conv.conversation_id, [])
+    msg_by_id = {m.message_id: m for m in msgs}
+
+    # Walk current_node → root via parent_id to get the displayed path,
+    # mirroring chatgpt.com's leaf-to-root render. Fallback: create_time
+    # order if current_node is missing or unrooted.
+    path: list = []
+    seen: set[str] = set()
+    cursor = conv.current_node
+    while cursor and cursor in msg_by_id and cursor not in seen:
+        seen.add(cursor)
+        path.append(msg_by_id[cursor])
+        cursor = msg_by_id[cursor].parent_id
+    path.reverse()
+    if not path:
+        path = sorted(msgs, key=lambda m: m.create_time or "")
 
     parts: list[str] = []
     parts.append("---")
     parts.append("provider: openai")
-    parts.append(f"id: {_yaml_scalar(conversation_id)}")
-    parts.append(f"title: {_yaml_scalar(title)}")
-    parts.append(f"account_id: {_yaml_scalar(account_id)}")
-    parts.append(f"create_time: {_yaml_scalar(create_time)}")
-    parts.append(f"update_time: {_yaml_scalar(update_time)}")
-    if model_slug:
-        parts.append(f"default_model_slug: {_yaml_scalar(model_slug)}")
+    parts.append(f"id: {_yaml_scalar(conv.conversation_id)}")
+    parts.append(f"title: {_yaml_scalar(conv.title)}")
+    parts.append(f"account_id: {_yaml_scalar(conv.account_id)}")
+    parts.append(f"create_time: {_yaml_scalar(conv.create_time)}")
+    parts.append(f"update_time: {_yaml_scalar(conv.update_time)}")
+    if conv.default_model_slug:
+        parts.append(f"default_model_slug: {_yaml_scalar(conv.default_model_slug)}")
     parts.append("---")
     parts.append("")
-    parts.append(f"# {title or '(untitled)'}")
+    parts.append(f"# {conv.title or '(untitled)'}")
     parts.append("")
 
-    last_ts = create_time
+    last_ts = conv.create_time
     msg_index = 0
-    with conn.cursor() as cur:
-        for msg_id, _parent, role, content_type, text, msg_created, msg_model in path:
-            # Skip system / model_editable_context fluff in the rendered
-            # markdown; it's still in Dolt if we ever need it.
-            if role == "system" or content_type == "model_editable_context":
+    for m in path:
+        # Skip system / model_editable_context fluff in the rendered markdown.
+        if m.role == "system" or m.content_type == "model_editable_context":
+            continue
+        msg_created = m.create_time
+        if not msg_created and last_ts:
+            msg_created = _bump_iso(last_ts)
+        if msg_created:
+            last_ts = msg_created
+        heading = (m.role or "unknown").capitalize()
+        parts.append(_msg_div_open(m.message_id, msg_index, "openai"))
+        parts.append("")
+        parts.append(f"## {heading}")
+        msg_index += 1
+        meta_bits = []
+        if msg_created:
+            meta_bits.append(msg_created)
+        if m.model_slug:
+            meta_bits.append(m.model_slug)
+        if meta_bits:
+            parts.append("")
+            parts.append("*" + " · ".join(meta_bits) + "*")
+        parts.append("")
+        for p in sorted(parts_by_msg.get(m.message_id, []), key=lambda x: x.part_index):
+            if not p.text and p.kind not in ("execution_output", "code"):
                 continue
-            if not msg_created and last_ts:
-                msg_created = _bump_iso(last_ts)
-            if msg_created:
-                last_ts = msg_created
-            heading = (role or "unknown").capitalize()
-            parts.append(_msg_div_open(msg_id, msg_index, "openai"))
-            parts.append("")
-            parts.append(f"## {heading}")
-            msg_index += 1
-            meta_bits = []
-            if msg_created:
-                meta_bits.append(msg_created)
-            if msg_model:
-                meta_bits.append(msg_model)
-            if meta_bits:
+            anchor = f'<a id="b-{m.message_id}-{p.part_index}"></a>'
+            if p.kind == "text":
+                parts.append(anchor + (p.text or "").rstrip())
                 parts.append("")
-                parts.append("*" + " · ".join(meta_bits) + "*")
-            parts.append("")
-            cur.execute(
-                """
-                SELECT part_index, kind, language, text
-                FROM openai_content_parts
-                WHERE message_id = %s
-                ORDER BY part_index
-                """,
-                (msg_id,),
-            )
-            for pidx, kind, language, ptext in cur.fetchall():
-                if not ptext and kind not in ("execution_output", "code"):
-                    continue
-                anchor = f'<a id="b-{msg_id}-{pidx}"></a>'
-                if kind == "text":
-                    parts.append(anchor + (ptext or "").rstrip())
-                    parts.append("")
-                elif kind == "code":
-                    parts.append(anchor)
-                    parts.append(f"```{language or ''}".rstrip())
-                    parts.append((ptext or "").rstrip())
-                    parts.append("```")
-                    parts.append("")
-                elif kind == "execution_output":
-                    parts.append(anchor)
-                    parts.append("```")
-                    parts.append((ptext or "").rstrip())
-                    parts.append("```")
-                    parts.append("")
-                elif kind in ("thoughts", "reasoning_recap"):
-                    parts.append(f"{anchor}<!-- {kind} -->")
-                    parts.append("> " + (ptext or "").replace("\n", "\n> "))
-                    parts.append("")
-                else:
-                    parts.append(f"{anchor}<!-- {kind} -->")
-                    parts.append((ptext or "").rstrip())
-                    parts.append("")
-            parts.append(_MSG_DIV_CLOSE)
-            parts.append("")
+            elif p.kind == "code":
+                parts.append(anchor)
+                parts.append(f"```{p.language or ''}".rstrip())
+                parts.append((p.text or "").rstrip())
+                parts.append("```")
+                parts.append("")
+            elif p.kind == "execution_output":
+                parts.append(anchor)
+                parts.append("```")
+                parts.append((p.text or "").rstrip())
+                parts.append("```")
+                parts.append("")
+            elif p.kind in ("thoughts", "reasoning_recap"):
+                parts.append(f"{anchor}<!-- {p.kind} -->")
+                parts.append("> " + (p.text or "").replace("\n", "\n> "))
+                parts.append("")
+            else:
+                parts.append(f"{anchor}<!-- {p.kind} -->")
+                parts.append((p.text or "").rstrip())
+                parts.append("")
+        parts.append(_MSG_DIV_CLOSE)
+        parts.append("")
 
     body = "\n".join(parts).rstrip() + "\n"
     target.write_text(body)
     return target
+
+
+def render_openai(parsed: ParsedChatGPTApi, root: Path) -> RenderSummary:
+    summary = RenderSummary()
+    msgs_by_conv: dict[str, list] = {}
+    for m in parsed.messages:
+        msgs_by_conv.setdefault(m.conversation_id, []).append(m)
+    parts_by_msg: dict[str, list] = {}
+    for p in parsed.content_parts:
+        parts_by_msg.setdefault(p.message_id, []).append(p)
+
+    log.info("rendering openai: %d conversations", len(parsed.conversations))
+    live_ids: set[str] = set()
+    accts: set[str] = set()
+    for conv in tqdm(
+        parsed.conversations, desc="render openai", unit="conv", leave=False
+    ):
+        live_ids.add(conv.conversation_id)
+        accts.add(conv.account_id or "unknown")
+        _render_one_openai(conv, msgs_by_conv, parts_by_msg, root)
+        summary.rendered += 1
+
+    for acct in accts:
+        chats_dir = root / "openai" / acct / "llm_chats"
+        if not chats_dir.is_dir():
+            continue
+        for f in chats_dir.glob("*.qmd"):
+            if f.name.split("__", 1)[0] not in live_ids:
+                f.unlink()
+                summary.orphans_removed += 1
+    return summary
+
+
+# ---------------- Slack ----------------
 
 
 def _slack_message_link(team_id: str, channel_id: str, ts: str) -> str:
@@ -507,84 +524,21 @@ def _publish_slack_image(
     return f"/api/media/slack/{quote(file_id)}/{quote(safe_name)}"
 
 
-def render_slack_thread(
-    conn: Connection,
+def _render_one_slack_thread(
     thread_uuid: str,
+    msgs: list,
+    channel_name: str,
+    user_labels: dict[str, str],
+    reactions_by_msg: dict[str, list[tuple[str, str]]],
     root: Path,
-    media_dirs: list[Path] | None = None,
+    media_dirs: list[Path],
 ) -> Path:
-    """Render one Slack thread (one root + zero-or-more replies) into a
-    single QMD. Standalone messages without replies are still threads of
-    length 1, so this function handles them too.
+    msgs = sorted(msgs, key=lambda m: (m.ts_iso, m.ts))
+    root_msg = next((m for m in msgs if m.is_thread_root), msgs[0])
+    team_id = root_msg.team_id
+    channel_id = root_msg.channel_id
 
-    `media_dirs` is the list of `<slack_source>/media` directories to
-    search for image attachments referenced in `raw_json['files']`. When
-    found, an image is symlinked into `<root>/media/slack/<file_id>/`
-    and embedded as a markdown image."""
-    media_dirs = media_dirs or []
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT m.uuid, m.team_id, m.channel_id, m.ts, m.thread_ts, m.user_id,
-                   m.text, m.ts_iso, m.is_thread_root, c.name AS channel_name,
-                   m.raw_json
-            FROM slack_messages m
-            JOIN slack_channels c ON c.channel_id = m.channel_id
-            WHERE m.thread_uuid = %s
-            ORDER BY m.ts_iso, m.ts
-            """,
-            (thread_uuid,),
-        )
-        rows = list(cur.fetchall())
-        if not rows:
-            raise KeyError(f"slack thread not found: {thread_uuid}")
-
-        # Resolve user_id -> display label once for the whole thread.
-        user_ids = {r[5] for r in rows if r[5]}
-        user_labels: dict[str, str] = {}
-        if user_ids:
-            placeholders = ",".join(["%s"] * len(user_ids))
-            cur.execute(
-                f"SELECT user_id, real_name, name FROM slack_users "
-                f"WHERE user_id IN ({placeholders})",
-                tuple(user_ids),
-            )
-            for uid, real_name, name in cur.fetchall():
-                user_labels[uid] = real_name or name or uid
-
-        cur.execute(
-            """
-            SELECT message_uuid, name, user_id
-            FROM slack_reactions
-            WHERE message_uuid IN (
-                SELECT uuid FROM slack_messages WHERE thread_uuid = %s
-            )
-            ORDER BY message_uuid, name, user_id
-            """,
-            (thread_uuid,),
-        )
-        reactions_by_msg: dict[str, list[tuple[str, str]]] = {}
-        for mid, name, uid in cur.fetchall():
-            reactions_by_msg.setdefault(mid, []).append((name, uid))
-
-    root_row = next((r for r in rows if r[8]), rows[0])
-    (
-        _,
-        team_id,
-        channel_id,
-        root_ts,
-        _,
-        _,
-        root_text,
-        root_ts_iso,
-        _,
-        channel_name,
-        _,
-    ) = root_row
-
-    # Use the root message's text (truncated) as the thread's display name.
-    # Mirrors how the Slack UI labels threads when no explicit title exists.
-    snippet = (root_text or "").strip().splitlines()
+    snippet = (root_msg.text or "").strip().splitlines()
     title = snippet[0] if snippet else "(empty thread)"
     title = title[:80]
 
@@ -603,32 +557,20 @@ def render_slack_thread(
     parts.append(f"team_id: {_yaml_scalar(team_id)}")
     parts.append(f"channel_id: {_yaml_scalar(channel_id)}")
     parts.append(f"channel_name: {_yaml_scalar(channel_name)}")
-    parts.append(f"root_ts: {_yaml_scalar(root_ts)}")
-    parts.append(f"root_ts_iso: {_yaml_scalar(root_ts_iso)}")
+    parts.append(f"root_ts: {_yaml_scalar(root_msg.ts)}")
+    parts.append(f"root_ts_iso: {_yaml_scalar(root_msg.ts_iso)}")
     parts.append(
-        f"slack_link: {_yaml_scalar(_slack_message_link(team_id, channel_id, root_ts))}"
+        f"slack_link: {_yaml_scalar(_slack_message_link(team_id, channel_id, root_msg.ts))}"
     )
     parts.append("---")
     parts.append("")
     parts.append(f"# #{channel_name}: {title}")
     parts.append("")
 
-    for msg_index, (
-        msg_uuid,
-        _,
-        _,
-        ts,
-        _,
-        user_id,
-        text,
-        ts_iso,
-        _is_root,
-        _,
-        raw_json,
-    ) in enumerate(rows):
-        author = user_labels.get(user_id, user_id or "unknown")
-        link = _slack_message_link(team_id, channel_id, ts)
-        parts.append(_msg_div_open(msg_uuid, msg_index, "slack"))
+    for msg_index, m in enumerate(msgs):
+        author = user_labels.get(m.user_id or "", m.user_id or "unknown")
+        link = _slack_message_link(team_id, channel_id, m.ts)
+        parts.append(_msg_div_open(m.uuid, msg_index, "slack"))
         parts.append("")
         parts.append(f"## {author}")
         parts.append("")
@@ -636,34 +578,21 @@ def render_slack_thread(
         # surrounding span is italic — markdown's `*…[label](url)…*` parsed
         # the link inconsistently inside emphasis.
         parts.append(
-            f'<div class="msg-meta"><em>{ts_iso}</em> · '
+            f'<div class="msg-meta"><em>{m.ts_iso}</em> · '
             f'<a href="{link}" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>'
         )
         parts.append("")
-        parts.append(_slack_to_commonmark((text or "").rstrip(), user_labels))
+        parts.append(_slack_to_commonmark((m.text or "").rstrip(), user_labels))
         parts.append("")
-        files = []
-        if raw_json:
-            try:
-                raw = (
-                    json.loads(raw_json)
-                    if isinstance(raw_json, (str, bytes))
-                    else raw_json
-                )
-                files = raw.get("files") or []
-            except (ValueError, TypeError):
-                files = []
+        files = (m.raw_json or {}).get("files") or []
         for f in files:
             url = _publish_slack_image(f, media_dirs, root)
             if url:
                 alt = (f.get("title") or f.get("name") or "image").replace("]", "")
                 parts.append(f"![{alt}]({url})")
                 parts.append("")
-        rxs = reactions_by_msg.get(msg_uuid)
+        rxs = reactions_by_msg.get(m.uuid)
         if rxs:
-            # Group reactions by emoji name to render `:thumbsup: ×2` instead
-            # of one line per reactor. The (name, user) tuples are already
-            # sorted by name from the SELECT above.
             counts: dict[str, int] = {}
             for name, _uid in rxs:
                 counts[name] = counts.get(name, 0) + 1
@@ -680,7 +609,73 @@ def render_slack_thread(
     return target
 
 
-def _write_accounts_index(conn: Connection, root: Path) -> None:
+def render_slack(
+    parsed: ParsedSlackApi,
+    root: Path,
+    media_dirs: list[Path] | None = None,
+) -> RenderSummary:
+    """`media_dirs` lists `<slack_source>/media` directories whose image
+    attachments should be symlinked into `<root>/media/slack/`. Empty/None
+    disables image embedding."""
+    media_dirs = media_dirs or []
+    summary = RenderSummary()
+    if not parsed.messages:
+        return summary
+
+    channels = {c.channel_id: c for c in parsed.channels}
+    user_labels: dict[str, str] = {
+        u.user_id: (u.real_name or u.name or u.user_id) for u in parsed.users
+    }
+    reactions_by_msg: dict[str, list[tuple[str, str]]] = {}
+    for r in sorted(
+        parsed.reactions, key=lambda x: (x.message_uuid, x.name, x.user_id)
+    ):
+        reactions_by_msg.setdefault(r.message_uuid, []).append((r.name, r.user_id))
+
+    msgs_by_thread: dict[str, list] = {}
+    for m in parsed.messages:
+        msgs_by_thread.setdefault(m.thread_uuid, []).append(m)
+
+    log.info("rendering slack: %d threads", len(msgs_by_thread))
+    live_threads: set[str] = set()
+    slack_dirs: set[tuple[str, str]] = set()
+    for thread_uuid, msgs in tqdm(
+        msgs_by_thread.items(), desc="render slack", unit="thr", leave=False
+    ):
+        live_threads.add(thread_uuid)
+        ch = channels.get(msgs[0].channel_id)
+        cname = (ch.name if ch and ch.name else None) or msgs[0].channel_id
+        slack_dirs.add((msgs[0].team_id, cname))
+        _render_one_slack_thread(
+            thread_uuid,
+            msgs,
+            cname,
+            user_labels,
+            reactions_by_msg,
+            root,
+            media_dirs,
+        )
+        summary.rendered += 1
+
+    for team_id, cname in slack_dirs:
+        threads_dir = root / "slack" / team_id / cname / "threads"
+        if not threads_dir.is_dir():
+            continue
+        for f in threads_dir.glob("*.qmd"):
+            if f.name.split("__", 1)[0] not in live_threads:
+                f.unlink()
+                summary.orphans_removed += 1
+    return summary
+
+
+# ---------------- accounts.json ----------------
+
+
+def write_accounts_json(
+    anthropic: ParsedExport | None,
+    openai: ParsedChatGPTApi | None,
+    root: Path,
+) -> None:
     """Emit `<root>/accounts.json` mapping account UUIDs → human labels.
 
     Read very late by the UI to render display names instead of opaque
@@ -688,121 +683,21 @@ def _write_accounts_index(conn: Connection, root: Path) -> None:
     the QMDs lets the backend stay file-only without having to talk
     to Dolt."""
     accounts: dict[str, dict] = {}
-    if _table_exists(conn, "anthropic_accounts"):
-        with conn.cursor() as cur:
-            cur.execute("SELECT account_uuid, full_name, email FROM anthropic_accounts")
-            for uuid, full_name, email in cur.fetchall():
-                accounts[uuid] = {
-                    "provider": "anthropic",
-                    "label": full_name or email or uuid,
-                    "email": email,
-                }
-    if _table_exists(conn, "openai_accounts"):
-        with conn.cursor() as cur:
-            cur.execute("SELECT account_id, name, email FROM openai_accounts")
-            for uid, name, email in cur.fetchall():
-                accounts[uid] = {
-                    "provider": "openai",
-                    "label": name or email or uid,
-                    "email": email,
-                }
+    if anthropic is not None:
+        for a in anthropic.accounts:
+            accounts[a.account_uuid] = {
+                "provider": "anthropic",
+                "label": a.full_name or a.email or a.account_uuid,
+                "email": a.email,
+            }
+    if openai is not None:
+        for a in openai.accounts:
+            accounts[a.account_id] = {
+                "provider": "openai",
+                "label": a.name or a.email or a.account_id,
+                "email": a.email,
+            }
     root.mkdir(parents=True, exist_ok=True)
     (root / "accounts.json").write_text(
         json.dumps(accounts, indent=2, sort_keys=True) + "\n"
     )
-
-
-def render_all(
-    conn: Connection,
-    root: Path,
-    slack_media_dirs: list[Path] | None = None,
-) -> RenderSummary:
-    """`slack_media_dirs` lists `<slack_source>/media` directories whose
-    image attachments should be symlinked into `<root>/media/slack/` and
-    embedded in rendered Slack QMDs. Empty/None disables image embedding."""
-    summary = RenderSummary()
-    slack_media_dirs = slack_media_dirs or []
-
-    if _table_exists(conn, "anthropic_conversations"):
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT conversation_uuid, account_uuid FROM anthropic_conversations"
-            )
-            rows = list(cur.fetchall())
-
-        log.info("rendering anthropic: %d conversations", len(rows))
-        live_uuids: set[str] = set()
-        accounts: set[str] = set()
-        for conv_uuid, acct in tqdm(
-            rows, desc="render anthropic", unit="conv", leave=False
-        ):
-            live_uuids.add(conv_uuid)
-            accounts.add(acct)
-            render_conversation(conn, conv_uuid, root)
-            summary.rendered += 1
-
-        for acct in accounts:
-            chats_dir = root / "anthropic" / acct / "llm_chats"
-            if not chats_dir.is_dir():
-                continue
-            for f in chats_dir.glob("*.qmd"):
-                uuid_prefix = f.name.split("__", 1)[0]
-                if uuid_prefix not in live_uuids:
-                    f.unlink()
-                    summary.orphans_removed += 1
-
-    if _table_exists(conn, "openai_conversations"):
-        with conn.cursor() as cur:
-            cur.execute("SELECT conversation_id, account_id FROM openai_conversations")
-            rows = list(cur.fetchall())
-        log.info("rendering openai: %d conversations", len(rows))
-        live_ids: set[str] = set()
-        accts: set[str] = set()
-        for cid, acct in tqdm(rows, desc="render openai", unit="conv", leave=False):
-            live_ids.add(cid)
-            accts.add(acct or "unknown")
-            render_openai_conversation(conn, cid, root)
-            summary.rendered += 1
-        for acct in accts:
-            chats_dir = root / "openai" / acct / "llm_chats"
-            if not chats_dir.is_dir():
-                continue
-            for f in chats_dir.glob("*.qmd"):
-                id_prefix = f.name.split("__", 1)[0]
-                if id_prefix not in live_ids:
-                    f.unlink()
-                    summary.orphans_removed += 1
-
-    if _table_exists(conn, "slack_messages"):
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT DISTINCT thread_uuid, team_id, channel_id FROM slack_messages"
-            )
-            slack_rows = list(cur.fetchall())
-        live_threads: set[str] = set()
-        slack_dirs: set[tuple[str, str]] = set()
-        with conn.cursor() as cur:
-            cur.execute("SELECT channel_id, name FROM slack_channels")
-            channel_names = {cid: name for cid, name in cur.fetchall()}
-        log.info("rendering slack: %d threads", len(slack_rows))
-        for thread_uuid, team_id, channel_id in tqdm(
-            slack_rows, desc="render slack", unit="thr", leave=False
-        ):
-            live_threads.add(thread_uuid)
-            cname = channel_names.get(channel_id) or channel_id
-            slack_dirs.add((team_id, cname))
-            render_slack_thread(conn, thread_uuid, root, media_dirs=slack_media_dirs)
-            summary.rendered += 1
-        for team_id, cname in slack_dirs:
-            threads_dir = root / "slack" / team_id / cname / "threads"
-            if not threads_dir.is_dir():
-                continue
-            for f in threads_dir.glob("*.qmd"):
-                tid_prefix = f.name.split("__", 1)[0]
-                if tid_prefix not in live_threads:
-                    f.unlink()
-                    summary.orphans_removed += 1
-
-    _write_accounts_index(conn, root)
-
-    return summary
