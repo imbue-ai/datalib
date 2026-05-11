@@ -115,12 +115,51 @@ def test_slack_api_fixture_parses_with_unicode_line_separator() -> None:
     assert "\u2028" in log_msgs[0].text
 
 
-def test_slack_api_fixture_dedupes_message_appearing_in_replies() -> None:
-    """`conversations.replies` returns the parent message alongside the
-    replies, so a thread root shows up in both `message/created` and
-    `reply/created`. The parser must emit one MessageRow per uuid, not
-    one per stream occurrence — otherwise the row collides with itself
-    in `grid_rows` (PRIMARY KEY uuid)."""
+def test_slack_api_fixture_dedupes_duplicated_message_records() -> None:
+    """The fixture intentionally exercises two duplication sources:
+
+    1. A thread root appears in both `message/created` (channel history)
+       *and* `reply/created` — Slack's `conversations.replies` returns
+       the parent message alongside the replies.
+    2. A non-root message appears twice in `message/created` — simulates
+       overlapping pages from a paginated history rescan.
+
+    The parser must emit one MessageRow per uuid in both cases, or the
+    row collides with itself in `grid_rows` (PRIMARY KEY uuid).
+    """
     parsed = parse_slack_api_dir(FIXTURES / "slack_api")
     uuids = [m.uuid for m in parsed.messages]
     assert len(uuids) == len(set(uuids))
+
+    # Sanity-check the two scenarios are actually present in the fixture
+    # files — if they get removed by accident, the dedup test above goes
+    # silently green without exercising anything.
+    import json
+
+    base = FIXTURES / "slack_api"
+    message_lines = (
+        (base / "message" / "created" / "events.jsonl").read_bytes().splitlines()
+    )
+    reply_lines = (
+        (base / "reply" / "created" / "events.jsonl").read_bytes().splitlines()
+    )
+    msg_ts_counts: dict[tuple[str, str], int] = {}
+    for line in message_lines:
+        if not line.strip():
+            continue
+        ev = json.loads(line)
+        key = (ev["channel_id"], ev["message_ts"])
+        msg_ts_counts[key] = msg_ts_counts.get(key, 0) + 1
+    assert any(c >= 2 for c in msg_ts_counts.values()), (
+        "fixture should contain an intra-stream duplicate"
+    )
+
+    msg_keys = set(msg_ts_counts)
+    reply_keys = {
+        (json.loads(line)["channel_id"], json.loads(line)["raw"]["ts"])
+        for line in reply_lines
+        if line.strip()
+    }
+    assert msg_keys & reply_keys, (
+        "fixture should contain a ts present in both message/ and reply/ streams"
+    )

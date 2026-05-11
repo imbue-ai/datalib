@@ -180,11 +180,41 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
 
     # Track seen message uuids — a single Slack ts can show up in both
     # `message/` (channel history) and `reply/` (conversations.replies
-    # returns the parent alongside the replies). Without dedup the same
-    # row hits `grid_rows` twice and fails the primary-key constraint.
+    # returns the parent alongside the replies). It can also appear twice
+    # in the same stream if overlapping history pages are downloaded.
+    # Without dedup the same row hits `grid_rows` twice and fails the
+    # primary-key constraint.
     seen_msg_uuids: set[str] = set()
 
-    # Top-level messages
+    def _append_message(
+        channel_id: str,
+        ts: str,
+        thread_ts: str | None,
+        effective_thread_ts: str,
+        is_root: bool,
+        raw: dict[str, Any],
+    ) -> None:
+        msg_uuid = slack_message_uuid(team_id, channel_id, ts)
+        if msg_uuid in seen_msg_uuids:
+            return
+        seen_msg_uuids.add(msg_uuid)
+        out.messages.append(
+            MessageRow(
+                uuid=msg_uuid,
+                team_id=team_id,
+                channel_id=channel_id,
+                ts=ts,
+                thread_ts=thread_ts,
+                thread_uuid=slack_thread_uuid(team_id, channel_id, effective_thread_ts),
+                user_id=raw.get("user"),
+                text=raw.get("text") or "",
+                ts_iso=ts_to_iso(ts),
+                is_thread_root=is_root,
+                raw_json=raw,
+            )
+        )
+
+    # Top-level messages.
     for ev in load_jsonl(api_dir / "message" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         channel_id = ev.get("channel_id") or ""
@@ -195,27 +225,13 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         # A top-level message is a thread root if it carries a thread_ts
         # equal to its own ts (Slack convention) — or simply if no
         # thread_ts is present (lone message; treat as a 1-message thread).
-        is_root = thread_ts is None or thread_ts == ts
-        effective_thread_ts = thread_ts or ts
-        msg_uuid = slack_message_uuid(team_id, channel_id, ts)
-        if msg_uuid in seen_msg_uuids:
-            continue
-        seen_msg_uuids.add(msg_uuid)
-        thread_uuid = slack_thread_uuid(team_id, channel_id, effective_thread_ts)
-        out.messages.append(
-            MessageRow(
-                uuid=msg_uuid,
-                team_id=team_id,
-                channel_id=channel_id,
-                ts=ts,
-                thread_ts=thread_ts,
-                thread_uuid=thread_uuid,
-                user_id=raw.get("user"),
-                text=raw.get("text") or "",
-                ts_iso=ts_to_iso(ts),
-                is_thread_root=is_root,
-                raw_json=raw,
-            )
+        _append_message(
+            channel_id=channel_id,
+            ts=ts,
+            thread_ts=thread_ts,
+            effective_thread_ts=thread_ts or ts,
+            is_root=thread_ts is None or thread_ts == ts,
+            raw=raw,
         )
 
     # Threaded replies — never roots; thread_uuid points at the root via the
@@ -227,25 +243,13 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         thread_ts = raw.get("thread_ts") or ev.get("thread_ts")
         if not ts or not thread_ts:
             continue
-        msg_uuid = slack_message_uuid(team_id, channel_id, ts)
-        if msg_uuid in seen_msg_uuids:
-            continue
-        seen_msg_uuids.add(msg_uuid)
-        thread_uuid = slack_thread_uuid(team_id, channel_id, thread_ts)
-        out.messages.append(
-            MessageRow(
-                uuid=msg_uuid,
-                team_id=team_id,
-                channel_id=channel_id,
-                ts=ts,
-                thread_ts=thread_ts,
-                thread_uuid=thread_uuid,
-                user_id=raw.get("user"),
-                text=raw.get("text") or "",
-                ts_iso=ts_to_iso(ts),
-                is_thread_root=False,
-                raw_json=raw,
-            )
+        _append_message(
+            channel_id=channel_id,
+            ts=ts,
+            thread_ts=thread_ts,
+            effective_thread_ts=thread_ts,
+            is_root=False,
+            raw=raw,
         )
 
     # Reactions — one row per (message, emoji name, user) tuple.
