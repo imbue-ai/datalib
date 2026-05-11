@@ -37,6 +37,11 @@ dev = [
 testpaths = ["tests"]
 norecursedirs = ["bazel-*", ".venv"]
 
+[tool.ruff]
+# Vendored subtrees are upstream-owned; lint them in their own repo, not
+# ours. Mirrors the [tool.pyright] `exclude` below.
+extend-exclude = ["third-party"]
+
 [tool.pyright]
 include = ["src", "tests", "schemas"]
 exclude = [
