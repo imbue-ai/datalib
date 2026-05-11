@@ -76,6 +76,14 @@ via `schemas/`. Cargo workspace + Bazel `visibility` enforce this.
 bazelisk test //...
 ```
 
+**This is the source of truth for "do the tests pass?" — always prefer it
+over per-language inner loops when you want a real answer.** Bazel's
+action cache makes re-runs cheap: untouched targets are served from cache,
+so the second invocation only re-executes what your changes actually
+affected. The per-language commands below are convenient for tight inner
+loops, but they don't see cross-language goldens, the deeplink fixture
+test, or the e2e suite — `bazelisk test //...` does.
+
 Runs:
 - Python smoke tests (`//tests:test_smoke`)
 - Rust unit tests (`//frankweiler/backend/{schema,core,tauri-backend}:*_unittests`)

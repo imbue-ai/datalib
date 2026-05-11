@@ -55,10 +55,24 @@ data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
 emits in the body. If you find yourself writing a QMD parser in the
 backend, stop — add the field to `grid_rows` instead.
 
+## Running tests
+
+**Default to `bazelisk test //...` for any "are tests passing?" question.**
+It's the source of truth: it runs Python, Rust, cross-language goldens,
+and the Playwright e2e suite in one shot, the same way CI does. Bazel's
+action cache makes re-runs cheap — unchanged targets are served from
+cache, so iterating costs only what you actually touched. Reach for
+`uv run pytest` / `cargo test` / `pnpm test` only for tight inner-loop
+iteration on a single language, and confirm with `bazelisk test //...`
+before declaring done.
+
 ## Common commands
 
 ```bash
-# Run unit + smoke tests
+# Source of truth — run this before claiming tests pass
+bazelisk test //...
+
+# Python-only inner loop (faster, narrower)
 uv run pytest
 
 # Ingest configured sources into the Dolt repo (per ~/.config/personal-mirror/config.yaml)
