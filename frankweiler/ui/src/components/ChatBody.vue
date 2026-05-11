@@ -56,9 +56,17 @@ function applySelection() {
       `[data-msg-index="${props.selectedMessageIndex}"]`,
     );
   }
-  if (target) {
-    target.classList.add("selected");
-    target.scrollIntoView({ block: "start", behavior: "auto" });
+  if (!target) return;
+  target.classList.add("selected");
+  // Set scrollTop on the known scrollport directly instead of calling
+  // target.scrollIntoView: scrollIntoView silently no-ops on
+  // same-conversation prop changes in Chromium (probably racing layout
+  // re-flow), and the user reported "nothing changes when I click
+  // around inside one thread" as a result.
+  const pane = target.closest(".chat-preview") as HTMLElement | null;
+  if (pane) {
+    pane.scrollTop +=
+      target.getBoundingClientRect().top - pane.getBoundingClientRect().top;
   }
 }
 
@@ -68,7 +76,13 @@ watch(html, async () => {
 });
 watch(
   () => [props.selectedMessageIndex, props.selectedMessageUuid],
-  () => applySelection(),
+  async () => {
+    // nextTick guards against a parent setting messageIndex in the same
+    // tick that it loads a new conversation: we want the html v-html
+    // patch to land before we look for `[data-msg-index]`.
+    await nextTick();
+    applySelection();
+  },
 );
 onMounted(() => applySelection());
 </script>
@@ -98,6 +112,8 @@ onMounted(() => applySelection());
 .chat-body .msg.selected {
   background: var(--fw-card-bg, #1f2937);
   border-left-width: 4px;
+  /* `outline` (not border) so moving the selection doesn't reflow. */
+  outline: 2px solid var(--fw-accent, #6366f1);
 }
 .chat-body .msg-meta {
   color: var(--fw-muted, #94a3b8);
