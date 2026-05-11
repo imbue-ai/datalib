@@ -113,3 +113,14 @@ def test_slack_api_fixture_parses_with_unicode_line_separator() -> None:
     log_msgs = [m for m in parsed.messages if "Stardate 47988.1" in (m.text or "")]
     assert len(log_msgs) == 1
     assert "\u2028" in log_msgs[0].text
+
+
+def test_slack_api_fixture_dedupes_message_appearing_in_replies() -> None:
+    """`conversations.replies` returns the parent message alongside the
+    replies, so a thread root shows up in both `message/created` and
+    `reply/created`. The parser must emit one MessageRow per uuid, not
+    one per stream occurrence — otherwise the row collides with itself
+    in `grid_rows` (PRIMARY KEY uuid)."""
+    parsed = parse_slack_api_dir(FIXTURES / "slack_api")
+    uuids = [m.uuid for m in parsed.messages]
+    assert len(uuids) == len(set(uuids))

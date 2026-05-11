@@ -178,6 +178,12 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
             )
         )
 
+    # Track seen message uuids — a single Slack ts can show up in both
+    # `message/` (channel history) and `reply/` (conversations.replies
+    # returns the parent alongside the replies). Without dedup the same
+    # row hits `grid_rows` twice and fails the primary-key constraint.
+    seen_msg_uuids: set[str] = set()
+
     # Top-level messages
     for ev in load_jsonl(api_dir / "message" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
@@ -192,6 +198,9 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         is_root = thread_ts is None or thread_ts == ts
         effective_thread_ts = thread_ts or ts
         msg_uuid = slack_message_uuid(team_id, channel_id, ts)
+        if msg_uuid in seen_msg_uuids:
+            continue
+        seen_msg_uuids.add(msg_uuid)
         thread_uuid = slack_thread_uuid(team_id, channel_id, effective_thread_ts)
         out.messages.append(
             MessageRow(
@@ -219,6 +228,9 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         if not ts or not thread_ts:
             continue
         msg_uuid = slack_message_uuid(team_id, channel_id, ts)
+        if msg_uuid in seen_msg_uuids:
+            continue
+        seen_msg_uuids.add(msg_uuid)
         thread_uuid = slack_thread_uuid(team_id, channel_id, thread_ts)
         out.messages.append(
             MessageRow(
