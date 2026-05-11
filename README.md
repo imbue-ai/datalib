@@ -15,6 +15,36 @@ Both projects share row shapes through **`schemas/`**, the single
 source-of-truth that emits Rust / Python / TypeScript types from one JSON
 Schema.
 
+## Slug + UUID identifiers (Notion-style)
+
+Wherever a row has both a stable UUID and a human-readable name —
+conversations, accounts, projects, Notion pages — the canonical reference
+form is `slug-uuid` (e.g.
+`picard-jean-luc-00000001-1701-4d00-8000-000000000001`).
+
+- **UUID is load-bearing.** Filters, deeplinks, and equality comparisons
+  use only the trailing UUID. Renames don't break old links.
+- **Slug rides along.** It's a non-load-bearing prefix that makes tokens
+  and URLs self-describing when read by a human, the way Notion's
+  `My-Page-Title-abc123…` URLs do. Backend strips it on the way in
+  (`extract_uuid_suffix` in `frankweiler/backend/core/src/query.rs`).
+- **Right-click "filter by this cell"** assembles the form automatically:
+  it has both the row's UUID (for the column the click landed on) and the
+  human display label (from accounts.json, conversation name, etc.).
+
+### Why no visual chips (yet)
+
+The filter bar is a single text input on purpose. Visual chip components
+are nice to look at but **hard to copy-paste out of** — the user can't
+grab a filter to send in chat or paste into a deeplink without
+re-typing. The Notion-shaped tokens are already self-describing as plain
+text, so they round-trip through any text channel cleanly.
+
+A reasonable future compromise: render chips visually but make
+double-click (or a chip menu) turn the chip back into editable plain
+text. Several editors do this for hashtags / mentions. Worth considering
+once the tokens themselves stabilise.
+
 ## Repo layout
 
 ```
