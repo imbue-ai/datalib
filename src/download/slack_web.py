@@ -37,7 +37,11 @@ from urllib.parse import urlencode
 import typer
 from tqdm import tqdm
 
-from jsonl_io import load_jsonl
+from event_store import (
+    diff_and_save as _diff_and_save,
+    load_latest_by_key as _load_latest_by_key,
+    make_record as _make_record,
+)
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "slack"
 DEFAULT_SINCE = "2024-01-01"
@@ -161,73 +165,6 @@ ENTITY_MESSAGE = "message"
 ENTITY_REPLY = "reply"
 ENTITY_REACTION = "reaction"
 ENTITY_SELF_IDENTITY = "self_identity"
-
-
-def _events_path(out_dir: Path, entity: str, stream: str) -> Path:
-    return out_dir / entity / stream / "events.jsonl"
-
-
-def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    if not records:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat()
-
-
-def _make_record(
-    entity: str, key: dict[str, Any], raw: dict[str, Any]
-) -> dict[str, Any]:
-    return {"_recorded_at": _now_iso(), **key, "raw": raw}
-
-
-def _diff_and_save(
-    out_dir: Path,
-    entity: str,
-    fresh: list[dict[str, Any]],
-    existing_by_key: dict[Any, dict[str, Any]],
-    key_of: Any,
-) -> tuple[int, int]:
-    """Append new records to created/ and (new+changed) records to updated/.
-
-    Returns (new_count, updated_count). Mirrors the reference's diff-save
-    semantics: created/ is append-only "first-sighting" stream, updated/
-    captures every change including first-sighting.
-    """
-    new_records: list[dict[str, Any]] = []
-    updated_records: list[dict[str, Any]] = []
-    for rec in fresh:
-        k = key_of(rec)
-        prior = existing_by_key.get(k)
-        if prior is None:
-            new_records.append(rec)
-        elif prior.get("raw") != rec.get("raw"):
-            updated_records.append(rec)
-    _append_jsonl(_events_path(out_dir, entity, "created"), new_records)
-    _append_jsonl(
-        _events_path(out_dir, entity, "updated"), new_records + updated_records
-    )
-    if new_records:
-        logger.info("  + %d new %s", len(new_records), entity)
-    if updated_records:
-        logger.info("  ~ %d updated %s", len(updated_records), entity)
-    return len(new_records), len(updated_records)
-
-
-def _load_latest_by_key(
-    out_dir: Path, entity: str, key_of: Any
-) -> dict[Any, dict[str, Any]]:
-    """Walk created/ then updated/ so updated/ entries shadow earlier ones."""
-    latest: dict[Any, dict[str, Any]] = {}
-    for stream in ("created", "updated"):
-        for rec in load_jsonl(_events_path(out_dir, entity, stream)):
-            latest[key_of(rec)] = rec
-    return latest
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +338,6 @@ def _download_files_for_records(
 def _fetch_self(out_dir: Path) -> dict[str, Any]:
     data = call_slack("auth.test")
     rec = _make_record(
-        ENTITY_SELF_IDENTITY,
         {"user_id": data["user_id"], "user_name": data["user"]},
         data,
     )
@@ -425,9 +361,7 @@ def _fetch_channels(
     if members_only:
         raw_channels = [c for c in raw_channels if c.get("is_member")]
     records = [
-        _make_record(
-            ENTITY_CHANNEL, {"channel_id": c["id"], "channel_name": c["name"]}, c
-        )
+        _make_record({"channel_id": c["id"], "channel_name": c["name"]}, c)
         for c in raw_channels
     ]
     existing = _load_latest_by_key(out_dir, ENTITY_CHANNEL, _key_channel)
@@ -437,7 +371,7 @@ def _fetch_channels(
 
 def _fetch_users(out_dir: Path) -> list[dict[str, Any]]:
     raw_users = paginate("users.list", {"limit": "200"}, "members")
-    records = [_make_record(ENTITY_USER, {"user_id": u["id"]}, u) for u in raw_users]
+    records = [_make_record({"user_id": u["id"]}, u) for u in raw_users]
     existing = _load_latest_by_key(out_dir, ENTITY_USER, _key_user)
     _diff_and_save(out_dir, ENTITY_USER, records, existing, _key_user)
     return records
@@ -475,7 +409,6 @@ def _make_message_records(
 ) -> list[dict[str, Any]]:
     return [
         _make_record(
-            ENTITY_MESSAGE,
             {
                 "channel_id": channel_id,
                 "channel_name": channel_name,
@@ -493,7 +426,6 @@ def _make_reply_records(
 ) -> list[dict[str, Any]]:
     return [
         _make_record(
-            ENTITY_REPLY,
             {
                 "channel_id": channel_id,
                 "channel_name": channel_name,
@@ -521,7 +453,6 @@ def _extract_reactions(
             continue
         out.append(
             _make_record(
-                ENTITY_REACTION,
                 {
                     "channel_id": channel_id,
                     "channel_name": channel_name,

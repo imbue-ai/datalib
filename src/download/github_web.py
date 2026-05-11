@@ -46,13 +46,17 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlencode
 
 import typer
 from tqdm import tqdm
 
-from jsonl_io import load_jsonl
+from event_store import (
+    diff_and_save as _diff_and_save,
+    load_latest_by_key as _load_latest_by_key,
+    make_record as _make_record,
+)
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "github"
 DEFAULT_REFRESH_WINDOW_DAYS = 30
@@ -204,68 +208,6 @@ ENTITY_PR = "pull_request"
 ENTITY_ISSUE_COMMENT = "issue_comment"
 ENTITY_PR_REVIEW = "pr_review"
 ENTITY_PR_REVIEW_COMMENT = "pr_review_comment"
-
-
-def _events_path(out_dir: Path, entity: str, stream: str) -> Path:
-    return out_dir / entity / stream / "events.jsonl"
-
-
-def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    if not records:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat()
-
-
-def _make_record(key: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
-    return {"_recorded_at": _now_iso(), **key, "raw": raw}
-
-
-def _diff_and_save(
-    out_dir: Path,
-    entity: str,
-    fresh: list[dict[str, Any]],
-    existing_by_key: dict[Any, dict[str, Any]],
-    key_of: Callable[[dict[str, Any]], Any],
-) -> tuple[int, int]:
-    """Append new records to created/ and (new+changed) records to updated/."""
-    new_records: list[dict[str, Any]] = []
-    updated_records: list[dict[str, Any]] = []
-    for rec in fresh:
-        k = key_of(rec)
-        prior = existing_by_key.get(k)
-        if prior is None:
-            new_records.append(rec)
-        elif prior.get("raw") != rec.get("raw"):
-            updated_records.append(rec)
-    _append_jsonl(_events_path(out_dir, entity, "created"), new_records)
-    _append_jsonl(
-        _events_path(out_dir, entity, "updated"), new_records + updated_records
-    )
-    if new_records:
-        logger.info("  + %d new %s", len(new_records), entity)
-    if updated_records:
-        logger.info("  ~ %d updated %s", len(updated_records), entity)
-    return len(new_records), len(updated_records)
-
-
-def _load_latest_by_key(
-    out_dir: Path,
-    entity: str,
-    key_of: Callable[[dict[str, Any]], Any],
-) -> dict[Any, dict[str, Any]]:
-    """Walk created/ then updated/ so updated/ entries shadow earlier ones."""
-    latest: dict[Any, dict[str, Any]] = {}
-    for stream in ("created", "updated"):
-        for rec in load_jsonl(_events_path(out_dir, entity, stream)):
-            latest[key_of(rec)] = rec
-    return latest
 
 
 # ---------------------------------------------------------------------------
