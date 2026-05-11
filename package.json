@@ -1,0 +1,111 @@
+{
+  "name": "@tobilu/qmd",
+  "version": "2.1.0",
+  "description": "Query Markup Documents - On-device hybrid search for markdown files with BM25, vector search, and LLM reranking",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "qmd": "bin/qmd"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "prepare": "[ -d .git ] && ./scripts/install-hooks.sh || true",
+    "build": "tsc -p tsconfig.build.json && printf '#!/usr/bin/env node\n' | cat - dist/cli/qmd.js > dist/cli/qmd.tmp && mv dist/cli/qmd.tmp dist/cli/qmd.js && chmod +x dist/cli/qmd.js",
+    "test": "vitest run --reporter=verbose test/",
+    "qmd": "tsx src/cli/qmd.ts",
+    "index": "tsx src/cli/qmd.ts index",
+    "vector": "tsx src/cli/qmd.ts vector",
+    "search": "tsx src/cli/qmd.ts search",
+    "vsearch": "tsx src/cli/qmd.ts vsearch",
+    "rerank": "tsx src/cli/qmd.ts rerank",
+    "inspector": "npx @modelcontextprotocol/inspector tsx src/cli/qmd.ts mcp",
+    "release": "./scripts/release.sh"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tobi/qmd.git"
+  },
+  "homepage": "https://github.com/tobi/qmd#readme",
+  "bugs": {
+    "url": "https://github.com/tobi/qmd/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "better-sqlite3": "12.8.0",
+    "fast-glob": "3.3.3",
+    "node-llama-cpp": "3.18.1",
+    "picomatch": "4.0.4",
+    "sqlite-vec": "0.1.9",
+    "web-tree-sitter": "0.26.7",
+    "yaml": "2.8.3",
+    "zod": "4.2.1"
+  },
+  "optionalDependencies": {
+    "sqlite-vec-darwin-arm64": "0.1.9",
+    "sqlite-vec-darwin-x64": "0.1.9",
+    "sqlite-vec-linux-arm64": "0.1.9",
+    "sqlite-vec-linux-x64": "0.1.9",
+    "sqlite-vec-windows-x64": "0.1.9",
+    "tree-sitter-go": "0.23.4",
+    "tree-sitter-python": "0.23.4",
+    "tree-sitter-rust": "0.24.0",
+    "tree-sitter-typescript": "0.23.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "tsx": "4.21.0",
+    "vitest": "3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "node-llama-cpp",
+      "tree-sitter-go",
+      "tree-sitter-javascript",
+      "tree-sitter-python",
+      "tree-sitter-rust",
+      "tree-sitter-typescript"
+    ]
+  },
+  "peerDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "markdown",
+    "search",
+    "fts",
+    "full-text-search",
+    "vector",
+    "semantic-search",
+    "sqlite",
+    "bm25",
+    "embeddings",
+    "rag",
+    "mcp",
+    "reranking",
+    "knowledge-base",
+    "local-ai",
+    "llm"
+  ],
+  "author": "Tobi Lutke <tobi@lutke.com>",
+  "license": "MIT"
+}
