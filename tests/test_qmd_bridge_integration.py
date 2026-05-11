@@ -207,6 +207,55 @@ def test_hits_for_known_comment_row(runner: QmdRunner, index: GridIndex) -> None
 
 
 # ---------------------------------------------------------------------------
+# Bidirectional coverage: every indexed qmd doc maps to ≥1 grid row, and
+# every grid row maps to ≥1 indexed qmd doc. Guards against drift between
+# the renderer (which decides what becomes a .qmd file) and the ingest
+# pipeline (which decides what becomes a grid_row). Also exercises the
+# "long message body chunk with no m-{uuid} in the snippet" case for
+# every indexed file: we hand the mapper an empty snippet and require
+# the path fallback to land somewhere on the grid.
+# ---------------------------------------------------------------------------
+
+
+def _indexed_paths(qmd_root: Path) -> list[str]:
+    """All active document paths in qmd's index.sqlite (collection-stripped)."""
+    db = sqlite3.connect(qmd_root / ".frankweiler" / "qmd" / "index.sqlite")
+    try:
+        return [
+            r[0]
+            for r in db.execute(
+                "SELECT DISTINCT path FROM documents "
+                "WHERE collection = 'mirror' AND active = 1"
+            )
+        ]
+    finally:
+        db.close()
+
+
+def test_every_indexed_doc_maps_to_a_grid_row(qmd_root: Path, index: GridIndex) -> None:
+    from qmd_bridge.mapping import QmdHit
+
+    paths = _indexed_paths(qmd_root)
+    assert paths, "qmd index has no documents"
+    orphaned = [
+        p for p in paths if not index.rows_for_hit(QmdHit(path=p, score=0, snippet=""))
+    ]
+    assert not orphaned, f"indexed qmd docs with no grid row: {orphaned}"
+
+
+def test_every_grid_row_has_an_indexed_doc(qmd_root: Path, index: GridIndex) -> None:
+    from qmd_bridge.mapping import _norm_path
+
+    norm_indexed = {_norm_path(p) for p in _indexed_paths(qmd_root)}
+    missing = [
+        r for r in index.by_uuid.values() if _norm_path(r.qmd_path) not in norm_indexed
+    ]
+    assert not missing, "grid rows with no indexed qmd doc: " + ", ".join(
+        f"{r.kind}:{r.qmd_path}" for r in missing
+    )
+
+
+# ---------------------------------------------------------------------------
 # Predicate plumbing: `qmd:"..."` vs `qmd_vsearch:"..."` reach the
 # right backend mode.
 # ---------------------------------------------------------------------------

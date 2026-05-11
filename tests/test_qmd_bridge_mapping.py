@@ -177,6 +177,26 @@ def test_slack_thread_hit_resolves_to_thread_row(index):
     assert [r.uuid for r in rows] == [SLACK_ROW.uuid]
 
 
+def test_long_message_body_chunk_with_no_m_uuid_falls_back_to_path(index):
+    # Simulates a qmd chunk that landed entirely inside a long message
+    # body, past the opening `<div id="m-...">` wrapper. There are NO
+    # m-{uuid} ids visible in this slice of text. We expect the path
+    # fallback to kick in and return every grid row on that file —
+    # imprecise but lands the user in the right neighborhood (strict v1).
+    hit = QmdHit(
+        path=GH_THREAD_PATH,
+        score=0.5,
+        snippet=(
+            "...the water temperature drift on long replicator runs is "
+            "consistent with a tannin extraction preset mismatch. "
+            "Reproducer: program 'tea, earl grey, hot' on holodeck-3 "
+            "after a 2-hour idle and observe the bitter aftertaste..."
+        ),
+    )
+    rows = index.rows_for_hit(hit)
+    assert {r.uuid for r in rows} == {GH_COMMENT_1.uuid, GH_COMMENT_2.uuid}
+
+
 def test_pr_index_hit_resolves_to_pr_container_row(index):
     hit = QmdHit(
         path=GH_PR_PATH,
