@@ -37,6 +37,8 @@ from urllib.parse import urlencode
 import typer
 from tqdm import tqdm
 
+from jsonl_io import load_jsonl
+
 DEFAULT_OUT_DIR = Path.home() / "backups" / "slack"
 DEFAULT_SINCE = "2024-01-01"
 DEFAULT_REFRESH_WINDOW_DAYS = 30
@@ -165,16 +167,6 @@ def _events_path(out_dir: Path, entity: str, stream: str) -> Path:
     return out_dir / entity / stream / "events.jsonl"
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
-        if line.strip():
-            out.append(json.loads(line))
-    return out
-
-
 def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     if not records:
         return
@@ -233,7 +225,7 @@ def _load_latest_by_key(
     """Walk created/ then updated/ so updated/ entries shadow earlier ones."""
     latest: dict[Any, dict[str, Any]] = {}
     for stream in ("created", "updated"):
-        for rec in _load_jsonl(_events_path(out_dir, entity, stream)):
+        for rec in load_jsonl(_events_path(out_dir, entity, stream)):
             latest[key_of(rec)] = rec
     return latest
 
@@ -418,11 +410,13 @@ def _fetch_self(out_dir: Path) -> dict[str, Any]:
     return rec
 
 
-def _fetch_channels(out_dir: Path, members_only: bool) -> list[dict[str, Any]]:
+def _fetch_channels(
+    out_dir: Path, members_only: bool, include_archived: bool = False
+) -> list[dict[str, Any]]:
     raw_channels = paginate(
         "conversations.list",
         {
-            "exclude_archived": "true",
+            "exclude_archived": "false" if include_archived else "true",
             "limit": "200",
             "types": "public_channel,private_channel",
         },
@@ -784,7 +778,11 @@ def fetch(
     self_rec = _fetch_self(out_dir)
     typer.echo(f"auth: {self_rec['user_name']} ({self_rec['user_id']})")
 
-    fresh_channels = _fetch_channels(out_dir, members_only=not all_channels)
+    fresh_channels = _fetch_channels(
+        out_dir,
+        members_only=not all_channels,
+        include_archived=bool(channels),
+    )
     name_to_id = {c["channel_name"]: c["channel_id"] for c in fresh_channels}
     # Backfill from cache for channels we have on disk but didn't refetch.
     for prior in existing_channels.values():
