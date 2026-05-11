@@ -75,6 +75,14 @@ sources:
     provider: slack
     kind: slack_api_dir
     path: {fixtures / "slack_api"}
+  - name: github_api_tng
+    provider: github
+    kind: github_api_dir
+    path: {fixtures / "github_api"}
+  - name: gitlab_api_tng
+    provider: gitlab
+    kind: gitlab_api_dir
+    path: {fixtures / "gitlab_api"}
 """
     )
 
@@ -114,7 +122,11 @@ sources:
     # its internal chunk store / journal files are not byte-stable across
     # runs (commit hashes, packing differences) and would bust the cache.
     qmd_tar = out / "qmd.tar"
-    qmd_subtrees = [d for d in ("anthropic", "openai", "slack") if (root / d).is_dir()]
+    qmd_subtrees = [
+        d
+        for d in ("anthropic", "openai", "slack", "github", "gitlab")
+        if (root / d).is_dir()
+    ]
     with tarfile.open(qmd_tar, "w") as tf:
         entries: list[Path] = []
         for sub in qmd_subtrees:

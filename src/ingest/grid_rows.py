@@ -24,9 +24,11 @@ from pymysql.connections import Connection
 
 from ingest.generated_grid_rows import COLUMNS, DDL
 from ingest.providers.anthropic.parse import ParsedExport
+from ingest.providers.github.parse import ParsedGithubApi
+from ingest.providers.gitlab.parse import ParsedGitlabApi
 from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.parse import ParsedSlackApi
-from ingest.render import _slugify
+from ingest.render import _github_pr_dir, _gitlab_mr_dir, _slugify
 
 _GRID_ROWS_COLUMNS = COLUMNS["grid_rows"]
 
@@ -60,6 +62,9 @@ class _Row:
     text: str
     slack_link: str | None
     qmd_path: str | None
+    source_url: str | None = None
+    git_sha: str | None = None
+    external_id: str | None = None
 
 
 def _bump_micros(ts: str, n: int) -> str:
@@ -374,6 +379,173 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
             )
 
 
+# ----- GitHub ---------------------------------------------------------------
+
+
+def _github_pr_index_path(repo_full_name: str, pr_number: int, title: str) -> str:
+    rel_dir, _ = _github_pr_dir(repo_full_name, pr_number, title)
+    return f"{rel_dir}/index.qmd"
+
+
+def _github_thread_path(
+    repo_full_name: str, pr_number: int, title: str, thread_key: str
+) -> str:
+    rel_dir, _ = _github_pr_dir(repo_full_name, pr_number, title)
+    if thread_key == "general":
+        fname = "general"
+    else:
+        path, _, line = thread_key.rpartition(":")
+        fname = f"{_slugify(path)}-L{line or '0'}"
+    return f"{rel_dir}/threads/{fname}.qmd"
+
+
+def _github_rows(parsed: ParsedGithubApi, self_account: str | None) -> Iterable[_Row]:
+    prs = {(p.repo_full_name, p.pr_number): p for p in parsed.pull_requests}
+
+    for pr in parsed.pull_requests:
+        yield _Row(
+            uuid=pr.uuid,
+            provider="github",
+            kind="GitHub PR",
+            source_label="GitHub",
+            when_ts=pr.updated_at or pr.created_at or "",
+            author=pr.user_login,
+            account=self_account,
+            project=pr.repo_full_name,
+            channel=None,
+            conversation_name=pr.title,
+            conversation_uuid=pr.uuid,
+            message_index=None,
+            entire_chat=f"/chat/{pr.uuid}",
+            text=(pr.title + "\n\n" + pr.body).strip() if pr.body else pr.title,
+            slack_link=None,
+            qmd_path=_github_pr_index_path(pr.repo_full_name, pr.pr_number, pr.title),
+            source_url=pr.html_url,
+            git_sha=pr.head_sha,
+            external_id=str(pr.pr_number),
+        )
+
+    # Index comments per-PR so message_index is per-thread.
+    comments_by_thread: dict[tuple[str, int, str], list] = {}
+    for c in parsed.comments:
+        comments_by_thread.setdefault(
+            (c.repo_full_name, c.pr_number, c.thread_key), []
+        ).append(c)
+
+    for (repo, pr_number, thread_key), items in comments_by_thread.items():
+        pr = prs.get((repo, pr_number))
+        if pr is None:
+            continue
+        items_sorted = sorted(items, key=lambda c: (c.created_at, c.external_id))
+        qmd = _github_thread_path(repo, pr_number, pr.title, thread_key)
+        for idx, c in enumerate(items_sorted):
+            yield _Row(
+                uuid=c.uuid,
+                provider="github",
+                kind=c.kind,
+                source_label="GitHub",
+                when_ts=c.created_at or "",
+                author=c.user_login,
+                account=self_account,
+                project=repo,
+                channel=None,
+                conversation_name=pr.title,
+                conversation_uuid=pr.uuid,
+                message_index=idx,
+                entire_chat=f"/chat/{pr.uuid}",
+                text=c.body or "",
+                slack_link=None,
+                qmd_path=qmd,
+                source_url=c.html_url,
+                git_sha=c.commit_id,
+                external_id=c.external_id,
+            )
+
+
+# ----- GitLab ---------------------------------------------------------------
+
+
+def _gitlab_mr_index_path(project_path: str, mr_iid: int, title: str) -> str:
+    rel_dir, _ = _gitlab_mr_dir(project_path, mr_iid, title)
+    return f"{rel_dir}/index.qmd"
+
+
+def _gitlab_thread_path(
+    project_path: str, mr_iid: int, title: str, thread_key: str
+) -> str:
+    rel_dir, _ = _gitlab_mr_dir(project_path, mr_iid, title)
+    if thread_key == "general":
+        fname = "general"
+    else:
+        path, _, line = thread_key.rpartition(":")
+        fname = f"{_slugify(path)}-L{line or '0'}"
+    return f"{rel_dir}/threads/{fname}.qmd"
+
+
+def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[_Row]:
+    mrs = {(m.project_path, m.mr_iid): m for m in parsed.merge_requests}
+
+    for mr in parsed.merge_requests:
+        yield _Row(
+            uuid=mr.uuid,
+            provider="gitlab",
+            kind="GitLab MR",
+            source_label="GitLab",
+            when_ts=mr.updated_at or mr.created_at or "",
+            author=mr.author_username,
+            account=self_account,
+            project=mr.project_path,
+            channel=None,
+            conversation_name=mr.title,
+            conversation_uuid=mr.uuid,
+            message_index=None,
+            entire_chat=f"/chat/{mr.uuid}",
+            text=(mr.title + "\n\n" + mr.description).strip()
+            if mr.description
+            else mr.title,
+            slack_link=None,
+            qmd_path=_gitlab_mr_index_path(mr.project_path, mr.mr_iid, mr.title),
+            source_url=mr.web_url,
+            git_sha=mr.head_sha,
+            external_id=str(mr.mr_iid),
+        )
+
+    notes_by_thread: dict[tuple[str, int, str], list] = {}
+    for n in parsed.notes:
+        notes_by_thread.setdefault((n.project_path, n.mr_iid, n.thread_key), []).append(
+            n
+        )
+
+    for (project, mr_iid, thread_key), items in notes_by_thread.items():
+        mr = mrs.get((project, mr_iid))
+        if mr is None:
+            continue
+        items_sorted = sorted(items, key=lambda n: (n.created_at, n.external_id))
+        qmd = _gitlab_thread_path(project, mr_iid, mr.title, thread_key)
+        for idx, n in enumerate(items_sorted):
+            yield _Row(
+                uuid=n.uuid,
+                provider="gitlab",
+                kind="GitLab Discussion Note",
+                source_label="GitLab",
+                when_ts=n.created_at or "",
+                author=n.user_login,
+                account=self_account,
+                project=project,
+                channel=None,
+                conversation_name=mr.title,
+                conversation_uuid=mr.uuid,
+                message_index=idx,
+                entire_chat=f"/chat/{mr.uuid}",
+                text=n.body or "",
+                slack_link=None,
+                qmd_path=qmd,
+                source_url=n.web_url,
+                git_sha=n.commit_sha,
+                external_id=n.external_id,
+            )
+
+
 # ----- entry point ----------------------------------------------------------
 
 
@@ -382,6 +554,8 @@ def populate_grid_rows(
     anthropic: ParsedExport | None,
     openai: ParsedChatGPTApi | None,
     slack: ParsedSlackApi | None,
+    github: ParsedGithubApi | None = None,
+    gitlab: ParsedGitlabApi | None = None,
 ) -> int:
     """Truncate `grid_rows` and re-emit every row from the parsed provider
     data. Returns the number of rows inserted."""
@@ -393,6 +567,12 @@ def populate_grid_rows(
         rows.extend(_openai_rows(openai))
     if slack is not None:
         rows.extend(_slack_rows(slack))
+    if github is not None:
+        gh_acct = github.self_identity.login if github.self_identity else None
+        rows.extend(_github_rows(github, gh_acct))
+    if gitlab is not None:
+        gl_acct = gitlab.self_identity.login if gitlab.self_identity else None
+        rows.extend(_gitlab_rows(gitlab, gl_acct))
 
     placeholders = ",".join(["%s"] * len(_GRID_ROWS_COLUMNS))
     columns_sql = ", ".join(_GRID_ROWS_COLUMNS)
@@ -419,6 +599,9 @@ def populate_grid_rows(
                         r.text,
                         r.slack_link,
                         r.qmd_path,
+                        r.source_url,
+                        r.git_sha,
+                        r.external_id,
                     )
                     for r in rows
                 ],

@@ -20,6 +20,8 @@ from typing import Any
 from tqdm import tqdm
 
 from ingest.providers.anthropic.parse import ParsedExport
+from ingest.providers.github.parse import ParsedGithubApi
+from ingest.providers.gitlab.parse import ParsedGitlabApi
 from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
 from ingest.providers.slack.parse import ParsedSlackApi
@@ -665,6 +667,245 @@ def render_slack(
             if f.name.split("__", 1)[0] not in live_threads:
                 f.unlink()
                 summary.orphans_removed += 1
+    return summary
+
+
+# ---------------- GitHub ----------------
+
+
+def _github_pr_dir(repo_full_name: str, pr_number: int, title: str) -> tuple[str, str]:
+    """Return (`relative dir`, `slug`) for a PR's per-PR directory.
+
+    Layout: `github/{owner}/{repo}/pr-{number}__{slug}/`. Owner/repo is split
+    on '/' so the tree mirrors GitHub's URL structure.
+    """
+    owner, _, repo = repo_full_name.partition("/")
+    repo = repo or "_"
+    slug = _slugify(title)
+    return f"github/{owner}/{repo}/pr-{pr_number}__{slug}", slug
+
+
+def _thread_filename_slug(thread_key: str, body: str) -> str:
+    if thread_key == "general":
+        return "general"
+    # diff thread "path:line" → "{slug(path)}-L{line}"
+    path, _, line = thread_key.rpartition(":")
+    return f"{_slugify(path)}-L{line or '0'}"
+
+
+def render_github(parsed: ParsedGithubApi, root: Path) -> RenderSummary:
+    summary = RenderSummary()
+    if not parsed.pull_requests:
+        return summary
+
+    comments_by_pr: dict[tuple[str, int], list] = {}
+    for c in parsed.comments:
+        comments_by_pr.setdefault((c.repo_full_name, c.pr_number), []).append(c)
+
+    log.info("rendering github: %d PRs", len(parsed.pull_requests))
+    for pr in tqdm(parsed.pull_requests, desc="render github", unit="pr", leave=False):
+        rel_dir, _slug = _github_pr_dir(pr.repo_full_name, pr.pr_number, pr.title)
+        pr_dir = root / rel_dir
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        threads_dir = pr_dir / "threads"
+        threads_dir.mkdir(exist_ok=True)
+
+        pr_comments = sorted(
+            comments_by_pr.get((pr.repo_full_name, pr.pr_number), []),
+            key=lambda c: (c.created_at, c.external_id),
+        )
+        by_thread: dict[str, list] = {}
+        for c in pr_comments:
+            by_thread.setdefault(c.thread_key, []).append(c)
+
+        # Per-thread QMDs
+        thread_links: list[tuple[str, str, int]] = []  # (label, rel-path, count)
+        for thread_key, items in by_thread.items():
+            fname = _thread_filename_slug(thread_key, "")
+            target = threads_dir / f"{fname}.qmd"
+            parts: list[str] = []
+            parts.append("---")
+            parts.append("provider: github")
+            parts.append(f"repo: {_yaml_scalar(pr.repo_full_name)}")
+            parts.append(f"pr_number: {pr.pr_number}")
+            parts.append(f"thread: {_yaml_scalar(thread_key)}")
+            parts.append("---")
+            parts.append("")
+            if thread_key == "general":
+                parts.append(f"# {pr.title}: discussion")
+            else:
+                path, _, line = thread_key.rpartition(":")
+                parts.append(f"# {pr.title}: `{path}`:{line}")
+            parts.append("")
+            for i, c in enumerate(items):
+                author = c.user_login or "unknown"
+                parts.append(_msg_div_open(c.uuid, i, "github"))
+                parts.append("")
+                parts.append(f"## {author} ({c.kind})")
+                meta = [c.created_at]
+                if c.html_url:
+                    meta.append(f"[view on GitHub]({c.html_url})")
+                parts.append("")
+                parts.append("*" + " · ".join(m for m in meta if m) + "*")
+                parts.append("")
+                parts.append((c.body or "").rstrip())
+                parts.append("")
+                parts.append(_MSG_DIV_CLOSE)
+                parts.append("")
+            body = "\n".join(parts).rstrip() + "\n"
+            target.write_text(body)
+            thread_links.append((thread_key, f"threads/{fname}.qmd", len(items)))
+            summary.rendered += 1
+
+        # PR index.qmd (metadata + TOC of thread links)
+        idx_parts: list[str] = []
+        idx_parts.append("---")
+        idx_parts.append("provider: github")
+        idx_parts.append(f"repo: {_yaml_scalar(pr.repo_full_name)}")
+        idx_parts.append(f"pr_number: {pr.pr_number}")
+        idx_parts.append(f"title: {_yaml_scalar(pr.title)}")
+        idx_parts.append(f"state: {_yaml_scalar(pr.state)}")
+        idx_parts.append(f"author: {_yaml_scalar(pr.user_login)}")
+        idx_parts.append(f"created_at: {_yaml_scalar(pr.created_at)}")
+        idx_parts.append(f"merged_at: {_yaml_scalar(pr.merged_at)}")
+        idx_parts.append(f"head_sha: {_yaml_scalar(pr.head_sha)}")
+        idx_parts.append(f"base_sha: {_yaml_scalar(pr.base_sha)}")
+        idx_parts.append(f"html_url: {_yaml_scalar(pr.html_url)}")
+        idx_parts.append("---")
+        idx_parts.append("")
+        idx_parts.append(f"# {pr.title}")
+        idx_parts.append("")
+        if pr.html_url:
+            idx_parts.append(f"[View PR #{pr.pr_number} on GitHub]({pr.html_url})")
+            idx_parts.append("")
+        if pr.body:
+            idx_parts.append(pr.body.rstrip())
+            idx_parts.append("")
+        if thread_links:
+            idx_parts.append("## Threads")
+            idx_parts.append("")
+            for key, rel, n in sorted(thread_links):
+                label = "General discussion" if key == "general" else f"`{key}`"
+                idx_parts.append(
+                    f"- [{label}]({rel}) ({n} comment{'s' if n != 1 else ''})"
+                )
+            idx_parts.append("")
+        (pr_dir / "index.qmd").write_text("\n".join(idx_parts).rstrip() + "\n")
+        summary.rendered += 1
+    return summary
+
+
+# ---------------- GitLab ----------------
+
+
+def _gitlab_mr_dir(project_path: str, mr_iid: int, title: str) -> tuple[str, str]:
+    parts = project_path.split("/")
+    if len(parts) >= 2:
+        group = "/".join(parts[:-1])
+        project = parts[-1]
+    else:
+        group = "_"
+        project = project_path or "_"
+    slug = _slugify(title)
+    return f"gitlab/{group}/{project}/mr-{mr_iid}__{slug}", slug
+
+
+def render_gitlab(parsed: ParsedGitlabApi, root: Path) -> RenderSummary:
+    summary = RenderSummary()
+    if not parsed.merge_requests:
+        return summary
+
+    notes_by_mr: dict[tuple[str, int], list] = {}
+    for n in parsed.notes:
+        notes_by_mr.setdefault((n.project_path, n.mr_iid), []).append(n)
+
+    log.info("rendering gitlab: %d MRs", len(parsed.merge_requests))
+    for mr in tqdm(parsed.merge_requests, desc="render gitlab", unit="mr", leave=False):
+        rel_dir, _slug = _gitlab_mr_dir(mr.project_path, mr.mr_iid, mr.title)
+        mr_dir = root / rel_dir
+        mr_dir.mkdir(parents=True, exist_ok=True)
+        threads_dir = mr_dir / "threads"
+        threads_dir.mkdir(exist_ok=True)
+
+        mr_notes = sorted(
+            notes_by_mr.get((mr.project_path, mr.mr_iid), []),
+            key=lambda n: (n.created_at, n.external_id),
+        )
+        by_thread: dict[str, list] = {}
+        for n in mr_notes:
+            by_thread.setdefault(n.thread_key, []).append(n)
+
+        thread_links: list[tuple[str, str, int]] = []
+        for thread_key, items in by_thread.items():
+            fname = _thread_filename_slug(thread_key, "")
+            target = threads_dir / f"{fname}.qmd"
+            parts: list[str] = []
+            parts.append("---")
+            parts.append("provider: gitlab")
+            parts.append(f"project: {_yaml_scalar(mr.project_path)}")
+            parts.append(f"mr_iid: {mr.mr_iid}")
+            parts.append(f"thread: {_yaml_scalar(thread_key)}")
+            parts.append("---")
+            parts.append("")
+            if thread_key == "general":
+                parts.append(f"# {mr.title}: discussion")
+            else:
+                path, _, line = thread_key.rpartition(":")
+                parts.append(f"# {mr.title}: `{path}`:{line}")
+            parts.append("")
+            for i, n in enumerate(items):
+                author = n.user_login or "unknown"
+                parts.append(_msg_div_open(n.uuid, i, "gitlab"))
+                parts.append("")
+                parts.append(f"## {author}")
+                meta = [n.created_at]
+                if n.web_url:
+                    meta.append(f"[view on GitLab]({n.web_url})")
+                parts.append("")
+                parts.append("*" + " · ".join(m for m in meta if m) + "*")
+                parts.append("")
+                parts.append((n.body or "").rstrip())
+                parts.append("")
+                parts.append(_MSG_DIV_CLOSE)
+                parts.append("")
+            target.write_text("\n".join(parts).rstrip() + "\n")
+            thread_links.append((thread_key, f"threads/{fname}.qmd", len(items)))
+            summary.rendered += 1
+
+        idx_parts: list[str] = []
+        idx_parts.append("---")
+        idx_parts.append("provider: gitlab")
+        idx_parts.append(f"project: {_yaml_scalar(mr.project_path)}")
+        idx_parts.append(f"mr_iid: {mr.mr_iid}")
+        idx_parts.append(f"title: {_yaml_scalar(mr.title)}")
+        idx_parts.append(f"state: {_yaml_scalar(mr.state)}")
+        idx_parts.append(f"author: {_yaml_scalar(mr.author_username)}")
+        idx_parts.append(f"created_at: {_yaml_scalar(mr.created_at)}")
+        idx_parts.append(f"merged_at: {_yaml_scalar(mr.merged_at)}")
+        idx_parts.append(f"head_sha: {_yaml_scalar(mr.head_sha)}")
+        idx_parts.append(f"base_sha: {_yaml_scalar(mr.base_sha)}")
+        idx_parts.append(f"web_url: {_yaml_scalar(mr.web_url)}")
+        idx_parts.append("---")
+        idx_parts.append("")
+        idx_parts.append(f"# {mr.title}")
+        idx_parts.append("")
+        if mr.web_url:
+            idx_parts.append(f"[View MR !{mr.mr_iid} on GitLab]({mr.web_url})")
+            idx_parts.append("")
+        if mr.description:
+            idx_parts.append(mr.description.rstrip())
+            idx_parts.append("")
+        if thread_links:
+            idx_parts.append("## Threads")
+            idx_parts.append("")
+            for key, rel, n in sorted(thread_links):
+                label = "General discussion" if key == "general" else f"`{key}`"
+                idx_parts.append(
+                    f"- [{label}]({rel}) ({n} note{'s' if n != 1 else ''})"
+                )
+            idx_parts.append("")
+        (mr_dir / "index.qmd").write_text("\n".join(idx_parts).rstrip() + "\n")
+        summary.rendered += 1
     return summary
 
 
