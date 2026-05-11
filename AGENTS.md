@@ -30,7 +30,30 @@ third-party/   vendored upstream code (see below).
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin in
-`frankweiler/backend/qmd_indexer/`.
+`frankweiler/backend/qmd_indexer/` (which shells out to `npx -y
+@tobilu/qmd@<version>`).
+
+### Why we don't run from the vendored tree
+
+It looks tempting to point the indexer at `third-party/qmd/bin/qmd` for
+hermeticity, but the win is smaller than it looks and was deliberately
+deferred:
+
+- The vendored tree is source-only. Running it requires `pnpm install`
+  (or `bun install`) **and** `pnpm run build` to produce `dist/`. The
+  install step compiles native deps (`better-sqlite3`, `node-llama-cpp`,
+  `sqlite-vec`, several `tree-sitter-*`) — that's the real network and
+  build cost, not the qmd fetch itself.
+- We'd still need node ≥22 and a working C toolchain on the host, so
+  it's not actually hermetic in the Bazel sense — just "npx-free".
+- `npx`'s cache already makes repeat invocations cheap.
+
+If we want better isolation later, the more likely direction is to
+**re-implement the bits of qmd we actually use** (indexing + retrieval
+against our markdown tree) in Rust inside `frankweiler/backend/`, using
+this vendored tree purely as the format/behavior reference. That keeps
+runtime deps inside the Cargo workspace and avoids growing a node
+toolchain footprint.
 
 Pulled in via `git subtree add --squash`, so the upstream tree is one
 squashed commit + a merge commit in our history (no full upstream log).
