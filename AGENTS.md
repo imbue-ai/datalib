@@ -20,7 +20,30 @@ src/
 tests/         pytest suite; Bazel-only goldens under tests/__snapshots__/
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 docs/          architecture notes (grid_rows.md, ...).
+third-party/   vendored upstream code (see below).
 ```
+
+## Vendored upstream: `third-party/qmd`
+
+`third-party/qmd/` is a checked-in snapshot of
+[`github.com/tobi/qmd`](https://github.com/tobi/qmd), pinned to **v2.1.0**.
+It exists as a **reference for the qmd format** — we don't build or ship
+from it; treat it as read-only documentation in code form. Our runtime
+still consumes `@tobilu/qmd` via the registry pin in
+`frankweiler/backend/qmd_indexer/`.
+
+Pulled in via `git subtree add --squash`, so the upstream tree is one
+squashed commit + a merge commit in our history (no full upstream log).
+To bump the pin:
+
+```sh
+git subtree pull --prefix=third-party/qmd \
+  https://github.com/tobi/qmd.git <new-tag> --squash
+```
+
+Do **not** edit files under `third-party/qmd/` — they will be overwritten
+on the next pull. If you need local patches, layer them outside the
+subtree and document why.
 
 ## The grid_rows union table
 
