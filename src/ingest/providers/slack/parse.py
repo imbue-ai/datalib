@@ -110,7 +110,13 @@ class ParsedSlackApi:
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    # Iterate the file directly: `slack_web.py` writes records with
+    # `ensure_ascii=False`, leaving U+2028 / U+2029 unescaped. `str.splitlines()`
+    # treats those as line breaks and shreds a single record into pieces that
+    # no longer parse. Python's file-iterator only splits on `\n`, which is
+    # the only separator the writer actually emits.
+    with path.open() as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def parse_api_dir(api_dir: Path) -> ParsedSlackApi:

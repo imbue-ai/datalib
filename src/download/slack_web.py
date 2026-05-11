@@ -169,9 +169,14 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     out: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
-        if line.strip():
-            out.append(json.loads(line))
+    # Iterate the file directly: json.dumps only emits `\n` between records,
+    # but str.splitlines() also breaks on `\r`, `\u2028`, `\u2029`, etc. —
+    # which can appear unescaped inside JSON string values and shred a record
+    # into pieces that no longer parse.
+    with path.open() as f:
+        for line in f:
+            if line.strip():
+                out.append(json.loads(line))
     return out
 
 
@@ -418,11 +423,13 @@ def _fetch_self(out_dir: Path) -> dict[str, Any]:
     return rec
 
 
-def _fetch_channels(out_dir: Path, members_only: bool) -> list[dict[str, Any]]:
+def _fetch_channels(
+    out_dir: Path, members_only: bool, include_archived: bool = False
+) -> list[dict[str, Any]]:
     raw_channels = paginate(
         "conversations.list",
         {
-            "exclude_archived": "true",
+            "exclude_archived": "false" if include_archived else "true",
             "limit": "200",
             "types": "public_channel,private_channel",
         },
@@ -784,7 +791,11 @@ def fetch(
     self_rec = _fetch_self(out_dir)
     typer.echo(f"auth: {self_rec['user_name']} ({self_rec['user_id']})")
 
-    fresh_channels = _fetch_channels(out_dir, members_only=not all_channels)
+    fresh_channels = _fetch_channels(
+        out_dir,
+        members_only=not all_channels,
+        include_archived=bool(channels),
+    )
     name_to_id = {c["channel_name"]: c["channel_id"] for c in fresh_channels}
     # Backfill from cache for channels we have on disk but didn't refetch.
     for prior in existing_channels.values():

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ingest.providers.anthropic.parse import parse_export
 from ingest.providers.openai.parse import parse_api_dir
+from ingest.providers.slack.parse import parse_api_dir as parse_slack_api_dir
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -95,3 +96,20 @@ def test_chatgpt_api_fixture_parses() -> None:
     # ChatGPT timestamps are normalized to ISO-8601 strings.
     for c in parsed.conversations:
         assert c.create_time is None or "T" in c.create_time
+
+
+def test_slack_api_fixture_parses_with_unicode_line_separator() -> None:
+    """Slack messages containing U+2028 (LINE SEPARATOR) in `raw.text` must
+    not shred record boundaries.
+
+    `slack_web.py` writes JSONL with `ensure_ascii=False`, which leaves
+    U+2028 / U+2029 unescaped. `str.splitlines()` treats those as line
+    breaks — so a naïve `path.read_text().splitlines()` loader will split
+    a single record into pieces that no longer parse. The fixture's
+    Data's-log message embeds a literal U+2028 to guard against
+    regression of this exact failure mode.
+    """
+    parsed = parse_slack_api_dir(FIXTURES / "slack_api")
+    log_msgs = [m for m in parsed.messages if "Stardate 47988.1" in (m.text or "")]
+    assert len(log_msgs) == 1
+    assert "\u2028" in log_msgs[0].text
