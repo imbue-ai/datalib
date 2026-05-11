@@ -117,22 +117,42 @@ type FilterCtx = {
 };
 const contextFilter = ref<FilterCtx | null>(null);
 
+// Optional "Filter by Notion Page" menu entry, populated when the right-
+// clicked row has a non-empty `notion_page_uuid`. Lets users zoom into all
+// rows on a single Notion page from any cell of any row on that page —
+// useful because the page UUID isn't always the same as conversation_uuid
+// (e.g. comment threads use the discussion UUID for that column).
+const contextNotionPage = ref<FilterCtx | null>(null);
+
 // Map AG Grid colId → query-language key + header. Keep in sync with
 // `column_for_field` in backend/core/src/db.rs.
-const FILTER_COLUMNS: Record<string, { key: string; header: string }> = {
+//
+// `uuidCol` (when set) names a sibling row field carrying the load-bearing
+// UUID for this filter. The cell's display text becomes a non-load-bearing
+// slug; the emitted token is `slug-uuid` (Notion-shaped). Filter comparison
+// is on UUID only — the slug is decoration so URLs/tokens are self-describing.
+const FILTER_COLUMNS: Record<
+  string,
+  { key: string; header: string; uuidCol?: keyof SearchRow }
+> = {
   source: { key: "source", header: "Source" },
   kind: { key: "kind", header: "Type" },
   channel: { key: "channel", header: "Channel" },
-  author: { key: "author", header: "Author" },
-  account: { key: "account", header: "Account" },
-  project: { key: "project", header: "Project" },
-  conversation_name: { key: "convo", header: "Conversation Name" },
+  author: { key: "author", header: "Author", uuidCol: "author" },
+  account: { key: "account", header: "Account", uuidCol: "account" },
+  project: { key: "project", header: "Project", uuidCol: "project" },
+  conversation_name: {
+    key: "convo",
+    header: "Conversation",
+    uuidCol: "conversation_uuid",
+  },
 };
 
 function closeContextMenu() {
   contextMenuVisible.value = false;
   contextMenuTargets.value = [];
   contextFilter.value = null;
+  contextNotionPage.value = null;
 }
 
 /// Quote a value for the search bar. Quotes when it contains whitespace,
@@ -168,8 +188,40 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Slugify a human-readable label for use as the non-load-bearing prefix in a
+// Notion-shaped `slug-uuid` token. Conservative: ASCII alnum + hyphens only,
+// max 40 chars, leading/trailing hyphens stripped. The backend ignores the
+// slug entirely — it's just for token/URL self-description.
+function slugifyForToken(label: string): string {
+  const ascii = label
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return ascii.slice(0, 40).replace(/-+$/, "");
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Compose `slug-uuid` (Notion URL pattern). When `slug` is empty (no display
+// label available) or `uuid` is not UUID-shaped, falls back to just `uuid`.
+function formatSlugUuid(slug: string, uuid: string): string {
+  if (!UUID_RE.test(uuid)) return uuid;
+  const s = slugifyForToken(slug);
+  return s.length === 0 ? uuid : `${s}-${uuid}`;
+}
+
 function applyContextFilter(exclude: boolean) {
   const ctx = contextFilter.value;
+  if (!ctx) return;
+  appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, exclude));
+  closeContextMenu();
+}
+
+function applyNotionPageFilter(exclude: boolean) {
+  const ctx = contextNotionPage.value;
   if (!ctx) return;
   appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, exclude));
   closeContextMenu();
@@ -413,20 +465,49 @@ const gridOptions: GridOptions<SearchRow> = {
     }
     contextMenuTargets.value = targets;
     // Capture which column was clicked so we can offer "Keep only" /
-    // "Exclude" entries for filterable columns. Use the raw row value
-    // (e.g. UUID for author/account), not the formatted display label —
-    // filtering on labels is ambiguous.
+    // "Exclude" entries for filterable columns. For UUID-bearing columns
+    // (author / account / project / convo) the emitted token follows the
+    // Notion URL pattern `slug-uuid` — the slug is non-load-bearing display,
+    // the trailing UUID is what the backend filters on. Slug comes from the
+    // human-readable display of the cell; UUID from the row's `uuidCol`.
     const colId = e.column?.getColId() ?? "";
     const meta = FILTER_COLUMNS[colId];
+    contextFilter.value = null;
     if (meta && e.data) {
-      const raw = (e.data as Record<string, unknown>)[colId];
-      if (typeof raw === "string" && raw.length > 0) {
-        contextFilter.value = { key: meta.key, header: meta.header, value: raw };
-      } else {
-        contextFilter.value = null;
+      const cellRaw = (e.data as Record<string, unknown>)[colId];
+      if (meta.uuidCol) {
+        const uuid = (e.data as Record<string, unknown>)[meta.uuidCol];
+        if (typeof uuid === "string" && uuid.length > 0) {
+          // For author/account, the cell raw IS the UUID; display the label
+          // from accounts.json. For convo, the cell raw is the conversation
+          // name. For project, no display label source — slug stays empty.
+          let displayLabel = "";
+          if (colId === "author" || colId === "account") {
+            displayLabel = accounts.value[uuid]?.label ?? "";
+          } else if (colId === "conversation_name") {
+            displayLabel = typeof cellRaw === "string" ? cellRaw : "";
+          }
+          const value = formatSlugUuid(displayLabel, uuid);
+          contextFilter.value = { key: meta.key, header: meta.header, value };
+        }
+      } else if (typeof cellRaw === "string" && cellRaw.length > 0) {
+        contextFilter.value = { key: meta.key, header: meta.header, value: cellRaw };
       }
-    } else {
-      contextFilter.value = null;
+    }
+    // Independent of the per-column filter: if this row belongs to a Notion
+    // page, offer a "Filter by Notion Page" entry. The slug comes from
+    // conversation_name when that row's conversation_uuid equals the page
+    // uuid (i.e. the row is the page itself); otherwise we have no clean
+    // display label and emit just the UUID.
+    if (e.data && e.data.notion_page_uuid) {
+      const pageUuid = e.data.notion_page_uuid;
+      const slug =
+        e.data.conversation_uuid === pageUuid ? e.data.conversation_name : "";
+      contextNotionPage.value = {
+        key: "notion_page",
+        header: "Notion Page",
+        value: formatSlugUuid(slug, pageUuid),
+      };
     }
     contextMenuVisible.value = true;
   },
@@ -504,6 +585,15 @@ const gridOptions: GridOptions<SearchRow> = {
           </div>
           <div class="ctx-item" @click="applyContextFilter(true)">
             Exclude all {{ contextFilter.header }}={{ contextFilter.value }}
+          </div>
+          <div class="ctx-divider" />
+        </template>
+        <template v-if="contextNotionPage">
+          <div class="ctx-item" @click="applyNotionPageFilter(false)">
+            Keep only Notion Page={{ contextNotionPage.value }}
+          </div>
+          <div class="ctx-item" @click="applyNotionPageFilter(true)">
+            Exclude all Notion Page={{ contextNotionPage.value }}
           </div>
           <div class="ctx-divider" />
         </template>

@@ -24,6 +24,10 @@ pub struct GridRow {
     ///   github.pr_review_comment: uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')
     ///   gitlab.mr: uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')
     ///   gitlab.note: uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')
+    ///   notion.page: page_id (already a Notion UUID)
+    ///   notion.heading: uuidv5(NOTION_NS, 'notion:heading:{page_id}:{block_id}')
+    ///   notion.thread: discussion_id (already a Notion UUID)
+    ///   notion.comment: comment_id (already a Notion UUID)
     pub uuid: String,
     /// Which provider this row originated from. Determines which per-provider table to consult for the raw payload.
     pub provider: String,
@@ -48,6 +52,12 @@ pub struct GridRow {
     ///   github.pr_review_comment: 'GitHub Review Comment'
     ///   gitlab.mr: 'GitLab MR'
     ///   gitlab.note: 'GitLab Discussion Note'
+    ///   notion.page: 'Notion Page' (or 'Notion Database' for collection_view_page)
+    ///   notion.heading.h1: 'Notion Heading 1'
+    ///   notion.heading.h2: 'Notion Heading 2'
+    ///   notion.heading.h3: 'Notion Heading 3'
+    ///   notion.thread: 'Notion Comment Thread'
+    ///   notion.comment: 'Notion Comment'
     pub kind: String,
     /// Human-friendly provider label shown in the Source column.
     ///
@@ -57,6 +67,7 @@ pub struct GridRow {
     ///   slack: 'Slack'
     ///   github: 'GitHub'
     ///   gitlab: 'GitLab'
+    ///   notion: 'Notion'
     pub source_label: String,
     /// ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable.
     ///
@@ -71,6 +82,10 @@ pub struct GridRow {
     ///   github.comment: comment.created_at
     ///   gitlab.mr: merge_request.updated_at OR created_at
     ///   gitlab.note: note.created_at
+    ///   notion.page: block.last_edited_time (Notion ms epoch, formatted ISO-8601 UTC)
+    ///   notion.heading: parent_page.last_edited_time (headings inherit page's last_edited_time)
+    ///   notion.thread: first comment.created_time
+    ///   notion.comment: comment.created_time
     pub when_ts: String,
     /// Display name of the message author. For LLM responses this is typically the model slug; for user inputs, the account; for Slack, the user real_name.
     ///
@@ -83,6 +98,10 @@ pub struct GridRow {
     ///   slack.message: users.real_name OR users.name
     ///   github: comment.user.login OR pull_request.user.login
     ///   gitlab: note.author.username OR merge_request.author.username
+    ///   notion.page: notion_user.name for block.last_edited_by_id (or created_by for headings)
+    ///   notion.heading: notion_user.name for parent_page.last_edited_by_id
+    ///   notion.thread: notion_user.name for first comment.created_by_id
+    ///   notion.comment: notion_user.name for comment.created_by_id
     pub author: Option<String>,
     /// Account identifier (provider-native). Drives the account: filter.
     ///
@@ -92,6 +111,7 @@ pub struct GridRow {
     ///   slack: slack_workspaces.team_id
     ///   github: self_identity.viewer.login (the host account that fetched the data)
     ///   gitlab: self_identity.current_user.username
+    ///   notion: notion_space.name (workspace name; one per ingest)
     pub account: Option<String>,
     /// Project identifier. For anthropic this is the project UUID; for github/gitlab this is the repo full name (e.g. 'owner/repo' or 'group/.../project_path'). Null for providers without a project notion (openai, slack).
     ///
@@ -101,6 +121,7 @@ pub struct GridRow {
     ///   slack: null
     ///   github: pull_request.base.repo.full_name (e.g. 'enterprise-d/replicator-firmware')
     ///   gitlab: merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')
+    ///   notion: null (Notion does not have a per-page project notion; workspace lives in `account`)
     pub project: Option<String>,
     /// Slack channel display name (e.g. 'bridge', 'engineering'). Null for non-Slack rows. Drives the Channel column and a future channel: filter.
     ///
@@ -119,6 +140,10 @@ pub struct GridRow {
     ///   slack: slack_channels.channel_name + thread root snippet
     ///   github: pull_request.title (carried onto every child comment/review row)
     ///   gitlab: merge_request.title (carried onto every child note row)
+    ///   notion.page: block.properties.title (plain-text join)
+    ///   notion.heading: parent_page.properties.title
+    ///   notion.thread: parent_page.properties.title
+    ///   notion.comment: parent_page.properties.title
     pub conversation_name: Option<String>,
     /// Parent conversation / thread UUID. For Chat / Slack Thread rows this equals `uuid`. For Message / block rows it points at the parent so the chat preview pane knows which thread to open.
     ///
@@ -134,6 +159,10 @@ pub struct GridRow {
     ///   github.comment: parent PR uuid
     ///   gitlab.mr: = uuid (MR uuid)
     ///   gitlab.note: parent MR uuid
+    ///   notion.page: = uuid (page_id)
+    ///   notion.heading: parent page_id
+    ///   notion.thread: = uuid (discussion_id)
+    ///   notion.comment: parent discussion_id
     pub conversation_uuid: String,
     /// Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `[data-msg-index="{index}"]`. Null for Chat / Slack Thread rows.
     pub message_index: Option<i64>,
@@ -153,6 +182,10 @@ pub struct GridRow {
     ///   github.comment: comment.body
     ///   gitlab.mr: merge_request.title + description
     ///   gitlab.note: note.body
+    ///   notion.page: page title + full plain-text body of all child blocks (recursive)
+    ///   notion.heading: heading block's plain-text title
+    ///   notion.thread: concatenated plain-text of every comment in the discussion
+    ///   notion.comment: comment.text rendered to plain text
     pub text: String,
     /// Deep link of the form `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or the https equivalent). Populated only for Slack rows; drives the 'Open in Slack' right-click context menu item.
     pub slack_link: Option<String>,
@@ -164,6 +197,7 @@ pub struct GridRow {
     ///   slack: slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.qmd
     ///   github: github/{owner}/{repo}/pr-{number}__{slug(title)}/index.qmd (PR), or .../threads/{thread_uuid}__{slug}.qmd (comment threads)
     ///   gitlab: gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.qmd (MR), or .../threads/{discussion_uuid}__{slug}.qmd (discussion threads)
+    ///   notion: notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.qmd (pages + headings); .../comments/{thread_short_id}__{snippet}.qmd (comment threads)
     pub qmd_path: Option<String>,
     /// Canonical URL pointing back to the original source on the provider's web UI. For GitHub/GitLab this is the html_url/web_url of the PR/MR or comment; null for providers without a stable public link.
     ///
@@ -192,6 +226,10 @@ pub struct GridRow {
     ///   gitlab.mr: merge_request.iid
     ///   gitlab.note: note.id
     pub external_id: Option<String>,
+    /// Notion-only. UUID of the page this row belongs to. For page rows this equals `uuid`; for heading / comment thread / comment rows it points at the containing page so the grid can filter every row that lives in a given document. Null for non-Notion rows.
+    pub notion_page_uuid: Option<String>,
+    /// Notion-only. UUID of the specific block this row is anchored to. For heading rows this is the heading block; for comment-thread rows it is the block the discussion is attached to (`discussion.parent_id` when parent_table='block'); for individual comment rows it is the same as the parent thread's block. Null for page-level rows and non-Notion rows.
+    pub notion_block_uuid: Option<String>,
 }
 
 pub const TABLES: &[(&str, &str)] = &[
@@ -221,11 +259,13 @@ pub const DDL: &[(&str, &str)] = &[
     source_url VARCHAR(1024),
     git_sha VARCHAR(64),
     external_id VARCHAR(128),
+    notion_page_uuid VARCHAR(96),
+    notion_block_uuid VARCHAR(96),
     PRIMARY KEY (uuid)
 )"#),
 ];
 
 /// Column names per table, in declaration order.
 pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id"]),
+    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid"]),
 ];

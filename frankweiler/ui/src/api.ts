@@ -20,6 +20,8 @@ export type SearchRow = {
   author: string;
   channel: string;
   slack_link: string;
+  // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
+  notion_page_uuid: string;
 };
 
 export type SearchResponse = {

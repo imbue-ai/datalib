@@ -25,4 +25,7 @@ pub struct SearchRow {
     pub channel: String,
     /// Deep-link URL to open this row in Slack; empty for non-Slack rows.
     pub slack_link: String,
+    /// For Notion rows: the page-level UUID the row belongs to. Empty
+    /// otherwise. Used by right-click "Filter by Notion Page".
+    pub notion_page_uuid: String,
 }

@@ -26,10 +26,15 @@ pub enum Field {
     Source,
     Kind,
     Channel,
-    ConvoName,
+    /// UUID-load-bearing filter on `conversation_uuid`. Token values follow
+    /// the Notion-style `slug-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` pattern;
+    /// the slug is non-load-bearing and discarded at filter time.
+    Convo,
     Author,
     Account,
     Project,
+    /// UUID-load-bearing filter on `notion_page_uuid`. Same `slug-uuid` form.
+    NotionPage,
     Other(String),
 }
 
@@ -43,13 +48,71 @@ impl Field {
             "source" => Field::Source,
             "kind" => Field::Kind,
             "channel" => Field::Channel,
-            "convo" => Field::ConvoName,
+            "convo" => Field::Convo,
             "author" => Field::Author,
             "account" => Field::Account,
             "project" => Field::Project,
+            "notion_page" => Field::NotionPage,
             _ => Field::Other(s.to_string()),
         }
     }
+
+    /// True when this field stores a UUID in the underlying column and so
+    /// expects `slug-uuid` Notion-shaped token values (the slug rides along
+    /// for display; only the trailing UUID is used for SQL comparison).
+    pub fn is_uuid_bearing(&self) -> bool {
+        matches!(
+            self,
+            Field::Author
+                | Field::Account
+                | Field::Project
+                | Field::Convo
+                | Field::NotionPage
+        )
+    }
+}
+
+/// Notion-style slug+UUID parser. If `value` ends with a `-`-prefixed
+/// UUID-shaped suffix (8-4-4-4-12 lowercase hex), return that suffix; else
+/// return the input unchanged. The leading slug is non-load-bearing — it
+/// exists only to make URLs/tokens self-describing.
+///
+/// Examples:
+/// - `"picard-jean-luc-00000001-1701-4d00-8000-000000000001"`
+///   → `"00000001-1701-4d00-8000-000000000001"`
+/// - `"00000001-1701-4d00-8000-000000000001"`
+///   → unchanged (slug is empty / absent)
+/// - `"plain-name"` → unchanged (no UUID suffix matched)
+pub fn extract_uuid_suffix(value: &str) -> &str {
+    if value.len() < 36 {
+        return value;
+    }
+    let candidate = &value[value.len() - 36..];
+    if is_uuid_shape(candidate)
+        && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
+    {
+        candidate
+    } else {
+        value
+    }
+}
+
+fn is_uuid_shape(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let b = s.as_bytes();
+    for (i, &c) in b.iter().enumerate() {
+        let is_dash_pos = matches!(i, 8 | 13 | 18 | 23);
+        if is_dash_pos {
+            if c != b'-' {
+                return false;
+            }
+        } else if !c.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -309,7 +372,7 @@ mod tests {
     fn negated_quoted_value() {
         let q = parse_query(r#"-convo:"hello world""#);
         assert!(q.terms[0].negate);
-        assert_eq!(q.terms[0].field, Field::ConvoName);
+        assert_eq!(q.terms[0].field, Field::Convo);
         assert_eq!(q.terms[0].value, "hello world");
     }
 
@@ -318,6 +381,29 @@ mod tests {
         let q = parse_query("source:Slack kind:Chat");
         assert_eq!(q.filters[&Field::Source], vec!["Slack".to_string()]);
         assert_eq!(q.filters[&Field::Kind], vec!["Chat".to_string()]);
+    }
+
+    #[test]
+    fn extract_uuid_suffix_strips_slug() {
+        // Notion-style: slug-uuid.
+        assert_eq!(
+            extract_uuid_suffix("picard-jean-luc-00000001-1701-4d00-8000-000000000001"),
+            "00000001-1701-4d00-8000-000000000001"
+        );
+        // Bare UUID passes through.
+        assert_eq!(
+            extract_uuid_suffix("00000001-1701-4d00-8000-000000000001"),
+            "00000001-1701-4d00-8000-000000000001"
+        );
+        // No UUID-shaped suffix → unchanged.
+        assert_eq!(extract_uuid_suffix("plain-name"), "plain-name");
+        // Too-short string → unchanged.
+        assert_eq!(extract_uuid_suffix("short"), "short");
+        // Suffix is hex-shaped but missing the boundary dash before slug.
+        assert_eq!(
+            extract_uuid_suffix("xxx00000001-1701-4d00-8000-000000000001"),
+            "xxx00000001-1701-4d00-8000-000000000001"
+        );
     }
 
     #[test]

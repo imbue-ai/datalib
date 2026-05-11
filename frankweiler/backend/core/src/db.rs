@@ -11,7 +11,7 @@
 //!
 //! See `docs/grid_rows.md` for the architecture overview.
 
-use crate::query::{Field, ParsedQuery, RowType};
+use crate::query::{extract_uuid_suffix, Field, ParsedQuery, RowType};
 use crate::search::SearchRow;
 use rusqlite::{params_from_iter, Connection, OpenFlags};
 use std::path::Path;
@@ -153,7 +153,7 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
     let sql = format!(
         "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
                 channel, conversation_name, conversation_uuid, message_index, \
-                entire_chat, text, slack_link \
+                entire_chat, text, slack_link, notion_page_uuid \
          FROM grid_rows{} \
          ORDER BY when_ts ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
          LIMIT ?",
@@ -181,6 +181,7 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
             r.get::<_, String>(12)?,                             // entire_chat
             r.get::<_, String>(13)?,                             // text
             r.get::<_, Option<String>>(14)?.unwrap_or_default(), // slack_link
+            r.get::<_, Option<String>>(15)?.unwrap_or_default(), // notion_page_uuid
         ))
     });
     let Ok(it) = it else { return Vec::new() };
@@ -202,6 +203,7 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
             entire_chat,
             text,
             slack_link,
+            notion_page_uuid,
         ) = row;
         let snip = if kind == "Chat" {
             text.clone()
@@ -225,6 +227,7 @@ pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> 
             author,
             channel,
             slack_link,
+            notion_page_uuid,
         });
     }
     rows
@@ -239,10 +242,12 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
         Field::Source => Some("source_label"),
         Field::Kind => Some("kind"),
         Field::Channel => Some("channel"),
-        Field::ConvoName => Some("conversation_name"),
+        // `convo:slug-uuid` filters on conversation_uuid (UUID-load-bearing).
+        Field::Convo => Some("conversation_uuid"),
         Field::Author => Some("author"),
         Field::Account => Some("account"),
         Field::Project => Some("project"),
+        Field::NotionPage => Some("notion_page_uuid"),
         Field::Before | Field::After | Field::Type | Field::Subj | Field::Other(_) => None,
     }
 }
@@ -276,7 +281,14 @@ fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         } else {
             clauses.push(format!("{col} = ?"));
         }
-        params.push(term.value.clone());
+        // UUID-bearing fields accept Notion-shaped `slug-uuid` tokens; the
+        // slug is non-load-bearing — strip it before binding.
+        let bound = if term.field.is_uuid_bearing() {
+            extract_uuid_suffix(&term.value).to_string()
+        } else {
+            term.value.clone()
+        };
+        params.push(bound);
     }
 
     if let Some(vals) = q.filters.get(&Field::Before) {
