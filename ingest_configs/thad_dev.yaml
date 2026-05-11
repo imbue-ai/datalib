@@ -36,3 +36,15 @@ sources:
     provider: slack
     kind: slack_api_dir
     path: ~/backups/slack
+
+  # GitHub API scrape (src/download/github_api.py output).
+  - name: github-api
+    provider: github
+    kind: github_api_dir
+    path: ~/backups/github
+
+  # GitLab API scrape (src/download/gitlab_api.py output).
+  - name: gitlab-api
+    provider: gitlab
+    kind: gitlab_api_dir
+    path: ~/backups/gitlab

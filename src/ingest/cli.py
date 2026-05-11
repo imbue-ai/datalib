@@ -14,6 +14,7 @@ from ingest.diff import diff_commits, format_report
 from ingest.dolt_service import DoltService
 from ingest.dump import dump_sql as run_dump
 from ingest.ingest import ingest as run_ingest
+from ingest.qmd_index import build_qmd_index
 
 
 def _configure_logging(verbose: bool = False) -> None:
@@ -96,6 +97,11 @@ def ingest(
         "--report/--no-report",
         help="After ingest, print a row-level diff between the new commit and its parent.",
     ),
+    qmd_index: bool = typer.Option(
+        True,
+        "--qmd-index/--no-qmd-index",
+        help="After rendering, rebuild the qmd search index over <root>.",
+    ),
     max_samples: int = typer.Option(
         3,
         "--max-samples",
@@ -135,6 +141,12 @@ def ingest(
     if rep is not None:
         typer.echo("")
         typer.echo(format_report(rep, max_samples=max_samples))
+
+    if qmd_index:
+        typer.echo("")
+        typer.echo("qmd-index: rebuilding...")
+        index_path = build_qmd_index(cfg.root)
+        typer.echo(f"qmd-index: wrote {index_path}")
 
 
 @app.command()

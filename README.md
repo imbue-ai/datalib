@@ -141,6 +141,71 @@ uv run python -m ingest --config ingest_configs/thad_dev.yaml
 
 Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
 
+### QMD search index (default-on, incremental)
+
+`ingest ingest` rebuilds the qmd search index over `<root>` after the
+markdown tree is rendered. It lives at `<root>/.frankweiler/qmd/index.sqlite`
+and is what the search bar's hybrid / vector queries hit (see
+`src/qmd_bridge/`). Pass `--no-qmd-index` to skip.
+
+Design notes:
+
+- **Two indexers, one shape**: the production path is Python
+  (`src/ingest/qmd_index.py`); the Bazel-driven fixture path is the Rust
+  binary at `frankweiler/backend/qmd_indexer/`. Both shell out to
+  `npx -y @tobilu/qmd@<version>` with `XDG_CACHE_HOME=<root>/.frankweiler`
+  so the index lands next to `mirror.sqlite`. Keep them in sync when
+  bumping the pinned qmd version.
+- **Incremental** in the production path. qmd's `documents` table keys
+  on `(collection, path, content_hash)`, and `content_vectors` is
+  keyed by hash, so a re-run only rechunks files whose bytes changed
+  and only re-embeds content hashes with no existing vector row.
+  Deletes are detected (rows marked `active=0`) and orphaned content
+  is cleaned. We do **not** wipe `<root>/.frankweiler/qmd/` between
+  runs — the prior wrapper did, which defeated all of this.
+- **Non-incremental** in the Bazel fixture path: that binary clears
+  the index dir each run because hermetic fixture builds want a clean
+  rebuild every time.
+- **First run is slow** — embedding all chunks for a fresh `<root>`
+  takes several minutes on CPU (one-time cost). qmd streams a live
+  progress bar (ETA + chunks/s) to stderr for both `update` and
+  `embed`; subprocess inherits stderr, so you see it in the ingest
+  terminal. `qmd embed` is resumable: if it gets interrupted, the
+  next run picks up where it left off (it skips content hashes that
+  already have vectors), so paying the cost in chunks is fine.
+
+  To watch it run end-to-end:
+
+  ```sh
+  bazelisk run //src/ingest:cli -- ingest \
+      --config $(pwd)/ingest_configs/thad_dev.yaml --no-report
+  ```
+
+  After a no-op render + dolt commit, you'll see something like:
+
+  ```
+  [1/1] mirror (**/*.qmd)
+  Collection: /Users/thad/mixed_up_files.thad (**/*.qmd)
+  Indexing: 7294/7294 ETA: 0s
+  Indexed: 0 new, 0 updated, 7294 unchanged, 0 removed
+
+  ✓ All collections updated.
+
+  Run 'qmd embed' to update embeddings (3282 unique hashes need vectors)
+  2026-05-11 15:26:08,654 INFO ingest.qmd_index: qmd-indexer: $ npx -y @tobilu/qmd@2.1.0 embed
+  Model: hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf
+
+  ██████████████████░░░░░░░░░░░░  59% 4540/4587 14.9 KB/s ETA 4m 3s
+  ```
+
+  Embedding ~15 KB/s on CPU works out to roughly 5–10 minutes per
+  thousand unembedded chunks. Once the backlog is drained, re-runs
+  are no-ops (a couple of seconds).
+- **Models cache**: qmd's embedding model (~300 MB) is shared across
+  data roots via a symlink at `<root>/.frankweiler/qmd/models ->
+  ~/.cache/qmd-models`. Override with `models_dir=` if you call
+  `build_qmd_index` directly.
+
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |
