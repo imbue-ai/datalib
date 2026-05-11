@@ -65,3 +65,47 @@ py_test(
         requirement("syrupy"),
     ],
 )
+
+# Unit tests for the qmd_bridge mapping abstraction. No qmd CLI; pure
+# Python over synthetic hits and a tiny synthetic grid.
+py_test(
+    name = "test_qmd_bridge_mapping",
+    size = "small",
+    srcs = [
+        "test_qmd_bridge_mapping.py",
+        "conftest_qmd_bridge_mapping.py",
+    ],
+    main = "conftest_qmd_bridge_mapping.py",
+    deps = [
+        "//src/qmd_bridge",
+        requirement("pytest"),
+    ],
+)
+
+# Integration test: runs the real `qmd` CLI against the cached qmd
+# index from `:ingested_tng_qmd`, then maps hits through to grid rows.
+# Requires node/npx on PATH and the qmd models cache (the indexer
+# populates ~/.cache/qmd-models on first run).
+py_test(
+    name = "test_qmd_bridge_integration",
+    size = "large",
+    srcs = [
+        "test_qmd_bridge_integration.py",
+        "conftest_qmd_bridge_integration.py",
+    ],
+    main = "conftest_qmd_bridge_integration.py",
+    data = [
+        "//tests/fixtures:ingested_tng",
+        "//tests/fixtures:ingested_tng_qmd",
+    ],
+    tags = [
+        "requires-network",
+        "no-remote",
+        "no-sandbox",
+    ],
+    deps = [
+        "//src/ingest",
+        "//src/qmd_bridge",
+        requirement("pytest"),
+    ],
+)

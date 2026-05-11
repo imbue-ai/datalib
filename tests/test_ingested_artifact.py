@@ -60,12 +60,10 @@ def test_qmd_tar_contains_expected_files() -> None:
     with tarfile.open(tar_path) as tf:
         names = sorted(tf.getnames())
 
-    # 7 LLM conversations + 5 Slack threads (Picard's tea thread, Worf
-    # standalone, Data standalone in #engineering, Riker's #ten-forward
-    # poker thread, and Picard's combadge thread in #bridge) across three
-    # providers.
+    # 7 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
+    # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files).
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 12, qmd_files
+    assert len(qmd_files) == 26, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -73,6 +71,8 @@ def test_qmd_tar_contains_expected_files() -> None:
     # Spot-check one slug from each provider.
     assert any("tea-earl-grey-hot.qmd" in n for n in qmd_files)
     assert any("anyone-up-for-poker-tonight.qmd" in n for n in qmd_files)
+    assert any("pr-42__recalibrate-replicator" in n for n in qmd_files)
+    assert any("mr-17__add-earl-grey" in n for n in qmd_files)
 
 
 def test_dump_sql_loads_into_in_memory_sqlite() -> None:
@@ -89,11 +89,23 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
     ).fetchone()[0]
     assert chats == 7
 
-    # 5 Slack thread rows (from render fixture).
+    # 6 Slack thread rows (from render fixture).
     threads = conn.execute(
         "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Slack Thread'"
     ).fetchone()[0]
-    assert threads == 5
+    assert threads == 6
+
+    # GitHub: 2 PRs in the fixture (closed #42, open #43).
+    gh_prs = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'GitHub PR'"
+    ).fetchone()[0]
+    assert gh_prs == 2
+
+    # GitLab: 2 MRs in the fixture (merged !17, open !18).
+    gl_mrs = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'GitLab MR'"
+    ).fetchone()[0]
+    assert gl_mrs == 2
 
     # Picard's account_uuid is a stable provider key; he should appear in
     # the account column on Anthropic rows.

@@ -1,0 +1,8 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "qmd_bridge",
+    srcs = glob(["**/*.py"]),
+    imports = [".."],  # `..` from src/qmd_bridge -> src/, so `import qmd_bridge`
+    visibility = ["//visibility:public"],
+)

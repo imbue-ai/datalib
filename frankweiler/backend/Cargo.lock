@@ -219,6 +219,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-qmd-indexer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "frankweiler-schema"
 version = "0.1.0"
 dependencies = [

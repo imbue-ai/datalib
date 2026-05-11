@@ -20,6 +20,12 @@ class GridRow:
       openai.message: openai_messages.message_id
       slack.thread: uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')
       slack.message: uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')
+      github.pr: uuidv5(GITHUB_NS, 'github:{repo}:pr:{number}')
+      github.issue_comment: uuidv5(GITHUB_NS, 'github:{repo}:issue_comment:{id}')
+      github.pr_review: uuidv5(GITHUB_NS, 'github:{repo}:pr_review:{id}')
+      github.pr_review_comment: uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')
+      gitlab.mr: uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')
+      gitlab.note: uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')
     """
     provider: str
     """Which provider this row originated from. Determines which per-provider table to consult for the raw payload."""
@@ -39,6 +45,12 @@ class GridRow:
       openai.message.system|*: 'Tool Call'
       slack.thread: 'Slack Thread'
       slack.message: 'Slack Message'
+      github.pr: 'GitHub PR'
+      github.issue_comment: 'GitHub PR Comment'
+      github.pr_review: 'GitHub Review'
+      github.pr_review_comment: 'GitHub Review Comment'
+      gitlab.mr: 'GitLab MR'
+      gitlab.note: 'GitLab Discussion Note'
     """
     source_label: str
     """Human-friendly provider label shown in the Source column.
@@ -47,6 +59,8 @@ class GridRow:
       anthropic: 'Claude'
       openai: 'ChatGPT'
       slack: 'Slack'
+      github: 'GitHub'
+      gitlab: 'GitLab'
     """
     when_ts: str
     """ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable.
@@ -58,6 +72,10 @@ class GridRow:
       openai.chat: IFNULL(create_time, update_time)
       openai.message: messages.create_time OR bump_micros(parent_conv.create_time, msg_idx+1)
       slack.message: slack_messages.ts (Slack ts is unix-seconds-with-fractional, formatted as ISO-8601 in UTC)
+      github.pr: pull_request.updated_at OR created_at
+      github.comment: comment.created_at
+      gitlab.mr: merge_request.updated_at OR created_at
+      gitlab.note: note.created_at
     """
     author: str | None
     """Display name of the message author. For LLM responses this is typically the model slug; for user inputs, the account; for Slack, the user real_name.
@@ -69,6 +87,8 @@ class GridRow:
       openai.message.user: account_id
       openai.message.assistant: model_slug OR role
       slack.message: users.real_name OR users.name
+      github: comment.user.login OR pull_request.user.login
+      gitlab: note.author.username OR merge_request.author.username
     """
     account: str | None
     """Account identifier (provider-native). Drives the account: filter.
@@ -77,14 +97,18 @@ class GridRow:
       anthropic: anthropic_conversations.account_uuid
       openai: openai_conversations.account_id
       slack: slack_workspaces.team_id
+      github: self_identity.viewer.login (the host account that fetched the data)
+      gitlab: self_identity.current_user.username
     """
     project: str | None
-    """Project identifier. Currently only Anthropic has projects; null for everyone else.
+    """Project identifier. For anthropic this is the project UUID; for github/gitlab this is the repo full name (e.g. 'owner/repo' or 'group/.../project_path'). Null for providers without a project notion (openai, slack).
 
     Per-provider mapping:
       anthropic: anthropic_conversations.project_uuid
       openai: null
       slack: null
+      github: pull_request.base.repo.full_name (e.g. 'enterprise-d/replicator-firmware')
+      gitlab: merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')
     """
     channel: str | None
     """Slack channel display name (e.g. 'bridge', 'engineering'). Null for non-Slack rows. Drives the Channel column and a future channel: filter.
@@ -93,6 +117,8 @@ class GridRow:
       anthropic: null
       openai: null
       slack: slack_channels.channel_name
+      github: null
+      gitlab: null
     """
     conversation_name: str | None
     """Human-readable parent conversation title — drives the Conversation Name grid column. For Chat rows this duplicates the row's own title; for messages/blocks it carries the parent thread's title so each grid row stands alone without a join.
@@ -101,6 +127,8 @@ class GridRow:
       anthropic: anthropic_conversations.name
       openai: openai_conversations.title
       slack: slack_channels.channel_name + thread root snippet
+      github: pull_request.title (carried onto every child comment/review row)
+      gitlab: merge_request.title (carried onto every child note row)
     """
     conversation_uuid: str
     """Parent conversation / thread UUID. For Chat / Slack Thread rows this equals `uuid`. For Message / block rows it points at the parent so the chat preview pane knows which thread to open.
@@ -113,9 +141,13 @@ class GridRow:
       openai.message: messages.conversation_id
       slack.thread: = uuid (thread root uuid)
       slack.message: thread root uuid
+      github.pr: = uuid (PR uuid)
+      github.comment: parent PR uuid
+      gitlab.mr: = uuid (MR uuid)
+      gitlab.note: parent MR uuid
     """
     message_index: int | None
-    """Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `#m-idx-{index}`. Null for Chat / Slack Thread rows."""
+    """Zero-based index of this message within its conversation, in the same order the QMD file renders messages. Used by ChatPreviewPane to scroll to and highlight the clicked message via `[data-msg-index="{index}"]`. Null for Chat / Slack Thread rows."""
     entire_chat: str
     """Path used by the row to open the full thread in the right-hand preview. Today: `/chat/{conversation_uuid}`."""
     text: str
@@ -129,6 +161,10 @@ class GridRow:
       openai.message: messages.text
       slack.thread: root message text
       slack.message: messages.text (with mention/emoji rendering)
+      github.pr: pull_request.title + body
+      github.comment: comment.body
+      gitlab.mr: merge_request.title + description
+      gitlab.note: note.body
     """
     slack_link: str | None
     """Deep link of the form `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or the https equivalent). Populated only for Slack rows; drives the 'Open in Slack' right-click context menu item."""
@@ -139,6 +175,38 @@ class GridRow:
       anthropic: anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{slug(name)}.qmd
       openai: openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.qmd
       slack: slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.qmd
+      github: github/{owner}/{repo}/pr-{number}__{slug(title)}/index.qmd (PR), or .../threads/{thread_uuid}__{slug}.qmd (comment threads)
+      gitlab: gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.qmd (MR), or .../threads/{discussion_uuid}__{slug}.qmd (discussion threads)
+    """
+    source_url: str | None
+    """Canonical URL pointing back to the original source on the provider's web UI. For GitHub/GitLab this is the html_url/web_url of the PR/MR or comment; null for providers without a stable public link.
+
+    Per-provider mapping:
+      github.pr: pull_request.html_url
+      github.comment: comment.html_url
+      gitlab.mr: merge_request.web_url
+      gitlab.note: merge_request.web_url + '#note_' + note.id
+    """
+    git_sha: str | None
+    """Git commit SHA associated with the row, used to reconstruct exact source state. For PRs/MRs this is the head SHA at the time of ingest; for review/diff comments it's the commit the comment is anchored to.
+
+    Per-provider mapping:
+      github.pr: pull_request.head.sha
+      github.pr_review: review.commit_id
+      github.pr_review_comment: comment.commit_id OR comment.original_commit_id
+      gitlab.mr: merge_request.sha (head)
+      gitlab.note: note.position.head_sha (if diff note) else null
+    """
+    external_id: str | None
+    """Provider-native primary identifier for this entity (e.g. numeric GitHub/GitLab id, PR number). Preserved alongside our uuid so we can round-trip back to the provider's API.
+
+    Per-provider mapping:
+      github.pr: pull_request.number
+      github.issue_comment: comment.id
+      github.pr_review: review.id
+      github.pr_review_comment: comment.id
+      gitlab.mr: merge_request.iid
+      gitlab.note: note.id
     """
 
 
@@ -168,6 +236,9 @@ CREATE TABLE IF NOT EXISTS grid_rows (
     text LONGTEXT NOT NULL,
     slack_link VARCHAR(512),
     qmd_path VARCHAR(512),
+    source_url VARCHAR(1024),
+    git_sha VARCHAR(64),
+    external_id VARCHAR(128),
     PRIMARY KEY (uuid)
 )
     """,
@@ -193,5 +264,8 @@ COLUMNS: dict[str, list[str]] = {
         "text",
         "slack_link",
         "qmd_path",
+        "source_url",
+        "git_sha",
+        "external_id",
     ],
 }

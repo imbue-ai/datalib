@@ -10,6 +10,8 @@ from ingest.config import (
     AnthropicExportDirSource,
     ChatGPTApiDirSource,
     Config,
+    GithubApiDirSource,
+    GitlabApiDirSource,
     SlackApiDirSource,
 )
 from ingest.dolt_service import DoltService
@@ -19,6 +21,20 @@ from ingest.providers.anthropic.ingest import (
     merge_anthropic,
 )
 from ingest.providers.anthropic.parse import ParsedExport
+from ingest.providers.github.ingest import (
+    ingest_api_dir as ingest_github_api_dir,
+)
+from ingest.providers.github.ingest import (
+    merge_github,
+)
+from ingest.providers.github.parse import ParsedGithubApi
+from ingest.providers.gitlab.ingest import (
+    ingest_api_dir as ingest_gitlab_api_dir,
+)
+from ingest.providers.gitlab.ingest import (
+    merge_gitlab,
+)
+from ingest.providers.gitlab.parse import ParsedGitlabApi
 from ingest.providers.openai.ingest import (
     ingest_api_dir,
     merge_openai,
@@ -33,6 +49,8 @@ from ingest.providers.slack.ingest import (
 from ingest.providers.slack.parse import ParsedSlackApi
 from ingest.render import (
     render_anthropic,
+    render_github,
+    render_gitlab,
     render_openai,
     render_slack,
     write_accounts_json,
@@ -69,6 +87,8 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     openai_inputs: list[ParsedChatGPTApi] = []
     slack_inputs: list[ParsedSlackApi] = []
     slack_media_dirs: list = []
+    github_inputs: list[ParsedGithubApi] = []
+    gitlab_inputs: list[ParsedGitlabApi] = []
 
     log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
     for src in config.enabled_sources:
@@ -92,6 +112,12 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
             media = src.path / "media"
             if media.is_dir():
                 slack_media_dirs.append(media)
+        elif isinstance(src, GithubApiDirSource):
+            parsed_gh, stats = ingest_github_api_dir(src.path)
+            github_inputs.append(parsed_gh)
+        elif isinstance(src, GitlabApiDirSource):
+            parsed_gl, stats = ingest_gitlab_api_dir(src.path)
+            gitlab_inputs.append(parsed_gl)
         else:
             raise NotImplementedError(f"unknown source: {src!r}")
         log.info("[%s] parsed in %.1fs", src.name, time.monotonic() - t0)
@@ -107,6 +133,8 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     anthropic = merge_anthropic(anthropic_inputs) if anthropic_inputs else None
     openai = merge_openai(openai_inputs) if openai_inputs else None
     slack = merge_slack(slack_inputs) if slack_inputs else None
+    github = merge_github(github_inputs) if github_inputs else None
+    gitlab = merge_gitlab(gitlab_inputs) if gitlab_inputs else None
 
     # Render QMDs and accounts.json directly from parsed data — no SQL.
     if anthropic is not None:
@@ -121,6 +149,14 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         r = render_slack(slack, config.root, media_dirs=slack_media_dirs)
         summary.rendered += r.rendered
         summary.rendered_orphans_removed += r.orphans_removed
+    if github is not None:
+        r = render_github(github, config.root)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
+    if gitlab is not None:
+        r = render_gitlab(gitlab, config.root)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
     write_accounts_json(anthropic, openai, config.root)
 
     # Write grid_rows to Dolt — the only structured table that survives.
@@ -129,7 +165,9 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
             conn.autocommit(False)
             log.info("populating grid_rows")
             t0 = time.monotonic()
-            summary.grid_rows = populate_grid_rows(conn, anthropic, openai, slack)
+            summary.grid_rows = populate_grid_rows(
+                conn, anthropic, openai, slack, github, gitlab
+            )
             conn.commit()
             log.info(
                 "grid_rows: %d rows in %.1fs",
