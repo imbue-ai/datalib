@@ -37,19 +37,23 @@
             "github.pr_review":        "uuidv5(GITHUB_NS, 'github:{repo}:pr_review:{id}')",
             "github.pr_review_comment":"uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')",
             "gitlab.mr":               "uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')",
-            "gitlab.note":             "uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')"
+            "gitlab.note":             "uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')",
+            "notion.page":             "page_id (already a Notion UUID)",
+            "notion.heading":          "uuidv5(NOTION_NS, 'notion:heading:{page_id}:{block_id}')",
+            "notion.thread":           "discussion_id (already a Notion UUID)",
+            "notion.comment":          "comment_id (already a Notion UUID)"
           }
         },
         "provider": {
           "type": "string",
           "x-sql-type": "VARCHAR(32)",
-          "enum": ["anthropic", "openai", "slack", "github", "gitlab"],
+          "enum": ["anthropic", "openai", "slack", "github", "gitlab", "notion"],
           "description": "Which provider this row originated from. Determines which per-provider table to consult for the raw payload."
         },
         "kind": {
           "type": "string",
           "x-sql-type": "VARCHAR(32)",
-          "enum": ["Chat", "User Input", "LLM Response", "LLM Thinking", "Tool Call", "Slack Thread", "Slack Message", "GitHub PR", "GitHub PR Comment", "GitHub Review", "GitHub Review Comment", "GitLab MR", "GitLab Discussion Note"],
+          "enum": ["Chat", "User Input", "LLM Response", "LLM Thinking", "Tool Call", "Slack Thread", "Slack Message", "GitHub PR", "GitHub PR Comment", "GitHub Review", "GitHub Review Comment", "GitLab MR", "GitLab Discussion Note", "Notion Page", "Notion Database", "Notion Heading 1", "Notion Heading 2", "Notion Heading 3", "Notion Comment Thread", "Notion Comment"],
           "description": "Row category as displayed in the Kind column. Drives the row-type filter (chat: vs message:) and the icon.",
           "x-mapping": {
             "anthropic.chat":            "'Chat'",
@@ -69,7 +73,13 @@
             "github.pr_review":          "'GitHub Review'",
             "github.pr_review_comment":  "'GitHub Review Comment'",
             "gitlab.mr":                 "'GitLab MR'",
-            "gitlab.note":               "'GitLab Discussion Note'"
+            "gitlab.note":               "'GitLab Discussion Note'",
+            "notion.page":               "'Notion Page' (or 'Notion Database' for collection_view_page)",
+            "notion.heading.h1":         "'Notion Heading 1'",
+            "notion.heading.h2":         "'Notion Heading 2'",
+            "notion.heading.h3":         "'Notion Heading 3'",
+            "notion.thread":             "'Notion Comment Thread'",
+            "notion.comment":            "'Notion Comment'"
           }
         },
         "source_label": {
@@ -81,7 +91,8 @@
             "openai":    "'ChatGPT'",
             "slack":     "'Slack'",
             "github":    "'GitHub'",
-            "gitlab":    "'GitLab'"
+            "gitlab":    "'GitLab'",
+            "notion":    "'Notion'"
           }
         },
         "when_ts": {
@@ -99,7 +110,11 @@
             "github.pr":         "pull_request.updated_at OR created_at",
             "github.comment":    "comment.created_at",
             "gitlab.mr":         "merge_request.updated_at OR created_at",
-            "gitlab.note":       "note.created_at"
+            "gitlab.note":       "note.created_at",
+            "notion.page":       "block.last_edited_time (Notion ms epoch, formatted ISO-8601 UTC)",
+            "notion.heading":    "parent_page.last_edited_time (headings inherit page's last_edited_time)",
+            "notion.thread":     "first comment.created_time",
+            "notion.comment":    "comment.created_time"
           }
         },
         "author": {
@@ -114,7 +129,11 @@
             "openai.message.assistant":  "model_slug OR role",
             "slack.message":             "users.real_name OR users.name",
             "github":                    "comment.user.login OR pull_request.user.login",
-            "gitlab":                    "note.author.username OR merge_request.author.username"
+            "gitlab":                    "note.author.username OR merge_request.author.username",
+            "notion.page":               "notion_user.name for block.last_edited_by_id (or created_by for headings)",
+            "notion.heading":            "notion_user.name for parent_page.last_edited_by_id",
+            "notion.thread":             "notion_user.name for first comment.created_by_id",
+            "notion.comment":            "notion_user.name for comment.created_by_id"
           }
         },
         "account": {
@@ -126,7 +145,8 @@
             "openai":    "openai_conversations.account_id",
             "slack":     "slack_workspaces.team_id",
             "github":    "self_identity.viewer.login (the host account that fetched the data)",
-            "gitlab":    "self_identity.current_user.username"
+            "gitlab":    "self_identity.current_user.username",
+            "notion":    "notion_space.name (workspace name; one per ingest)"
           }
         },
         "project": {
@@ -138,7 +158,8 @@
             "openai":    "null",
             "slack":     "null",
             "github":    "pull_request.base.repo.full_name (e.g. 'enterprise-d/replicator-firmware')",
-            "gitlab":    "merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')"
+            "gitlab":    "merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')",
+            "notion":    "null (Notion does not have a per-page project notion; workspace lives in `account`)"
           }
         },
         "channel": {
@@ -162,7 +183,11 @@
             "openai":    "openai_conversations.title",
             "slack":     "slack_channels.channel_name + thread root snippet",
             "github":    "pull_request.title (carried onto every child comment/review row)",
-            "gitlab":    "merge_request.title (carried onto every child note row)"
+            "gitlab":    "merge_request.title (carried onto every child note row)",
+            "notion.page":    "block.properties.title (plain-text join)",
+            "notion.heading": "parent_page.properties.title",
+            "notion.thread":  "parent_page.properties.title",
+            "notion.comment": "parent_page.properties.title"
           }
         },
         "conversation_uuid": {
@@ -180,7 +205,11 @@
             "github.pr":         "= uuid (PR uuid)",
             "github.comment":    "parent PR uuid",
             "gitlab.mr":         "= uuid (MR uuid)",
-            "gitlab.note":       "parent MR uuid"
+            "gitlab.note":       "parent MR uuid",
+            "notion.page":       "= uuid (page_id)",
+            "notion.heading":    "parent page_id",
+            "notion.thread":     "= uuid (discussion_id)",
+            "notion.comment":    "parent discussion_id"
           }
         },
         "message_index": {
@@ -208,7 +237,11 @@
             "github.pr":         "pull_request.title + body",
             "github.comment":    "comment.body",
             "gitlab.mr":         "merge_request.title + description",
-            "gitlab.note":       "note.body"
+            "gitlab.note":       "note.body",
+            "notion.page":       "page title + full plain-text body of all child blocks (recursive)",
+            "notion.heading":    "heading block's plain-text title",
+            "notion.thread":     "concatenated plain-text of every comment in the discussion",
+            "notion.comment":    "comment.text rendered to plain text"
           }
         },
         "slack_link": {
@@ -225,7 +258,8 @@
             "openai":    "openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.qmd",
             "slack":     "slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.qmd",
             "github":    "github/{owner}/{repo}/pr-{number}__{slug(title)}/index.qmd (PR), or .../threads/{thread_uuid}__{slug}.qmd (comment threads)",
-            "gitlab":    "gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.qmd (MR), or .../threads/{discussion_uuid}__{slug}.qmd (discussion threads)"
+            "gitlab":    "gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.qmd (MR), or .../threads/{discussion_uuid}__{slug}.qmd (discussion threads)",
+            "notion":    "notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.qmd (pages + headings); .../comments/{thread_short_id}__{snippet}.qmd (comment threads)"
           }
         },
         "source_url": {
@@ -263,6 +297,16 @@
             "gitlab.mr":               "merge_request.iid",
             "gitlab.note":             "note.id"
           }
+        },
+        "notion_page_uuid": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Notion-only. UUID of the page this row belongs to. For page rows this equals `uuid`; for heading / comment thread / comment rows it points at the containing page so the grid can filter every row that lives in a given document. Null for non-Notion rows."
+        },
+        "notion_block_uuid": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(96)",
+          "description": "Notion-only. UUID of the specific block this row is anchored to. For heading rows this is the heading block; for comment-thread rows it is the block the discussion is attached to (`discussion.parent_id` when parent_table='block'); for individual comment rows it is the same as the parent thread's block. Null for page-level rows and non-Notion rows."
         }
       }
     }

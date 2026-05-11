@@ -61,9 +61,10 @@ def test_qmd_tar_contains_expected_files() -> None:
         names = sorted(tf.getnames())
 
     # 7 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
-    # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files).
+    # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files) +
+    # 9 Notion files (7 page index.qmd + 2 comment thread files).
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 26, qmd_files
+    assert len(qmd_files) == 35, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -73,6 +74,15 @@ def test_qmd_tar_contains_expected_files() -> None:
     assert any("anyone-up-for-poker-tonight.qmd" in n for n in qmd_files)
     assert any("pr-42__recalibrate-replicator" in n for n in qmd_files)
     assert any("mr-17__add-earl-grey" in n for n in qmd_files)
+    # Notion: nested page hierarchy and a comment thread sibling of index.qmd.
+    assert any("bridge-operations__" in n and n.endswith("/index.qmd") for n in qmd_files)
+    assert any(
+        "warp-core-maintenance__" in n and n.endswith("/index.qmd") for n in qmd_files
+    )
+    assert any(
+        "encounter-at-farpoint__" in n and n.endswith("/index.qmd") for n in qmd_files
+    )
+    assert any("/comments/d15c0001__" in n for n in qmd_files)
 
 
 def test_dump_sql_loads_into_in_memory_sqlite() -> None:
@@ -106,6 +116,26 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
         "SELECT COUNT(*) FROM grid_rows WHERE kind = 'GitLab MR'"
     ).fetchone()[0]
     assert gl_mrs == 2
+
+    # Notion: 7 pages (5 plain + 1 collection_view_page + 1 root) and at
+    # least one H1 heading and one comment thread + comment.
+    notion_pages = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows "
+        "WHERE kind IN ('Notion Page', 'Notion Database')"
+    ).fetchone()[0]
+    assert notion_pages == 7
+    notion_h1 = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Heading 1'"
+    ).fetchone()[0]
+    assert notion_h1 > 0
+    notion_threads = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Comment Thread'"
+    ).fetchone()[0]
+    assert notion_threads == 2
+    notion_comments = conn.execute(
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Comment'"
+    ).fetchone()[0]
+    assert notion_comments == 3
 
     # Picard's account_uuid is a stable provider key; he should appear in
     # the account column on Anthropic rows.

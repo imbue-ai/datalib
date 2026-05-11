@@ -22,6 +22,14 @@ from tqdm import tqdm
 from ingest.providers.anthropic.parse import ParsedExport
 from ingest.providers.github.parse import ParsedGithubApi
 from ingest.providers.gitlab.parse import ParsedGitlabApi
+from ingest.providers.notion.parse import (
+    BlockRow as _NotionBlockRow,
+)
+from ingest.providers.notion.parse import (
+    ParsedNotionWeb,
+    notion_ms_to_iso,
+    rich_text_to_plain,
+)
 from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
 from ingest.providers.slack.parse import ParsedSlackApi
@@ -907,6 +915,553 @@ def render_gitlab(parsed: ParsedGitlabApi, root: Path) -> RenderSummary:
         (mr_dir / "index.qmd").write_text("\n".join(idx_parts).rstrip() + "\n")
         summary.rendered += 1
     return summary
+
+
+# ---------------- Notion ----------------
+
+
+_NOTION_HEADING_TYPES = {"header": 1, "sub_header": 2, "sub_sub_header": 3}
+
+
+def _notion_short_id(uuid_str: str) -> str:
+    return (uuid_str or "").split("-", 1)[0][:8] or "00000000"
+
+
+def _notion_page_slug(title: str | None) -> str:
+    return _slugify(title) if title else "untitled"
+
+
+def _notion_page_dir_segment(page_id: str, title: str | None) -> str:
+    return f"{_notion_page_slug(title)}__{_notion_short_id(page_id)}"
+
+
+def _notion_space_segment(space) -> str:
+    name = space.name if space else None
+    sid = space.space_id if space else ""
+    return f"{_slugify(name)}__{_notion_short_id(sid)}"
+
+
+def _notion_page_titles(
+    blocks: list[_NotionBlockRow],
+    collections: list | None = None,
+) -> dict[str, str]:
+    """Plain-text title for every page-like block (page + collection_view_page).
+    Used both for rich-text mention resolution and for path slugs.
+
+    For `collection_view_page` the title lives on the linked collection,
+    not on the block itself; fall back to the collection's `name` when the
+    block has no own title."""
+    coll_names: dict[str, str] = {}
+    for c in collections or []:
+        coll_names[c.collection_id] = c.name_plain or "(untitled)"
+    out: dict[str, str] = {}
+    for b in blocks:
+        if b.type not in ("page", "collection_view_page"):
+            continue
+        t = rich_text_to_plain((b.properties or {}).get("title"))
+        if not t and b.type == "collection_view_page" and b.collection_id:
+            t = coll_names.get(b.collection_id, "")
+        out[b.block_id] = t or "(untitled)"
+    return out
+
+
+def _notion_user_names(parsed: ParsedNotionWeb) -> dict[str, str]:
+    return {u.user_id: (u.name or u.user_id) for u in parsed.users}
+
+
+def _notion_page_path_segments(
+    page_id: str,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+    collection_owner_block: dict[str, str] | None = None,
+) -> list[str]:
+    """Walk parent chain up while parent_table=='block' (i.e. nested pages).
+    Stops at the root page (whose parent_table is 'space'). The space
+    segment is added by the caller.
+
+    `collection_owner_block` maps collection_id → the block (typically a
+    `collection_view_page`) that owns it, so DB rows (which have
+    parent_table='collection') can chain up into the page hierarchy."""
+    collection_owner_block = collection_owner_block or {}
+    chain: list[str] = []
+    cur_id: str | None = page_id
+    seen: set[str] = set()
+    while cur_id and cur_id not in seen:
+        seen.add(cur_id)
+        block = blocks_by_id.get(cur_id)
+        if block is None:
+            break
+        chain.append(_notion_page_dir_segment(cur_id, page_titles.get(cur_id)))
+        if block.parent_table == "block":
+            parent = blocks_by_id.get(block.parent_id or "")
+            if parent is None or parent.type not in ("page", "collection_view_page"):
+                break
+            cur_id = parent.block_id
+        elif block.parent_table == "collection":
+            owner_id = collection_owner_block.get(block.parent_id or "")
+            if not owner_id:
+                break
+            cur_id = owner_id
+        else:
+            break
+    return list(reversed(chain))
+
+
+def _notion_collection_owner_block_map(
+    blocks_by_id: dict[str, _NotionBlockRow],
+) -> dict[str, str]:
+    """For each `collection_id`, the block that 'hosts' it in the page
+    hierarchy — prefer a `collection_view_page` (full-page DB), fall back
+    to an inline `collection_view`. Used to graft DB rows
+    (parent_table='collection') into the page tree."""
+    out: dict[str, str] = {}
+    for b in blocks_by_id.values():
+        if not b.collection_id:
+            continue
+        if b.type == "collection_view_page":
+            out[b.collection_id] = b.block_id
+        elif b.type == "collection_view" and b.collection_id not in out:
+            out[b.collection_id] = b.block_id
+    return out
+
+
+def _notion_page_rel_dir(
+    space,
+    page_id: str,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+) -> str:
+    coll_owner = _notion_collection_owner_block_map(blocks_by_id)
+    segs = [_notion_space_segment(space)] + _notion_page_path_segments(
+        page_id, blocks_by_id, page_titles, collection_owner_block=coll_owner
+    )
+    return "notion/" + "/".join(segs)
+
+
+def _notion_page_qmd_path(
+    space,
+    page_id: str,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+) -> str:
+    """Each page renders to `<page_rel_dir>/index.qmd` so its sub-pages can
+    live in sibling directories beneath the same path."""
+    return f"{_notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)}/index.qmd"
+
+
+def _notion_thread_qmd_path(
+    space,
+    page_id: str,
+    discussion_id: str,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+    snippet: str,
+) -> str:
+    page_dir = _notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)
+    name = f"{_notion_short_id(discussion_id)}__{_slugify(snippet)}.qmd"
+    return f"{page_dir}/comments/{name}"
+
+
+def _notion_render_rich_text(
+    rt: list | None,
+    user_names: dict[str, str],
+    page_titles: dict[str, str],
+) -> str:
+    """Render Notion rich-text to inline CommonMark. Preserves bold / italic /
+    code marks and rewrites user / page / link references."""
+    if not rt:
+        return ""
+    out: list[str] = []
+    for span in rt:
+        if not isinstance(span, list) or not span:
+            continue
+        text = span[0]
+        marks = span[1] if len(span) > 1 else []
+        rendered: str | None = None
+        wrap_bold = False
+        wrap_italic = False
+        wrap_code = False
+        link_href: str | None = None
+        for mark in marks or []:
+            if not isinstance(mark, list) or not mark:
+                continue
+            tag = mark[0]
+            arg = mark[1] if len(mark) > 1 else None
+            if tag == "b":
+                wrap_bold = True
+            elif tag == "i":
+                wrap_italic = True
+            elif tag == "c":
+                wrap_code = True
+            elif tag == "a" and isinstance(arg, str):
+                link_href = arg
+            elif tag == "u" and isinstance(arg, str):
+                rendered = "@" + (user_names.get(arg) or arg[:8])
+            elif tag == "p" and isinstance(arg, str):
+                title = page_titles.get(arg) or f"page:{arg[:8]}"
+                rendered = title
+            elif tag == "d" and isinstance(arg, dict):
+                rendered = arg.get("start_date") or ""
+            elif tag == "sm" and isinstance(arg, str):
+                rendered = arg.split("/", 1)[-1]
+        s = rendered if rendered is not None else str(text)
+        if wrap_code:
+            s = f"`{s}`"
+        if wrap_bold:
+            s = f"**{s}**"
+        if wrap_italic:
+            s = f"*{s}*"
+        if link_href and not wrap_code:
+            s = f"[{s}]({link_href})"
+        out.append(s)
+    return "".join(out)
+
+
+def _notion_render_block(
+    block: _NotionBlockRow,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    user_names: dict[str, str],
+    page_titles: dict[str, str],
+    *,
+    depth: int = 0,
+) -> list[str]:
+    """Recursively render one block to markdown lines. Returns lines with no
+    trailing newlines so the caller can join with '\\n'."""
+    btype = block.type or ""
+    props = block.properties or {}
+    title_md = _notion_render_rich_text(
+        props.get("title"), user_names, page_titles
+    )
+    indent = "    " * depth
+    lines: list[str] = []
+
+    if btype == "text":
+        if title_md:
+            lines.append(f"{indent}{title_md}")
+        lines.append("")
+    elif btype == "header":
+        lines.append(f"# {title_md}")
+        lines.append("")
+    elif btype == "sub_header":
+        lines.append(f"## {title_md}")
+        lines.append("")
+    elif btype == "sub_sub_header":
+        lines.append(f"### {title_md}")
+        lines.append("")
+    elif btype == "bulleted_list":
+        lines.append(f"{indent}- {title_md}")
+    elif btype == "numbered_list":
+        lines.append(f"{indent}1. {title_md}")
+    elif btype == "to_do":
+        checked = (props.get("checked") or [[""]])[0][0] == "Yes"
+        box = "[x]" if checked else "[ ]"
+        lines.append(f"{indent}- {box} {title_md}")
+    elif btype == "toggle":
+        lines.append(f"{indent}<details><summary>{title_md}</summary>")
+        lines.append("")
+        for child_id in block.content:
+            child = blocks_by_id.get(child_id)
+            if child:
+                lines.extend(
+                    _notion_render_block(
+                        child, blocks_by_id, user_names, page_titles, depth=depth
+                    )
+                )
+        lines.append(f"{indent}</details>")
+        lines.append("")
+        return lines  # children already rendered
+    elif btype == "quote":
+        lines.append(f"> {title_md}")
+        lines.append("")
+    elif btype == "callout":
+        icon = (block.format or {}).get("page_icon") or "💡"
+        lines.append(f"> {icon} {title_md}")
+        lines.append("")
+    elif btype == "code":
+        lang_rt = props.get("language") or [[""]]
+        lang = (lang_rt[0][0] if lang_rt and lang_rt[0] else "").lower()
+        code_text = (props.get("title") or [[""]])[0][0]
+        lines.append(f"```{lang}")
+        lines.append(code_text)
+        lines.append("```")
+        lines.append("")
+    elif btype == "divider":
+        lines.append("---")
+        lines.append("")
+    elif btype == "image":
+        src = (props.get("source") or [[""]])[0][0]
+        caption = _notion_render_rich_text(
+            props.get("caption"), user_names, page_titles
+        )
+        alt = caption or "image"
+        lines.append(f"![{alt}]({src})")
+        lines.append("")
+    elif btype == "file":
+        src = (props.get("source") or [[""]])[0][0]
+        name = (props.get("title") or [["file"]])[0][0]
+        lines.append(f"[📎 {name}]({src})")
+        lines.append("")
+    elif btype == "embed":
+        src = (props.get("source") or [[""]])[0][0]
+        lines.append(f"<iframe src=\"{src}\"></iframe>")
+        lines.append("")
+    elif btype == "table":
+        col_order = (block.format or {}).get("table_block_column_order") or []
+        has_header = bool((block.format or {}).get("table_block_column_header"))
+        rows: list[list[str]] = []
+        for row_id in block.content:
+            row_block = blocks_by_id.get(row_id)
+            if row_block is None or row_block.type != "table_row":
+                continue
+            cells = []
+            for col in col_order:
+                cell_rt = (row_block.properties or {}).get(col) or []
+                cells.append(
+                    _notion_render_rich_text(cell_rt, user_names, page_titles)
+                )
+            rows.append(cells)
+        if rows:
+            if not has_header:
+                rows.insert(0, ["" for _ in col_order])
+            lines.append("| " + " | ".join(rows[0]) + " |")
+            lines.append("| " + " | ".join(["---"] * len(col_order)) + " |")
+            for r in rows[1:]:
+                lines.append("| " + " | ".join(r) + " |")
+            lines.append("")
+        return lines
+    elif btype in ("column_list", "column"):
+        for child_id in block.content:
+            child = blocks_by_id.get(child_id)
+            if child:
+                lines.extend(
+                    _notion_render_block(
+                        child, blocks_by_id, user_names, page_titles, depth=depth
+                    )
+                )
+        return lines
+    elif btype == "page" and depth > 0:
+        # Nested page link — render as a link rather than inlining.
+        sub_title = page_titles.get(block.block_id, "(untitled)")
+        slug = _notion_page_dir_segment(block.block_id, sub_title)
+        lines.append(f"{indent}- 📄 [{sub_title}]({slug}/index.qmd)")
+        lines.append("")
+        return lines
+    elif btype == "collection_view" or btype == "collection_view_page":
+        coll_title = (
+            page_titles.get(block.block_id)
+            if btype == "collection_view_page"
+            else None
+        )
+        label = coll_title or "(inline database)"
+        lines.append(f"{indent}*[Database: {label}]*")
+        lines.append("")
+        return lines
+    else:
+        if title_md:
+            lines.append(f"{indent}{title_md}")
+            lines.append("")
+
+    # Render children for the simple block types (lists / to_do can have
+    # nested children via `content`).
+    if btype in ("bulleted_list", "numbered_list", "to_do"):
+        for child_id in block.content:
+            child = blocks_by_id.get(child_id)
+            if child:
+                lines.extend(
+                    _notion_render_block(
+                        child,
+                        blocks_by_id,
+                        user_names,
+                        page_titles,
+                        depth=depth + 1,
+                    )
+                )
+    return lines
+
+
+def _notion_render_one_page(
+    page: _NotionBlockRow,
+    parsed: ParsedNotionWeb,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+    user_names: dict[str, str],
+    root: Path,
+) -> Path:
+    rel_dir = _notion_page_rel_dir(parsed.space, page.block_id, blocks_by_id, page_titles)
+    out_dir = root / rel_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "index.qmd"
+
+    title = page_titles.get(page.block_id) or "(untitled)"
+    icon = (page.format or {}).get("page_icon")
+
+    parts: list[str] = []
+    parts.append("---")
+    parts.append("provider: notion")
+    parts.append(f"page_id: {_yaml_scalar(page.block_id)}")
+    parts.append(f"title: {_yaml_scalar(title)}")
+    parts.append(f"space_id: {_yaml_scalar(parsed.space.space_id if parsed.space else None)}")
+    parts.append(
+        f"created_time: {_yaml_scalar(notion_ms_to_iso(page.created_time_ms))}"
+    )
+    parts.append(
+        f"last_edited_time: {_yaml_scalar(notion_ms_to_iso(page.last_edited_time_ms))}"
+    )
+    parts.append("---")
+    parts.append("")
+    parts.append(f"# {icon + ' ' if icon else ''}{title}")
+    parts.append("")
+
+    for child_id in page.content:
+        child = blocks_by_id.get(child_id)
+        if child is None or not child.alive:
+            continue
+        parts.extend(
+            _notion_render_block(child, blocks_by_id, user_names, page_titles)
+        )
+
+    # Sub-pages: any block whose parent is this page and type=='page'.
+    subpages = [
+        b
+        for b in parsed.blocks
+        if b.parent_id == page.block_id
+        and b.parent_table == "block"
+        and b.type in ("page", "collection_view_page")
+        and b.alive
+    ]
+    if subpages:
+        parts.append("## Sub-pages")
+        parts.append("")
+        for sp in subpages:
+            sub_title = page_titles.get(sp.block_id, "(untitled)")
+            seg = _notion_page_dir_segment(sp.block_id, sub_title)
+            parts.append(f"- [📄 {sub_title}]({seg}/index.qmd)")
+        parts.append("")
+
+    target.write_text("\n".join(parts).rstrip() + "\n")
+    return target
+
+
+def _notion_render_one_thread(
+    discussion,
+    parsed: ParsedNotionWeb,
+    blocks_by_id: dict[str, _NotionBlockRow],
+    page_titles: dict[str, str],
+    user_names: dict[str, str],
+    page_id: str,
+    comments: list,
+    root: Path,
+) -> Path:
+    snippet = (comments[0].text_plain if comments else discussion.context_plain or "")
+    snippet = snippet.strip().splitlines()[0][:60] if snippet.strip() else "thread"
+
+    rel = _notion_thread_qmd_path(
+        parsed.space, page_id, discussion.discussion_id, blocks_by_id, page_titles, snippet
+    )
+    target = root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    page_title = page_titles.get(page_id, "(untitled)")
+    parts: list[str] = []
+    parts.append("---")
+    parts.append("provider: notion")
+    parts.append(f"discussion_id: {_yaml_scalar(discussion.discussion_id)}")
+    parts.append(f"page_id: {_yaml_scalar(page_id)}")
+    parts.append(f"resolved: {str(bool(discussion.resolved)).lower()}")
+    if discussion.context_plain:
+        parts.append(f"context: {_yaml_scalar(discussion.context_plain)}")
+    parts.append("---")
+    parts.append("")
+    parts.append(f"# Comment thread on “{page_title}”")
+    parts.append("")
+    if discussion.context_plain:
+        parts.append(f"> Anchored to: *{discussion.context_plain}*")
+        parts.append("")
+
+    for i, c in enumerate(comments):
+        author = user_names.get(c.created_by_id or "", c.created_by_id or "unknown")
+        parts.append(_msg_div_open(c.comment_id, i, "notion"))
+        parts.append("")
+        parts.append(f"## {author}")
+        parts.append("")
+        parts.append(f"*{notion_ms_to_iso(c.created_time_ms)}*")
+        parts.append("")
+        body_md = _notion_render_rich_text(
+            (c.raw_json or {}).get("text"), user_names, page_titles
+        )
+        parts.append(body_md or c.text_plain)
+        parts.append("")
+        parts.append(_MSG_DIV_CLOSE)
+        parts.append("")
+
+    target.write_text("\n".join(parts).rstrip() + "\n")
+    return target
+
+
+def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
+    summary = RenderSummary()
+    if not parsed.blocks and not parsed.comments:
+        return summary
+
+    blocks_by_id = {b.block_id: b for b in parsed.blocks}
+    page_titles = _notion_page_titles(parsed.blocks, parsed.collections)
+    user_names = _notion_user_names(parsed)
+
+    pages = [
+        b
+        for b in parsed.blocks
+        if b.type in ("page", "collection_view_page") and b.alive
+    ]
+    log.info("rendering notion: %d pages, %d discussions",
+             len(pages), len(parsed.discussions))
+
+    for p in tqdm(pages, desc="render notion pages", unit="pg", leave=False):
+        _notion_render_one_page(p, parsed, blocks_by_id, page_titles, user_names, root)
+        summary.rendered += 1
+
+    # Threads: group comments by discussion_id; place under the page that
+    # contains the discussion's anchor block.
+    comments_by_disc: dict[str, list] = {}
+    for c in parsed.comments:
+        if c.discussion_id:
+            comments_by_disc.setdefault(c.discussion_id, []).append(c)
+    for disc in parsed.discussions:
+        items = sorted(
+            comments_by_disc.get(disc.discussion_id, []),
+            key=lambda c: (c.created_time_ms or 0, c.comment_id),
+        )
+        if not items:
+            continue
+        page_id = _notion_thread_page_id(disc, blocks_by_id)
+        if not page_id:
+            continue
+        _notion_render_one_thread(
+            disc, parsed, blocks_by_id, page_titles, user_names, page_id, items, root
+        )
+        summary.rendered += 1
+
+    return summary
+
+
+def _notion_thread_page_id(
+    discussion, blocks_by_id: dict[str, _NotionBlockRow]
+) -> str | None:
+    """Walk up from the discussion's parent block until we hit a page-type
+    block. Returns the containing page's block_id, or None if we can't
+    find one (orphaned thread)."""
+    if discussion.parent_table != "block":
+        return None
+    cur_id: str | None = discussion.parent_id
+    seen: set[str] = set()
+    while cur_id and cur_id not in seen:
+        seen.add(cur_id)
+        block = blocks_by_id.get(cur_id)
+        if block is None:
+            return None
+        if block.type in ("page", "collection_view_page"):
+            return block.block_id
+        cur_id = block.parent_id
+    return None
 
 
 # ---------------- accounts.json ----------------

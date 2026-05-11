@@ -12,6 +12,7 @@ from ingest.config import (
     Config,
     GithubApiDirSource,
     GitlabApiDirSource,
+    NotionWebDirSource,
     SlackApiDirSource,
 )
 from ingest.dolt_service import DoltService
@@ -35,6 +36,13 @@ from ingest.providers.gitlab.ingest import (
     merge_gitlab,
 )
 from ingest.providers.gitlab.parse import ParsedGitlabApi
+from ingest.providers.notion.ingest import (
+    ingest_web_dir as ingest_notion_web_dir,
+)
+from ingest.providers.notion.ingest import (
+    merge_notion,
+)
+from ingest.providers.notion.parse import ParsedNotionWeb
 from ingest.providers.openai.ingest import (
     ingest_api_dir,
     merge_openai,
@@ -51,6 +59,7 @@ from ingest.render import (
     render_anthropic,
     render_github,
     render_gitlab,
+    render_notion,
     render_openai,
     render_slack,
     write_accounts_json,
@@ -89,6 +98,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     slack_media_dirs: list = []
     github_inputs: list[ParsedGithubApi] = []
     gitlab_inputs: list[ParsedGitlabApi] = []
+    notion_inputs: list[ParsedNotionWeb] = []
 
     log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
     for src in config.enabled_sources:
@@ -118,6 +128,9 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         elif isinstance(src, GitlabApiDirSource):
             parsed_gl, stats = ingest_gitlab_api_dir(src.path)
             gitlab_inputs.append(parsed_gl)
+        elif isinstance(src, NotionWebDirSource):
+            parsed_n, stats = ingest_notion_web_dir(src.path)
+            notion_inputs.append(parsed_n)
         else:
             raise NotImplementedError(f"unknown source: {src!r}")
         log.info("[%s] parsed in %.1fs", src.name, time.monotonic() - t0)
@@ -135,6 +148,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     slack = merge_slack(slack_inputs) if slack_inputs else None
     github = merge_github(github_inputs) if github_inputs else None
     gitlab = merge_gitlab(gitlab_inputs) if gitlab_inputs else None
+    notion = merge_notion(notion_inputs) if notion_inputs else None
 
     # Render QMDs and accounts.json directly from parsed data — no SQL.
     if anthropic is not None:
@@ -157,6 +171,10 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         r = render_gitlab(gitlab, config.root)
         summary.rendered += r.rendered
         summary.rendered_orphans_removed += r.orphans_removed
+    if notion is not None:
+        r = render_notion(notion, config.root)
+        summary.rendered += r.rendered
+        summary.rendered_orphans_removed += r.orphans_removed
     write_accounts_json(anthropic, openai, config.root)
 
     # Write grid_rows to Dolt — the only structured table that survives.
@@ -166,7 +184,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
             log.info("populating grid_rows")
             t0 = time.monotonic()
             summary.grid_rows = populate_grid_rows(
-                conn, anthropic, openai, slack, github, gitlab
+                conn, anthropic, openai, slack, github, gitlab, notion
             )
             conn.commit()
             log.info(

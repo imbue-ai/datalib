@@ -89,12 +89,24 @@ class GitlabApiDirSource(_SourceBase):
         return Path(v).expanduser().resolve()
 
 
+class NotionWebDirSource(_SourceBase):
+    provider: Literal["notion"]
+    kind: Literal["notion_web_dir"]
+    path: Path
+
+    @field_validator("path", mode="after")
+    @classmethod
+    def _expand(cls, v: Path) -> Path:
+        return Path(v).expanduser().resolve()
+
+
 SourceConfig = Annotated[
     AnthropicExportDirSource
     | ChatGPTApiDirSource
     | SlackApiDirSource
     | GithubApiDirSource
-    | GitlabApiDirSource,
+    | GitlabApiDirSource
+    | NotionWebDirSource,
     Field(discriminator="provider"),
 ]
 
@@ -126,6 +138,7 @@ class Config(BaseModel):
         | SlackApiDirSource
         | GithubApiDirSource
         | GitlabApiDirSource
+        | NotionWebDirSource
     ]:
         return [s for s in self.sources if s.enabled]
 

@@ -35,18 +35,27 @@ fixtures/
 │   review comments — #42 has a Riker → Picard reply pair anchored to
 │   src/replicator/tea.c:17 to exercise `in_reply_to_id` tree-rebuilding.
 │
-└── gitlab_api/                event-store JSONL written by `download/gitlab_web.py`.
+├── gitlab_api/                event-store JSONL written by `download/gitlab_web.py`.
+│   └── <entity>/{created,updated}/events.jsonl
+│   Entities: self_identity, merge_request, discussion. Project:
+│   `enterprise-d/holodeck`. Two MRs (!17 merged; !18 open) with a mix
+│   of position-anchored discussions (line-level diff threads with
+│   `position.new_path`/`new_line`) and free-form discussions
+│   (`individual_note: true`) so consumers see both shapes.
+│
+└── notion_web/                event-store JSONL written by `download/notion_web.py`.
     └── <entity>/{created,updated}/events.jsonl
-    Entities: self_identity, merge_request, discussion. Project:
-    `enterprise-d/holodeck`. Two MRs (!17 merged; !18 open) with a mix
-    of position-anchored discussions (line-level diff threads with
-    `position.new_path`/`new_line`) and free-form discussions
-    (`individual_note: true`) so consumers see both shapes.
+    Mirrors Notion's native recordMap tables 1:1 (one entity per
+    `KNOWN_TABLES` entry in `notion_web.py`). Workspace:
+    "USS Enterprise-D Operations". Covers all 14 Notion tables and
+    every block `type` the downloader emits — see the variation table
+    below.
 ```
 
-Neither github_api nor gitlab_api is wired into the ingest pipeline yet —
-these are checked-in samples that mirror the on-disk shape of the
-downloaders' output, available for future parser tests and UI mocks.
+None of github_api / gitlab_api / notion_web is wired into the ingest
+pipeline yet — these are checked-in samples that mirror the on-disk
+shape of the downloaders' output, available for future parser tests
+and UI mocks.
 
 ## Coverage of source variation
 
@@ -69,6 +78,24 @@ Aim: at least one example of every shape we've seen in real backups.
 | ChatGPT `code` content_type    | `68fa0002` message `msg-fake-poly-0002`           |
 | Starred / not starred          | `c0000003` (starred), `c0000004` (not)            |
 | Multiple senders               | every conversation                                |
+| Notion `space` + `team`        | `notion_web/notion_space/`, `notion_team/`        |
+| Notion `notion_user` (7 crew)  | `notion_web/notion_user/`                         |
+| Notion `space_view` / `space_user` / `user_root` / `user_settings` / `sidebar_section` | `notion_web/` (one each) |
+| Notion block type `page` (nested) | `notion_block/` root + `Engineering Wiki` + `Warp Core Maintenance` subpage |
+| Notion `collection_view_page`  | `b10cb10c-...0003` (Mission Logs DB)              |
+| Notion inline `collection_view` block | `b10cb10c-...0006`                         |
+| Notion `collection` w/ rich schema (title, status, person, date, multi_select, last_edited_time, button) | `notion_collection/` |
+| Notion `collection_view` (board + table) | `notion_collection_view/` (two views)   |
+| Notion DB rows (parent_table=collection) | `b10cb10c-...0100` / `...0101`         |
+| Block types text/header/sub_header/sub_sub_header/bulleted_list/numbered_list/to_do/toggle/quote/callout/code/divider/image/file/embed/table/table_row/column_list/column | `notion_block/created/events.jsonl` |
+| Rich text marks (bold/italic/code/link/user-mention/page-mention/date) | `b10cb10c-...0014`                |
+| To-do checked + unchecked      | `b10cb10c-...001a` / `...001b`                    |
+| Toggle with nested child       | `b10cb10c-...001c` → `...001d`                    |
+| Discussion (unresolved + resolved) | `notion_discussion/` (two)                    |
+| Comment thread (Riker → Picard reply pair) | `notion_comment/` (`c00ffee1` → `c00ffee2`) |
+| Activity type `commented`      | `ac710001-...0001`                                |
+| Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
+| Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
 
 ## Star Trek: TNG dramatis personae
 
@@ -78,6 +105,11 @@ Aim: at least one example of every shape we've seen in real backups.
 | `00000002-1701-4d00-8000-000000000002`    | Geordi La Forge     |
 | `00000003-1701-4d00-8000-000000000003`    | Beverly Crusher     |
 | `user-FAKE0DATAANDROID0POSITRONIC1`       | Lt. Cmdr. Data (ChatGPT) |
+| `00000004-1701-4d00-8000-000000000004`    | Lt. Worf            |
+| `00000005-1701-4d00-8000-000000000005`    | Lt. Cmdr. Geordi La Forge (Notion) |
+| `00000006-1701-4d00-8000-000000000006`    | Dr. Beverly Crusher (Notion) |
+| `00000007-1701-4d00-8000-000000000007`    | Cmdr. Deanna Troi (Notion) |
+| `5face1d0-1701-4d00-8000-000000000001`    | Workspace: USS Enterprise-D Operations (Notion space) |
 
 UUIDs follow the pattern `XXXXXXXX-1701-4d00-8000-...` so they sort
 predictably and scream "test data" in any debugger output.

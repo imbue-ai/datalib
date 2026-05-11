@@ -83,6 +83,10 @@ sources:
     provider: gitlab
     kind: gitlab_api_dir
     path: {fixtures / "gitlab_api"}
+  - name: notion_web_tng
+    provider: notion
+    kind: notion_web_dir
+    path: {fixtures / "notion_web"}
 """
     )
 
@@ -124,7 +128,7 @@ sources:
     qmd_tar = out / "qmd.tar"
     qmd_subtrees = [
         d
-        for d in ("anthropic", "openai", "slack", "github", "gitlab")
+        for d in ("anthropic", "openai", "slack", "github", "gitlab", "notion")
         if (root / d).is_dir()
     ]
     with tarfile.open(qmd_tar, "w") as tf:

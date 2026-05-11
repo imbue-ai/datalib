@@ -32,6 +32,7 @@ filegroup(
         "slack_api/media/**/*",
         "github_api/**/*.jsonl",
         "gitlab_api/**/*.jsonl",
+        "notion_web/**/*.jsonl",
     ]),
     visibility = ["//visibility:public"],
 )
