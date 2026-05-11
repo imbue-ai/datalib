@@ -55,6 +55,17 @@ data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
 emits in the body. If you find yourself writing a QMD parser in the
 backend, stop — add the field to `grid_rows` instead.
 
+## Git: prefer merges over rebases
+
+When integrating remote changes into a local branch (e.g. `git pull` after
+a rejected push), **prefer a merge commit over a rebase**. Rebasing
+rewrites local commit hashes, which loses the "what actually happened"
+history and can surprise other clones. A merge commit keeps both sides of
+the history intact and is cheap to read with `git log --first-parent`.
+
+In practice: `git pull` (default merge), not `git pull --rebase`. Force-
+push is off the table on shared branches.
+
 ## Running tests
 
 **Default to `bazelisk test //...` for any "are tests passing?" question.**
