@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import json
 import uuid as uuid_lib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from jsonl_io import load_jsonl
 
 # Stable UUID namespace for Slack-derived ids. v5 hashes derived from
 # `slack:{team}:{channel}:{ts}` and `slack:reaction:{message_uuid}:{name}:{user}`
@@ -107,18 +108,6 @@ class ParsedSlackApi:
     reactions: list[ReactionRow] = field(default_factory=list)
 
 
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    # Iterate the file directly: `slack_web.py` writes records with
-    # `ensure_ascii=False`, leaving U+2028 / U+2029 unescaped. `str.splitlines()`
-    # treats those as line breaks and shreds a single record into pieces that
-    # no longer parse. Python's file-iterator only splits on `\n`, which is
-    # the only separator the writer actually emits.
-    with path.open() as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-
 def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
     """Parse the per-entity event-stream layout written by
     `src/download/slack_web.py`:
@@ -134,7 +123,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
 
     # Workspace (self_identity) — typically one row per team for the user's
     # own account. Provides the team_id all other rows scope to.
-    self_events = _read_jsonl(api_dir / "self_identity" / "created" / "events.jsonl")
+    self_events = load_jsonl(api_dir / "self_identity" / "created" / "events.jsonl")
     team_id: str | None = None
     self_user_id: str | None = None
     for ev in self_events:
@@ -156,7 +145,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
     if team_id is None:
         team_id = "unknown"
 
-    for ev in _read_jsonl(api_dir / "user" / "created" / "events.jsonl"):
+    for ev in load_jsonl(api_dir / "user" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         profile = raw.get("profile") or {}
         out.users.append(
@@ -172,7 +161,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
             )
         )
 
-    for ev in _read_jsonl(api_dir / "channel" / "created" / "events.jsonl"):
+    for ev in load_jsonl(api_dir / "channel" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         topic = (raw.get("topic") or {}).get("value")
         purpose = (raw.get("purpose") or {}).get("value")
@@ -190,7 +179,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         )
 
     # Top-level messages
-    for ev in _read_jsonl(api_dir / "message" / "created" / "events.jsonl"):
+    for ev in load_jsonl(api_dir / "message" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         channel_id = ev.get("channel_id") or ""
         ts = raw.get("ts") or ev.get("message_ts") or ""
@@ -222,7 +211,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
 
     # Threaded replies — never roots; thread_uuid points at the root via the
     # event's `thread_ts`.
-    for ev in _read_jsonl(api_dir / "reply" / "created" / "events.jsonl"):
+    for ev in load_jsonl(api_dir / "reply" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         channel_id = ev.get("channel_id") or ""
         ts = raw.get("ts") or ev.get("reply_ts") or ""
@@ -248,7 +237,7 @@ def parse_api_dir(api_dir: Path) -> ParsedSlackApi:
         )
 
     # Reactions — one row per (message, emoji name, user) tuple.
-    for ev in _read_jsonl(api_dir / "reaction" / "created" / "events.jsonl"):
+    for ev in load_jsonl(api_dir / "reaction" / "created" / "events.jsonl"):
         raw = ev.get("raw") or {}
         channel_id = ev.get("channel_id") or ""
         message_ts = ev.get("message_ts") or ""

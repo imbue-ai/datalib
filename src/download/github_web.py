@@ -52,6 +52,8 @@ from urllib.parse import urlencode
 import typer
 from tqdm import tqdm
 
+from jsonl_io import load_jsonl
+
 DEFAULT_OUT_DIR = Path.home() / "backups" / "github"
 DEFAULT_REFRESH_WINDOW_DAYS = 30
 LATCHKEY_TIMEOUT = 60
@@ -208,16 +210,6 @@ def _events_path(out_dir: Path, entity: str, stream: str) -> Path:
     return out_dir / entity / stream / "events.jsonl"
 
 
-def _load_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
-        if line.strip():
-            out.append(json.loads(line))
-    return out
-
-
 def _append_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     if not records:
         return
@@ -271,7 +263,7 @@ def _load_latest_by_key(
     """Walk created/ then updated/ so updated/ entries shadow earlier ones."""
     latest: dict[Any, dict[str, Any]] = {}
     for stream in ("created", "updated"):
-        for rec in _load_jsonl(_events_path(out_dir, entity, stream)):
+        for rec in load_jsonl(_events_path(out_dir, entity, stream)):
             latest[key_of(rec)] = rec
     return latest
 
