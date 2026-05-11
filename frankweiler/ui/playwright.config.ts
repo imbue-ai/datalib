@@ -24,11 +24,26 @@ const VITE_URL = `http://127.0.0.1:${VITE_PORT}`;
 
 // Locate the bazel-built http binary. Built via:
 //   bazelisk build //frankweiler/backend/http:frankweiler_http_bin
+//
+// FRANKWEILER_HTTP_BIN is set by frankweiler/ui/run_e2e.sh (the sh_test
+// wrapper used by `bazel test //frankweiler/ui:e2e_test` and
+// `bazel run //frankweiler/ui:e2e`). That wrapper resolves the binary
+// out of the test's runfiles via `rlocation` — the only stable way to
+// find it under `bazel test`, since the runfiles path isn't computable
+// from this file. The fallback to the source-workspace `bazel-bin`
+// symlink is for interactive use outside bazel (plain `pnpm exec
+// playwright test`), where the developer is expected to have run
+// `bazelisk build //frankweiler/backend/http:frankweiler_http_bin`
+// beforehand. We avoid the symlink under bazel because it isn't a
+// declared input of e2e_test and races with parallel actions under
+// `bazel test //...`.
 const workspace = path.resolve(here, "../..");
-const backendBin = path.join(
-  workspace,
-  "bazel-bin/frankweiler/backend/http/frankweiler_http_bin",
-);
+const backendBin =
+  process.env.FRANKWEILER_HTTP_BIN ||
+  path.join(
+    workspace,
+    "bazel-bin/frankweiler/backend/http/frankweiler_http_bin",
+  );
 
 export default defineConfig({
   testDir: "tests/e2e",

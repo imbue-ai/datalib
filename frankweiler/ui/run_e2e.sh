@@ -47,6 +47,16 @@ fi
 # Make sure Playwright's chromium is installed. This is a no-op once cached.
 (cd "$UI_DIR" && pnpm exec playwright install chromium >/dev/null)
 
+# Resolve the bazel-built backend binary from runfiles and export it for
+# playwright.config.ts. Without this, playwright falls back to the
+# source-workspace `bazel-bin/...` convenience symlink, which is not a
+# declared input of this test and can race with concurrent bazel actions
+# under `bazel test //...`.
+BACKEND_BIN_RUNFILE="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)" || BACKEND_BIN_RUNFILE=""
+if [[ -n "$BACKEND_BIN_RUNFILE" && -x "$BACKEND_BIN_RUNFILE" ]]; then
+  export FRANKWEILER_HTTP_BIN="$BACKEND_BIN_RUNFILE"
+fi
+
 # Pass through any extra args (e.g. test names).
 cd "$UI_DIR"
 exec pnpm exec playwright test "$@"
