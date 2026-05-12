@@ -11,9 +11,11 @@
 //! index at `<root>/.frankweiler/qmd/index.sqlite` (qmd's natural cache
 //! location when `XDG_CACHE_HOME=<root>/.frankweiler`).
 
+pub mod daemon;
 pub mod mapping;
 pub mod runner;
 
+pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use mapping::{GridIndex, GridRowRef, QmdHit, QueryMode};
 pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION, DEFAULT_QMD_VERSION};
 

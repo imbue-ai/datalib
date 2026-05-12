@@ -52,7 +52,7 @@ watch(
             :href="chat.source_url"
             target="_blank"
             rel="noopener noreferrer"
-            >Open in {{ chat.source_label || "source" }} ↗</a
+            >{{ chat.source_label || "source" }} ↗</a
           >
           <span v-if="chat.source_url && (chat.created_at || chat.account)">
             ·

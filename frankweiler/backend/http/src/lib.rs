@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use frankweiler_core::dolt_server::DoltServer;
-use frankweiler_core::qmd::{GridIndex, QmdRunner, QmdRunnerConfig, QueryMode};
+use frankweiler_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
 use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, RepoError};
 use frankweiler_core::search::SearchRow;
@@ -49,6 +49,11 @@ pub struct AppState {
     /// keeping the server alive for every request handler. `None` when
     /// running under `--backend sqlite`.
     pub dolt_server: Option<Arc<DoltServer>>,
+    /// Long-lived `qmd mcp` child for sub-second searches. `None` when
+    /// no qmd index is materialized at startup (or its spawn check
+    /// failed) — `run_qmd_search` then falls back to the per-call
+    /// `npx … query` shell-out path so search still works.
+    pub qmd_daemon: Option<Arc<QmdDaemon>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,7 +186,7 @@ async fn search_handler(
     let rows = if parsed.free_text.is_empty() {
         s.repo.search(&parsed, limit).await.unwrap_or_default()
     } else {
-        match run_qmd_search(&s.root, &s.repo, &parsed, limit).await {
+        match run_qmd_search(&s.root, &s.repo, s.qmd_daemon.as_ref(), &parsed, limit).await {
             Ok(rows) => rows,
             Err(e) => {
                 qmd_error = Some(format!("{e:#}"));
@@ -216,22 +221,35 @@ async fn search_handler(
 async fn run_qmd_search(
     root: &std::sync::Arc<PathBuf>,
     repo: &DynRepo,
+    daemon: Option<&Arc<QmdDaemon>>,
     parsed: &ParsedQuery,
     limit: usize,
 ) -> anyhow::Result<Vec<SearchRow>> {
     let root_owned = root.as_ref().clone();
     let parsed_for_qmd = parsed.clone();
+    let daemon = daemon.cloned();
     // Ask qmd for a generous hit count: a single qmd hit (e.g. a
     // conversation-level snippet) can resolve to many grid rows. We then
     // truncate to `limit` after row expansion.
     let qmd_limit = std::cmp::min(limit.saturating_mul(2).max(50), 1_000);
     let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let cfg = QmdRunnerConfig::new(root_owned);
-        let runner = QmdRunner::new(cfg)?;
         let mode = match parsed_for_qmd.free_text_mode {
             FreeTextMode::Hybrid => QueryMode::Hybrid,
             FreeTextMode::Vsearch => QueryMode::Vsearch,
         };
+        // Prefer the long-lived MCP daemon (sub-second). On any I/O
+        // error we drop down to a fresh `npx … query` shell-out so a
+        // misbehaving daemon doesn't kill search entirely.
+        if let Some(d) = daemon.as_ref() {
+            match d.search(mode, &parsed_for_qmd.free_text, qmd_limit) {
+                Ok(hits) => return Ok(hits),
+                Err(e) => {
+                    eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
+                }
+            }
+        }
+        let cfg = QmdRunnerConfig::new(root_owned);
+        let runner = QmdRunner::new(cfg)?;
         runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)
     })
     .await
@@ -398,6 +416,7 @@ mod tests {
             root,
             repo,
             dolt_server: None,
+            qmd_daemon: None,
         });
     }
 }

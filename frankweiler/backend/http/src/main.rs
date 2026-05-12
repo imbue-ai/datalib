@@ -25,6 +25,7 @@
 use frankweiler_core::config::{default_config_path, load_config, BackendConfig, Config};
 use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::dolt_server::DoltServer;
+use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_core::repo::DynRepo;
 use frankweiler_http::{router, AppState};
 use std::path::PathBuf;
@@ -51,10 +52,24 @@ async fn main() -> anyhow::Result<()> {
 
     let root = Arc::new(root);
     let (repo, dolt_server) = build_repo(backend_kind, cfg_opt.as_ref(), root.clone()).await?;
+    // Best-effort daemon spawn. If the index isn't materialized yet
+    // `QmdDaemon::new` fails fast; the search path then falls back to
+    // the per-call CLI shell-out, so /api/search still works.
+    let qmd_daemon = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
+        Ok(d) => {
+            eprintln!("qmd daemon: ready (lazy spawn on first search)");
+            Some(Arc::new(d))
+        }
+        Err(e) => {
+            eprintln!("qmd daemon: disabled ({e:#}); falling back to CLI per call");
+            None
+        }
+    };
     let state = AppState {
         root,
         repo,
         dolt_server,
+        qmd_daemon,
     };
     axum::serve(listener, router(state)).await?;
     Ok(())

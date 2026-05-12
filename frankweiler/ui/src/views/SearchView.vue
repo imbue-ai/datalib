@@ -394,15 +394,52 @@ function accountLabel(uuid: string): string {
 let inflight: AbortController | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Per-query LRU cache so re-typing a recent query feels instant.
+// Keyed by the exact search string. Bounded — older entries evicted on insert.
+// Lives in module scope but is intentionally not exported: cache invalidates
+// naturally on page reload (which also re-reads server state via /api/health).
+const SEARCH_CACHE_MAX = 16;
+const SEARCH_LIMIT = 2000;
+type SearchCacheEntry = { rows: SearchRow[]; total: number };
+const searchCache = new Map<string, SearchCacheEntry>();
+
+function cacheGet(key: string): SearchCacheEntry | undefined {
+  const hit = searchCache.get(key);
+  if (!hit) return undefined;
+  // LRU touch: re-insert to move to the end of the iteration order.
+  searchCache.delete(key);
+  searchCache.set(key, hit);
+  return hit;
+}
+
+function cachePut(key: string, entry: SearchCacheEntry) {
+  searchCache.delete(key);
+  searchCache.set(key, entry);
+  while (searchCache.size > SEARCH_CACHE_MAX) {
+    const oldest = searchCache.keys().next().value;
+    if (oldest === undefined) break;
+    searchCache.delete(oldest);
+  }
+}
+
 async function runSearch(q: string) {
   inflight?.abort();
+  const cached = cacheGet(q);
+  if (cached) {
+    rows.value = cached.rows;
+    total.value = cached.total;
+    loading.value = false;
+    error.value = null;
+    return;
+  }
   inflight = new AbortController();
   loading.value = true;
   error.value = null;
   try {
-    const r = await fetchSearch(q, 100_000, inflight.signal);
+    const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal);
     rows.value = r.rows;
     total.value = r.total_estimated;
+    cachePut(q, { rows: r.rows, total: r.total_estimated });
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = (e as Error).message;
@@ -413,6 +450,10 @@ async function runSearch(q: string) {
 
 watch(query, (q) => {
   if (debounceTimer) clearTimeout(debounceTimer);
+  // Show the spinner immediately on input change (unless we'll serve from
+  // cache) — otherwise the 150ms debounce + multi-second backend latency
+  // leaves the user staring at stale rows with no feedback.
+  if (!searchCache.has(q)) loading.value = true;
   debounceTimer = setTimeout(() => runSearch(q), 150);
   syncHash();
 });
@@ -499,9 +540,14 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     headerName: "Contents",
     flex: 1,
     minWidth: 200,
-    wrapText: true,
-    autoHeight: true,
-    cellStyle: { whiteSpace: "normal", lineHeight: "1.3em" },
+    // No autoHeight/wrapText: forcing per-row layout measurement on the
+    // snippet column was the dominant render cost on large result sets.
+    // Truncate with ellipsis; preview pane shows the full body.
+    cellStyle: {
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+    },
   },
   {
     field: "author",
@@ -531,7 +577,7 @@ const defaultColDef: ColDef = {
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
-  rowHeight: 56,
+  rowHeight: 36,
   // Single-row selection drives the right preview pane. Cell text
   // selection is intentionally NOT enabled here: AG Grid's text-selection
   // mode swallows row clicks, breaking the preview wiring.
@@ -684,14 +730,18 @@ const gridOptions: GridOptions<SearchRow> = {
         <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
           <AgGridVue
             class="grid"
+            :class="{ 'grid--loading': loading }"
             :rowData="rows"
             :columnDefs="columnDefs"
             :defaultColDef="defaultColDef"
             :gridOptions="gridOptions"
           />
+          <div v-if="loading" class="grid-spinner" aria-label="searching">
+            <div class="grid-spinner__ring" />
+            <div class="grid-spinner__label">searching…</div>
+          </div>
         </div>
-        <p v-if="loading && rows.length === 0" class="empty">searching…</p>
-        <p v-else-if="!loading && rows.length === 0 && !error" class="empty">
+        <p v-if="!loading && rows.length === 0 && !error" class="empty">
           no matches.
         </p>
       </Pane>
@@ -820,10 +870,43 @@ const gridOptions: GridOptions<SearchRow> = {
 .grid-wrap {
   flex: 1 1 auto;
   min-height: 200px;
+  position: relative;
 }
 .grid {
   width: 100%;
   height: 100%;
+  transition: filter 120ms ease-out;
+}
+.grid--loading {
+  filter: blur(2px);
+  pointer-events: none;
+}
+.grid-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  pointer-events: none;
+  /* Above the (blurred) grid but below any modals/menus. */
+  z-index: 5;
+}
+.grid-spinner__ring {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid var(--fw-border);
+  border-top-color: var(--fw-accent, #4a8bff);
+  animation: fw-spin 800ms linear infinite;
+}
+.grid-spinner__label {
+  font-size: 0.85rem;
+  color: var(--fw-muted);
+}
+@keyframes fw-spin {
+  to { transform: rotate(360deg); }
 }
 .ctx-overlay {
   position: fixed;
