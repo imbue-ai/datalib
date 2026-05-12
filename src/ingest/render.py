@@ -35,7 +35,7 @@ from ingest.providers.notion.parse import (
     rich_text_to_plain,
 )
 from ingest.providers.openai.parse import ParsedChatGPTApi
-from ingest.providers.slack.mrkdwn import resolve_user_mentions
+from ingest.providers.slack.mrkdwn import emojize_shortcodes, resolve_user_mentions
 from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
 from ingest.providers.slack.parse import ParsedSlackApi
 
@@ -619,7 +619,10 @@ def _render_one_slack_thread(
             for name, _uid in rxs:
                 counts[name] = counts.get(name, 0) + 1
             emoji_strs = [
-                f":{n}: ×{c}" if c > 1 else f":{n}:" for n, c in counts.items()
+                f"{emojize_shortcodes(f':{n}:')} ×{c}"
+                if c > 1
+                else emojize_shortcodes(f":{n}:")
+                for n, c in counts.items()
             ]
             parts.append("> Reactions: " + " ".join(emoji_strs))
             parts.append("")

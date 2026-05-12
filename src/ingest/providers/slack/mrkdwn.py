@@ -23,6 +23,8 @@ from __future__ import annotations
 import re
 from typing import Mapping
 
+import emoji as _emoji
+
 
 _USER_REF = re.compile(r"<@([UW][A-Z0-9_]+)(?:\|([^>]+))?>")
 _CHANNEL_REF = re.compile(r"<#([CG][A-Z0-9_]+)(?:\|([^>]+))?>")
@@ -41,6 +43,16 @@ _BOLD = re.compile(r"(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])")
 _STRIKE = re.compile(r"(?<![\w~])~(?!\s)([^~\n]+?)(?<!\s)~(?![\w~])")
 
 
+def emojize_shortcodes(text: str) -> str:
+    """Replace `:shortcode:` tokens with their Unicode emoji.
+
+    Uses `emoji`'s `alias` language so Slack-only spellings like
+    `:thumbsup:` and `:robot_face:` resolve. Unknown shortcodes (custom
+    workspace emoji) pass through untouched.
+    """
+    return _emoji.emojize(text, language="alias")
+
+
 def resolve_user_mentions(
     text: str, user_labels: Mapping[str, str] | None = None
 ) -> str:
@@ -57,7 +69,7 @@ def resolve_user_mentions(
         uid, label = m.group(1), m.group(2)
         return f"@{label or labels.get(uid, uid)}"
 
-    return _USER_REF.sub(_sub, text)
+    return emojize_shortcodes(_USER_REF.sub(_sub, text))
 
 
 def to_commonmark(text: str, user_labels: Mapping[str, str] | None = None) -> str:
@@ -114,6 +126,7 @@ def to_commonmark(text: str, user_labels: Mapping[str, str] | None = None) -> st
     # a blank line after each `>`-block so the quote ends where Slack ends
     # it.
     out = _terminate_blockquotes(out)
+    out = emojize_shortcodes(out)
     return out
 
 

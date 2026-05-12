@@ -29,7 +29,7 @@ Mr. Data, status report.
 
 All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
 
-> Reactions: :robot_face: :thumbsup: ×2
+> Reactions: 🤖 👍 ×2
 
 </div>
 

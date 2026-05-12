@@ -29,6 +29,6 @@ Anyone up for poker tonight?
 
 I do not understand the appeal of this Earth game.
 
-> Reactions: :joy:
+> Reactions: 😂
 
 </div>
