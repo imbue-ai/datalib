@@ -292,7 +292,10 @@ mod tests {
         // produce the right error. Here we just confirm resolution
         // honors the override (path is returned even if non-existent).
         let resolved = resolve_dolt_binary(cfg.binary.as_deref()).unwrap();
-        assert_eq!(resolved, PathBuf::from("/definitely/not/a/real/path/dolt-nope"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("/definitely/not/a/real/path/dolt-nope")
+        );
         // Suppress unused warning.
         let _ = tmp;
     }

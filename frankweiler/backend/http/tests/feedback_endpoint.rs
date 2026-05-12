@@ -65,11 +65,7 @@ async fn post_feedback_inserts_and_dolt_commits() {
         host: "127.0.0.1".into(),
         port: pick_free_port(),
         user: "root".into(),
-        repo_dirname: repo_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
+        repo_dirname: repo_dir.file_name().unwrap().to_string_lossy().into_owned(),
         binary: None,
     };
     let server = DoltServer::ensure(&repo_dir, &cfg).expect("dolt sql-server ready");
@@ -111,8 +107,15 @@ async fn post_feedback_inserts_and_dolt_commits() {
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "expected 200, got {:?}", resp.status());
-    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "expected 200, got {:?}",
+        resp.status()
+    );
+    let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let feedback_uuid = parsed["feedback_uuid"].as_str().unwrap().to_string();
     assert_eq!(feedback_uuid.len(), 36);

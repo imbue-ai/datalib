@@ -211,8 +211,16 @@ mod tests {
             .unwrap();
             for j in 0..4u32 {
                 let mwhen = format!("2026-04-{:02}T10:0{}:00+00:00", i + 1, j);
-                let kind = if j % 2 == 0 { "User Input" } else { "LLM Response" };
-                let author = if kind == "User Input" { "acct-a" } else { "claude-opus-4-7" };
+                let kind = if j % 2 == 0 {
+                    "User Input"
+                } else {
+                    "LLM Response"
+                };
+                let author = if kind == "User Input" {
+                    "acct-a"
+                } else {
+                    "claude-opus-4-7"
+                };
                 sqlx::query(
                     "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, \
                      author, account, project, channel, conversation_name, conversation_uuid, \
@@ -245,9 +253,20 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        for (j, role) in ["user", "assistant", "user", "assistant"].iter().enumerate() {
-            let kind = if *role == "user" { "User Input" } else { "LLM Response" };
-            let author = if kind == "User Input" { "acct-o" } else { "gpt-5" };
+        for (j, role) in ["user", "assistant", "user", "assistant"]
+            .iter()
+            .enumerate()
+        {
+            let kind = if *role == "user" {
+                "User Input"
+            } else {
+                "LLM Response"
+            };
+            let author = if kind == "User Input" {
+                "acct-o"
+            } else {
+                "gpt-5"
+            };
             sqlx::query(
                 "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, \
                  author, account, project, channel, conversation_name, conversation_uuid, \
@@ -285,7 +304,11 @@ mod tests {
 
         let times: Vec<&str> = rows.iter().map(|r| r.when.as_str()).collect();
         for w in times.windows(2) {
-            assert!(w[0] <= w[1], "rows not sorted ascending by when: {:?}", times);
+            assert!(
+                w[0] <= w[1],
+                "rows not sorted ascending by when: {:?}",
+                times
+            );
         }
 
         let first_chatgpt_chat = rows

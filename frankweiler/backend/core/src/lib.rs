@@ -7,8 +7,8 @@ pub mod dolt_repo;
 pub mod dolt_server;
 pub mod query;
 pub mod repo;
-pub mod sqlite_repo;
 pub mod search;
+pub mod sqlite_repo;
 pub mod version;
 
 #[cfg(test)]

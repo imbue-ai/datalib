@@ -22,7 +22,9 @@
 //! `/api/search` will just return zero rows. `/api/health` reports the
 //! resolved root and whether it exists, which is handy when wiring up the UI.
 
-use frankweiler_core::config::{default_config_path, load_config, BackendConfig, Config, DoltConfig};
+use frankweiler_core::config::{
+    default_config_path, load_config, BackendConfig, Config, DoltConfig,
+};
 use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::repo::DynRepo;

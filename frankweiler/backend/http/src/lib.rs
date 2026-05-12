@@ -244,8 +244,7 @@ async fn submit_feedback(
     if req.comment.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let context_json = serde_json::to_string(&req.context)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let context_json = serde_json::to_string(&req.context).map_err(|_| StatusCode::BAD_REQUEST)?;
     // Server-stamped fields. We mint these here rather than trusting the
     // client so each row carries a server-vouched provenance and so
     // `feedback_uuid` collisions are impossible from the wire.

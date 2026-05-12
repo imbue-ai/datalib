@@ -338,18 +338,14 @@ def emit_rust(schema: dict, source_name: str) -> str:
             alias = _tagged_union_alias_name(name, prop_name)
             variants = _tagged_union_variants(tu, schema)
             tag = tu.get("tag", "")
-            out.append(
-                f"/// Discriminated union for `{name}.{prop_name}`, tagged by"
-            )
+            out.append(f"/// Discriminated union for `{name}.{prop_name}`, tagged by")
             out.append(f"/// sibling field `{tag}`.")
             out.append("#[derive(Debug, Clone, Serialize, Deserialize)]")
             out.append("#[serde(untagged)]")
             out.append(f"pub enum {alias} {{")
             for tag_val, type_name in variants:
                 # Variant name: PascalCase of the tag value.
-                variant = "".join(
-                    p[:1].upper() + p[1:] for p in tag_val.split("_")
-                )
+                variant = "".join(p[:1].upper() + p[1:] for p in tag_val.split("_"))
                 out.append(f"    {variant}({type_name}),")
             out.append("}")
             out.append("")

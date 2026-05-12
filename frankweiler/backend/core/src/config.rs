@@ -237,7 +237,10 @@ mod tests {
             dolt: DoltConfig::default(),
         };
         assert_eq!(cfg.dolt_repo_path(), tmp.join("dolt_repo"));
-        assert_eq!(cfg.dolt_mysql_url(), "mysql://root@127.0.0.1:3306/dolt_repo");
+        assert_eq!(
+            cfg.dolt_mysql_url(),
+            "mysql://root@127.0.0.1:3306/dolt_repo"
+        );
     }
 
     #[test]

@@ -65,11 +65,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         host: "127.0.0.1".into(),
         port: pick_free_port(),
         user: "root".into(),
-        repo_dirname: repo_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
+        repo_dirname: repo_dir.file_name().unwrap().to_string_lossy().into_owned(),
         binary: None,
     };
 

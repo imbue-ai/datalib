@@ -8,10 +8,12 @@ rust_library(
     crate_name = "frankweiler_core",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
+    proc_macro_deps = [
+        "@frankweiler_crates//:async-trait",
+    ],
     deps = [
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:async-trait",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
