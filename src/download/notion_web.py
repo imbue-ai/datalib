@@ -192,6 +192,19 @@ class NotionWebClient:
         }
         return self._post("loadCachedPageChunkV2", body)
 
+    def sync_record_values(self, pointers: list[dict]) -> dict[str, Any]:
+        """Fetch specific records by pointer. Used to plug holes left by
+        loadCachedPageChunkV2 — e.g. comments referenced by a discussion
+        whose own record never showed up in any page chunk recordMap.
+
+        Each pointer is {"table": ..., "id": ..., "spaceId": ...}; version=-1
+        asks Notion for the latest. The response is a normal recordMap, so
+        `_sink_response` handles it without special-casing."""
+        body = {
+            "requests": [{"pointer": p, "version": -1} for p in pointers],
+        }
+        return self._post("syncRecordValues", body)
+
     def get_notification_log(
         self,
         space_id: str,
@@ -513,6 +526,251 @@ def _walk_subtree(
 
 
 # ---------------------------------------------------------------------------
+# Dangling-reference sweep: chase ids referenced by records we already have
+# but whose own row never showed up in any loadCachedPageChunkV2 recordMap.
+# Concrete trigger: discussions whose `comments[]` listed a comment id whose
+# row was missing — Thad's reply on the Personal Data Liberation page.
+# Generalized to other cross-table refs so other holes (orphan child blocks,
+# DB rows, etc.) heal the same way without bespoke logic per type.
+# ---------------------------------------------------------------------------
+
+
+# Per source-table, the (field, target_table) refs to follow. Values are
+# field accessors against `_extract_value(record.raw)`; list-typed fields
+# yield each element, scalar fields yield the single id. parent_id is
+# handled separately because it's gated on parent_table.
+_LIST_REFS: dict[str, list[tuple[str, str]]] = {
+    "notion_block": [
+        ("content", "block"),
+        ("discussions", "discussion"),
+        ("view_ids", "collection_view"),
+    ],
+    "notion_discussion": [
+        ("comments", "comment"),
+    ],
+    "notion_collection": [
+        ("template_pages", "block"),
+    ],
+}
+
+_SCALAR_REFS: dict[str, list[tuple[str, str]]] = {
+    "notion_block": [
+        ("collection_id", "collection"),
+    ],
+}
+
+# (source_entity, expected parent_table, target_table)
+_PARENT_REFS: list[tuple[str, str, str]] = [
+    ("notion_block", "block", "block"),
+    ("notion_discussion", "block", "block"),
+    ("notion_comment", "discussion", "discussion"),
+    ("notion_collection", "block", "block"),
+]
+
+
+def _subtree_block_ids(
+    root_id: str,
+    existing_blocks: dict[str, dict],
+) -> set[str]:
+    """BFS the `content[]` graph within `existing_blocks` starting at
+    `root_id`. Result is the set of currently-known descendant block IDs.
+    Missing children aren't here yet — they get added in the next sweep
+    pass after they're fetched."""
+    result: set[str] = set()
+    queue: deque[str] = deque([root_id])
+    while queue:
+        bid = queue.popleft()
+        if bid in result:
+            continue
+        rec = existing_blocks.get(bid)
+        if rec is None:
+            continue
+        result.add(bid)
+        value = _extract_value(rec.get("raw")) or {}
+        for cid in value.get("content") or []:
+            if isinstance(cid, str) and cid not in result:
+                queue.append(cid)
+    return result
+
+
+def _subtree_scope(
+    subtree_root: str,
+    existing: dict[str, dict[str, dict]],
+) -> dict[str, set[str]]:
+    """In-scope record ids per entity for a subtree-restricted sweep.
+
+    Blocks: descendants of `subtree_root` via `content[]`.
+    Discussions: anchored at an in-scope block (`parent_table=='block'`).
+    Comments: parented to an in-scope discussion.
+    Collections: parented to an in-scope block.
+
+    A ref originating from a record NOT in this scope is ignored — that's
+    what prevents the sweep from chasing the entire workspace graph when
+    a single page links sideways."""
+    in_blocks = _subtree_block_ids(subtree_root, existing.get("notion_block", {}))
+
+    in_discussions: set[str] = set()
+    for did, drec in (existing.get("notion_discussion") or {}).items():
+        dv = _extract_value(drec.get("raw")) or {}
+        if (
+            dv.get("parent_table") == "block"
+            and isinstance(dv.get("parent_id"), str)
+            and dv["parent_id"] in in_blocks
+        ):
+            in_discussions.add(did)
+
+    in_comments: set[str] = set()
+    for cid, crec in (existing.get("notion_comment") or {}).items():
+        cv = _extract_value(crec.get("raw")) or {}
+        if (
+            cv.get("parent_table") == "discussion"
+            and isinstance(cv.get("parent_id"), str)
+            and cv["parent_id"] in in_discussions
+        ):
+            in_comments.add(cid)
+
+    in_collections: set[str] = set()
+    for coll_id, coll_rec in (existing.get("notion_collection") or {}).items():
+        cv = _extract_value(coll_rec.get("raw")) or {}
+        if (
+            cv.get("parent_table") == "block"
+            and isinstance(cv.get("parent_id"), str)
+            and cv["parent_id"] in in_blocks
+        ):
+            in_collections.add(coll_id)
+
+    return {
+        "notion_block": in_blocks,
+        "notion_discussion": in_discussions,
+        "notion_comment": in_comments,
+        "notion_collection": in_collections,
+    }
+
+
+def _dangling_refs(
+    existing: dict[str, dict[str, dict]],
+    scope: dict[str, set[str]] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Return {target_entity: {missing_id: space_id_hint}} for every record
+    referenced by something we have but absent from our own store.
+
+    When `scope` is supplied, only refs whose source `(entity, id)` lives
+    in the scope set are followed. Unscoped (`scope=None`) means walk all
+    source records — only safe when the working set is naturally bounded.
+
+    space_id_hint is the source record's space_id; refs are intra-space in
+    practice (and Notion requires spaceId on the pointer). Falls back to ""
+    when neither the source value nor the top-level column carries one."""
+    out: dict[str, dict[str, str]] = {}
+
+    def _consider(target_table: str, ref_id: Any, space_id: str) -> None:
+        if not isinstance(ref_id, str) or not ref_id:
+            return
+        ent = _entity_name(target_table)
+        if ref_id in existing.get(ent, {}):
+            return
+        bucket = out.setdefault(ent, {})
+        # First hit wins for the space hint; pointers are cheap.
+        bucket.setdefault(ref_id, space_id)
+
+    for source_ent, recs in existing.items():
+        list_refs = _LIST_REFS.get(source_ent, [])
+        scalar_refs = _SCALAR_REFS.get(source_ent, [])
+        parent_refs = [(pt, tt) for (se, pt, tt) in _PARENT_REFS if se == source_ent]
+        if not (list_refs or scalar_refs or parent_refs):
+            continue
+        scope_ids = None if scope is None else scope.get(source_ent, set())
+        for rec_id, rec in recs.items():
+            if scope_ids is not None and rec_id not in scope_ids:
+                continue
+            value = _extract_value(rec.get("raw")) or {}
+            space_id = (
+                value.get("space_id")
+                if isinstance(value.get("space_id"), str)
+                else rec.get("space_id")
+            ) or ""
+            for field, target in list_refs:
+                for ref_id in value.get(field) or []:
+                    _consider(target, ref_id, space_id)
+            for field, target in scalar_refs:
+                _consider(target, value.get(field), space_id)
+            for expected_pt, target in parent_refs:
+                if value.get("parent_table") == expected_pt:
+                    _consider(target, value.get("parent_id"), space_id)
+
+    return out
+
+
+def _resolve_dangling(
+    client: NotionWebClient,
+    out_dir: Path,
+    existing: dict[str, dict[str, dict]],
+    *,
+    subtree_root: str | None = None,
+    max_passes: int = 10,
+    batch_size: int = 50,
+) -> dict[str, tuple[int, int]]:
+    """Iteratively fetch every referenced-but-missing id via syncRecordValues.
+    Repeats because freshly-fetched blocks can themselves reference other
+    missing records (e.g. a newly-pulled page chunk's child blocks). Capped
+    at `max_passes` so a permanently-unfetchable id (deleted, no permission)
+    can't loop forever.
+
+    When `subtree_root` is given, the sweep stays inside that subtree:
+    only refs originating from records anchored under `subtree_root` are
+    followed. The in-scope set is recomputed each pass so newly-fetched
+    descendant blocks broaden the search frontier without escaping it."""
+    totals: dict[str, tuple[int, int]] = {}
+    unresolved: set[tuple[str, str]] = set()
+    for pass_n in range(max_passes):
+        scope = _subtree_scope(subtree_root, existing) if subtree_root else None
+        missing = _dangling_refs(existing, scope=scope)
+        # Drop ids syncRecordValues refused to return on a prior pass —
+        # otherwise a deleted/inaccessible record traps the loop.
+        pending: list[tuple[str, str, str]] = []
+        for ent, by_id in missing.items():
+            table = ent.removeprefix("notion_")
+            for ref_id, space_id in by_id.items():
+                key = (table, ref_id)
+                if key in unresolved:
+                    continue
+                pending.append((table, ref_id, space_id))
+        if not pending:
+            break
+        logger.info(
+            "dangling pass %d: %d ids across %d tables",
+            pass_n + 1,
+            len(pending),
+            len({t for t, _, _ in pending}),
+        )
+        attempted_this_pass: set[tuple[str, str]] = set()
+        for i in range(0, len(pending), batch_size):
+            chunk = pending[i : i + batch_size]
+            pointers = [
+                {"table": t, "id": rid, "spaceId": sid} for (t, rid, sid) in chunk
+            ]
+            try:
+                resp = client.sync_record_values(pointers)
+            except NotionError as e:
+                tqdm.write(f"  ! syncRecordValues batch: {e}")
+                continue
+            stats = _sink_response(out_dir, resp, existing)
+            for ent, (n, u) in stats.items():
+                tn, tu = totals.get(ent, (0, 0))
+                totals[ent] = (tn + n, tu + u)
+            for t, rid, _ in chunk:
+                attempted_this_pass.add((t, rid))
+        # Anything still missing after we attempted it is "unresolved" — mark
+        # so we don't refetch on the next pass. New refs surfaced by records
+        # added this pass remain eligible.
+        for table, ref_id in attempted_this_pass:
+            ent = _entity_name(table)
+            if ref_id not in existing.get(ent, {}):
+                unresolved.add((table, ref_id))
+    return totals
+
+
+# ---------------------------------------------------------------------------
 # Entry point: typer CLI.
 # ---------------------------------------------------------------------------
 
@@ -621,9 +879,10 @@ def fetch(
             tn, tu = grand.get(ent, (0, 0))
             grand[ent] = (tn + n, tu + u)
 
+    root: str | None = None
     if subtree:
-        root = subtree.replace("-", "")
-        root = f"{root[0:8]}-{root[8:12]}-{root[12:16]}-{root[16:20]}-{root[20:32]}"
+        raw = subtree.replace("-", "")
+        root = f"{raw[0:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:32]}"
         # Use the space we already know (single-space case) or require --space.
         if len(space_ids) > 1 and space is None:
             typer.echo(
@@ -660,6 +919,22 @@ def fetch(
                     merge(_fetch_page(client, out_dir, pid, sid, existing))
                 except NotionError as e:
                     tqdm.write(f"  ! {pid}: {e}")
+
+    # Plug holes: any record referenced by something we have but not yet in
+    # our store (most commonly comments named in discussion.comments[] whose
+    # rows never appeared in any page chunk). Runs after the main walks so
+    # the working set is as complete as it'll get this run.
+    #
+    # Subtree mode: scope the sweep to the requested subtree so it doesn't
+    # chase content[] refs out across the whole workspace. Inbox mode has
+    # no single root, so we skip the sweep entirely for now — its job
+    # there would be to chase notification-referenced pages, which the
+    # main inbox walk already does with proper cursoring.
+    if root is not None:
+        typer.echo("dangling-reference sweep (scoped to subtree)")
+        merge(_resolve_dangling(client, out_dir, existing, subtree_root=root))
+    else:
+        typer.echo("dangling-reference sweep: skipped (inbox mode)")
 
     typer.echo(f"\nrequests: {client.requests}  network: {client.network_seconds:.1f}s")
     if grand:

@@ -125,6 +125,17 @@ pub struct FilterTerm {
     pub negate: bool,
 }
 
+/// How free-text should be evaluated. Bare search-bar text defaults to
+/// `Hybrid`; the explicit `qmd:"..."` predicate forces `Hybrid` and
+/// `qmd_vsearch:"..."` forces `Vsearch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeTextMode {
+    /// qmd hybrid (BM25 + vector + reranker).
+    Hybrid,
+    /// qmd vector-only search.
+    Vsearch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedQuery {
     /// Each occurrence preserved in order. Same-field repetitions are
@@ -134,7 +145,12 @@ pub struct ParsedQuery {
     /// callers that want `IN (...)` semantics (none currently). Negative
     /// terms are not represented here.
     pub filters: BTreeMap<Field, Vec<String>>,
+    /// Free-text portion of the query (after structured filters and the
+    /// optional `qmd:` / `qmd_vsearch:` predicate are peeled off). Empty
+    /// when the user typed only structured filters.
     pub free_text: String,
+    /// How `free_text` should be evaluated against the qmd index.
+    pub free_text_mode: FreeTextMode,
     pub resolved_type: RowType,
 }
 
@@ -142,6 +158,10 @@ pub fn parse_query(s: &str) -> ParsedQuery {
     let mut terms: Vec<FilterTerm> = Vec::new();
     let mut filters: BTreeMap<Field, Vec<String>> = BTreeMap::new();
     let mut free_terms: Vec<String> = Vec::new();
+    // `qmd:"..."` / `qmd_vsearch:"..."` set the mode for the free-text
+    // portion. Multiple occurrences: last one wins (matches the
+    // single-string Python parser, which never accumulates these).
+    let mut free_text_mode: FreeTextMode = FreeTextMode::Hybrid;
     for tok in tokenize(s) {
         let (negate, body) = if let Some(rest) = tok.strip_prefix('-') {
             (true, rest.to_string())
@@ -150,6 +170,18 @@ pub fn parse_query(s: &str) -> ParsedQuery {
         };
         if let Some((k, v)) = split_field(&body) {
             if !k.is_empty() && !v.is_empty() {
+                // `qmd:` and `qmd_vsearch:` are NOT structured grid-row
+                // filters — they route the embedded free text through
+                // qmd. Treat the value as free text and switch modes.
+                if !negate && (k == "qmd" || k == "qmd_vsearch") {
+                    free_text_mode = if k == "qmd_vsearch" {
+                        FreeTextMode::Vsearch
+                    } else {
+                        FreeTextMode::Hybrid
+                    };
+                    free_terms.push(v);
+                    continue;
+                }
                 let field = Field::from_key(k);
                 if !negate {
                     filters.entry(field.clone()).or_default().push(v.clone());
@@ -186,6 +218,7 @@ pub fn parse_query(s: &str) -> ParsedQuery {
         terms,
         filters,
         free_text,
+        free_text_mode,
         resolved_type,
     }
 }
@@ -399,6 +432,38 @@ mod tests {
             extract_uuid_suffix("xxx00000001-1701-4d00-8000-000000000001"),
             "xxx00000001-1701-4d00-8000-000000000001"
         );
+    }
+
+    #[test]
+    fn bare_text_defaults_to_hybrid_mode() {
+        let q = parse_query("earl grey");
+        assert_eq!(q.free_text, "earl grey");
+        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
+    }
+
+    #[test]
+    fn qmd_predicate_recognized_as_hybrid() {
+        let q = parse_query("qmd:\"earl grey\"");
+        assert_eq!(q.free_text, "earl grey");
+        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
+        // qmd: is NOT a Field — it doesn't show up as a structured filter.
+        assert!(q.filters.is_empty());
+        assert!(q.terms.is_empty());
+    }
+
+    #[test]
+    fn qmd_vsearch_predicate_switches_mode() {
+        let q = parse_query("qmd_vsearch:\"hello world\"");
+        assert_eq!(q.free_text, "hello world");
+        assert_eq!(q.free_text_mode, FreeTextMode::Vsearch);
+    }
+
+    #[test]
+    fn qmd_predicate_coexists_with_filters() {
+        let q = parse_query("qmd:\"foo\" source:Slack");
+        assert_eq!(q.free_text, "foo");
+        assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
+        assert_eq!(q.filters[&Field::Source], vec!["Slack".to_string()]);
     }
 
     #[test]

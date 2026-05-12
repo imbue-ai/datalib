@@ -20,7 +20,8 @@ use axum::{
     Router,
 };
 use frankweiler_core::dolt_server::DoltServer;
-use frankweiler_core::query::parse_query;
+use frankweiler_core::qmd::{GridIndex, QmdRunner, QmdRunnerConfig, QueryMode};
+use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
@@ -168,20 +169,89 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(200).min(100_000);
-    let rows = s.repo.search(&parsed, limit).await.unwrap_or_default();
+    // Three routing cases:
+    //   1. Empty free-text — pure structured query, route through repo.search.
+    //   2. Non-empty free-text + qmd index present — shell out to qmd, map
+    //      hits to row uuids via the repo's grid_row_refs, then fetch full
+    //      rows via repo.search_by_uuids preserving rank order.
+    //   3. Non-empty free-text but no qmd index — degrade gracefully: surface
+    //      the error in `query_echo.qmd_error` and fall back to repo.search
+    //      (SQL substring LIKE) so the UI isn't dead.
+    let mut qmd_error: Option<String> = None;
+    let rows = if parsed.free_text.is_empty() {
+        s.repo.search(&parsed, limit).await.unwrap_or_default()
+    } else {
+        match run_qmd_search(&s.root, &s.repo, &parsed, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                qmd_error = Some(format!("{e:#}"));
+                s.repo.search(&parsed, limit).await.unwrap_or_default()
+            }
+        }
+    };
+
     let total = rows.len() as u64;
     Json(SearchResponse {
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
+            "free_text_mode": match parsed.free_text_mode {
+                FreeTextMode::Hybrid => "hybrid",
+                FreeTextMode::Vsearch => "vsearch",
+            },
             "resolved_type": format!("{:?}", parsed.resolved_type),
             "filters": parsed.filters.iter()
                 .map(|(k, v)| (format!("{:?}", k), v.clone()))
                 .collect::<Vec<_>>(),
+            "qmd_error": qmd_error,
         }),
         rows,
         columns: default_columns(),
         total_estimated: total,
     })
+}
+
+/// Run a qmd-routed search. qmd itself is shelled out via `npx` on a
+/// blocking thread; the row-resolution layer is async and goes through
+/// the repo trait so both Dolt and SQLite backends work.
+async fn run_qmd_search(
+    root: &std::sync::Arc<PathBuf>,
+    repo: &DynRepo,
+    parsed: &ParsedQuery,
+    limit: usize,
+) -> anyhow::Result<Vec<SearchRow>> {
+    let root_owned = root.as_ref().clone();
+    let parsed_for_qmd = parsed.clone();
+    // Ask qmd for a generous hit count: a single qmd hit (e.g. a
+    // conversation-level snippet) can resolve to many grid rows. We then
+    // truncate to `limit` after row expansion.
+    let qmd_limit = std::cmp::min(limit.saturating_mul(2).max(50), 1_000);
+    let hits = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let cfg = QmdRunnerConfig::new(root_owned);
+        let runner = QmdRunner::new(cfg)?;
+        let mode = match parsed_for_qmd.free_text_mode {
+            FreeTextMode::Hybrid => QueryMode::Hybrid,
+            FreeTextMode::Vsearch => QueryMode::Vsearch,
+        };
+        Ok(runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)?)
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
+
+    let refs = repo
+        .grid_row_refs()
+        .await
+        .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
+    let idx = GridIndex::new(refs);
+    let uuids: Vec<String> = idx
+        .rows_for_hits(hits.iter())
+        .into_iter()
+        .map(|r| r.uuid)
+        .collect();
+    let rows = repo
+        .search_by_uuids(parsed, &uuids, limit)
+        .await
+        .map_err(|e| anyhow::anyhow!("search_by_uuids: {e}"))?;
+    Ok(rows)
 }
 
 async fn columns() -> Json<Vec<ColumnSpec>> {

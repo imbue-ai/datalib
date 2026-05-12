@@ -22,6 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::db::ChatMeta;
+use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 use frankweiler_schema::feedback::FeedbackRow;
@@ -52,6 +53,22 @@ pub trait MirrorRepo: Send + Sync {
         &self,
         conversation_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
+
+    /// Fetch every row's `(uuid, kind, qmd_path, provider)` tuple. Used to
+    /// build a `GridIndex` so qmd-routed search can map hits → grid rows.
+    /// Returning an empty list is acceptable for an empty / missing store.
+    async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError>;
+
+    /// Same shape as [`search`](Self::search), but with a caller-supplied
+    /// ranked uuid list (output of `GridIndex::rows_for_hits`). The free-text
+    /// portion of `q` is ignored — qmd has already done that work. Structured
+    /// filters and date ranges still apply. Output preserves the input order.
+    async fn search_by_uuids(
+        &self,
+        q: &ParsedQuery,
+        uuids: &[String],
+        limit: usize,
+    ) -> Result<Vec<SearchRow>, RepoError>;
 
     /// Append a feedback row and stamp the change as its own `dolt log`
     /// entry. The default impl returns [`RepoError::ReadOnly`]; only

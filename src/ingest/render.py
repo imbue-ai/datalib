@@ -26,6 +26,9 @@ from ingest.providers.notion.parse import (
     BlockRow as _NotionBlockRow,
 )
 from ingest.providers.notion.parse import (
+    CommentRow as _NotionCommentRow,
+)
+from ingest.providers.notion.parse import (
     ParsedNotionWeb,
     notion_ms_to_iso,
     notion_url,
@@ -1352,8 +1355,10 @@ def _notion_render_one_thread(
     page_id: str,
     comments: list,
     root: Path,
+    ordered_ids: list[str] | None = None,
 ) -> Path:
-    snippet = comments[0].text_plain if comments else discussion.context_plain or ""
+    first_text = comments[0].text_plain if comments else ""
+    snippet = first_text or discussion.context_plain or ""
     snippet = snippet.strip().splitlines()[0][:60] if snippet.strip() else "thread"
 
     rel = _notion_thread_qmd_path(
@@ -1394,7 +1399,29 @@ def _notion_render_one_thread(
 
     # Notion doesn't expose stable per-comment permalinks; the discussion
     # URL opens the side panel scrolled to the full thread.
-    for i, c in enumerate(comments):
+    matched_by_id: dict[str, _NotionCommentRow] = {c.comment_id: c for c in comments}
+    iterable: list[tuple[str, _NotionCommentRow | None]]
+    if ordered_ids:
+        iterable = [(cid, matched_by_id.get(cid)) for cid in ordered_ids]
+    else:
+        iterable = [(c.comment_id, c) for c in comments]
+    for i, (cid, c) in enumerate(iterable):
+        if c is None:
+            # Referenced by discussion.comment_ids but no CommentRow on disk
+            # (e.g. backup race, deleted comment, or downloader gap). Surface
+            # a placeholder so the thread isn't silently truncated.
+            parts.append(_msg_div_open(cid, i, "notion"))
+            parts.append("")
+            parts.append("## (missing comment)")
+            parts.append("")
+            parts.append(
+                f"*comment `{cid}` referenced by this discussion "
+                f"but not present in backup* — [↗]({thread_url})"
+            )
+            parts.append("")
+            parts.append(_MSG_DIV_CLOSE)
+            parts.append("")
+            continue
         author = user_names.get(c.created_by_id or "", c.created_by_id or "unknown")
         parts.append(_msg_div_open(c.comment_id, i, "notion"))
         parts.append("")
@@ -1449,13 +1476,22 @@ def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
             comments_by_disc.get(disc.discussion_id, []),
             key=lambda c: (c.created_time_ms or 0, c.comment_id),
         )
-        if not items:
+        ordered_ids = list(disc.comment_ids) if disc.comment_ids else None
+        if not items and not ordered_ids:
             continue
         page_id = _notion_thread_page_id(disc, blocks_by_id)
         if not page_id:
             continue
         _notion_render_one_thread(
-            disc, parsed, blocks_by_id, page_titles, user_names, page_id, items, root
+            disc,
+            parsed,
+            blocks_by_id,
+            page_titles,
+            user_names,
+            page_id,
+            items,
+            root,
+            ordered_ids=ordered_ids,
         )
         summary.rendered += 1
 
