@@ -397,12 +397,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "frankweiler-core",
  "frankweiler-schema",
  "serde",
  "serde_json",
  "tokio",
  "tower-http",
+ "uuid",
 ]
 
 [[package]]

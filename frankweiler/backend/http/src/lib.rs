@@ -16,13 +16,15 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::query::parse_query;
-use frankweiler_core::repo::DynRepo;
+use frankweiler_core::repo::{DynRepo, RepoError};
 use frankweiler_core::search::SearchRow;
+use frankweiler_core::version::git_hash;
+use frankweiler_schema::feedback::FeedbackRow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,6 +97,34 @@ pub struct ChatResponse {
     pub body: String,
 }
 
+/// Client-supplied portion of a feedback submission. The server stamps
+/// the rest (UUID, timestamp, app_version, git_hash) at insert time, so
+/// the client only has to describe what was being clicked on and what the
+/// user typed. `context` is whatever shape `feedback/context.ts` produced;
+/// we round-trip it as JSON straight into the `context_json` column.
+#[derive(Debug, Deserialize)]
+pub struct FeedbackRequest {
+    /// Optional thumb up/down — `null` when the user submitted just a
+    /// comment without choosing a direction.
+    pub sentiment: Option<String>,
+    /// Required free-form comment. The UI disables Submit until non-empty;
+    /// the server enforces the same constraint defensively.
+    pub comment: String,
+    /// Decoded `FeedbackContext`. Re-serialized into the row's
+    /// `context_json` column verbatim.
+    pub context: serde_json::Value,
+}
+
+/// What the client gets back after a successful POST. Mostly a confirmation
+/// that the row landed; the UUID is useful for showing a "filed as X" toast
+/// and for cross-referencing in `dolt log`.
+#[derive(Debug, Serialize)]
+pub struct FeedbackResponse {
+    pub feedback_uuid: String,
+    pub created_at: String,
+    pub git_hash: &'static str,
+}
+
 pub fn router(state: AppState) -> Router {
     // Slack image attachments are symlinked into `<root>/media/slack/<file_id>/`
     // by ingest; serve them verbatim so QMD-embedded `![](...)` URLs resolve.
@@ -105,6 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
         .route("/api/chat/{conversation_uuid}", get(chat))
+        .route("/api/feedback", post(submit_feedback))
         .nest_service("/api/media", ServeDir::new(media_dir))
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -201,6 +232,48 @@ async fn chat(
         source_url,
         body,
     }))
+}
+
+async fn submit_feedback(
+    State(s): State<AppState>,
+    Json(req): Json<FeedbackRequest>,
+) -> Result<Json<FeedbackResponse>, StatusCode> {
+    // The UI also disables Submit until non-empty, but enforce it here so
+    // a hand-crafted POST can't slip an all-whitespace row past the audit
+    // trail.
+    if req.comment.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let context_json = serde_json::to_string(&req.context)
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    // Server-stamped fields. We mint these here rather than trusting the
+    // client so each row carries a server-vouched provenance and so
+    // `feedback_uuid` collisions are impossible from the wire.
+    let feedback_uuid = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Local::now().to_rfc3339();
+    let app_version = env!("CARGO_PKG_VERSION").to_string();
+    let git_hash_str = git_hash().to_string();
+    let row = FeedbackRow {
+        feedback_uuid: feedback_uuid.clone(),
+        created_at: created_at.clone(),
+        sentiment: req.sentiment,
+        comment: req.comment,
+        app_version,
+        git_hash: git_hash_str,
+        context_json,
+    };
+    match s.repo.insert_feedback(row).await {
+        Ok(()) => Ok(Json(FeedbackResponse {
+            feedback_uuid,
+            created_at,
+            git_hash: git_hash(),
+        })),
+        Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
+        Err(e) => {
+            eprintln!("feedback insert failed: {e}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 /// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
