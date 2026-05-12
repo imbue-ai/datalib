@@ -123,6 +123,16 @@ cache, so iterating costs only what you actually touched. Reach for
 iteration on a single language, and confirm with `bazelisk test //...`
 before declaring done.
 
+**Specifically beware `uv run pytest tests/test_snapshots.py`**: those
+tests load `bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which
+is a Bazel genrule output. `uv` does not know how to rebuild it, so if
+you change any ingest/render/schema code and re-run under `uv`, you'll
+diff fresh snapshots against a stale artifact and chase phantom
+failures. Always run snapshot tests via
+`bazelisk test //tests:test_snapshots` (or `//...`); Bazel rebuilds
+`//tests/fixtures:ingested_tng` first. Same caveat applies to anything
+else that consumes a cached Bazel output as input.
+
 ## Common commands
 
 ```bash

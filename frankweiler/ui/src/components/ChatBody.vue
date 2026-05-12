@@ -41,6 +41,65 @@ const md = new MarkdownIt({
 const html = computed(() => md.render(props.body || ""));
 const root = ref<HTMLElement | null>(null);
 
+function injectCopyUuidButtons() {
+  if (!root.value) return;
+  for (const el of root.value.querySelectorAll<HTMLElement>(".msg[id^='m-']")) {
+    if (el.querySelector(":scope > .msg-meta .copy-uuid, :scope > p .copy-uuid"))
+      continue;
+    const uuid = el.id.slice(2);
+    if (!uuid) continue;
+    // Prefer the explicit `.msg-meta` div (slack). Otherwise use the first
+    // <p><em>…</em></p> emitted as the markdown italic meta line
+    // (github/gitlab/anthropic/openai).
+    let host: HTMLElement | null = el.querySelector(":scope > .msg-meta");
+    if (!host) {
+      for (const p of el.querySelectorAll<HTMLElement>(":scope > p")) {
+        if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) {
+          host = p;
+          break;
+        }
+      }
+    }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-uuid";
+    btn.dataset.uuid = uuid;
+    btn.title = `Copy section ID (${uuid})`;
+    btn.setAttribute("aria-label", "Copy section ID");
+    btn.textContent = "🆔";
+    if (host) {
+      host.append(document.createTextNode(" · "), btn);
+    } else {
+      // No meta line — drop the button at the top of the section.
+      el.prepend(btn);
+    }
+  }
+}
+
+async function onCopyClick(ev: MouseEvent) {
+  const btn = (ev.target as HTMLElement | null)?.closest<HTMLButtonElement>(
+    "button.copy-uuid",
+  );
+  if (!btn) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const uuid = btn.dataset.uuid || "";
+  if (!uuid) return;
+  try {
+    await navigator.clipboard.writeText(uuid);
+    const prev = btn.textContent;
+    btn.textContent = "✓";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = prev;
+      btn.classList.remove("copied");
+    }, 900);
+  } catch {
+    btn.classList.add("copy-failed");
+    setTimeout(() => btn.classList.remove("copy-failed"), 900);
+  }
+}
+
 function applySelection() {
   if (!root.value) return;
   for (const el of root.value.querySelectorAll(".msg.selected")) {
@@ -72,6 +131,7 @@ function applySelection() {
 
 watch(html, async () => {
   await nextTick();
+  injectCopyUuidButtons();
   applySelection();
 });
 watch(
@@ -84,11 +144,19 @@ watch(
     applySelection();
   },
 );
-onMounted(() => applySelection());
+onMounted(() => {
+  injectCopyUuidButtons();
+  applySelection();
+});
 </script>
 
 <template>
-  <div class="chat-body markdown-body" ref="root" v-html="html"></div>
+  <div
+    class="chat-body markdown-body"
+    ref="root"
+    v-html="html"
+    @click="onCopyClick"
+  ></div>
 </template>
 
 <style>
@@ -123,5 +191,33 @@ onMounted(() => applySelection());
 .chat-body .msg-meta a {
   color: inherit;
   text-decoration: underline;
+}
+.chat-body button.copy-uuid {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  padding: 0 0.25rem;
+  margin: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.chat-body button.copy-uuid:hover {
+  opacity: 1;
+  border-color: var(--fw-muted, #94a3b8);
+}
+.chat-body button.copy-uuid.copied {
+  color: #16a34a;
+  opacity: 1;
+}
+.chat-body button.copy-uuid.copy-failed {
+  color: #dc2626;
+  opacity: 1;
 }
 </style>
