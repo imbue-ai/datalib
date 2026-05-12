@@ -5,11 +5,11 @@ This is the OpenAI/ChatGPT counterpart to scripts/sync_claude_web.py. For now
 it only fetches and caches; ingest into Dolt under an `openai_*` schema is a
 separate (forthcoming) step.
 
-Auth: assumes `latchkey curl` is configured for the `chatgpt` service. We
-read the injected `Authorization: Bearer <accessToken>` and `Cookie`
-(includes `cf_clearance` + `__Secure-next-auth.session-token`) out of
-latchkey's `-v` output, then issue the real requests via `curl_cffi` so we
-get a Chrome TLS fingerprint and clear Cloudflare's managed challenges.
+Auth + transport: every request shells out to `latchkey curl`, which
+injects the registered `chatgpt` service cookies/headers. To clear
+Cloudflare's managed challenges we point `LATCHKEY_CURL` at
+`latchkey_curl_shim.py` (a `curl_cffi` wrapper with a Chrome TLS
+fingerprint) — see `download.latchkey_curl_shim`.
 
 Usage:
     uv run python scripts/sync_chatgpt_web.py fetch [options]
@@ -23,17 +23,18 @@ Output layout (default ~/backups/chatgpt_api/):
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import typer
-from curl_cffi import requests as curl_requests
 from tqdm import tqdm
+
+from download.latchkey_curl_shim import latchkey_env as _latchkey_env
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
 # Inter-fetch sleep. We don't have evidence ChatGPT throttles us at any
@@ -41,8 +42,8 @@ DEFAULT_OUT_DIR = Path.home() / "backups" / "chatgpt_api"
 # while not doubling per-conv latency on top of ~0.4s GETs.
 SLEEP_BETWEEN = 0.1
 PAGE_SIZE = 100
-IMPERSONATE = "chrome"
 BASE = "https://chatgpt.com"
+LATCHKEY_TIMEOUT = 120
 
 # When ChatGPT 429s us, it does so for many minutes. After this much total
 # wait without a successful retry, give up and let the user resume later.
@@ -53,69 +54,110 @@ class RateLimited(RuntimeError):
     """Raised when /backend-api keeps returning HTTP 429 after backoff."""
 
 
-# ---------------------------------------------------------------------------
-# Auth: pull Authorization + Cookie out of latchkey at run time.
-# ---------------------------------------------------------------------------
-
-
-def get_auth_headers() -> dict[str, str]:
-    """Run `latchkey curl -v` against /api/auth/session and harvest the
-    Authorization/Cookie/User-Agent headers latchkey injects."""
-    proc = subprocess.run(
-        ["latchkey", "curl", "-v", "-o", "/dev/null", "-s", f"{BASE}/api/auth/session"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _parse_status_and_headers(dump: str) -> tuple[int, dict[str, str]]:
+    """Parse a `curl -D -` dump (status line + headers, possibly multi-block
+    when redirects were followed) into the *final* response's
+    (status, lowercased-headers)."""
+    status = 0
     headers: dict[str, str] = {}
-    for name in ("Authorization", "Cookie", "User-Agent"):
-        m = re.search(rf"^> {name}: (.+)$", proc.stderr, flags=re.MULTILINE)
-        if not m:
-            raise RuntimeError(
-                f"Could not extract {name!r} from `latchkey curl -v`. "
-                "Is the `chatgpt` service registered with `latchkey auth set`?\n"
-                f"latchkey stderr tail:\n{proc.stderr[-500:]}"
-            )
-        headers[name] = m.group(1).strip()
-    headers["Accept"] = "application/json"
-    return headers
+    for block in dump.split("\r\n\r\n"):
+        block = block.strip()
+        if not block:
+            continue
+        lines = block.splitlines()
+        first = lines[0]
+        if first.startswith("HTTP/"):
+            parts = first.split(None, 2)
+            if len(parts) >= 2 and parts[1].isdigit():
+                status = int(parts[1])
+                headers = {}
+            for line in lines[1:]:
+                if ":" not in line:
+                    continue
+                name, value = line.split(":", 1)
+                headers[name.strip().lower()] = value.strip()
+    return status, headers
 
 
 # ---------------------------------------------------------------------------
-# Web API client (curl_cffi with Chrome TLS fingerprint).
+# Web API client: shells out to `latchkey curl` (with our shim wired into
+# `LATCHKEY_CURL`) for every request. The shim handles the Chrome TLS
+# fingerprint that Cloudflare requires; latchkey handles cookie injection.
 # ---------------------------------------------------------------------------
 
 
 class ChatGPTWebClient:
-    def __init__(self, headers: dict[str, str]) -> None:
-        self._headers = headers
-        # Persisted session so the underlying curl handle reuses its TCP +
-        # TLS connection across requests. Without this, every GET pays a
-        # full TLS handshake to chatgpt.com (~1s round trip), which
-        # dominates the per-request budget. Measured impact in the wild:
-        # ~1.08s/req without, ~0.4s/req with.
-        self._session = curl_requests.Session(
-            impersonate=IMPERSONATE,
-            headers=headers,
-        )
+    def __init__(self) -> None:
+        self._env = _latchkey_env()
         # Cumulative network time (excludes sleeps), updated by _get.
         self.network_seconds: float = 0.0
         self.requests: int = 0
+
+    def _curl_get(self, url: str) -> tuple[int, str, dict[str, str]]:
+        """Run `latchkey curl` once. Returns (status, body, response headers).
+
+        We pass `-D -` to capture *response* headers (not request headers —
+        latchkey deliberately hides those from us, since they carry the
+        injected auth credentials). The only response-side fields we
+        actually read are `Retry-After` (for 429 backoff) and the
+        `cf-mitigated` diagnostic on errors; both are server-side metadata,
+        not secrets. Exponential backoff works fine without Retry-After, so
+        we could drop this if it ever becomes a maintenance burden."""
+        with tempfile.NamedTemporaryFile(
+            prefix="chatgpt-", suffix=".json", delete=False
+        ) as bodyf:
+            body_path = Path(bodyf.name)
+        try:
+            cmd = [
+                "latchkey",
+                "curl",
+                "-sS",
+                "-D",
+                "-",
+                "-H",
+                "Accept: application/json",
+                "-o",
+                str(body_path),
+                url,
+            ]
+            t0 = time.perf_counter()
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=LATCHKEY_TIMEOUT,
+                check=False,
+                env=self._env,
+            )
+            self.network_seconds += time.perf_counter() - t0
+            self.requests += 1
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"latchkey curl exit {proc.returncode}; stderr={proc.stderr[:300]}"
+                )
+            status, resp_headers = _parse_status_and_headers(proc.stdout)
+            body_text = body_path.read_text(errors="replace")
+            return status, body_text, resp_headers
+        finally:
+            body_path.unlink(missing_ok=True)
 
     def _get(self, path: str) -> Any:
         url = f"{BASE}{path}"
         waited = 0.0
         while True:
-            t0 = time.perf_counter()
-            r = self._session.get(url)
-            self.network_seconds += time.perf_counter() - t0
-            self.requests += 1
-            if r.status_code == 200:
-                return r.json()
-            if r.status_code == 429:
+            status, body_text, resp_headers = self._curl_get(url)
+            if status == 200:
+                try:
+                    return json.loads(body_text)
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(
+                        f"GET {path} -> 200 but non-JSON body: {e}; "
+                        f"body[:200]={body_text[:200]}"
+                    )
+            if status == 429:
                 # Honor Retry-After when present; otherwise exponential backoff
                 # capped at 60s. Give up after RATE_LIMIT_GIVE_UP_AFTER total.
-                ra = r.headers.get("Retry-After")
+                ra = resp_headers.get("retry-after")
                 try:
                     wait = (
                         float(ra)
@@ -134,8 +176,9 @@ class ChatGPTWebClient:
                 waited += wait
                 continue
             raise RuntimeError(
-                f"GET {path} -> HTTP {r.status_code} "
-                f"cf-mitigated={r.headers.get('cf-mitigated')} body={r.text[:300]}"
+                f"GET {path} -> HTTP {status} "
+                f"cf-mitigated={resp_headers.get('cf-mitigated')} "
+                f"body={body_text[:300]}"
             )
 
     def me(self) -> dict:
@@ -228,8 +271,7 @@ def fetch(
     # Local time with explicit offset, per the project timestamp convention.
     started_at = datetime.now().astimezone().isoformat()
 
-    headers = get_auth_headers()
-    client = ChatGPTWebClient(headers)
+    client = ChatGPTWebClient()
 
     me = client.me()
     _write_json(me_path, me)

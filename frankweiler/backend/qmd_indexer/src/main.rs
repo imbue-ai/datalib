@@ -179,6 +179,7 @@ fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
     let mut cmd = Command::new("npx");
     cmd.arg("-y").arg(qmd_pkg).args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
     eprintln!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
     let status = cmd
         .status()

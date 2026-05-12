@@ -19,13 +19,12 @@ have under `omitExistingRecordVersions`, so the server only returns records
 that have changed. This is the big incremental win — re-running on a quiet
 inbox costs ~one request per notification page and almost no payload.
 
-Auth: assumes `latchkey curl` is configured for the `notion_unofficial`
-service (see NOTION_AUTH.md). We harvest the injected `Cookie` /
-`User-Agent` / `Notion-Client-Version` headers from `latchkey curl -v`, then
-issue the real requests via `curl_cffi` with a Chrome TLS fingerprint —
-Notion sits behind Cloudflare and bounces off-fingerprint clients (other
-endpoints work without it, but `loadCachedPageChunkV2` / `getNotificationLog`
-do not).
+Auth + transport: every request shells out to `latchkey curl`, which injects
+the registered `notion_unofficial` cookies/headers (see NOTION_AUTH.md). For
+the Cloudflare-protected endpoints (`loadCachedPageChunkV2`,
+`getNotificationLog`), point `LATCHKEY_CURL` at a curl-impersonate-style
+binary before invoking this script — latchkey will use it as its curl
+backend so requests carry a Chrome TLS fingerprint.
 
 Usage:
     uv run python -m download.notion_web                      # inbox, all spaces
@@ -35,19 +34,20 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import logging
-import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Iterable
 
 import typer
-from curl_cffi import requests as curl_requests
 from tqdm import tqdm
 
+from download.latchkey_curl_shim import latchkey_env as _latchkey_env
 from event_store import (
     diff_and_save as _diff_and_save,
     load_latest_by_key as _load_latest_by_key,
@@ -56,7 +56,6 @@ from event_store import (
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "notion"
 BASE = "https://www.notion.so/api/v3"
-IMPERSONATE = "chrome"
 LATCHKEY_TIMEOUT = 60
 RETRY_MAX = 6
 RETRY_INITIAL_BACKOFF = 2.0
@@ -87,8 +86,8 @@ logger = logging.getLogger("notion_web")
 
 
 # ---------------------------------------------------------------------------
-# Auth + transport: latchkey for cookie storage, curl_cffi for the actual
-# requests (Chrome TLS fingerprint clears Cloudflare).
+# Auth + transport: latchkey for cookie injection; LATCHKEY_CURL pointed at
+# our curl_cffi shim so Cloudflare-protected endpoints clear the challenge.
 # ---------------------------------------------------------------------------
 
 
@@ -96,72 +95,91 @@ class NotionError(RuntimeError):
     pass
 
 
-def _harvest_auth_headers() -> dict[str, str]:
-    """Run `latchkey curl -v` against a known-cheap endpoint and pull out the
-    Cookie / User-Agent / Notion-Client-Version that latchkey injects."""
-    proc = subprocess.run(
-        [
-            "latchkey",
-            "curl",
-            "-v",
-            "-o",
-            "/dev/null",
-            "-s",
-            f"{BASE}/loadUserContent",
-            "-X",
-            "POST",
-            "-H",
-            "Content-Type: application/json",
-            "--data",
-            "{}",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=LATCHKEY_TIMEOUT,
-        check=False,
-    )
-    headers: dict[str, str] = {}
-    for name in ("Cookie", "User-Agent", "Notion-Client-Version"):
-        m = re.search(rf"^> {name}: (.+)$", proc.stderr, flags=re.MULTILINE)
-        if m:
-            headers[name] = m.group(1).strip()
-    missing = [n for n in ("Cookie", "User-Agent") if n not in headers]
-    if missing:
-        raise NotionError(
-            f"latchkey did not inject {missing}. "
-            "Is `notion_unofficial` registered and authed? See NOTION_AUTH.md."
-        )
-    headers["Content-Type"] = "application/json"
-    headers["Accept"] = "application/json"
-    return headers
-
-
 class NotionWebClient:
-    def __init__(self, headers: dict[str, str]) -> None:
-        self._session = curl_requests.Session(impersonate=IMPERSONATE, headers=headers)
+    """Posts JSON to Notion's v3 endpoints via `latchkey curl`.
+
+    Every request shells out to `latchkey curl` so latchkey injects the
+    registered cookies/headers. We set `LATCHKEY_CURL` to point latchkey at
+    `latchkey_curl_shim.py`, a thin wrapper around `curl_cffi` that gives us
+    a Chrome TLS fingerprint for Cloudflare-protected endpoints.
+    """
+
+    def __init__(self) -> None:
         self.requests = 0
         self.network_seconds = 0.0
+        self._env = _latchkey_env()
 
     def _post(self, method: str, body: dict[str, Any]) -> dict[str, Any]:
         url = f"{BASE}/{method}"
+        payload = json.dumps(body)
         backoff = RETRY_INITIAL_BACKOFF
         for attempt in range(RETRY_MAX + 1):
-            t0 = time.perf_counter()
-            r = self._session.post(url, json=body)
-            self.network_seconds += time.perf_counter() - t0
-            self.requests += 1
-            if r.status_code == 200:
-                return r.json()
-            if r.status_code in (429, 502, 503, 504):
+            with tempfile.NamedTemporaryFile(
+                prefix="notion-", suffix=".json", delete=False
+            ) as bodyf:
+                body_path = Path(bodyf.name)
+            try:
+                cmd = [
+                    "latchkey",
+                    "curl",
+                    "-sS",
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-H",
+                    "Accept: application/json",
+                    "--data",
+                    payload,
+                    "-o",
+                    str(body_path),
+                    "-w",
+                    "%{http_code}",
+                    url,
+                ]
+                t0 = time.perf_counter()
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=LATCHKEY_TIMEOUT,
+                    check=False,
+                    env=self._env,
+                )
+                self.network_seconds += time.perf_counter() - t0
+                self.requests += 1
+                if proc.returncode != 0:
+                    raise NotionError(
+                        f"{method}: latchkey curl exit {proc.returncode}; "
+                        f"stderr={proc.stderr[:300]}"
+                    )
+                status_txt = proc.stdout.strip()
+                try:
+                    status = int(status_txt) if status_txt else 0
+                except ValueError:
+                    status = 0
+                resp_text = body_path.read_text(errors="replace")
+            finally:
+                body_path.unlink(missing_ok=True)
+
+            if status == 200:
+                try:
+                    return json.loads(resp_text)
+                except json.JSONDecodeError as e:
+                    raise NotionError(
+                        f"{method}: HTTP 200 but non-JSON body: {e}; "
+                        f"body[:200]={resp_text[:200]}"
+                    )
+            if status in (429, 502, 503, 504):
                 if attempt == RETRY_MAX:
                     raise NotionError(
-                        f"{method}: HTTP {r.status_code} after {attempt} retries; "
-                        f"body={r.text[:200]}"
+                        f"{method}: HTTP {status} after {attempt} retries; "
+                        f"body={resp_text[:200]}"
                     )
                 logger.warning(
                     "%s -> %d; sleeping %.0fs (attempt %d/%d)",
                     method,
-                    r.status_code,
+                    status,
                     backoff,
                     attempt + 1,
                     RETRY_MAX,
@@ -169,7 +187,7 @@ class NotionWebClient:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, RETRY_MAX_BACKOFF)
                 continue
-            raise NotionError(f"{method}: HTTP {r.status_code} body={r.text[:300]}")
+            raise NotionError(f"{method}: HTTP {status} body={resp_text[:300]}")
         raise AssertionError("unreachable")
 
     def load_user_content(self) -> dict[str, Any]:
@@ -832,8 +850,7 @@ def fetch(
     out_dir = out_dir.expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    headers = _harvest_auth_headers()
-    client = NotionWebClient(headers)
+    client = NotionWebClient()
 
     # Load all known entities up front. The set of entities can grow as we
     # encounter new tables, so we load lazily inside _sink_response too.

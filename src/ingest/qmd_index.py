@@ -114,4 +114,5 @@ def _env_with_cache(cache_home: Path) -> dict[str, str]:
 
     env = os.environ.copy()
     env["XDG_CACHE_HOME"] = str(cache_home)
+    env["XDG_CONFIG_HOME"] = str(cache_home)
     return env

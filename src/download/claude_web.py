@@ -3,10 +3,11 @@
 shape as Anthropic's bulk export, so the ingest pipeline can consume either
 indistinguishably.
 
-Auth: assumes `latchkey curl` is configured for the `claude-ai` service. The
-script reads the sessionKey out of latchkey's `-v` output and then makes the
-real requests via `curl_cffi` so we get a Chrome TLS fingerprint and clear
-Cloudflare's managed challenges.
+Auth + transport: every request shells out to `latchkey curl`, which
+injects the registered `claude-ai` service cookies/headers. To clear
+Cloudflare's managed challenges we point `LATCHKEY_CURL` at
+`latchkey_curl_shim.py` (a `curl_cffi` wrapper with a Chrome TLS
+fingerprint) — see `download.latchkey_curl_shim`.
 
 Mirrors the shape of `download/chatgpt_web.py` so both downloaders behave
 the same way: incremental, missing conversations fetched first (so a 429
@@ -19,76 +20,82 @@ Usage:
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import typer
-from curl_cffi import requests as curl_requests
 from tqdm import tqdm
+
+from download.latchkey_curl_shim import latchkey_env as _latchkey_env
 
 DEFAULT_EXPORT_DIR = Path.home() / "backups" / "claude"
 DEFAULT_OUT_DIR = Path.home() / "backups" / "claude_api"
 DEFAULT_OVERLAP = 3
 SLEEP_BETWEEN = 0.4
-IMPERSONATE = "chrome"
+LATCHKEY_TIMEOUT = 120
 
 CLAUDE_BASE = "https://claude.ai/api"
 
 
 # ---------------------------------------------------------------------------
-# Auth: pull the sessionKey cookie out of latchkey at run time.
-# ---------------------------------------------------------------------------
-
-
-def get_session_cookie() -> str:
-    proc = subprocess.run(
-        [
-            "latchkey",
-            "curl",
-            "-v",
-            "-o",
-            "/dev/null",
-            "-s",
-            f"{CLAUDE_BASE}/organizations",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    # latchkey writes its injected request headers to stderr (curl -v).
-    m = re.search(r"^> Cookie: (.+)$", proc.stderr, flags=re.MULTILINE)
-    if not m:
-        raise RuntimeError(
-            "Could not extract Cookie from `latchkey curl -v`. "
-            "Is the `claude-ai` service registered with `latchkey auth set`?"
-        )
-    return m.group(1).strip()
-
-
-# ---------------------------------------------------------------------------
-# Web API client (curl_cffi with Chrome TLS fingerprint).
+# Web API client: shells out to `latchkey curl` (with our shim wired into
+# `LATCHKEY_CURL`) for every request. The shim handles the Chrome TLS
+# fingerprint that Cloudflare requires; latchkey handles cookie injection.
 # ---------------------------------------------------------------------------
 
 
 class ClaudeWebClient:
-    def __init__(self, cookie: str) -> None:
-        self._cookie = cookie
+    def __init__(self) -> None:
+        self._env = _latchkey_env()
 
     def _get(self, path: str) -> Any:
         url = f"{CLAUDE_BASE}{path}"
-        r = curl_requests.get(
-            url,
-            impersonate=IMPERSONATE,
-            headers={"Cookie": self._cookie, "Accept": "application/json"},
-        )
-        if r.status_code != 200:
-            raise RuntimeError(f"GET {path} -> HTTP {r.status_code}: {r.text[:300]}")
-        return r.json()
+        with tempfile.NamedTemporaryFile(
+            prefix="claude-", suffix=".json", delete=False
+        ) as bodyf:
+            body_path = Path(bodyf.name)
+        try:
+            cmd = [
+                "latchkey",
+                "curl",
+                "-sS",
+                "-H",
+                "Accept: application/json",
+                "-o",
+                str(body_path),
+                "-w",
+                "%{http_code}",
+                url,
+            ]
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=LATCHKEY_TIMEOUT,
+                check=False,
+                env=self._env,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"GET {path}: latchkey curl exit {proc.returncode}; "
+                    f"stderr={proc.stderr[:300]}"
+                )
+            status_txt = proc.stdout.strip()
+            try:
+                status = int(status_txt) if status_txt else 0
+            except ValueError:
+                status = 0
+            body_text = body_path.read_text(errors="replace")
+        finally:
+            body_path.unlink(missing_ok=True)
+        if status != 200:
+            raise RuntimeError(f"GET {path} -> HTTP {status}: {body_text[:300]}")
+        return json.loads(body_text)
 
     def list_orgs(self) -> list[dict]:
         return self._get("/organizations")
@@ -217,8 +224,7 @@ def fetch(
     if not account_uuid:
         print("warning: no users.json found — conversation.account.uuid will be empty")
 
-    cookie = get_session_cookie()
-    client = ClaudeWebClient(cookie)
+    client = ClaudeWebClient()
 
     orgs = client.list_orgs()
     print(f"orgs from API: {len(orgs)}")

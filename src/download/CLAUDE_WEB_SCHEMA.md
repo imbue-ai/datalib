@@ -34,12 +34,13 @@ uuid in the bulk export's `users.json` for that purpose — see
 claude.ai is gated by Cloudflare. Two layers:
 
 1. **Cookie auth.** `sessionKey` is the long-lived auth cookie. We never
-   store it in the repo — it's read out of `latchkey curl -v` stderr at
-   run time (latchkey holds the credential).
+   store it in the repo — latchkey holds the credential and injects it on
+   every `latchkey curl` invocation.
 2. **TLS fingerprint.** Cloudflare returns `cf-mitigated: challenge`
    (HTTP 403) to anything whose JA3/JA4 doesn't look like a real browser,
-   regardless of headers. We use `curl-cffi` with `impersonate="chrome"`,
-   which bundles curl-impersonate and produces a Chrome JA3.
+   regardless of headers. We set `LATCHKEY_CURL` to point at
+   `download/latchkey_curl_shim.py`, a `curl_cffi`-backed shim that gives
+   latchkey a Chrome TLS fingerprint as its curl backend.
 
 `cf_clearance` is HttpOnly; if you ever need to copy it manually, grab it
 from DevTools → Application → Cookies.

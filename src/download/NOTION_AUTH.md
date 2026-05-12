@@ -61,6 +61,20 @@ Expected: a large JSON blob starting with a workspace UUID and a `recordMap`.
 If you get `UnauthorizedError`, the cookies are stale — repeat the auth step.
 If you get `No service matches URL`, the `services register` step didn't run.
 
+## Cloudflare-protected endpoints (`LATCHKEY_CURL`)
+
+`loadCachedPageChunkV2` and `getNotificationLog` sit behind Cloudflare and
+bounce off-fingerprint clients with `HTTP 403`. The downloader handles this
+automatically: on startup it points `LATCHKEY_CURL` at
+`src/download/latchkey_curl_shim.py`, a thin wrapper around `curl_cffi`
+that emits a Chrome TLS fingerprint. Latchkey then runs that wrapper as its
+curl backend, so every request — cheap or Cloudflare-protected — goes out
+impersonating Chrome.
+
+If you want to override this (e.g. point at a real `curl-impersonate-chrome`
+binary you've installed via Homebrew), set `LATCHKEY_CURL` yourself before
+invoking the downloader.
+
 ## Notes / gotchas
 
 - `token_v2` is the credential that matters. It's HttpOnly so it never appears
