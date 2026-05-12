@@ -3,7 +3,7 @@ import { RouterView } from "vue-router";
 </script>
 
 <template>
-  <main class="frankweiler-shell">
+  <main class="frankweiler-shell" data-feedback-root>
     <header><h1>Frankweiler</h1></header>
     <RouterView />
   </main>
