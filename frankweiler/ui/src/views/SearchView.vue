@@ -28,6 +28,8 @@ import {
   type SearchRow,
 } from "@/api";
 import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
+import FeedbackModal from "@/components/FeedbackModal.vue";
+import { buildContext, type FeedbackContext } from "@/feedback/context";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -110,6 +112,22 @@ function resolveTargetRows(
 const contextMenuVisible = ref(false);
 const contextMenuPos = ref({ x: 0, y: 0 });
 const contextMenuTargets = ref<SearchRow[]>([]);
+// The DOM element under the right-click. Stashed so a follow-up
+// "Feedback…" click can reconstruct the breadcrumb pointing at the
+// exact cell the user was looking at — the context menu itself sits
+// above the grid, so re-deriving from a later event would point at the
+// menu, not the cell.
+const contextAnchorEl = ref<Element | null>(null);
+// Column id (e.g. "author") + raw cell value snapshot for the feedback
+// payload. Captured at right-click time so the modal sees what the user
+// was pointing at even if the grid re-renders behind the dialog.
+const contextCellInfo = ref<{ column: string; cellValue: string } | null>(null);
+
+// Feedback modal state. The modal is surface-agnostic — we hand it a
+// fully-built FeedbackContext and a short label for the title bar.
+const feedbackOpen = ref(false);
+const feedbackContext = ref<FeedbackContext | null>(null);
+const feedbackSurfaceLabel = ref("");
 // Filter context: which column the user right-clicked on, and the raw
 // cell value to filter by. Null when the right-click happened on a
 // non-filterable column (Time, Contents) or a row with no value there.
@@ -159,6 +177,52 @@ function closeContextMenu() {
   contextMenuTargets.value = [];
   contextFilter.value = null;
   contextNotionPage.value = null;
+  contextAnchorEl.value = null;
+  contextCellInfo.value = null;
+}
+
+function openFeedbackForCell() {
+  const targets = contextMenuTargets.value;
+  const info = contextCellInfo.value;
+  if (targets.length === 0 || !info) {
+    closeContextMenu();
+    return;
+  }
+  const rowUuids = targets.map((r) => r.uuid);
+  feedbackContext.value = buildContext({
+    surface: "grid_cell",
+    anchor: contextAnchorEl.value,
+    targetUuids: rowUuids,
+    payload: {
+      column: info.column,
+      row_uuids: rowUuids,
+      cell_value: info.cellValue || null,
+    },
+  });
+  feedbackSurfaceLabel.value = `Grid cell · ${info.column}${
+    targets.length > 1 ? ` · ${targets.length} rows` : ""
+  }`;
+  feedbackOpen.value = true;
+  closeContextMenu();
+}
+
+function openFeedbackForRow() {
+  const targets = contextMenuTargets.value;
+  if (targets.length === 0) {
+    closeContextMenu();
+    return;
+  }
+  const rowUuids = targets.map((r) => r.uuid);
+  feedbackContext.value = buildContext({
+    surface: "grid_row",
+    anchor: contextAnchorEl.value,
+    targetUuids: rowUuids,
+    payload: { row_uuids: rowUuids },
+  });
+  feedbackSurfaceLabel.value =
+    targets.length === 1 ? "Grid row" : `Grid rows · ${targets.length}`;
+  feedbackOpen.value = true;
+  closeContextMenu();
 }
 
 /// Quote a value for the search bar. Quotes when it contains whitespace,
@@ -463,6 +527,8 @@ const gridOptions: GridOptions<SearchRow> = {
     if (me) {
       me.preventDefault();
       contextMenuPos.value = { x: me.clientX, y: me.clientY };
+      contextAnchorEl.value =
+        me.target instanceof Element ? me.target : null;
     }
     // Lightroom: right-clicking an unselected row narrows selection to it.
     if (!e.node.isSelected()) {
@@ -479,6 +545,22 @@ const gridOptions: GridOptions<SearchRow> = {
     const colId = e.column?.getColId() ?? "";
     const meta = FILTER_COLUMNS[colId];
     contextFilter.value = null;
+    // Snapshot the cell value for "Feedback…". valueFormatter result is
+    // closer to what the user actually sees (e.g. author UUID → label)
+    // than the raw row field, so prefer it when available.
+    let cellRendered: string;
+    try {
+      const fmt = e.value;
+      cellRendered =
+        typeof fmt === "string"
+          ? fmt
+          : fmt == null
+            ? ""
+            : String(fmt);
+    } catch {
+      cellRendered = "";
+    }
+    contextCellInfo.value = { column: colId, cellValue: cellRendered };
     if (meta && e.data) {
       const cellRaw = (e.data as Record<string, unknown>)[colId];
       if (meta.uuidCol) {
@@ -613,8 +695,22 @@ const gridOptions: GridOptions<SearchRow> = {
         >
           Open in Slack{{ slackLinkTargets.length === 1 ? '' : ` (${slackLinkTargets.length})` }}
         </div>
+        <div class="ctx-divider" />
+        <div v-if="contextCellInfo" class="ctx-item" @click="openFeedbackForCell">
+          Feedback on this cell…
+        </div>
+        <div class="ctx-item" @click="openFeedbackForRow">
+          Feedback on row{{ contextMenuTargets.length === 1 ? '' : 's' }}…
+        </div>
       </div>
     </div>
+
+    <FeedbackModal
+      :open="feedbackOpen"
+      :surface-label="feedbackSurfaceLabel"
+      :context="feedbackContext"
+      @close="feedbackOpen = false"
+    />
   </section>
 </template>
 
