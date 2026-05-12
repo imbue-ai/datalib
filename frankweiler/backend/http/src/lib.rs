@@ -19,6 +19,7 @@ use axum::{
     routing::get,
     Router,
 };
+use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::query::parse_query;
 use frankweiler_core::repo::DynRepo;
 use frankweiler_core::search::SearchRow;
@@ -34,11 +35,17 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`] instead of going to `mirror.sqlite` directly.
     pub root: Arc<PathBuf>,
-    /// All SQL flows through this seam. Default today is
-    /// [`frankweiler_core::sqlite_repo::SqliteRepo`] against the
-    /// periodically-materialized `mirror.sqlite`. T7 flips the default
-    /// to [`frankweiler_core::dolt_repo::DoltRepo`].
+    /// All SQL flows through this seam. Default is
+    /// [`frankweiler_core::dolt_repo::DoltRepo`] against the managed
+    /// `dolt sql-server`; `--backend sqlite` swaps in
+    /// [`frankweiler_core::sqlite_repo::SqliteRepo`] (read-only,
+    /// reference / debug path).
     pub repo: DynRepo,
+    /// Managed `dolt sql-server` subprocess. Held here so its `Drop`
+    /// (SIGKILL + wait) runs only when the backend itself shuts down,
+    /// keeping the server alive for every request handler. `None` when
+    /// running under `--backend sqlite`.
+    pub dolt_server: Option<Arc<DoltServer>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -245,6 +252,10 @@ mod tests {
     async fn router_compiles() {
         let root = Arc::new(PathBuf::from("/tmp/nonexistent-fw-root"));
         let repo = frankweiler_core::repo::default_repo(root.clone()).await;
-        let _r = router(AppState { root, repo });
+        let _r = router(AppState {
+            root,
+            repo,
+            dolt_server: None,
+        });
     }
 }
