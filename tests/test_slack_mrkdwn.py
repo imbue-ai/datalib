@@ -78,6 +78,23 @@ def test_blockquote_preserved_at_line_start() -> None:
     assert to_commonmark(src) == src
 
 
+def test_blockquote_does_not_bleed_into_next_line() -> None:
+    # Slack quotes only the `>` line itself; CommonMark would lazily extend
+    # the blockquote to the next non-blank line. Inject a blank line so the
+    # following text renders unquoted.
+    src = "> accumulating complexity?\nyeah, that's what I meant."
+    expected = "> accumulating complexity?\n\nyeah, that's what I meant."
+    assert to_commonmark(src) == expected
+
+
+def test_blockquote_group_stays_together() -> None:
+    # Consecutive `>` lines form one Slack quote; we only inject a blank
+    # line *after* the last `>` line of the group.
+    src = "> line one\n> line two\nback to normal"
+    expected = "> line one\n> line two\n\nback to normal"
+    assert to_commonmark(src) == expected
+
+
 def test_combined_message() -> None:
     src = (
         "TIL: you can `tail` *any* tqdm output, see "

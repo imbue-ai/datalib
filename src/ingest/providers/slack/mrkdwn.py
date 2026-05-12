@@ -90,4 +90,24 @@ def to_commonmark(text: str, user_labels: Mapping[str, str] | None = None) -> st
     # consumed so we never accidentally synthesise a `<@U…>` from text the
     # user actually typed.
     out = out.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    # Slack `>` quotes only the prefixed line(s); CommonMark would lazily
+    # absorb the following non-blank line into the same blockquote. Inject
+    # a blank line after each `>`-block so the quote ends where Slack ends
+    # it.
+    out = _terminate_blockquotes(out)
     return out
+
+
+def _terminate_blockquotes(text: str) -> str:
+    lines = text.split("\n")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if not line.startswith(">"):
+            continue
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        # Only inject when the next line is non-blank text that would
+        # otherwise be sucked into the blockquote by lazy continuation.
+        if nxt and not nxt.startswith(">"):
+            out.append("")
+    return "\n".join(out)
