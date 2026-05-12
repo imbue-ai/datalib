@@ -4,6 +4,7 @@ import { RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "./ChatBody.vue";
 import CopyUuidButton from "./CopyUuidButton.vue";
+import FeedbackButton from "./FeedbackButton.vue";
 import FeedbackModal from "./FeedbackModal.vue";
 import {
   buildContext,
@@ -123,6 +124,11 @@ watch(
         <h2>
           {{ chat.name || chat.conversation_uuid }}
           <CopyUuidButton :uuid="chat.conversation_uuid" label="Copy page ID" />
+          <FeedbackButton
+            :entity-uuid="chat.conversation_uuid"
+            entity-kind="conversation"
+            label="Conversation"
+          />
         </h2>
         <p class="meta">
           <RouterLink
