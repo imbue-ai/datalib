@@ -9,6 +9,8 @@ last_edited_time: "2369-05-28T15:10:00.000000+00:00"
 
 # 🧑‍🚀 Bridge Operations
 
+[View on Notion ↗](https://www.notion.so/b10cb10c17014d008000000000000002)
+
 This page tracks bridge-watch handoffs and standing orders. Tea, Earl Grey, hot.
 
 # Standing Orders

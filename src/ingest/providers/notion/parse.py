@@ -36,6 +36,26 @@ def notion_heading_uuid(page_id: str, block_id: str) -> str:
     return str(uuid_lib.uuid5(NOTION_UUID_NS, f"notion:heading:{page_id}:{block_id}"))
 
 
+def notion_url(
+    page_id: str,
+    *,
+    discussion_id: str | None = None,
+    block_anchor: str | None = None,
+) -> str:
+    """Build a `www.notion.so` URL for a page, optionally focused on a
+    discussion + anchor block. Notion accepts both dashed and undashed
+    UUIDs but its own UI emits the undashed form, so we match that."""
+    page = page_id.replace("-", "")
+    url = f"https://www.notion.so/{page}"
+    if discussion_id:
+        url += f"?d={discussion_id.replace('-', '')}"
+        if block_anchor:
+            url += f"#{block_anchor.replace('-', '')}"
+    elif block_anchor:
+        url += f"#{block_anchor.replace('-', '')}"
+    return url
+
+
 def notion_ms_to_iso(ms: int | None) -> str:
     """Notion stores timestamps as milliseconds since unix epoch.
     Render as ISO-8601 UTC with explicit `+00:00`, microsecond precision —

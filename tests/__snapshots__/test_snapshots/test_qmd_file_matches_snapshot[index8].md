@@ -8,3 +8,5 @@ last_edited_time: "2369-05-28T17:53:20.000000+00:00"
 ---
 
 # 🌌 Encounter at Farpoint
+
+[View on Notion ↗](https://www.notion.so/b10cb10c17014d008000000000000100)

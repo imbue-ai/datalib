@@ -30,6 +30,7 @@ from ingest.providers.notion.parse import (
     ParsedNotionWeb,
     notion_heading_uuid,
     notion_ms_to_iso,
+    notion_url,
     rich_text_to_plain,
 )
 from ingest.providers.openai.parse import ParsedChatGPTApi
@@ -629,6 +630,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
                 text="\n".join(body_parts),
                 slack_link=None,
                 qmd_path=qmd,
+                source_url=notion_url(b.block_id),
                 notion_page_uuid=b.block_id,
                 notion_block_uuid=None,
             )
@@ -667,6 +669,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             text=heading_text,
             slack_link=None,
             qmd_path=_notion_page_qmd_path(space, page_id, blocks_by_id, page_titles),
+            source_url=notion_url(page_id, block_anchor=b.block_id),
             notion_page_uuid=page_id,
             notion_block_uuid=b.block_id,
         )
@@ -695,6 +698,22 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
         )
         page_title = page_titles.get(page_id, "(untitled)")
         first = items[0]
+        thread_url = notion_url(
+            page_id, discussion_id=disc.discussion_id, block_anchor=block_anchor
+        )
+
+        # Resolve @-mentions against the user map; `c.text_plain` was built
+        # at parse time without it, so unresolved users render as `@<short
+        # uuid>`. Re-run rich_text_to_plain here with names available.
+        def _comment_text(c):
+            return (
+                rich_text_to_plain(
+                    (c.raw_json or {}).get("text"),
+                    user_names=user_names,
+                    page_titles=page_titles,
+                )
+                or c.text_plain
+            )
 
         # Thread row.
         yield _Row(
@@ -711,9 +730,10 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             conversation_uuid=disc.discussion_id,
             message_index=None,
             entire_chat=f"/notion/thread/{disc.discussion_id}",
-            text="\n".join(c.text_plain for c in items if c.text_plain),
+            text="\n".join(t for t in (_comment_text(c) for c in items) if t),
             slack_link=None,
             qmd_path=thread_qmd,
+            source_url=thread_url,
             notion_page_uuid=page_id,
             notion_block_uuid=block_anchor,
         )
@@ -733,9 +753,10 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
                 conversation_uuid=disc.discussion_id,
                 message_index=idx,
                 entire_chat=f"/notion/thread/{disc.discussion_id}",
-                text=c.text_plain,
+                text=_comment_text(c),
                 slack_link=None,
                 qmd_path=thread_qmd,
+                source_url=thread_url,
                 notion_page_uuid=page_id,
                 notion_block_uuid=block_anchor,
             )

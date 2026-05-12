@@ -33,6 +33,7 @@ import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
 import githubIconUrl from "@/assets/github.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
+import notionIconUrl from "@/assets/notion.svg";
 
 const SOURCE_ICONS: Record<string, string> = {
   Claude: claudeIconUrl,
@@ -40,6 +41,7 @@ const SOURCE_ICONS: Record<string, string> = {
   Slack: slackIconUrl,
   GitHub: githubIconUrl,
   GitLab: gitlabIconUrl,
+  Notion: notionIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule]);

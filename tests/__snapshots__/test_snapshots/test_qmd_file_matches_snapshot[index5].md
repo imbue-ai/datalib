@@ -9,6 +9,8 @@ last_edited_time: "2369-05-28T15:13:20.000000+00:00"
 
 # ⚙️ Engineering Wiki
 
+[View on Notion ↗](https://www.notion.so/b10cb10c17014d008000000000000004)
+
 Warp Core Maintenance
 
 ## Sub-pages

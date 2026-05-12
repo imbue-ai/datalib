@@ -28,6 +28,7 @@ from ingest.providers.notion.parse import (
 from ingest.providers.notion.parse import (
     ParsedNotionWeb,
     notion_ms_to_iso,
+    notion_url,
     rich_text_to_plain,
 )
 from ingest.providers.openai.parse import ParsedChatGPTApi
@@ -1311,6 +1312,8 @@ def _notion_render_one_page(
     parts.append("")
     parts.append(f"# {icon + ' ' if icon else ''}{title}")
     parts.append("")
+    parts.append(f"[View on Notion ↗]({notion_url(page.block_id)})")
+    parts.append("")
 
     for child_id in page.content:
         child = blocks_by_id.get(child_id)
@@ -1365,6 +1368,12 @@ def _notion_render_one_thread(
     target.parent.mkdir(parents=True, exist_ok=True)
 
     page_title = page_titles.get(page_id, "(untitled)")
+    block_anchor = discussion.parent_id if discussion.parent_table == "block" else None
+    thread_url = notion_url(
+        page_id,
+        discussion_id=discussion.discussion_id,
+        block_anchor=block_anchor,
+    )
     parts: list[str] = []
     parts.append("---")
     parts.append("provider: notion")
@@ -1377,17 +1386,21 @@ def _notion_render_one_thread(
     parts.append("")
     parts.append(f"# Comment thread on “{page_title}”")
     parts.append("")
+    parts.append(f"[View thread on Notion ↗]({thread_url})")
+    parts.append("")
     if discussion.context_plain:
         parts.append(f"> Anchored to: *{discussion.context_plain}*")
         parts.append("")
 
+    # Notion doesn't expose stable per-comment permalinks; the discussion
+    # URL opens the side panel scrolled to the full thread.
     for i, c in enumerate(comments):
         author = user_names.get(c.created_by_id or "", c.created_by_id or "unknown")
         parts.append(_msg_div_open(c.comment_id, i, "notion"))
         parts.append("")
         parts.append(f"## {author}")
         parts.append("")
-        parts.append(f"*{notion_ms_to_iso(c.created_time_ms)}*")
+        parts.append(f"*{notion_ms_to_iso(c.created_time_ms)}* — [↗]({thread_url})")
         parts.append("")
         body_md = _notion_render_rich_text(
             (c.raw_json or {}).get("text"), user_names, page_titles
