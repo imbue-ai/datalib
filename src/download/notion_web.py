@@ -101,11 +101,19 @@ def _harvest_auth_headers() -> dict[str, str]:
     Cookie / User-Agent / Notion-Client-Version that latchkey injects."""
     proc = subprocess.run(
         [
-            "latchkey", "curl", "-v", "-o", "/dev/null", "-s",
+            "latchkey",
+            "curl",
+            "-v",
+            "-o",
+            "/dev/null",
+            "-s",
             f"{BASE}/loadUserContent",
-            "-X", "POST",
-            "-H", "Content-Type: application/json",
-            "--data", "{}",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "--data",
+            "{}",
         ],
         capture_output=True,
         text=True,
@@ -152,14 +160,16 @@ class NotionWebClient:
                     )
                 logger.warning(
                     "%s -> %d; sleeping %.0fs (attempt %d/%d)",
-                    method, r.status_code, backoff, attempt + 1, RETRY_MAX,
+                    method,
+                    r.status_code,
+                    backoff,
+                    attempt + 1,
+                    RETRY_MAX,
                 )
                 time.sleep(backoff)
                 backoff = min(backoff * 2, RETRY_MAX_BACKOFF)
                 continue
-            raise NotionError(
-                f"{method}: HTTP {r.status_code} body={r.text[:300]}"
-            )
+            raise NotionError(f"{method}: HTTP {r.status_code} body={r.text[:300]}")
         raise AssertionError("unreachable")
 
     def load_user_content(self) -> dict[str, Any]:
@@ -265,7 +275,9 @@ def _collect_records_by_entity(
             if table == "__version__" or not isinstance(by_id, dict):
                 continue
             if table not in KNOWN_TABLES:
-                logger.debug("unknown table %r (%d entries) — skipping", table, len(by_id))
+                logger.debug(
+                    "unknown table %r (%d entries) — skipping", table, len(by_id)
+                )
                 continue
             for rec_id, payload in by_id.items():
                 if (table, rec_id) in seen_keys:
@@ -378,7 +390,9 @@ def _fetch_page(
             continue
         visited_cursor_keys.add(key)
 
-        omit = _block_versions_for_page(page_id, space_id, existing.get("notion_block", {}))
+        omit = _block_versions_for_page(
+            page_id, space_id, existing.get("notion_block", {})
+        )
         resp = client.load_page_chunk(page_id, cur, omit)
         stats = _sink_response(out_dir, resp, existing)
         for ent, (n, u) in stats.items():
@@ -574,7 +588,7 @@ def fetch(
     typer.echo(
         "existing: "
         + " ".join(
-            f"{ent.split('_',1)[1]}={len(existing[ent])}"
+            f"{ent.split('_', 1)[1]}={len(existing[ent])}"
             for ent in sorted(existing)
             if existing[ent]
         )
@@ -627,8 +641,12 @@ def fetch(
             for t in types:
                 typer.echo(f"inbox[{t}]: {sid}")
                 refs, inbox_stats = _walk_inbox(
-                    client, out_dir, sid, existing,
-                    notification_page_size, max_notification_pages,
+                    client,
+                    out_dir,
+                    sid,
+                    existing,
+                    notification_page_size,
+                    max_notification_pages,
                     type_=t,
                 )
                 merge(inbox_stats)
@@ -643,9 +661,7 @@ def fetch(
                 except NotionError as e:
                     tqdm.write(f"  ! {pid}: {e}")
 
-    typer.echo(
-        f"\nrequests: {client.requests}  network: {client.network_seconds:.1f}s"
-    )
+    typer.echo(f"\nrequests: {client.requests}  network: {client.network_seconds:.1f}s")
     if grand:
         typer.echo("new/updated:")
         for ent in sorted(grand):

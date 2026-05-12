@@ -63,11 +63,7 @@ impl Field {
     pub fn is_uuid_bearing(&self) -> bool {
         matches!(
             self,
-            Field::Author
-                | Field::Account
-                | Field::Project
-                | Field::Convo
-                | Field::NotionPage
+            Field::Author | Field::Account | Field::Project | Field::Convo | Field::NotionPage
         )
     }
 }
@@ -88,8 +84,7 @@ pub fn extract_uuid_suffix(value: &str) -> &str {
         return value;
     }
     let candidate = &value[value.len() - 36..];
-    if is_uuid_shape(candidate)
-        && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
+    if is_uuid_shape(candidate) && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
     {
         candidate
     } else {

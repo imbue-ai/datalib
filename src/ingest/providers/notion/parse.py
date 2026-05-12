@@ -208,9 +208,16 @@ class ParsedNotionWeb:
 
 
 def _value(event: dict) -> dict:
+    # Notion's syncRecordValues response wraps each record as
+    #   raw = {"spaceId"?: ..., "value": {"value": <entity>, "role": <role>}}
+    # i.e. raw.value is an envelope, and the entity itself lives one level
+    # deeper at raw.value.value.
     raw = event.get("raw") or {}
-    val = raw.get("value")
-    return val if isinstance(val, dict) else {}
+    envelope = raw.get("value")
+    if not isinstance(envelope, dict):
+        return {}
+    inner = envelope.get("value")
+    return inner if isinstance(inner, dict) else {}
 
 
 def parse_api_dir(api_dir: Path) -> ParsedNotionWeb:

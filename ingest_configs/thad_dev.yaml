@@ -48,3 +48,9 @@ sources:
     provider: gitlab
     kind: gitlab_api_dir
     path: ~/backups/gitlab
+
+  # Notion web scrape (src/download/notion_web.py output).
+  - name: notion-web
+    provider: notion
+    kind: notion_web_dir
+    path: ~/backups/notion

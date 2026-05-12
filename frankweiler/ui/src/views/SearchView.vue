@@ -31,11 +31,15 @@ import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
+import githubIconUrl from "@/assets/github.svg";
+import gitlabIconUrl from "@/assets/gitlab.svg";
 
 const SOURCE_ICONS: Record<string, string> = {
   Claude: claudeIconUrl,
   ChatGPT: chatgptIconUrl,
   Slack: slackIconUrl,
+  GitHub: githubIconUrl,
+  GitLab: gitlabIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule]);

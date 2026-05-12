@@ -587,7 +587,9 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             continue
         if b.type in ("page", "collection_view_page"):
             title = page_titles.get(b.block_id, "(untitled)")
-            kind = "Notion Database" if b.type == "collection_view_page" else "Notion Page"
+            kind = (
+                "Notion Database" if b.type == "collection_view_page" else "Notion Page"
+            )
             qmd = _notion_page_qmd_path(space, b.block_id, blocks_by_id, page_titles)
             # Aggregate body: page title + every descendant text-bearing block.
             body_parts: list[str] = [title]
@@ -654,9 +656,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             entire_chat=f"/notion/{page_id}",
             text=heading_text,
             slack_link=None,
-            qmd_path=_notion_page_qmd_path(
-                space, page_id, blocks_by_id, page_titles
-            ),
+            qmd_path=_notion_page_qmd_path(space, page_id, blocks_by_id, page_titles),
             notion_page_uuid=page_id,
             notion_block_uuid=b.block_id,
         )
@@ -677,7 +677,9 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
         if not page_id:
             continue
         block_anchor = disc.parent_id if disc.parent_table == "block" else None
-        snippet = items[0].text_plain.splitlines()[0][:60] if items[0].text_plain else ""
+        snippet = (
+            items[0].text_plain.splitlines()[0][:60] if items[0].text_plain else ""
+        )
         thread_qmd = _notion_thread_qmd_path(
             space, page_id, disc.discussion_id, blocks_by_id, page_titles, snippet
         )

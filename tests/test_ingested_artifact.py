@@ -75,7 +75,9 @@ def test_qmd_tar_contains_expected_files() -> None:
     assert any("pr-42__recalibrate-replicator" in n for n in qmd_files)
     assert any("mr-17__add-earl-grey" in n for n in qmd_files)
     # Notion: nested page hierarchy and a comment thread sibling of index.qmd.
-    assert any("bridge-operations__" in n and n.endswith("/index.qmd") for n in qmd_files)
+    assert any(
+        "bridge-operations__" in n and n.endswith("/index.qmd") for n in qmd_files
+    )
     assert any(
         "warp-core-maintenance__" in n and n.endswith("/index.qmd") for n in qmd_files
     )

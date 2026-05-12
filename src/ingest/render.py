@@ -1046,7 +1046,9 @@ def _notion_page_qmd_path(
 ) -> str:
     """Each page renders to `<page_rel_dir>/index.qmd` so its sub-pages can
     live in sibling directories beneath the same path."""
-    return f"{_notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)}/index.qmd"
+    return (
+        f"{_notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)}/index.qmd"
+    )
 
 
 def _notion_thread_qmd_path(
@@ -1129,9 +1131,7 @@ def _notion_render_block(
     trailing newlines so the caller can join with '\\n'."""
     btype = block.type or ""
     props = block.properties or {}
-    title_md = _notion_render_rich_text(
-        props.get("title"), user_names, page_titles
-    )
+    title_md = _notion_render_rich_text(props.get("title"), user_names, page_titles)
     indent = "    " * depth
     lines: list[str] = []
 
@@ -1203,7 +1203,7 @@ def _notion_render_block(
         lines.append("")
     elif btype == "embed":
         src = (props.get("source") or [[""]])[0][0]
-        lines.append(f"<iframe src=\"{src}\"></iframe>")
+        lines.append(f'<iframe src="{src}"></iframe>')
         lines.append("")
     elif btype == "table":
         col_order = (block.format or {}).get("table_block_column_order") or []
@@ -1216,9 +1216,7 @@ def _notion_render_block(
             cells = []
             for col in col_order:
                 cell_rt = (row_block.properties or {}).get(col) or []
-                cells.append(
-                    _notion_render_rich_text(cell_rt, user_names, page_titles)
-                )
+                cells.append(_notion_render_rich_text(cell_rt, user_names, page_titles))
             rows.append(cells)
         if rows:
             if not has_header:
@@ -1248,9 +1246,7 @@ def _notion_render_block(
         return lines
     elif btype == "collection_view" or btype == "collection_view_page":
         coll_title = (
-            page_titles.get(block.block_id)
-            if btype == "collection_view_page"
-            else None
+            page_titles.get(block.block_id) if btype == "collection_view_page" else None
         )
         label = coll_title or "(inline database)"
         lines.append(f"{indent}*[Database: {label}]*")
@@ -1287,7 +1283,9 @@ def _notion_render_one_page(
     user_names: dict[str, str],
     root: Path,
 ) -> Path:
-    rel_dir = _notion_page_rel_dir(parsed.space, page.block_id, blocks_by_id, page_titles)
+    rel_dir = _notion_page_rel_dir(
+        parsed.space, page.block_id, blocks_by_id, page_titles
+    )
     out_dir = root / rel_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / "index.qmd"
@@ -1300,7 +1298,9 @@ def _notion_render_one_page(
     parts.append("provider: notion")
     parts.append(f"page_id: {_yaml_scalar(page.block_id)}")
     parts.append(f"title: {_yaml_scalar(title)}")
-    parts.append(f"space_id: {_yaml_scalar(parsed.space.space_id if parsed.space else None)}")
+    parts.append(
+        f"space_id: {_yaml_scalar(parsed.space.space_id if parsed.space else None)}"
+    )
     parts.append(
         f"created_time: {_yaml_scalar(notion_ms_to_iso(page.created_time_ms))}"
     )
@@ -1316,9 +1316,7 @@ def _notion_render_one_page(
         child = blocks_by_id.get(child_id)
         if child is None or not child.alive:
             continue
-        parts.extend(
-            _notion_render_block(child, blocks_by_id, user_names, page_titles)
-        )
+        parts.extend(_notion_render_block(child, blocks_by_id, user_names, page_titles))
 
     # Sub-pages: any block whose parent is this page and type=='page'.
     subpages = [
@@ -1352,11 +1350,16 @@ def _notion_render_one_thread(
     comments: list,
     root: Path,
 ) -> Path:
-    snippet = (comments[0].text_plain if comments else discussion.context_plain or "")
+    snippet = comments[0].text_plain if comments else discussion.context_plain or ""
     snippet = snippet.strip().splitlines()[0][:60] if snippet.strip() else "thread"
 
     rel = _notion_thread_qmd_path(
-        parsed.space, page_id, discussion.discussion_id, blocks_by_id, page_titles, snippet
+        parsed.space,
+        page_id,
+        discussion.discussion_id,
+        blocks_by_id,
+        page_titles,
+        snippet,
     )
     target = root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1412,8 +1415,11 @@ def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
         for b in parsed.blocks
         if b.type in ("page", "collection_view_page") and b.alive
     ]
-    log.info("rendering notion: %d pages, %d discussions",
-             len(pages), len(parsed.discussions))
+    log.info(
+        "rendering notion: %d pages, %d discussions",
+        len(pages),
+        len(parsed.discussions),
+    )
 
     for p in tqdm(pages, desc="render notion pages", unit="pg", leave=False):
         _notion_render_one_page(p, parsed, blocks_by_id, page_titles, user_names, root)
