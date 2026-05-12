@@ -73,6 +73,7 @@ class QmdRunner:
             cmd.extend(extra)
         env = os.environ.copy()
         env["XDG_CACHE_HOME"] = str(self.config.cache_home)
+        env["XDG_CONFIG_HOME"] = str(self.config.cache_home)
         env.update(self.config.extra_env)
         proc = subprocess.run(
             cmd,

@@ -2,9 +2,10 @@
 
 Inline counterpart to `frankweiler/backend/qmd_indexer` (Rust). Shape:
 
-  * Pin `XDG_CACHE_HOME` to `<root>/.frankweiler` so the index lands at
-    `<root>/.frankweiler/qmd/index.sqlite` alongside the rest of the
-    backend's state.
+  * Pin both `XDG_CACHE_HOME` and `XDG_CONFIG_HOME` to `<root>/.frankweiler`
+    so the index lands at `<root>/.frankweiler/qmd/index.sqlite` and the
+    collection registry at `<root>/.frankweiler/qmd/index.yml`, keeping all
+    qmd state inside the data root (never touching `~/.config/qmd/`).
   * Symlink `<root>/.frankweiler/qmd/models -> <models_dir>` so qmd's
     ~300MB embedding model isn't duplicated inside every data root.
   * Drive qmd via `npx -y @tobilu/qmd@<version>`: `collection add` on
