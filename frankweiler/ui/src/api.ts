@@ -4,6 +4,8 @@
 // In Tauri/openhost packaging, the same relative paths are served by the
 // embedded backend.
 
+import type { FeedbackContext } from "./feedback/context";
+
 export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
@@ -87,4 +89,42 @@ export function fetchSearch(
 
 export function fetchChat(uuid: string, signal?: AbortSignal): Promise<ChatResponse> {
   return getJson<ChatResponse>(`/api/chat/${encodeURIComponent(uuid)}`, signal);
+}
+
+export type FeedbackRequest = {
+  sentiment: "up" | "down" | null;
+  comment: string;
+  context: FeedbackContext;
+};
+
+export type FeedbackResponse = {
+  feedback_uuid: string;
+  created_at: string;
+  git_hash: string;
+};
+
+// POST /api/feedback. Server stamps the UUID, timestamp, app_version, and
+// git_hash; we ship sentiment + comment + the producer-built context.
+export async function submitFeedback(
+  req: FeedbackRequest,
+  signal?: AbortSignal,
+): Promise<FeedbackResponse> {
+  const r = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!r.ok) {
+    // Surface server message when present; fall back to status code so the
+    // modal's error line says something more useful than "Failed to fetch".
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      // ignore — body may not be readable on aborted responses
+    }
+    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/feedback → ${r.status}`);
+  }
+  return (await r.json()) as FeedbackResponse;
 }
