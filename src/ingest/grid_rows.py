@@ -171,9 +171,14 @@ def _slack_qmd_path(
     return f"slack/{team_id}/{channel_name}/threads/{thread_uuid}__{_slugify(_slack_thread_title(root_text))}.qmd"
 
 
-def _slack_link(team_id: str, channel_id: str, ts: str) -> str:
+def _slack_link(
+    team_id: str, channel_id: str, ts: str, thread_ts: str | None = None
+) -> str:
     ts_no_dot = ts.replace(".", "")
-    return f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+    url = f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+    if thread_ts is not None and thread_ts != ts:
+        url += f"&thread_ts={thread_ts}&cid={channel_id}"
+    return url
 
 
 # ----- Anthropic ------------------------------------------------------------
@@ -412,7 +417,9 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
                 message_index=msg_idx,
                 entire_chat=f"/slack/{thread_uuid}",
                 text=m.text or "",
-                slack_link=_slack_link(m.team_id, m.channel_id, m.ts),
+                slack_link=_slack_link(
+                    m.team_id, m.channel_id, m.ts, thread_ts=root_msg.ts
+                ),
                 qmd_path=_slack_qmd_path(
                     root_msg.team_id, cname, thread_uuid, root_msg.text
                 ),

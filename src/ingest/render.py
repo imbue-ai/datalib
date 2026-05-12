@@ -474,12 +474,19 @@ def render_openai(parsed: ParsedChatGPTApi, root: Path) -> RenderSummary:
 # ---------------- Slack ----------------
 
 
-def _slack_message_link(team_id: str, channel_id: str, ts: str) -> str:
+def _slack_message_link(
+    team_id: str, channel_id: str, ts: str, thread_ts: str | None = None
+) -> str:
     """Slack web deep-link of the form
     `https://slack.com/archives/{channel}/p{ts_no_dot}`. The `team` param
-    is appended so cross-workspace clicks land in the right org."""
+    routes cross-workspace clicks to the right org. For thread replies,
+    pass `thread_ts` (the dotted root ts) so the URL opens the side pane
+    on the reply rather than landing on the channel view."""
     ts_no_dot = ts.replace(".", "")
-    return f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+    url = f"https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}"
+    if thread_ts is not None and thread_ts != ts:
+        url += f"&thread_ts={thread_ts}&cid={channel_id}"
+    return url
 
 
 def _publish_slack_image(
@@ -583,7 +590,7 @@ def _render_one_slack_thread(
 
     for msg_index, m in enumerate(msgs):
         author = user_labels.get(m.user_id or "", m.user_id or "unknown")
-        link = _slack_message_link(team_id, channel_id, m.ts)
+        link = _slack_message_link(team_id, channel_id, m.ts, thread_ts=root_msg.ts)
         parts.append(_msg_div_open(m.uuid, msg_index, "slack"))
         parts.append("")
         parts.append(f"## {author}")

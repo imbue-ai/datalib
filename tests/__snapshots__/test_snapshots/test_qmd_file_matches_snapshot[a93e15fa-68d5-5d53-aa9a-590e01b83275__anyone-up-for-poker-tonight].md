@@ -25,7 +25,7 @@ Anyone up for poker tonight?
 
 ## Worf
 
-<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&thread_ts=12604000600.000600&cid=C_TENFWD" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 I do not understand the appeal of this Earth game.
 
