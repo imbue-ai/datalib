@@ -206,6 +206,51 @@ function openFeedbackForCell() {
   closeContextMenu();
 }
 
+function openFeedbackForColumnHeader(ev: MouseEvent, colId: string) {
+  ev.preventDefault();
+  const anchor = ev.target instanceof Element ? ev.target : null;
+  feedbackContext.value = buildContext({
+    surface: "column_header",
+    anchor,
+    targetUuids: [],
+    payload: { key: colId },
+  });
+  feedbackSurfaceLabel.value = `Column header · ${colId}`;
+  feedbackOpen.value = true;
+}
+
+// AG Grid doesn't expose a column-header right-click event, so we
+// listen on the grid wrapper and check whether the target sits inside a
+// `.ag-header-cell`. The colId comes from the AG-Grid-supplied
+// `col-id` attribute on that wrapper. Falls through (no preventDefault)
+// when the target isn't a header so the existing cell-context handler
+// still gets a chance to fire.
+function onGridWrapContextMenu(ev: MouseEvent) {
+  if (!(ev.target instanceof Element)) return;
+  const headerCell = ev.target.closest(".ag-header-cell");
+  if (!headerCell) return;
+  const colId = headerCell.getAttribute("col-id") || "";
+  if (!colId) return;
+  openFeedbackForColumnHeader(ev, colId);
+}
+
+function openFeedbackForSearchBar(ev: MouseEvent) {
+  ev.preventDefault();
+  const anchor = ev.target instanceof Element ? ev.target : null;
+  // The search bar is the entire filter set: treat it as a single chip
+  // keyed "query" with the literal query text. We don't try to parse
+  // individual tokens — the comment + breadcrumb is enough to find what
+  // was being looked at.
+  feedbackContext.value = buildContext({
+    surface: "filter_chip",
+    anchor,
+    targetUuids: [],
+    payload: { key: "query", value: query.value },
+  });
+  feedbackSurfaceLabel.value = "Search bar";
+  feedbackOpen.value = true;
+}
+
 function openFeedbackForRow() {
   const targets = contextMenuTargets.value;
   if (targets.length === 0) {
@@ -619,6 +664,7 @@ const gridOptions: GridOptions<SearchRow> = {
       class="search-input"
       data-testid="search-input"
       autofocus
+      @contextmenu="openFeedbackForSearchBar"
     />
 
     <div v-if="health" class="health">
@@ -631,7 +677,7 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <Splitpanes class="split" :dbl-click-splitter="false">
       <Pane size="55" min-size="25" class="left-pane">
-        <div class="grid-wrap" @contextmenu.prevent>
+        <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
           <AgGridVue
             class="grid"
             :rowData="rows"
