@@ -10,6 +10,58 @@ pub struct Config {
     pub qmd: QmdConfig,
     #[serde(default)]
     pub backend: BackendConfig,
+    #[serde(default)]
+    pub dolt: DoltConfig,
+}
+
+/// Settings for the managed `dolt sql-server` the backend talks to at
+/// runtime. Mirrors the shape of `DoltConfig` in `src/ingest/config.py` so
+/// the same `~/.config/personal-mirror/config.yaml` `dolt:` block can drive
+/// both ingest and the Rust backend.
+///
+/// `repo_dirname` is the directory under `Config.root` that holds the Dolt
+/// repository; defaults to `"dolt_repo"`, matching `DOLT_REPO_DIRNAME` in
+/// `src/ingest/dolt_service.py`.
+///
+/// `binary` is an optional override for the `dolt` executable; `None` means
+/// look up `dolt` on `$PATH`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DoltConfig {
+    #[serde(default = "default_dolt_host")]
+    pub host: String,
+    #[serde(default = "default_dolt_port")]
+    pub port: u16,
+    #[serde(default = "default_dolt_user")]
+    pub user: String,
+    #[serde(default = "default_dolt_repo_dirname")]
+    pub repo_dirname: String,
+    #[serde(default)]
+    pub binary: Option<PathBuf>,
+}
+
+fn default_dolt_host() -> String {
+    "127.0.0.1".into()
+}
+fn default_dolt_port() -> u16 {
+    3306
+}
+fn default_dolt_user() -> String {
+    "root".into()
+}
+fn default_dolt_repo_dirname() -> String {
+    "dolt_repo".into()
+}
+
+impl Default for DoltConfig {
+    fn default() -> Self {
+        Self {
+            host: default_dolt_host(),
+            port: default_dolt_port(),
+            user: default_dolt_user(),
+            repo_dirname: default_dolt_repo_dirname(),
+            binary: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +111,26 @@ impl Config {
             .index_path
             .replace("${root}", &self.root.display().to_string());
         expand_tilde(&s)
+    }
+
+    /// Absolute path to the Dolt repository this backend reads/writes.
+    ///
+    /// Resolves to `<root>/<dolt.repo_dirname>`. Matches the layout
+    /// established by `DoltService` in `src/ingest/dolt_service.py`.
+    pub fn dolt_repo_path(&self) -> PathBuf {
+        self.root.join(&self.dolt.repo_dirname)
+    }
+
+    /// MySQL connection URL for the running `dolt sql-server`. The database
+    /// name is the repo directory name (Dolt's default).
+    pub fn dolt_mysql_url(&self) -> String {
+        format!(
+            "mysql://{user}@{host}:{port}/{db}",
+            user = self.dolt.user,
+            host = self.dolt.host,
+            port = self.dolt.port,
+            db = self.dolt.repo_dirname,
+        )
     }
 }
 
@@ -136,10 +208,57 @@ mod tests {
             root: tmp.clone(),
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
+            dolt: DoltConfig::default(),
         };
         let resolved = cfg.resolved_qmd_index();
         assert!(resolved.starts_with(&tmp));
         assert!(resolved.ends_with("qmd-index"));
+    }
+
+    #[test]
+    fn dolt_defaults_match_python_ingest() {
+        // Defaults must stay aligned with `DoltConfig` in
+        // `src/ingest/config.py` so a single yaml drives both.
+        let cfg = DoltConfig::default();
+        assert_eq!(cfg.host, "127.0.0.1");
+        assert_eq!(cfg.port, 3306);
+        assert_eq!(cfg.user, "root");
+        assert_eq!(cfg.repo_dirname, "dolt_repo");
+        assert!(cfg.binary.is_none());
+    }
+
+    #[test]
+    fn dolt_repo_path_and_url() {
+        let tmp = tempdir();
+        let cfg = Config {
+            root: tmp.clone(),
+            qmd: QmdConfig::default(),
+            backend: BackendConfig::default(),
+            dolt: DoltConfig::default(),
+        };
+        assert_eq!(cfg.dolt_repo_path(), tmp.join("dolt_repo"));
+        assert_eq!(cfg.dolt_mysql_url(), "mysql://root@127.0.0.1:3306/dolt_repo");
+    }
+
+    #[test]
+    fn loads_dolt_block_from_yaml() {
+        let tmp = tempdir();
+        let root = tmp.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        let cfg_path = tmp.join("config.yaml");
+        std::fs::write(
+            &cfg_path,
+            format!(
+                "root: {}\ndolt:\n  port: 13306\n  repo_dirname: my_repo\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        assert_eq!(cfg.dolt.port, 13306);
+        assert_eq!(cfg.dolt.repo_dirname, "my_repo");
+        assert_eq!(cfg.dolt.host, "127.0.0.1");
+        assert_eq!(cfg.dolt_repo_path(), root.join("my_repo"));
     }
 
     fn tempdir() -> PathBuf {
