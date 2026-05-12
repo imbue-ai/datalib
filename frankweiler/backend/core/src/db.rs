@@ -110,6 +110,10 @@ pub struct ChatMeta {
     pub channel: Option<String>,
     pub when_ts: Option<String>,
     pub source_label: Option<String>,
+    // Canonical web URL back to the provider, used for the page-level
+    // "Open in …" button. For Slack rows `source_url` is null and we fall
+    // back to `slack_link` (a slack:// deep link).
+    pub source_url: Option<String>,
 }
 
 /// Fetch the chat-level row for a conversation. Returns `None` when the
@@ -117,7 +121,8 @@ pub struct ChatMeta {
 pub fn chat_meta(root: &Path, conversation_uuid: &str) -> Option<ChatMeta> {
     let conn = open_mirror(root)?;
     conn.query_row(
-        "SELECT conversation_name, account, project, channel, when_ts, source_label \
+        "SELECT conversation_name, account, project, channel, when_ts, source_label, \
+                COALESCE(source_url, slack_link) \
          FROM grid_rows \
          WHERE conversation_uuid = ?1 \
          ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
@@ -131,6 +136,7 @@ pub fn chat_meta(root: &Path, conversation_uuid: &str) -> Option<ChatMeta> {
                 channel: r.get::<_, Option<String>>(3)?,
                 when_ts: r.get::<_, Option<String>>(4)?,
                 source_label: r.get::<_, Option<String>>(5)?,
+                source_url: r.get::<_, Option<String>>(6)?,
             })
         },
     )

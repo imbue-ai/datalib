@@ -43,6 +43,7 @@ export type ChatResponse = {
   channel: string | null;
   created_at: string | null;
   source_label: string | null;
+  source_url: string | null;
   body: string;
 };
 

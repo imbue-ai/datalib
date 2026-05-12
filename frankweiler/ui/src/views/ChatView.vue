@@ -3,6 +3,7 @@ import { ref, watch, onMounted } from "vue";
 import { useRoute, RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "@/components/ChatBody.vue";
+import CopyUuidButton from "@/components/CopyUuidButton.vue";
 
 const route = useRoute();
 const chat = ref<ChatResponse | null>(null);
@@ -35,8 +36,21 @@ watch(
     <p v-else-if="error" class="error">error: {{ error }}</p>
     <template v-else-if="chat">
       <header>
-        <h2>{{ chat.name || chat.conversation_uuid }}</h2>
+        <h2>
+          {{ chat.name || chat.conversation_uuid }}
+          <CopyUuidButton :uuid="chat.conversation_uuid" label="Copy page ID" />
+        </h2>
         <p class="meta">
+          <a
+            v-if="chat.source_url"
+            :href="chat.source_url"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Open in {{ chat.source_label || "source" }} ↗</a
+          >
+          <span v-if="chat.source_url && (chat.created_at || chat.account)">
+            ·
+          </span>
           <span v-if="chat.created_at">created {{ chat.created_at }}</span>
           <span v-if="chat.account"> · account {{ chat.account }}</span>
         </p>

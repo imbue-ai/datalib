@@ -3,6 +3,7 @@ import { ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "./ChatBody.vue";
+import CopyUuidButton from "./CopyUuidButton.vue";
 
 const props = defineProps<{
   conversationUuid: string | null;
@@ -43,7 +44,10 @@ watch(
     <p v-else-if="error" class="error">error: {{ error }}</p>
     <template v-else-if="chat">
       <header class="chat-header">
-        <h2>{{ chat.name || chat.conversation_uuid }}</h2>
+        <h2>
+          {{ chat.name || chat.conversation_uuid }}
+          <CopyUuidButton :uuid="chat.conversation_uuid" label="Copy page ID" />
+        </h2>
         <p class="meta">
           <RouterLink
             :to="{
@@ -52,6 +56,15 @@ watch(
             }"
             >open full view ↗</RouterLink
           >
+          <template v-if="chat.source_url">
+            ·
+            <a
+              :href="chat.source_url"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Open in {{ chat.source_label || "source" }} ↗</a
+            >
+          </template>
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>

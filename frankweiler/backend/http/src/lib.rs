@@ -76,6 +76,7 @@ pub struct ChatResponse {
     pub channel: Option<String>,
     pub created_at: Option<String>,
     pub source_label: Option<String>,
+    pub source_url: Option<String>,
     pub body: String,
 }
 
@@ -154,6 +155,16 @@ async fn chat(
     let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let body = strip_frontmatter(&raw).to_string();
     let meta = chat_meta(&s.root, &conversation_uuid).unwrap_or_default();
+    // Synthesize page-level URLs for providers that don't carry one in
+    // `source_url`. Claude/ChatGPT use the conversation UUID directly in
+    // their public URL scheme.
+    let source_url = meta
+        .source_url
+        .or_else(|| match meta.source_label.as_deref() {
+            Some("Claude") => Some(format!("https://claude.ai/chat/{conversation_uuid}")),
+            Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{conversation_uuid}")),
+            _ => None,
+        });
     Ok(Json(ChatResponse {
         conversation_uuid,
         name: meta.name,
@@ -162,6 +173,7 @@ async fn chat(
         channel: meta.channel,
         created_at: meta.when_ts,
         source_label: meta.source_label,
+        source_url,
         body,
     }))
 }
