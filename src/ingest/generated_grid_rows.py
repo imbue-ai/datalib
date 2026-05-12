@@ -311,3 +311,32 @@ COLUMNS: dict[str, list[str]] = {
         "notion_block_uuid",
     ],
 }
+
+
+# Per-column max byte length for VARCHAR(N) columns. Writers should
+# truncate over-long values before INSERT — Dolt/MySQL reject the
+# whole batch otherwise. Columns with TEXT/LONGTEXT types are absent
+# from this map (effectively unbounded for our purposes).
+MAX_LENGTHS: dict[str, dict[str, int]] = {
+    "grid_rows": {
+        "uuid": 96,
+        "provider": 32,
+        "kind": 32,
+        "source_label": 32,
+        "when_ts": 40,
+        "author": 255,
+        "account": 96,
+        "project": 96,
+        "channel": 255,
+        "conversation_name": 512,
+        "conversation_uuid": 96,
+        "entire_chat": 255,
+        "slack_link": 512,
+        "qmd_path": 512,
+        "source_url": 1024,
+        "git_sha": 64,
+        "external_id": 128,
+        "notion_page_uuid": 96,
+        "notion_block_uuid": 96,
+    },
+}

@@ -45,6 +45,7 @@ def test_dump_sql_has_expected_tables_and_rows() -> None:
         "c0000005-1701-4d00-8000",  # Borg encryption signature
         "68fa0001-fake-7000-8000",  # Sonnet
         "68fa0002-fake-7000-8000",  # Polyfit
+        "68fa0003-fake-7000-8000",  # Long-title warp research (truncation guard)
     ):
         assert uuid_prefix in dump, f"missing conversation {uuid_prefix} in dump.sql"
 
@@ -60,11 +61,11 @@ def test_qmd_tar_contains_expected_files() -> None:
     with tarfile.open(tar_path) as tf:
         names = sorted(tf.getnames())
 
-    # 7 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
+    # 8 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
     # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files) +
     # 9 Notion files (7 page index.qmd + 2 comment thread files).
     qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 35, qmd_files
+    assert len(qmd_files) == 36, qmd_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -95,11 +96,24 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
     conn = load_dump_into_memory(_runfile("tests/fixtures/ingested/dump.sql"))
 
     # Sanity check expected counts on the union projection.
-    # 5 anthropic chats + 2 openai chats = 7 chat rows.
+    # 5 anthropic chats + 3 openai chats = 8 chat rows.
     chats = conn.execute(
         "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Chat'"
     ).fetchone()[0]
-    assert chats == 7
+    assert chats == 8
+
+    # The third openai chat has a pathologically long auto-title. Ingest
+    # must truncate it to fit conversation_name VARCHAR(512) (with a
+    # trailing ellipsis) rather than failing the whole INSERT batch.
+    long_title_row = conn.execute(
+        "SELECT conversation_name FROM grid_rows "
+        "WHERE uuid = '68fa0003-fake-7000-8000-positronic0003'"
+    ).fetchone()
+    assert long_title_row is not None
+    cname = long_title_row[0]
+    assert len(cname) <= 512
+    assert cname.endswith("…")
+    assert cname.startswith("I have been reviewing the Daystrom Institute")
 
     # 6 Slack thread rows (from render fixture).
     threads = conn.execute(

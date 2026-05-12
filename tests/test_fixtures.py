@@ -74,10 +74,13 @@ def test_chatgpt_api_fixture_parses() -> None:
     assert parsed.accounts[0].name == "Lt. Cmdr. Data"
 
     titles = {c.title for c in parsed.conversations}
-    assert titles == {
-        "Sonnet on a Cat Named Spot",
-        "Polynomial Fit for Sensor Calibration",
-    }
+    assert "Sonnet on a Cat Named Spot" in titles
+    assert "Polynomial Fit for Sensor Calibration" in titles
+    # Third conversation deliberately exercises the failure mode where
+    # ChatGPT's auto-titler leaves the full first user message as the
+    # title — guards the conversation_name truncation path in ingest.
+    long_titles = [t for t in titles if t and t.startswith("I have been reviewing")]
+    assert len(long_titles) == 1 and len(long_titles[0]) > 512
 
     # The system message in the sonnet thread is content_type model_editable_context.
     sonnet_msgs = [

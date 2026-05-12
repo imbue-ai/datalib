@@ -15,6 +15,14 @@ Custom annotations:
                               are visible from any language.
   * `x-sql-type`            — explicit SQL column type (e.g. `VARCHAR(64)`,
                               `LONGTEXT`). Overrides the default mapping.
+                              When `VARCHAR(N)`, the `N` is also re-emitted
+                              as a per-column entry in `MAX_LENGTHS` so the
+                              ingest writer can truncate over-long values
+                              before INSERT rather than letting the DB
+                              reject the whole batch. (Currently emitted
+                              for Python only — the only consumer that
+                              writes rows. Add Rust/TS emission if a writer
+                              shows up in those languages.)
   * `x-primary-key` (defn)  — list of column names that form the table's
                               primary key. Triggers DDL emission for that
                               definition.
@@ -147,6 +155,23 @@ def _default_sql_type(prop: dict) -> str:
 
 def _sql_type(prop: dict) -> str:
     return prop.get("x-sql-type") or _default_sql_type(prop)
+
+
+def _varchar_max_len(prop: dict) -> int | None:
+    """If the resolved SQL type is VARCHAR(N), return N. Else None.
+
+    Used by emitters to expose per-column max lengths to writers so they
+    can truncate over-long values pre-INSERT. We deliberately do NOT also
+    expose limits for TEXT/LONGTEXT — those are effectively unbounded for
+    our purposes and the writer should never need to truncate them.
+    """
+    t = _sql_type(prop).strip().upper()
+    if not t.startswith("VARCHAR(") or not t.endswith(")"):
+        return None
+    try:
+        return int(t[len("VARCHAR(") : -1])
+    except ValueError:
+        return None
 
 
 def _emit_ddl_for(name: str, defn: dict, table: str) -> str:
@@ -412,6 +437,8 @@ def emit_python(schema: dict, source_name: str) -> str:
     ]
     ddl_emitted: list[tuple[str, str]] = []
     columns_emitted: list[tuple[str, list[str]]] = []
+    # (table, [(col, max_len), ...]) for every VARCHAR(N) column.
+    max_lengths_emitted: list[tuple[str, list[tuple[str, int]]]] = []
     tagged_unions: list[tuple[str, str, list[tuple[str, str]]]] = []
     for name, defn in schema["definitions"].items():
         # Note tagged unions for end-of-file emission. We can't emit them
@@ -469,6 +496,13 @@ def emit_python(schema: dict, source_name: str) -> str:
             if table:
                 ddl_emitted.append((table, _emit_ddl_for(name, defn, table)))
                 columns_emitted.append((table, list(defn.get("properties", {}).keys())))
+                bounded = [
+                    (pn, _varchar_max_len(p))
+                    for pn, p in defn.get("properties", {}).items()
+                ]
+                max_lengths_emitted.append(
+                    (table, [(pn, n) for pn, n in bounded if n is not None])
+                )
     for alias, descr, variants in tagged_unions:
         out.append("")
         out.append("")
@@ -506,6 +540,24 @@ def emit_python(schema: dict, source_name: str) -> str:
             for c in cols:
                 out.append(f'        "{c}",')
             out.append("    ],")
+        out.append("}")
+    if max_lengths_emitted:
+        out.append("")
+        out.append("")
+        out.append(
+            "# Per-column max byte length for VARCHAR(N) columns. Writers should"
+        )
+        out.append("# truncate over-long values before INSERT — Dolt/MySQL reject the")
+        out.append(
+            "# whole batch otherwise. Columns with TEXT/LONGTEXT types are absent"
+        )
+        out.append("# from this map (effectively unbounded for our purposes).")
+        out.append("MAX_LENGTHS: dict[str, dict[str, int]] = {")
+        for table, cols in max_lengths_emitted:
+            out.append(f'    "{table}": {{')
+            for col, n in cols:
+                out.append(f'        "{col}": {n},')
+            out.append("    },")
         out.append("}")
     return "\n".join(out) + "\n"
 

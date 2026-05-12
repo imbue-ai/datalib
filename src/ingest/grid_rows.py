@@ -22,7 +22,7 @@ from typing import Iterable
 
 from pymysql.connections import Connection
 
-from ingest.generated_grid_rows import COLUMNS, DDL
+from ingest.generated_grid_rows import COLUMNS, DDL, MAX_LENGTHS
 from ingest.providers.anthropic.parse import ParsedExport
 from ingest.providers.github.parse import ParsedGithubApi
 from ingest.providers.gitlab.parse import ParsedGitlabApi
@@ -46,6 +46,19 @@ from ingest.render import (
 )
 
 _GRID_ROWS_COLUMNS = COLUMNS["grid_rows"]
+_GRID_ROWS_MAX_LENGTHS = MAX_LENGTHS["grid_rows"]
+
+
+def _truncate_for_column(col: str, value):
+    """Clip `value` to the column's VARCHAR(N) limit so an oversized field
+    (e.g. a ChatGPT conversation auto-titled with the full first user
+    message) doesn't blow up the whole insert. Non-string and unbounded
+    columns pass through unchanged."""
+    limit = _GRID_ROWS_MAX_LENGTHS.get(col)
+    if limit is None or not isinstance(value, str) or len(value) <= limit:
+        return value
+    ellipsis = "…"
+    return value[: max(0, limit - len(ellipsis))] + ellipsis
 
 
 def ensure_schema(conn: Connection) -> None:
@@ -833,33 +846,40 @@ def populate_grid_rows(
     with conn.cursor() as cur:
         cur.execute("DELETE FROM grid_rows")
         if rows:
+            raw_tuples = [
+                (
+                    r.uuid,
+                    r.provider,
+                    r.kind,
+                    r.source_label,
+                    r.when_ts,
+                    r.author,
+                    r.account,
+                    r.project,
+                    r.channel,
+                    r.conversation_name,
+                    r.conversation_uuid,
+                    r.message_index,
+                    r.entire_chat,
+                    r.text,
+                    r.slack_link,
+                    r.qmd_path,
+                    r.source_url,
+                    r.git_sha,
+                    r.external_id,
+                    r.notion_page_uuid,
+                    r.notion_block_uuid,
+                )
+                for r in rows
+            ]
             cur.executemany(
                 f"INSERT INTO grid_rows ({columns_sql}) VALUES ({placeholders})",
                 [
-                    (
-                        r.uuid,
-                        r.provider,
-                        r.kind,
-                        r.source_label,
-                        r.when_ts,
-                        r.author,
-                        r.account,
-                        r.project,
-                        r.channel,
-                        r.conversation_name,
-                        r.conversation_uuid,
-                        r.message_index,
-                        r.entire_chat,
-                        r.text,
-                        r.slack_link,
-                        r.qmd_path,
-                        r.source_url,
-                        r.git_sha,
-                        r.external_id,
-                        r.notion_page_uuid,
-                        r.notion_block_uuid,
+                    tuple(
+                        _truncate_for_column(col, v)
+                        for col, v in zip(_GRID_ROWS_COLUMNS, t)
                     )
-                    for r in rows
+                    for t in raw_tuples
                 ],
             )
     return len(rows)
