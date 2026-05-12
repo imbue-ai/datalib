@@ -4,6 +4,13 @@ import { RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "./ChatBody.vue";
 import CopyUuidButton from "./CopyUuidButton.vue";
+import FeedbackModal from "./FeedbackModal.vue";
+import {
+  buildContext,
+  capturePreviewSelection,
+  messageAncestor,
+  type FeedbackContext,
+} from "@/feedback/context";
 
 const props = defineProps<{
   conversationUuid: string | null;
@@ -13,6 +20,71 @@ const props = defineProps<{
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+const feedbackOpen = ref(false);
+const feedbackContext = ref<FeedbackContext | null>(null);
+const feedbackSurfaceLabel = ref("");
+
+function onPaneContextMenu(ev: MouseEvent) {
+  // Cascade: active selection > message under cursor > whole-page fallback.
+  // We never want to swallow the browser's right-click chrome unless we
+  // actually have something to file feedback on, so bail before
+  // preventDefault when no conversation is loaded.
+  if (!chat.value) return;
+  const conv = chat.value.conversation_uuid;
+  const target = ev.target instanceof Element ? ev.target : null;
+
+  const sel = capturePreviewSelection();
+  if (sel) {
+    ev.preventDefault();
+    feedbackContext.value = buildContext({
+      surface: "preview_selection",
+      anchor: target,
+      targetUuids: [
+        conv,
+        sel.start_message_uuid,
+        sel.end_message_uuid,
+      ].filter((v, i, a) => a.indexOf(v) === i),
+      payload: sel,
+    });
+    feedbackSurfaceLabel.value = "Selected text";
+    feedbackOpen.value = true;
+    return;
+  }
+
+  const msgUuid = messageAncestor(target);
+  if (msgUuid) {
+    ev.preventDefault();
+    const msgEl = target?.closest("[data-msg-index]");
+    const idxAttr = msgEl?.getAttribute("data-msg-index") ?? "0";
+    const msgIndex = Number.parseInt(idxAttr, 10);
+    feedbackContext.value = buildContext({
+      surface: "preview_message",
+      anchor: target,
+      targetUuids: [conv, msgUuid],
+      payload: {
+        conversation_uuid: conv,
+        message_uuid: msgUuid,
+        message_index: Number.isFinite(msgIndex) ? msgIndex : 0,
+      },
+    });
+    feedbackSurfaceLabel.value = "Chat message";
+    feedbackOpen.value = true;
+    return;
+  }
+
+  // Click landed in the preview but outside any message — treat as
+  // page-level feedback so the user always gets a way in.
+  ev.preventDefault();
+  feedbackContext.value = buildContext({
+    surface: "page_header",
+    anchor: target,
+    targetUuids: [conv],
+    payload: { entity_kind: "conversation", entity_uuid: conv },
+  });
+  feedbackSurfaceLabel.value = "Conversation";
+  feedbackOpen.value = true;
+}
 
 watch(
   () => props.conversationUuid,
@@ -36,7 +108,11 @@ watch(
 </script>
 
 <template>
-  <section class="chat-preview">
+  <section
+    class="chat-preview"
+    :data-conversation-uuid="chat?.conversation_uuid ?? null"
+    @contextmenu="onPaneContextMenu"
+  >
     <p v-if="!conversationUuid" class="empty">
       Select a row to preview the conversation.
     </p>
@@ -70,6 +146,12 @@ watch(
       </header>
       <ChatBody :body="chat.body" :selected-message-index="messageIndex" />
     </template>
+    <FeedbackModal
+      :open="feedbackOpen"
+      :surface-label="feedbackSurfaceLabel"
+      :context="feedbackContext"
+      @close="feedbackOpen = false"
+    />
   </section>
 </template>
 
