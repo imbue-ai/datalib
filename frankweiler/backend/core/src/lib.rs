@@ -9,6 +9,7 @@ pub mod query;
 pub mod repo;
 pub mod sqlite_repo;
 pub mod search;
+pub mod version;
 
 #[cfg(test)]
 mod tests {

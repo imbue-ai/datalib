@@ -2,3 +2,9 @@ common --enable_bzlmod
 common --noenable_workspace
 build --incompatible_strict_action_env
 test --test_output=errors
+
+# Stamp builds with the git hash via tools/workspace_status.sh. Consumers
+# read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
+# lives in frankweiler_core::version::git_hash() (cargo builds use build.rs).
+build --workspace_status_command=tools/workspace_status.sh
+build --stamp
