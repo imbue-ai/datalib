@@ -3,6 +3,7 @@
 pub mod config;
 pub mod db;
 pub mod deeplink;
+pub mod dolt_server;
 pub mod query;
 pub mod search;
 
