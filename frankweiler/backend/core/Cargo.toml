@@ -15,7 +15,6 @@ serde_yaml = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
-rusqlite = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }

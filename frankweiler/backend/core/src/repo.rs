@@ -1,27 +1,27 @@
 //! `MirrorRepo` is the single seam between the HTTP layer and the
-//! underlying SQL store. Today there's one implementation:
-//! [`LegacySqliteRepo`], which is a thin async wrapper around the
-//! existing rusqlite-backed functions in [`crate::db`]. T5 adds
-//! `DoltRepo` (sqlx::MySqlPool against the managed `dolt sql-server`)
-//! and T6 replaces this legacy impl with a sqlx-based one.
+//! underlying SQL store.
+//!
+//! Implementations:
+//! * [`crate::dolt_repo::DoltRepo`] — `sqlx::MySqlPool` against the
+//!   managed `dolt sql-server`. Production path; the only writable
+//!   backend; default in T7.
+//! * [`crate::sqlite_repo::SqliteRepo`] — `sqlx::SqlitePool` against
+//!   the periodically-materialized `<root>/mirror.sqlite`. Read-only
+//!   reference impl, reachable via an explicit CLI flag in T7.
 //!
 //! Why a trait? Per the feedback-mechanism plan (component C2), the
-//! running app is moving its source-of-truth from `mirror.sqlite`
-//! (read-only, periodically re-materialized by ingest) to a managed
-//! Dolt repo (writable, mutated by the app itself). The trait lets us
-//! flip the cutover at startup and keep the SQLite path around as a
-//! debug / backwards-compat reference.
+//! running app is moving its source-of-truth from `mirror.sqlite` to a
+//! managed Dolt repo. The trait lets us flip the cutover at startup and
+//! keep the SQLite path around as a debug / backwards-compat reference.
 //!
-//! All methods are async so the production [`crate::dolt_server`] +
-//! `sqlx::MySqlPool` impl is natural. Sync rusqlite work in the legacy
-//! impl is parked on a blocking task via `tokio::task::spawn_blocking`.
+//! All methods are async because both impls run on top of sqlx pools.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::db::{self, ChatMeta};
+use crate::db::ChatMeta;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 
@@ -36,96 +36,71 @@ pub enum RepoError {
 }
 
 /// The single point that all backend SQL flows through.
-///
-/// Implementations: [`LegacySqliteRepo`] today; `DoltRepo`/`SqliteRepo`
-/// in T5/T6.
 #[async_trait]
 pub trait MirrorRepo: Send + Sync {
     /// Run a grid-search query and return rows for the UI.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
 
-    /// Fetch the per-conversation header data (name, account, project, ...).
-    /// Returns `Ok(None)` when no chat-level row exists for the UUID.
+    /// Fetch the per-conversation header data. Returns `Ok(None)` when
+    /// no chat-level row exists for the UUID.
     async fn chat_meta(&self, conversation_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
 
-    /// Resolve the on-disk QMD path for a conversation. Returned path
-    /// is absolute (already joined with the data root).
+    /// Resolve the on-disk QMD path for a conversation. The returned
+    /// path is absolute (already joined with the data root).
     async fn qmd_path_for_conversation(
         &self,
         conversation_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
 }
 
-/// Wraps the existing rusqlite-backed `db::*` functions behind the
-/// async trait. Sync work runs in `spawn_blocking`. T6 deletes this
-/// in favor of a sqlx::SqlitePool-based implementation.
-pub struct LegacySqliteRepo {
-    root: Arc<PathBuf>,
-}
-
-impl LegacySqliteRepo {
-    pub fn new(root: Arc<PathBuf>) -> Self {
-        Self { root }
-    }
-}
-
-#[async_trait]
-impl MirrorRepo for LegacySqliteRepo {
-    async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError> {
-        let root = self.root.clone();
-        let query = query.clone();
-        tokio::task::spawn_blocking(move || db::grid_rows(root.as_ref().as_path(), &query, limit))
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))
-    }
-
-    async fn chat_meta(&self, conversation_uuid: &str) -> Result<Option<ChatMeta>, RepoError> {
-        let root = self.root.clone();
-        let uuid = conversation_uuid.to_string();
-        tokio::task::spawn_blocking(move || db::chat_meta(root.as_ref().as_path(), &uuid))
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))
-    }
-
-    async fn qmd_path_for_conversation(
-        &self,
-        conversation_uuid: &str,
-    ) -> Result<Option<PathBuf>, RepoError> {
-        let root = self.root.clone();
-        let uuid = conversation_uuid.to_string();
-        tokio::task::spawn_blocking(move || {
-            db::qmd_path_for_conversation(root.as_ref().as_path(), &uuid)
-        })
-        .await
-        .map_err(|e| RepoError::Internal(e.to_string()))
-    }
-}
-
 /// Convenience type alias for the dyn-dispatched repo handle used by
 /// HTTP handlers via `axum::State`.
 pub type DynRepo = Arc<dyn MirrorRepo>;
 
-/// Build the default repo for the given data root. Today this is the
-/// legacy SQLite-backed impl; T7 changes the default to `DoltRepo`.
-pub fn default_repo(root: Arc<PathBuf>) -> DynRepo {
-    Arc::new(LegacySqliteRepo::new(root))
+/// Default repo factory. Today: opens the SQLite mirror at
+/// `<root>/mirror.sqlite` read-only. T7 flips this default to
+/// `DoltRepo` and exposes SQLite behind a debug CLI flag.
+///
+/// If `mirror.sqlite` is missing we still return a working repo —
+/// it just yields zero rows on every query, matching the previous
+/// `rusqlite`-era behavior. We materialize this by lazily-opening a
+/// pool against an empty in-memory DB so the trait dispatch keeps
+/// working.
+pub async fn default_repo(root: Arc<PathBuf>) -> DynRepo {
+    use crate::sqlite_repo::SqliteRepo;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+
+    let db_path = root.as_ref().join("mirror.sqlite");
+    if db_path.exists() {
+        if let Ok(repo) = SqliteRepo::open(root.clone()).await {
+            return Arc::new(repo);
+        }
+    }
+    // Fallback: empty in-memory DB with the grid_rows DDL applied so
+    // SELECTs succeed and return zero rows.
+    let opts = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("in-memory sqlite always opens");
+    for (_table, ddl) in frankweiler_schema::grid_rows::DDL {
+        let _ = sqlx::query(ddl).execute(&pool).await;
+    }
+    Arc::new(SqliteRepo::from_pool(pool, root))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
-    use tokio::runtime::Runtime;
 
-    #[test]
-    fn legacy_repo_search_on_missing_root_returns_empty() {
-        // No mirror.sqlite → existing db::grid_rows returns Vec::new();
-        // we surface that as Ok(vec![]) through the trait.
-        let rt = Runtime::new().unwrap();
+    #[tokio::test]
+    async fn default_repo_on_missing_root_returns_empty_results() {
         let root = Arc::new(PathBuf::from("/tmp/fw-no-such-root-for-tests"));
-        let repo = LegacySqliteRepo::new(root);
+        let repo = default_repo(root).await;
         let parsed = crate::query::parse_query("");
-        let out = rt.block_on(repo.search(&parsed, 10)).unwrap();
+        let out = repo.search(&parsed, 10).await.unwrap();
         assert!(out.is_empty());
     }
 }

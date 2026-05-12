@@ -11,12 +11,15 @@ rust_library(
     deps = [
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:async-trait",
         "@frankweiler_crates//:chrono",
-        "@frankweiler_crates//:rusqlite",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:uuid",
     ],
 )
 
@@ -50,6 +53,7 @@ rust_test(
     ],
     deps = [
         ":frankweiler_core",
-        "@frankweiler_crates//:rusqlite",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
     ],
 )

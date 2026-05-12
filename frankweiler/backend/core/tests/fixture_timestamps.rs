@@ -2,11 +2,11 @@
 //! non-empty timestamp.
 //!
 //! Loads the `dump.sql` artifact emitted by `//tests/fixtures:ingested_tng`
-//! into in-memory SQLite and runs `grid_rows_with_conn` over it. The
-//! check exists because tool_use / tool_result blocks routinely lack an
-//! intrinsic `start_timestamp`; without the synthetic-timestamp fallback
-//! they sort to the top of the grid and the user can't reason about
-//! ordering.
+//! into an in-memory SQLite database and runs the `MirrorRepo::search`
+//! path over it via [`SqliteRepo`]. The check exists because tool_use /
+//! tool_result blocks routinely lack an intrinsic `start_timestamp`;
+//! without the synthetic-timestamp fallback they sort to the top of the
+//! grid and the user can't reason about ordering.
 //!
 //! How the dump.sql is located:
 //!   * Under `bazel test`: the test target sets `FRANKWEILER_TEST_DUMP_SQL`
@@ -28,10 +28,13 @@
 //! "malformed JSON"). We undo MySQL's backslash interpretation before
 //! handing the script to SQLite.
 
-use frankweiler_core::db::grid_rows_with_conn;
 use frankweiler_core::query::parse_query;
-use rusqlite::Connection;
+use frankweiler_core::repo::MirrorRepo;
+use frankweiler_core::sqlite_repo::SqliteRepo;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::path::PathBuf;
+use std::str::FromStr;
+use std::sync::Arc;
 
 fn locate_dump_sql() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("FRANKWEILER_TEST_DUMP_SQL") {
@@ -39,8 +42,6 @@ fn locate_dump_sql() -> Option<PathBuf> {
         if path.exists() {
             return Some(path);
         }
-        // Bazel sometimes hands us a runfiles-relative path; resolve via
-        // TEST_SRCDIR if so.
         if let Ok(srcdir) = std::env::var("TEST_SRCDIR") {
             let candidate = PathBuf::from(srcdir).join("_main").join(&p);
             if candidate.exists() {
@@ -51,14 +52,6 @@ fn locate_dump_sql() -> Option<PathBuf> {
     None
 }
 
-/// Translate MySQL-style backslash escapes inside single-quoted SQL
-/// literals into their literal characters, so SQLite reads the same
-/// values that Dolt/MySQL would.
-///
-/// Walks the script once, tracking whether we're inside a single-quoted
-/// string. Inside such a string, `\\` → `\`, `\'` → `'`, `\"` → `"`,
-/// `\n` → newline, `\r` → CR. SQL-standard `''` (a doubled single quote)
-/// is left alone — SQLite handles it natively.
 fn mysql_to_sqlite(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
@@ -74,7 +67,6 @@ fn mysql_to_sqlite(text: &str) -> String {
             i += 1;
             continue;
         }
-        // In single-quoted string.
         if c == b'\\' && i + 1 < bytes.len() {
             let n = bytes[i + 1];
             match n {
@@ -85,15 +77,12 @@ fn mysql_to_sqlite(text: &str) -> String {
                 b'r' => out.push('\r'),
                 b't' => out.push('\t'),
                 b'0' => out.push('\0'),
-                // Unknown escape: drop the backslash, keep the next char
-                // (mirrors MySQL's behavior for un-recognized sequences).
                 _ => out.push(n as char),
             }
             i += 2;
             continue;
         }
         if c == b'\'' {
-            // Possible string terminator or doubled-quote escape (`''`).
             if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
                 out.push_str("''");
                 i += 2;
@@ -110,18 +99,27 @@ fn mysql_to_sqlite(text: &str) -> String {
     out
 }
 
-fn load_dump(path: &PathBuf) -> Connection {
+async fn load_dump(path: &PathBuf) -> SqlitePool {
     let sql =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
     let translated = mysql_to_sqlite(&sql);
-    let conn = Connection::open_in_memory().expect("open in-memory sqlite");
-    conn.execute_batch(&translated)
+    // In-memory DB: pin to one connection so the schema/data are visible
+    // to subsequent queries.
+    let opts = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("open in-memory sqlite");
+    sqlx::raw_sql(&translated)
+        .execute(&pool)
+        .await
         .unwrap_or_else(|e| panic!("load dump.sql: {}", e));
-    conn
+    pool
 }
 
-#[test]
-fn every_grid_row_has_a_timestamp() {
+#[tokio::test]
+async fn every_grid_row_has_a_timestamp() {
     let Some(dump) = locate_dump_sql() else {
         eprintln!(
             "skipping: FRANKWEILER_TEST_DUMP_SQL not set or file missing. \
@@ -129,13 +127,13 @@ fn every_grid_row_has_a_timestamp() {
         );
         return;
     };
-    let conn = load_dump(&dump);
+    let pool = load_dump(&dump).await;
+    let repo = SqliteRepo::from_pool(pool, Arc::new(PathBuf::from("/tmp/fw-fixture-root")));
 
-    // Empty query → resolves to RowType::All, exercising every push_*
-    // branch (anthropic chats, anthropic messages, anthropic blocks,
-    // openai chats, openai messages).
-    let q = parse_query("");
-    let rows = grid_rows_with_conn(&conn, &q, 100_000);
+    let rows = repo
+        .search(&parse_query(""), 100_000)
+        .await
+        .expect("search succeeds");
     assert!(
         !rows.is_empty(),
         "fixture produced zero rows — broken setup"
@@ -165,15 +163,11 @@ fn every_grid_row_has_a_timestamp() {
         missing.join("\n")
     );
 
-    // Sanity: confirm we exercised both providers (otherwise the test
-    // could pass trivially if one provider's data weren't loaded).
     let saw_claude = rows.iter().any(|r| r.source == "Claude");
     let saw_chatgpt = rows.iter().any(|r| r.source == "ChatGPT");
     assert!(saw_claude, "no Claude rows in fixture output");
     assert!(saw_chatgpt, "no ChatGPT rows in fixture output");
 
-    // Sanity: confirm tool blocks are represented — they're the row type
-    // most likely to lack an intrinsic timestamp.
     let saw_tool = rows.iter().any(|r| r.kind == "Tool Call");
     assert!(saw_tool, "no Tool Call rows in fixture output");
 }

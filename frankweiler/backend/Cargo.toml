@@ -24,7 +24,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = "0.8"
 tower-http = { version = "0.6.8", features = ["cors", "fs"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 # sqlx is the shared client behind the upcoming MirrorRepo seam: the same
 # trait points at either `mysql://` (managed dolt sql-server, the
 # production path) or `sqlite://mirror.sqlite` (reference / debug path).

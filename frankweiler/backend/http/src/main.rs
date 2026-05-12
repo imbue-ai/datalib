@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     );
     eprintln!("data root: {} (exists={})", root.display(), root.exists());
     let root = Arc::new(root);
-    let repo = frankweiler_core::repo::default_repo(root.clone());
+    let repo = frankweiler_core::repo::default_repo(root.clone()).await;
     let state = AppState { root, repo };
     axum::serve(listener, router(state)).await?;
     Ok(())

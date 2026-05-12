@@ -34,9 +34,10 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`] instead of going to `mirror.sqlite` directly.
     pub root: Arc<PathBuf>,
-    /// All SQL flows through this seam. Today it wraps the existing
-    /// rusqlite-backed `db::*` functions ([`LegacySqliteRepo`]); T5
-    /// flips the default to `DoltRepo`.
+    /// All SQL flows through this seam. Default today is
+    /// [`frankweiler_core::sqlite_repo::SqliteRepo`] against the
+    /// periodically-materialized `mirror.sqlite`. T7 flips the default
+    /// to [`frankweiler_core::dolt_repo::DoltRepo`].
     pub repo: DynRepo,
 }
 
@@ -243,7 +244,7 @@ mod tests {
     #[tokio::test]
     async fn router_compiles() {
         let root = Arc::new(PathBuf::from("/tmp/nonexistent-fw-root"));
-        let repo = frankweiler_core::repo::default_repo(root.clone());
+        let repo = frankweiler_core::repo::default_repo(root.clone()).await;
         let _r = router(AppState { root, repo });
     }
 }
