@@ -5,20 +5,57 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Materialize the bazel-built fixture once, before any worker starts.
-// Tests share the resulting data root via FRANKWEILER_ROOT.
-const here = path.dirname(fileURLToPath(import.meta.url));
-const fixtureRoot = mkdtempSync(path.join(tmpdir(), "fw-e2e-"));
-execFileSync(
-  "node",
-  [path.join(here, "tests/e2e/prepare-fixture.cjs"), fixtureRoot],
-  { stdio: "inherit" },
-);
+// Ask the kernel for a free ephemeral port. Shells out to a tiny Node
+// one-liner so we stay synchronous (Playwright's config module isn't
+// async). There's a small race between close() here and the real
+// listener binding, but it's the standard ephemeral-port pattern and
+// lets `bazel test --runs_per_test=N` (and parallel local runs) coexist
+// without colliding on fixed dev ports.
+function freePort(): number {
+  const out = execFileSync("node", [
+    "-e",
+    "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()});",
+  ]).toString();
+  return Number.parseInt(out, 10);
+}
 
-// Distinct ports from the dev defaults (5173 / 8731) so a running dev
-// server doesn't collide with the test stack.
-const BACKEND_PORT = 8741;
-const VITE_PORT = 5183;
+// Playwright reloads this config in each worker subprocess; freePort()
+// must therefore be idempotent across reloads or each worker will point
+// at ports nobody is listening on. Inherit from env when present so the
+// values minted in the parent process flow into the workers.
+function cachedPort(envVar: string): number {
+  const existing = process.env[envVar];
+  if (existing) return Number.parseInt(existing, 10);
+  const port = freePort();
+  process.env[envVar] = String(port);
+  return port;
+}
+
+// Materialize the bazel-built fixture once, before any worker starts.
+// Tests share the resulting data root via FRANKWEILER_ROOT. Cache the
+// path in env so worker subprocesses (which re-import this config)
+// don't each rebuild the fixture into a fresh temp dir.
+const here = path.dirname(fileURLToPath(import.meta.url));
+function ensureFixtureRoot(): string {
+  const existing = process.env.FW_E2E_FIXTURE_ROOT;
+  if (existing) return existing;
+  const root = mkdtempSync(path.join(tmpdir(), "fw-e2e-"));
+  execFileSync(
+    "node",
+    [path.join(here, "tests/e2e/prepare-fixture.cjs"), root],
+    { stdio: "inherit" },
+  );
+  process.env.FW_E2E_FIXTURE_ROOT = root;
+  return root;
+}
+const fixtureRoot = ensureFixtureRoot();
+
+// Ephemeral ports so concurrent runs (`bazel test --runs_per_test=N`,
+// two devs on one machine) don't collide. Previously hardcoded to
+// 8741 / 5183 — distinct from the dev defaults (5173 / 8731) but
+// still fixed across runs.
+const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
+const VITE_PORT = cachedPort("FW_E2E_VITE_PORT");
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 const VITE_URL = `http://127.0.0.1:${VITE_PORT}`;
 
@@ -66,7 +103,7 @@ export default defineConfig({
     {
       // Backend reads FRANKWEILER_ROOT for its data path. We override the
       // bind via a tiny config file pointing at our chosen port.
-      command: `${JSON.stringify(backendBin)}`,
+      command: `${JSON.stringify(backendBin)} --backend sqlite`,
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,

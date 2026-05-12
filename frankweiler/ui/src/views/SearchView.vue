@@ -226,6 +226,10 @@ function openFeedbackForColumnHeader(ev: MouseEvent, colId: string) {
 // when the target isn't a header so the existing cell-context handler
 // still gets a chance to fire.
 function onGridWrapContextMenu(ev: MouseEvent) {
+  // Suppress the UA's native menu synchronously during bubble — AG Grid
+  // dispatches `cellContextMenu` asynchronously, so its `preventDefault`
+  // lands too late and the native menu wins over our custom `.ctx-menu`.
+  ev.preventDefault();
   if (!(ev.target instanceof Element)) return;
   const headerCell = ev.target.closest(".ag-header-cell");
   if (!headerCell) return;

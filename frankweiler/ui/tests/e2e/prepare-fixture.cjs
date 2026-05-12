@@ -119,6 +119,53 @@ function main() {
   loadDumpIntoSqlite(dump, path.join(outRoot, "mirror.sqlite"));
   // Backend reads root via FRANKWEILER_ROOT env var (set by playwright config).
 
+  // Recreate the `models` symlink that `tests/fixtures/build_qmd_index.py`
+  // strips from qmd-index.tar, and assert the shared cache is already
+  // populated. The intent of the symlink scheme (see
+  // frankweiler-qmd-indexer main.rs) is that the ~1.6 GB of qmd model
+  // files live once in ~/.cache/qmd-models and every data root just
+  // symlinks them in. If the cache is empty here, qmd's first call
+  // would silently redownload — a "passes after 30+s" near-failure.
+  // Fail fast and loud instead.
+  const sharedModels = path.join(
+    process.env.HOME || ".",
+    ".cache",
+    "qmd-models",
+  );
+  const REQUIRED_MODELS = [
+    "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
+    "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
+  ];
+  const missing = REQUIRED_MODELS.filter((name) => {
+    const p = path.join(sharedModels, name);
+    try {
+      return fs.statSync(p).size === 0;
+    } catch {
+      return true;
+    }
+  });
+  if (missing.length > 0) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[prepare-fixture] missing qmd models in ${sharedModels}:\n` +
+        missing.map((m) => `  - ${m}`).join("\n") +
+        `\n\nPopulate the shared cache once by running the qmd indexer ` +
+        `against any data root, e.g.:\n` +
+        `  bazelisk run //frankweiler/backend/qmd_indexer -- --root <some-frankweiler-root>\n` +
+        `or let qmd download them by invoking the CLI directly. The e2e ` +
+        `suite refuses to trigger this download itself — that path is a ` +
+        `silent multi-minute stall.`,
+    );
+    process.exit(3);
+  }
+  const modelsLink = path.join(outRoot, ".frankweiler", "qmd", "models");
+  fs.mkdirSync(path.dirname(modelsLink), { recursive: true });
+  try {
+    fs.symlinkSync(sharedModels, modelsLink);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+
   // eslint-disable-next-line no-console
   console.log(outRoot);
 }

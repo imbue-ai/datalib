@@ -16,6 +16,11 @@ import { test, expect } from "@playwright/test";
 // to specific UUIDs, so we don't check identities.
 
 test.describe("free-text search routes through qmd", () => {
+  // The first qmd call in this session pays for npx package fetch + model
+  // load. Subsequent calls are fast. Lift the per-test timeout for the
+  // first sub-test so the warm-up doesn't trip Playwright's 30s default.
+  test.setTimeout(120_000);
+
   test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({
     page,
   }) => {
@@ -23,8 +28,7 @@ test.describe("free-text search routes through qmd", () => {
     const firstDataRow = page
       .locator('.ag-center-cols-container [role="row"]')
       .first();
-    // qmd's first run can take a few seconds (npx warm-up + model load).
-    await expect(firstDataRow).toBeVisible({ timeout: 30_000 });
+    await expect(firstDataRow).toBeVisible({ timeout: 90_000 });
   });
 
   test("explicit qmd:\"...\" predicate also returns rows", async ({ page }) => {

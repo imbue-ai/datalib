@@ -232,7 +232,7 @@ async fn run_qmd_search(
             FreeTextMode::Hybrid => QueryMode::Hybrid,
             FreeTextMode::Vsearch => QueryMode::Vsearch,
         };
-        Ok(runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)?)
+        runner.search(mode, &parsed_for_qmd.free_text, qmd_limit)
     })
     .await
     .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))??;
