@@ -15,7 +15,7 @@ slack_link: "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC17
 
 ## Jean-Luc Picard
 
-<div class="msg-meta"><em>2369-05-28T15:08:20.000099+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:08:20.000099+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 Mr. Data, status report.
 
@@ -25,7 +25,7 @@ Mr. Data, status report.
 
 ## Lt. Cmdr. Data
 
-<div class="msg-meta"><em>2369-05-28T15:10:00.000200+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:10:00.000200+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
 
@@ -37,7 +37,7 @@ All systems nominal, Captain. Long-range sensors detect a Class M planet bearing
 
 ## William T. Riker
 
-<div class="msg-meta"><em>2369-05-28T15:11:40.000299+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:11:40.000299+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 Set a course, Mr. Data. Warp factor five.
 

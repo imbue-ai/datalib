@@ -48,7 +48,10 @@ watch(
   () => props.open,
   (now) => {
     if (now) {
-      sentiment.value = null;
+      // Default to thumbs-down: in practice every feedback we file is
+      // "this is wrong / could be better", and clicking the modal open
+      // is itself the signal. The user can clear it or flip to thumbs-up.
+      sentiment.value = "down";
       comment.value = "";
       submitting.value = false;
       errorMsg.value = null;

@@ -15,7 +15,7 @@ slack_link: "https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC17
 
 ## Lt. Cmdr. Data
 
-<div class="msg-meta"><em>2369-05-28T15:20:00.000799+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:20:00.000799+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
 

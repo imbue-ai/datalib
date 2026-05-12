@@ -141,6 +141,7 @@ impl MirrorRepo for DoltRepo {
                 channel,
                 slack_link,
                 notion_page_uuid,
+                score: None,
             });
         }
         Ok(out)
@@ -302,6 +303,7 @@ impl MirrorRepo for DoltRepo {
                     channel,
                     slack_link,
                     notion_page_uuid,
+                    score: None,
                 },
             );
         }

@@ -593,7 +593,7 @@ def _render_one_slack_thread(
         # the link inconsistently inside emphasis.
         parts.append(
             f'<div class="msg-meta"><em>{m.ts_iso}</em> · '
-            f'<a href="{link}" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>'
+            f'<a href="{link}" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>'
         )
         parts.append("")
         parts.append(_slack_to_commonmark((m.text or "").rstrip(), user_labels))

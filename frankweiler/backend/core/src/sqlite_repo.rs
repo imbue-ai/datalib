@@ -121,6 +121,7 @@ impl MirrorRepo for SqliteRepo {
                 channel,
                 slack_link,
                 notion_page_uuid,
+                score: None,
             });
         }
         Ok(out)
@@ -248,6 +249,7 @@ impl MirrorRepo for SqliteRepo {
                     channel,
                     slack_link,
                     notion_page_uuid,
+                    score: None,
                 },
             );
         }

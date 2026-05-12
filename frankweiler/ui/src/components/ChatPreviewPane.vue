@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "./ChatBody.vue";
@@ -26,65 +26,160 @@ const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
 const feedbackSurfaceLabel = ref("");
 
+// Right-click context menu state. We defer building the feedback
+// context until the user actually picks "Feedback…", but the surface
+// kind ('selection' / 'message' / 'conversation') is decided up-front
+// at right-click time so the Copy and Feedback actions agree on what
+// the user was pointing at.
+type PendingTarget =
+  | {
+      kind: "selection";
+      anchor: Element | null;
+      conv: string;
+      sel: ReturnType<typeof capturePreviewSelection>;
+      selectionText: string;
+    }
+  | {
+      kind: "message";
+      anchor: Element | null;
+      conv: string;
+      msgUuid: string;
+      msgIndex: number;
+    }
+  | {
+      kind: "conversation";
+      anchor: Element | null;
+      conv: string;
+    };
+
+const ctxMenuVisible = ref(false);
+const ctxMenuPos = ref({ x: 0, y: 0 });
+const ctxTarget = ref<PendingTarget | null>(null);
+
 function onPaneContextMenu(ev: MouseEvent) {
-  // Cascade: active selection > message under cursor > whole-page fallback.
-  // We never want to swallow the browser's right-click chrome unless we
-  // actually have something to file feedback on, so bail before
-  // preventDefault when no conversation is loaded.
   if (!chat.value) return;
   const conv = chat.value.conversation_uuid;
   const target = ev.target instanceof Element ? ev.target : null;
 
+  // Cascade: active selection > message under cursor > whole-page fallback.
+  // Whichever path we take, we then open our custom context menu instead
+  // of jumping straight into the feedback modal.
+  let pending: PendingTarget;
   const sel = capturePreviewSelection();
   if (sel) {
-    ev.preventDefault();
-    feedbackContext.value = buildContext({
-      surface: "preview_selection",
+    pending = {
+      kind: "selection",
       anchor: target,
-      targetUuids: [
+      conv,
+      sel,
+      selectionText: window.getSelection()?.toString() ?? "",
+    };
+  } else {
+    const msgUuid = messageAncestor(target);
+    if (msgUuid) {
+      const msgEl = target?.closest("[data-msg-index]");
+      const idxAttr = msgEl?.getAttribute("data-msg-index") ?? "0";
+      const parsed = Number.parseInt(idxAttr, 10);
+      pending = {
+        kind: "message",
+        anchor: target,
         conv,
-        sel.start_message_uuid,
-        sel.end_message_uuid,
-      ].filter((v, i, a) => a.indexOf(v) === i),
-      payload: sel,
-    });
-    feedbackSurfaceLabel.value = "Selected text";
-    feedbackOpen.value = true;
-    return;
+        msgUuid,
+        msgIndex: Number.isFinite(parsed) ? parsed : 0,
+      };
+    } else {
+      pending = { kind: "conversation", anchor: target, conv };
+    }
   }
 
-  const msgUuid = messageAncestor(target);
-  if (msgUuid) {
-    ev.preventDefault();
-    const msgEl = target?.closest("[data-msg-index]");
-    const idxAttr = msgEl?.getAttribute("data-msg-index") ?? "0";
-    const msgIndex = Number.parseInt(idxAttr, 10);
+  ev.preventDefault();
+  ctxTarget.value = pending;
+  ctxMenuPos.value = { x: ev.clientX, y: ev.clientY };
+  ctxMenuVisible.value = true;
+}
+
+function closeCtxMenu() {
+  ctxMenuVisible.value = false;
+  ctxTarget.value = null;
+}
+
+const copyLabel = computed(() => {
+  const t = ctxTarget.value;
+  if (!t) return "Copy";
+  if (t.kind === "selection") return "Copy selected text";
+  if (t.kind === "message") return "Copy message ID";
+  return "Copy conversation ID";
+});
+
+function copyTargetText(): string {
+  const t = ctxTarget.value;
+  if (!t) return "";
+  if (t.kind === "selection") return t.selectionText;
+  if (t.kind === "message") return t.msgUuid;
+  return t.conv;
+}
+
+async function onCopy() {
+  const text = copyTargetText();
+  if (!text) {
+    closeCtxMenu();
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Fallback for non-secure contexts.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+  closeCtxMenu();
+}
+
+function onFeedback() {
+  const t = ctxTarget.value;
+  if (!t) {
+    closeCtxMenu();
+    return;
+  }
+  if (t.kind === "selection" && t.sel) {
+    feedbackContext.value = buildContext({
+      surface: "preview_selection",
+      anchor: t.anchor,
+      targetUuids: [
+        t.conv,
+        t.sel.start_message_uuid,
+        t.sel.end_message_uuid,
+      ].filter((v, i, a) => a.indexOf(v) === i),
+      payload: t.sel,
+    });
+    feedbackSurfaceLabel.value = "Selected text";
+  } else if (t.kind === "message") {
     feedbackContext.value = buildContext({
       surface: "preview_message",
-      anchor: target,
-      targetUuids: [conv, msgUuid],
+      anchor: t.anchor,
+      targetUuids: [t.conv, t.msgUuid],
       payload: {
-        conversation_uuid: conv,
-        message_uuid: msgUuid,
-        message_index: Number.isFinite(msgIndex) ? msgIndex : 0,
+        conversation_uuid: t.conv,
+        message_uuid: t.msgUuid,
+        message_index: t.msgIndex,
       },
     });
     feedbackSurfaceLabel.value = "Chat message";
-    feedbackOpen.value = true;
-    return;
+  } else {
+    feedbackContext.value = buildContext({
+      surface: "page_header",
+      anchor: t.anchor,
+      targetUuids: [t.conv],
+      payload: { entity_kind: "conversation", entity_uuid: t.conv },
+    });
+    feedbackSurfaceLabel.value = "Conversation";
   }
-
-  // Click landed in the preview but outside any message — treat as
-  // page-level feedback so the user always gets a way in.
-  ev.preventDefault();
-  feedbackContext.value = buildContext({
-    surface: "page_header",
-    anchor: target,
-    targetUuids: [conv],
-    payload: { entity_kind: "conversation", entity_uuid: conv },
-  });
-  feedbackSurfaceLabel.value = "Conversation";
   feedbackOpen.value = true;
+  closeCtxMenu();
 }
 
 watch(
@@ -158,6 +253,22 @@ watch(
       :context="feedbackContext"
       @close="feedbackOpen = false"
     />
+    <div
+      v-if="ctxMenuVisible"
+      class="ctx-overlay"
+      @click="closeCtxMenu"
+      @contextmenu.prevent="closeCtxMenu"
+    >
+      <div
+        class="ctx-menu"
+        :style="{ top: ctxMenuPos.y + 'px', left: ctxMenuPos.x + 'px' }"
+        @click.stop
+      >
+        <div class="ctx-item" @click="onCopy">{{ copyLabel }}</div>
+        <div class="ctx-divider" />
+        <div class="ctx-item" @click="onFeedback">Feedback…</div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -184,6 +295,37 @@ watch(
 }
 .error {
   color: #e35d6a;
+}
+.ctx-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  background: transparent;
+}
+.ctx-menu {
+  position: fixed;
+  background: var(--fw-input-bg, #fff);
+  color: var(--fw-fg, #000);
+  border: 1px solid var(--fw-border, #ccc);
+  border-radius: 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+  padding: 4px 0;
+  z-index: 1501;
+  font-size: 14px;
+}
+.ctx-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+.ctx-item:hover {
+  background: var(--fw-accent, #eee);
+}
+.ctx-divider {
+  height: 1px;
+  background: var(--fw-border, #ccc);
+  margin: 4px 0;
 }
 </style>
 

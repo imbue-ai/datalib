@@ -68,6 +68,11 @@ let gridApi: GridApi<SearchRow> | null = null;
 // — otherwise the grid's column-events would clobber the URL we just read.
 let restoring = false;
 
+// True once the user has manually clicked a column header (or the URL
+// restored an explicit column state). Once set, we stop forcing the
+// score-vs-time default on subsequent query result loads.
+let userSortedManually = false;
+
 function encodeColumnState(state: ColumnState[]): string {
   // Compact base64url so the URL stays vaguely readable when it shows up
   // in dev tools / shared links.
@@ -399,7 +404,10 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 // Lives in module scope but is intentionally not exported: cache invalidates
 // naturally on page reload (which also re-reads server state via /api/health).
 const SEARCH_CACHE_MAX = 16;
-const SEARCH_LIMIT = 2000;
+// Backend's hard ceiling — anything lower surfaces as silently-missing
+// rows for the user. Memory/render cost is fine at this size thanks to
+// AG Grid's row virtualization.
+const SEARCH_LIMIT = 100_000;
 type SearchCacheEntry = { rows: SearchRow[]; total: number };
 const searchCache = new Map<string, SearchCacheEntry>();
 
@@ -485,7 +493,85 @@ async function tryRestoreSelection() {
   restoring = false;
 }
 
-watch(rows, tryRestoreSelection);
+// Apply the default sort whenever results change, unless the user has
+// taken sort into their own hands.
+//   - qmd-scored results → score desc, scroll to top.
+//   - everything else    → time ascending, scroll to bottom so the most
+//                          recent rows are what the user lands on.
+function applyDefaultSort() {
+  if (!gridApi || userSortedManually) return;
+  const hasScores = rows.value.some((r) => typeof r.score === "number");
+  restoring = true;
+  if (hasScores) {
+    gridApi.applyColumnState({
+      state: [
+        { colId: "score", sort: "desc", sortIndex: 0 },
+        { colId: "when", sort: null, sortIndex: null },
+      ],
+      defaultState: { sort: null },
+    });
+  } else {
+    gridApi.applyColumnState({
+      state: [
+        { colId: "score", sort: null, sortIndex: null },
+        { colId: "when", sort: "asc", sortIndex: 0 },
+      ],
+      defaultState: { sort: null },
+    });
+  }
+  restoring = false;
+  // ensureIndexVisible needs the post-sort row order to be computed,
+  // which happens after the current tick.
+  nextTick(() => {
+    if (!gridApi) return;
+    if (hasScores) {
+      gridApi.ensureIndexVisible(0, "top");
+    } else {
+      const last = gridApi.getDisplayedRowCount() - 1;
+      if (last >= 0) gridApi.ensureIndexVisible(last, "bottom");
+    }
+  });
+}
+
+// Adaptive column visibility: on every results load, columns whose
+// values are all identical (including all-empty) get hidden; columns
+// with varying values get shown. The user's pick was "adaptive rule
+// wins" — manual column-visibility toggles get overwritten on the
+// next query.
+const ADAPTIVE_FIELDS: (keyof SearchRow)[] = [
+  "score",
+  "source",
+  "kind",
+  "channel",
+  "when",
+  "author",
+  "account",
+];
+
+function stringifyForCompare(v: unknown): string {
+  if (v == null) return "";
+  return typeof v === "string" ? v : String(v);
+}
+
+function applyAdaptiveVisibility() {
+  if (!gridApi || rows.value.length === 0) return;
+  const state = ADAPTIVE_FIELDS.map((field) => {
+    const first = stringifyForCompare(rows.value[0][field]);
+    const allSame = rows.value.every(
+      (r) => stringifyForCompare(r[field]) === first,
+    );
+    return { colId: field as string, hide: allSame };
+  });
+  restoring = true;
+  gridApi.applyColumnState({ state });
+  restoring = false;
+}
+
+watch(rows, () => {
+  applyAdaptiveVisibility();
+  applyDefaultSort();
+  tryRestoreSelection();
+});
 
 onMounted(async () => {
   try {
@@ -512,6 +598,22 @@ function openRow(row: SearchRow) {
 
 const columnDefs = computed<ColDef<SearchRow>[]>(() => [
   {
+    field: "score",
+    headerName: "Score",
+    width: 90,
+    // Default sort is applied programmatically on row updates (see
+    // applyDefaultSort) — we don't bake it into the colDef so a user
+    // re-sort sticks across query changes.
+    valueFormatter: (p) => {
+      const v = p.value;
+      return typeof v === "number" ? v.toFixed(3) : "";
+    },
+    cellStyle: { "text-align": "right" } as Record<string, string>,
+    // QMD scores aren't comparable across queries; hide the filter UI
+    // (range filter would be misleading) but keep the column sortable.
+    filter: false,
+  },
+  {
     field: "source",
     headerName: "Source",
     width: 90,
@@ -533,21 +635,25 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     field: "when",
     headerName: "Time",
     width: 165,
-    sort: "desc",
   },
   {
     field: "snippet",
     headerName: "Contents",
     flex: 1,
     minWidth: 200,
-    // No autoHeight/wrapText: forcing per-row layout measurement on the
-    // snippet column was the dominant render cost on large result sets.
-    // Truncate with ellipsis; preview pane shows the full body.
+    // Soft-wrap to a two-line clamp. autoHeight is intentionally OFF —
+    // it forces per-row layout measurement and was the dominant render
+    // cost on large result sets. Row height is fixed to fit two lines;
+    // anything longer is ellipsised by the CSS line-clamp.
+    wrapText: true,
     cellStyle: {
-      whiteSpace: "nowrap",
+      "white-space": "normal",
+      "line-height": "1.25",
+      display: "-webkit-box",
+      "-webkit-box-orient": "vertical",
+      "-webkit-line-clamp": "2",
       overflow: "hidden",
-      textOverflow: "ellipsis",
-    },
+    } as Record<string, string>,
   },
   {
     field: "author",
@@ -577,7 +683,8 @@ const defaultColDef: ColDef = {
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
-  rowHeight: 36,
+  // Tall enough for two lines of clamped snippet text plus padding.
+  rowHeight: 52,
   // Single-row selection drives the right preview pane. Cell text
   // selection is intentionally NOT enabled here: AG Grid's text-selection
   // mode swallows row clicks, breaking the preview wiring.
@@ -600,9 +707,13 @@ const gridOptions: GridOptions<SearchRow> = {
         restoring = true;
         gridApi.applyColumnState({ state, applyOrder: true });
         restoring = false;
+        // An explicit URL-encoded column state carries the user's sort
+        // choice — don't clobber it with our default.
+        if (state.some((c) => c.sort != null)) userSortedManually = true;
       }
     }
     // Rows may already be loaded by the time the grid is ready.
+    applyDefaultSort();
     tryRestoreSelection();
   },
   onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
@@ -702,7 +813,15 @@ const gridOptions: GridOptions<SearchRow> = {
   onColumnMoved: (e) => {
     if (e.finished) syncHash();
   },
-  onSortChanged: () => syncHash(),
+  onSortChanged: (e) => {
+    // Only treat header-click sorts as "user intent". Programmatic
+    // sorts (our applyDefaultSort) come through with source 'api', so
+    // they don't flip the flag.
+    if (!restoring && e.source === "uiColumnSorted") {
+      userSortedManually = true;
+    }
+    syncHash();
+  },
 };
 </script>
 

@@ -15,7 +15,7 @@ slack_link: "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC17
 
 ## William T. Riker
 
-<div class="msg-meta"><em>2369-05-28T15:16:40.000601+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:16:40.000601+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 Anyone up for poker tonight?
 
@@ -25,7 +25,7 @@ Anyone up for poker tonight?
 
 ## Worf
 
-<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer">view in Slack ↗</a></div>
+<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
 
 I do not understand the appeal of this Earth game.
 

@@ -28,4 +28,9 @@ pub struct SearchRow {
     /// For Notion rows: the page-level UUID the row belongs to. Empty
     /// otherwise. Used by right-click "Filter by Notion Page".
     pub notion_page_uuid: String,
+    /// QMD-routed rank score for this row, when the search went through qmd.
+    /// `None` for pure structured queries (no free text) and for the SQL-LIKE
+    /// fallback path. Surfaced to the UI as a sortable "Score" column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
 }

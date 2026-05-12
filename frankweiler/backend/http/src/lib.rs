@@ -260,15 +260,27 @@ async fn run_qmd_search(
         .await
         .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
     let idx = GridIndex::new(refs);
-    let uuids: Vec<String> = idx
-        .rows_for_hits(hits.iter())
-        .into_iter()
-        .map(|r| r.uuid)
-        .collect();
-    let rows = repo
+    // Walk hits in rank order, mapping each to its grid rows and stamping
+    // the hit's score onto every row it produces. A single qmd hit can fan
+    // out to many rows; if a row is produced by more than one hit we keep
+    // the first (highest-ranked) score we saw for it.
+    let mut uuids: Vec<String> = Vec::new();
+    let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for h in &hits {
+        for row in idx.rows_for_hit(h) {
+            if !scores.contains_key(&row.uuid) {
+                scores.insert(row.uuid.clone(), h.score);
+                uuids.push(row.uuid);
+            }
+        }
+    }
+    let mut rows = repo
         .search_by_uuids(parsed, &uuids, limit)
         .await
         .map_err(|e| anyhow::anyhow!("search_by_uuids: {e}"))?;
+    for r in rows.iter_mut() {
+        r.score = scores.get(&r.uuid).copied();
+    }
     Ok(rows)
 }
 
@@ -379,6 +391,7 @@ fn strip_frontmatter(text: &str) -> &str {
 
 fn default_columns() -> Vec<ColumnSpec> {
     vec![
+        col("score", "Score", true),
         col("source", "Source", true),
         col("kind", "Type", true),
         col("when", "Time", true),
@@ -405,7 +418,7 @@ mod tests {
 
     #[test]
     fn default_columns_listed() {
-        assert_eq!(default_columns().len(), 9);
+        assert_eq!(default_columns().len(), 10);
     }
 
     #[tokio::test]

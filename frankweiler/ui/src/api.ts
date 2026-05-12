@@ -24,6 +24,9 @@ export type SearchRow = {
   slack_link: string;
   // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
   notion_page_uuid: string;
+  // QMD rank score. Present when the row came from a qmd-routed search;
+  // omitted (undefined) for pure structured queries and the LIKE fallback.
+  score?: number;
 };
 
 export type SearchResponse = {
