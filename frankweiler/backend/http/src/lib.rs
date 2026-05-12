@@ -19,8 +19,8 @@ use axum::{
     routing::get,
     Router,
 };
-use frankweiler_core::db::{chat_meta, grid_rows, qmd_path_for_conversation};
 use frankweiler_core::query::parse_query;
+use frankweiler_core::repo::DynRepo;
 use frankweiler_core::search::SearchRow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -30,7 +30,14 @@ use tower_http::services::ServeDir;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Data root on disk — drives the static `/api/media/*` mount and
+    /// the `accounts.json` lookup. The SQL store is reached through
+    /// [`AppState::repo`] instead of going to `mirror.sqlite` directly.
     pub root: Arc<PathBuf>,
+    /// All SQL flows through this seam. Today it wraps the existing
+    /// rusqlite-backed `db::*` functions ([`LegacySqliteRepo`]); T5
+    /// flips the default to `DoltRepo`.
+    pub repo: DynRepo,
 }
 
 #[derive(Debug, Serialize)]
@@ -122,7 +129,7 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(200).min(100_000);
-    let rows = grid_rows(&s.root, &parsed, limit);
+    let rows = s.repo.search(&parsed, limit).await.unwrap_or_default();
     let total = rows.len() as u64;
     Json(SearchResponse {
         query_echo: serde_json::json!({
@@ -150,11 +157,21 @@ async fn chat(
     // to the UI as-is; structured metadata comes from grid_rows. Per-message
     // anchors in the body (<div id="m-{uuid}" data-msg-index="…">) let the
     // UI scroll-and-highlight without a structured chat schema.
-    let path =
-        qmd_path_for_conversation(&s.root, &conversation_uuid).ok_or(StatusCode::NOT_FOUND)?;
+    let path = s
+        .repo
+        .qmd_path_for_conversation(&conversation_uuid)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let body = strip_frontmatter(&raw).to_string();
-    let meta = chat_meta(&s.root, &conversation_uuid).unwrap_or_default();
+    let meta = s
+        .repo
+        .chat_meta(&conversation_uuid)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly in
     // their public URL scheme.
@@ -225,8 +242,8 @@ mod tests {
 
     #[tokio::test]
     async fn router_compiles() {
-        let _r = router(AppState {
-            root: Arc::new(PathBuf::from("/tmp/nonexistent-fw-root")),
-        });
+        let root = Arc::new(PathBuf::from("/tmp/nonexistent-fw-root"));
+        let repo = frankweiler_core::repo::default_repo(root.clone());
+        let _r = router(AppState { root, repo });
     }
 }

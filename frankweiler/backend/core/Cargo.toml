@@ -19,3 +19,4 @@ rusqlite = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
+async-trait = { workspace = true }

@@ -45,3 +45,4 @@ sqlx = { version = "0.8", default-features = false, features = [
     "uuid",
 ] }
 uuid = { version = "1", features = ["v4", "serde"] }
+async-trait = "0.1"

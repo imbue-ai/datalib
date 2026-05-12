@@ -5,6 +5,7 @@ pub mod db;
 pub mod deeplink;
 pub mod dolt_server;
 pub mod query;
+pub mod repo;
 pub mod search;
 
 #[cfg(test)]
