@@ -31,7 +31,7 @@ fn open_mirror(root: &Path) -> Option<Connection> {
 
 const SNIPPET_LEN: usize = 240;
 
-fn snippet(text: &str, needle: &str) -> String {
+pub(crate) fn snippet(text: &str, needle: &str) -> String {
     let trimmed = if needle.is_empty() {
         first_chars(text, SNIPPET_LEN)
     } else {
@@ -258,7 +258,7 @@ fn column_for_field(f: &Field) -> Option<&'static str> {
     }
 }
 
-fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
+pub(crate) fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
