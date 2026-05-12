@@ -18,6 +18,14 @@ Custom annotations:
   * `x-primary-key` (defn)  — list of column names that form the table's
                               primary key. Triggers DDL emission for that
                               definition.
+  * `x-tagged-union` (prop) — discriminated union for a property. Shape:
+                              `{tag: "<sibling-field>", variants: {<value>:
+                              "#/definitions/<TypeName>", ...}}`. Codegen
+                              synthesizes a named union alias (parent name
+                              + property name, e.g. `FeedbackContextPayload`)
+                              and uses it as the property's type. The tag
+                              field is a sibling, not an internal tag, so
+                              Rust emits an `#[serde(untagged)]` enum.
 
 Usage:
     python codegen.py <schema.json> --rust <out.rs>
@@ -44,6 +52,24 @@ def _resolve_ref(schema: dict, ref: str) -> tuple[str, dict]:
     assert ref.startswith("#/definitions/"), ref
     name = ref.removeprefix("#/definitions/")
     return name, schema["definitions"][name]
+
+
+def _tagged_union_alias_name(parent: str, prop_name: str) -> str:
+    """Synthesized type name for an `x-tagged-union` property."""
+    return parent + prop_name[:1].upper() + prop_name[1:]
+
+
+def _tagged_union_variants(tu: dict, schema: dict) -> list[tuple[str, str]]:
+    """Return [(tag_value, type_name), ...] for an x-tagged-union spec.
+
+    Order follows insertion order of `variants` in the schema so generated
+    code is deterministic.
+    """
+    out: list[tuple[str, str]] = []
+    for tag_val, ref in tu.get("variants", {}).items():
+        name, _ = _resolve_ref(schema, ref)
+        out.append((tag_val, name))
+    return out
 
 
 def _ts_type(prop: dict, schema: dict) -> str:
@@ -226,6 +252,22 @@ def emit_typescript(schema: dict, source_name: str) -> str:
         out.extend(schema_doc)
         out.append("")
     for name, defn in schema["definitions"].items():
+        # Emit any synthesized tagged-union aliases ahead of the interface
+        # that references them.
+        for prop_name, prop in defn.get("properties", {}).items():
+            tu = prop.get("x-tagged-union")
+            if not tu:
+                continue
+            alias = _tagged_union_alias_name(name, prop_name)
+            variants = _tagged_union_variants(tu, schema)
+            tag = tu.get("tag", "")
+            out.append(
+                f"/** Discriminated union for {name}.{prop_name}, "
+                f"tagged by sibling field `{tag}`. */"
+            )
+            body = " | ".join(t for _, t in variants)
+            out.append(f"export type {alias} = {body};")
+            out.append("")
         out.extend(_ts_doc(defn, ""))
         out.append(f"export interface {name} {{")
         required = set(defn.get("required", []))
@@ -234,7 +276,11 @@ def emit_typescript(schema: dict, source_name: str) -> str:
             if doc:
                 out.extend(doc)
             opt = "" if prop_name in required else "?"
-            out.append(f"  {prop_name}{opt}: {_ts_type(prop, schema)};")
+            if "x-tagged-union" in prop:
+                tname = _tagged_union_alias_name(name, prop_name)
+            else:
+                tname = _ts_type(prop, schema)
+            out.append(f"  {prop_name}{opt}: {tname};")
         out.append("}")
         out.append("")
     out.append("export const TABLES = {")
@@ -280,6 +326,33 @@ def emit_rust(schema: dict, source_name: str) -> str:
     ddl_emitted: list[tuple[str, str]] = []  # (table, ddl)
     columns_emitted: list[tuple[str, list[str]]] = []
     for name, defn in schema["definitions"].items():
+        # Emit synthesized tagged-union enums ahead of the struct that uses
+        # them. The discriminator is a *sibling* field, not internal to the
+        # payload, so we emit `#[serde(untagged)]` — serde will try each
+        # variant in declaration order. Variant shapes are distinct enough
+        # in our schemas to make this unambiguous.
+        for prop_name, prop in defn.get("properties", {}).items():
+            tu = prop.get("x-tagged-union")
+            if not tu:
+                continue
+            alias = _tagged_union_alias_name(name, prop_name)
+            variants = _tagged_union_variants(tu, schema)
+            tag = tu.get("tag", "")
+            out.append(
+                f"/// Discriminated union for `{name}.{prop_name}`, tagged by"
+            )
+            out.append(f"/// sibling field `{tag}`.")
+            out.append("#[derive(Debug, Clone, Serialize, Deserialize)]")
+            out.append("#[serde(untagged)]")
+            out.append(f"pub enum {alias} {{")
+            for tag_val, type_name in variants:
+                # Variant name: PascalCase of the tag value.
+                variant = "".join(
+                    p[:1].upper() + p[1:] for p in tag_val.split("_")
+                )
+                out.append(f"    {variant}({type_name}),")
+            out.append("}")
+            out.append("")
         out.extend(_rust_doc(defn, ""))
         out.append("#[derive(Debug, Clone, Serialize, Deserialize)]")
         out.append(f"pub struct {name} {{")
@@ -288,7 +361,11 @@ def emit_rust(schema: dict, source_name: str) -> str:
             if doc:
                 out.extend(doc)
             field = f"r#{prop_name}" if prop_name in rust_keywords else prop_name
-            out.append(f"    pub {field}: {_rust_type(prop, schema)},")
+            if "x-tagged-union" in prop:
+                ftype = _tagged_union_alias_name(name, prop_name)
+            else:
+                ftype = _rust_type(prop, schema)
+            out.append(f"    pub {field}: {ftype},")
         out.append("}")
         out.append("")
         if "x-primary-key" in defn:
@@ -339,7 +416,25 @@ def emit_python(schema: dict, source_name: str) -> str:
     ]
     ddl_emitted: list[tuple[str, str]] = []
     columns_emitted: list[tuple[str, list[str]]] = []
+    tagged_unions: list[tuple[str, str, list[tuple[str, str]]]] = []
     for name, defn in schema["definitions"].items():
+        # Note tagged unions for end-of-file emission. We can't emit them
+        # inline because the variant dataclasses are defined later in the
+        # file (the parent definition comes before its variant types in
+        # the schema), and `Foo | Bar` is a *runtime* expression that
+        # needs all names already bound. Field annotations themselves
+        # work either way thanks to `from __future__ import annotations`.
+        for prop_name, prop in defn.get("properties", {}).items():
+            tu = prop.get("x-tagged-union")
+            if not tu:
+                continue
+            tagged_unions.append(
+                (
+                    _tagged_union_alias_name(name, prop_name),
+                    f"{name}.{prop_name}, tagged by sibling field `{tu.get('tag', '')}`",
+                    _tagged_union_variants(tu, schema),
+                )
+            )
         # PEP 8: two blank lines before a top-level class.
         out.append("")
         out.append("")
@@ -355,7 +450,11 @@ def emit_python(schema: dict, source_name: str) -> str:
         if not props and not cls_doc:
             out.append("    pass")
         for prop_name, prop in props:
-            out.append(f"    {prop_name}: {_py_type(prop, schema)}")
+            if "x-tagged-union" in prop:
+                ptype = _tagged_union_alias_name(name, prop_name)
+            else:
+                ptype = _py_type(prop, schema)
+            out.append(f"    {prop_name}: {ptype}")
             doc = _py_doc(prop, "    ")
             if doc:
                 # In Python, field docstrings aren't standard, but multi-line
@@ -374,6 +473,12 @@ def emit_python(schema: dict, source_name: str) -> str:
             if table:
                 ddl_emitted.append((table, _emit_ddl_for(name, defn, table)))
                 columns_emitted.append((table, list(defn.get("properties", {}).keys())))
+    for alias, descr, variants in tagged_unions:
+        out.append("")
+        out.append("")
+        out.append(f"# Discriminated union for {descr}.")
+        body = " | ".join(t for _, t in variants)
+        out.append(f"{alias} = {body}")
     out.append("")
     out.append("")
     out.append("TABLES: dict[str, str] = {")

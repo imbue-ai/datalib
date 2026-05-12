@@ -4,6 +4,7 @@
 //! Each schema becomes a submodule:
 //!   * `anthropic` — anthropic_* tables (raw provider rows)
 //!   * `grid_rows` — grid_rows union table (one row per displayable entity)
+//!   * `feedback`  — feedback table + discriminated surface payload
 //!
 //! Regenerate by running:
 //!     bazelisk run //schemas:update_generated
@@ -15,6 +16,10 @@ pub mod anthropic {
 
 pub mod grid_rows {
     include!("generated/grid_rows.rs");
+}
+
+pub mod feedback {
+    include!("generated/feedback.rs");
 }
 
 #[cfg(test)]
@@ -38,6 +43,15 @@ mod tests {
     #[test]
     fn anthropic_tables_lists_all_six() {
         assert_eq!(super::anthropic::TABLES.len(), 6);
+    }
+
+    #[test]
+    fn feedback_table_present() {
+        assert_eq!(super::feedback::TABLES.len(), 1);
+        assert_eq!(super::feedback::DDL.len(), 1);
+        let (_, cols) = super::feedback::COLUMNS[0];
+        assert!(cols.contains(&"feedback_uuid"));
+        assert!(cols.contains(&"context_json"));
     }
 
     #[test]
