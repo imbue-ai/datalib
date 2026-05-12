@@ -22,6 +22,10 @@ pub struct FeedbackRow {
     pub git_hash: String,
     /// JSON payload matching `FeedbackContext` (this same file). Serialized at the HTTP boundary; readers parse on demand. Stored as MySQL/Dolt `JSON` so `JSON_EXTRACT` filters are cheap; SQLite's reference impl stores the same JSON as plain text.
     pub context_json: String,
+    /// Filled in retrospectively (by hand) when the issue this feedback raised has been addressed: the git SHA of the commit that fixed it. NULL means unresolved. Not server-stamped — the writer at submit time leaves it NULL and a human updates it via a manual UPDATE once the fix lands.
+    pub fixed_in_git_hash: Option<String>,
+    /// Free-form maintainer notes about the resolution: how the fix works, which test exercises this case, follow-ups, etc. Companion to `fixed_in_git_hash`; both are populated by hand after the fact.
+    pub notes: Option<String>,
 }
 
 /// Discriminated union for `FeedbackContext.payload`, tagged by
@@ -150,11 +154,13 @@ pub const DDL: &[(&str, &str)] = &[
     app_version VARCHAR(32) NOT NULL,
     git_hash VARCHAR(40) NOT NULL,
     context_json JSON NOT NULL,
+    fixed_in_git_hash VARCHAR(40),
+    notes TEXT,
     PRIMARY KEY (feedback_uuid)
 )"#),
 ];
 
 /// Column names per table, in declaration order.
 pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("feedback", &["feedback_uuid", "created_at", "sentiment", "comment", "app_version", "git_hash", "context_json"]),
+    ("feedback", &["feedback_uuid", "created_at", "sentiment", "comment", "app_version", "git_hash", "context_json", "fixed_in_git_hash", "notes"]),
 ];

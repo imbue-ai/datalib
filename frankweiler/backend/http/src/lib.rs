@@ -360,6 +360,9 @@ async fn submit_feedback(
         app_version,
         git_hash: git_hash_str,
         context_json,
+        // Resolution metadata is filled in by hand later, never at submit time.
+        fixed_in_git_hash: None,
+        notes: None,
     };
     match s.repo.insert_feedback(row).await {
         Ok(()) => Ok(Json(FeedbackResponse {
