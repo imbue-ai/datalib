@@ -11,6 +11,7 @@ from ingest.config import (
     DoltConfig,
     load_config,
 )
+from ingest.grid_rows import _anthropic_rows
 from ingest.providers.anthropic.parse import parse_export
 from ingest.render import _slugify
 
@@ -125,3 +126,59 @@ def test_parse_export_minimal(tmp_path: Path) -> None:
     assert len(parsed.content_blocks) == 1
     assert parsed.accounts[0].account_uuid == "u-1"
     assert parsed.messages[0].text == "hi"
+
+
+def test_anthropic_llm_response_row_uses_final_text_block_not_message_text(
+    tmp_path: Path,
+) -> None:
+    """The real claude.ai API populates the message-level ``text`` field with the
+    first text-or-thinking-shaped block, which is often the ``thinking`` content
+    rather than the assistant's actual final response. The ``LLM Response`` grid
+    row must reflect the user-visible text — i.e. the concatenation of the
+    ``text``-type blocks — not whatever ended up in ``message.text``."""
+    export = tmp_path / "export"
+    export.mkdir()
+    (export / "users.json").write_text(
+        json.dumps([{"uuid": "u-1", "full_name": "U", "email_address": "u@x"}])
+    )
+    thinking = "internal reasoning that should NOT surface as the response"
+    final = "the actual user-visible answer"
+    (export / "conversations.json").write_text(
+        json.dumps(
+            [
+                {
+                    "uuid": "c-1",
+                    "name": "T",
+                    "summary": "",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:01Z",
+                    "account": {"uuid": "u-1"},
+                    "chat_messages": [
+                        {
+                            "uuid": "m-asst",
+                            # Mirrors real claude.ai API: ``text`` carries the
+                            # thinking content, not the final response.
+                            "text": thinking,
+                            "sender": "assistant",
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-01-01T00:00:00Z",
+                            "parent_message_uuid": None,
+                            "content": [
+                                {"type": "thinking", "thinking": thinking},
+                                {"type": "text", "text": final},
+                            ],
+                            "attachments": [],
+                            "files": [],
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+    parsed = parse_export(export)
+    rows = list(_anthropic_rows(parsed))
+    response_rows = [r for r in rows if r.kind == "LLM Response"]
+    assert len(response_rows) == 1
+    assert response_rows[0].text == final, (
+        f"LLM Response row should carry final text block, got: {response_rows[0].text!r}"
+    )

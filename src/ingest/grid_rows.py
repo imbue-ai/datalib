@@ -213,6 +213,16 @@ def _anthropic_rows(parsed: ParsedExport) -> Iterable[_Row]:
                 author = model or m.sender
             else:
                 author = m.sender
+            # The claude.ai web API populates ``message.text`` with whatever
+            # the first text-or-thinking-shaped block contained, which for
+            # assistant turns is often the ``thinking`` content rather than
+            # the user-visible response. Reconstruct from text-type blocks
+            # so the grid row reflects what the renderer actually surfaces.
+            msg_blocks = sorted(
+                blocks_by_msg.get(m.message_uuid, []), key=lambda x: x.block_index
+            )
+            text_parts = [b.text for b in msg_blocks if b.type == "text" and b.text]
+            row_text = "\n\n".join(text_parts) if text_parts else (m.text or "")
             yield _Row(
                 uuid=m.message_uuid,
                 provider="anthropic",
@@ -227,7 +237,7 @@ def _anthropic_rows(parsed: ParsedExport) -> Iterable[_Row]:
                 conversation_uuid=cuuid,
                 message_index=msg_idx,
                 entire_chat=f"/chat/{cuuid}",
-                text=m.text or "",
+                text=row_text,
                 slack_link=None,
                 qmd_path=_anthropic_qmd_path(conv.account_uuid, cuuid, conv.name),
             )
