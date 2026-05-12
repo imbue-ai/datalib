@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use crate::db::ChatMeta;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
+use frankweiler_schema::feedback::FeedbackRow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -51,6 +52,13 @@ pub trait MirrorRepo: Send + Sync {
         &self,
         conversation_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
+
+    /// Append a feedback row and stamp the change as its own `dolt log`
+    /// entry. The default impl returns [`RepoError::ReadOnly`]; only
+    /// [`crate::dolt_repo::DoltRepo`] overrides it.
+    async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
 }
 
 /// Convenience type alias for the dyn-dispatched repo handle used by

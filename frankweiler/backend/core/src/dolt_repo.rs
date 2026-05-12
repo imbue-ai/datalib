@@ -1,8 +1,12 @@
 //! `DoltRepo` — production [`MirrorRepo`](crate::repo::MirrorRepo) backed
 //! by a `sqlx::MySqlPool` against the managed [`DoltServer`](crate::dolt_server::DoltServer).
 //!
-//! Today this serves grid + chat-preview reads. Writes
-//! (`insert_feedback` + `CALL DOLT_COMMIT`) arrive in T12.
+//! Reads: grid search + chat-preview metadata. Writes: [`Self::insert_feedback`]
+//! appends a row to the `feedback` table and calls `DOLT_COMMIT` so each
+//! piece of feedback becomes its own entry in `dolt log` (lazy man's audit
+//! trail). The `feedback` table itself is created on connect via the DDL
+//! shipped by [`frankweiler_schema::feedback`]; the `CREATE TABLE IF NOT
+//! EXISTS` makes the init idempotent across restarts.
 //!
 //! Dialect notes: SQL strings use `?` placeholders, which works for both
 //! MySQL (sqlx bind index) and the legacy SQLite path. We reuse
@@ -22,6 +26,7 @@ use crate::db::{build_where, snippet, ChatMeta};
 use crate::query::ParsedQuery;
 use crate::repo::{MirrorRepo, RepoError};
 use crate::search::SearchRow;
+use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 
 /// MySQL/Dolt-backed implementation of [`MirrorRepo`].
 ///
@@ -41,13 +46,27 @@ impl DoltRepo {
     }
 
     /// Connect to the Dolt MySQL endpoint at `mysql_url` (typically from
-    /// [`crate::dolt_server::DoltServer::mysql_url`]).
+    /// [`crate::dolt_server::DoltServer::mysql_url`]) and ensure the
+    /// `feedback` table exists. The DDL is `CREATE TABLE IF NOT EXISTS`,
+    /// so a real ingest-populated repo is left untouched.
     pub async fn connect(mysql_url: &str, root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
         let pool = MySqlPoolOptions::new()
             .max_connections(8)
             .connect(mysql_url)
             .await?;
-        Ok(Self::from_pool(pool, root))
+        let repo = Self::from_pool(pool, root);
+        repo.init_feedback_table().await?;
+        Ok(repo)
+    }
+
+    /// Apply the feedback DDL. Idempotent — `CREATE TABLE IF NOT EXISTS`
+    /// is a no-op when the table already exists. Dolt auto-commits DDL
+    /// even with `--no-auto-commit`, so no DOLT_COMMIT is needed here.
+    async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
+        for (_table, ddl) in FEEDBACK_DDL {
+            sqlx::query(ddl).execute(&self.pool).await?;
+        }
+        Ok(())
     }
 
     pub fn pool(&self) -> &MySqlPool {
@@ -148,6 +167,42 @@ impl MirrorRepo for DoltRepo {
             source_label: r.try_get("source_label").ok(),
             source_url: r.try_get("source_url_or_link").ok(),
         }))
+    }
+
+    async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
+        // Pin INSERT + DOLT_COMMIT to one connection: Dolt's working set
+        // is session-scoped under `--no-auto-commit`, so a SELECT from a
+        // different connection in the pool wouldn't see the uncommitted
+        // row. DOLT_COMMIT here publishes the row across every connection
+        // *and* stamps a `dolt log` entry — that audit trail is the whole
+        // point of routing feedback through Dolt instead of SQLite.
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "INSERT INTO feedback \
+             (feedback_uuid, created_at, sentiment, comment, app_version, git_hash, context_json) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.feedback_uuid)
+        .bind(&row.created_at)
+        .bind(&row.sentiment)
+        .bind(&row.comment)
+        .bind(&row.app_version)
+        .bind(&row.git_hash)
+        .bind(&row.context_json)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
+        let msg = format!("feedback: {}", row.feedback_uuid);
+        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
+            .bind(msg)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        Ok(())
     }
 
     async fn qmd_path_for_conversation(
