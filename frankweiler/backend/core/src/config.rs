@@ -14,14 +14,25 @@ pub struct Config {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmdConfig {
-    /// `${root}` is expanded against `Config.root` after load.
+    /// Path to the qmd index file. `${root}` is expanded against
+    /// `Config.root` after load. Defaults to the canonical location the
+    /// `frankweiler-qmd-indexer` writes to.
     pub index_path: String,
+    /// npm package version of `@tobilu/qmd` to invoke via `npx`. Must
+    /// match the version the indexer wrote with — the on-disk SQLite
+    /// schema isn't versioned in a way the runner can detect.
+    pub qmd_version: String,
+    /// qmd collection name passed to `qmd collection add` at index time;
+    /// also forms the `qmd://<collection>/…` URIs the runner reads back.
+    pub collection: String,
 }
 
 impl Default for QmdConfig {
     fn default() -> Self {
         Self {
-            index_path: "${root}/.frankweiler/qmd-index".into(),
+            index_path: format!("${{root}}/{}", crate::qmd::QMD_INDEX_REL),
+            qmd_version: crate::qmd::DEFAULT_QMD_VERSION.into(),
+            collection: crate::qmd::DEFAULT_COLLECTION.into(),
         }
     }
 }
@@ -139,7 +150,7 @@ mod tests {
         };
         let resolved = cfg.resolved_qmd_index();
         assert!(resolved.starts_with(&tmp));
-        assert!(resolved.ends_with("qmd-index"));
+        assert!(resolved.ends_with("index.sqlite"));
     }
 
     fn tempdir() -> PathBuf {

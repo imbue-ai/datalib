@@ -19,9 +19,11 @@ use axum::{
     routing::get,
     Router,
 };
-use frankweiler_core::db::{chat_meta, grid_rows, qmd_path_for_conversation};
-use frankweiler_core::query::parse_query;
+use frankweiler_core::db::{chat_meta, grid_rows, grid_rows_by_uuids, qmd_path_for_conversation};
+use frankweiler_core::qmd::{GridIndex, QmdRunner, QmdRunnerConfig};
+use frankweiler_core::query::{parse_query, FreeTextMode};
 use frankweiler_core::search::SearchRow;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -122,20 +124,96 @@ async fn search_handler(
 ) -> Json<SearchResponse> {
     let parsed = parse_query(p.q.as_deref().unwrap_or(""));
     let limit = p.limit.unwrap_or(200).min(100_000);
-    let rows = grid_rows(&s.root, &parsed, limit);
+
+    // Three routing cases:
+    //   1. Empty free-text — pure structured query, run grid_rows as before.
+    //   2. Non-empty free-text + qmd index present — shell out to qmd,
+    //      map hits to row uuids, fetch full rows preserving rank order.
+    //   3. Non-empty free-text but no qmd index — degrade gracefully:
+    //      surface the error in `query_echo.qmd_error` and fall back to
+    //      the SQL substring LIKE so the UI isn't dead.
+    let mut qmd_error: Option<String> = None;
+    let rows = if parsed.free_text.is_empty() {
+        grid_rows(&s.root, &parsed, limit)
+    } else {
+        match run_qmd_search(&s.root, &parsed, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                // Stringify for the query_echo so the UI can show "qmd
+                // unavailable, falling back" without a blank table.
+                qmd_error = Some(format!("{e:#}"));
+                grid_rows(&s.root, &parsed, limit)
+            }
+        }
+    };
+
     let total = rows.len() as u64;
     Json(SearchResponse {
         query_echo: serde_json::json!({
             "free_text": parsed.free_text,
+            "free_text_mode": match parsed.free_text_mode {
+                FreeTextMode::Hybrid => "hybrid",
+                FreeTextMode::Vsearch => "vsearch",
+            },
             "resolved_type": format!("{:?}", parsed.resolved_type),
             "filters": parsed.filters.iter()
                 .map(|(k, v)| (format!("{:?}", k), v.clone()))
                 .collect::<Vec<_>>(),
+            "qmd_error": qmd_error,
         }),
         rows,
         columns: default_columns(),
         total_estimated: total,
     })
+}
+
+/// Run a qmd-routed search. Spawns the qmd CLI on a blocking thread.
+async fn run_qmd_search(
+    root: &std::sync::Arc<PathBuf>,
+    parsed: &frankweiler_core::query::ParsedQuery,
+    limit: usize,
+) -> anyhow::Result<Vec<SearchRow>> {
+    let root = root.clone();
+    let parsed = parsed.clone();
+    tokio::task::spawn_blocking(move || qmd_search_blocking(&root, &parsed, limit))
+        .await
+        .map_err(|e| anyhow::anyhow!("qmd task join error: {e}"))?
+}
+
+fn qmd_search_blocking(
+    root: &std::path::Path,
+    parsed: &frankweiler_core::query::ParsedQuery,
+    limit: usize,
+) -> anyhow::Result<Vec<SearchRow>> {
+    let cfg = QmdRunnerConfig::new(root.to_path_buf());
+    let runner = QmdRunner::new(cfg)?;
+    // Ask qmd for a generous hit count: a single qmd hit (e.g. a
+    // conversation-level snippet) can resolve to many grid rows. We then
+    // truncate to `limit` after row expansion.
+    let qmd_limit = std::cmp::min(limit.saturating_mul(2).max(50), 1_000);
+    let hits = runner.search(
+        match parsed.free_text_mode {
+            FreeTextMode::Hybrid => frankweiler_core::qmd::QueryMode::Hybrid,
+            FreeTextMode::Vsearch => frankweiler_core::qmd::QueryMode::Vsearch,
+        },
+        &parsed.free_text,
+        qmd_limit,
+    )?;
+    let mirror = root.join("mirror.sqlite");
+    if !mirror.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(
+        &mirror,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let idx = GridIndex::from_sqlite(&conn);
+    let uuids: Vec<String> = idx
+        .rows_for_hits(hits.iter())
+        .into_iter()
+        .map(|r| r.uuid)
+        .collect();
+    Ok(grid_rows_by_uuids(root, parsed, &uuids, limit))
 }
 
 async fn columns() -> Json<Vec<ColumnSpec>> {

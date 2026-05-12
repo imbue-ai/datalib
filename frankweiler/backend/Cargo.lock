@@ -212,6 +212,7 @@ dependencies = [
  "axum",
  "frankweiler-core",
  "frankweiler-schema",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

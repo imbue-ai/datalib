@@ -150,6 +150,145 @@ pub fn grid_rows(root: &Path, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     grid_rows_with_conn(&conn, q, limit)
 }
 
+/// Fetch rows by an externally-provided uuid list (the qmd-routing path).
+///
+/// `uuids` is the ranked output of `GridIndex::rows_for_hits`. Structured
+/// filters (`source:`, `kind:`, etc.) and `before:`/`after:` from `q` are
+/// still applied — the free-text portion is ignored here because qmd has
+/// already done that work and produced the uuid list.
+///
+/// Output is in the same order as `uuids`, preserving qmd's hybrid rank.
+/// Rows dropped by the filter pass are simply omitted (no re-ranking).
+pub fn grid_rows_by_uuids(
+    root: &Path,
+    q: &ParsedQuery,
+    uuids: &[String],
+    limit: usize,
+) -> Vec<SearchRow> {
+    let Some(conn) = open_mirror(root) else {
+        return Vec::new();
+    };
+    grid_rows_by_uuids_with_conn(&conn, q, uuids, limit)
+}
+
+pub fn grid_rows_by_uuids_with_conn(
+    conn: &Connection,
+    q: &ParsedQuery,
+    uuids: &[String],
+    limit: usize,
+) -> Vec<SearchRow> {
+    if uuids.is_empty() {
+        return Vec::new();
+    }
+    // Build the same structured-filter clauses as grid_rows_with_conn,
+    // but suppress the free-text LIKE: qmd produced `uuids` already.
+    let (mut where_sql, mut params) = build_where(q, "");
+    // Append `uuid IN (?, ?, ...)`. We cap at `limit` to bound the query.
+    let take = uuids.len().min(limit);
+    let placeholders = std::iter::repeat_n("?", take).collect::<Vec<_>>().join(",");
+    if where_sql.is_empty() {
+        where_sql = format!(" WHERE uuid IN ({placeholders})");
+    } else {
+        where_sql.push_str(&format!(" AND uuid IN ({placeholders})"));
+    }
+    for u in uuids.iter().take(take) {
+        params.push(u.clone());
+    }
+    let sql = format!(
+        "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
+                channel, conversation_name, conversation_uuid, message_index, \
+                entire_chat, text, slack_link, notion_page_uuid \
+         FROM grid_rows{}",
+        where_sql
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return Vec::new();
+    };
+    // Collect into a uuid → SearchRow map, then walk `uuids` in qmd's
+    // rank order to produce the final slice.
+    let it = stmt.query_map(params_from_iter(params.iter()), |r| {
+        Ok((
+            r.get::<_, String>(0)?,                              // uuid
+            r.get::<_, String>(1)?,                              // provider
+            r.get::<_, String>(2)?,                              // kind
+            r.get::<_, String>(3)?,                              // source_label
+            r.get::<_, String>(4)?,                              // when_ts
+            r.get::<_, Option<String>>(5)?.unwrap_or_default(),  // author
+            r.get::<_, Option<String>>(6)?.unwrap_or_default(),  // account
+            r.get::<_, Option<String>>(7)?.unwrap_or_default(),  // project
+            r.get::<_, Option<String>>(8)?.unwrap_or_default(),  // channel
+            r.get::<_, Option<String>>(9)?.unwrap_or_default(),  // conversation_name
+            r.get::<_, String>(10)?,                             // conversation_uuid
+            r.get::<_, Option<i64>>(11)?,                        // message_index
+            r.get::<_, String>(12)?,                             // entire_chat
+            r.get::<_, String>(13)?,                             // text
+            r.get::<_, Option<String>>(14)?.unwrap_or_default(), // slack_link
+            r.get::<_, Option<String>>(15)?.unwrap_or_default(), // notion_page_uuid
+        ))
+    });
+    let Ok(it) = it else { return Vec::new() };
+    let mut by_uuid: std::collections::HashMap<String, SearchRow> =
+        std::collections::HashMap::new();
+    for row in it.flatten() {
+        let (
+            uuid,
+            _provider,
+            kind,
+            source_label,
+            when_ts,
+            author,
+            account,
+            project,
+            channel,
+            conversation_name,
+            conversation_uuid,
+            message_index,
+            entire_chat,
+            text,
+            slack_link,
+            notion_page_uuid,
+        ) = row;
+        // For qmd-routed results we pass the snippet through qmd untouched
+        // (qmd's reranked snippet already contains the relevant fragment).
+        // But qmd hits resolve at the row-uuid level, so the caller still
+        // wants a row-shaped object. Reuse the row's text as the snippet
+        // for messages; full text for Chat rows (mirrors grid_rows_with_conn).
+        let snip = if kind == "Chat" {
+            text.clone()
+        } else {
+            first_chars(&text, SNIPPET_LEN).replace('\n', " ")
+        };
+        by_uuid.insert(
+            uuid.clone(),
+            SearchRow {
+                uuid,
+                conversation_uuid,
+                message_index: message_index.map(|n| n as usize),
+                snippet: snip,
+                sender: author.clone(),
+                when: when_ts,
+                conversation_name,
+                project,
+                account,
+                entire_chat,
+                source: source_label,
+                kind,
+                author,
+                channel,
+                slack_link,
+                notion_page_uuid,
+            },
+        );
+    }
+    let mut out: Vec<SearchRow> = Vec::with_capacity(by_uuid.len());
+    for u in uuids.iter().take(take) {
+        if let Some(r) = by_uuid.remove(u) {
+            out.push(r);
+        }
+    }
+    out
+}
+
 pub fn grid_rows_with_conn(conn: &Connection, q: &ParsedQuery, limit: usize) -> Vec<SearchRow> {
     let needle = q.free_text.to_lowercase();
     let (where_sql, params) = build_where(q, &needle);

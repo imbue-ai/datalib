@@ -39,19 +39,35 @@ function findWorkspaceRoot(start) {
 function ensureFixtureBuilt(workspace) {
   const dump = path.join(workspace, "bazel-bin/tests/fixtures/ingested/dump.sql");
   const tar = path.join(workspace, "bazel-bin/tests/fixtures/ingested/qmd.tar");
-  if (fs.existsSync(dump) && fs.existsSync(tar)) {
-    return { dump, tar };
+  const qmdIndex = path.join(
+    workspace,
+    "bazel-bin/tests/fixtures/ingested/qmd-index.tar",
+  );
+  if (fs.existsSync(dump) && fs.existsSync(tar) && fs.existsSync(qmdIndex)) {
+    return { dump, tar, qmdIndex };
   }
   // eslint-disable-next-line no-console
-  console.error("[prepare-fixture] building //tests/fixtures:ingested_tng…");
-  const r = spawnSync("bazelisk", ["build", "//tests/fixtures:ingested_tng"], {
-    cwd: workspace,
-    stdio: "inherit",
-  });
+  console.error(
+    "[prepare-fixture] building //tests/fixtures:ingested_tng and :ingested_tng_qmd…",
+  );
+  const r = spawnSync(
+    "bazelisk",
+    [
+      "build",
+      "//tests/fixtures:ingested_tng",
+      "//tests/fixtures:ingested_tng_qmd",
+    ],
+    {
+      cwd: workspace,
+      stdio: "inherit",
+    },
+  );
   if (r.status !== 0) {
-    throw new Error("bazelisk build //tests/fixtures:ingested_tng failed");
+    throw new Error(
+      "bazelisk build //tests/fixtures:ingested_tng[_qmd] failed",
+    );
   }
-  return { dump, tar };
+  return { dump, tar, qmdIndex };
 }
 
 function loadDumpIntoSqlite(dumpPath, sqlitePath) {
@@ -80,7 +96,7 @@ function main() {
     process.exit(2);
   }
   const workspace = findWorkspaceRoot(__dirname);
-  const { dump, tar } = ensureFixtureBuilt(workspace);
+  const { dump, tar, qmdIndex } = ensureFixtureBuilt(workspace);
 
   fs.rmSync(outRoot, { recursive: true, force: true });
   fs.mkdirSync(outRoot, { recursive: true });
@@ -90,6 +106,15 @@ function main() {
   execFileSync("tar", ["-xf", tar, "-C", outRoot, "--strip-components=1"], {
     stdio: "inherit",
   });
+  // Overlay qmd-index.tar with the same strip — its archive paths are
+  // also rooted at `qmd/`, so the index file lands at
+  // <root>/.frankweiler/qmd/index.sqlite, exactly where the backend
+  // expects it (frankweiler_core::qmd::QMD_INDEX_REL).
+  execFileSync(
+    "tar",
+    ["-xf", qmdIndex, "-C", outRoot, "--strip-components=1"],
+    { stdio: "inherit" },
+  );
 
   loadDumpIntoSqlite(dump, path.join(outRoot, "mirror.sqlite"));
   // Backend reads root via FRANKWEILER_ROOT env var (set by playwright config).
