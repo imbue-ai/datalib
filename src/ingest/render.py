@@ -35,6 +35,7 @@ from ingest.providers.notion.parse import (
     rich_text_to_plain,
 )
 from ingest.providers.openai.parse import ParsedChatGPTApi
+from ingest.providers.slack.mrkdwn import resolve_user_mentions
 from ingest.providers.slack.mrkdwn import to_commonmark as _slack_to_commonmark
 from ingest.providers.slack.parse import ParsedSlackApi
 
@@ -559,7 +560,7 @@ def _render_one_slack_thread(
     team_id = root_msg.team_id
     channel_id = root_msg.channel_id
 
-    snippet = (root_msg.text or "").strip().splitlines()
+    snippet = resolve_user_mentions(root_msg.text or "", user_labels).strip().splitlines()
     title = snippet[0] if snippet else "(empty thread)"
     title = title[:80]
 

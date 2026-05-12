@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from pymysql.connections import Connection
 
@@ -34,6 +34,7 @@ from ingest.providers.notion.parse import (
     rich_text_to_plain,
 )
 from ingest.providers.openai.parse import ParsedChatGPTApi
+from ingest.providers.slack.mrkdwn import resolve_user_mentions
 from ingest.providers.slack.parse import ParsedSlackApi
 from ingest.render import (
     _github_pr_dir,
@@ -159,16 +160,24 @@ def _openai_qmd_path(
     return f"openai/{account_id or 'unknown'}/llm_chats/{conversation_id}__{_slugify(title)}.qmd"
 
 
-def _slack_thread_title(root_text: str | None) -> str:
-    snippet = (root_text or "").strip().splitlines()
+def _slack_thread_title(
+    root_text: str | None,
+    user_labels: Mapping[str, str] | None = None,
+) -> str:
+    text = resolve_user_mentions(root_text or "", user_labels)
+    snippet = text.strip().splitlines()
     title = snippet[0] if snippet else "(empty thread)"
     return title[:80]
 
 
 def _slack_qmd_path(
-    team_id: str, channel_name: str, thread_uuid: str, root_text: str | None
+    team_id: str,
+    channel_name: str,
+    thread_uuid: str,
+    root_text: str | None,
+    user_labels: Mapping[str, str] | None = None,
 ) -> str:
-    return f"slack/{team_id}/{channel_name}/threads/{thread_uuid}__{_slugify(_slack_thread_title(root_text))}.qmd"
+    return f"slack/{team_id}/{channel_name}/threads/{thread_uuid}__{_slugify(_slack_thread_title(root_text, user_labels))}.qmd"
 
 
 def _slack_link(
@@ -392,10 +401,10 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
             conversation_uuid=thread_uuid,
             message_index=None,
             entire_chat=f"/slack/{thread_uuid}",
-            text=root_msg.text or "",
+            text=resolve_user_mentions(root_msg.text or "", user_labels),
             slack_link=_slack_link(root_msg.team_id, root_msg.channel_id, root_msg.ts),
             qmd_path=_slack_qmd_path(
-                root_msg.team_id, cname, thread_uuid, root_msg.text
+                root_msg.team_id, cname, thread_uuid, root_msg.text, user_labels
             ),
         )
 
@@ -416,12 +425,12 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
                 conversation_uuid=thread_uuid,
                 message_index=msg_idx,
                 entire_chat=f"/slack/{thread_uuid}",
-                text=m.text or "",
+                text=resolve_user_mentions(m.text or "", user_labels),
                 slack_link=_slack_link(
                     m.team_id, m.channel_id, m.ts, thread_ts=root_msg.ts
                 ),
                 qmd_path=_slack_qmd_path(
-                    root_msg.team_id, cname, thread_uuid, root_msg.text
+                    root_msg.team_id, cname, thread_uuid, root_msg.text, user_labels
                 ),
             )
 

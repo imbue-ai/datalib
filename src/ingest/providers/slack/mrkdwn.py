@@ -41,6 +41,25 @@ _BOLD = re.compile(r"(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])")
 _STRIKE = re.compile(r"(?<![\w~])~(?!\s)([^~\n]+?)(?<!\s)~(?![\w~])")
 
 
+def resolve_user_mentions(
+    text: str, user_labels: Mapping[str, str] | None = None
+) -> str:
+    """Replace `<@U…>` / `<@U…|label>` with `@<label>` only.
+
+    Mirrors the user-mention rule inside `to_commonmark` but skips every
+    other mrkdwn fixup. Use this for plain-text contexts (the QMD H1 title,
+    the grid-row snippet text) where running the full pipeline would damage
+    literal characters like `*` or `<…>`.
+    """
+    labels = user_labels or {}
+
+    def _sub(m: re.Match[str]) -> str:
+        uid, label = m.group(1), m.group(2)
+        return f"@{label or labels.get(uid, uid)}"
+
+    return _USER_REF.sub(_sub, text)
+
+
 def to_commonmark(text: str, user_labels: Mapping[str, str] | None = None) -> str:
     """Translate Slack mrkdwn `text` into CommonMark.
 
