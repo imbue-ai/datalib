@@ -101,6 +101,36 @@ data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
 emits in the body. If you find yourself writing a QMD parser in the
 backend, stop — add the field to `grid_rows` instead.
 
+## Feedback persistence (Dolt)
+
+The running backend always talks to a managed `dolt sql-server`
+subprocess (`frankweiler/backend/core/src/dolt_server.rs`) — `dolt` must
+be on `$PATH`. `mirror.sqlite` is still emitted by ingest but is a
+reference-only artifact; the production code path goes through
+`DoltRepo` (sqlx::MySqlPool). The `--backend sqlite` flag is a
+debug-only escape hatch.
+
+Every UUID-bearing UI surface has a "Feedback…" path. Right-click on
+the grid emits `grid_cell` / `grid_row`; the search input emits
+`filter_chip`; column headers emit `column_header`; the preview pane
+cascades selection (`preview_selection`) → message (`preview_message`)
+→ whole-thread (`page_header`); the page-header
+`FeedbackButton` is `page_header`. The producer-side types and DOM
+breadcrumb walker live in `frankweiler/ui/src/feedback/context.ts`;
+the backend-side row + discriminated payload schema lives in
+`schemas/feedback.schema.json` and is codegen'd into all three
+languages.
+
+Each `POST /api/feedback` inserts a row **and** runs
+`CALL DOLT_COMMIT('-Am', 'feedback: <uuid>')` so each row gets its own
+`dolt log` entry — keep INSERT + DOLT_COMMIT pinned to one pool
+connection because `--no-auto-commit` makes writes session-scoped.
+
+Bazel stamps the binary with the git hash via
+`tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
+get the same value from `frankweiler/backend/core/build.rs`. Read-back
+of feedback rows is out of scope — query Dolt directly.
+
 ## Git: prefer merges over rebases
 
 When integrating remote changes into a local branch (e.g. `git pull` after
