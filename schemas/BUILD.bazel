@@ -3,6 +3,9 @@ load("@rules_python//python:defs.bzl", "py_binary")
 exports_files([
     "grid_rows.schema.json",
     "feedback.schema.json",
+    "documents.schema.json",
+    "sync_jobs.schema.json",
+    "download_runs.schema.json",
     "codegen.py",
 ])
 
@@ -85,3 +88,35 @@ filegroup(
     ],
     visibility = ["//visibility:public"],
 )
+
+[
+    [
+        genrule(
+            name = "{}_{}".format(stem, ext),
+            srcs = ["{}.schema.json".format(stem)],
+            outs = ["{}.{}".format(stem, suffix)],
+            cmd = "$(execpath :codegen) $(execpath {}.schema.json) --{} $@".format(stem, lang),
+            tools = [":codegen"],
+            visibility = ["//visibility:public"],
+        )
+        for ext, suffix, lang in [
+            ("rs", "rs", "rust"),
+            ("py", "py", "python"),
+            ("ts", "ts", "typescript"),
+        ]
+    ]
+    for stem in ["documents", "sync_jobs", "download_runs"]
+]
+
+[
+    filegroup(
+        name = "{}_all".format(stem),
+        srcs = [
+            ":{}_py".format(stem),
+            ":{}_rs".format(stem),
+            ":{}_ts".format(stem),
+        ],
+        visibility = ["//visibility:public"],
+    )
+    for stem in ["documents", "sync_jobs", "download_runs"]
+]

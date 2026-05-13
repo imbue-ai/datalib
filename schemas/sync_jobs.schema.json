@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://imbue.com/schemas/sync_jobs.schema.json",
+  "title": "SyncJobsSchema",
+  "description": "Background job queue for UI-driven sync. The backend inserts rows here in response to `POST /api/sync/jobs`; the `mixed-up-files worker` child process polls for `pending` rows, executes them (download + ingest + render), and updates state. Every state transition is committed via `CALL DOLT_COMMIT('-Am', 'sync_job: <id> <state>')` so the full history lives in `dolt log` next to the data it produced. See plan-ui-driven-sync.md, Phases D + E.",
+  "type": "object",
+  "definitions": {
+    "SyncJobRow": {
+      "type": "object",
+      "description": "One row in the `sync_jobs` table. UI polls `GET /api/sync/jobs/{id}` to render the Lightroom-style progress chrome; cancel flips `state` to `canceled` and the worker SIGTERMs its child.",
+      "x-primary-key": ["id"],
+      "required": ["id", "kind", "state", "created_at"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(36)",
+          "description": "Client-or-backend-generated UUIDv4. Used as the row primary key and in `dolt log` commit messages."
+        },
+        "source_name": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(64)",
+          "description": "`sources[].name` from `config.yaml` this job operates on. NULL for `kind = all` parent jobs and for `kind = ingest` passes that consume every pending download_runs row across sources."
+        },
+        "kind": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(16)",
+          "enum": ["download", "ingest", "render", "all"],
+          "description": "What the job does. `download` fetches from a single source's provider; `ingest` translates queued raw files into Dolt rows; `render` re-emits markdown for documents whose cache key changed; `all` is a parent job that enqueues + waits on per-source child jobs."
+        },
+        "parent_job_id": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(36)",
+          "description": "When this row was enqueued as a child of an `all`-kind job, points at the parent. NULL for standalone jobs. Lets the UI group `Sync all` runs into one collapsible card."
+        },
+        "state": {
+          "type": "string",
+          "x-sql-type": "VARCHAR(16)",
+          "enum": ["pending", "running", "done", "failed", "canceled"],
+          "description": "Lifecycle state. `pending` → `running` when the worker picks it up; `running` → `done` / `failed` at completion; `pending` / `running` → `canceled` when the UI requests a cancel (worker SIGTERMs the child and moves on)."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "x-sql-type": "VARCHAR(40)",
+          "description": "When the backend enqueued the row (ISO-8601 with explicit local offset, per AGENTS.md)."
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "x-sql-type": "VARCHAR(40)",
+          "description": "When the worker flipped `state` to `running` (ISO-8601 with explicit offset). NULL while still `pending`."
+        },
+        "finished_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "x-sql-type": "VARCHAR(40)",
+          "description": "When the worker flipped `state` to a terminal value — `done`, `failed`, or `canceled` (ISO-8601 with explicit offset). NULL while still pending/running."
+        },
+        "error": {
+          "type": ["string", "null"],
+          "x-sql-type": "TEXT",
+          "description": "Human-readable error message when `state = failed`. The full structured log lives in `<root>/state/job-logs/<id>.log`; this column is just the summary the UI shows in the chrome."
+        },
+        "pid": {
+          "type": ["integer", "null"],
+          "description": "OS pid of the active child process while `state = running`. On worker startup, any `running` rows whose pid is no longer alive get flipped to `failed` (state recovery — see plan Phase D, task 16)."
+        },
+        "progress_pct": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Latest reported progress, 0.0..1.0. May be NULL when the underlying step can't report a meaningful fraction (e.g. open-ended Slack history pull). Drives the progress bar in the UI chrome."
+        },
+        "progress_msg": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(512)",
+          "description": "Latest human-readable progress line (e.g. `downloaded 14/200 conversations`). Shown on hover over the chrome's progress bar so the user can see what the worker is actually doing — useful for distinguishing 'slow but working' from 'stuck'."
+        }
+      }
+    }
+  },
+  "tables": {
+    "sync_jobs": "#/definitions/SyncJobRow"
+  }
+}
