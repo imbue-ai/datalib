@@ -58,14 +58,26 @@ class GitlabWebSync(_SyncBase):
     max_mrs: int | None = None
 
 
-class NotionWebSync(_SyncBase):
-    kind: Literal["notion_web"]
+class NotionOfficialSync(_SyncBase):
+    kind: Literal["notion_official"]
+    # Mode is implicit: `subtree` set → subtree mode; `inbox=True` → inbox mode.
+    # Exactly one must be set (enforced in model_validator below).
+    inbox: bool = False
     subtree: str | None = None
     space: str | None = None
     notification_page_size: int | None = None
     max_notification_pages: int | None = None
     inbox_types: list[str] | None = None
-    subtree_max_pages: int | None = None
+    max_pages: int | None = None
+
+    @model_validator(mode="after")
+    def _one_mode(self) -> NotionOfficialSync:
+        if self.inbox == (self.subtree is not None):
+            raise ValueError(
+                "notion_official sync: exactly one of `inbox: true` or "
+                "`subtree: <id>` must be set"
+            )
+        return self
 
 
 SyncConfig = Annotated[
@@ -74,7 +86,7 @@ SyncConfig = Annotated[
     | SlackWebSync
     | GithubWebSync
     | GitlabWebSync
-    | NotionWebSync,
+    | NotionOfficialSync,
     Field(discriminator="kind"),
 ]
 
@@ -167,9 +179,9 @@ class GitlabApiDirSource(_SourceBase):
         return Path(v).expanduser().resolve()
 
 
-class NotionWebDirSource(_SourceBase):
+class NotionOfficialDirSource(_SourceBase):
     provider: Literal["notion"]
-    kind: Literal["notion_web_dir"]
+    kind: Literal["notion_official_dir"]
     path: Path
 
     @field_validator("path", mode="after")
@@ -184,7 +196,7 @@ SourceConfig = Annotated[
     | SlackApiDirSource
     | GithubApiDirSource
     | GitlabApiDirSource
-    | NotionWebDirSource,
+    | NotionOfficialDirSource,
     Field(discriminator="provider"),
 ]
 
@@ -216,7 +228,7 @@ class Config(BaseModel):
         | SlackApiDirSource
         | GithubApiDirSource
         | GitlabApiDirSource
-        | NotionWebDirSource
+        | NotionOfficialDirSource
     ]:
         return [s for s in self.sources if s.enabled]
 

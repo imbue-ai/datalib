@@ -27,7 +27,7 @@ from ingest.config import (
     ClaudeWebSync,
     GithubWebSync,
     GitlabWebSync,
-    NotionWebSync,
+    NotionOfficialSync,
     SlackWebSync,
     SyncConfig,
     load_config,
@@ -39,7 +39,7 @@ KIND_TO_MODULE: dict[str, str] = {
     "slack_web": "download.slack_web",
     "github_web": "download.github_web",
     "gitlab_web": "download.gitlab_web",
-    "notion_web": "download.notion_web",
+    "notion_official": "download.notion_official",
 }
 
 
@@ -92,8 +92,10 @@ def sync_to_argv(sync: SyncConfig, out_dir: Path) -> list[str]:
             argv += ["--max-mrs", str(sync.max_mrs)]
         return argv
 
-    if isinstance(sync, NotionWebSync):
+    if isinstance(sync, NotionOfficialSync):
         argv = ["--out-dir", str(out_dir)]
+        if sync.inbox:
+            argv += ["--inbox"]
         if sync.subtree is not None:
             argv += ["--subtree", sync.subtree]
         if sync.space is not None:
@@ -104,8 +106,8 @@ def sync_to_argv(sync: SyncConfig, out_dir: Path) -> list[str]:
             argv += ["--max-notification-pages", str(sync.max_notification_pages)]
         for t in sync.inbox_types or []:
             argv += ["--inbox-types", t]
-        if sync.subtree_max_pages is not None:
-            argv += ["--subtree-max-pages", str(sync.subtree_max_pages)]
+        if sync.max_pages is not None:
+            argv += ["--max-pages", str(sync.max_pages)]
         return argv
 
     raise ValueError(f"unknown sync kind: {sync!r}")

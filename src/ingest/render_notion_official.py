@@ -28,20 +28,30 @@ import logging
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import typer
 
-from jsonl_io import load_jsonl
+from ingest.providers.notion_official.parse import (
+    ENTITY_BLOCK,
+    ENTITY_PAGE,
+    ParsedNotionOfficial,
+    parse_api_dir,
+)
 
 logger = logging.getLogger(__name__)
 
-ENTITY_PAGE = "notion_official_page"
-ENTITY_BLOCK = "notion_official_block"
-
 SLUG_MAX_LEN = 60
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+@dataclass
+class RenderSummary:
+    rendered: int = 0
+    orphans_removed: int = 0
+    skipped: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +79,29 @@ def _page_dir_segment(page_id: str, title: str | None) -> str:
 
 def _notion_url(page_id: str) -> str:
     return f"https://www.notion.so/{page_id.replace('-', '')}"
+
+
+def _notion_thread_url(
+    page_id: str, discussion_id: str | None, anchor_block_id: str | None
+) -> str:
+    """Open the page with the comment side panel pinned to the thread.
+    Mirrors the format produced by the unofficial-API renderer (Notion
+    accepts both dashed and undashed)."""
+    pg = page_id.replace("-", "")
+    url = f"https://www.notion.so/{pg}"
+    if discussion_id:
+        url += f"?d={discussion_id.replace('-', '')}"
+        if anchor_block_id:
+            url += f"#{anchor_block_id.replace('-', '')}"
+    elif anchor_block_id:
+        url += f"#{anchor_block_id.replace('-', '')}"
+    return url
+
+
+def _block_anchor(block_id: str) -> str:
+    """HTML anchor placed before each block's rendered content so thread
+    .md files can deep-link back to the block."""
+    return f'<a id="b-{_short_id(block_id)}"></a>'
 
 
 def _yaml_scalar(v: object) -> str:
@@ -194,11 +227,14 @@ def _render_block(
     depth: int = 0,
 ) -> list[str]:
     """Return markdown lines (no trailing newline) for one block + its
-    descendants. Caller joins with '\\n'."""
+    descendants. Caller joins with '\\n'.
+
+    The first line emitted is an HTML anchor so threads anchored to this
+    block can deep-link back."""
     btype = block.get("type") or ""
     payload = _block_payload(block)
     indent = "    " * depth
-    lines: list[str] = []
+    lines: list[str] = [_block_anchor(block.get("id", ""))]
 
     def rt(field: str = "rich_text") -> str:
         return _render_rich_text(payload.get(field), user_names, page_titles)
@@ -438,29 +474,6 @@ def _build_page_titles(pages: list[dict], blocks: list[dict]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _load_all_blocks(out_dir: Path) -> list[dict]:
-    """Walk created + updated to assemble the latest snapshot per block."""
-    latest: dict[str, dict] = {}
-    for stream in ("created", "updated"):
-        path = out_dir / ENTITY_BLOCK / stream / "events.jsonl"
-        if not path.exists():
-            continue
-        for rec in load_jsonl(path):
-            latest[rec["id"]] = rec["raw"]
-    return list(latest.values())
-
-
-def _load_all_pages(out_dir: Path) -> list[dict]:
-    latest: dict[str, dict] = {}
-    for stream in ("created", "updated"):
-        path = out_dir / ENTITY_PAGE / stream / "events.jsonl"
-        if not path.exists():
-            continue
-        for rec in load_jsonl(path):
-            latest[rec["id"]] = rec["raw"]
-    return list(latest.values())
-
-
 def _index_children(blocks: list[dict]) -> dict[str, list[dict]]:
     """Map parent (block or page) id → its direct children, preserving the
     fetcher's insertion order (which mirrors Notion's API order)."""
@@ -483,12 +496,12 @@ def _render_page(
     page_titles: dict[str, str],
     media_urls: dict[str, str],
     bookmark_titles: dict[str, str],
-    out_root: Path,
+    pages_root: Path,
 ) -> Path:
     pid = page["id"]
     title = page_titles.get(pid) or "(untitled)"
     seg = _page_dir_segment(pid, title)
-    page_dir = out_root / seg
+    page_dir = pages_root / seg
     page_dir.mkdir(parents=True, exist_ok=True)
 
     # Build a flat map of every child_page (any depth) → its directory
@@ -538,142 +551,315 @@ def _render_page(
     return target
 
 
+# ---------------------------------------------------------------------------
+# Comment threads.
+#
+# Notion's official API exposes comments as a flat list per page (or block);
+# each carries a `discussion_id` that groups thread members. We render one
+# `.md` per discussion, located under the page's directory, deep-linked back
+# to the anchor block via the `<a id="b-<id8>">` markers _render_block emits.
+# ---------------------------------------------------------------------------
+
+
+def _block_to_page_id(blocks: list[dict]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for b in blocks:
+        parent = b.get("parent") or {}
+        if parent.get("type") == "page_id":
+            out[b["id"]] = parent["page_id"]
+    return out
+
+
+def _resolve_comment_page_id(
+    comment: dict, blocks: list[dict], block_owning_page: dict[str, str]
+) -> str | None:
+    parent = comment.get("parent") or {}
+    ptype = parent.get("type")
+    if ptype == "page_id":
+        return parent.get("page_id")
+    if ptype == "block_id":
+        bid = parent.get("block_id")
+        if not bid:
+            return None
+        # Walk up the block hierarchy: the comment fixture might point at a
+        # block whose parent.type is `block_id`, not `page_id`.
+        block_parent: dict[str, str] = {}
+        for b in blocks:
+            par = b.get("parent") or {}
+            if par.get("type") == "block_id":
+                block_parent[b["id"]] = par["block_id"]
+        cur: str | None = bid
+        seen: set[str] = set()
+        while cur and cur not in seen:
+            seen.add(cur)
+            if cur in block_owning_page:
+                return block_owning_page[cur]
+            cur = block_parent.get(cur)
+    return None
+
+
+def _comment_text_plain(comment: dict) -> str:
+    return _rich_text_plain(comment.get("rich_text"))
+
+
+def _thread_filename(discussion_id: str, snippet: str) -> str:
+    snip = _slugify(snippet) or "thread"
+    return f"{_short_id(discussion_id)}__{snip}.md"
+
+
+def _format_iso_short(ts: str | None) -> str:
+    """Notion timestamps are ISO 8601 with trailing 'Z'; pass through if so,
+    else just return as-is. Don't try to be cute about timezones."""
+    return ts or ""
+
+
+def _render_thread(
+    *,
+    discussion_id: str,
+    page_id: str,
+    page_title: str,
+    parent_block_id: str | None,
+    comments: list[dict],
+    user_names: dict[str, str],
+    page_titles: dict[str, str],
+    page_dir: Path,
+) -> Path | None:
+    """Write one thread .md under `<page_dir>/threads/`. Returns the path
+    (absolute) on success, or None if no on-disk file should exist."""
+    if not comments:
+        return None
+    comments = sorted(comments, key=lambda c: c.get("created_time") or "")
+    first_text = _comment_text_plain(comments[0])
+    snippet = (first_text.splitlines()[0] if first_text else "thread")[:60]
+
+    threads_dir = page_dir / "threads"
+    threads_dir.mkdir(parents=True, exist_ok=True)
+    target = threads_dir / _thread_filename(discussion_id, snippet)
+
+    thread_url = _notion_thread_url(page_id, discussion_id, parent_block_id)
+
+    parts: list[str] = []
+    parts.append("---")
+    parts.append("provider: notion_official")
+    parts.append(f"discussion_id: {_yaml_scalar(discussion_id)}")
+    parts.append(f"page_id: {_yaml_scalar(page_id)}")
+    if parent_block_id:
+        parts.append(f"parent_block_id: {_yaml_scalar(parent_block_id)}")
+    parts.append("---")
+    parts.append("")
+    parts.append(f"# Comment thread on “{page_title}”")
+    parts.append("")
+    parts.append(f"[View thread on Notion ↗]({thread_url})")
+    parts.append("")
+    if parent_block_id:
+        anchor = f"../index.md#b-{_short_id(parent_block_id)}"
+        parts.append(f"Anchored to [block ↩]({anchor})")
+        parts.append("")
+
+    for i, c in enumerate(comments):
+        cid = c.get("id", "")
+        author_id = (c.get("created_by") or {}).get("id") or ""
+        author = user_names.get(author_id) or author_id[:8] or "unknown"
+        created = _format_iso_short(c.get("created_time"))
+        parts.append(f'<a id="c-{_short_id(cid)}"></a>')
+        parts.append("")
+        parts.append(f"## {author}")
+        parts.append("")
+        parts.append(f"*{created}* — [↗]({thread_url})")
+        parts.append("")
+        body = _render_rich_text(c.get("rich_text"), user_names, page_titles)
+        parts.append(body or "")
+        parts.append("")
+
+    target.write_text("\n".join(parts).rstrip() + "\n")
+    return target
+
+
+# ---------------------------------------------------------------------------
+# Library entry point (called from ingest.py) and CLI shim.
+# ---------------------------------------------------------------------------
+
+
+_PAGES_SUBDIR = Path("rendered_md") / "notion" / "pages"
+
+
+def thread_qmd_path_rel(
+    *, page_id: str, page_title: str, discussion_id: str, snippet: str
+) -> str:
+    """Return the rel path (under root) we'd write a thread to. Used by
+    grid_rows to populate `qmd_path` without duplicating directory layout
+    logic."""
+    seg = _page_dir_segment(page_id, page_title)
+    return str(_PAGES_SUBDIR / seg / "threads" / _thread_filename(discussion_id, snippet))
+
+
+def page_qmd_path_rel(*, page_id: str, page_title: str) -> str:
+    seg = _page_dir_segment(page_id, page_title)
+    return str(_PAGES_SUBDIR / seg / "index.md")
+
+
+def thread_snippet(comment_rich_text_plain: str) -> str:
+    return (comment_rich_text_plain.splitlines()[0] if comment_rich_text_plain else "thread")[:60]
+
+
+def render_notion_official(
+    parsed: ParsedNotionOfficial,
+    root: Path,
+    skip: set[str] | None = None,
+) -> RenderSummary:
+    """Render every page in `parsed` to markdown under
+    `<root>/rendered_md/notion/pages/<page-dir>/index.md`, with comment
+    threads as siblings under `threads/`.
+
+    `skip` is a set of `document_uuid` values whose corresponding rendered
+    output is still fresh. For the official path, the only `document_uuid`s
+    in the grid_rows stream are discussion IDs (pages don't currently
+    produce grid rows under the new scheme), so `skip` only affects
+    thread rendering.
+
+    Orphan cleanup: pages/threads on disk that aren't in `parsed` get
+    deleted so the rendered tree mirrors the source of truth."""
+    summary = RenderSummary()
+    skip = skip or set()
+    pages_root = root / _PAGES_SUBDIR
+    pages_root.mkdir(parents=True, exist_ok=True)
+
+    pages = parsed.pages
+    blocks = parsed.blocks
+    comments = parsed.comments
+    if not pages and not blocks and not comments:
+        return summary
+
+    children_by_parent = _index_children(blocks)
+    page_titles = _build_page_titles(pages, blocks)
+    pages_by_id = {p["id"]: p for p in pages}
+    block_owning_page = _block_to_page_id(blocks)
+
+    live_page_dirs: set[str] = set()
+    live_thread_paths: set[Path] = set()
+
+    for page in pages:
+        pid = page["id"]
+        title = page_titles.get(pid) or "(untitled)"
+        seg = _page_dir_segment(pid, title)
+        live_page_dirs.add(seg)
+        _render_page(
+            page,
+            children_by_parent=children_by_parent,
+            user_names=parsed.user_names,
+            page_titles=page_titles,
+            media_urls=parsed.media_urls,
+            bookmark_titles=parsed.bookmark_titles,
+            pages_root=pages_root,
+        )
+        summary.rendered += 1
+
+    # Group comments by discussion_id, render one .md per group.
+    by_disc: dict[str, list[dict]] = {}
+    for c in comments:
+        did = c.get("discussion_id")
+        if not did:
+            continue
+        by_disc.setdefault(did, []).append(c)
+
+    for disc_id, members in by_disc.items():
+        # Use the first comment's parent to derive the anchor block + page.
+        first = sorted(members, key=lambda c: c.get("created_time") or "")[0]
+        page_id = _resolve_comment_page_id(first, blocks, block_owning_page)
+        if page_id is None:
+            continue
+        page = pages_by_id.get(page_id)
+        if page is None:
+            continue
+        title = page_titles.get(page_id) or "(untitled)"
+        parent = first.get("parent") or {}
+        parent_block_id = (
+            parent.get("block_id") if parent.get("type") == "block_id" else None
+        )
+        page_dir = pages_root / _page_dir_segment(page_id, title)
+        if disc_id in skip:
+            # Still need to record the path so orphan cleanup doesn't delete it.
+            snippet = thread_snippet(_comment_text_plain(
+                sorted(members, key=lambda c: c.get("created_time") or "")[0]
+            ))
+            live_thread_paths.add(
+                page_dir / "threads" / _thread_filename(disc_id, snippet)
+            )
+            summary.skipped += 1
+            continue
+        path = _render_thread(
+            discussion_id=disc_id,
+            page_id=page_id,
+            page_title=title,
+            parent_block_id=parent_block_id,
+            comments=members,
+            user_names=parsed.user_names,
+            page_titles=page_titles,
+            page_dir=page_dir,
+        )
+        if path is not None:
+            live_thread_paths.add(path)
+            summary.rendered += 1
+
+    # Orphan cleanup. Walk pages_root and delete page dirs / thread files
+    # not in the live set. Skip the root itself.
+    if pages_root.is_dir():
+        for sub in pages_root.iterdir():
+            if not sub.is_dir():
+                continue
+            if sub.name not in live_page_dirs:
+                _rmtree(sub)
+                summary.orphans_removed += 1
+                continue
+            threads_dir = sub / "threads"
+            if threads_dir.is_dir():
+                for f in threads_dir.iterdir():
+                    if f.is_file() and f not in live_thread_paths:
+                        f.unlink()
+                        summary.orphans_removed += 1
+                # Remove empty threads dir
+                if not any(threads_dir.iterdir()):
+                    threads_dir.rmdir()
+
+    return summary
+
+
+def _rmtree(path: Path) -> None:
+    for child in path.iterdir():
+        if child.is_dir():
+            _rmtree(child)
+        else:
+            child.unlink()
+    path.rmdir()
+
+
 def render(
-    subtree: str = typer.Option(
-        ...,
-        "--subtree",
-        help="Root page id (UUID) to render. Renders this page + every "
-        "descendant child_page found in the event store.",
-    ),
-    out: Path = typer.Option(
-        Path("/tmp/notion_official_render"),
-        "--out",
-        help="Output directory (default /tmp/notion_official_render).",
-    ),
     backups_dir: Path = typer.Option(
         Path.home() / "backups" / "notion",
         "--backups-dir",
     ),
+    out: Path = typer.Option(
+        Path("/tmp/notion_official_render"),
+        "--out",
+        help="Project root for `rendered_md/notion/pages/...` output.",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
+    """Render every page+comment-thread in the backups dir to markdown."""
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    out = out.expanduser()
-    backups_dir = backups_dir.expanduser()
-
-    blocks = _load_all_blocks(backups_dir)
-    pages = _load_all_pages(backups_dir)
-    typer.echo(f"loaded {len(pages)} pages, {len(blocks)} blocks")
-
-    children_by_parent = _index_children(blocks)
-    page_titles = _build_page_titles(pages, blocks)
-    user_names = _user_names_from_unofficial(backups_dir)
-    media_urls, bookmark_titles = _unofficial_block_lookups(backups_dir)
-
-    # BFS from the requested root, visiting only pages we actually have.
-    raw = subtree.replace("-", "")
-    root = f"{raw[0:8]}-{raw[8:12]}-{raw[12:16]}-{raw[16:20]}-{raw[20:32]}"
-    pages_by_id = {p["id"]: p for p in pages}
-
-    out.mkdir(parents=True, exist_ok=True)
-    rendered = 0
-    queue: list[str] = [root]
-    seen: set[str] = set()
-    while queue:
-        pid = queue.pop(0)
-        if pid in seen:
-            continue
-        seen.add(pid)
-        page = pages_by_id.get(pid)
-        if page is None:
-            typer.echo(f"  ! page {pid[:8]} not in event store; skipping")
-            continue
-        _render_page(
-            page,
-            children_by_parent=children_by_parent,
-            user_names=user_names,
-            page_titles=page_titles,
-            media_urls=media_urls,
-            bookmark_titles=bookmark_titles,
-            out_root=out,
-        )
-        rendered += 1
-        # Enqueue every child_page anywhere under this page.
-        stack = list(children_by_parent.get(pid, []))
-        while stack:
-            b = stack.pop()
-            if b.get("type") == "child_page":
-                if b["id"] not in seen:
-                    queue.append(b["id"])
-            else:
-                stack.extend(children_by_parent.get(b["id"], []))
-    typer.echo(f"rendered {rendered} pages → {out}")
-
-
-def _user_names_from_unofficial(backups_dir: Path) -> dict[str, str]:
-    """Borrow the user table from the unofficial-API mirror — the official
-    API would also serve /v1/users, but we already have names locally and
-    this avoids re-fetching them."""
-    path = backups_dir / "notion_user" / "updated" / "events.jsonl"
-    if not path.exists():
-        return {}
-    out: dict[str, str] = {}
-    for rec in load_jsonl(path):
-        raw = rec.get("raw") or {}
-        val = raw.get("value") or {}
-        if "value" in val and isinstance(val["value"], dict):
-            val = val["value"]
-        uid = val.get("id") or rec.get("id")
-        name = val.get("name") or val.get("given_name") or ""
-        if uid and name:
-            out[uid] = name
-    return out
-
-
-def _unofficial_block_lookups(
-    backups_dir: Path,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Walk the unofficial-API mirror once and return:
-      - media_urls: block id → source URL for image/video/audio/pdf/file
-      - bookmark_titles: block id → title cached by Notion for bookmarks
-
-    Both fill gaps in the official API's response: PAT tokens can't sign
-    `prod-files-secure` URLs, and bookmark blocks come back with only the
-    raw URL (no title)."""
-    path = backups_dir / "notion_block" / "updated" / "events.jsonl"
-    media_urls: dict[str, str] = {}
-    bookmark_titles: dict[str, str] = {}
-    if not path.exists():
-        return media_urls, bookmark_titles
-    media_types = {"image", "video", "audio", "pdf", "file"}
-
-    def _first(props: dict, key: str) -> str:
-        v = (props or {}).get(key)
-        if isinstance(v, list) and v and isinstance(v[0], list) and v[0]:
-            return v[0][0] or ""
-        return ""
-
-    for rec in load_jsonl(path):
-        raw = rec.get("raw") or {}
-        val = raw.get("value") or {}
-        if "value" in val and isinstance(val["value"], dict):
-            val = val["value"]
-        t = val.get("type")
-        bid = val.get("id") or rec.get("id")
-        if not bid:
-            continue
-        props = val.get("properties") or {}
-        if t in media_types:
-            url = _first(props, "source")
-            if url:
-                media_urls[bid] = url
-        elif t == "bookmark":
-            title = _first(props, "title")
-            if title:
-                bookmark_titles[bid] = title
-    return media_urls, bookmark_titles
+    parsed = parse_api_dir(backups_dir.expanduser())
+    typer.echo(
+        f"loaded pages={len(parsed.pages)} blocks={len(parsed.blocks)} "
+        f"comments={len(parsed.comments)}"
+    )
+    summary = render_notion_official(parsed, out.expanduser())
+    typer.echo(
+        f"rendered {summary.rendered}  skipped {summary.skipped}  "
+        f"orphans removed {summary.orphans_removed}"
+    )
 
 
 def main() -> None:

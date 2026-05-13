@@ -13,7 +13,7 @@ from ingest.config import (
     DoltConfig,
     GithubWebSync,
     GitlabWebSync,
-    NotionWebSync,
+    NotionOfficialSync,
     SlackWebSync,
     load_config,
 )
@@ -165,7 +165,7 @@ def test_sync_to_argv_per_provider(tmp_path: Path) -> None:
         "4",
     ]
     assert sync_to_argv(
-        NotionWebSync(kind="notion_web", subtree="abc", space="def"), out
+        NotionOfficialSync(kind="notion_official", subtree="abc", space="def"), out
     ) == ["--out-dir", str(out), "--subtree", "abc", "--space", "def"]
 
 

@@ -12,7 +12,7 @@ from ingest.config import (
     Config,
     GithubApiDirSource,
     GitlabApiDirSource,
-    NotionWebDirSource,
+    NotionOfficialDirSource,
     SlackApiDirSource,
 )
 from ingest.documents import (
@@ -42,13 +42,13 @@ from ingest.providers.gitlab.ingest import (
     merge_gitlab,
 )
 from ingest.providers.gitlab.parse import ParsedGitlabApi
-from ingest.providers.notion.ingest import (
-    ingest_web_dir as ingest_notion_web_dir,
+from ingest.providers.notion_official.ingest import (
+    ingest_official_dir as ingest_notion_official_dir,
 )
-from ingest.providers.notion.ingest import (
-    merge_notion,
+from ingest.providers.notion_official.ingest import (
+    merge_notion_official,
 )
-from ingest.providers.notion.parse import ParsedNotionWeb
+from ingest.providers.notion_official.parse import ParsedNotionOfficial
 from ingest.providers.openai.ingest import (
     ingest_api_dir,
     merge_openai,
@@ -65,11 +65,11 @@ from ingest.render import (
     render_anthropic,
     render_github,
     render_gitlab,
-    render_notion,
     render_openai,
     render_slack,
     write_accounts_json,
 )
+from ingest.render_notion_official import render_notion_official
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     slack_media_dirs: list = []
     github_inputs: list[ParsedGithubApi] = []
     gitlab_inputs: list[ParsedGitlabApi] = []
-    notion_inputs: list[ParsedNotionWeb] = []
+    notion_inputs: list[ParsedNotionOfficial] = []
 
     log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
     for src in config.enabled_sources:
@@ -136,8 +136,8 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         elif isinstance(src, GitlabApiDirSource):
             parsed_gl, stats = ingest_gitlab_api_dir(src.path)
             gitlab_inputs.append(parsed_gl)
-        elif isinstance(src, NotionWebDirSource):
-            parsed_n, stats = ingest_notion_web_dir(src.path)
+        elif isinstance(src, NotionOfficialDirSource):
+            parsed_n, stats = ingest_notion_official_dir(src.path)
             notion_inputs.append(parsed_n)
         else:
             raise NotImplementedError(f"unknown source: {src!r}")
@@ -156,7 +156,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     slack = merge_slack(slack_inputs) if slack_inputs else None
     github = merge_github(github_inputs) if github_inputs else None
     gitlab = merge_gitlab(gitlab_inputs) if gitlab_inputs else None
-    notion = merge_notion(notion_inputs) if notion_inputs else None
+    notion = merge_notion_official(notion_inputs) if notion_inputs else None
 
     # Build the unified row stream once; `populate_grid_rows`,
     # `populate_documents`, and the renderer-skip computation all read
@@ -217,7 +217,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if notion is not None:
-                r = render_notion(notion, config.root, skip=skip)
+                r = render_notion_official(notion, config.root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped

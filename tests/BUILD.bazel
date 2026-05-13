@@ -47,22 +47,6 @@ py_test(
     ],
 )
 
-# Pure-Python regression test for the Notion comment-thread renderer.
-# Uses synthetic ParsedNotionWeb input — no fixture, no dolt, no network.
-py_test(
-    name = "test_notion_thread_render",
-    size = "small",
-    srcs = [
-        "test_notion_thread_render.py",
-        "conftest_notion_thread_render.py",
-    ],
-    main = "conftest_notion_thread_render.py",
-    deps = [
-        "//src/ingest",
-        requirement("pytest"),
-    ],
-)
-
 # Tests that consume the cached genrule output. Inherits the genrule's
 # `requires-dolt` constraint transitively (the artifact can only be
 # produced where dolt is on PATH), so the test is similarly tagged.

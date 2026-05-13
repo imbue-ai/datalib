@@ -26,24 +26,24 @@ from ingest.generated_grid_rows import COLUMNS, DDL, MAX_LENGTHS
 from ingest.providers.anthropic.parse import ParsedExport
 from ingest.providers.github.parse import ParsedGithubApi
 from ingest.providers.gitlab.parse import ParsedGitlabApi
-from ingest.providers.notion.parse import (
-    ParsedNotionWeb,
-    notion_heading_uuid,
-    notion_ms_to_iso,
-    notion_url,
-    rich_text_to_plain,
-)
+from ingest.providers.notion_official.parse import ParsedNotionOfficial
 from ingest.providers.openai.parse import ParsedChatGPTApi
 from ingest.providers.slack.mrkdwn import resolve_user_mentions
 from ingest.providers.slack.parse import ParsedSlackApi
 from ingest.render import (
     _github_pr_dir,
     _gitlab_mr_dir,
-    _notion_page_qmd_path,
-    _notion_page_titles,
-    _notion_thread_qmd_path,
-    _notion_thread_page_id,
     _slugify,
+)
+from ingest.render_notion_official import (
+    _block_to_page_id,
+    _build_page_titles,
+    _comment_text_plain,
+    _notion_thread_url,
+    _render_rich_text,
+    _resolve_comment_page_id,
+    thread_qmd_path_rel,
+    thread_snippet,
 )
 
 _GRID_ROWS_COLUMNS = COLUMNS["grid_rows"]
@@ -620,232 +620,102 @@ def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[
             )
 
 
-# ----- Notion ---------------------------------------------------------------
+# ----- Notion (official API) ------------------------------------------------
+#
+# Under the official path we emit only Comment Thread + Comment rows. Pages
+# and headings don't get grid rows here (the previous unofficial path did,
+# but we dropped them with the migration — see render_notion_official.py).
 
 
-_NOTION_HEADING_KIND = {
-    "header": "Notion Heading 1",
-    "sub_header": "Notion Heading 2",
-    "sub_sub_header": "Notion Heading 3",
-}
-
-
-def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
-    if not parsed.blocks and not parsed.comments:
+def _notion_rows(parsed: ParsedNotionOfficial) -> Iterable[_Row]:
+    if not parsed.comments:
         return
-    blocks_by_id = {b.block_id: b for b in parsed.blocks}
-    page_titles = _notion_page_titles(parsed.blocks, parsed.collections)
-    user_names = {u.user_id: (u.name or u.user_id) for u in parsed.users}
-    space = parsed.space
-    account = space.name if space else None
+    page_titles = _build_page_titles(parsed.pages, parsed.blocks)
+    block_owning_page = _block_to_page_id(parsed.blocks)
+    user_names = parsed.user_names
 
-    # Page rows + heading rows.
-    for b in parsed.blocks:
-        if not b.alive:
-            continue
-        if b.type in ("page", "collection_view_page"):
-            title = page_titles.get(b.block_id, "(untitled)")
-            kind = (
-                "Notion Database" if b.type == "collection_view_page" else "Notion Page"
-            )
-            qmd = _notion_page_qmd_path(space, b.block_id, blocks_by_id, page_titles)
-            # Aggregate body: page title + every descendant text-bearing block.
-            body_parts: list[str] = [title]
-            for d in _notion_descendant_blocks(b, blocks_by_id):
-                t = rich_text_to_plain(
-                    (d.properties or {}).get("title"),
-                    user_names=user_names,
-                    page_titles=page_titles,
-                )
-                if t:
-                    body_parts.append(t)
-            yield _Row(
-                uuid=b.block_id,
-                provider="notion",
-                kind=kind,
-                source_label="Notion",
-                when_ts=notion_ms_to_iso(b.last_edited_time_ms),
-                author=user_names.get(b.last_edited_by_id or "")
-                or user_names.get(b.created_by_id or ""),
-                account=account,
-                project=None,
-                channel=None,
-                conversation_name=title,
-                conversation_uuid=b.block_id,
-                message_index=None,
-                entire_chat=f"/notion/{b.block_id}",
-                text="\n".join(body_parts),
-                slack_link=None,
-                qmd_path=qmd,
-                source_url=notion_url(b.block_id),
-                notion_page_uuid=b.block_id,
-                notion_block_uuid=None,
-                document_uuid=b.block_id,
-            )
-            continue
-
-        kind = _NOTION_HEADING_KIND.get(b.type or "")
-        if kind is None:
-            continue
-        page_id = _notion_block_owning_page(b, blocks_by_id)
-        if not page_id:
-            continue
-        page = blocks_by_id.get(page_id)
-        heading_text = rich_text_to_plain(
-            (b.properties or {}).get("title"),
-            user_names=user_names,
-            page_titles=page_titles,
-        )
-        yield _Row(
-            uuid=notion_heading_uuid(page_id, b.block_id),
-            provider="notion",
-            kind=kind,
-            source_label="Notion",
-            when_ts=notion_ms_to_iso(
-                (page.last_edited_time_ms if page else None) or b.last_edited_time_ms
-            ),
-            author=user_names.get(
-                (page.last_edited_by_id if page else None) or b.last_edited_by_id or ""
-            ),
-            account=account,
-            project=None,
-            channel=None,
-            conversation_name=page_titles.get(page_id, "(untitled)"),
-            conversation_uuid=page_id,
-            message_index=None,
-            entire_chat=f"/notion/{page_id}",
-            text=heading_text,
-            slack_link=None,
-            qmd_path=_notion_page_qmd_path(space, page_id, blocks_by_id, page_titles),
-            source_url=notion_url(page_id, block_anchor=b.block_id),
-            notion_page_uuid=page_id,
-            notion_block_uuid=b.block_id,
-            document_uuid=page_id,
-        )
-
-    # Comment thread + comment rows.
-    comments_by_disc: dict[str, list] = {}
+    by_disc: dict[str, list[dict]] = {}
     for c in parsed.comments:
-        if c.discussion_id:
-            comments_by_disc.setdefault(c.discussion_id, []).append(c)
-    for disc in parsed.discussions:
-        items = sorted(
-            comments_by_disc.get(disc.discussion_id, []),
-            key=lambda c: (c.created_time_ms or 0, c.comment_id),
-        )
-        if not items:
+        did = c.get("discussion_id")
+        if did:
+            by_disc.setdefault(did, []).append(c)
+
+    for disc_id, members in by_disc.items():
+        items = sorted(members, key=lambda c: (c.get("created_time") or "", c.get("id") or ""))
+        first = items[0]
+        page_id = _resolve_comment_page_id(first, parsed.blocks, block_owning_page)
+        if page_id is None:
             continue
-        page_id = _notion_thread_page_id(disc, blocks_by_id)
-        if not page_id:
-            continue
-        block_anchor = disc.parent_id if disc.parent_table == "block" else None
-        snippet = (
-            items[0].text_plain.splitlines()[0][:60] if items[0].text_plain else ""
-        )
-        thread_qmd = _notion_thread_qmd_path(
-            space, page_id, disc.discussion_id, blocks_by_id, page_titles, snippet
+        parent = first.get("parent") or {}
+        parent_block_id = (
+            parent.get("block_id") if parent.get("type") == "block_id" else None
         )
         page_title = page_titles.get(page_id, "(untitled)")
-        first = items[0]
-        thread_url = notion_url(
-            page_id, discussion_id=disc.discussion_id, block_anchor=block_anchor
+        snippet = thread_snippet(_comment_text_plain(first))
+        thread_qmd = thread_qmd_path_rel(
+            page_id=page_id,
+            page_title=page_title,
+            discussion_id=disc_id,
+            snippet=snippet,
         )
+        thread_url = _notion_thread_url(page_id, disc_id, parent_block_id)
 
-        # Resolve @-mentions against the user map; `c.text_plain` was built
-        # at parse time without it, so unresolved users render as `@<short
-        # uuid>`. Re-run rich_text_to_plain here with names available.
-        def _comment_text(c):
+        def _comment_text(c: dict) -> str:
             return (
-                rich_text_to_plain(
-                    (c.raw_json or {}).get("text"),
-                    user_names=user_names,
-                    page_titles=page_titles,
-                )
-                or c.text_plain
+                _render_rich_text(c.get("rich_text"), user_names, page_titles)
+                or _comment_text_plain(c)
             )
+
+        first_author_id = (first.get("created_by") or {}).get("id") or ""
 
         # Thread row.
         yield _Row(
-            uuid=disc.discussion_id,
+            uuid=disc_id,
             provider="notion",
             kind="Notion Comment Thread",
             source_label="Notion",
-            when_ts=notion_ms_to_iso(first.created_time_ms),
-            author=user_names.get(first.created_by_id or ""),
-            account=account,
+            when_ts=first.get("created_time") or "",
+            author=user_names.get(first_author_id) or (first_author_id[:8] or None),
+            account=None,
             project=None,
             channel=None,
             conversation_name=page_title,
-            conversation_uuid=disc.discussion_id,
+            conversation_uuid=disc_id,
             message_index=None,
-            entire_chat=f"/notion/thread/{disc.discussion_id}",
+            entire_chat=f"/notion/thread/{disc_id}",
             text="\n".join(t for t in (_comment_text(c) for c in items) if t),
             slack_link=None,
             qmd_path=thread_qmd,
             source_url=thread_url,
             notion_page_uuid=page_id,
-            notion_block_uuid=block_anchor,
-            document_uuid=disc.discussion_id,
+            notion_block_uuid=parent_block_id,
+            document_uuid=disc_id,
         )
 
         for idx, c in enumerate(items):
+            author_id = (c.get("created_by") or {}).get("id") or ""
             yield _Row(
-                uuid=c.comment_id,
+                uuid=c.get("id") or "",
                 provider="notion",
                 kind="Notion Comment",
                 source_label="Notion",
-                when_ts=notion_ms_to_iso(c.created_time_ms),
-                author=user_names.get(c.created_by_id or ""),
-                account=account,
+                when_ts=c.get("created_time") or "",
+                author=user_names.get(author_id) or (author_id[:8] or None),
+                account=None,
                 project=None,
                 channel=None,
                 conversation_name=page_title,
-                conversation_uuid=disc.discussion_id,
+                conversation_uuid=disc_id,
                 message_index=idx,
-                entire_chat=f"/notion/thread/{disc.discussion_id}",
+                entire_chat=f"/notion/thread/{disc_id}",
                 text=_comment_text(c),
                 slack_link=None,
                 qmd_path=thread_qmd,
                 source_url=thread_url,
                 notion_page_uuid=page_id,
-                notion_block_uuid=block_anchor,
-                document_uuid=disc.discussion_id,
+                notion_block_uuid=parent_block_id,
+                document_uuid=disc_id,
             )
-
-
-def _notion_descendant_blocks(page, blocks_by_id: dict) -> Iterable:
-    """Recursively yield every block under `page.content`, stopping at
-    nested pages so a parent page's `text` doesn't engulf its children."""
-    stack = list(page.content)
-    seen: set[str] = set()
-    while stack:
-        bid = stack.pop()
-        if bid in seen:
-            continue
-        seen.add(bid)
-        b = blocks_by_id.get(bid)
-        if b is None:
-            continue
-        if b.type in ("page", "collection_view_page"):
-            continue
-        yield b
-        stack.extend(b.content)
-
-
-def _notion_block_owning_page(block, blocks_by_id: dict) -> str | None:
-    """Walk parents until we find a page-type block. Returns block_id of
-    that page, or None if the block is orphaned."""
-    cur_id = block.parent_id
-    seen: set[str] = set()
-    while cur_id and cur_id not in seen:
-        seen.add(cur_id)
-        parent = blocks_by_id.get(cur_id)
-        if parent is None:
-            return None
-        if parent.type in ("page", "collection_view_page"):
-            return parent.block_id
-        cur_id = parent.parent_id
-    return None
 
 
 # ----- entry point ----------------------------------------------------------
@@ -857,7 +727,7 @@ def gather_rows(
     slack: ParsedSlackApi | None,
     github: ParsedGithubApi | None = None,
     gitlab: ParsedGitlabApi | None = None,
-    notion: ParsedNotionWeb | None = None,
+    notion: ParsedNotionOfficial | None = None,
 ) -> list[_Row]:
     """Assemble the unified `_Row` list from every provider's parsed data
     without touching Dolt. Shared by `populate_grid_rows` and the
@@ -887,7 +757,7 @@ def populate_grid_rows(
     slack: ParsedSlackApi | None,
     github: ParsedGithubApi | None = None,
     gitlab: ParsedGitlabApi | None = None,
-    notion: ParsedNotionWeb | None = None,
+    notion: ParsedNotionOfficial | None = None,
     rows: list[_Row] | None = None,
 ) -> int:
     """Re-emit grid rows for every document in `rows` using a per-document

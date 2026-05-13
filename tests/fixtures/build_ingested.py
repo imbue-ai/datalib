@@ -83,9 +83,9 @@ sources:
     provider: gitlab
     kind: gitlab_api_dir
     path: {fixtures / "gitlab_api"}
-  - name: notion_web_tng
+  - name: notion_official_tng
     provider: notion
-    kind: notion_web_dir
+    kind: notion_official_dir
     path: {fixtures / "notion_web"}
 """
     )

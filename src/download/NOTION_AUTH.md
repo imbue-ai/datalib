@@ -1,22 +1,33 @@
-# Notion (unofficial web API) — latchkey setup
+# Notion — latchkey setup
 
-`download/notion_web.py` talks to Notion's internal `https://www.notion.so/api/v3/*`
-endpoints (the same ones the web client uses), not the public `api.notion.com`
-integration API. That route doesn't require admin/integration approval; it
-authenticates with your normal browser session cookies.
+`download/notion_official.py` uses two latchkey services:
 
-We register it as a **separate** latchkey service (`notion_unofficial`) so it
-doesn't collide with the existing `notion` service, which is pointed at the
-official `api.notion.com` (kept around for when an integration token is
-available).
+- `notion` — Notion's public `https://api.notion.com/v1/*` API, authenticated
+  with a workspace-bot token. Used for everything except inbox discovery
+  (pages, blocks, comments).
+- `notion_unofficial` — Notion's internal `https://www.notion.so/api/v3/*`
+  endpoints, authenticated with browser session cookies. Used **only** for
+  `getNotificationLog` (inbox discovery) because the public API has no
+  notifications surface.
+
+The unofficial service is registered separately so it doesn't collide with
+the official one.
 
 ## One-time setup
 
 ```bash
+latchkey services register notion --base-api-url="https://api.notion.com/"
 latchkey services register notion_unofficial --base-api-url="https://www.notion.so/"
 ```
 
-## Auth (re-run whenever the session expires)
+Set the official-API token (a workspace-bot internal-integration token):
+
+```bash
+latchkey auth set notion -H 'Authorization: Bearer <SECRET_NOTION_INTEGRATION_TOKEN>' \
+  -H 'Notion-Version: 2022-06-28'
+```
+
+## Auth — unofficial service (re-run whenever the session cookie expires)
 
 1. Open <https://www.notion.so> in a logged-in browser tab.
 2. DevTools → **Console** → paste this snippet:

@@ -1,66 +1,133 @@
 ---
-provider: notion
-page_id: b10cb10c-1701-4d00-8000-000000000002
-title: Bridge Operations
-space_id: 5face1d0-1701-4d00-8000-000000000001
-created_time: "2369-05-19T08:53:20.000000+00:00"
-last_edited_time: "2369-05-28T15:10:00.000000+00:00"
+provider: notion_official
+page_id: b1d6e000-1701-4d00-8000-000000000001
+title: Bridge Operations Handbook
+created_time: "2369-04-15T00:01:00.000Z"
+last_edited_time: "2369-04-15T00:02:00.000Z"
 ---
 
-# 🧑‍🚀 Bridge Operations
+# 🖖 Bridge Operations Handbook
 
-[View on Notion ↗](https://www.notion.so/b10cb10c17014d008000000000000002)
+[View on Notion ↗](https://www.notion.so/b1d6e00017014d008000000000000001)
 
-This page tracks bridge-watch handoffs and standing orders. Tea, Earl Grey, hot.
+<a id="b-b10c0001"></a>
+# Mission Overview
 
-# Standing Orders
+<a id="b-b10c0001"></a>
+The **USS Enterprise-D** is on a deep-space survey near *the Romulan Neutral Zone*. Coordinate any sensor sweeps with @Data before adjusting `sensor gain`.
 
-## Yellow Alert Procedures
+<a id="b-b10c0001"></a>
+> 🖖 Captain on the bridge: @Jean-Luc Picard presides over all standing orders below.
 
-### Step 1: Notify Engineering
+<a id="b-b10c0001"></a>
+*[table of contents]*
 
-Coordinate with @Geordi La Forge before any **warp-core ejection** — see Warp Core Maintenance, or the [protocol PDF](https://example.invalid/protocols/ejection.pdf). Inline code: `red_alert()`. *italics here*. Reference date: 2369-04-15.
+<a id="b-b10c0001"></a>
+## Crew Roster
 
-- Shields at maximum
-- Phasers locked
-- Hail the unknown vessel on all Starfleet frequencies
-    The Romulan signature on long-range sensors is consistent with a D'deridex-class warbird.
+<a id="b-b10c0001"></a>
+- Duty roster lives at [Shift Roster](https://www.notion.so/b1d6e00017014d008000000000000002) — refer to it before bridge handoff.
+<a id="b-b10c0001"></a>
+- Senior staff: @Jean-Luc Picard, @William T. Riker, @Data, @Worf.
+<a id="b-b10c0001"></a>
+1. Confirm shift assignments at start of duty.
+<a id="b-b10c0001"></a>
+1. File anomalies in the incident log below.
+<a id="b-b10c0001"></a>
+---
 
-1. Sound red alert
-1. Raise shields
-- [x] Verify deflector array alignment
-- [ ] Inspect EPS conduits on deck 36
-<details><summary>Click to reveal Captain's private notes</summary>
+<a id="b-b10c0001"></a>
+## Standing Orders
 
-The Romulan signature on long-range sensors is consistent with a D'deridex-class warbird.
+<a id="b-b10c0001"></a>
+- [x] Maintain Yellow Alert posture in the Neutral Zone
+<a id="b-b10c0001"></a>
+- [ ] Run weekly warp-core diagnostic with @Geordi La Forge
+<a id="b-b10c0001"></a>
+<details><summary>Engagement protocols</summary>
 
+<a id="b-b10c0001"></a>
+    Hail before firing. Shields raised only after a second sensor confirmation.
+
+<a id="b-b10c0001"></a>
+    - Tactical leads: @Worf
 </details>
 
-> Things are only impossible until they're not. — J-L Picard
+<a id="b-b10c0001"></a>
+> Make it so.
 
-> ⚠️ Reminder: holodeck safety protocols must remain ENABLED outside of authorized drills.
-
+<a id="b-b10c0001"></a>
 ```python
-def red_alert():
-    shields.raise_all()
-    weapons.arm("phasers", "photon_torpedoes")
-    intercom.broadcast("All hands, battle stations.")
+def hail(frequency):
+    return f"Open channel {frequency}."
+
 ```
 
----
+*Helmsman utility snippet*
 
-![Long-range sensor capture: D'deridex-class warbird decloaking, stardate 46531.2](https://example.invalid/images/main-viewer-romulan-warbird.png)
+<a id="b-b10c0001"></a>
+## Reference Material
 
-[📎 away-team-roster-stardate-46531.pdf](https://example.invalid/files/away-team-roster.pdf)
+<a id="b-b10c0001"></a>
+[Prime Directive — Memory Alpha](https://memory-alpha.example.invalid/wiki/Prime_Directive)
 
-<iframe src="https://example.invalid/embeds/sector-001-map"></iframe>
+<a id="b-b10c0001"></a>
+[Starfleet Academy — Memory Alpha](https://memory-alpha.example.invalid/wiki/Starfleet_Academy)
 
+<a id="b-b10c0001"></a>
+🔗 [https://incident-tracker.starfleet.invalid/issue/NCC-1701-D-42](https://incident-tracker.starfleet.invalid/issue/NCC-1701-D-42)
+
+<a id="b-b10c0001"></a>
+[Live sensor readout](https://lcars.example.invalid/embed/sensor-readout-2369-04-15)
+
+<a id="b-b10c0001"></a>
+![Bridge tactical station](https://example.invalid/images/bridge-station.png)
+
+<a id="b-b10c0001"></a>
+![image](https://example.invalid/images/sensor-overlay.png)
+
+<a id="b-b10c0001"></a>
+[🎬 Warp drive tour](https://example.invalid/videos/warp-drive-tour.mp4)
+
+<a id="b-b10c0001"></a>
+[📎 duty-roster-2369-04-15.pdf](https://example.invalid/files/duty-roster-2369-04-15.pdf)
+
+<a id="b-b10c0001"></a>
+$$ E = mc^2 $$
+
+<a id="b-b10c0001"></a>
 | Station | Officer | Status |
 | --- | --- | --- |
-| Ops | Data | On duty |
+| Tactical | Worf | Green |
+| Operations | Data | Green |
 
-Bridge watch — Alpha shift
+<a id="b-b10c0001"></a>
+<a id="b-b10c0001"></a>
+<a id="b-b10c0001"></a>
+Port side: sensor banks A-C.
 
-Bridge watch — Beta shift
+<a id="b-b10c0001"></a>
+<a id="b-b10c0001"></a>
+Starboard side: sensor banks D-F.
 
-*[Database: (inline database)]*
+<a id="b-b10c0001"></a>
+<a id="b-b10c0001"></a>
+Reminder: log all subspace anomalies on the date 2369-04-15 form.
+
+<a id="b-b10c0001"></a>
+---
+
+<a id="b-b10c0001"></a>
+## Related Logs
+
+<a id="b-b10c0001"></a>
+🔗 [Incident Log: Stardate 47988.1](../incident-log-stardate-47988-1__b1d6e000/index.md)
+
+<a id="b-b1d6e000"></a>
+- 📄 [Shift Roster](../shift-roster__b1d6e000/index.md)
+
+<a id="b-b1d6e000"></a>
+- 📄 [Incident Log: Stardate 47988.1](../incident-log-stardate-47988-1__b1d6e000/index.md)
+
+<a id="b-b10c0001"></a>
+*[breadcrumb]*
