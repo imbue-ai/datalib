@@ -3,7 +3,7 @@
 //! Resolves the data root in this order:
 //!   1. $FRANKWEILER_ROOT
 //!   2. `root:` from $FRANKWEILER_CONFIG or ~/.config/frankweiler/config.yaml
-//!   3. ~/Documents/personal-mirror (default)
+//!   3. ~/Documents/mixed-up-files (default)
 //!
 //! Bind address is $FRANKWEILER_BIND if set, else backend.bind from the
 //! config file, else 127.0.0.1:8731. The env override exists primarily for
@@ -156,9 +156,9 @@ fn resolve_bind_and_root(cfg: Option<&Config>) -> (String, PathBuf) {
 
 fn default_root() -> PathBuf {
     if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join("Documents/personal-mirror");
+        return PathBuf::from(home).join("Documents/mixed-up-files");
     }
-    PathBuf::from("./personal-mirror")
+    PathBuf::from("./mixed-up-files")
 }
 
 fn expand_tilde(s: &str) -> PathBuf {

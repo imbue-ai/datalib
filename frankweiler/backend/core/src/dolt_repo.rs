@@ -31,7 +31,7 @@ use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 
 /// MySQL/Dolt-backed implementation of [`MirrorRepo`].
 ///
-/// `root` is the data root (e.g. `~/Documents/personal-mirror`) — needed
+/// `root` is the data root (e.g. `~/Documents/mixed-up-files`) — needed
 /// because `qmd_path` in `grid_rows` is stored relative to the root and
 /// the trait contract returns an absolute path.
 pub struct DoltRepo {

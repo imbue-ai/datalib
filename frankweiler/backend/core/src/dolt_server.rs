@@ -224,9 +224,9 @@ fn ensure_repo_initialized(dolt: &Path, repo_dir: &Path) -> Result<(), DoltServe
     let output = Command::new(dolt)
         .arg("init")
         .arg("--name")
-        .arg("personal-mirror")
+        .arg("mixed-up-files")
         .arg("--email")
-        .arg("personal-mirror@local")
+        .arg("mixed-up-files@local")
         .current_dir(repo_dir)
         .output()?;
     if !output.status.success() {

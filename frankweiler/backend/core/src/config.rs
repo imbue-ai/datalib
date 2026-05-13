@@ -16,7 +16,7 @@ pub struct Config {
 
 /// Settings for the managed `dolt sql-server` the backend talks to at
 /// runtime. Mirrors the shape of `DoltConfig` in `src/ingest/config.py` so
-/// the same `~/.config/personal-mirror/config.yaml` `dolt:` block can drive
+/// the same `~/.config/mixed-up-files/config.yaml` `dolt:` block can drive
 /// both ingest and the Rust backend.
 ///
 /// `repo_dirname` is the directory under `Config.root` that holds the Dolt

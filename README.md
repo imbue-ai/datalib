@@ -1,4 +1,4 @@
-# personal-mirror
+# mixed-up-files
 
 Two coupled projects that mirror personal data into a queryable local store:
 
@@ -57,7 +57,7 @@ once the tokens themselves stabilise.
 │   └── BUILD.bazel           genrules per language
 ├── docs/                     architecture notes
 │   └── grid_rows.md          how the grid_rows union table works
-├── pyproject.toml + uv.lock  Python project (personal-mirror) — src layout
+├── pyproject.toml + uv.lock  Python project (mixed-up-files) — src layout
 ├── requirements.txt          uv-exported, consumed by Bazel pip.parse
 ├── src/
 │   ├── download/             per-provider downloaders (claude.ai, chatgpt.com, slack)
@@ -146,7 +146,7 @@ source of truth):
 1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
 2. `$FRANKWEILER_ROOT`
 3. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
-4. `~/Documents/personal-mirror`
+4. `~/Documents/mixed-up-files`
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.
@@ -169,7 +169,7 @@ bazelisk run //src/ingest:cli -- ingest --config $(pwd)/ingest_configs/thad_dev.
 uv run python -m ingest --config ingest_configs/thad_dev.yaml
 ```
 
-Omit `--config` to use the default (`~/.config/personal-mirror/config.yaml`).
+Omit `--config` to use the default (`~/.config/mixed-up-files/config.yaml`).
 
 ### QMD search index (default-on, incremental)
 

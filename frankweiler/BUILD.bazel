@@ -20,7 +20,7 @@ sh_binary(
 # Same as :dev, but materializes a one-shot data root from the
 # checked-in TNG fixtures (`//tests/fixtures:ingested_tng`) into a
 # tmpdir and points the backend at it. Useful for eyeballing the grid
-# without needing a real on-disk personal-mirror. Requires sqlite3
+# without needing a real on-disk mixed-up-files root. Requires sqlite3
 # on PATH (Bazel runs the genrule as `requires-dolt`, so dolt must
 # also be available the first time the artifact is built).
 sh_binary(

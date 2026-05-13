@@ -10,7 +10,7 @@
 #                     e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
 #   FRANKWEILER_ROOT  data root when no positional arg given. Falls back
 #                     to root: in ~/.config/frankweiler/config.yaml, else
-#                     ~/Documents/personal-mirror.
+#                     ~/Documents/mixed-up-files.
 #   FRANKWEILER_PORT  Vite port (default: 5173)
 #
 # Bazel sets BUILD_WORKSPACE_DIRECTORY when invoked via `bazel run`; we use it

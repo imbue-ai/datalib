@@ -56,7 +56,7 @@ def _materialize_mirror_sqlite(conn, out_path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-app = typer.Typer(help="Personal mirror of LLM chat history into Dolt + QMD.")
+app = typer.Typer(help="mixed-up-files: mirror LLM chat history into Dolt + markdown.")
 
 
 @app.callback()
@@ -70,7 +70,7 @@ def ingest(
         None,
         "--config",
         "-c",
-        help="Path to YAML config (default: ~/.config/personal-mirror/config.yaml)",
+        help="Path to YAML config (default: ~/.config/mixed-up-files/config.yaml)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="DEBUG-level logging."),
     now: str | None = typer.Option(

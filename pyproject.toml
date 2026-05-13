@@ -1,5 +1,5 @@
 [project]
-name = "personal-mirror"
+name = "mixed-up-files"
 version = "0.1.0"
 description = "Download + ingest LLM chat exports into a Dolt-backed mirror"
 authors = [
