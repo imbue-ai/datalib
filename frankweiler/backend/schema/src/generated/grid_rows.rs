@@ -230,6 +230,8 @@ pub struct GridRow {
     pub notion_page_uuid: Option<String>,
     /// Notion-only. UUID of the specific block this row is anchored to. For heading rows this is the heading block; for comment-thread rows it is the block the discussion is attached to (`discussion.parent_id` when parent_table='block'); for individual comment rows it is the same as the parent thread's block. Null for page-level rows and non-Notion rows.
     pub notion_block_uuid: Option<String>,
+    /// FK into the `documents` table — every renderable document (conversation, thread, page, …) gets one row in `documents`, and every grid_row that participates in that document points at it. Many-to-1. Nullable today because the column is being introduced ahead of the producer-side population pass (see plan-ui-driven-sync.md, Phase C); will become NOT NULL once every renderer emits it. Drives incremental re-render (skip if `documents.row_set_hash` unchanged) and per-document re-ingest.
+    pub document_uuid: Option<String>,
 }
 
 pub const TABLES: &[(&str, &str)] = &[
@@ -261,11 +263,12 @@ pub const DDL: &[(&str, &str)] = &[
     external_id VARCHAR(128),
     notion_page_uuid VARCHAR(96),
     notion_block_uuid VARCHAR(96),
+    document_uuid VARCHAR(36),
     PRIMARY KEY (uuid)
 )"#),
 ];
 
 /// Column names per table, in declaration order.
 pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid"]),
+    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid", "document_uuid"]),
 ];

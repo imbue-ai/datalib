@@ -96,6 +96,7 @@ class _Row:
     external_id: str | None = None
     notion_page_uuid: str | None = None
     notion_block_uuid: str | None = None
+    document_uuid: str | None = None
 
 
 def _bump_micros(ts: str, n: int) -> str:
@@ -885,6 +886,7 @@ def populate_grid_rows(
                     r.external_id,
                     r.notion_page_uuid,
                     r.notion_block_uuid,
+                    r.document_uuid,
                 )
                 for r in rows
             ]

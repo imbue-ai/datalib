@@ -246,6 +246,8 @@ class GridRow:
     """Notion-only. UUID of the page this row belongs to. For page rows this equals `uuid`; for heading / comment thread / comment rows it points at the containing page so the grid can filter every row that lives in a given document. Null for non-Notion rows."""
     notion_block_uuid: str | None
     """Notion-only. UUID of the specific block this row is anchored to. For heading rows this is the heading block; for comment-thread rows it is the block the discussion is attached to (`discussion.parent_id` when parent_table='block'); for individual comment rows it is the same as the parent thread's block. Null for page-level rows and non-Notion rows."""
+    document_uuid: str | None
+    """FK into the `documents` table — every renderable document (conversation, thread, page, …) gets one row in `documents`, and every grid_row that participates in that document points at it. Many-to-1. Nullable today because the column is being introduced ahead of the producer-side population pass (see plan-ui-driven-sync.md, Phase C); will become NOT NULL once every renderer emits it. Drives incremental re-render (skip if `documents.row_set_hash` unchanged) and per-document re-ingest."""
 
 
 TABLES: dict[str, str] = {
@@ -279,6 +281,7 @@ CREATE TABLE IF NOT EXISTS grid_rows (
     external_id VARCHAR(128),
     notion_page_uuid VARCHAR(96),
     notion_block_uuid VARCHAR(96),
+    document_uuid VARCHAR(36),
     PRIMARY KEY (uuid)
 )
     """,
@@ -309,6 +312,7 @@ COLUMNS: dict[str, list[str]] = {
         "external_id",
         "notion_page_uuid",
         "notion_block_uuid",
+        "document_uuid",
     ],
 }
 
@@ -338,5 +342,6 @@ MAX_LENGTHS: dict[str, dict[str, int]] = {
         "external_id": 128,
         "notion_page_uuid": 96,
         "notion_block_uuid": 96,
+        "document_uuid": 36,
     },
 }
