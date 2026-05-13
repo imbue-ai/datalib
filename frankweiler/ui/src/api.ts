@@ -94,6 +94,88 @@ export function fetchChat(uuid: string, signal?: AbortSignal): Promise<ChatRespo
   return getJson<ChatResponse>(`/api/chat/${encodeURIComponent(uuid)}`, signal);
 }
 
+// --- Sync API --------------------------------------------------------------
+
+export type SyncSource = {
+  name: string;
+  provider: string;
+  kind: string;
+  managed: boolean;
+};
+
+export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
+export type SyncJobKind = "download" | "ingest" | "render" | "all";
+
+export type SyncJob = {
+  id: string;
+  kind: SyncJobKind;
+  source_name: string | null;
+  state: SyncJobState;
+  progress_pct: number | null;
+  progress_msg: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  parent_job_id?: string | null;
+  pid?: number | null;
+};
+
+export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
+  return getJson<SyncSource[]>("/api/sync/sources", signal);
+}
+
+export function fetchActiveJobs(signal?: AbortSignal): Promise<SyncJob[]> {
+  return getJson<SyncJob[]>("/api/sync/jobs", signal);
+}
+
+export function fetchAllJobs(limit = 50, signal?: AbortSignal): Promise<SyncJob[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return getJson<SyncJob[]>(`/api/sync/jobs/all?${params.toString()}`, signal);
+}
+
+export function fetchJob(id: string, signal?: AbortSignal): Promise<SyncJob> {
+  return getJson<SyncJob>(`/api/sync/jobs/${encodeURIComponent(id)}`, signal);
+}
+
+export async function enqueueJob(
+  req: { kind: SyncJobKind; source_name?: string | null },
+  signal?: AbortSignal,
+): Promise<SyncJob> {
+  const r = await fetch("/api/sync/jobs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+    signal,
+  });
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/sync/jobs → ${r.status}`);
+  }
+  return (await r.json()) as SyncJob;
+}
+
+export async function cancelJob(id: string, signal?: AbortSignal): Promise<void> {
+  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/cancel`, {
+    method: "POST",
+    signal,
+  });
+  if (!r.ok) {
+    throw new Error(`POST /api/sync/jobs/${id}/cancel → ${r.status}`);
+  }
+}
+
+export async function fetchJobLog(id: string, signal?: AbortSignal): Promise<string> {
+  const r = await fetch(`/api/sync/jobs/${encodeURIComponent(id)}/log`, { signal });
+  if (!r.ok) throw new Error(`GET /api/sync/jobs/${id}/log → ${r.status}`);
+  return await r.text();
+}
+
 export type FeedbackRequest = {
   sentiment: "up" | "down" | null;
   comment: string;

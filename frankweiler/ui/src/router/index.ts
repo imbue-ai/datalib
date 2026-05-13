@@ -18,6 +18,11 @@ const router = createRouter({
       component: () => import("@/views/ChatView.vue"),
     },
     {
+      path: "/sync",
+      name: "sync",
+      component: () => import("@/views/SyncView.vue"),
+    },
+    {
       path: "/prefs",
       name: "prefs",
       component: () => import("@/views/PreferencesView.vue"),
