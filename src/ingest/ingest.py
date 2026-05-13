@@ -15,7 +15,12 @@ from ingest.config import (
     NotionWebDirSource,
     SlackApiDirSource,
 )
-from ingest.documents import populate_documents
+from ingest.documents import (
+    compute_document_hashes,
+    documents_to_skip,
+    fetch_existing_document_state,
+    populate_documents,
+)
 from ingest.dolt_service import DoltService
 from ingest.grid_rows import gather_rows, populate_grid_rows
 from ingest.providers.anthropic.ingest import (
@@ -83,6 +88,7 @@ class IngestSummary:
     commit_hash: str | None = None
     rendered: int = 0
     rendered_orphans_removed: int = 0
+    rendered_skipped: int = 0
     grid_rows: int = 0
     documents: int = 0
 
@@ -152,36 +158,12 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     gitlab = merge_gitlab(gitlab_inputs) if gitlab_inputs else None
     notion = merge_notion(notion_inputs) if notion_inputs else None
 
-    # Render QMDs and accounts.json directly from parsed data — no SQL.
-    if anthropic is not None:
-        r = render_anthropic(anthropic, config.root)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    if openai is not None:
-        r = render_openai(openai, config.root)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    if slack is not None:
-        r = render_slack(slack, config.root, media_dirs=slack_media_dirs)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    if github is not None:
-        r = render_github(github, config.root)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    if gitlab is not None:
-        r = render_gitlab(gitlab, config.root)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    if notion is not None:
-        r = render_notion(notion, config.root)
-        summary.rendered += r.rendered
-        summary.rendered_orphans_removed += r.orphans_removed
-    write_accounts_json(anthropic, openai, config.root)
-
-    # Build the unified row stream once; `populate_grid_rows` and
-    # `populate_documents` both read from it so they hash the same input.
+    # Build the unified row stream once; `populate_grid_rows`,
+    # `populate_documents`, and the renderer-skip computation all read
+    # from it so the hashes match exactly.
     all_rows = gather_rows(anthropic, openai, slack, github, gitlab, notion)
+    new_hashes = compute_document_hashes(all_rows)
+
     # First-source-per-provider mapping. v0 documents.source_name is best-
     # effort: when multiple sources share a provider they get merged into
     # one Parsed object upstream, so we can't attribute each row to its
@@ -194,13 +176,64 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
     with DoltService(config) as dolt:
         with dolt.connect() as conn:
             conn.autocommit(False)
+
+            # Compute the renderer skip set BEFORE rendering: documents
+            # whose stored (row_set_hash, renderer_version) still matches
+            # the new hash + current RENDERER_VERSION don't need re-render.
+            existing = fetch_existing_document_state(conn)
+            skip = documents_to_skip(new_hashes, existing)
+            log.info(
+                "render skip: %d/%d documents unchanged",
+                len(skip),
+                len(new_hashes),
+            )
+
+            # Render QMDs and accounts.json directly from parsed data.
+            if anthropic is not None:
+                r = render_anthropic(anthropic, config.root, skip=skip)
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            if openai is not None:
+                r = render_openai(openai, config.root, skip=skip)
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            if slack is not None:
+                r = render_slack(
+                    slack, config.root, media_dirs=slack_media_dirs, skip=skip
+                )
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            if github is not None:
+                r = render_github(github, config.root, skip=skip)
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            if gitlab is not None:
+                r = render_gitlab(gitlab, config.root, skip=skip)
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            if notion is not None:
+                r = render_notion(notion, config.root, skip=skip)
+                summary.rendered += r.rendered
+                summary.rendered_orphans_removed += r.orphans_removed
+                summary.rendered_skipped += r.skipped
+            write_accounts_json(anthropic, openai, config.root)
+
             log.info("populating grid_rows + documents")
             t0 = time.monotonic()
             summary.grid_rows = populate_grid_rows(
                 conn, anthropic, openai, slack, github, gitlab, notion, rows=all_rows
             )
             summary.documents = populate_documents(
-                conn, all_rows, provider_to_source_name
+                conn,
+                all_rows,
+                provider_to_source_name,
+                rendered_at=started_at,
+                skipped=skip,
             )
             conn.commit()
             log.info(

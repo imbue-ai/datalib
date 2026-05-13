@@ -202,6 +202,7 @@ def _render_anthropic_block(
 class RenderSummary:
     rendered: int = 0
     orphans_removed: int = 0
+    skipped: int = 0
 
 
 # ---------------- Anthropic ----------------
@@ -291,8 +292,11 @@ def _render_one_anthropic(
     return target
 
 
-def render_anthropic(parsed: ParsedExport, root: Path) -> RenderSummary:
+def render_anthropic(
+    parsed: ParsedExport, root: Path, skip: set[str] | None = None
+) -> RenderSummary:
     summary = RenderSummary()
+    skip = skip or set()
     blocks_by_msg: dict[str, list] = {}
     for b in parsed.content_blocks:
         blocks_by_msg.setdefault(b.message_uuid, []).append(b)
@@ -311,6 +315,9 @@ def render_anthropic(parsed: ParsedExport, root: Path) -> RenderSummary:
     ):
         live_uuids.add(conv.conversation_uuid)
         accounts.add(conv.account_uuid)
+        if conv.conversation_uuid in skip:
+            summary.skipped += 1
+            continue
         _render_one_anthropic(
             parsed,
             conv.conversation_uuid,
@@ -441,8 +448,11 @@ def _render_one_openai(
     return target
 
 
-def render_openai(parsed: ParsedChatGPTApi, root: Path) -> RenderSummary:
+def render_openai(
+    parsed: ParsedChatGPTApi, root: Path, skip: set[str] | None = None
+) -> RenderSummary:
     summary = RenderSummary()
+    skip = skip or set()
     msgs_by_conv: dict[str, list] = {}
     for m in parsed.messages:
         msgs_by_conv.setdefault(m.conversation_id, []).append(m)
@@ -458,6 +468,9 @@ def render_openai(parsed: ParsedChatGPTApi, root: Path) -> RenderSummary:
     ):
         live_ids.add(conv.conversation_id)
         accts.add(conv.account_id or "unknown")
+        if conv.conversation_id in skip:
+            summary.skipped += 1
+            continue
         _render_one_openai(conv, msgs_by_conv, parts_by_msg, root)
         summary.rendered += 1
 
@@ -640,11 +653,13 @@ def render_slack(
     parsed: ParsedSlackApi,
     root: Path,
     media_dirs: list[Path] | None = None,
+    skip: set[str] | None = None,
 ) -> RenderSummary:
     """`media_dirs` lists `<slack_source>/media` directories whose image
     attachments should be symlinked into `<root>/media/slack/`. Empty/None
     disables image embedding."""
     media_dirs = media_dirs or []
+    skip = skip or set()
     summary = RenderSummary()
     if not parsed.messages:
         return summary
@@ -673,6 +688,9 @@ def render_slack(
         ch = channels.get(msgs[0].channel_id)
         cname = (ch.name if ch and ch.name else None) or msgs[0].channel_id
         slack_dirs.add((msgs[0].team_id, cname))
+        if thread_uuid in skip:
+            summary.skipped += 1
+            continue
         _render_one_slack_thread(
             thread_uuid,
             msgs,
@@ -718,8 +736,11 @@ def _thread_filename_slug(thread_key: str, body: str) -> str:
     return f"{_slugify(path)}-L{line or '0'}"
 
 
-def render_github(parsed: ParsedGithubApi, root: Path) -> RenderSummary:
+def render_github(
+    parsed: ParsedGithubApi, root: Path, skip: set[str] | None = None
+) -> RenderSummary:
     summary = RenderSummary()
+    skip = skip or set()
     if not parsed.pull_requests:
         return summary
 
@@ -729,6 +750,9 @@ def render_github(parsed: ParsedGithubApi, root: Path) -> RenderSummary:
 
     log.info("rendering github: %d PRs", len(parsed.pull_requests))
     for pr in tqdm(parsed.pull_requests, desc="render github", unit="pr", leave=False):
+        if pr.uuid in skip:
+            summary.skipped += 1
+            continue
         rel_dir, _slug = _github_pr_dir(pr.repo_full_name, pr.pr_number, pr.title)
         pr_dir = root / rel_dir
         pr_dir.mkdir(parents=True, exist_ok=True)
@@ -835,8 +859,11 @@ def _gitlab_mr_dir(project_path: str, mr_iid: int, title: str) -> tuple[str, str
     return f"gitlab/{group}/{project}/mr-{mr_iid}__{slug}", slug
 
 
-def render_gitlab(parsed: ParsedGitlabApi, root: Path) -> RenderSummary:
+def render_gitlab(
+    parsed: ParsedGitlabApi, root: Path, skip: set[str] | None = None
+) -> RenderSummary:
     summary = RenderSummary()
+    skip = skip or set()
     if not parsed.merge_requests:
         return summary
 
@@ -846,6 +873,9 @@ def render_gitlab(parsed: ParsedGitlabApi, root: Path) -> RenderSummary:
 
     log.info("rendering gitlab: %d MRs", len(parsed.merge_requests))
     for mr in tqdm(parsed.merge_requests, desc="render gitlab", unit="mr", leave=False):
+        if mr.uuid in skip:
+            summary.skipped += 1
+            continue
         rel_dir, _slug = _gitlab_mr_dir(mr.project_path, mr.mr_iid, mr.title)
         mr_dir = root / rel_dir
         mr_dir.mkdir(parents=True, exist_ok=True)
@@ -1454,8 +1484,11 @@ def _notion_render_one_thread(
     return target
 
 
-def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
+def render_notion(
+    parsed: ParsedNotionWeb, root: Path, skip: set[str] | None = None
+) -> RenderSummary:
     summary = RenderSummary()
+    skip = skip or set()
     if not parsed.blocks and not parsed.comments:
         return summary
 
@@ -1475,6 +1508,9 @@ def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
     )
 
     for p in tqdm(pages, desc="render notion pages", unit="pg", leave=False):
+        if p.block_id in skip:
+            summary.skipped += 1
+            continue
         _notion_render_one_page(p, parsed, blocks_by_id, page_titles, user_names, root)
         summary.rendered += 1
 
@@ -1494,6 +1530,9 @@ def render_notion(parsed: ParsedNotionWeb, root: Path) -> RenderSummary:
             continue
         page_id = _notion_thread_page_id(disc, blocks_by_id)
         if not page_id:
+            continue
+        if disc.discussion_id in skip:
+            summary.skipped += 1
             continue
         _notion_render_one_thread(
             disc,

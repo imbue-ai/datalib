@@ -98,6 +98,51 @@ def _canonical_tuple(r: _Row) -> tuple:
     )
 
 
+def compute_document_hashes(rows: Iterable[_Row]) -> dict[str, str]:
+    """Group `rows` by `document_uuid` and return the SHA-256 row_set_hash
+    for each group. Used by ingest.py to decide which documents still
+    match the previously rendered output (skip) and which need to be
+    re-rendered."""
+    by_doc: dict[str, list[_Row]] = {}
+    for r in rows:
+        if r.document_uuid is None:
+            continue
+        by_doc.setdefault(r.document_uuid, []).append(r)
+    return {uuid: _hash_rows(group) for uuid, group in by_doc.items()}
+
+
+def fetch_existing_document_state(
+    conn: Connection,
+) -> dict[str, tuple[str, str, str | None]]:
+    """Read `(row_set_hash, renderer_version, rendered_at)` for every row
+    currently in the `documents` table. Returns an empty dict if the table
+    doesn't exist yet (first ingest)."""
+    ensure_schema(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT document_uuid, row_set_hash, renderer_version, rendered_at FROM documents"
+        )
+        return {uuid: (h, v, r) for (uuid, h, v, r) in cur.fetchall()}
+
+
+def documents_to_skip(
+    new_hashes: dict[str, str],
+    existing: dict[str, tuple[str, str, str | None]],
+) -> set[str]:
+    """Document UUIDs whose stored `(row_set_hash, renderer_version)`
+    matches `new_hashes[uuid]` paired with the current RENDERER_VERSION —
+    these don't need to be re-rendered."""
+    skip: set[str] = set()
+    for uuid, new_hash in new_hashes.items():
+        prev = existing.get(uuid)
+        if prev is None:
+            continue
+        old_hash, old_version, _ = prev
+        if old_hash == new_hash and old_version == RENDERER_VERSION:
+            skip.add(uuid)
+    return skip
+
+
 def _hash_rows(rows: list[_Row]) -> str:
     """SHA-256 (hex) over the canonical tuples of `rows`, ordered by
     `(when_ts, uuid)` so the hash is independent of producer iteration
@@ -156,22 +201,43 @@ def populate_documents(
     conn: Connection,
     rows: Iterable[_Row],
     provider_to_source_name: dict[str, str],
+    rendered_at: str | None = None,
+    skipped: set[str] | None = None,
 ) -> int:
     """Re-emit one `documents` row per distinct `document_uuid` in `rows`
     using a per-document delete+insert pattern, mirroring
     `populate_grid_rows`. Documents not present in `rows` are left
     untouched (orphan cleanup is C.6's job). Returns the number of
-    documents inserted."""
+    documents inserted.
+
+    `rendered_at` is the ingest timestamp; it's stamped on every doc that
+    was just re-rendered. Docs in `skipped` keep their prior `rendered_at`
+    (the file on disk is still up to date — see `documents_to_skip`)."""
     ensure_schema(conn)
     docs = _document_rows_from_grid_rows(list(rows), provider_to_source_name)
     if not docs:
         return 0
+
+    skipped = skipped or set()
+    prior_rendered_at: dict[str, str | None] = {}
+    if skipped:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT document_uuid, rendered_at FROM documents "
+                "WHERE document_uuid IN (" + ",".join(["%s"] * len(skipped)) + ")",
+                tuple(skipped),
+            )
+            prior_rendered_at = {uuid: ts for (uuid, ts) in cur.fetchall()}
 
     placeholders = ",".join(["%s"] * len(_DOCUMENTS_COLUMNS))
     columns_sql = ", ".join(_DOCUMENTS_COLUMNS)
     insert_sql = f"INSERT INTO documents ({columns_sql}) VALUES ({placeholders})"
     with conn.cursor() as cur:
         for d in docs:
+            if d.document_uuid in skipped:
+                ts = prior_rendered_at.get(d.document_uuid)
+            else:
+                ts = rendered_at
             cur.execute(
                 "DELETE FROM documents WHERE document_uuid = %s", (d.document_uuid,)
             )
@@ -186,7 +252,7 @@ def populate_documents(
                 d.md_path,
                 d.row_set_hash,
                 d.renderer_version,
-                d.rendered_at,
+                ts,
             )
             cur.execute(
                 insert_sql,
