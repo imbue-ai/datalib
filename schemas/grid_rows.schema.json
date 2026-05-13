@@ -310,7 +310,7 @@
         },
         "document_uuid": {
           "type": ["string", "null"],
-          "x-sql-type": "VARCHAR(36)",
+          "x-sql-type": "VARCHAR(96)",
           "description": "FK into the `documents` table — every renderable document (conversation, thread, page, …) gets one row in `documents`, and every grid_row that participates in that document points at it. Many-to-1. Nullable today because the column is being introduced ahead of the producer-side population pass (see plan-ui-driven-sync.md, Phase C); will become NOT NULL once every renderer emits it. Drives incremental re-render (skip if `documents.row_set_hash` unchanged) and per-document re-ingest."
         }
       }

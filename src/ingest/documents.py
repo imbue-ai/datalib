@@ -157,44 +157,43 @@ def populate_documents(
     rows: Iterable[_Row],
     provider_to_source_name: dict[str, str],
 ) -> int:
-    """Truncate the `documents` table and re-emit one row per distinct
-    `document_uuid` in `rows`. Returns the number of documents inserted.
-
-    Like `populate_grid_rows`, this is a full rebuild today; per-document
-    upsert lands in Phase C.3."""
+    """Re-emit one `documents` row per distinct `document_uuid` in `rows`
+    using a per-document delete+insert pattern, mirroring
+    `populate_grid_rows`. Documents not present in `rows` are left
+    untouched (orphan cleanup is C.6's job). Returns the number of
+    documents inserted."""
     ensure_schema(conn)
     docs = _document_rows_from_grid_rows(list(rows), provider_to_source_name)
+    if not docs:
+        return 0
 
     placeholders = ",".join(["%s"] * len(_DOCUMENTS_COLUMNS))
     columns_sql = ", ".join(_DOCUMENTS_COLUMNS)
+    insert_sql = f"INSERT INTO documents ({columns_sql}) VALUES ({placeholders})"
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM documents")
-        if docs:
-            raw_tuples = [
-                (
-                    d.document_uuid,
-                    d.source_name,
-                    d.provider,
-                    d.kind,
-                    d.title,
-                    d.created_at,
-                    d.updated_at,
-                    d.md_path,
-                    d.row_set_hash,
-                    d.renderer_version,
-                    d.rendered_at,
-                )
-                for d in docs
-            ]
-            cur.executemany(
-                f"INSERT INTO documents ({columns_sql}) VALUES ({placeholders})",
-                [
-                    tuple(
-                        _truncate_for_column_doc(col, v)
-                        for col, v in zip(_DOCUMENTS_COLUMNS, t)
-                    )
-                    for t in raw_tuples
-                ],
+        for d in docs:
+            cur.execute(
+                "DELETE FROM documents WHERE document_uuid = %s", (d.document_uuid,)
+            )
+            raw = (
+                d.document_uuid,
+                d.source_name,
+                d.provider,
+                d.kind,
+                d.title,
+                d.created_at,
+                d.updated_at,
+                d.md_path,
+                d.row_set_hash,
+                d.renderer_version,
+                d.rendered_at,
+            )
+            cur.execute(
+                insert_sql,
+                tuple(
+                    _truncate_for_column_doc(col, v)
+                    for col, v in zip(_DOCUMENTS_COLUMNS, raw)
+                ),
             )
     return len(docs)
 

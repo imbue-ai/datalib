@@ -20,7 +20,7 @@
       "properties": {
         "document_uuid": {
           "type": "string",
-          "x-sql-type": "VARCHAR(36)",
+          "x-sql-type": "VARCHAR(96)",
           "description": "Stable document identifier. For providers whose native id is already a UUID (Anthropic conversation_uuid, Notion page_id) we reuse it verbatim; for ts-keyed providers (Slack threads) we synthesize a UUIDv5 from the same canonical tuple `grid_rows.uuid` uses. Must be deterministic so re-ingest is idempotent."
         },
         "source_name": {

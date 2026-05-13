@@ -263,7 +263,7 @@ pub const DDL: &[(&str, &str)] = &[
     external_id VARCHAR(128),
     notion_page_uuid VARCHAR(96),
     notion_block_uuid VARCHAR(96),
-    document_uuid VARCHAR(36),
+    document_uuid VARCHAR(96),
     PRIMARY KEY (uuid)
 )"#),
 ];

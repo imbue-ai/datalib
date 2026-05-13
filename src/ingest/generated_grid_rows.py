@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS grid_rows (
     external_id VARCHAR(128),
     notion_page_uuid VARCHAR(96),
     notion_block_uuid VARCHAR(96),
-    document_uuid VARCHAR(36),
+    document_uuid VARCHAR(96),
     PRIMARY KEY (uuid)
 )
     """,
@@ -342,6 +342,6 @@ MAX_LENGTHS: dict[str, dict[str, int]] = {
         "external_id": 128,
         "notion_page_uuid": 96,
         "notion_block_uuid": 96,
-        "document_uuid": 36,
+        "document_uuid": 96,
     },
 }

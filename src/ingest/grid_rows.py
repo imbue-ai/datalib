@@ -63,12 +63,11 @@ def _truncate_for_column(col: str, value):
 
 
 def ensure_schema(conn: Connection) -> None:
-    """(Re)create the grid_rows table. Drops first so schema changes
-    (new columns, retyped columns) take effect even when the underlying
-    Dolt repo persists between ingest runs — grid_rows is fully derived
-    from the parsed provider data, so dropping is always safe."""
+    """Create the `grid_rows` table if it doesn't exist. Idempotent —
+    no drop, because per-document delete+insert (see `populate_grid_rows`)
+    relies on existing rows persisting between ingest runs so unchanged
+    documents stay put."""
     with conn.cursor() as cur:
-        cur.execute("DROP TABLE IF EXISTS grid_rows")
         for stmt in DDL:
             cur.execute(stmt)
 
@@ -884,19 +883,31 @@ def populate_grid_rows(
     notion: ParsedNotionWeb | None = None,
     rows: list[_Row] | None = None,
 ) -> int:
-    """Truncate `grid_rows` and re-emit every row from the parsed provider
-    data. Returns the number of rows inserted. Callers can pass a
-    pre-computed `rows` list (from `gather_rows`) to avoid re-running the
-    per-provider row generators."""
+    """Re-emit grid rows for every document in `rows` using a per-document
+    delete+insert pattern: for each `document_uuid` present in `rows`,
+    delete the existing rows for that document and insert the fresh ones.
+    Documents not present in `rows` are left untouched (orphan cleanup is
+    C.6's job). Returns the number of rows inserted."""
     ensure_schema(conn)
     if rows is None:
         rows = gather_rows(anthropic, openai, slack, github, gitlab, notion)
 
+    by_doc: dict[str, list[_Row]] = {}
+    for r in rows:
+        if r.document_uuid is None:
+            # Every provider attaches document_uuid in C.1; a None here
+            # means a row generator regressed.
+            raise ValueError(
+                f"grid row {r.uuid!r} ({r.provider}/{r.kind}) has no document_uuid"
+            )
+        by_doc.setdefault(r.document_uuid, []).append(r)
+
     placeholders = ",".join(["%s"] * len(_GRID_ROWS_COLUMNS))
     columns_sql = ", ".join(_GRID_ROWS_COLUMNS)
+    insert_sql = f"INSERT INTO grid_rows ({columns_sql}) VALUES ({placeholders})"
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM grid_rows")
-        if rows:
+        for doc_uuid, group in by_doc.items():
+            cur.execute("DELETE FROM grid_rows WHERE document_uuid = %s", (doc_uuid,))
             raw_tuples = [
                 (
                     r.uuid,
@@ -922,10 +933,10 @@ def populate_grid_rows(
                     r.notion_block_uuid,
                     r.document_uuid,
                 )
-                for r in rows
+                for r in group
             ]
             cur.executemany(
-                f"INSERT INTO grid_rows ({columns_sql}) VALUES ({placeholders})",
+                insert_sql,
                 [
                     tuple(
                         _truncate_for_column(col, v)

@@ -43,7 +43,7 @@ TABLES: dict[str, str] = {
 DDL: list[str] = [
     """
 CREATE TABLE IF NOT EXISTS documents (
-    document_uuid VARCHAR(36) NOT NULL,
+    document_uuid VARCHAR(96) NOT NULL,
     source_name VARCHAR(64) NOT NULL,
     provider VARCHAR(32) NOT NULL,
     kind VARCHAR(32) NOT NULL,
@@ -84,7 +84,7 @@ COLUMNS: dict[str, list[str]] = {
 # from this map (effectively unbounded for our purposes).
 MAX_LENGTHS: dict[str, dict[str, int]] = {
     "documents": {
-        "document_uuid": 36,
+        "document_uuid": 96,
         "source_name": 64,
         "provider": 32,
         "kind": 32,
