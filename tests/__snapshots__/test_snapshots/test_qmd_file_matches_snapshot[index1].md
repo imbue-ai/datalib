@@ -22,6 +22,6 @@ Fixes #41.
 
 ## Threads
 
-- [General discussion](threads/general.qmd) (2 comments)
-- [`src/holodeck/safety.c:200`](threads/src-holodeck-safety-c-L200.qmd) (1 comment)
-- [`src/holodeck/safety.c:215`](threads/src-holodeck-safety-c-L215.qmd) (1 comment)
+- [General discussion](threads/general.md) (2 comments)
+- [`src/holodeck/safety.c:200`](threads/src-holodeck-safety-c-L200.md) (1 comment)
+- [`src/holodeck/safety.c:215`](threads/src-holodeck-safety-c-L215.md) (1 comment)

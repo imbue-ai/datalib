@@ -20,5 +20,5 @@ Adds a regression test that asserts holodeck weapons cannot fire while safeties 
 
 ## Threads
 
-- [General discussion](threads/general.qmd) (1 note)
-- [`tests/safety.rs:42`](threads/tests-safety-rs-L42.qmd) (3 notes)
+- [General discussion](threads/general.md) (1 note)
+- [`tests/safety.rs:42`](threads/tests-safety-rs-L42.md) (3 notes)

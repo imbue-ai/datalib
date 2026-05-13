@@ -26,7 +26,7 @@ from qmd_bridge.mapping import (
 
 # An LLM chat: one container row, one qmd file. The inner m-* divs are
 # message ids, NOT grid rows.
-LLM_PATH = "anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000001-1701-4d00-8000-00000000c001__tea-earl-grey-hot.qmd"
+LLM_PATH = "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000001-1701-4d00-8000-00000000c001__tea-earl-grey-hot.md"
 LLM_ROW = GridRowRef(
     uuid="c0000001-1701-4d00-8000-00000000c001",
     kind="Chat",
@@ -35,7 +35,7 @@ LLM_ROW = GridRowRef(
 )
 
 # A Slack thread: one container row, one qmd file.
-SLACK_PATH = "slack/T_NCC1701D/ten-forward/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275__anyone-up-for-poker-tonight.qmd"
+SLACK_PATH = "rendered_md/slack/T_NCC1701D/ten-forward/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275__anyone-up-for-poker-tonight.md"
 SLACK_ROW = GridRowRef(
     uuid="a93e15fa-68d5-5d53-aa9a-590e01b83275",
     kind="Slack Thread",
@@ -43,8 +43,8 @@ SLACK_ROW = GridRowRef(
     provider="slack",
 )
 
-# A GitHub PR-42 container row (qmd_path = index.qmd).
-GH_PR_PATH = "github/enterprise-d/replicator-firmware/pr-42__recalibrate-replicator-templates-for-earl-grey-hot/index.qmd"
+# A GitHub PR-42 container row (qmd_path = index.md).
+GH_PR_PATH = "rendered_md/github/enterprise-d/replicator-firmware/pr-42__recalibrate-replicator-templates-for-earl-grey-hot/index.md"
 GH_PR_ROW = GridRowRef(
     uuid="ed42aaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     kind="GitHub PR",
@@ -53,7 +53,7 @@ GH_PR_ROW = GridRowRef(
 )
 
 # Two GitHub PR-42 comment rows whose qmd_path is a shared thread file.
-GH_THREAD_PATH = "github/enterprise-d/replicator-firmware/pr-42__recalibrate-replicator-templates-for-earl-grey-hot/threads/general.qmd"
+GH_THREAD_PATH = "rendered_md/github/enterprise-d/replicator-firmware/pr-42__recalibrate-replicator-templates-for-earl-grey-hot/threads/general.md"
 GH_COMMENT_1 = GridRowRef(
     uuid="0a6abb8f-71df-553c-80e0-940c8f0c1213",
     kind="GitHub PR Comment",
@@ -218,8 +218,8 @@ def test_path_match_is_case_and_underscore_insensitive(index):
     # lookup, so a hit with the qmd-style path should still find the row.
     hit = QmdHit(
         path=(
-            "github/enterprise-d/replicator-firmware/"
-            "pr-42-recalibrate-replicator-templates-for-earl-grey-hot/index.qmd"
+            "rendered_md/github/enterprise-d/replicator-firmware/"
+            "pr-42-recalibrate-replicator-templates-for-earl-grey-hot/index.md"
         ),
         score=0.4,
         snippet="pr_number: 42",
@@ -235,7 +235,7 @@ def test_path_match_is_case_and_underscore_insensitive(index):
 
 def test_unknown_path_with_unknown_uuids_returns_empty(index):
     hit = QmdHit(
-        path="nowhere/never.qmd",
+        path="nowhere/never.md",
         score=0.1,
         snippet="m-deadbeef-dead-beef-dead-beefdeadbeef",
     )
@@ -313,7 +313,7 @@ def test_hits_for_row_with_no_m_uuids_falls_back_to_path(index):
 
 def test_hits_for_row_ignores_other_paths(index):
     h = QmdHit(
-        path="some/other/path.qmd",
+        path="some/other/path.md",
         score=0.9,
         snippet=f"m-{LLM_ROW.uuid} mention",
     )

@@ -108,12 +108,12 @@ def test_table_dump_matches_snapshot(
 
 @pytest.fixture(scope="module")
 def qmd_files() -> dict[str, str]:
-    """Map of `<provider>/<account>/<slug>.qmd` → file contents."""
+    """Map of `rendered_md/<provider>/.../<slug>.md` → file contents."""
     assert _ARTIFACT_DIR is not None
     out: dict[str, str] = {}
     with tarfile.open(_ARTIFACT_DIR / "qmd.tar") as tf:
         for member in tf.getmembers():
-            if not member.isfile() or not member.name.endswith(".qmd"):
+            if not member.isfile() or not member.name.endswith(".md"):
                 continue
             f = tf.extractfile(member)
             if f is None:
@@ -130,7 +130,7 @@ def _discover_qmd_params() -> list:
         return []
     with tarfile.open(_ARTIFACT_DIR / "qmd.tar") as tf:
         names = sorted(
-            m.name for m in tf.getmembers() if m.isfile() and m.name.endswith(".qmd")
+            m.name for m in tf.getmembers() if m.isfile() and m.name.endswith(".md")
         )
     return [pytest.param(n, id=Path(n).stem) for n in names]
 

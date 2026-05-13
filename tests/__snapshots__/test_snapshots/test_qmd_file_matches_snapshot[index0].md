@@ -20,5 +20,5 @@ Adjusts the steeping target to 85 degC. Tea is meant to be HOT.
 
 ## Threads
 
-- [General discussion](threads/general.qmd) (2 comments)
-- [`src/replicator/tea.c:17`](threads/src-replicator-tea-c-L17.qmd) (2 comments)
+- [General discussion](threads/general.md) (2 comments)
+- [`src/replicator/tea.c:17`](threads/src-replicator-tea-c-L17.md) (2 comments)

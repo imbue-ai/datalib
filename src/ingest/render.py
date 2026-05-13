@@ -1,4 +1,5 @@
-"""Render parsed provider data to QMD markdown files on disk.
+"""Render parsed provider data to Markdown files on disk under
+`<root>/rendered_md/<provider>/...`.
 
 Inputs are the in-memory `Parsed*` dataclasses produced by each provider's
 `parse` module. We do not query SQL here — provider-specific tables no
@@ -217,11 +218,11 @@ def _render_one_anthropic(
     root: Path,
 ) -> Path:
     conv = next(c for c in parsed.conversations if c.conversation_uuid == conv_uuid)
-    out_dir = root / "anthropic" / conv.account_uuid / "llm_chats"
+    out_dir = root / "rendered_md" / "anthropic" / conv.account_uuid / "llm_chats"
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(conv.name)
-    target = out_dir / f"{conv_uuid}__{slug}.qmd"
-    for existing in out_dir.glob(f"{conv_uuid}__*.qmd"):
+    target = out_dir / f"{conv_uuid}__{slug}.md"
+    for existing in out_dir.glob(f"{conv_uuid}__*.md"):
         if existing != target:
             existing.unlink()
 
@@ -329,10 +330,10 @@ def render_anthropic(
         summary.rendered += 1
 
     for acct in accounts:
-        chats_dir = root / "anthropic" / acct / "llm_chats"
+        chats_dir = root / "rendered_md" / "anthropic" / acct / "llm_chats"
         if not chats_dir.is_dir():
             continue
-        for f in chats_dir.glob("*.qmd"):
+        for f in chats_dir.glob("*.md"):
             if f.name.split("__", 1)[0] not in live_uuids:
                 f.unlink()
                 summary.orphans_removed += 1
@@ -348,11 +349,13 @@ def _render_one_openai(
     parts_by_msg: dict[str, list],
     root: Path,
 ) -> Path:
-    out_dir = root / "openai" / (conv.account_id or "unknown") / "llm_chats"
+    out_dir = (
+        root / "rendered_md" / "openai" / (conv.account_id or "unknown") / "llm_chats"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(conv.title)
-    target = out_dir / f"{conv.conversation_id}__{slug}.qmd"
-    for existing in out_dir.glob(f"{conv.conversation_id}__*.qmd"):
+    target = out_dir / f"{conv.conversation_id}__{slug}.md"
+    for existing in out_dir.glob(f"{conv.conversation_id}__*.md"):
         if existing != target:
             existing.unlink()
 
@@ -475,10 +478,10 @@ def render_openai(
         summary.rendered += 1
 
     for acct in accts:
-        chats_dir = root / "openai" / acct / "llm_chats"
+        chats_dir = root / "rendered_md" / "openai" / acct / "llm_chats"
         if not chats_dir.is_dir():
             continue
-        for f in chats_dir.glob("*.qmd"):
+        for f in chats_dir.glob("*.md"):
             if f.name.split("__", 1)[0] not in live_ids:
                 f.unlink()
                 summary.orphans_removed += 1
@@ -579,11 +582,11 @@ def _render_one_slack_thread(
     title = snippet[0] if snippet else "(empty thread)"
     title = title[:80]
 
-    out_dir = root / "slack" / team_id / channel_name / "threads"
+    out_dir = root / "rendered_md" / "slack" / team_id / channel_name / "threads"
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _slugify(title)
-    target = out_dir / f"{thread_uuid}__{slug}.qmd"
-    for existing in out_dir.glob(f"{thread_uuid}__*.qmd"):
+    target = out_dir / f"{thread_uuid}__{slug}.md"
+    for existing in out_dir.glob(f"{thread_uuid}__*.md"):
         if existing != target:
             existing.unlink()
 
@@ -703,10 +706,10 @@ def render_slack(
         summary.rendered += 1
 
     for team_id, cname in slack_dirs:
-        threads_dir = root / "slack" / team_id / cname / "threads"
+        threads_dir = root / "rendered_md" / "slack" / team_id / cname / "threads"
         if not threads_dir.is_dir():
             continue
-        for f in threads_dir.glob("*.qmd"):
+        for f in threads_dir.glob("*.md"):
             if f.name.split("__", 1)[0] not in live_threads:
                 f.unlink()
                 summary.orphans_removed += 1
@@ -725,7 +728,7 @@ def _github_pr_dir(repo_full_name: str, pr_number: int, title: str) -> tuple[str
     owner, _, repo = repo_full_name.partition("/")
     repo = repo or "_"
     slug = _slugify(title)
-    return f"github/{owner}/{repo}/pr-{pr_number}__{slug}", slug
+    return f"rendered_md/github/{owner}/{repo}/pr-{pr_number}__{slug}", slug
 
 
 def _thread_filename_slug(thread_key: str, body: str) -> str:
@@ -771,7 +774,7 @@ def render_github(
         thread_links: list[tuple[str, str, int]] = []  # (label, rel-path, count)
         for thread_key, items in by_thread.items():
             fname = _thread_filename_slug(thread_key, "")
-            target = threads_dir / f"{fname}.qmd"
+            target = threads_dir / f"{fname}.md"
             parts: list[str] = []
             parts.append("---")
             parts.append("provider: github")
@@ -803,10 +806,10 @@ def render_github(
                 parts.append("")
             body = "\n".join(parts).rstrip() + "\n"
             target.write_text(body)
-            thread_links.append((thread_key, f"threads/{fname}.qmd", len(items)))
+            thread_links.append((thread_key, f"threads/{fname}.md", len(items)))
             summary.rendered += 1
 
-        # PR index.qmd (metadata + TOC of thread links)
+        # PR index.md (metadata + TOC of thread links)
         idx_parts: list[str] = []
         idx_parts.append("---")
         idx_parts.append("provider: github")
@@ -839,7 +842,7 @@ def render_github(
                     f"- [{label}]({rel}) ({n} comment{'s' if n != 1 else ''})"
                 )
             idx_parts.append("")
-        (pr_dir / "index.qmd").write_text("\n".join(idx_parts).rstrip() + "\n")
+        (pr_dir / "index.md").write_text("\n".join(idx_parts).rstrip() + "\n")
         summary.rendered += 1
     return summary
 
@@ -856,7 +859,7 @@ def _gitlab_mr_dir(project_path: str, mr_iid: int, title: str) -> tuple[str, str
         group = "_"
         project = project_path or "_"
     slug = _slugify(title)
-    return f"gitlab/{group}/{project}/mr-{mr_iid}__{slug}", slug
+    return f"rendered_md/gitlab/{group}/{project}/mr-{mr_iid}__{slug}", slug
 
 
 def render_gitlab(
@@ -893,7 +896,7 @@ def render_gitlab(
         thread_links: list[tuple[str, str, int]] = []
         for thread_key, items in by_thread.items():
             fname = _thread_filename_slug(thread_key, "")
-            target = threads_dir / f"{fname}.qmd"
+            target = threads_dir / f"{fname}.md"
             parts: list[str] = []
             parts.append("---")
             parts.append("provider: gitlab")
@@ -924,7 +927,7 @@ def render_gitlab(
                 parts.append(_MSG_DIV_CLOSE)
                 parts.append("")
             target.write_text("\n".join(parts).rstrip() + "\n")
-            thread_links.append((thread_key, f"threads/{fname}.qmd", len(items)))
+            thread_links.append((thread_key, f"threads/{fname}.md", len(items)))
             summary.rendered += 1
 
         idx_parts: list[str] = []
@@ -959,7 +962,7 @@ def render_gitlab(
                     f"- [{label}]({rel}) ({n} note{'s' if n != 1 else ''})"
                 )
             idx_parts.append("")
-        (mr_dir / "index.qmd").write_text("\n".join(idx_parts).rstrip() + "\n")
+        (mr_dir / "index.md").write_text("\n".join(idx_parts).rstrip() + "\n")
         summary.rendered += 1
     return summary
 
@@ -1082,7 +1085,7 @@ def _notion_page_rel_dir(
     segs = [_notion_space_segment(space)] + _notion_page_path_segments(
         page_id, blocks_by_id, page_titles, collection_owner_block=coll_owner
     )
-    return "notion/" + "/".join(segs)
+    return "rendered_md/notion/" + "/".join(segs)
 
 
 def _notion_page_qmd_path(
@@ -1091,11 +1094,9 @@ def _notion_page_qmd_path(
     blocks_by_id: dict[str, _NotionBlockRow],
     page_titles: dict[str, str],
 ) -> str:
-    """Each page renders to `<page_rel_dir>/index.qmd` so its sub-pages can
+    """Each page renders to `<page_rel_dir>/index.md` so its sub-pages can
     live in sibling directories beneath the same path."""
-    return (
-        f"{_notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)}/index.qmd"
-    )
+    return f"{_notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)}/index.md"
 
 
 def _notion_thread_qmd_path(
@@ -1107,7 +1108,7 @@ def _notion_thread_qmd_path(
     snippet: str,
 ) -> str:
     page_dir = _notion_page_rel_dir(space, page_id, blocks_by_id, page_titles)
-    name = f"{_notion_short_id(discussion_id)}__{_slugify(snippet)}.qmd"
+    name = f"{_notion_short_id(discussion_id)}__{_slugify(snippet)}.md"
     return f"{page_dir}/comments/{name}"
 
 
@@ -1288,7 +1289,7 @@ def _notion_render_block(
         # Nested page link — render as a link rather than inlining.
         sub_title = page_titles.get(block.block_id, "(untitled)")
         slug = _notion_page_dir_segment(block.block_id, sub_title)
-        lines.append(f"{indent}- 📄 [{sub_title}]({slug}/index.qmd)")
+        lines.append(f"{indent}- 📄 [{sub_title}]({slug}/index.md)")
         lines.append("")
         return lines
     elif btype == "collection_view" or btype == "collection_view_page":
@@ -1335,7 +1336,7 @@ def _notion_render_one_page(
     )
     out_dir = root / rel_dir
     out_dir.mkdir(parents=True, exist_ok=True)
-    target = out_dir / "index.qmd"
+    target = out_dir / "index.md"
 
     title = page_titles.get(page.block_id) or "(untitled)"
     icon = (page.format or {}).get("page_icon")
@@ -1382,7 +1383,7 @@ def _notion_render_one_page(
         for sp in subpages:
             sub_title = page_titles.get(sp.block_id, "(untitled)")
             seg = _notion_page_dir_segment(sp.block_id, sub_title)
-            parts.append(f"- [📄 {sub_title}]({seg}/index.qmd)")
+            parts.append(f"- [📄 {sub_title}]({seg}/index.md)")
         parts.append("")
 
     target.write_text("\n".join(parts).rstrip() + "\n")

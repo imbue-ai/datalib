@@ -33,7 +33,7 @@ use anyhow::{bail, Context, Result};
 
 const DEFAULT_QMD_VERSION: &str = "2.1.0";
 const DEFAULT_COLLECTION_NAME: &str = "mirror";
-const DEFAULT_MASK: &str = "**/*.qmd";
+const DEFAULT_MASK: &str = "**/*.md";
 
 struct Args {
     root: PathBuf,

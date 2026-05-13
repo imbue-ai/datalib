@@ -20,5 +20,5 @@ Tea. Earl Grey. Hot.
 
 ## Threads
 
-- [General discussion](threads/general.qmd) (1 note)
-- [`src/replicator/menu.rs:88`](threads/src-replicator-menu-rs-L88.qmd) (2 notes)
+- [General discussion](threads/general.md) (1 note)
+- [`src/replicator/menu.rs:88`](threads/src-replicator-menu-rs-L88.md) (2 notes)

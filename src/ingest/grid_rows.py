@@ -150,14 +150,18 @@ def _anthropic_qmd_path(
     account_uuid: str | None, conversation_uuid: str, name: str | None
 ) -> str:
     return (
-        f"anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{_slugify(name)}.qmd"
+        f"rendered_md/anthropic/{account_uuid}/llm_chats/"
+        f"{conversation_uuid}__{_slugify(name)}.md"
     )
 
 
 def _openai_qmd_path(
     account_id: str | None, conversation_id: str, title: str | None
 ) -> str:
-    return f"openai/{account_id or 'unknown'}/llm_chats/{conversation_id}__{_slugify(title)}.qmd"
+    return (
+        f"rendered_md/openai/{account_id or 'unknown'}/llm_chats/"
+        f"{conversation_id}__{_slugify(title)}.md"
+    )
 
 
 def _slack_thread_title(
@@ -177,7 +181,10 @@ def _slack_qmd_path(
     root_text: str | None,
     user_labels: Mapping[str, str] | None = None,
 ) -> str:
-    return f"slack/{team_id}/{channel_name}/threads/{thread_uuid}__{_slugify(_slack_thread_title(root_text, user_labels))}.qmd"
+    return (
+        f"rendered_md/slack/{team_id}/{channel_name}/threads/"
+        f"{thread_uuid}__{_slugify(_slack_thread_title(root_text, user_labels))}.md"
+    )
 
 
 def _slack_link(
@@ -447,7 +454,7 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
 
 def _github_pr_index_path(repo_full_name: str, pr_number: int, title: str) -> str:
     rel_dir, _ = _github_pr_dir(repo_full_name, pr_number, title)
-    return f"{rel_dir}/index.qmd"
+    return f"{rel_dir}/index.md"
 
 
 def _github_thread_path(
@@ -459,7 +466,7 @@ def _github_thread_path(
     else:
         path, _, line = thread_key.rpartition(":")
         fname = f"{_slugify(path)}-L{line or '0'}"
-    return f"{rel_dir}/threads/{fname}.qmd"
+    return f"{rel_dir}/threads/{fname}.md"
 
 
 def _github_rows(parsed: ParsedGithubApi, self_account: str | None) -> Iterable[_Row]:
@@ -532,7 +539,7 @@ def _github_rows(parsed: ParsedGithubApi, self_account: str | None) -> Iterable[
 
 def _gitlab_mr_index_path(project_path: str, mr_iid: int, title: str) -> str:
     rel_dir, _ = _gitlab_mr_dir(project_path, mr_iid, title)
-    return f"{rel_dir}/index.qmd"
+    return f"{rel_dir}/index.md"
 
 
 def _gitlab_thread_path(
@@ -544,7 +551,7 @@ def _gitlab_thread_path(
     else:
         path, _, line = thread_key.rpartition(":")
         fname = f"{_slugify(path)}-L{line or '0'}"
-    return f"{rel_dir}/threads/{fname}.qmd"
+    return f"{rel_dir}/threads/{fname}.md"
 
 
 def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[_Row]:

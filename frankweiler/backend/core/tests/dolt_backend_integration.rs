@@ -100,7 +100,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
          message_index, entire_chat, text, slack_link, qmd_path, source_url) \
          VALUES ('c-1','anthropic','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary','', 'chats/c-1.qmd', 'https://claude.ai/chat/c-1')",
+                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1')",
     )
     .execute(&mut *conn)
     .await
@@ -151,7 +151,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert!(qmd.is_some());
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
-    assert!(qmd.to_string_lossy().ends_with("chats/c-1.qmd"));
+    assert!(qmd.to_string_lossy().ends_with("chats/c-1.md"));
 
     // Drop the server explicitly to kill the subprocess before we
     // clean up the temp dir — otherwise the dolt server keeps the

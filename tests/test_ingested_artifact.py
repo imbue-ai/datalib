@@ -63,29 +63,27 @@ def test_qmd_tar_contains_expected_files() -> None:
 
     # 8 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
     # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files) +
-    # 9 Notion files (7 page index.qmd + 2 comment thread files).
-    qmd_files = [n for n in names if n.endswith(".qmd")]
-    assert len(qmd_files) == 36, qmd_files
+    # 9 Notion files (7 page index.md + 2 comment thread files).
+    md_files = [n for n in names if n.endswith(".md")]
+    assert len(md_files) == 36, md_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
 
     # Spot-check one slug from each provider.
-    assert any("tea-earl-grey-hot.qmd" in n for n in qmd_files)
-    assert any("anyone-up-for-poker-tonight.qmd" in n for n in qmd_files)
-    assert any("pr-42__recalibrate-replicator" in n for n in qmd_files)
-    assert any("mr-17__add-earl-grey" in n for n in qmd_files)
-    # Notion: nested page hierarchy and a comment thread sibling of index.qmd.
+    assert any("tea-earl-grey-hot.md" in n for n in md_files)
+    assert any("anyone-up-for-poker-tonight.md" in n for n in md_files)
+    assert any("pr-42__recalibrate-replicator" in n for n in md_files)
+    assert any("mr-17__add-earl-grey" in n for n in md_files)
+    # Notion: nested page hierarchy and a comment thread sibling of index.md.
+    assert any("bridge-operations__" in n and n.endswith("/index.md") for n in md_files)
     assert any(
-        "bridge-operations__" in n and n.endswith("/index.qmd") for n in qmd_files
+        "warp-core-maintenance__" in n and n.endswith("/index.md") for n in md_files
     )
     assert any(
-        "warp-core-maintenance__" in n and n.endswith("/index.qmd") for n in qmd_files
+        "encounter-at-farpoint__" in n and n.endswith("/index.md") for n in md_files
     )
-    assert any(
-        "encounter-at-farpoint__" in n and n.endswith("/index.qmd") for n in qmd_files
-    )
-    assert any("/comments/d15c0001__" in n for n in qmd_files)
+    assert any("/comments/d15c0001__" in n for n in md_files)
 
 
 def test_dump_sql_loads_into_in_memory_sqlite() -> None:

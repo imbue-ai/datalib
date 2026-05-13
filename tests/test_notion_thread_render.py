@@ -159,7 +159,7 @@ def test_thread_renders_comment_referenced_but_missing_from_comment_table(
     parsed = _make_parsed()
     render_notion(parsed, tmp_path)
 
-    thread_files = list(tmp_path.rglob("comments/*.qmd"))
+    thread_files = list(tmp_path.rglob("comments/*.md"))
     assert len(thread_files) == 1, thread_files
     body = thread_files[0].read_text()
 

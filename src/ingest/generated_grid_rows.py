@@ -202,15 +202,15 @@ class GridRow:
     slack_link: str | None
     """Deep link of the form `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or the https equivalent). Populated only for Slack rows; drives the 'Open in Slack' right-click context menu item."""
     qmd_path: str | None
-    """Path to the rendered QMD file for this row's conversation/thread, relative to the data root. Set on every row (chat-level rows point at their own QMD; message/block rows inherit their parent thread's). The chat preview pane uses this to load the conversation directly — no glob, no frontmatter scan.
+    """Path to the rendered Markdown file for this row's conversation/thread, relative to the data root. All paths are rooted under `rendered_md/<provider>/...`. Set on every row (chat-level rows point at their own .md; message/block rows inherit their parent thread's). The chat preview pane uses this to load the conversation directly — no glob, no frontmatter scan. (Column name retained as `qmd_path` for historical reasons.)
 
     Per-provider mapping:
-      anthropic: anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{slug(name)}.qmd
-      openai: openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.qmd
-      slack: slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.qmd
-      github: github/{owner}/{repo}/pr-{number}__{slug(title)}/index.qmd (PR), or .../threads/{thread_uuid}__{slug}.qmd (comment threads)
-      gitlab: gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.qmd (MR), or .../threads/{discussion_uuid}__{slug}.qmd (discussion threads)
-      notion: notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.qmd (pages + headings); .../comments/{thread_short_id}__{snippet}.qmd (comment threads)
+      anthropic: rendered_md/anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{slug(name)}.md
+      openai: rendered_md/openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.md
+      slack: rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.md
+      github: rendered_md/github/{owner}/{repo}/pr-{number}__{slug(title)}/index.md (PR), or .../threads/{thread_uuid}__{slug}.md (comment threads)
+      gitlab: rendered_md/gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.md (MR), or .../threads/{discussion_uuid}__{slug}.md (discussion threads)
+      notion: rendered_md/notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.md (pages + headings); .../comments/{thread_short_id}__{snippet}.md (comment threads)
     """
     source_url: str | None
     """Canonical URL pointing back to the original source on the provider's web UI. For GitHub/GitLab this is the html_url/web_url of the PR/MR or comment; null for providers without a stable public link.

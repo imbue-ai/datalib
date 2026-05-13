@@ -15,4 +15,4 @@ Warp Core Maintenance
 
 ## Sub-pages
 
-- [📄 Warp Core Maintenance](warp-core-maintenance__b10cb10c/index.qmd)
+- [📄 Warp Core Maintenance](warp-core-maintenance__b10cb10c/index.md)

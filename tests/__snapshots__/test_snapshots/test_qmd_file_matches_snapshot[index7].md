@@ -19,6 +19,6 @@ Engineering Wiki
 
 ## Sub-pages
 
-- [📄 Bridge Operations](bridge-operations__b10cb10c/index.qmd)
-- [📄 Mission Logs](mission-logs__b10cb10c/index.qmd)
-- [📄 Engineering Wiki](engineering-wiki__b10cb10c/index.qmd)
+- [📄 Bridge Operations](bridge-operations__b10cb10c/index.md)
+- [📄 Mission Logs](mission-logs__b10cb10c/index.md)
+- [📄 Engineering Wiki](engineering-wiki__b10cb10c/index.md)

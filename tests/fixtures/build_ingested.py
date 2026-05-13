@@ -121,16 +121,14 @@ sources:
     if r.returncode != 0:
         return r.returncode
 
-    # Tar the QMD tree (rooted at "qmd/<provider>/...") into a single output.
-    # Crucially, exclude the live Dolt repo dir under <root>/dolt_repo/ \u2014
-    # its internal chunk store / journal files are not byte-stable across
-    # runs (commit hashes, packing differences) and would bust the cache.
+    # Tar the rendered Markdown tree (rooted at "qmd/rendered_md/...") into a
+    # single output. Crucially, exclude the live Dolt repo dir under
+    # <root>/dolt_repo/ \u2014 its internal chunk store / journal files are
+    # not byte-stable across runs (commit hashes, packing differences) and
+    # would bust the cache. The archive prefix stays "qmd/" so the overlay
+    # tar produced by build_qmd_index.py continues to layer cleanly on top.
     qmd_tar = out / "qmd.tar"
-    qmd_subtrees = [
-        d
-        for d in ("anthropic", "openai", "slack", "github", "gitlab", "notion")
-        if (root / d).is_dir()
-    ]
+    qmd_subtrees = ["rendered_md"] if (root / "rendered_md").is_dir() else []
     with tarfile.open(qmd_tar, "w") as tf:
         entries: list[Path] = []
         for sub in qmd_subtrees:

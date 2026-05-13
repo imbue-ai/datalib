@@ -117,15 +117,15 @@ def test_vsearch_earl_grey_hits_pr42_and_mr17(
     rows = index.rows_for_hits(hits)
     kinds = {r.kind for r in rows}
     # The earl grey query straddles GitHub PR-42 (comments + the PR itself
-    # via index.qmd) and GitLab MR-17. We don't assert an exact ordering;
+    # via index.md) and GitLab MR-17. We don't assert an exact ordering;
     # we just want the right neighborhood to come back.
     assert {"GitHub PR", "GitLab MR"} <= kinds, kinds
     # And specifically the PR-42 / MR-17 container rows should be in
-    # there (index.qmd is the path-fallback case). qmd_path lives on
+    # there (index.md is the path-fallback case). qmd_path lives on
     # the grid side, where casing/`__` are preserved.
     paths = {r.qmd_path for r in rows}
-    assert any("/pr-42__" in p and p.endswith("/index.qmd") for p in paths), paths
-    assert any("/mr-17__" in p and p.endswith("/index.qmd") for p in paths), paths
+    assert any("/pr-42__" in p and p.endswith("/index.md") for p in paths), paths
+    assert any("/mr-17__" in p and p.endswith("/index.md") for p in paths), paths
 
 
 def test_vsearch_holodeck_lands_in_safety_neighborhood(
@@ -146,7 +146,7 @@ def test_vsearch_llm_chat_resolves_to_chat_row(
     # Wording from the Anthropic c0000001 "Tea, Earl Grey, Hot" chat —
     # the Picard quote alone surfaces GitHub PR-42 strongly, so we use
     # vocabulary unique to the chat itself (preset tannin discussion).
-    # The hit on that .qmd file maps (via path fallback — LLM messages
+    # The hit on that .md file maps (via path fallback — LLM messages
     # aren't grid rows) to the single conversation-level Chat row.
     hits = runner.vsearch("tannin extraction preset replicator", limit=10)
     rows = index.rows_for_hits(hits)
@@ -209,7 +209,7 @@ def test_hits_for_known_comment_row(runner: QmdRunner, index: GridIndex) -> None
 # ---------------------------------------------------------------------------
 # Bidirectional coverage: every indexed qmd doc maps to ≥1 grid row, and
 # every grid row maps to ≥1 indexed qmd doc. Guards against drift between
-# the renderer (which decides what becomes a .qmd file) and the ingest
+# the renderer (which decides what becomes a .md file) and the ingest
 # pipeline (which decides what becomes a grid_row). Also exercises the
 # "long message body chunk with no m-{uuid} in the snippet" case for
 # every indexed file: we hand the mapper an empty snippet and require

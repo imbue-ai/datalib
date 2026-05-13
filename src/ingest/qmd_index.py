@@ -33,7 +33,7 @@ from pathlib import Path
 
 DEFAULT_QMD_VERSION = "2.1.0"
 DEFAULT_COLLECTION_NAME = "mirror"
-DEFAULT_MASK = "**/*.qmd"
+DEFAULT_MASK = "**/*.md"
 
 logger = logging.getLogger(__name__)
 
