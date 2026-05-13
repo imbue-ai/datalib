@@ -27,6 +27,7 @@ use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_core::repo::DynRepo;
+use frankweiler_core::worker::{Worker, WorkerCaps};
 use frankweiler_http::{router, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,11 +66,36 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+    // Spawn the Python worker only on the Dolt path — the worker writes
+    // sync_jobs state into Dolt, so under `--backend sqlite` it would
+    // have nothing to do. Failures here are non-fatal: the HTTP API
+    // still serves reads, just nothing drains the queue.
+    let worker = if dolt_server.is_some() {
+        let cfg_path = default_config_path();
+        let cfg_arg = if cfg_path.exists() {
+            Some(cfg_path)
+        } else {
+            None
+        };
+        match Worker::ensure(root.as_ref(), cfg_arg.as_deref(), &WorkerCaps::default()) {
+            Ok(w) => {
+                eprintln!("worker: spawned (pid={:?})", w.pid());
+                Some(Arc::new(w))
+            }
+            Err(e) => {
+                eprintln!("worker: failed to spawn ({e:#}); /api/sync still serves reads");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let state = AppState {
         root,
         repo,
         dolt_server,
         qmd_daemon,
+        worker,
     };
     axum::serve(listener, router(state)).await?;
     Ok(())

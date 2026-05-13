@@ -22,6 +22,14 @@ pub mod feedback {
     include!("generated/feedback.rs");
 }
 
+pub mod sync_jobs {
+    include!("generated/sync_jobs.rs");
+}
+
+pub mod download_runs {
+    include!("generated/download_runs.rs");
+}
+
 #[cfg(test)]
 mod tests {
     use super::anthropic::*;

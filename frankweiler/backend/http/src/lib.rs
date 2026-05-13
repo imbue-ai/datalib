@@ -25,7 +25,9 @@ use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
+use frankweiler_core::worker::Worker;
 use frankweiler_schema::feedback::FeedbackRow;
+use frankweiler_schema::sync_jobs::SyncJobRow;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -54,6 +56,11 @@ pub struct AppState {
     /// failed) — `run_qmd_search` then falls back to the per-call
     /// `npx … query` shell-out path so search still works.
     pub qmd_daemon: Option<Arc<QmdDaemon>>,
+    /// Supervised Python `worker` subprocess that drains `sync_jobs`.
+    /// `None` under `--backend sqlite` (worker writes to Dolt only) or
+    /// when the spawn failed at startup; the `/api/sync/*` endpoints
+    /// still serve reads regardless.
+    pub worker: Option<Arc<Worker>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +149,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/accounts", get(accounts))
         .route("/api/chat/{conversation_uuid}", get(chat))
         .route("/api/feedback", post(submit_feedback))
+        .route("/api/sync/sources", get(sync_sources))
+        .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
+        .route("/api/sync/jobs/all", get(sync_jobs_all))
+        .route("/api/sync/jobs/{id}", get(sync_job_get))
+        .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
+        .route("/api/sync/jobs/{id}/log", get(sync_job_log))
         .nest_service("/api/media", ServeDir::new(media_dir))
         .with_state(state)
         .layer(CorsLayer::permissive())
@@ -415,6 +428,171 @@ fn col(field: &str, header: &str, default_visible: bool) -> ColumnSpec {
     }
 }
 
+/// One entry in `GET /api/sync/sources`. Derived from the config file
+/// at the data root — the backend never persists this list to SQL.
+#[derive(Debug, Serialize)]
+pub struct SourceInfo {
+    pub name: String,
+    pub provider: String,
+    pub kind: String,
+    pub managed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EnqueueJobRequest {
+    pub kind: String,
+    #[serde(default)]
+    pub source_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct JobsAllParams {
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Read sources directly from `~/.config/frankweiler/config.yaml` (or
+/// the file pointed at by `$FRANKWEILER_CONFIG`). We don't go through
+/// the Rust `Config` because it doesn't model `sources:` yet — the
+/// Python ingest config does, and we just want to surface name + provider
+/// + kind + managed flag for the UI. Unknown / extra fields are ignored.
+async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
+    let path = frankweiler_core::config::default_config_path();
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Json(Vec::new()),
+    };
+    #[derive(Deserialize)]
+    struct Top {
+        #[serde(default)]
+        sources: Vec<RawSource>,
+    }
+    #[derive(Deserialize)]
+    struct RawSource {
+        name: String,
+        provider: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        managed: bool,
+    }
+    let parsed: Top = serde_yaml::from_str(&raw).unwrap_or(Top { sources: vec![] });
+    let out: Vec<SourceInfo> = parsed
+        .sources
+        .into_iter()
+        .map(|r| SourceInfo {
+            name: r.name,
+            provider: r.provider,
+            kind: r.kind.unwrap_or_default(),
+            managed: r.managed,
+        })
+        .collect();
+    let _ = s; // unused; included for symmetry with other handlers.
+    Json(out)
+}
+
+async fn sync_jobs_active(State(s): State<AppState>) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
+    s.repo
+        .list_jobs(true, 200)
+        .await
+        .map(Json)
+        .map_err(repo_err_to_status)
+}
+
+async fn sync_jobs_all(
+    State(s): State<AppState>,
+    Query(p): Query<JobsAllParams>,
+) -> Result<Json<Vec<SyncJobRow>>, StatusCode> {
+    let limit = p.limit.unwrap_or(200).min(10_000);
+    s.repo
+        .list_jobs(false, limit)
+        .await
+        .map(Json)
+        .map_err(repo_err_to_status)
+}
+
+async fn sync_job_get(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<SyncJobRow>, StatusCode> {
+    match s.repo.get_job(&id).await {
+        Ok(Some(row)) => Ok(Json(row)),
+        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Err(e) => Err(repo_err_to_status(e)),
+    }
+}
+
+async fn sync_enqueue(
+    State(s): State<AppState>,
+    Json(req): Json<EnqueueJobRequest>,
+) -> Result<Json<SyncJobRow>, StatusCode> {
+    // Validate the discriminator client-side; the DB column is a
+    // VARCHAR with no enum constraint so we'd otherwise accept anything.
+    match req.kind.as_str() {
+        "download" | "ingest" | "render" | "all" => {}
+        _ => return Err(StatusCode::BAD_REQUEST),
+    }
+    s.repo
+        .enqueue_job(&req.kind, req.source_name.as_deref())
+        .await
+        .map(Json)
+        .map_err(repo_err_to_status)
+}
+
+async fn sync_job_cancel(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    s.repo
+        .request_cancel_job(&id)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(repo_err_to_status)
+}
+
+/// Tail the per-job log written by the worker at `<root>/state/job-logs/{id}.log`.
+/// 404 when the file doesn't exist yet — the UI polls `/jobs/{id}` for state
+/// and only follows the log link once it appears.
+async fn sync_job_log(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        String,
+    ),
+    StatusCode,
+> {
+    // Defensive: reject anything that could traverse outside the logs dir.
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let path = s.root.join("state/job-logs").join(format!("{id}.log"));
+    match std::fs::read_to_string(&path) {
+        Ok(body) => Ok((
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; charset=utf-8",
+            )],
+            body,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+fn repo_err_to_status(e: RepoError) -> StatusCode {
+    match e {
+        RepoError::ReadOnly => StatusCode::SERVICE_UNAVAILABLE,
+        _ => {
+            eprintln!("repo error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +611,7 @@ mod tests {
             repo,
             dolt_server: None,
             qmd_daemon: None,
+            worker: None,
         });
     }
 }

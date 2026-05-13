@@ -16,6 +16,7 @@ rust_library(
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:serde_yaml",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tower-http",
         "@frankweiler_crates//:uuid",

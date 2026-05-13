@@ -28,6 +28,7 @@ use crate::query::ParsedQuery;
 use crate::repo::{MirrorRepo, RepoError};
 use crate::search::SearchRow;
 use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
+use frankweiler_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 
 /// MySQL/Dolt-backed implementation of [`MirrorRepo`].
 ///
@@ -57,6 +58,7 @@ impl DoltRepo {
             .await?;
         let repo = Self::from_pool(pool, root);
         repo.init_feedback_table().await?;
+        repo.init_sync_jobs_table().await?;
         Ok(repo)
     }
 
@@ -65,6 +67,15 @@ impl DoltRepo {
     /// even with `--no-auto-commit`, so no DOLT_COMMIT is needed here.
     async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in FEEDBACK_DDL {
+            sqlx::query(ddl).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    /// Apply the sync_jobs DDL. The Python worker also runs this on its
+    /// own startup; double-application is a no-op.
+    async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
+        for (_table, ddl) in SYNC_JOBS_DDL {
             sqlx::query(ddl).execute(&self.pool).await?;
         }
         Ok(())
@@ -316,6 +327,132 @@ impl MirrorRepo for DoltRepo {
         Ok(out)
     }
 
+    async fn list_jobs(
+        &self,
+        only_active: bool,
+        limit: usize,
+    ) -> Result<Vec<SyncJobRow>, RepoError> {
+        let base = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                           started_at, finished_at, error, pid, progress_pct, progress_msg \
+                    FROM sync_jobs";
+        let sql = if only_active {
+            format!(
+                "{base} WHERE state IN ('pending','running') \
+                 ORDER BY created_at DESC, id DESC LIMIT ?"
+            )
+        } else {
+            format!("{base} ORDER BY created_at DESC, id DESC LIMIT ?")
+        };
+        let rows = sqlx::query(&sql)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let mut out: Vec<SyncJobRow> = Vec::with_capacity(rows.len());
+        for r in rows {
+            out.push(row_to_sync_job(&r));
+        }
+        Ok(out)
+    }
+
+    async fn get_job(&self, job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
+        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+                   FROM sync_jobs WHERE id = ? LIMIT 1";
+        let row = sqlx::query(sql)
+            .bind(job_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        Ok(row.as_ref().map(row_to_sync_job))
+    }
+
+    async fn enqueue_job(
+        &self,
+        kind: &str,
+        source_name: Option<&str>,
+    ) -> Result<SyncJobRow, RepoError> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Local::now().to_rfc3339();
+        let row = SyncJobRow {
+            id: id.clone(),
+            source_name: source_name.map(|s| s.to_string()),
+            kind: kind.to_string(),
+            parent_job_id: None,
+            state: "pending".to_string(),
+            created_at: created_at.clone(),
+            started_at: None,
+            finished_at: None,
+            error: None,
+            pid: None,
+            progress_pct: None,
+            progress_msg: None,
+        };
+        // Pin INSERT + DOLT_COMMIT to one connection: same rationale as
+        // `insert_feedback` — Dolt's working set is session-scoped under
+        // `--no-auto-commit`, so the worker (on a different connection)
+        // wouldn't see an uncommitted row.
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        sqlx::query(
+            "INSERT INTO sync_jobs \
+             (id, source_name, kind, parent_job_id, state, created_at, \
+              started_at, finished_at, error, pid, progress_pct, progress_msg) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.id)
+        .bind(&row.source_name)
+        .bind(&row.kind)
+        .bind(&row.parent_job_id)
+        .bind(&row.state)
+        .bind(&row.created_at)
+        .bind(&row.started_at)
+        .bind(&row.finished_at)
+        .bind(&row.error)
+        .bind(row.pid)
+        .bind(row.progress_pct)
+        .bind(&row.progress_msg)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
+        let msg = format!("sync_job: {} pending", row.id);
+        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
+            .bind(msg)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        Ok(row)
+    }
+
+    async fn request_cancel_job(&self, job_id: &str) -> Result<(), RepoError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        // Match the Python `request_cancel` semantics: flip pending/running
+        // rows to `canceled` so the worker picks it up on the next poll.
+        // Terminal rows are left alone (no-op).
+        sqlx::query(
+            "UPDATE sync_jobs SET state = 'canceled' \
+             WHERE id = ? AND state IN ('pending', 'running')",
+        )
+        .bind(job_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
+        let msg = format!("sync_job: {job_id} cancel-requested");
+        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
+            .bind(msg)
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        Ok(())
+    }
+
     async fn qmd_path_for_conversation(
         &self,
         conversation_uuid: &str,
@@ -332,5 +469,22 @@ impl MirrorRepo for DoltRepo {
         let Some(r) = row else { return Ok(None) };
         let rel: Option<String> = r.try_get("qmd_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
+    }
+}
+
+fn row_to_sync_job(r: &sqlx::mysql::MySqlRow) -> SyncJobRow {
+    SyncJobRow {
+        id: r.try_get("id").unwrap_or_default(),
+        source_name: r.try_get("source_name").ok(),
+        kind: r.try_get("kind").unwrap_or_default(),
+        parent_job_id: r.try_get("parent_job_id").ok(),
+        state: r.try_get("state").unwrap_or_default(),
+        created_at: r.try_get("created_at").unwrap_or_default(),
+        started_at: r.try_get("started_at").ok(),
+        finished_at: r.try_get("finished_at").ok(),
+        error: r.try_get("error").ok(),
+        pid: r.try_get::<i32, _>("pid").ok().map(|n| n as i64),
+        progress_pct: r.try_get("progress_pct").ok(),
+        progress_msg: r.try_get("progress_msg").ok(),
     }
 }

@@ -9,6 +9,8 @@ rust_library(
         "src/generated/anthropic.rs",
         "src/generated/feedback.rs",
         "src/generated/grid_rows.rs",
+        "src/generated/sync_jobs.rs",
+        "src/generated/download_runs.rs",
     ],
     crate_name = "frankweiler_schema",
     edition = "2021",

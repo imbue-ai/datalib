@@ -402,6 +402,7 @@ dependencies = [
  "frankweiler-schema",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sqlx",
  "tokio",
  "tower",

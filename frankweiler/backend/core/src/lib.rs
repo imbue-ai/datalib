@@ -11,6 +11,7 @@ pub mod repo;
 pub mod search;
 pub mod sqlite_repo;
 pub mod version;
+pub mod worker;
 
 #[cfg(test)]
 mod tests {

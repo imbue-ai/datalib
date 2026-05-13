@@ -26,6 +26,7 @@ use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 use frankweiler_schema::feedback::FeedbackRow;
+use frankweiler_schema::sync_jobs::SyncJobRow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {
@@ -74,6 +75,41 @@ pub trait MirrorRepo: Send + Sync {
     /// entry. The default impl returns [`RepoError::ReadOnly`]; only
     /// [`crate::dolt_repo::DoltRepo`] overrides it.
     async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// List `sync_jobs` rows. When `only_active` is true, returns only
+    /// rows in `pending` or `running` state — used by the UI's polling
+    /// chrome. Otherwise returns the most recent `limit` rows newest-first.
+    /// Default impl returns [`RepoError::ReadOnly`].
+    async fn list_jobs(
+        &self,
+        _only_active: bool,
+        _limit: usize,
+    ) -> Result<Vec<SyncJobRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Fetch a single sync job by id. Returns `Ok(None)` when not found.
+    async fn get_job(&self, _job_id: &str) -> Result<Option<SyncJobRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Enqueue a new `pending` sync job. Implementations stamp the id
+    /// (UUIDv4) and `created_at` themselves so callers don't have to.
+    /// The new row is returned as written.
+    async fn enqueue_job(
+        &self,
+        _kind: &str,
+        _source_name: Option<&str>,
+    ) -> Result<SyncJobRow, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Request cancellation of a pending/running job. Flips `state` to
+    /// `canceled` for pending/running rows; the worker observes the
+    /// state change on its next poll and SIGTERMs its child.
+    async fn request_cancel_job(&self, _job_id: &str) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
 }
