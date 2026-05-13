@@ -189,6 +189,7 @@ def _render_block(
     user_names: dict[str, str],
     page_titles: dict[str, str],
     sub_pages_dir: dict[str, str],  # child_page id → relative dir of its index.md
+    media_urls: dict[str, str],
     depth: int = 0,
 ) -> list[str]:
     """Return markdown lines (no trailing newline) for one block + its
@@ -211,6 +212,7 @@ def _render_block(
                     user_names=user_names,
                     page_titles=page_titles,
                     sub_pages_dir=sub_pages_dir,
+                    media_urls=media_urls,
                     depth=depth + extra_depth,
                 )
             )
@@ -272,7 +274,7 @@ def _render_block(
         lines.append("---")
         lines.append("")
     elif btype == "image":
-        url = _media_url(payload)
+        url = _media_url(payload) or media_urls.get(block["id"], "")
         caption = rt("caption") or "image"
         if url:
             lines.append(f"![{caption}]({url})")
@@ -280,7 +282,7 @@ def _render_block(
             lines.append(f"*(image: {caption})*")
         lines.append("")
     elif btype in ("video", "audio", "pdf", "file"):
-        url = _media_url(payload)
+        url = _media_url(payload) or media_urls.get(block["id"], "")
         caption = rt("caption") or btype
         name = (payload.get("name") if btype == "file" else None) or caption
         icon = {"video": "🎬", "audio": "🎵", "pdf": "📄", "file": "📎"}[btype]
@@ -477,6 +479,7 @@ def _render_page(
     children_by_parent: dict[str, list[dict]],
     user_names: dict[str, str],
     page_titles: dict[str, str],
+    media_urls: dict[str, str],
     out_root: Path,
 ) -> Path:
     pid = page["id"]
@@ -522,6 +525,7 @@ def _render_page(
                 user_names=user_names,
                 page_titles=page_titles,
                 sub_pages_dir=sub_pages_dir,
+                media_urls=media_urls,
             )
         )
 
@@ -562,6 +566,7 @@ def render(
     children_by_parent = _index_children(blocks)
     page_titles = _build_page_titles(pages, blocks)
     user_names = _user_names_from_unofficial(backups_dir)
+    media_urls = _media_urls_from_unofficial(backups_dir)
 
     # BFS from the requested root, visiting only pages we actually have.
     raw = subtree.replace("-", "")
@@ -586,6 +591,7 @@ def render(
             children_by_parent=children_by_parent,
             user_names=user_names,
             page_titles=page_titles,
+            media_urls=media_urls,
             out_root=out,
         )
         rendered += 1
@@ -618,6 +624,33 @@ def _user_names_from_unofficial(backups_dir: Path) -> dict[str, str]:
         name = val.get("name") or val.get("given_name") or ""
         if uid and name:
             out[uid] = name
+    return out
+
+
+def _media_urls_from_unofficial(backups_dir: Path) -> dict[str, str]:
+    """Map block id → source URL from the unofficial-API mirror. The official
+    API often returns `image`/`video`/`file` blocks with no URL — the
+    integration/PAT token can't sign attachment URLs hosted in
+    prod-files-secure. The unofficial mirror still has them in
+    `properties.source[0][0]`, so use those as a fallback."""
+    path = backups_dir / "notion_block" / "updated" / "events.jsonl"
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    media_types = {"image", "video", "audio", "pdf", "file"}
+    for rec in load_jsonl(path):
+        raw = rec.get("raw") or {}
+        val = raw.get("value") or {}
+        if "value" in val and isinstance(val["value"], dict):
+            val = val["value"]
+        if val.get("type") not in media_types:
+            continue
+        src = (val.get("properties") or {}).get("source")
+        url = ""
+        if isinstance(src, list) and src and isinstance(src[0], list) and src[0]:
+            url = src[0][0] or ""
+        if url:
+            out[val.get("id") or rec.get("id")] = url
     return out
 
 
