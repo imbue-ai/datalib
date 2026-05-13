@@ -21,8 +21,7 @@ from ingest.render import _slack_message_link
 def test_root_message_uses_plain_permalink() -> None:
     url = _slack_message_link("T_NCC1701D", "C_BRIDGE", "12604000100.000100")
     assert (
-        url
-        == "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
+        url == "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
     )
 
 
@@ -34,8 +33,7 @@ def test_thread_reply_includes_thread_context_in_render() -> None:
         thread_ts="12604000100.000100",
     )
     assert (
-        url
-        == "https://slack.com/archives/C_BRIDGE/p12604000200000200"
+        url == "https://slack.com/archives/C_BRIDGE/p12604000200000200"
         "?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE"
     )
 
@@ -50,8 +48,7 @@ def test_root_message_when_ts_equals_thread_ts_stays_plain() -> None:
         thread_ts="12604000100.000100",
     )
     assert (
-        url
-        == "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
+        url == "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
     )
 
 

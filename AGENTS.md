@@ -142,6 +142,27 @@ the history intact and is cheap to read with `git log --first-parent`.
 In practice: `git pull` (default merge), not `git pull --rebase`. Force-
 push is off the table on shared branches.
 
+## Python deps: pyproject.toml → requirements.txt → Bazel
+
+`uv` and Bazel read **different** files for Python deps:
+
+- `uv run …` reads `pyproject.toml` + `uv.lock`.
+- Bazel's `pip.parse` in `MODULE.bazel` reads `requirements.txt` (the
+  hub is `@py_pip`, consumed via `requirement("…")` in BUILD files).
+
+`requirements.txt` is a generated artifact — it must be regenerated
+after any `pyproject.toml` dep change, or Bazel targets that try to
+`requirement("newpkg")` will fail with
+`no such package '@@…py_pip//newpkg': BUILD file not found`:
+
+```sh
+uv export --no-emit-project --no-emit-workspace --format requirements-txt -o requirements.txt
+```
+
+Then add `requirement("newpkg")` to the relevant `BUILD.bazel` `deps`.
+A `uv run` smoke test won't catch a missing Bazel dep — the venv has it.
+Run `bazelisk build //…` (or `//src/ingest:cli`) to verify.
+
 ## Running tests
 
 **Default to `bazelisk test //...` for any "are tests passing?" question.**

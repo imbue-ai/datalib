@@ -17,7 +17,9 @@ from ingest.providers.slack.mrkdwn import resolve_user_mentions
 
 def test_resolve_user_mentions_swaps_known_id_for_label() -> None:
     assert (
-        resolve_user_mentions("<@U_PICARD> has joined the channel", {"U_PICARD": "Jean-Luc Picard"})
+        resolve_user_mentions(
+            "<@U_PICARD> has joined the channel", {"U_PICARD": "Jean-Luc Picard"}
+        )
         == "@Jean-Luc Picard has joined the channel"
     )
 

@@ -560,7 +560,9 @@ def _render_one_slack_thread(
     team_id = root_msg.team_id
     channel_id = root_msg.channel_id
 
-    snippet = resolve_user_mentions(root_msg.text or "", user_labels).strip().splitlines()
+    snippet = (
+        resolve_user_mentions(root_msg.text or "", user_labels).strip().splitlines()
+    )
     title = snippet[0] if snippet else "(empty thread)"
     title = title[:80]
 

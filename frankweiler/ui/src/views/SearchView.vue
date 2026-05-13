@@ -383,6 +383,14 @@ function syncHash() {
   const q: Record<string, string> = {};
   if (query.value) q.q = query.value;
   if (selectedRow.value) q.sel = rowKey(selectedRow.value);
+  else if (typeof route.query.sel === "string" && rows.value.length === 0) {
+    // Preserve the URL's pending `sel` until rows load and
+    // tryRestoreSelection has had a chance to run. AG Grid's column
+    // events fire as microtasks after applyColumnState, slipping out of
+    // the `restoring=true` window, and would otherwise clobber the
+    // URL's selection target before we can restore it on reload.
+    q.sel = route.query.sel;
+  }
   if (gridApi) {
     const state = gridApi.getColumnState();
     if (state.length > 0) q.cols = encodeColumnState(state);
@@ -524,6 +532,11 @@ function applyDefaultSort() {
   // which happens after the current tick.
   nextTick(() => {
     if (!gridApi) return;
+    // If the URL is pinning a row, tryRestoreSelection scrolls to it —
+    // don't fight that with a default scroll.
+    if (typeof route.query.sel === "string" && route.query.sel.length > 0) {
+      return;
+    }
     if (hasScores) {
       gridApi.ensureIndexVisible(0, "top");
     } else {

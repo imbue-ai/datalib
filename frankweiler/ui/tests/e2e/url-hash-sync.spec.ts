@@ -12,21 +12,31 @@ import { test, expect } from "@playwright/test";
 // changes in response to user actions. It does not pin a serialization
 // format — the implementer is free to choose one.
 
+// Resolve a stable target row by its `row-id` (AG Grid's per-row UUID
+// attribute). `.first()` in a virtualized grid is racy: after a sort or
+// scroll, the row at DOM-position-0 can shift mid-test, so a click and
+// the subsequent class-assertion may end up looking at different rows.
+async function pinFirstRowId(page: import("@playwright/test").Page) {
+  const first = page.locator('.ag-center-cols-container [role="row"]').first();
+  await expect(first).toBeVisible();
+  const id = await first.getAttribute("row-id");
+  expect(id, "first data row must have a row-id attribute").toBeTruthy();
+  return id!;
+}
+
 test.describe("URL hash reflects app state (bug #1)", () => {
   test("selecting a row updates the URL hash", async ({ page }) => {
     await page.goto("/");
-    // Wait for grid rows to render. AG Grid puts each row in a div with
-    // role=row and a data-rowindex attribute.
-    const firstDataRow = page
-      .locator('.ag-center-cols-container [role="row"]')
-      .first();
-    await expect(firstDataRow).toBeVisible();
+    const rowId = await pinFirstRowId(page);
+    const target = page.locator(
+      `.ag-center-cols-container [role="row"][row-id="${rowId}"]`,
+    );
 
     const beforeHash = await page.evaluate(() => location.hash);
 
-    await firstDataRow.click();
+    await target.click();
     // Selection visibly applies (row gets ag-row-selected class).
-    await expect(firstDataRow).toHaveClass(/ag-row-selected/);
+    await expect(target).toHaveClass(/ag-row-selected/);
 
     const afterHash = await page.evaluate(() => location.hash);
     expect(
@@ -37,12 +47,12 @@ test.describe("URL hash reflects app state (bug #1)", () => {
 
   test("hash survives reload — selected row is restored", async ({ page }) => {
     await page.goto("/");
-    const firstDataRow = page
-      .locator('.ag-center-cols-container [role="row"]')
-      .first();
-    await expect(firstDataRow).toBeVisible();
-    await firstDataRow.click();
-    await expect(firstDataRow).toHaveClass(/ag-row-selected/);
+    const rowId = await pinFirstRowId(page);
+    const target = page.locator(
+      `.ag-center-cols-container [role="row"][row-id="${rowId}"]`,
+    );
+    await target.click();
+    await expect(target).toHaveClass(/ag-row-selected/);
 
     const hashWithSelection = await page.evaluate(() => location.hash);
     expect(hashWithSelection).not.toBe("#/search");
