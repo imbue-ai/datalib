@@ -7,13 +7,20 @@ from pathlib import Path
 
 from ingest.config import (
     AnthropicExportDirSource,
+    ChatgptWebSync,
+    ClaudeWebSync,
     Config,
     DoltConfig,
+    GithubWebSync,
+    GitlabWebSync,
+    NotionWebSync,
+    SlackWebSync,
     load_config,
 )
 from ingest.grid_rows import _anthropic_rows
 from ingest.providers.anthropic.parse import parse_export
 from ingest.render import _slugify
+from ingest.run_source import resolve, sync_to_argv
 
 
 def test_slugify_basic() -> None:
@@ -100,6 +107,113 @@ sources:
         assert "sync" in str(e).lower()
         return
     raise AssertionError("expected managed-without-sync validation to fail")
+
+
+def test_sync_to_argv_per_provider(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    assert sync_to_argv(
+        SlackWebSync(
+            kind="slack_web",
+            channels=["general", "random"],
+            since="2026-01-01",
+            refresh_window_days=7,
+            all_channels=True,
+            media=False,
+        ),
+        out,
+    ) == [
+        "--out-dir",
+        str(out),
+        "--channels",
+        "general",
+        "--channels",
+        "random",
+        "--since",
+        "2026-01-01",
+        "--refresh-window-days",
+        "7",
+        "--all",
+        "--no-media",
+    ]
+    assert sync_to_argv(ClaudeWebSync(kind="claude_web", overlap=5), out) == [
+        "--out-dir",
+        str(out),
+        "--overlap",
+        "5",
+    ]
+    assert sync_to_argv(
+        ChatgptWebSync(kind="chatgpt_web", max_pages=10, sleep_between=0.5), out
+    ) == [
+        "--out-dir",
+        str(out),
+        "--max-pages",
+        "10",
+        "--sleep-between",
+        "0.5",
+    ]
+    assert sync_to_argv(GithubWebSync(kind="github_web", max_prs=3), out) == [
+        "--out-dir",
+        str(out),
+        "--max-prs",
+        "3",
+    ]
+    assert sync_to_argv(GitlabWebSync(kind="gitlab_web", max_mrs=4), out) == [
+        "--out-dir",
+        str(out),
+        "--max-mrs",
+        "4",
+    ]
+    assert sync_to_argv(
+        NotionWebSync(kind="notion_web", subtree="abc", space="def"), out
+    ) == ["--out-dir", str(out), "--subtree", "abc", "--space", "def"]
+
+
+def test_resolve_returns_sync_and_raw_outdir(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg_path.write_text(
+        f"""
+root: {root}
+sources:
+  - name: slack-imbue
+    provider: slack
+    kind: slack_api_dir
+    path: {tmp_path}/slack
+    managed: true
+    sync:
+      kind: slack_web
+      channels: ["general"]
+"""
+    )
+    sync, out_dir = resolve("slack-imbue", cfg_path)
+    assert isinstance(sync, SlackWebSync)
+    assert sync.channels == ["general"]
+    assert out_dir == root / "raw" / "slack-imbue"
+    assert out_dir.exists()
+
+
+def test_resolve_missing_sync_block_rejected(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg_path.write_text(
+        f"""
+root: {root}
+sources:
+  - name: manual
+    provider: anthropic
+    kind: export_dir
+    path: {tmp_path}/export
+"""
+    )
+    try:
+        resolve("manual", cfg_path)
+    except ValueError as e:
+        assert "sync" in str(e).lower()
+        return
+    raise AssertionError("expected resolve() to reject sync-less source")
 
 
 def test_config_rejects_duplicate_source_names(tmp_path: Path) -> None:
