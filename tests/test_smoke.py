@@ -51,6 +51,57 @@ sources:
     assert cfg.enabled_sources[0].name == "test"
 
 
+def test_config_managed_source_with_sync_block(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg_path.write_text(
+        f"""
+root: {root}
+sources:
+  - name: slack-work
+    provider: slack
+    kind: slack_api_dir
+    path: {tmp_path}/slack
+    managed: true
+    sync:
+      kind: slack_web
+      channels: ["general", "random"]
+      refresh_window_days: 7
+"""
+    )
+    cfg = load_config(cfg_path)
+    src = cfg.enabled_sources[0]
+    assert src.managed is True
+    assert src.sync is not None
+    assert src.sync.kind == "slack_web"
+    assert src.sync.channels == ["general", "random"]
+    assert src.sync.refresh_window_days == 7
+
+
+def test_config_managed_without_sync_block_rejected(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "config.yaml"
+    root = tmp_path / "data"
+    root.mkdir()
+    cfg_path.write_text(
+        f"""
+root: {root}
+sources:
+  - name: bad
+    provider: slack
+    kind: slack_api_dir
+    path: {tmp_path}/slack
+    managed: true
+"""
+    )
+    try:
+        load_config(cfg_path)
+    except Exception as e:
+        assert "sync" in str(e).lower()
+        return
+    raise AssertionError("expected managed-without-sync validation to fail")
+
+
 def test_config_rejects_duplicate_source_names(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.yaml"
     root = tmp_path / "data"

@@ -15,9 +15,79 @@ class DoltConfig(BaseModel):
     user: str = "root"
 
 
+# ---------------------------------------------------------------------------
+# Sync blocks: per-provider knobs that drive `mixed-up-files worker` when the
+# source is `managed: true`. The same block is read by each downloader binary
+# when run standalone (with --source-name <name>), so there's one source of
+# truth for "what to pull from this provider". Discriminated on `kind` because
+# a single provider can grow more than one sync mode over time.
+# ---------------------------------------------------------------------------
+
+
+class _SyncBase(BaseModel):
+    refresh_window_days: int | None = None
+
+
+class ClaudeWebSync(_SyncBase):
+    kind: Literal["claude_web"]
+    overlap: int | None = None
+
+
+class ChatgptWebSync(_SyncBase):
+    kind: Literal["chatgpt_web"]
+    max_pages: int | None = None
+    limit: int | None = None
+    sleep_between: float | None = None
+
+
+class SlackWebSync(_SyncBase):
+    kind: Literal["slack_web"]
+    channels: list[str] | None = None
+    since: str | None = None
+    all_channels: bool = False
+    media: bool = True
+
+
+class GithubWebSync(_SyncBase):
+    kind: Literal["github_web"]
+    max_prs: int | None = None
+
+
+class GitlabWebSync(_SyncBase):
+    kind: Literal["gitlab_web"]
+    max_mrs: int | None = None
+
+
+class NotionWebSync(_SyncBase):
+    kind: Literal["notion_web"]
+    subtree: str | None = None
+    space: str | None = None
+    notification_page_size: int | None = None
+    max_notification_pages: int | None = None
+    inbox_types: list[str] | None = None
+    subtree_max_pages: int | None = None
+
+
+SyncConfig = Annotated[
+    ClaudeWebSync
+    | ChatgptWebSync
+    | SlackWebSync
+    | GithubWebSync
+    | GitlabWebSync
+    | NotionWebSync,
+    Field(discriminator="kind"),
+]
+
+
 class _SourceBase(BaseModel):
     name: str
     enabled: bool = True
+    # `managed: true` = the worker is allowed to run this source's downloader
+    # in response to UI-driven sync jobs. `managed: false` (default) = data
+    # arrives via an external process (e.g. legacy export drops); the worker
+    # only ingests what's already on disk.
+    managed: bool = False
+    sync: SyncConfig | None = None
 
     @field_validator("name")
     @classmethod
@@ -25,6 +95,14 @@ class _SourceBase(BaseModel):
         if not v.strip():
             raise ValueError("source name must be non-empty")
         return v
+
+    @model_validator(mode="after")
+    def _managed_requires_sync(self) -> _SourceBase:
+        if self.managed and self.sync is None:
+            raise ValueError(
+                f"source {self.name!r}: managed=true requires a `sync:` block"
+            )
+        return self
 
 
 class AnthropicExportDirSource(_SourceBase):
