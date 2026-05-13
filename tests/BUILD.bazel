@@ -17,6 +17,21 @@ py_test(
     ],
 )
 
+# Pure-Python unit test for the worker package (Phase D).
+py_test(
+    name = "test_worker",
+    size = "small",
+    srcs = [
+        "test_worker.py",
+        "conftest_worker.py",
+    ],
+    main = "conftest_worker.py",
+    deps = [
+        "//src/worker",
+        requirement("pytest"),
+    ],
+)
+
 # Pure-Python unit test for per-provider orphan cleanup (C.6).
 py_test(
     name = "test_orphan_cleanup",

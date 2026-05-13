@@ -1,0 +1,23 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@py_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "worker",
+    srcs = glob(["**/*.py"]),
+    imports = [".."],  # parent of `worker/` is `src/`
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/ingest",
+        requirement("pydantic"),
+        requirement("pymysql"),
+        requirement("typer"),
+    ],
+)
+
+py_binary(
+    name = "worker_bin",
+    srcs = ["__main__.py"],
+    main = "__main__.py",
+    visibility = ["//visibility:public"],
+    deps = [":worker"],
+)
