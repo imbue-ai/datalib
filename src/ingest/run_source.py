@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -110,11 +111,21 @@ def sync_to_argv(sync: SyncConfig, out_dir: Path) -> list[str]:
     raise ValueError(f"unknown sync kind: {sync!r}")
 
 
+def _run_timestamp() -> str:
+    """Localized ISO-8601 with offset, filesystem-safe (`:` -> `-`)."""
+    return datetime.now().astimezone().isoformat(timespec="seconds").replace(":", "-")
+
+
 def resolve(
-    source_name: str, config_path: Path | None = None
+    source_name: str,
+    config_path: Path | None = None,
+    run_timestamp: str | None = None,
 ) -> tuple[SyncConfig, Path]:
     """Look up `source_name` in the config and return its `sync:` block plus
-    the directory where the downloader should write (under `<root>/raw/<name>/`)."""
+    the dated raw output directory for this run
+    (`<root>/raw/<source-name>/<ISO-timestamp>/`). Each invocation gets its
+    own subdir so consecutive runs don't trample each other; the worker
+    (Phase D) will record `download_runs.raw_path` pointing at it."""
     cfg = load_config(config_path)
     for src in cfg.sources:
         if src.name != source_name:
@@ -124,7 +135,8 @@ def resolve(
                 f"source {source_name!r}: no `sync:` block in config — "
                 f"cannot drive a downloader for this source"
             )
-        out_dir = cfg.root / "raw" / src.name
+        ts = run_timestamp or _run_timestamp()
+        out_dir = cfg.root / "raw" / src.name / ts
         out_dir.mkdir(parents=True, exist_ok=True)
         return src.sync, out_dir
     raise ValueError(f"source {source_name!r} not found in config")

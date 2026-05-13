@@ -187,11 +187,14 @@ sources:
       channels: ["general"]
 """
     )
-    sync, out_dir = resolve("slack-imbue", cfg_path)
+    sync, out_dir = resolve(
+        "slack-imbue", cfg_path, run_timestamp="2026-05-13T14-22-05-07-00"
+    )
     assert isinstance(sync, SlackWebSync)
     assert sync.channels == ["general"]
-    assert out_dir == root / "raw" / "slack-imbue"
+    assert out_dir == root / "raw" / "slack-imbue" / "2026-05-13T14-22-05-07-00"
     assert out_dir.exists()
+    assert out_dir.parent == root / "raw" / "slack-imbue"
 
 
 def test_resolve_missing_sync_block_rejected(tmp_path: Path) -> None:
