@@ -82,7 +82,7 @@ def table_sections() -> dict[str, str]:
 # Table list mirrors `ingest.dump._TABLES` — kept hard-coded here so
 # the parametrize ids are visible at collection time without importing the
 # genrule's working set.
-_TABLES = ("grid_rows",)
+_TABLES = ("grid_rows", "documents")
 
 
 @pytest.fixture

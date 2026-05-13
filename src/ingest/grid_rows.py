@@ -845,18 +845,17 @@ def _notion_block_owning_page(block, blocks_by_id: dict) -> str | None:
 # ----- entry point ----------------------------------------------------------
 
 
-def populate_grid_rows(
-    conn: Connection,
+def gather_rows(
     anthropic: ParsedExport | None,
     openai: ParsedChatGPTApi | None,
     slack: ParsedSlackApi | None,
     github: ParsedGithubApi | None = None,
     gitlab: ParsedGitlabApi | None = None,
     notion: ParsedNotionWeb | None = None,
-) -> int:
-    """Truncate `grid_rows` and re-emit every row from the parsed provider
-    data. Returns the number of rows inserted."""
-    ensure_schema(conn)
+) -> list[_Row]:
+    """Assemble the unified `_Row` list from every provider's parsed data
+    without touching Dolt. Shared by `populate_grid_rows` and the
+    documents-table populator so they hash exactly the same row set."""
     rows: list[_Row] = []
     if anthropic is not None:
         rows.extend(_anthropic_rows(anthropic))
@@ -872,6 +871,26 @@ def populate_grid_rows(
         rows.extend(_gitlab_rows(gitlab, gl_acct))
     if notion is not None:
         rows.extend(_notion_rows(notion))
+    return rows
+
+
+def populate_grid_rows(
+    conn: Connection,
+    anthropic: ParsedExport | None,
+    openai: ParsedChatGPTApi | None,
+    slack: ParsedSlackApi | None,
+    github: ParsedGithubApi | None = None,
+    gitlab: ParsedGitlabApi | None = None,
+    notion: ParsedNotionWeb | None = None,
+    rows: list[_Row] | None = None,
+) -> int:
+    """Truncate `grid_rows` and re-emit every row from the parsed provider
+    data. Returns the number of rows inserted. Callers can pass a
+    pre-computed `rows` list (from `gather_rows`) to avoid re-running the
+    per-provider row generators."""
+    ensure_schema(conn)
+    if rows is None:
+        rows = gather_rows(anthropic, openai, slack, github, gitlab, notion)
 
     placeholders = ",".join(["%s"] * len(_GRID_ROWS_COLUMNS))
     columns_sql = ", ".join(_GRID_ROWS_COLUMNS)

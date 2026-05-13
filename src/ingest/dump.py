@@ -31,6 +31,7 @@ from typing import Any
 
 from pymysql.connections import Connection
 
+from ingest.generated_documents import DDL as _DOCUMENTS_DDL
 from ingest.generated_grid_rows import DDL as _GRID_ROWS_DDL
 
 
@@ -40,7 +41,7 @@ def _portable_ddl_for(table: str) -> str:
     plain CREATE is what we want for a fresh load) and normalizes
     whitespace so the output is stable regardless of how the source
     string was formatted."""
-    for stmt in _GRID_ROWS_DDL:
+    for stmt in (*_GRID_ROWS_DDL, *_DOCUMENTS_DDL):
         normalized = textwrap.dedent(stmt).strip()
         if re.search(
             rf"\bCREATE TABLE\b\s+(IF\s+NOT\s+EXISTS\s+)?{re.escape(table)}\b",
@@ -54,7 +55,7 @@ def _portable_ddl_for(table: str) -> str:
     raise KeyError(f"no portable DDL declared for table {table!r}")
 
 
-_TABLES = ("grid_rows",)
+_TABLES = ("grid_rows", "documents")
 
 
 def _quote_ident(name: str) -> str:

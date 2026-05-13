@@ -15,8 +15,9 @@ from ingest.config import (
     NotionWebDirSource,
     SlackApiDirSource,
 )
+from ingest.documents import populate_documents
 from ingest.dolt_service import DoltService
-from ingest.grid_rows import populate_grid_rows
+from ingest.grid_rows import gather_rows, populate_grid_rows
 from ingest.providers.anthropic.ingest import (
     ingest_export_dir,
     merge_anthropic,
@@ -83,6 +84,7 @@ class IngestSummary:
     rendered: int = 0
     rendered_orphans_removed: int = 0
     grid_rows: int = 0
+    documents: int = 0
 
 
 def ingest(config: Config, now: str | None = None) -> IngestSummary:
@@ -177,19 +179,34 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         summary.rendered_orphans_removed += r.orphans_removed
     write_accounts_json(anthropic, openai, config.root)
 
-    # Write grid_rows to Dolt — the only structured table that survives.
+    # Build the unified row stream once; `populate_grid_rows` and
+    # `populate_documents` both read from it so they hash the same input.
+    all_rows = gather_rows(anthropic, openai, slack, github, gitlab, notion)
+    # First-source-per-provider mapping. v0 documents.source_name is best-
+    # effort: when multiple sources share a provider they get merged into
+    # one Parsed object upstream, so we can't attribute each row to its
+    # originating source without threading source_name through every
+    # provider's parse layer. Revisit once incremental ingest lands.
+    provider_to_source_name: dict[str, str] = {}
+    for s in config.enabled_sources:
+        provider_to_source_name.setdefault(s.provider, s.name)
+
     with DoltService(config) as dolt:
         with dolt.connect() as conn:
             conn.autocommit(False)
-            log.info("populating grid_rows")
+            log.info("populating grid_rows + documents")
             t0 = time.monotonic()
             summary.grid_rows = populate_grid_rows(
-                conn, anthropic, openai, slack, github, gitlab, notion
+                conn, anthropic, openai, slack, github, gitlab, notion, rows=all_rows
+            )
+            summary.documents = populate_documents(
+                conn, all_rows, provider_to_source_name
             )
             conn.commit()
             log.info(
-                "grid_rows: %d rows in %.1fs",
+                "grid_rows: %d rows, documents: %d in %.1fs",
                 summary.grid_rows,
+                summary.documents,
                 time.monotonic() - t0,
             )
 
