@@ -49,7 +49,7 @@ from event_store import (
 
 DEFAULT_OUT_DIR = Path.home() / "backups" / "notion"
 BASE = "https://api.notion.com/v1"
-LATCHKEY_TIMEOUT = 60
+LATCHKEY_TIMEOUT = 180
 RETRY_MAX = 6
 RETRY_INITIAL_BACKOFF = 2.0
 RETRY_MAX_BACKOFF = 60.0
@@ -95,13 +95,21 @@ class NotionOfficialClient:
         backoff = RETRY_INITIAL_BACKOFF
         for attempt in range(RETRY_MAX + 1):
             t0 = time.perf_counter()
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=LATCHKEY_TIMEOUT,
-                check=False,
-            )
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=LATCHKEY_TIMEOUT,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as e:
+                # Wrap so the per-page error handler can catch and skip.
+                self.network_seconds += time.perf_counter() - t0
+                self.requests += 1
+                raise NotionOfficialError(
+                    f"{method} {path}: timeout after {LATCHKEY_TIMEOUT}s"
+                ) from e
             self.network_seconds += time.perf_counter() - t0
             self.requests += 1
             if proc.returncode != 0:
