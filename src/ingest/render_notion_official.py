@@ -190,6 +190,7 @@ def _render_block(
     page_titles: dict[str, str],
     sub_pages_dir: dict[str, str],  # child_page id → relative dir of its index.md
     media_urls: dict[str, str],
+    bookmark_titles: dict[str, str],
     depth: int = 0,
 ) -> list[str]:
     """Return markdown lines (no trailing newline) for one block + its
@@ -213,6 +214,7 @@ def _render_block(
                     page_titles=page_titles,
                     sub_pages_dir=sub_pages_dir,
                     media_urls=media_urls,
+                    bookmark_titles=bookmark_titles,
                     depth=depth + extra_depth,
                 )
             )
@@ -298,7 +300,7 @@ def _render_block(
         lines.append("")
     elif btype == "bookmark":
         url = payload.get("url") or ""
-        caption = rt("caption")
+        caption = rt("caption") or bookmark_titles.get(block["id"], "")
         lines.append(f"[{caption or url}]({url})")
         lines.append("")
     elif btype == "link_preview":
@@ -480,6 +482,7 @@ def _render_page(
     user_names: dict[str, str],
     page_titles: dict[str, str],
     media_urls: dict[str, str],
+    bookmark_titles: dict[str, str],
     out_root: Path,
 ) -> Path:
     pid = page["id"]
@@ -526,6 +529,7 @@ def _render_page(
                 page_titles=page_titles,
                 sub_pages_dir=sub_pages_dir,
                 media_urls=media_urls,
+                bookmark_titles=bookmark_titles,
             )
         )
 
@@ -566,7 +570,7 @@ def render(
     children_by_parent = _index_children(blocks)
     page_titles = _build_page_titles(pages, blocks)
     user_names = _user_names_from_unofficial(backups_dir)
-    media_urls = _media_urls_from_unofficial(backups_dir)
+    media_urls, bookmark_titles = _unofficial_block_lookups(backups_dir)
 
     # BFS from the requested root, visiting only pages we actually have.
     raw = subtree.replace("-", "")
@@ -592,6 +596,7 @@ def render(
             user_names=user_names,
             page_titles=page_titles,
             media_urls=media_urls,
+            bookmark_titles=bookmark_titles,
             out_root=out,
         )
         rendered += 1
@@ -627,31 +632,48 @@ def _user_names_from_unofficial(backups_dir: Path) -> dict[str, str]:
     return out
 
 
-def _media_urls_from_unofficial(backups_dir: Path) -> dict[str, str]:
-    """Map block id → source URL from the unofficial-API mirror. The official
-    API often returns `image`/`video`/`file` blocks with no URL — the
-    integration/PAT token can't sign attachment URLs hosted in
-    prod-files-secure. The unofficial mirror still has them in
-    `properties.source[0][0]`, so use those as a fallback."""
+def _unofficial_block_lookups(
+    backups_dir: Path,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Walk the unofficial-API mirror once and return:
+      - media_urls: block id → source URL for image/video/audio/pdf/file
+      - bookmark_titles: block id → title cached by Notion for bookmarks
+
+    Both fill gaps in the official API's response: PAT tokens can't sign
+    `prod-files-secure` URLs, and bookmark blocks come back with only the
+    raw URL (no title)."""
     path = backups_dir / "notion_block" / "updated" / "events.jsonl"
+    media_urls: dict[str, str] = {}
+    bookmark_titles: dict[str, str] = {}
     if not path.exists():
-        return {}
-    out: dict[str, str] = {}
+        return media_urls, bookmark_titles
     media_types = {"image", "video", "audio", "pdf", "file"}
+
+    def _first(props: dict, key: str) -> str:
+        v = (props or {}).get(key)
+        if isinstance(v, list) and v and isinstance(v[0], list) and v[0]:
+            return v[0][0] or ""
+        return ""
+
     for rec in load_jsonl(path):
         raw = rec.get("raw") or {}
         val = raw.get("value") or {}
         if "value" in val and isinstance(val["value"], dict):
             val = val["value"]
-        if val.get("type") not in media_types:
+        t = val.get("type")
+        bid = val.get("id") or rec.get("id")
+        if not bid:
             continue
-        src = (val.get("properties") or {}).get("source")
-        url = ""
-        if isinstance(src, list) and src and isinstance(src[0], list) and src[0]:
-            url = src[0][0] or ""
-        if url:
-            out[val.get("id") or rec.get("id")] = url
-    return out
+        props = val.get("properties") or {}
+        if t in media_types:
+            url = _first(props, "source")
+            if url:
+                media_urls[bid] = url
+        elif t == "bookmark":
+            title = _first(props, "title")
+            if title:
+                bookmark_titles[bid] = title
+    return media_urls, bookmark_titles
 
 
 def main() -> None:
