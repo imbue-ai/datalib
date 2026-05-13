@@ -224,6 +224,7 @@ def _anthropic_rows(parsed: ParsedExport) -> Iterable[_Row]:
             text=text,
             slack_link=None,
             qmd_path=_anthropic_qmd_path(c.account_uuid, c.conversation_uuid, c.name),
+            document_uuid=c.conversation_uuid,
         )
 
     # Message + block rows. Index messages within their conversation by
@@ -269,6 +270,7 @@ def _anthropic_rows(parsed: ParsedExport) -> Iterable[_Row]:
                 text=row_text,
                 slack_link=None,
                 qmd_path=_anthropic_qmd_path(conv.account_uuid, cuuid, conv.name),
+                document_uuid=cuuid,
             )
 
             for b in sorted(
@@ -299,6 +301,7 @@ def _anthropic_rows(parsed: ParsedExport) -> Iterable[_Row]:
                     text=btext or (b.type or ""),
                     slack_link=None,
                     qmd_path=_anthropic_qmd_path(conv.account_uuid, cuuid, conv.name),
+                    document_uuid=cuuid,
                 )
 
 
@@ -329,6 +332,7 @@ def _openai_rows(parsed: ParsedChatGPTApi) -> Iterable[_Row]:
             text=c.title or "",
             slack_link=None,
             qmd_path=_openai_qmd_path(c.account_id, c.conversation_id, c.title),
+            document_uuid=c.conversation_id,
         )
 
         msgs = sorted(
@@ -362,6 +366,7 @@ def _openai_rows(parsed: ParsedChatGPTApi) -> Iterable[_Row]:
                 text=m.text or "",
                 slack_link=None,
                 qmd_path=_openai_qmd_path(c.account_id, c.conversation_id, c.title),
+                document_uuid=c.conversation_id,
             )
 
 
@@ -407,6 +412,7 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
             qmd_path=_slack_qmd_path(
                 root_msg.team_id, cname, thread_uuid, root_msg.text, user_labels
             ),
+            document_uuid=thread_uuid,
         )
 
         # Message rows.
@@ -433,6 +439,7 @@ def _slack_rows(parsed: ParsedSlackApi) -> Iterable[_Row]:
                 qmd_path=_slack_qmd_path(
                     root_msg.team_id, cname, thread_uuid, root_msg.text, user_labels
                 ),
+                document_uuid=thread_uuid,
             )
 
 
@@ -480,6 +487,7 @@ def _github_rows(parsed: ParsedGithubApi, self_account: str | None) -> Iterable[
             source_url=pr.html_url,
             git_sha=pr.head_sha,
             external_id=str(pr.pr_number),
+            document_uuid=pr.uuid,
         )
 
     # Index comments per-PR so message_index is per-thread.
@@ -516,6 +524,7 @@ def _github_rows(parsed: ParsedGithubApi, self_account: str | None) -> Iterable[
                 source_url=c.html_url,
                 git_sha=c.commit_id,
                 external_id=c.external_id,
+                document_uuid=pr.uuid,
             )
 
 
@@ -565,6 +574,7 @@ def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[
             source_url=mr.web_url,
             git_sha=mr.head_sha,
             external_id=str(mr.mr_iid),
+            document_uuid=mr.uuid,
         )
 
     notes_by_thread: dict[tuple[str, int, str], list] = {}
@@ -600,6 +610,7 @@ def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[
                 source_url=n.web_url,
                 git_sha=n.commit_sha,
                 external_id=n.external_id,
+                document_uuid=mr.uuid,
             )
 
 
@@ -663,6 +674,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
                 source_url=notion_url(b.block_id),
                 notion_page_uuid=b.block_id,
                 notion_block_uuid=None,
+                document_uuid=b.block_id,
             )
             continue
 
@@ -702,6 +714,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             source_url=notion_url(page_id, block_anchor=b.block_id),
             notion_page_uuid=page_id,
             notion_block_uuid=b.block_id,
+            document_uuid=page_id,
         )
 
     # Comment thread + comment rows.
@@ -766,6 +779,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
             source_url=thread_url,
             notion_page_uuid=page_id,
             notion_block_uuid=block_anchor,
+            document_uuid=disc.discussion_id,
         )
 
         for idx, c in enumerate(items):
@@ -789,6 +803,7 @@ def _notion_rows(parsed: ParsedNotionWeb) -> Iterable[_Row]:
                 source_url=thread_url,
                 notion_page_uuid=page_id,
                 notion_block_uuid=block_anchor,
+                document_uuid=disc.discussion_id,
             )
 
 
