@@ -893,26 +893,43 @@ def populate_grid_rows(
     """Re-emit grid rows for every document in `rows` using a per-document
     delete+insert pattern: for each `document_uuid` present in `rows`,
     delete the existing rows for that document and insert the fresh ones.
-    Documents not present in `rows` are left untouched (orphan cleanup is
-    C.6's job). Returns the number of rows inserted."""
+    Also performs orphan cleanup: any rows in `grid_rows` whose provider
+    was seen in this run but whose `document_uuid` is not in the fresh
+    stream are deleted (the upstream document was archived/deleted). The
+    cleanup is scoped to providers present in `rows` so an ingest of just
+    one provider doesn't wipe the others. Returns the number of rows
+    inserted."""
     ensure_schema(conn)
     if rows is None:
         rows = gather_rows(anthropic, openai, slack, github, gitlab, notion)
 
     by_doc: dict[str, list[_Row]] = {}
+    providers_in_run: set[str] = set()
     for r in rows:
         if r.document_uuid is None:
-            # Every provider attaches document_uuid in C.1; a None here
-            # means a row generator regressed.
             raise ValueError(
                 f"grid row {r.uuid!r} ({r.provider}/{r.kind}) has no document_uuid"
             )
         by_doc.setdefault(r.document_uuid, []).append(r)
+        providers_in_run.add(r.provider)
 
     placeholders = ",".join(["%s"] * len(_GRID_ROWS_COLUMNS))
     columns_sql = ", ".join(_GRID_ROWS_COLUMNS)
     insert_sql = f"INSERT INTO grid_rows ({columns_sql}) VALUES ({placeholders})"
     with conn.cursor() as cur:
+        # Orphan cleanup, per-provider scope. Providers absent from this
+        # run are left untouched so a Slack-only ingest doesn't wipe
+        # Anthropic. Within an ingested provider, any document_uuid not
+        # in the fresh stream is treated as deleted upstream.
+        if providers_in_run:
+            kept = list(by_doc.keys())
+            prov_placeholders = ",".join(["%s"] * len(providers_in_run))
+            keep_placeholders = ",".join(["%s"] * len(kept))
+            cur.execute(
+                f"DELETE FROM grid_rows WHERE provider IN ({prov_placeholders}) "
+                f"AND document_uuid NOT IN ({keep_placeholders})",
+                tuple(providers_in_run) + tuple(kept),
+            )
         for doc_uuid, group in by_doc.items():
             cur.execute("DELETE FROM grid_rows WHERE document_uuid = %s", (doc_uuid,))
             raw_tuples = [

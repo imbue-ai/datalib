@@ -17,6 +17,21 @@ py_test(
     ],
 )
 
+# Pure-Python unit test for per-provider orphan cleanup (C.6).
+py_test(
+    name = "test_orphan_cleanup",
+    size = "small",
+    srcs = [
+        "test_orphan_cleanup.py",
+        "conftest_orphan_cleanup.py",
+    ],
+    main = "conftest_orphan_cleanup.py",
+    deps = [
+        "//src/ingest",
+        requirement("pytest"),
+    ],
+)
+
 # Pure-Python regression test for the Notion comment-thread renderer.
 # Uses synthetic ParsedNotionWeb input — no fixture, no dolt, no network.
 py_test(

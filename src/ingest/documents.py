@@ -206,9 +206,10 @@ def populate_documents(
 ) -> int:
     """Re-emit one `documents` row per distinct `document_uuid` in `rows`
     using a per-document delete+insert pattern, mirroring
-    `populate_grid_rows`. Documents not present in `rows` are left
-    untouched (orphan cleanup is C.6's job). Returns the number of
-    documents inserted.
+    `populate_grid_rows`. Also performs per-provider orphan cleanup:
+    `documents` rows for providers present in this run whose
+    `document_uuid` is absent from the fresh stream are deleted. Returns
+    the number of documents inserted.
 
     `rendered_at` is the ingest timestamp; it's stamped on every doc that
     was just re-rendered. Docs in `skipped` keep their prior `rendered_at`
@@ -232,7 +233,16 @@ def populate_documents(
     placeholders = ",".join(["%s"] * len(_DOCUMENTS_COLUMNS))
     columns_sql = ", ".join(_DOCUMENTS_COLUMNS)
     insert_sql = f"INSERT INTO documents ({columns_sql}) VALUES ({placeholders})"
+    providers_in_run = {d.provider for d in docs}
+    kept = [d.document_uuid for d in docs]
     with conn.cursor() as cur:
+        prov_placeholders = ",".join(["%s"] * len(providers_in_run))
+        keep_placeholders = ",".join(["%s"] * len(kept))
+        cur.execute(
+            f"DELETE FROM documents WHERE provider IN ({prov_placeholders}) "
+            f"AND document_uuid NOT IN ({keep_placeholders})",
+            tuple(providers_in_run) + tuple(kept),
+        )
         for d in docs:
             if d.document_uuid in skipped:
                 ts = prior_rendered_at.get(d.document_uuid)
