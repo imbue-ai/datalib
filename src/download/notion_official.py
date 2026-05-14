@@ -571,10 +571,13 @@ def _mirror_page(
 
 
 def fetch(
-    subtree: str = typer.Option(
-        None,
-        "--subtree",
-        help="Root page id (UUID, dashed or undashed) to mirror.",
+    subtree_page: list[str] = typer.Option(
+        [],
+        "--subtree-page",
+        help=(
+            "Root page id (UUID, dashed or undashed) to BFS-mirror. "
+            "Repeatable: pass `--subtree-page <id>` once per root."
+        ),
     ),
     inbox: bool = typer.Option(
         False,
@@ -624,20 +627,23 @@ def fetch(
 ) -> None:
     """Mirror Notion pages via the official API.
 
-    Two modes (exactly one required):
-      --subtree <id>: BFS-mirror that page's hierarchy.
+    Two source modes; pass either or both. At least one is required.
+      --subtree-page <id> (repeatable): seed the BFS queue with each id.
       --inbox: discover pages via the unofficial getNotificationLog,
-               then mirror each one.
+               then enqueue each one.
+    Pages discovered through either path share one output namespace under
+    `out_dir` keyed by page id, so a page reached via both routes is
+    fetched once.
     """
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    if subtree is None and not inbox:
-        typer.echo("must specify either --subtree <id> or --inbox", err=True)
-        raise typer.Exit(2)
-    if subtree is not None and inbox:
-        typer.echo("--subtree and --inbox are mutually exclusive", err=True)
+    if not subtree_page and not inbox:
+        typer.echo(
+            "must specify --inbox and/or one or more --subtree-page <id>",
+            err=True,
+        )
         raise typer.Exit(2)
 
     out_dir = out_dir.expanduser()
@@ -652,16 +658,20 @@ def fetch(
         f"blocks={len(existing_blocks)} comments={len(existing_comments)}"
     )
 
-    # Seed the BFS queue.
+    # Seed the BFS queue. Subtree roots first (deterministic, no network),
+    # then inbox-discovered pages.
     queue: deque[str] = deque()
     queued: set[str] = set()
     uo_client: NotionUnofficialClient | None = None
 
-    if subtree is not None:
-        root = _format_uuid(subtree)
+    for pid_raw in subtree_page:
+        root = _format_uuid(pid_raw)
+        if root in queued:
+            continue
         queue.append(root)
         queued.add(root)
-    else:
+
+    if inbox:
         uo_client = NotionUnofficialClient()
         typer.echo("inbox bootstrap: loadUserContent + getSpaces")
         uo_client.load_user_content()

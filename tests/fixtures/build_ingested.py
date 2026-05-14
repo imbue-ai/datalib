@@ -53,40 +53,31 @@ def main() -> int:
     config_path = work / "config.yaml"
     config_path.write_text(
         f"""\
-root: {root}
+data_root: {root}
 dolt:
   port: {port}
 sources:
   - name: anthropic_export_tng
-    provider: anthropic
-    kind: export_dir
-    path: {fixtures / "anthropic_export"}
-    provenance: export
+    type: claude_export
+    input_path: {fixtures / "anthropic_export"}
   - name: anthropic_api_tng
-    provider: anthropic
-    kind: export_dir
-    path: {fixtures / "anthropic_api"}
-    provenance: api
+    type: claude_api
+    input_path: {fixtures / "anthropic_api"}
   - name: chatgpt_api_tng
-    provider: openai
-    kind: chatgpt_api_dir
-    path: {fixtures / "chatgpt_api"}
+    type: chatgpt_api
+    input_path: {fixtures / "chatgpt_api"}
   - name: slack_api_tng
-    provider: slack
-    kind: slack_api_dir
-    path: {fixtures / "slack_api"}
+    type: slack_api
+    input_path: {fixtures / "slack_api"}
   - name: github_api_tng
-    provider: github
-    kind: github_api_dir
-    path: {fixtures / "github_api"}
+    type: github_api
+    input_path: {fixtures / "github_api"}
   - name: gitlab_api_tng
-    provider: gitlab
-    kind: gitlab_api_dir
-    path: {fixtures / "gitlab_api"}
-  - name: notion_official_tng
-    provider: notion
-    kind: notion_official_dir
-    path: {fixtures / "notion_web"}
+    type: gitlab_api
+    input_path: {fixtures / "gitlab_api"}
+  - name: notion_api_tng
+    type: notion_api
+    input_path: {fixtures / "notion_web"}
 """
     )
 

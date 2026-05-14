@@ -7,13 +7,14 @@ from datetime import datetime
 from typing import Any
 
 from ingest.config import (
-    AnthropicExportDirSource,
-    ChatGPTApiDirSource,
+    ChatgptApiSource,
+    ClaudeApiSource,
+    ClaudeExportSource,
     Config,
-    GithubApiDirSource,
-    GitlabApiDirSource,
-    NotionOfficialDirSource,
-    SlackApiDirSource,
+    GithubApiSource,
+    GitlabApiSource,
+    NotionApiSource,
+    SlackApiSource,
 )
 from ingest.documents import (
     compute_document_hashes,
@@ -77,8 +78,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class SourceResult:
     name: str
-    provider: str
-    kind: str
+    type: str
     stats: Any  # AnthropicIngestStats | OpenAIIngestStats | SlackIngestStats
 
 
@@ -110,34 +110,34 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
 
     log.info("ingest start: %d enabled source(s)", len(config.enabled_sources))
     for src in config.enabled_sources:
+        assert src.input_path is not None, "input_path defaulted at load time"
         log.info(
-            "[%s] %s/%s: parsing from %s",
+            "[%s] %s: parsing from %s",
             src.name,
-            src.provider,
-            src.kind,
-            src.path,
+            src.type,
+            src.input_path,
         )
         t0 = time.monotonic()
-        if isinstance(src, AnthropicExportDirSource):
-            parsed_a, stats = ingest_export_dir(src.path, source=src.provenance)
+        if isinstance(src, ClaudeExportSource | ClaudeApiSource):
+            parsed_a, stats = ingest_export_dir(src.input_path, source=src.provenance)
             anthropic_inputs.append((parsed_a, src.provenance))
-        elif isinstance(src, ChatGPTApiDirSource):
-            parsed_o, stats = ingest_api_dir(src.path, source=src.provenance)
+        elif isinstance(src, ChatgptApiSource):
+            parsed_o, stats = ingest_api_dir(src.input_path, source=src.provenance)
             openai_inputs.append(parsed_o)
-        elif isinstance(src, SlackApiDirSource):
-            parsed_s, stats = ingest_slack_api_dir(src.path)
+        elif isinstance(src, SlackApiSource):
+            parsed_s, stats = ingest_slack_api_dir(src.input_path)
             slack_inputs.append(parsed_s)
-            media = src.path / "media"
+            media = src.input_path / "media"
             if media.is_dir():
                 slack_media_dirs.append(media)
-        elif isinstance(src, GithubApiDirSource):
-            parsed_gh, stats = ingest_github_api_dir(src.path)
+        elif isinstance(src, GithubApiSource):
+            parsed_gh, stats = ingest_github_api_dir(src.input_path)
             github_inputs.append(parsed_gh)
-        elif isinstance(src, GitlabApiDirSource):
-            parsed_gl, stats = ingest_gitlab_api_dir(src.path)
+        elif isinstance(src, GitlabApiSource):
+            parsed_gl, stats = ingest_gitlab_api_dir(src.input_path)
             gitlab_inputs.append(parsed_gl)
-        elif isinstance(src, NotionOfficialDirSource):
-            parsed_n, stats = ingest_notion_official_dir(src.path)
+        elif isinstance(src, NotionApiSource):
+            parsed_n, stats = ingest_notion_official_dir(src.input_path)
             notion_inputs.append(parsed_n)
         else:
             raise NotImplementedError(f"unknown source: {src!r}")
@@ -145,8 +145,7 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
         summary.sources.append(
             SourceResult(
                 name=src.name,
-                provider=src.provider,
-                kind=src.kind,
+                type=src.type,
                 stats=stats,
             )
         )
@@ -190,38 +189,38 @@ def ingest(config: Config, now: str | None = None) -> IngestSummary:
 
             # Render QMDs and accounts.json directly from parsed data.
             if anthropic is not None:
-                r = render_anthropic(anthropic, config.root, skip=skip)
+                r = render_anthropic(anthropic, config.data_root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if openai is not None:
-                r = render_openai(openai, config.root, skip=skip)
+                r = render_openai(openai, config.data_root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if slack is not None:
                 r = render_slack(
-                    slack, config.root, media_dirs=slack_media_dirs, skip=skip
+                    slack, config.data_root, media_dirs=slack_media_dirs, skip=skip
                 )
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if github is not None:
-                r = render_github(github, config.root, skip=skip)
+                r = render_github(github, config.data_root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if gitlab is not None:
-                r = render_gitlab(gitlab, config.root, skip=skip)
+                r = render_gitlab(gitlab, config.data_root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
             if notion is not None:
-                r = render_notion_official(notion, config.root, skip=skip)
+                r = render_notion_official(notion, config.data_root, skip=skip)
                 summary.rendered += r.rendered
                 summary.rendered_orphans_removed += r.orphans_removed
                 summary.rendered_skipped += r.skipped
-            write_accounts_json(anthropic, openai, config.root)
+            write_accounts_json(anthropic, openai, config.data_root)
 
             log.info("populating grid_rows + documents")
             t0 = time.monotonic()

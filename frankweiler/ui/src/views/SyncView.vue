@@ -143,8 +143,7 @@ onUnmounted(() => {
       <thead>
         <tr>
           <th>Name</th>
-          <th>Provider</th>
-          <th>Kind</th>
+          <th>Type</th>
           <th>Managed</th>
           <th></th>
         </tr>
@@ -152,8 +151,7 @@ onUnmounted(() => {
       <tbody>
         <tr v-for="s in sources" :key="s.name">
           <td>{{ s.name }}</td>
-          <td>{{ s.provider }}</td>
-          <td>{{ s.kind }}</td>
+          <td>{{ s.type }}</td>
           <td>{{ s.managed ? "yes" : "no" }}</td>
           <td>
             <button
@@ -166,7 +164,7 @@ onUnmounted(() => {
           </td>
         </tr>
         <tr v-if="sources.length === 0 && !loading">
-          <td colspan="5" class="empty">no sources configured.</td>
+          <td colspan="4" class="empty">no sources configured.</td>
         </tr>
       </tbody>
     </table>

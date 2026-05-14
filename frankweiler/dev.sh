@@ -9,7 +9,7 @@
 #                     tildes are expanded relative to $HOME.
 #                     e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
 #   FRANKWEILER_ROOT  data root when no positional arg given. Falls back
-#                     to root: in ~/.config/frankweiler/config.yaml, else
+#                     to data_root: in ~/.config/frankweiler/config.yaml, else
 #                     ~/Documents/mixed-up-files.
 #   FRANKWEILER_PORT  Vite port (default: 5173)
 #

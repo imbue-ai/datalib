@@ -2,7 +2,7 @@
 //!
 //! Resolves the data root in this order:
 //!   1. $FRANKWEILER_ROOT
-//!   2. `root:` from $FRANKWEILER_CONFIG or ~/.config/frankweiler/config.yaml
+//!   2. `data_root:` from $FRANKWEILER_CONFIG or ~/.config/frankweiler/config.yaml
 //!   3. ~/Documents/mixed-up-files (default)
 //!
 //! Bind address is $FRANKWEILER_BIND if set, else backend.bind from the
@@ -173,7 +173,7 @@ fn resolve_bind_and_root(cfg: Option<&Config>) -> (String, PathBuf) {
     let root = if let Ok(env) = std::env::var("FRANKWEILER_ROOT") {
         expand_tilde(&env)
     } else if let Some(c) = cfg {
-        c.root.clone()
+        c.data_root.clone()
     } else {
         default_root()
     };

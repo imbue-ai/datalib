@@ -98,8 +98,10 @@ export function fetchChat(uuid: string, signal?: AbortSignal): Promise<ChatRespo
 
 export type SyncSource = {
   name: string;
-  provider: string;
-  kind: string;
+  // Discriminator from the config (e.g. `claude_api`, `notion_api`,
+  // `claude_export`). Encodes both provider and provenance.
+  type: string;
+  // True iff the source has a `sync:` block.
   managed: boolean;
 };
 

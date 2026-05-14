@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from ingest.run_source import KIND_TO_MODULE, resolve, sync_to_argv
+from ingest.run_source import TYPE_TO_MODULE, resolve, sync_to_argv
 
 from . import download_runs as dl_runs
 from . import jobs as jobs_mod
@@ -115,15 +115,15 @@ def _run_download(
     if job.source_name is None:
         raise ValueError("download job requires source_name")
 
-    sync, out_dir = resolve(job.source_name, cfg.config_path)
-    module = KIND_TO_MODULE[sync.kind]
-    argv = [sys.executable, "-m", module, *sync_to_argv(sync, out_dir)]
+    src, out_dir = resolve(job.source_name, cfg.config_path)
+    module = TYPE_TO_MODULE[src.type]
+    argv = [sys.executable, "-m", module, *sync_to_argv(src, out_dir)]
     proc = spawn(argv, out_dir)
     raw_rel = str(out_dir)
 
     conn = make_conn()
     jobs_mod.mark_running(conn, job.id, pid=proc.pid)
-    jobs_mod.update_progress(conn, job.id, pct=0.0, msg=f"starting {sync.kind}")
+    jobs_mod.update_progress(conn, job.id, pct=0.0, msg=f"starting {src.type}")
     run_id = dl_runs.insert_started(conn, source_name=job.source_name, raw_path=raw_rel)
     conn.commit()
 

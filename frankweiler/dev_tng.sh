@@ -59,7 +59,7 @@ mkdir -p "$ROOT/dolt_repo"
 # 8731 unless $FRANKWEILER_BIND is set.
 DOLT_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 cat > "$ROOT/config.yaml" <<EOF
-root: $ROOT
+data_root: $ROOT
 dolt:
   port: $DOLT_PORT
 EOF

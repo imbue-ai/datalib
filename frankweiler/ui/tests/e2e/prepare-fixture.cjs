@@ -142,7 +142,7 @@ function main() {
   // this via FRANKWEILER_CONFIG (set by playwright.config.ts).
   fs.writeFileSync(
     path.join(outRoot, "config.yaml"),
-    `root: ${outRoot}\ndolt:\n  port: ${doltPort}\n`,
+    `data_root: ${outRoot}\ndolt:\n  port: ${doltPort}\n`,
   );
 
   // Recreate the `models` symlink that `tests/fixtures/build_qmd_index.py`

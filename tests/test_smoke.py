@@ -6,15 +6,23 @@ import json
 from pathlib import Path
 
 from ingest.config import (
-    AnthropicExportDirSource,
-    ChatgptWebSync,
-    ClaudeWebSync,
+    ChatgptApiSource,
+    ChatgptApiSync,
+    ClaudeApiSource,
+    ClaudeApiSync,
+    ClaudeExportSource,
     Config,
     DoltConfig,
-    GithubWebSync,
-    GitlabWebSync,
-    NotionOfficialSync,
-    SlackWebSync,
+    GithubApiSource,
+    GithubApiSync,
+    GitlabApiSource,
+    GitlabApiSync,
+    NotionApiSource,
+    NotionApiSync,
+    NotionInbox,
+    NotionSubtrees,
+    SlackApiSource,
+    SlackApiSync,
     load_config,
 )
 from ingest.grid_rows import _anthropic_rows
@@ -41,12 +49,11 @@ def test_config_round_trip(tmp_path: Path) -> None:
     root.mkdir()
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
   - name: test
-    provider: anthropic
-    kind: export_dir
-    path: {tmp_path}/export
+    type: claude_export
+    input_path: {tmp_path}/export
     enabled: true
 """
     )
@@ -54,8 +61,10 @@ sources:
     assert isinstance(cfg, Config)
     assert isinstance(cfg.dolt, DoltConfig)
     assert len(cfg.enabled_sources) == 1
-    assert isinstance(cfg.enabled_sources[0], AnthropicExportDirSource)
+    assert isinstance(cfg.enabled_sources[0], ClaudeExportSource)
     assert cfg.enabled_sources[0].name == "test"
+    assert cfg.enabled_sources[0].provider == "anthropic"
+    assert cfg.enabled_sources[0].provenance == "export"
 
 
 def test_config_managed_source_with_sync_block(tmp_path: Path) -> None:
@@ -64,65 +73,61 @@ def test_config_managed_source_with_sync_block(tmp_path: Path) -> None:
     root.mkdir()
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
   - name: slack-work
-    provider: slack
-    kind: slack_api_dir
-    path: {tmp_path}/slack
-    managed: true
+    type: slack_api
+    input_path: {tmp_path}/slack
     sync:
-      kind: slack_web
       channels: ["general", "random"]
       refresh_window_days: 7
 """
     )
     cfg = load_config(cfg_path)
     src = cfg.enabled_sources[0]
-    assert src.managed is True
+    assert isinstance(src, SlackApiSource)
     assert src.sync is not None
-    assert src.sync.kind == "slack_web"
     assert src.sync.channels == ["general", "random"]
     assert src.sync.refresh_window_days == 7
 
 
-def test_config_managed_without_sync_block_rejected(tmp_path: Path) -> None:
+def test_config_input_path_defaults_under_data_root(tmp_path: Path) -> None:
+    """Sources may omit `input_path`; the loader fills in `${data_root}/raw/${name}`."""
     cfg_path = tmp_path / "config.yaml"
     root = tmp_path / "data"
     root.mkdir()
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
-  - name: bad
-    provider: slack
-    kind: slack_api_dir
-    path: {tmp_path}/slack
-    managed: true
+  - name: unspec
+    type: claude_export
 """
     )
-    try:
-        load_config(cfg_path)
-    except Exception as e:
-        assert "sync" in str(e).lower()
-        return
-    raise AssertionError("expected managed-without-sync validation to fail")
+    cfg = load_config(cfg_path)
+    src = cfg.sources[0]
+    assert src.input_path == (root / "raw" / "unspec").resolve()
 
 
-def test_sync_to_argv_per_provider(tmp_path: Path) -> None:
-    out = tmp_path / "out"
-    out.mkdir()
-    assert sync_to_argv(
-        SlackWebSync(
-            kind="slack_web",
+def _slack_source(out: Path) -> SlackApiSource:
+    return SlackApiSource(
+        name="slack-x",
+        type="slack_api",
+        input_path=out,
+        sync=SlackApiSync(
             channels=["general", "random"],
             since="2026-01-01",
             refresh_window_days=7,
             all_channels=True,
             media=False,
         ),
-        out,
-    ) == [
+    )
+
+
+def test_sync_to_argv_per_type(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    assert sync_to_argv(_slack_source(out), out) == [
         "--out-dir",
         str(out),
         "--channels",
@@ -136,14 +141,20 @@ def test_sync_to_argv_per_provider(tmp_path: Path) -> None:
         "--all",
         "--no-media",
     ]
-    assert sync_to_argv(ClaudeWebSync(kind="claude_web", overlap=5), out) == [
-        "--out-dir",
-        str(out),
-        "--overlap",
-        "5",
-    ]
     assert sync_to_argv(
-        ChatgptWebSync(kind="chatgpt_web", max_pages=10, sleep_between=0.5), out
+        ClaudeApiSource(
+            name="c", type="claude_api", input_path=out, sync=ClaudeApiSync(overlap=5)
+        ),
+        out,
+    ) == ["--out-dir", str(out), "--overlap", "5"]
+    assert sync_to_argv(
+        ChatgptApiSource(
+            name="g",
+            type="chatgpt_api",
+            input_path=out,
+            sync=ChatgptApiSync(max_pages=10, sleep_between=0.5),
+        ),
+        out,
     ) == [
         "--out-dir",
         str(out),
@@ -152,49 +163,73 @@ def test_sync_to_argv_per_provider(tmp_path: Path) -> None:
         "--sleep-between",
         "0.5",
     ]
-    assert sync_to_argv(GithubWebSync(kind="github_web", max_prs=3), out) == [
-        "--out-dir",
-        str(out),
-        "--max-prs",
-        "3",
-    ]
-    assert sync_to_argv(GitlabWebSync(kind="gitlab_web", max_mrs=4), out) == [
-        "--out-dir",
-        str(out),
-        "--max-mrs",
-        "4",
-    ]
     assert sync_to_argv(
-        NotionOfficialSync(kind="notion_official", subtree="abc", space="def"), out
-    ) == ["--out-dir", str(out), "--subtree", "abc", "--space", "def"]
+        GithubApiSource(
+            name="gh",
+            type="github_api",
+            input_path=out,
+            sync=GithubApiSync(max_prs=3),
+        ),
+        out,
+    ) == ["--out-dir", str(out), "--max-prs", "3"]
+    assert sync_to_argv(
+        GitlabApiSource(
+            name="gl",
+            type="gitlab_api",
+            input_path=out,
+            sync=GitlabApiSync(max_mrs=4),
+        ),
+        out,
+    ) == ["--out-dir", str(out), "--max-mrs", "4"]
 
 
-def test_resolve_returns_sync_and_raw_outdir(tmp_path: Path) -> None:
+def test_sync_to_argv_notion_combines_inbox_and_subtrees(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    src = NotionApiSource(
+        name="notion",
+        type="notion_api",
+        input_path=out,
+        sync=NotionApiSync(
+            inbox=NotionInbox(types=["mention"], space="ws"),
+            subtrees=NotionSubtrees(pages=["abc", "def"], max_pages=50),
+        ),
+    )
+    argv = sync_to_argv(src, out)
+    # --inbox lights up the inbox path, --subtree-page is repeatable, all
+    # output lands in the same flat namespace under --out-dir.
+    assert "--inbox" in argv
+    assert argv[argv.index("--inbox-types") + 1] == "mention"
+    assert argv[argv.index("--space") + 1] == "ws"
+    pages = [argv[i + 1] for i, a in enumerate(argv) if a == "--subtree-page"]
+    assert pages == ["abc", "def"]
+    assert argv[argv.index("--max-pages") + 1] == "50"
+
+
+def test_resolve_returns_source_and_raw_outdir(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.yaml"
     root = tmp_path / "data"
     root.mkdir()
+    slack_in = tmp_path / "slack"
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
   - name: slack-imbue
-    provider: slack
-    kind: slack_api_dir
-    path: {tmp_path}/slack
-    managed: true
+    type: slack_api
+    input_path: {slack_in}
     sync:
-      kind: slack_web
       channels: ["general"]
 """
     )
-    sync, out_dir = resolve(
+    src, out_dir = resolve(
         "slack-imbue", cfg_path, run_timestamp="2026-05-13T14-22-05-07-00"
     )
-    assert isinstance(sync, SlackWebSync)
-    assert sync.channels == ["general"]
-    assert out_dir == root / "raw" / "slack-imbue" / "2026-05-13T14-22-05-07-00"
+    assert isinstance(src, SlackApiSource)
+    assert src.sync is not None
+    assert src.sync.channels == ["general"]
+    assert out_dir == slack_in.resolve() / "2026-05-13T14-22-05-07-00"
     assert out_dir.exists()
-    assert out_dir.parent == root / "raw" / "slack-imbue"
 
 
 def test_resolve_missing_sync_block_rejected(tmp_path: Path) -> None:
@@ -203,12 +238,11 @@ def test_resolve_missing_sync_block_rejected(tmp_path: Path) -> None:
     root.mkdir()
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
   - name: manual
-    provider: anthropic
-    kind: export_dir
-    path: {tmp_path}/export
+    type: claude_export
+    input_path: {tmp_path}/export
 """
     )
     try:
@@ -225,16 +259,14 @@ def test_config_rejects_duplicate_source_names(tmp_path: Path) -> None:
     root.mkdir()
     cfg_path.write_text(
         f"""
-root: {root}
+data_root: {root}
 sources:
   - name: dupe
-    provider: anthropic
-    kind: export_dir
-    path: {tmp_path}/a
+    type: claude_export
+    input_path: {tmp_path}/a
   - name: dupe
-    provider: anthropic
-    kind: export_dir
-    path: {tmp_path}/b
+    type: claude_export
+    input_path: {tmp_path}/b
 """
     )
     try:

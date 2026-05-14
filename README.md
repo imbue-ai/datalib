@@ -163,10 +163,10 @@ your downloads.
 
 ```sh
 # Bazel (uses an absolute path so the binary's CWD doesn't matter)
-bazelisk run //src/ingest:cli -- ingest --config $(pwd)/ingest_configs/thad_dev.yaml
+bazelisk run //src/ingest:cli -- ingest --config $(pwd)/configs/thad_dev.yaml
 
 # uv (paths are repo-relative)
-uv run python -m ingest --config ingest_configs/thad_dev.yaml
+uv run python -m ingest --config configs/thad_dev.yaml
 ```
 
 Omit `--config` to use the default (`~/.config/mixed-up-files/config.yaml`).
@@ -208,7 +208,7 @@ Design notes:
 
   ```sh
   bazelisk run //src/ingest:cli -- ingest \
-      --config $(pwd)/ingest_configs/thad_dev.yaml --no-report
+      --config $(pwd)/configs/thad_dev.yaml --no-report
   ```
 
   After a no-op render + dolt commit, you'll see something like:

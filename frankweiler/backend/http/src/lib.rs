@@ -433,8 +433,13 @@ fn col(field: &str, header: &str, default_visible: bool) -> ColumnSpec {
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
     pub name: String,
-    pub provider: String,
-    pub kind: String,
+    /// Discriminator from the config (e.g. `claude_api`, `notion_api`,
+    /// `claude_export`). Carries both the provider and the
+    /// provenance — the UI splits it on `_` when it needs either piece.
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// True when the source has a `sync:` block — i.e. the worker can
+    /// drive a downloader for it. Derived; not stored in YAML.
     pub managed: bool,
 }
 
@@ -453,9 +458,11 @@ pub struct JobsAllParams {
 
 /// Read sources directly from `~/.config/frankweiler/config.yaml` (or
 /// the file pointed at by `$FRANKWEILER_CONFIG`). We don't go through
-/// the Rust `Config` because it doesn't model `sources:` yet — the
-/// Python ingest config does, and we just want to surface name + provider
-/// + kind + managed flag for the UI. Unknown / extra fields are ignored.
+/// the Rust `Config` because it doesn't model `sources:` — the Python
+/// ingest config does, and we just want to surface name + type +
+/// managed flag for the UI. `managed` is derived from whether a `sync:`
+/// block is present (worker can drive a downloader). Unknown / extra
+/// fields are ignored.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     let path = frankweiler_core::config::default_config_path();
     let raw = match std::fs::read_to_string(&path) {
@@ -470,11 +477,10 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     #[derive(Deserialize)]
     struct RawSource {
         name: String,
-        provider: String,
+        #[serde(rename = "type")]
+        type_: String,
         #[serde(default)]
-        kind: Option<String>,
-        #[serde(default)]
-        managed: bool,
+        sync: Option<serde_yaml::Value>,
     }
     let parsed: Top = serde_yaml::from_str(&raw).unwrap_or(Top { sources: vec![] });
     let out: Vec<SourceInfo> = parsed
@@ -482,9 +488,8 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
         .into_iter()
         .map(|r| SourceInfo {
             name: r.name,
-            provider: r.provider,
-            kind: r.kind.unwrap_or_default(),
-            managed: r.managed,
+            managed: r.sync.is_some(),
+            type_: r.type_,
         })
         .collect();
     let _ = s; // unused; included for symmetry with other handlers.

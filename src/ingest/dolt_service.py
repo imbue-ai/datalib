@@ -35,7 +35,7 @@ class DoltService:
 
     def __init__(self, config: Config) -> None:
         self._config = config
-        self._repo_dir: Path = config.root / DOLT_REPO_DIRNAME
+        self._repo_dir: Path = config.data_root / DOLT_REPO_DIRNAME
         self._proc: subprocess.Popen[bytes] | None = None
         self._owns_server = False
 

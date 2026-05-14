@@ -113,17 +113,17 @@ def ingest(
     cfg = load_config(config)
     if port is not None:
         cfg.dolt.port = port
-    typer.echo(f"root: {cfg.root}")
+    typer.echo(f"data_root: {cfg.data_root}")
     typer.echo(f"sources: {[s.name for s in cfg.enabled_sources]}")
     summary = run_ingest(cfg, now=now)
     for s in summary.sources:
-        typer.echo(f"  [{s.name}] {s.provider}/{s.kind}: {asdict(s.stats)}")
+        typer.echo(f"  [{s.name}] {s.type}: {asdict(s.stats)}")
     typer.echo(f"dolt commit: {summary.commit_hash or '(no changes)'}")
     typer.echo(
         f"rendered: {summary.rendered} qmd files (removed {summary.rendered_orphans_removed} orphans)"
     )
 
-    mirror_path = cfg.root / "mirror.sqlite"
+    mirror_path = cfg.data_root / "mirror.sqlite"
     with DoltService(cfg) as dolt, dolt.connect() as conn:
         _materialize_mirror_sqlite(conn, mirror_path)
         if dump_sql is not None:
@@ -145,7 +145,7 @@ def ingest(
     if qmd_index:
         typer.echo("")
         typer.echo("qmd-index: rebuilding...")
-        index_path = build_qmd_index(cfg.root)
+        index_path = build_qmd_index(cfg.data_root)
         typer.echo(f"qmd-index: wrote {index_path}")
 
 

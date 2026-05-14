@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub root: PathBuf,
+    pub data_root: PathBuf,
     #[serde(default)]
     pub qmd: QmdConfig,
     #[serde(default)]
@@ -19,7 +19,7 @@ pub struct Config {
 /// the same `~/.config/mixed-up-files/config.yaml` `dolt:` block can drive
 /// both ingest and the Rust backend.
 ///
-/// `repo_dirname` is the directory under `Config.root` that holds the Dolt
+/// `repo_dirname` is the directory under `Config.data_root` that holds the Dolt
 /// repository; defaults to `"dolt_repo"`, matching `DOLT_REPO_DIRNAME` in
 /// `src/ingest/dolt_service.py`.
 ///
@@ -66,8 +66,8 @@ impl Default for DoltConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmdConfig {
-    /// Path to the qmd index file. `${root}` is expanded against
-    /// `Config.root` after load. Defaults to the canonical location the
+    /// Path to the qmd index file. `${data_root}` is expanded against
+    /// `Config.data_root` after load. Defaults to the canonical location the
     /// `frankweiler-qmd-indexer` writes to.
     pub index_path: String,
     /// npm package version of `@tobilu/qmd` to invoke via `npx`. Must
@@ -82,7 +82,7 @@ pub struct QmdConfig {
 impl Default for QmdConfig {
     fn default() -> Self {
         Self {
-            index_path: format!("${{root}}/{}", crate::qmd::QMD_INDEX_REL),
+            index_path: format!("${{data_root}}/{}", crate::qmd::QMD_INDEX_REL),
             qmd_version: crate::qmd::DEFAULT_QMD_VERSION.into(),
             collection: crate::qmd::DEFAULT_COLLECTION.into(),
         }
@@ -110,17 +110,17 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("yaml: {0}")]
     Yaml(#[from] serde_yaml::Error),
-    #[error("root does not exist: {0}")]
-    RootMissing(PathBuf),
+    #[error("data_root does not exist: {0}")]
+    DataRootMissing(PathBuf),
 }
 
 impl Config {
-    /// Resolve `${root}` and `~` in derived paths after load.
+    /// Resolve `${data_root}` and `~` in derived paths after load.
     pub fn resolved_qmd_index(&self) -> PathBuf {
         let s = self
             .qmd
             .index_path
-            .replace("${root}", &self.root.display().to_string());
+            .replace("${data_root}", &self.data_root.display().to_string());
         expand_tilde(&s)
     }
 
@@ -129,7 +129,7 @@ impl Config {
     /// Resolves to `<root>/<dolt.repo_dirname>`. Matches the layout
     /// established by `DoltService` in `src/ingest/dolt_service.py`.
     pub fn dolt_repo_path(&self) -> PathBuf {
-        self.root.join(&self.dolt.repo_dirname)
+        self.data_root.join(&self.dolt.repo_dirname)
     }
 
     /// MySQL connection URL for the running `dolt sql-server`. The database
@@ -169,9 +169,9 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     }
     let raw = std::fs::read_to_string(p)?;
     let mut cfg: Config = serde_yaml::from_str(&raw)?;
-    cfg.root = expand_tilde(&cfg.root.display().to_string());
-    if !cfg.root.exists() {
-        return Err(ConfigError::RootMissing(cfg.root.clone()));
+    cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
+    if !cfg.data_root.exists() {
+        return Err(ConfigError::DataRootMissing(cfg.data_root.clone()));
     }
     Ok(cfg)
 }
@@ -195,9 +195,9 @@ mod tests {
         let root = tmp.join("data");
         std::fs::create_dir_all(&root).unwrap();
         let cfg_path = tmp.join("config.yaml");
-        std::fs::write(&cfg_path, format!("root: {}\n", root.display())).unwrap();
+        std::fs::write(&cfg_path, format!("data_root: {}\n", root.display())).unwrap();
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        assert_eq!(cfg.root, root);
+        assert_eq!(cfg.data_root, root);
         assert_eq!(cfg.backend.bind, "127.0.0.1:8731");
     }
 
@@ -205,10 +205,10 @@ mod tests {
     fn errors_on_missing_root() {
         let tmp = tempdir();
         let cfg_path = tmp.join("config.yaml");
-        std::fs::write(&cfg_path, "root: /no/such/path\n").unwrap();
+        std::fs::write(&cfg_path, "data_root: /no/such/path\n").unwrap();
         assert!(matches!(
             load_config(Some(&cfg_path)),
-            Err(ConfigError::RootMissing(_))
+            Err(ConfigError::DataRootMissing(_))
         ));
     }
 
@@ -216,7 +216,7 @@ mod tests {
     fn resolves_qmd_template() {
         let tmp = tempdir();
         let cfg = Config {
-            root: tmp.clone(),
+            data_root: tmp.clone(),
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
@@ -242,7 +242,7 @@ mod tests {
     fn dolt_repo_path_and_url() {
         let tmp = tempdir();
         let cfg = Config {
-            root: tmp.clone(),
+            data_root: tmp.clone(),
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
@@ -263,7 +263,7 @@ mod tests {
         std::fs::write(
             &cfg_path,
             format!(
-                "root: {}\ndolt:\n  port: 13306\n  repo_dirname: my_repo\n",
+                "data_root: {}\ndolt:\n  port: 13306\n  repo_dirname: my_repo\n",
                 root.display()
             ),
         )
