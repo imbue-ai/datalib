@@ -42,4 +42,8 @@ echo "TNG data root: $ROOT" >&2
 tar -xf "$QMD_TAR" -C "$ROOT" --strip-components=1
 sqlite3 "$ROOT/mirror.sqlite" < "$DUMP"
 
+# Point the backend at mirror.sqlite (not the empty Dolt repo dev.sh would
+# otherwise initialize alongside it).
+export FRANKWEILER_BACKEND_ARGS="--backend sqlite"
+
 exec "$DEV_SH" "$ROOT"
