@@ -35,8 +35,6 @@ from typing import Any
 import typer
 
 from ingest.providers.notion_official.parse import (
-    ENTITY_BLOCK,
-    ENTITY_PAGE,
     ParsedNotionOfficial,
     parse_api_dir,
 )
@@ -690,7 +688,9 @@ def thread_qmd_path_rel(
     grid_rows to populate `qmd_path` without duplicating directory layout
     logic."""
     seg = _page_dir_segment(page_id, page_title)
-    return str(_PAGES_SUBDIR / seg / "threads" / _thread_filename(discussion_id, snippet))
+    return str(
+        _PAGES_SUBDIR / seg / "threads" / _thread_filename(discussion_id, snippet)
+    )
 
 
 def page_qmd_path_rel(*, page_id: str, page_title: str) -> str:
@@ -699,7 +699,9 @@ def page_qmd_path_rel(*, page_id: str, page_title: str) -> str:
 
 
 def thread_snippet(comment_rich_text_plain: str) -> str:
-    return (comment_rich_text_plain.splitlines()[0] if comment_rich_text_plain else "thread")[:60]
+    return (
+        comment_rich_text_plain.splitlines()[0] if comment_rich_text_plain else "thread"
+    )[:60]
 
 
 def render_notion_official(
@@ -779,9 +781,11 @@ def render_notion_official(
         page_dir = pages_root / _page_dir_segment(page_id, title)
         if disc_id in skip:
             # Still need to record the path so orphan cleanup doesn't delete it.
-            snippet = thread_snippet(_comment_text_plain(
-                sorted(members, key=lambda c: c.get("created_time") or "")[0]
-            ))
+            snippet = thread_snippet(
+                _comment_text_plain(
+                    sorted(members, key=lambda c: c.get("created_time") or "")[0]
+                )
+            )
             live_thread_paths.add(
                 page_dir / "threads" / _thread_filename(disc_id, snippet)
             )

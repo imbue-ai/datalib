@@ -237,8 +237,29 @@ def test_every_indexed_doc_maps_to_a_grid_row(qmd_root: Path, index: GridIndex) 
 
     paths = _indexed_paths(qmd_root)
     assert paths, "qmd index has no documents"
+
+    # Under the official-API notion ingest path, the renderer emits page
+    # index.md files (for navigation/preview) and per-thread comment files
+    # under nested page hierarchies — but the grid_rows projection only
+    # emits Notion Comment Thread + Notion Comment rows, whose qmd_path
+    # lands under `pages/<slug>/threads/<thread>.md`. Other notion .md
+    # files (page index.md, and the comment .md files rendered under the
+    # workspace hierarchy) intentionally have no grid row. See
+    # src/ingest/grid_rows.py:_notion_rows.
+    def _notion_path_without_grid_row(p: str) -> bool:
+        # Match both `rendered_md/...` and qmd's normalized `rendered-md/...`.
+        if "rendered-md/notion/" not in p and "rendered_md/notion/" not in p:
+            return False
+        # Thread .md files (under `/threads/`) DO map to grid rows; keep
+        # those in the orphan check. Everything else (page index.md and
+        # `/comments/` files under workspace hierarchies) does not.
+        return "/threads/" not in p
+
     orphaned = [
-        p for p in paths if not index.rows_for_hit(QmdHit(path=p, score=0, snippet=""))
+        p
+        for p in paths
+        if not _notion_path_without_grid_row(p)
+        and not index.rows_for_hit(QmdHit(path=p, score=0, snippet=""))
     ]
     assert not orphaned, f"indexed qmd docs with no grid row: {orphaned}"
 

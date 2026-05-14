@@ -63,9 +63,9 @@ def test_qmd_tar_contains_expected_files() -> None:
 
     # 8 LLM conversations + 6 Slack threads + 7 GitHub PR files (2 indices +
     # 5 thread files) + 6 GitLab MR files (2 indices + 4 thread files) +
-    # 9 Notion files (7 page index.md + 2 comment thread files).
+    # 5 Notion files (3 page index.md + 2 comment thread files).
     md_files = [n for n in names if n.endswith(".md")]
-    assert len(md_files) == 36, md_files
+    assert len(md_files) == 32, md_files
 
     # No dolt internals leaked into the tar.
     assert not any("dolt_repo" in n or ".dolt" in n for n in names), names
@@ -75,15 +75,16 @@ def test_qmd_tar_contains_expected_files() -> None:
     assert any("anyone-up-for-poker-tonight.md" in n for n in md_files)
     assert any("pr-42__recalibrate-replicator" in n for n in md_files)
     assert any("mr-17__add-earl-grey" in n for n in md_files)
-    # Notion: nested page hierarchy and a comment thread sibling of index.md.
-    assert any("bridge-operations__" in n and n.endswith("/index.md") for n in md_files)
+    # Notion (official-API path): pages live under `notion/pages/<slug>__<id8>/`
+    # with comment threads as siblings under `threads/`.
     assert any(
-        "warp-core-maintenance__" in n and n.endswith("/index.md") for n in md_files
+        "notion/pages/bridge-operations-handbook__" in n and n.endswith("/index.md")
+        for n in md_files
     )
     assert any(
-        "encounter-at-farpoint__" in n and n.endswith("/index.md") for n in md_files
+        "notion/pages/shift-roster__" in n and n.endswith("/index.md") for n in md_files
     )
-    assert any("/comments/d15c0001__" in n for n in md_files)
+    assert any("/threads/d0000001__" in n for n in md_files)
 
 
 def test_dump_sql_loads_into_in_memory_sqlite() -> None:
@@ -131,17 +132,12 @@ def test_dump_sql_loads_into_in_memory_sqlite() -> None:
     ).fetchone()[0]
     assert gl_mrs == 2
 
-    # Notion: 7 pages (5 plain + 1 collection_view_page + 1 root) and at
-    # least one H1 heading and one comment thread + comment.
+    # Notion (official-API path): 3 pages + 2 discussion threads + 3 comments.
+    # Heading and Database rows from the legacy unofficial path are not emitted.
     notion_pages = conn.execute(
-        "SELECT COUNT(*) FROM grid_rows "
-        "WHERE kind IN ('Notion Page', 'Notion Database')"
+        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Page'"
     ).fetchone()[0]
-    assert notion_pages == 7
-    notion_h1 = conn.execute(
-        "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Heading 1'"
-    ).fetchone()[0]
-    assert notion_h1 > 0
+    assert notion_pages == 3
     notion_threads = conn.execute(
         "SELECT COUNT(*) FROM grid_rows WHERE kind = 'Notion Comment Thread'"
     ).fetchone()[0]

@@ -40,8 +40,11 @@ from ingest.render_notion_official import (
     _build_page_titles,
     _comment_text_plain,
     _notion_thread_url,
+    _notion_url,
+    _page_title,
     _render_rich_text,
     _resolve_comment_page_id,
+    page_qmd_path_rel,
     thread_qmd_path_rel,
     thread_snippet,
 )
@@ -622,17 +625,49 @@ def _gitlab_rows(parsed: ParsedGitlabApi, self_account: str | None) -> Iterable[
 
 # ----- Notion (official API) ------------------------------------------------
 #
-# Under the official path we emit only Comment Thread + Comment rows. Pages
-# and headings don't get grid rows here (the previous unofficial path did,
-# but we dropped them with the migration — see render_notion_official.py).
+# Under the official path we emit Page, Comment Thread, and Comment rows.
+# (The previous unofficial path also emitted heading rows and database rows;
+# those were dropped with the migration — see render_notion_official.py.)
 
 
 def _notion_rows(parsed: ParsedNotionOfficial) -> Iterable[_Row]:
-    if not parsed.comments:
+    if not parsed.pages and not parsed.comments:
         return
     page_titles = _build_page_titles(parsed.pages, parsed.blocks)
-    block_owning_page = _block_to_page_id(parsed.blocks)
+
     user_names = parsed.user_names
+    for page in parsed.pages:
+        pid = page["id"]
+        title = page_titles.get(pid) or _page_title(page)
+        author_id = (page.get("last_edited_by") or page.get("created_by") or {}).get(
+            "id"
+        ) or ""
+        yield _Row(
+            uuid=pid,
+            provider="notion",
+            kind="Notion Page",
+            source_label="Notion",
+            when_ts=page.get("last_edited_time") or page.get("created_time") or "",
+            author=user_names.get(author_id) or (author_id[:8] or None),
+            account=None,
+            project=None,
+            channel=None,
+            conversation_name=title,
+            conversation_uuid=pid,
+            message_index=None,
+            entire_chat=f"/notion/page/{pid}",
+            text=title,
+            slack_link=None,
+            qmd_path=page_qmd_path_rel(page_id=pid, page_title=title),
+            source_url=_notion_url(pid),
+            notion_page_uuid=pid,
+            document_uuid=pid,
+        )
+
+    if not parsed.comments:
+        return
+
+    block_owning_page = _block_to_page_id(parsed.blocks)
 
     by_disc: dict[str, list[dict]] = {}
     for c in parsed.comments:
@@ -641,7 +676,9 @@ def _notion_rows(parsed: ParsedNotionOfficial) -> Iterable[_Row]:
             by_disc.setdefault(did, []).append(c)
 
     for disc_id, members in by_disc.items():
-        items = sorted(members, key=lambda c: (c.get("created_time") or "", c.get("id") or ""))
+        items = sorted(
+            members, key=lambda c: (c.get("created_time") or "", c.get("id") or "")
+        )
         first = items[0]
         page_id = _resolve_comment_page_id(first, parsed.blocks, block_owning_page)
         if page_id is None:
@@ -661,10 +698,9 @@ def _notion_rows(parsed: ParsedNotionOfficial) -> Iterable[_Row]:
         thread_url = _notion_thread_url(page_id, disc_id, parent_block_id)
 
         def _comment_text(c: dict) -> str:
-            return (
-                _render_rich_text(c.get("rich_text"), user_names, page_titles)
-                or _comment_text_plain(c)
-            )
+            return _render_rich_text(
+                c.get("rich_text"), user_names, page_titles
+            ) or _comment_text_plain(c)
 
         first_author_id = (first.get("created_by") or {}).get("id") or ""
 

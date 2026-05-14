@@ -698,9 +698,12 @@ def fetch(
                 queued.add(pid)
 
     counts = {
-        "new_pages": 0, "upd_pages": 0,
-        "new_blocks": 0, "upd_blocks": 0,
-        "new_comments": 0, "upd_comments": 0,
+        "new_pages": 0,
+        "upd_pages": 0,
+        "new_blocks": 0,
+        "upd_blocks": 0,
+        "new_comments": 0,
+        "upd_comments": 0,
     }
     visited: set[str] = set()
     pbar = tqdm(total=len(queue), unit="pg", desc="fetch")
@@ -711,8 +714,12 @@ def fetch(
         visited.add(pid)
         pbar.set_postfix_str(pid[:8])
         blocks = _mirror_page(
-            client, out_dir, pid,
-            existing_pages, existing_blocks, existing_comments,
+            client,
+            out_dir,
+            pid,
+            existing_pages,
+            existing_blocks,
+            existing_comments,
             counts,
         )
         # Enqueue child pages (only useful in subtree mode, but harmless in
