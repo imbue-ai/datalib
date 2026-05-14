@@ -101,14 +101,16 @@ export default defineConfig({
   ],
   webServer: [
     {
-      // Backend reads FRANKWEILER_ROOT for its data path. We override the
-      // bind via a tiny config file pointing at our chosen port.
-      command: `${JSON.stringify(backendBin)} --backend sqlite`,
+      // Backend reads its data root + dolt port from the config.yaml
+      // emitted by prepare-fixture.cjs (pointed at via FRANKWEILER_CONFIG).
+      // We override only the HTTP bind here so each test run claims its
+      // own ephemeral port.
+      command: JSON.stringify(backendBin),
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
       env: {
-        FRANKWEILER_ROOT: fixtureRoot,
+        FRANKWEILER_CONFIG: path.join(fixtureRoot, "config.yaml"),
         FRANKWEILER_BIND: `127.0.0.1:${BACKEND_PORT}`,
       },
     },

@@ -6,16 +6,16 @@
 //   bazel-bin/tests/fixtures/ingested/qmd.tar    -- rendered conversation tree
 //
 // Backend layout expected at <root>:
-//   <root>/mirror.sqlite
+//   <root>/dolt_repo/         (initialized + dump loaded)
+//   <root>/config.yaml        (ephemeral dolt port; backend reads via
+//                              FRANKWEILER_CONFIG)
 //   <root>/anthropic/<account>/llm_chats/*.qmd
 //   <root>/openai/<account>/llm_chats/*.qmd
 //
 // The tar archive's entries are prefixed with `qmd/`, matching the directory
-// the genrule writes into, so we extract to <root>/.. and the qmd/ tree lands
-// alongside mirror.sqlite under <root>/qmd/. The backend's qmd::scan_root,
-// however, expects <root>/{anthropic,openai} directly. To bridge that, we
-// extract with `--strip-components=1` so the inner anthropic/ and openai/
-// directories sit at <root>/.
+// the genrule writes into. The backend's qmd::scan_root expects
+// <root>/{anthropic,openai} directly, so we extract with `--strip-components=1`
+// so the inner provider dirs sit at <root>/.
 //
 // Usage:
 //   node prepare-fixture.cjs <out-root>
@@ -24,8 +24,9 @@
 // to the workspace root.
 
 const fs = require("node:fs");
+const net = require("node:net");
 const path = require("node:path");
-const { execFileSync, spawnSync } = require("node:child_process");
+const { execFileSync, execSync, spawnSync } = require("node:child_process");
 
 function findWorkspaceRoot(start) {
   let dir = start;
@@ -70,21 +71,39 @@ function ensureFixtureBuilt(workspace) {
   return { dump, tar, qmdIndex };
 }
 
-function loadDumpIntoSqlite(dumpPath, sqlitePath) {
-  // Use python3 — the dump is the SQL subset accepted by sqlite, and
-  // src/ingest/sqlite_load.py demonstrates this works via executescript.
-  const script = `
-import sqlite3, sys, pathlib
-dump = pathlib.Path(sys.argv[1]).read_text()
-out = sys.argv[2]
-pathlib.Path(out).unlink(missing_ok=True)
-conn = sqlite3.connect(out)
-conn.executescript(dump)
-conn.commit()
-conn.close()
-`;
-  execFileSync("python3", ["-c", script, dumpPath, sqlitePath], {
-    stdio: "inherit",
+function freePortSync() {
+  // Synchronous ephemeral-port grab via a brief listen on :0.
+  // Spawn node to keep this routine fully sync (we can't await here).
+  const out = execFileSync("node", [
+    "-e",
+    "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close()});",
+  ]).toString();
+  return Number.parseInt(out, 10);
+}
+
+function loadDumpIntoDolt(dumpPath, repoDir) {
+  // `dolt init` requires an identity even for throwaway repos. The dump
+  // is a portable MySQL dialect (backticks, `LOCK TABLES`-free, no
+  // dolt-only DDL) that `dolt sql` ingests in offline mode without
+  // needing the sql-server up. The repo dir name becomes the database
+  // name, hence the `USE dolt_repo` prepend.
+  fs.mkdirSync(repoDir, { recursive: true });
+  execFileSync(
+    "dolt",
+    [
+      "init",
+      "--name",
+      "Frankweiler e2e",
+      "--email",
+      "e2e@frankweiler.local",
+    ],
+    { cwd: repoDir, stdio: "inherit" },
+  );
+  const dump = fs.readFileSync(dumpPath, "utf8");
+  execSync("dolt sql", {
+    cwd: repoDir,
+    input: `USE dolt_repo;\n${dump}`,
+    stdio: ["pipe", "inherit", "inherit"],
   });
 }
 
@@ -116,8 +135,15 @@ function main() {
     { stdio: "inherit" },
   );
 
-  loadDumpIntoSqlite(dump, path.join(outRoot, "mirror.sqlite"));
-  // Backend reads root via FRANKWEILER_ROOT env var (set by playwright config).
+  const doltPort = freePortSync();
+  loadDumpIntoDolt(dump, path.join(outRoot, "dolt_repo"));
+  // Ephemeral dolt port avoids 3306 collisions when multiple bazel test
+  // shards (or a host-side dev dolt) run concurrently. The backend reads
+  // this via FRANKWEILER_CONFIG (set by playwright.config.ts).
+  fs.writeFileSync(
+    path.join(outRoot, "config.yaml"),
+    `root: ${outRoot}\ndolt:\n  port: ${doltPort}\n`,
+  );
 
   // Recreate the `models` symlink that `tests/fixtures/build_qmd_index.py`
   // strips from qmd-index.tar, and assert the shared cache is already

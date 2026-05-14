@@ -73,11 +73,8 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-# Start the backend. Extra flags (e.g. `--backend sqlite`) can be passed
-# through $FRANKWEILER_BACKEND_ARGS — used by dev_tng.sh to point at the
-# materialized mirror.sqlite instead of the on-disk Dolt repo.
-# shellcheck disable=SC2086
-"$BIN" ${FRANKWEILER_BACKEND_ARGS:-} &
+# Start the backend.
+"$BIN" &
 BACKEND_PID=$!
 
 # Start Vite (foreground-stdio, but in the background process-wise).

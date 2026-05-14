@@ -27,8 +27,8 @@ DEV_SH="$(rlocation _main/frankweiler/dev.sh)"
 [[ -f "$QMD_TAR" ]] || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -x "$DEV_SH" ]]  || { echo "ERROR: dev.sh not found at $DEV_SH" >&2; exit 1; }
 
-if ! command -v sqlite3 >/dev/null 2>&1; then
-  echo "ERROR: sqlite3 not on PATH (needed to materialize mirror.sqlite)" >&2
+if ! command -v dolt >/dev/null 2>&1; then
+  echo "ERROR: dolt not on PATH (needed to materialize the Dolt repo)" >&2
   exit 1
 fi
 
@@ -40,10 +40,29 @@ echo "TNG data root: $ROOT" >&2
 # contents); strip that one component so the providers land directly
 # under $ROOT, which is where the backend expects them.
 tar -xf "$QMD_TAR" -C "$ROOT" --strip-components=1
-sqlite3 "$ROOT/mirror.sqlite" < "$DUMP"
 
-# Point the backend at mirror.sqlite (not the empty Dolt repo dev.sh would
-# otherwise initialize alongside it).
-export FRANKWEILER_BACKEND_ARGS="--backend sqlite"
+# Materialize the Dolt repo at <root>/dolt_repo and load the fixture dump
+# into it. `dolt init` requires an identity; we pass throwaway values
+# since no commits originate from this script. Reusing the genrule's
+# byte-stable `dump.sql` keeps the in-Dolt state identical to what the
+# Python ingest pipeline would have produced.
+mkdir -p "$ROOT/dolt_repo"
+(
+  cd "$ROOT/dolt_repo"
+  dolt init --name "Frankweiler TNG" --email "tng@frankweiler.local" >/dev/null
+  { echo "USE dolt_repo;"; cat "$DUMP"; } | dolt sql
+)
+
+# Ephemeral Dolt port so two dev_tng instances (or a dev_tng plus the dev
+# backend pointed at the user's real root) can coexist on 3306 without
+# colliding. Vite still serves on 5173; the backend binds the default
+# 8731 unless $FRANKWEILER_BIND is set.
+DOLT_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+cat > "$ROOT/config.yaml" <<EOF
+root: $ROOT
+dolt:
+  port: $DOLT_PORT
+EOF
+export FRANKWEILER_CONFIG="$ROOT/config.yaml"
 
 exec "$DEV_SH" "$ROOT"
