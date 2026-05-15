@@ -4,4 +4,5 @@
 //! openai, github, gitlab, notion) remain Python until M2+.
 
 pub mod event_store;
+pub mod obs;
 pub mod slack;

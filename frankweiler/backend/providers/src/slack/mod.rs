@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::{json, Value};
+use tracing::{info, info_span, instrument, warn, Instrument};
 
 use crate::event_store::{diff_and_save, load_latest_by_key, make_record};
+use crate::obs::events;
 use api::{call_slack, paginate, SlackError};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
@@ -82,6 +84,7 @@ fn empty_params() -> BTreeMap<String, String> {
     BTreeMap::new()
 }
 
+#[instrument(skip_all)]
 async fn fetch_self(out_dir: &Path) -> Result<Value> {
     let data = call_slack("auth.test", &empty_params())
         .await
@@ -114,6 +117,7 @@ async fn fetch_self(out_dir: &Path) -> Result<Value> {
     Ok(rec)
 }
 
+#[instrument(skip(out_dir))]
 async fn fetch_channels(
     out_dir: &Path,
     members_only: bool,
@@ -164,6 +168,7 @@ async fn fetch_channels(
     Ok(records)
 }
 
+#[instrument(skip_all)]
 async fn fetch_users(out_dir: &Path) -> Result<()> {
     let mut params = BTreeMap::new();
     params.insert("limit".to_string(), "200".to_string());
@@ -180,7 +185,9 @@ async fn fetch_users(out_dir: &Path) -> Result<()> {
         })
         .collect();
     let existing = load_latest_by_key(out_dir, ENTITY_USER, k_user)?;
-    diff_and_save(out_dir, ENTITY_USER, &records, &existing, k_user)?;
+    let t0 = std::time::Instant::now();
+    let (n_new, _) = diff_and_save(out_dir, ENTITY_USER, &records, &existing, k_user)?;
+    events::indexed_batch(ENTITY_USER, n_new, t0.elapsed().as_millis() as u64);
     Ok(())
 }
 
@@ -533,13 +540,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let channel_latest_ts = channel_latest_ts_map(&existing_messages);
     let latest_reply_by_thread = latest_reply_ts_map(&existing_replies);
 
-    eprintln!(
-        "[slack] existing: channels={} users={} messages={} replies={} reactions={}",
-        existing_channels.len(),
-        existing_users.len(),
-        existing_messages.len(),
-        existing_replies.len(),
-        existing_reactions.len()
+    info!(
+        event = "slack_state_loaded",
+        channels = existing_channels.len(),
+        users = existing_users.len(),
+        messages = existing_messages.len(),
+        replies = existing_replies.len(),
+        reactions = existing_reactions.len(),
     );
 
     let _self_rec = fetch_self(out).await?;
@@ -599,10 +606,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         None
     };
 
-    eprintln!(
-        "[slack] exporting {} channels (media: {})",
-        targets.len(),
-        if opts.media { "on" } else { "off" }
+    info!(
+        event = "slack_export_planned",
+        channels = targets.len(),
+        media = opts.media,
     );
 
     let mut totals = FetchSummary {
@@ -611,9 +618,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         reactions: 0,
         media: BTreeMap::new(),
     };
+    // Per-channel progress: each iteration enters a span carrying the
+    // channel name as a field. `indicatif.pb_show` is the marker
+    // tracing-indicatif looks for to render this span as a bar on TTY.
     for (cid, name) in &targets {
-        eprintln!("[slack] {}", name);
-        match export_channel(
+        let span = info_span!(
+            "channel",
+            channel_name = %name,
+            channel_id = %cid,
+            indicatif.pb_show = tracing::field::Empty,
+        );
+        let result = export_channel(
             out,
             cid,
             name,
@@ -628,8 +643,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             media_dir.as_deref(),
             media_headers.as_ref(),
         )
-        .await
-        {
+        .instrument(span)
+        .await;
+        match result {
             Ok((n_msg, n_reply, n_react, m_counts)) => {
                 totals.messages += n_msg;
                 totals.replies += n_reply;
@@ -638,13 +654,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     *totals.media.entry(k).or_insert(0) += v;
                 }
             }
-            Err(e) => eprintln!("[slack] ! {}: {}", name, e),
+            Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
         }
     }
 
-    eprintln!(
-        "[slack] new: {} messages  {} replies  {} reactions",
-        totals.messages, totals.replies, totals.reactions
+    info!(
+        event = "slack_export_complete",
+        messages = totals.messages,
+        replies = totals.replies,
+        reactions = totals.reactions,
     );
     Ok(totals)
 }

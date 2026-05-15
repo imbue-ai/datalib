@@ -14,6 +14,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::time::sleep;
+use tracing::{debug, info, instrument, warn};
+
+use crate::obs::events;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -112,14 +115,24 @@ async fn call_slack_once(
     Ok(data)
 }
 
+#[instrument(skip(params), fields(method = method))]
 pub async fn call_slack(
     method: &str,
     params: &BTreeMap<String, String>,
 ) -> Result<Value, SlackError> {
     let mut backoff = RATE_LIMIT_INITIAL_BACKOFF;
     for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        let t0 = std::time::Instant::now();
         match call_slack_once(method, params).await {
-            Ok(v) => return Ok(v),
+            Ok(v) => {
+                let bytes = v.to_string().len() as u64;
+                events::item_fetched(
+                    &format!("slack.api/{}", method),
+                    bytes,
+                    t0.elapsed().as_millis() as u64,
+                );
+                return Ok(v);
+            }
             Err(SlackError::RateLimited(_)) => {
                 if attempt == RATE_LIMIT_MAX_RETRIES {
                     return Err(SlackError::Permanent(format!(
@@ -127,19 +140,24 @@ pub async fn call_slack(
                         method, attempt
                     )));
                 }
-                eprintln!(
-                    "rate-limited on {}; sleeping {:?} (attempt {}/{})",
-                    method,
-                    backoff,
-                    attempt + 1,
-                    RATE_LIMIT_MAX_RETRIES
+                warn!(
+                    event = "slack_rate_limited",
+                    method = method,
+                    attempt = attempt + 1,
+                    max_retries = RATE_LIMIT_MAX_RETRIES,
+                    backoff_ms = backoff.as_millis() as u64,
                 );
             }
             Err(SlackError::Transient(msg)) => {
                 if attempt == RATE_LIMIT_MAX_RETRIES {
                     return Err(SlackError::Permanent(msg));
                 }
-                eprintln!("transient on {}: {}; sleeping {:?}", method, msg, backoff);
+                warn!(
+                    event = "slack_transient_error",
+                    method = method,
+                    error = %msg,
+                    backoff_ms = backoff.as_millis() as u64,
+                );
             }
             Err(e @ SlackError::Permanent(_)) => return Err(e),
         }
@@ -311,15 +329,22 @@ pub async fn download_one_file(
             .chars()
             .rev()
             .collect();
-        eprintln!(
-            "media: {} ({}) failed exit={} {}",
-            file_id,
-            name,
-            proc.status.code().unwrap_or(-1),
-            tail.trim()
+        warn!(
+            event = "slack_media_failed",
+            file_id = file_id,
+            name = %name,
+            exit = proc.status.code().unwrap_or(-1),
+            stderr = %tail.trim(),
         );
         return Ok("error");
     }
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    events::item_fetched(url, bytes, 0);
+    debug!(
+        event = "slack_media_downloaded",
+        file_id = file_id,
+        bytes = bytes
+    );
     Ok("downloaded")
 }
 
@@ -348,11 +373,18 @@ pub async fn download_files_for_records(
         let outcome = match download_one_file(f, media_dir, headers).await {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("media: error: {}", e);
+                warn!(event = "slack_media_error", error = %e);
                 "error"
             }
         };
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
+    info!(
+        event = "slack_media_summary",
+        downloaded = counts.get("downloaded").copied().unwrap_or(0),
+        skipped = counts.get("skipped").copied().unwrap_or(0),
+        errors = counts.get("error").copied().unwrap_or(0),
+        external = counts.get("external").copied().unwrap_or(0),
+    );
     counts
 }

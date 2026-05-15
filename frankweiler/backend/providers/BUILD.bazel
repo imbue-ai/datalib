@@ -1,10 +1,15 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Excludes src/bin/ — those compile as separate `rust_binary` targets
+# below. Globbing them into the library would produce duplicate symbols.
 rust_library(
     name = "frankweiler_providers",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     crate_name = "frankweiler_providers",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
@@ -12,11 +17,38 @@ rust_library(
         "//frankweiler/backend/core:frankweiler_core",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:opentelemetry",
+        "@frankweiler_crates//:opentelemetry-otlp",
+        "@frankweiler_crates//:opentelemetry_sdk",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+        "@frankweiler_crates//:tracing-opentelemetry",
+        "@frankweiler_crates//:tracing-subscriber",
         "@frankweiler_crates//:uuid",
+    ],
+)
+
+# CLI driver for the Slack downloader. Emits structured tracing events:
+# pretty + tracing-indicatif progress bars on a TTY, NDJSON on stderr
+# otherwise, plus optional OTLP export via --otlp-endpoint. Shells out
+# to host `latchkey` at runtime; the worker / orchestrator passes
+# `--otlp-endpoint` when monitoring is enabled.
+rust_binary(
+    name = "slack_download",
+    srcs = ["src/bin/slack_download.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_providers",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
     ],
 )
 
