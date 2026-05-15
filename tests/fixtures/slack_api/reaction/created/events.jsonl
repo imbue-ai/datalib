@@ -1,2 +1,0 @@
-{"_recorded_at": "2369-04-15T00:00:15+00:00", "channel_id": "C_BRIDGE", "channel_name": "bridge", "message_ts": "12604000200.000200", "thread_ts": "12604000100.000100", "raw": {"reactions": [{"name": "thumbsup", "users": ["U_PICARD", "U_RIKER"], "count": 2}, {"name": "robot_face", "users": ["U_DATA"], "count": 1}]}}
-{"_recorded_at": "2369-04-15T00:00:15+00:00", "channel_id": "C_TENFWD", "channel_name": "ten-forward", "message_ts": "12604000700.000700", "thread_ts": "12604000600.000600", "raw": {"reactions": [{"name": "joy", "users": ["U_RIKER"], "count": 1}]}}

@@ -1,0 +1,1 @@
+{"_recorded_at": "2369-04-15T00:00:00+00:00", "method": "auth.test", "params": {}, "duration_ms": 0, "_item_hashes": {"U_PICARD": 13721328455903626953}, "response": {"ok": true, "url": "https://enterprise-d.slack.com/", "team": "USS Enterprise NCC-1701-D", "user": "picard", "team_id": "T_NCC1701D", "user_id": "U_PICARD", "is_enterprise_install": false}}
