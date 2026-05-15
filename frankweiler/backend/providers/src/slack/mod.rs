@@ -18,6 +18,7 @@
 //! zero writes.
 
 pub mod api;
+pub mod load;
 pub mod mrkdwn;
 pub mod render;
 pub mod shapes;
