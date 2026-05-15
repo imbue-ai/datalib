@@ -26,3 +26,36 @@ rust_test(
     crate = ":frankweiler_providers",
     edition = "2021",
 )
+
+# Live Slack snapshot test. Hits api.slack.com via `latchkey curl`, so
+# tagged "manual" to exclude it from `bazelisk test //...`. Run with:
+#
+#     bazelisk test //frankweiler/backend/providers:slack_live \
+#         --test_arg=--ignored --test_env=PATH --test_env=HOME
+#
+# Target name matches the cargo test stem (`tests/slack_live.rs`) so
+# insta snapshot filenames are identical between bazel and cargo runs.
+# INSTA_WORKSPACE_ROOT="." because bazel runs tests with cwd at the
+# runfiles workspace root, and insta's `file!()` already includes
+# `frankweiler/backend/providers/tests/slack_live.rs` relative to it.
+rust_test(
+    name = "slack_live",
+    srcs = ["tests/slack_live.rs"],
+    crate_root = "tests/slack_live.rs",
+    data = glob(["tests/snapshots/*.snap"]),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to api.slack.com
+        "manual",
+        "no-sandbox",  # latchkey reads its keyring from the host
+    ],
+    deps = [
+        ":frankweiler_providers",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+    ],
+)
