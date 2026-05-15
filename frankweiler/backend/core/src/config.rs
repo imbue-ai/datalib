@@ -369,10 +369,7 @@ impl Config {
             } = s
             {
                 let inbox_on = sync.inbox.as_ref().is_some_and(|i| i.enabled);
-                let subtrees_on = sync
-                    .subtrees
-                    .as_ref()
-                    .is_some_and(|t| !t.pages.is_empty());
+                let subtrees_on = sync.subtrees.as_ref().is_some_and(|t| !t.pages.is_empty());
                 if !inbox_on && !subtrees_on {
                     return Err(ConfigError::NotionSyncEmpty(name.into()));
                 }
@@ -383,7 +380,8 @@ impl Config {
         sorted.sort_unstable();
         let dupes: Vec<String> = sorted
             .windows(2)
-            .filter_map(|w| (w[0] == w[1]).then(|| w[0].to_string()))
+            .filter(|w| w[0] == w[1])
+            .map(|w| w[0].to_string())
             .collect();
         if !dupes.is_empty() {
             let mut d = dupes;
@@ -658,7 +656,10 @@ sources:
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
         let s = &cfg.sources[0];
-        assert_eq!(s.resolved_input_path(&cfg.data_root), root.join("raw/slack"));
+        assert_eq!(
+            s.resolved_input_path(&cfg.data_root),
+            root.join("raw/slack")
+        );
     }
 
     #[test]

@@ -1,0 +1,358 @@
+//! Slack API transport: latchkey curl shellout with retry + pagination.
+//!
+//! Slack accepts the latchkey-injected `Authorization: Bearer <token>` on
+//! api.slack.com directly. The `files.slack.com` host is not in latchkey's
+//! URL allowlist for the `slack` service, so file downloads harvest the
+//! Bearer + d-cookie from `latchkey curl -v` stderr and replay with plain
+//! curl. Mirrors `src/download/slack_web.py`.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use serde_json::Value;
+use tokio::process::Command;
+use tokio::time::sleep;
+
+pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
+pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const RATE_LIMIT_MAX_RETRIES: u32 = 7;
+pub const RATE_LIMIT_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
+pub const RATE_LIMIT_MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+#[derive(thiserror::Error, Debug)]
+pub enum SlackError {
+    #[error("rate limited: {0}")]
+    RateLimited(String),
+    #[error("transient: {0}")]
+    Transient(String),
+    #[error("{0}")]
+    Permanent(String),
+}
+
+fn url_encode(s: &str) -> String {
+    // Minimal RFC 3986 unreserved + safe chars. We pass channel ids, ts
+    // strings, and short numeric limits — none of which need fancy
+    // encoding — but cover the general case for cursor tokens too.
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+fn build_url(method: &str, params: &BTreeMap<String, String>) -> String {
+    let base = format!("https://slack.com/api/{}", method);
+    if params.is_empty() {
+        return base;
+    }
+    let qs: Vec<String> = params
+        .iter()
+        .map(|(k, v)| format!("{}={}", url_encode(k), url_encode(v)))
+        .collect();
+    format!("{}?{}", base, qs.join("&"))
+}
+
+async fn call_slack_once(
+    method: &str,
+    params: &BTreeMap<String, String>,
+) -> Result<Value, SlackError> {
+    let url = build_url(method, params);
+    let proc = tokio::time::timeout(
+        LATCHKEY_TIMEOUT,
+        Command::new("latchkey").arg("curl").arg(&url).output(),
+    )
+    .await
+    .map_err(|_| SlackError::Transient(format!("{}: latchkey curl timed out", method)))?
+    .map_err(|e| SlackError::Transient(format!("{}: spawn failed: {}", method, e)))?;
+
+    if !proc.status.success() {
+        let code = proc.status.code().unwrap_or(-1);
+        let stderr_tail = String::from_utf8_lossy(&proc.stderr);
+        let tail: String = stderr_tail
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        let msg = format!("latchkey curl {} exit={} stderr={:?}", method, code, tail);
+        return Err(match code {
+            7 | 28 | 35 | 56 => SlackError::Transient(msg),
+            _ => SlackError::Permanent(msg),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&proc.stdout);
+    let data: Value = serde_json::from_str(&stdout).map_err(|e| {
+        let preview: String = stdout.chars().take(200).collect();
+        SlackError::Permanent(format!("{}: invalid JSON: {:?} ({})", method, preview, e))
+    })?;
+    let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !ok {
+        let err = data
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        if err == "ratelimited" {
+            return Err(SlackError::RateLimited(method.to_string()));
+        }
+        return Err(SlackError::Permanent(format!(
+            "{}: ok=false error={:?}",
+            method, err
+        )));
+    }
+    Ok(data)
+}
+
+pub async fn call_slack(
+    method: &str,
+    params: &BTreeMap<String, String>,
+) -> Result<Value, SlackError> {
+    let mut backoff = RATE_LIMIT_INITIAL_BACKOFF;
+    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
+        match call_slack_once(method, params).await {
+            Ok(v) => return Ok(v),
+            Err(SlackError::RateLimited(_)) => {
+                if attempt == RATE_LIMIT_MAX_RETRIES {
+                    return Err(SlackError::Permanent(format!(
+                        "{}: rate-limited after {} retries",
+                        method, attempt
+                    )));
+                }
+                eprintln!(
+                    "rate-limited on {}; sleeping {:?} (attempt {}/{})",
+                    method,
+                    backoff,
+                    attempt + 1,
+                    RATE_LIMIT_MAX_RETRIES
+                );
+            }
+            Err(SlackError::Transient(msg)) => {
+                if attempt == RATE_LIMIT_MAX_RETRIES {
+                    return Err(SlackError::Permanent(msg));
+                }
+                eprintln!("transient on {}: {}; sleeping {:?}", method, msg, backoff);
+            }
+            Err(e @ SlackError::Permanent(_)) => return Err(e),
+        }
+        sleep(backoff).await;
+        backoff = std::cmp::min(backoff * 2, RATE_LIMIT_MAX_BACKOFF);
+    }
+    Err(SlackError::Permanent(format!(
+        "{}: exhausted retries",
+        method
+    )))
+}
+
+/// Walks Slack cursor pagination, returning all items concatenated.
+pub async fn paginate(
+    method: &str,
+    params: &BTreeMap<String, String>,
+    response_key: &str,
+) -> Result<Vec<Value>> {
+    let mut items: Vec<Value> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut p = params.clone();
+        if let Some(c) = &cursor {
+            p.insert("cursor".to_string(), c.clone());
+        }
+        let data = call_slack(method, &p).await.map_err(|e| anyhow!("{}", e))?;
+        if let Some(arr) = data.get(response_key).and_then(|v| v.as_array()) {
+            items.extend(arr.iter().cloned());
+        }
+        if let Some(false) = data.get("has_more").and_then(|v| v.as_bool()) {
+            break;
+        }
+        let next = data
+            .get("response_metadata")
+            .and_then(|m| m.get("next_cursor"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        if next.is_none() {
+            break;
+        }
+        cursor = next;
+    }
+    Ok(items)
+}
+
+// ---------------------------------------------------------------------------
+// File-download path: harvest Bearer/Cookie from `latchkey curl -v` stderr.
+// ---------------------------------------------------------------------------
+
+pub async fn extract_file_auth() -> Result<BTreeMap<String, String>> {
+    let proc = tokio::time::timeout(
+        LATCHKEY_TIMEOUT,
+        Command::new("latchkey")
+            .args([
+                "curl",
+                "-v",
+                "-o",
+                "/dev/null",
+                "-s",
+                "https://slack.com/api/auth.test",
+            ])
+            .output(),
+    )
+    .await
+    .context("latchkey curl -v timed out")?
+    .context("latchkey curl -v spawn failed")?;
+
+    let stderr = String::from_utf8_lossy(&proc.stderr);
+    let mut headers: BTreeMap<String, String> = BTreeMap::new();
+    for name in ["Authorization", "Cookie", "User-Agent"] {
+        for line in stderr.lines() {
+            let prefix = format!("> {}: ", name);
+            if let Some(rest) = line.strip_prefix(&prefix) {
+                headers.insert(name.to_string(), rest.trim().to_string());
+                break;
+            }
+        }
+    }
+    if !headers.contains_key("Authorization") {
+        bail!(
+            "could not extract Authorization header from `latchkey curl -v`; \
+             is the `slack` service registered with `latchkey auth set`?"
+        );
+    }
+    Ok(headers)
+}
+
+fn safe_filename(name: Option<&str>, fallback: &str) -> String {
+    let s = match name {
+        Some(n) if !n.is_empty() => n,
+        _ => return fallback.to_string(),
+    };
+    let cleaned: String = s
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, '-' | '.' | '_' | ' ') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub async fn download_one_file(
+    file_obj: &Value,
+    media_dir: &Path,
+    headers: &BTreeMap<String, String>,
+) -> Result<&'static str> {
+    let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
+        Some(s) => s,
+        None => return Ok("tombstone"),
+    };
+    if file_obj.get("mode").and_then(|v| v.as_str()) == Some("tombstone") {
+        return Ok("tombstone");
+    }
+    if file_obj
+        .get("is_external")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return Ok("external");
+    }
+    let url = file_obj
+        .get("url_private_download")
+        .and_then(|v| v.as_str())
+        .or_else(|| file_obj.get("url_private").and_then(|v| v.as_str()));
+    let url = match url {
+        Some(u) => u,
+        None => return Ok("external"),
+    };
+
+    let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
+    let target_dir = media_dir.join(file_id);
+    let target = target_dir.join(&name);
+    if let Ok(meta) = std::fs::metadata(&target) {
+        if meta.len() > 0 {
+            return Ok("skipped");
+        }
+    }
+    std::fs::create_dir_all(&target_dir)?;
+
+    let mut cmd = Command::new("curl");
+    cmd.arg("-fSL").arg("-o").arg(&target);
+    for (k, v) in headers {
+        cmd.arg("-H").arg(format!("{}: {}", k, v));
+    }
+    cmd.arg(url);
+
+    let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
+        .await
+        .context("file curl timed out")?
+        .context("file curl spawn failed")?;
+    if !proc.status.success() {
+        let _ = std::fs::remove_file(&target);
+        let stderr_tail = String::from_utf8_lossy(&proc.stderr);
+        let tail: String = stderr_tail
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        eprintln!(
+            "media: {} ({}) failed exit={} {}",
+            file_id,
+            name,
+            proc.status.code().unwrap_or(-1),
+            tail.trim()
+        );
+        return Ok("error");
+    }
+    Ok("downloaded")
+}
+
+pub async fn download_files_for_records(
+    records: &[Value],
+    media_dir: &Path,
+    headers: &BTreeMap<String, String>,
+) -> BTreeMap<String, usize> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
+        counts.insert(k.to_string(), 0);
+    }
+    let mut targets: Vec<Value> = Vec::new();
+    for rec in records {
+        if let Some(files) = rec
+            .get("raw")
+            .and_then(|r| r.get("files"))
+            .and_then(|f| f.as_array())
+        {
+            for f in files {
+                targets.push(f.clone());
+            }
+        }
+    }
+    for f in &targets {
+        let outcome = match download_one_file(f, media_dir, headers).await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("media: error: {}", e);
+                "error"
+            }
+        };
+        *counts.entry(outcome.to_string()).or_insert(0) += 1;
+    }
+    counts
+}

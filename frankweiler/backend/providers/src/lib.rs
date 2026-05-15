@@ -1,3 +1,7 @@
 //! Frankweiler provider crate: per-service downloaders + ingest.
 //!
-//! Currently empty — slack downloader + ingest land in a follow-up commit.
+//! Currently hosts the Slack downloader; other providers (anthropic,
+//! openai, github, gitlab, notion) remain Python until M2+.
+
+pub mod event_store;
+pub mod slack;
