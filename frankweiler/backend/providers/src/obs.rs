@@ -171,9 +171,11 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
 /// dashboards see the same shape. Keep this list short — every event
 /// added here becomes a long-term commitment to downstream consumers.
 pub mod events {
-    /// One HTTP-ish call to the upstream provider completed.
+    /// One HTTP-ish call to the upstream provider completed. Emitted at
+    /// `debug` because progress bars carry the cumulative counters; the
+    /// per-call detail is only interesting when something looks wrong.
     pub fn item_fetched(url: &str, bytes: u64, duration_ms: u64) {
-        tracing::info!(
+        tracing::debug!(
             event = "item_fetched",
             url = url,
             bytes = bytes,

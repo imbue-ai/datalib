@@ -1,7 +1,14 @@
 //! Append-only raw-API capture with per-item content dedup.
 //!
-//! Layout: `<out_dir>/raw_api/<method>/events.jsonl`. Each record wraps
-//! one upstream call:
+//! Layout: `<out_dir>/raw_api/<method>/<run_id>.jsonl`. Each fetch
+//! invocation gets its own JSONL file per method (lazy-created on first
+//! write, so empty runs leave no trace). The directory itself is
+//! append-only; files are immutable once a run finishes, which keeps
+//! Dropbox/rsync happy and makes "this run produced X" / "translator
+//! already consumed file Y" trivial to track downstream. Files can be
+//! repacked offline if their count ever becomes inconvenient.
+//!
+//! Each record wraps one upstream call:
 //!
 //! ```json
 //! {"_recorded_at": "...", "method": "conversations.history",
@@ -60,6 +67,9 @@ pub struct PageCapture<'a> {
 
 pub struct RawStore {
     out_dir: PathBuf,
+    /// Stamp shared across all per-method JSONL files written by this
+    /// invocation. Filename: `<run_id>.jsonl`.
+    run_id: String,
     /// `(method, item_key) -> hash(item_value)`. Sized linearly with the
     /// number of unique items ever seen across all methods.
     seen: BTreeMap<(String, String), ItemHash>,
@@ -67,11 +77,12 @@ pub struct RawStore {
 
 impl RawStore {
     /// Load existing `raw_api/` streams, populating the dedup index from
-    /// each envelope's inlined `_item_hashes` map. No response bodies are
-    /// reparsed past the top level.
+    /// each envelope's inlined `_item_hashes` map. Glob-fans-in every
+    /// `*.jsonl` per method, so prior runs accumulate naturally.
     pub fn load(out_dir: &Path) -> Result<Self> {
         let mut store = Self {
             out_dir: out_dir.to_path_buf(),
+            run_id: make_run_id(),
             seen: BTreeMap::new(),
         };
         let raw_root = out_dir.join("raw_api");
@@ -86,33 +97,45 @@ impl RawStore {
                 continue;
             }
             let method = method_entry.file_name().to_string_lossy().to_string();
-            let path = method_entry.path().join("events.jsonl");
-            if !path.exists() {
-                continue;
-            }
-            let f =
-                std::fs::File::open(&path).with_context(|| format!("open {}", path.display()))?;
-            for line in BufReader::new(f).lines() {
-                let line = line?;
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let env: Value = serde_json::from_str(&line)
-                    .with_context(|| format!("parse {}", path.display()))?;
-                let hashes = env
-                    .get("_item_hashes")
-                    .and_then(|v| v.as_object())
-                    .with_context(|| {
-                        format!("{}: envelope missing _item_hashes", path.display())
-                    })?;
-                for (k, v) in hashes {
-                    if let Some(h) = v.as_u64() {
-                        store.seen.insert((method.clone(), k.clone()), h);
+            let method_dir = method_entry.path();
+            let mut files: Vec<PathBuf> = std::fs::read_dir(&method_dir)
+                .with_context(|| format!("read_dir {}", method_dir.display()))?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+                .collect();
+            files.sort();
+            for path in files {
+                let f = std::fs::File::open(&path)
+                    .with_context(|| format!("open {}", path.display()))?;
+                for line in BufReader::new(f).lines() {
+                    let line = line?;
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let env: Value = serde_json::from_str(&line)
+                        .with_context(|| format!("parse {}", path.display()))?;
+                    let hashes = env
+                        .get("_item_hashes")
+                        .and_then(|v| v.as_object())
+                        .with_context(|| {
+                            format!("{}: envelope missing _item_hashes", path.display())
+                        })?;
+                    for (k, v) in hashes {
+                        if let Some(h) = v.as_u64() {
+                            store.seen.insert((method.clone(), k.clone()), h);
+                        }
                     }
                 }
             }
         }
         Ok(store)
+    }
+
+    /// Stamp identifying this run's output files. One per invocation,
+    /// shared across all methods.
+    pub fn run_id(&self) -> &str {
+        &self.run_id
     }
 
     /// Number of unique items currently indexed for `method`. Useful for
@@ -179,7 +202,7 @@ impl RawStore {
             .out_dir
             .join("raw_api")
             .join(&method)
-            .join("events.jsonl");
+            .join(format!("{}.jsonl", self.run_id));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir -p {}", parent.display()))?;
@@ -216,6 +239,12 @@ fn params_to_value(params: &BTreeMap<String, String>) -> Value {
 
 fn now_iso() -> String {
     Local::now().to_rfc3339()
+}
+
+/// Sortable, filesystem-safe run stamp. Millisecond precision so two
+/// runs back-to-back don't collide.
+fn make_run_id() -> String {
+    Local::now().format("run-%Y%m%dT%H%M%S%3f").to_string()
 }
 
 /// Hash a JSON value canonically. `serde_json::Map` is a `BTreeMap` in

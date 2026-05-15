@@ -22,12 +22,26 @@ use serde_json::Value;
 
 const TEST_CHANNEL: &str = "thad-testing-channel";
 
-fn load_jsonl(path: &Path) -> Vec<Value> {
-    let text = fs::read_to_string(path).unwrap_or_default();
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("valid jsonl"))
-        .collect()
+/// Fan-in every `*.jsonl` under a method directory. Run-stamped files
+/// sort lexically by timestamp prefix, so iteration order is run order.
+fn load_jsonl(method_dir: &Path) -> Vec<Value> {
+    let mut paths: Vec<_> = fs::read_dir(method_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+                .collect()
+        })
+        .unwrap_or_default();
+    paths.sort();
+    let mut out = Vec::new();
+    for p in paths {
+        let text = fs::read_to_string(&p).unwrap_or_default();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            out.push(serde_json::from_str(line).expect("valid jsonl"));
+        }
+    }
+    out
 }
 
 /// Pull only the items inside each page envelope. Sorting keeps the
@@ -86,14 +100,14 @@ async fn slack_live_download_snapshot() {
 
     // Trim conversations.list down to the test channel — workspace-wide
     // churn isn't what we're testing.
-    let channels_rows = load_jsonl(&raw.join("conversations.list").join("events.jsonl"));
+    let channels_rows = load_jsonl(&raw.join("conversations.list"));
     let mut channels = extract_items(&channels_rows, "channels", &["id"]);
     channels.retain(|c| c.get("name").and_then(|v| v.as_str()) == Some(TEST_CHANNEL));
 
     // Messages + replies — full sets are tiny for the test channel.
-    let history_rows = load_jsonl(&raw.join("conversations.history").join("events.jsonl"));
+    let history_rows = load_jsonl(&raw.join("conversations.history"));
     let messages = extract_items(&history_rows, "messages", &["ts"]);
-    let replies_rows = load_jsonl(&raw.join("conversations.replies").join("events.jsonl"));
+    let replies_rows = load_jsonl(&raw.join("conversations.replies"));
     let replies = extract_items(&replies_rows, "messages", &["thread_ts", "ts"]);
 
     // Users: trim to authors referenced by the test channel's traffic.
@@ -103,7 +117,7 @@ async fn slack_live_download_snapshot() {
             referenced.insert(u.to_string());
         }
     }
-    let users_rows = load_jsonl(&raw.join("users.list").join("events.jsonl"));
+    let users_rows = load_jsonl(&raw.join("users.list"));
     let mut users = extract_items(&users_rows, "members", &["id"]);
     users.retain(|u| {
         u.get("id")

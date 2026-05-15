@@ -483,10 +483,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         media: BTreeMap::new(),
     };
     for (cid, name) in &targets {
+        // Fields declared `Empty` here become live slots on the span,
+        // so `span.record("msgs", ...)` etc. inside paginate_history
+        // update the indicatif progress bar in place (it renders
+        // `{span_fields}` by default).
         let span = info_span!(
             "channel",
             channel_name = %name,
             channel_id = %cid,
+            msgs = tracing::field::Empty,
+            replies = tracing::field::Empty,
+            media = tracing::field::Empty,
             indicatif.pb_show = tracing::field::Empty,
         );
         let mut totals = ChannelTotals::default();

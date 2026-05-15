@@ -14,7 +14,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::time::sleep;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use crate::obs::events;
 
@@ -349,7 +349,7 @@ pub async fn download_files_for_messages(
         };
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
-    info!(
+    debug!(
         event = "slack_media_summary",
         downloaded = counts.get("downloaded").copied().unwrap_or(0),
         skipped = counts.get("skipped").copied().unwrap_or(0),
