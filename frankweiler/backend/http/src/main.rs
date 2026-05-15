@@ -22,7 +22,9 @@
 //! `/api/search` will just return zero rows. `/api/health` reports the
 //! resolved root and whether it exists, which is handy when wiring up the UI.
 
-use frankweiler_core::config::{default_config_path, load_config, BackendConfig, Config};
+use frankweiler_core::config::{
+    default_config_path, load_config, BackendConfig, Config, ConfigError,
+};
 use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
@@ -41,14 +43,34 @@ enum BackendKind {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let backend_kind = parse_backend_flag();
-    let cfg_opt = load_config(Some(&default_config_path())).ok();
+    // Load config: missing default config path is fine (we fall back to env +
+    // defaults), but any other error (parse, IO, validation) is fatal —
+    // silently swallowing them masks typos in $FRANKWEILER_CONFIG.
+    let cfg_path = default_config_path();
+    let explicit_cfg = std::env::var("FRANKWEILER_CONFIG").is_ok();
+    let cfg_opt = match load_config(Some(&cfg_path)) {
+        Ok(c) => Some(c),
+        Err(ConfigError::NotFound(p)) if !explicit_cfg => {
+            eprintln!("config: no file at {} (using defaults)", p.display());
+            None
+        }
+        Err(e) => return Err(anyhow::anyhow!("config {}: {e}", cfg_path.display())),
+    };
     let (bind, root) = resolve_bind_and_root(cfg_opt.as_ref());
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     eprintln!(
         "frankweiler-http listening on http://{}",
         listener.local_addr()?
     );
-    eprintln!("data root: {} (exists={})", root.display(), root.exists());
+    // Auto-create the data root so a fresh install (or a typo'd dev config
+    // pointing at a not-yet-created dir) doesn't require manual mkdir.
+    if !root.exists() {
+        std::fs::create_dir_all(&root)
+            .map_err(|e| anyhow::anyhow!("create data_root {}: {e}", root.display()))?;
+        eprintln!("data root: {} (created)", root.display());
+    } else {
+        eprintln!("data root: {}", root.display());
+    }
     eprintln!("backend: {:?}", backend_kind);
 
     let root = Arc::new(root);

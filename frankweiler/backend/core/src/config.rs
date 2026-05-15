@@ -331,8 +331,6 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
     #[error("yaml: {0}")]
     Yaml(#[from] serde_yaml::Error),
-    #[error("data_root does not exist: {0}")]
-    DataRootMissing(PathBuf),
     #[error("duplicate source names: {0:?}")]
     DuplicateSourceNames(Vec<String>),
     #[error(
@@ -443,9 +441,6 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     let raw = std::fs::read_to_string(p)?;
     let mut cfg: Config = serde_yaml::from_str(&raw)?;
     cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
-    if !cfg.data_root.exists() {
-        return Err(ConfigError::DataRootMissing(cfg.data_root.clone()));
-    }
     cfg.validate()?;
     Ok(cfg)
 }
@@ -473,17 +468,6 @@ mod tests {
         let cfg = load_config(Some(&cfg_path)).unwrap();
         assert_eq!(cfg.data_root, root);
         assert_eq!(cfg.backend.bind, "127.0.0.1:8731");
-    }
-
-    #[test]
-    fn errors_on_missing_root() {
-        let tmp = tempdir();
-        let cfg_path = tmp.join("config.yaml");
-        std::fs::write(&cfg_path, "data_root: /no/such/path\n").unwrap();
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::DataRootMissing(_))
-        ));
     }
 
     #[test]
