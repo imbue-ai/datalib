@@ -27,6 +27,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use tracing::{info, info_span, instrument, warn, Instrument};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::obs::events;
 use crate::raw_store::{PageCapture, RawStore};
@@ -311,13 +312,19 @@ async fn paginate_history(
             }
         }
 
+        // tracing-indicatif 0.3 doesn't hook `on_record`, so `span.record`
+        // never reaches the bar. `pb_set_message` is the supported path
+        // for live cumulative counters. We also record the fields so a
+        // JSON renderer sees them at span close.
         let span = tracing::Span::current();
+        let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
         span.record("msgs", totals.messages);
         span.record("replies", totals.replies);
-        span.record(
-            "media",
-            totals.media.get("downloaded").copied().unwrap_or(0),
-        );
+        span.record("media", media_downloaded);
+        span.pb_set_message(&format!(
+            "msgs={} replies={} media={}",
+            totals.messages, totals.replies, media_downloaded
+        ));
 
         cursor = next_cursor(&resp);
         if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {

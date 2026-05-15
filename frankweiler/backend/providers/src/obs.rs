@@ -42,7 +42,15 @@ use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
+use tracing_indicatif::style::ProgressStyle;
 use tracing_indicatif::IndicatifLayer;
+
+/// Default template + a trailing `{msg}` slot so callers can publish a
+/// live-updating cumulative-counter line via
+/// `IndicatifSpanExt::pb_set_message`. tracing-indicatif 0.3 does not
+/// hook `on_record`, so the bar will not reflect post-creation
+/// `span.record` calls — `pb_set_message` is the supported path.
+const PROGRESS_TEMPLATE: &str = "{span_child_prefix}{spinner} {span_name}{{{span_fields}}} {msg}";
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -150,7 +158,9 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
             .try_init()
             .context("install tracing subscriber")?;
     } else {
-        let indicatif = IndicatifLayer::new();
+        let indicatif = IndicatifLayer::new().with_progress_style(
+            ProgressStyle::with_template(PROGRESS_TEMPLATE).expect("valid template"),
+        );
         let writer = indicatif.get_stderr_writer();
         registry
             .with(
