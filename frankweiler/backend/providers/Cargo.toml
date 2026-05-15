@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "slack-download"
 path = "src/bin/slack_download.rs"
 
+[[bin]]
+name = "slack-render"
+path = "src/bin/slack_render.rs"
+
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-schema = { path = "../schema" }
@@ -22,6 +26,9 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 uuid = { workspace = true, features = ["v5"] }
+regex = "1.11"
+once_cell = "1.20"
+emojis = "0.6"
 
 # Observability stack — emitted as structured events, rendered as a
 # progress UI on a TTY, JSON on stderr otherwise, and optionally
@@ -38,3 +45,4 @@ tracing-opentelemetry = "0.28"
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

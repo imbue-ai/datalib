@@ -18,6 +18,8 @@
 //! zero writes.
 
 pub mod api;
+pub mod mrkdwn;
+pub mod render;
 pub mod shapes;
 pub mod translate;
 

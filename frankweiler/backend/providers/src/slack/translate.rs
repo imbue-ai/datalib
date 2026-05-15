@@ -118,6 +118,10 @@ pub struct Message {
     pub user_id: Option<String>,
     pub text: String,
     pub ts_iso: String,
+    /// Original Slack message JSON, preserved verbatim. The renderer
+    /// reaches into this for `files`, `reactions`, and any future field
+    /// we don't promote to a struct member.
+    pub raw_json: Value,
 }
 
 impl Message {
@@ -345,6 +349,7 @@ fn insert_message(
         user_id: opt_str(raw, "user"),
         text: opt_str(raw, "text").unwrap_or_default(),
         ts_iso: ts_to_iso(ts),
+        raw_json: raw.clone(),
     };
     out.insert(key, msg);
 }
@@ -464,39 +469,9 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
 // Helpers: mention resolution, slug, slack-link, qmd path.
 // ---------------------------------------------------------------------------
 
-/// Replace `<@U…>` / `<@U…|label>` with `@<label>`. Plain-text path —
-/// the full mrkdwn → CommonMark pipeline lives in the upcoming
-/// `mrkdwn.rs` (Phase 2) and is only run when rendering a thread to a
-/// `.md` file, not when projecting onto grid_rows.
-pub fn resolve_user_mentions(text: &str, user_labels: &BTreeMap<String, String>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'<' && i + 1 < bytes.len() && bytes[i + 1] == b'@' {
-            if let Some(end) = text[i..].find('>') {
-                let inner = &text[i + 2..i + end];
-                let (uid, label) = match inner.split_once('|') {
-                    Some((u, l)) => (u, Some(l)),
-                    None => (inner, None),
-                };
-                let resolved = label
-                    .map(str::to_string)
-                    .or_else(|| user_labels.get(uid).cloned())
-                    .unwrap_or_else(|| uid.to_string());
-                out.push('@');
-                out.push_str(&resolved);
-                i += end + 1;
-                continue;
-            }
-        }
-        // UTF-8 safe single-codepoint advance.
-        let ch = text[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
+// Mention resolution is shared with the renderer in `mrkdwn` — that
+// keeps the grid-row text and the .md preview spelling identical.
+pub use super::mrkdwn::resolve_user_mentions;
 
 pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&str>) -> String {
     let ts_no_dot: String = ts.chars().filter(|c| *c != '.').collect();
