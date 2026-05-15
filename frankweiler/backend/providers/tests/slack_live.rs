@@ -1,9 +1,9 @@
 //! Live Slack integration snapshot test.
 //!
 //! Hits real api.slack.com via `latchkey curl`, downloads the configured
-//! test channel, and snapshots each entity's `updated/` JSONL stream with
-//! redactions for volatile fields. Marked `#[ignore]` so `cargo test`
-//! skips it; run explicitly with:
+//! test channel, and snapshots each captured `raw_api/<method>` stream
+//! with redactions for volatile fields. Marked `#[ignore]` so
+//! `cargo test` skips it; run explicitly with:
 //!
 //!     cargo test -p frankweiler-providers --test slack_live -- --ignored
 //!
@@ -22,32 +22,40 @@ use serde_json::Value;
 
 const TEST_CHANNEL: &str = "thad-testing-channel";
 
-fn load_jsonl_sorted(path: &Path) -> Vec<Value> {
+fn load_jsonl(path: &Path) -> Vec<Value> {
     let text = fs::read_to_string(path).unwrap_or_default();
-    let mut rows: Vec<Value> = text
-        .lines()
+    text.lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("valid jsonl"))
-        .collect();
-    // Order varies with API pagination. Sort by the canonical JSON form of
-    // each record's key fields so snapshots are stable across runs.
-    rows.sort_by_key(|r| {
+        .collect()
+}
+
+/// Pull only the items inside each page envelope. Sorting keeps the
+/// snapshot stable across pagination/cursor reordering, and the page
+/// envelope metadata (`_recorded_at`, `params.cursor`) is volatile in
+/// ways that aren't worth redacting per-field.
+fn extract_items(rows: &[Value], array_field: &str, sort_keys: &[&str]) -> Vec<Value> {
+    let mut items: Vec<Value> = Vec::new();
+    for row in rows {
+        if let Some(arr) = row
+            .get("response")
+            .and_then(|r| r.get(array_field))
+            .and_then(|v| v.as_array())
+        {
+            items.extend(arr.iter().cloned());
+        }
+    }
+    items.sort_by_key(|v| {
         let mut k = String::new();
-        for field in [
-            "channel_id",
-            "user_id",
-            "thread_ts",
-            "message_ts",
-            "reply_ts",
-        ] {
-            if let Some(v) = r.get(field).and_then(|v| v.as_str()) {
-                k.push_str(v);
+        for f in sort_keys {
+            if let Some(s) = v.get(*f).and_then(|x| x.as_str()) {
+                k.push_str(s);
                 k.push('\x1f');
             }
         }
         k
     });
-    rows
+    items
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -74,73 +82,68 @@ async fn slack_live_download_snapshot() {
     };
     slack::fetch(opts).await.expect("slack fetch failed");
 
-    // Authors referenced by our test channel's traffic — used to trim the
-    // user snapshot down to just the users we care about, so the rest of
-    // the workspace's directory doesn't churn the snapshot.
-    let mut referenced_users: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
-    for entity in ["message", "reply"] {
-        let path = tmp.join(entity).join("updated").join("events.jsonl");
-        for r in load_jsonl_sorted(&path) {
-            if let Some(u) = r
-                .get("raw")
-                .and_then(|raw| raw.get("user"))
-                .and_then(|v| v.as_str())
-            {
-                referenced_users.insert(u.to_string());
-            }
+    let raw = tmp.join("raw_api");
+
+    // Trim conversations.list down to the test channel — workspace-wide
+    // churn isn't what we're testing.
+    let channels_rows = load_jsonl(&raw.join("conversations.list").join("events.jsonl"));
+    let mut channels = extract_items(&channels_rows, "channels", &["id"]);
+    channels.retain(|c| c.get("name").and_then(|v| v.as_str()) == Some(TEST_CHANNEL));
+
+    // Messages + replies — full sets are tiny for the test channel.
+    let history_rows = load_jsonl(&raw.join("conversations.history").join("events.jsonl"));
+    let messages = extract_items(&history_rows, "messages", &["ts"]);
+    let replies_rows = load_jsonl(&raw.join("conversations.replies").join("events.jsonl"));
+    let replies = extract_items(&replies_rows, "messages", &["thread_ts", "ts"]);
+
+    // Users: trim to authors referenced by the test channel's traffic.
+    let mut referenced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for m in messages.iter().chain(replies.iter()) {
+        if let Some(u) = m.get("user").and_then(|v| v.as_str()) {
+            referenced.insert(u.to_string());
         }
     }
+    let users_rows = load_jsonl(&raw.join("users.list").join("events.jsonl"));
+    let mut users = extract_items(&users_rows, "members", &["id"]);
+    users.retain(|u| {
+        u.get("id")
+            .and_then(|v| v.as_str())
+            .map(|id| referenced.contains(id))
+            .unwrap_or(false)
+    });
 
-    // Redact volatile fields: _recorded_at is wall clock; url_private*,
-    // permalink*, thumb_* are signed Slack URLs regenerated each call.
-    for entity in [
-        "self_identity",
-        "channel",
-        "user",
-        "message",
-        "reply",
-        "reaction",
+    // Redact volatile fields: url_private*, permalink*, thumb_* are
+    // signed Slack URLs regenerated each call.
+    for (suffix, value) in [
+        ("channels", &channels),
+        ("users", &users),
+        ("messages", &messages),
+        ("replies", &replies),
     ] {
-        let path = tmp.join(entity).join("updated").join("events.jsonl");
-        let mut rows = load_jsonl_sorted(&path);
-        // Trim noisy workspace-wide listings down to what's relevant to
-        // the test channel. Whole-workspace churn isn't what we're testing.
-        if entity == "channel" {
-            rows.retain(|r| r.get("channel_name").and_then(|v| v.as_str()) == Some(TEST_CHANNEL));
-        } else if entity == "user" {
-            rows.retain(|r| {
-                r.get("user_id")
-                    .and_then(|v| v.as_str())
-                    .map(|u| referenced_users.contains(u))
-                    .unwrap_or(false)
-            });
-        }
         insta::with_settings!({
-            snapshot_suffix => entity,
+            snapshot_suffix => suffix,
             sort_maps => true,
         }, {
-            assert_json_snapshot!(rows, {
-                "[]._recorded_at" => "[ts]",
-                "[].raw.url_private" => "[url]",
-                "[].raw.url_private_download" => "[url]",
-                "[].raw.permalink" => "[url]",
-                "[].raw.permalink_public" => "[url]",
-                "[].raw.files[].url_private" => "[url]",
-                "[].raw.files[].url_private_download" => "[url]",
-                "[].raw.files[].permalink" => "[url]",
-                "[].raw.files[].permalink_public" => "[url]",
-                "[].raw.files[].thumb_64" => "[url]",
-                "[].raw.files[].thumb_80" => "[url]",
-                "[].raw.files[].thumb_160" => "[url]",
-                "[].raw.files[].thumb_360" => "[url]",
-                "[].raw.files[].thumb_480" => "[url]",
-                "[].raw.files[].thumb_720" => "[url]",
-                "[].raw.files[].thumb_800" => "[url]",
-                "[].raw.files[].thumb_960" => "[url]",
-                "[].raw.files[].thumb_1024" => "[url]",
-                "[].raw.files[].thumb_pdf" => "[url]",
-                "[].raw.files[].thumb_video" => "[url]",
+            assert_json_snapshot!(value, {
+                "[].url_private" => "[url]",
+                "[].url_private_download" => "[url]",
+                "[].permalink" => "[url]",
+                "[].permalink_public" => "[url]",
+                "[].files[].url_private" => "[url]",
+                "[].files[].url_private_download" => "[url]",
+                "[].files[].permalink" => "[url]",
+                "[].files[].permalink_public" => "[url]",
+                "[].files[].thumb_64" => "[url]",
+                "[].files[].thumb_80" => "[url]",
+                "[].files[].thumb_160" => "[url]",
+                "[].files[].thumb_360" => "[url]",
+                "[].files[].thumb_480" => "[url]",
+                "[].files[].thumb_720" => "[url]",
+                "[].files[].thumb_800" => "[url]",
+                "[].files[].thumb_960" => "[url]",
+                "[].files[].thumb_1024" => "[url]",
+                "[].files[].thumb_pdf" => "[url]",
+                "[].files[].thumb_video" => "[url]",
             });
         });
     }

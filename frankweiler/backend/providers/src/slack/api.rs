@@ -1,4 +1,4 @@
-//! Slack API transport: latchkey curl shellout with retry + pagination.
+//! Slack API transport: latchkey curl shellout with retry.
 //!
 //! Slack accepts the latchkey-injected `Authorization: Bearer <token>` on
 //! api.slack.com directly. The `files.slack.com` host is not in latchkey's
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::time::sleep;
@@ -34,10 +34,15 @@ pub enum SlackError {
     Permanent(String),
 }
 
+/// Successful Slack API call plus wall-clock duration of the underlying
+/// HTTP exchange. The caller stamps this into the raw-API capture so
+/// stored fixtures double as latency samples.
+pub struct SlackCall {
+    pub response: Value,
+    pub duration_ms: u64,
+}
+
 fn url_encode(s: &str) -> String {
-    // Minimal RFC 3986 unreserved + safe chars. We pass channel ids, ts
-    // strings, and short numeric limits — none of which need fancy
-    // encoding — but cover the general case for cursor tokens too.
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
@@ -119,19 +124,19 @@ async fn call_slack_once(
 pub async fn call_slack(
     method: &str,
     params: &BTreeMap<String, String>,
-) -> Result<Value, SlackError> {
+) -> Result<SlackCall, SlackError> {
     let mut backoff = RATE_LIMIT_INITIAL_BACKOFF;
     for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
         let t0 = std::time::Instant::now();
         match call_slack_once(method, params).await {
             Ok(v) => {
+                let duration_ms = t0.elapsed().as_millis() as u64;
                 let bytes = v.to_string().len() as u64;
-                events::item_fetched(
-                    &format!("slack.api/{}", method),
-                    bytes,
-                    t0.elapsed().as_millis() as u64,
-                );
-                return Ok(v);
+                events::item_fetched(&format!("slack.api/{}", method), bytes, duration_ms);
+                return Ok(SlackCall {
+                    response: v,
+                    duration_ms,
+                });
             }
             Err(SlackError::RateLimited(_)) => {
                 if attempt == RATE_LIMIT_MAX_RETRIES {
@@ -168,40 +173,6 @@ pub async fn call_slack(
         "{}: exhausted retries",
         method
     )))
-}
-
-/// Walks Slack cursor pagination, returning all items concatenated.
-pub async fn paginate(
-    method: &str,
-    params: &BTreeMap<String, String>,
-    response_key: &str,
-) -> Result<Vec<Value>> {
-    let mut items: Vec<Value> = Vec::new();
-    let mut cursor: Option<String> = None;
-    loop {
-        let mut p = params.clone();
-        if let Some(c) = &cursor {
-            p.insert("cursor".to_string(), c.clone());
-        }
-        let data = call_slack(method, &p).await.map_err(|e| anyhow!("{}", e))?;
-        if let Some(arr) = data.get(response_key).and_then(|v| v.as_array()) {
-            items.extend(arr.iter().cloned());
-        }
-        if let Some(false) = data.get("has_more").and_then(|v| v.as_bool()) {
-            break;
-        }
-        let next = data
-            .get("response_metadata")
-            .and_then(|m| m.get("next_cursor"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        if next.is_none() {
-            break;
-        }
-        cursor = next;
-    }
-    Ok(items)
 }
 
 // ---------------------------------------------------------------------------
@@ -348,8 +319,11 @@ pub async fn download_one_file(
     Ok("downloaded")
 }
 
-pub async fn download_files_for_records(
-    records: &[Value],
+/// Walk message records for `files[]` and download each. `records` is
+/// the raw `messages` array from a `conversations.history` /
+/// `conversations.replies` response.
+pub async fn download_files_for_messages(
+    messages: &[Value],
     media_dir: &Path,
     headers: &BTreeMap<String, String>,
 ) -> BTreeMap<String, usize> {
@@ -358,12 +332,8 @@ pub async fn download_files_for_records(
         counts.insert(k.to_string(), 0);
     }
     let mut targets: Vec<Value> = Vec::new();
-    for rec in records {
-        if let Some(files) = rec
-            .get("raw")
-            .and_then(|r| r.get("files"))
-            .and_then(|f| f.as_array())
-        {
+    for m in messages {
+        if let Some(files) = m.get("files").and_then(|f| f.as_array()) {
             for f in files {
                 targets.push(f.clone());
             }

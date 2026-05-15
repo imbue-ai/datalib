@@ -1,77 +1,74 @@
-//! Slack downloader entry point. Mirrors `src/download/slack_web.py`:
-//! per-entity event streams (self_identity / channel / user / message /
-//! reply / reaction), each split into created/ + updated/ JSONL files.
+//! Slack downloader entry point.
 //!
-//! Raw API responses are stored verbatim under `raw` — no field dropping,
-//! since we want to keep full fidelity for later schema evolution.
+//! Captures raw Slack API responses verbatim into
+//! `<out>/raw_api/<method>/events.jsonl`. Each page of each method gets
+//! one envelope record `{_recorded_at, method, params, duration_ms,
+//! response}`. Pages whose every item is a content-match for prior
+//! captures are skipped, so the on-disk size tracks unique-content
+//! growth rather than poll frequency.
+//!
+//! Deriving "the latest set of users", "messages in channel X", etc.
+//! from this stream is the translator's job — this layer is concerned
+//! only with faithful capture + dedup.
+//!
+//! Resume cursor: derived at startup from the dedup index. For each
+//! channel we know the max `ts` we've ever recorded, and the next
+//! forward pass starts there. The trailing refresh window re-queries
+//! the last N days; the dedup layer collapses no-op refresh passes to
+//! zero writes.
 
 pub mod api;
+pub mod shapes;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
-use crate::event_store::{diff_and_save, load_latest_by_key, make_record};
 use crate::obs::events;
-use api::{call_slack, paginate, SlackError};
+use crate::raw_store::{PageCapture, RawStore};
+use api::{call_slack, SlackCall, SlackError};
+use shapes::{
+    items_in_response, latest_reply_by_thread, latest_ts_by_channel, M_AUTH_TEST, M_CHANNELS,
+    M_HISTORY, M_REPLIES, M_USERS,
+};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 
-const ENTITY_CHANNEL: &str = "channel";
-const ENTITY_USER: &str = "user";
-const ENTITY_MESSAGE: &str = "message";
-const ENTITY_REPLY: &str = "reply";
-const ENTITY_REACTION: &str = "reaction";
-const ENTITY_SELF: &str = "self_identity";
-
 // ---------------------------------------------------------------------------
-// Key extraction. Each is rendered as a tab-joined string for BTreeMap use.
+// Page capture helper. Wraps `call_slack` + `RawStore::save_page` so each
+// API call site is one statement.
 // ---------------------------------------------------------------------------
 
-fn k_channel(rec: &Value) -> String {
-    rec.get("channel_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn k_user(rec: &Value) -> String {
-    rec.get("user_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
-}
-
-fn k_message(rec: &Value) -> String {
-    let c = rec.get("channel_id").and_then(|v| v.as_str()).unwrap_or("");
-    let t = rec.get("message_ts").and_then(|v| v.as_str()).unwrap_or("");
-    format!("{}\t{}", c, t)
-}
-
-fn k_reply(rec: &Value) -> String {
-    let c = rec.get("channel_id").and_then(|v| v.as_str()).unwrap_or("");
-    let t = rec.get("thread_ts").and_then(|v| v.as_str()).unwrap_or("");
-    let r = rec.get("reply_ts").and_then(|v| v.as_str()).unwrap_or("");
-    format!("{}\t{}\t{}", c, t, r)
-}
-
-fn k_reaction(rec: &Value) -> String {
-    let c = rec.get("channel_id").and_then(|v| v.as_str()).unwrap_or("");
-    let m = rec.get("message_ts").and_then(|v| v.as_str()).unwrap_or("");
-    let t = rec
-        .get("thread_ts")
-        .and_then(|v| v.as_str())
-        .unwrap_or("__none__");
-    format!("{}\t{}\t{}", c, m, t)
+async fn call_and_save(
+    store: &mut RawStore,
+    method: &str,
+    params: &BTreeMap<String, String>,
+) -> Result<Value> {
+    let SlackCall {
+        response,
+        duration_ms,
+    } = call_slack(method, params)
+        .await
+        .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
+    let items = items_in_response(method, params, &response);
+    let cap = PageCapture {
+        method,
+        params,
+        duration_ms,
+        response: response.clone(),
+        items,
+    };
+    store.save_page(cap)?;
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
-// Fetch helpers
+// Per-method drivers.
 // ---------------------------------------------------------------------------
 
 fn datetime_to_slack_ts(dt: &DateTime<Utc>) -> String {
@@ -85,41 +82,17 @@ fn empty_params() -> BTreeMap<String, String> {
 }
 
 #[instrument(skip_all)]
-async fn fetch_self(out_dir: &Path) -> Result<Value> {
-    let data = call_slack("auth.test", &empty_params())
-        .await
-        .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
-    let user_id = data
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let user_name = data
-        .get("user")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let rec = make_record(
-        &[
-            ("user_id", Value::String(user_id.clone())),
-            ("user_name", Value::String(user_name)),
-        ],
-        data,
-    );
-    let existing = load_latest_by_key(out_dir, ENTITY_SELF, k_user)?;
-    diff_and_save(
-        out_dir,
-        ENTITY_SELF,
-        std::slice::from_ref(&rec),
-        &existing,
-        k_user,
-    )?;
-    Ok(rec)
+async fn fetch_self(store: &mut RawStore) -> Result<()> {
+    call_and_save(store, M_AUTH_TEST, &empty_params()).await?;
+    Ok(())
 }
 
-#[instrument(skip(out_dir))]
+/// Fetch every channel page; `members_only`/`include_archived` filter
+/// what we *return* to the caller for fan-out, but we capture every page
+/// verbatim regardless.
+#[instrument(skip(store))]
 async fn fetch_channels(
-    out_dir: &Path,
+    store: &mut RawStore,
     members_only: bool,
     include_archived: bool,
 ) -> Result<Vec<Value>> {
@@ -133,232 +106,100 @@ async fn fetch_channels(
         "types".to_string(),
         "public_channel,private_channel".to_string(),
     );
-    let mut raws = paginate("conversations.list", &params, "channels").await?;
+
+    let mut all: Vec<Value> = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut p = params.clone();
+        if let Some(c) = &cursor {
+            p.insert("cursor".to_string(), c.clone());
+        }
+        let resp = call_and_save(store, M_CHANNELS, &p).await?;
+        if let Some(arr) = resp.get("channels").and_then(|v| v.as_array()) {
+            all.extend(arr.iter().cloned());
+        }
+        cursor = next_cursor(&resp);
+        if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
+            break;
+        }
+    }
     if members_only {
-        raws.retain(|c| {
+        all.retain(|c| {
             c.get("is_member")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
         });
     }
-    let records: Vec<Value> = raws
-        .into_iter()
-        .map(|c| {
-            let id = c
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            let name = c
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            make_record(
-                &[
-                    ("channel_id", Value::String(id)),
-                    ("channel_name", Value::String(name)),
-                ],
-                c,
-            )
-        })
-        .collect();
-    let existing = load_latest_by_key(out_dir, ENTITY_CHANNEL, k_channel)?;
-    diff_and_save(out_dir, ENTITY_CHANNEL, &records, &existing, k_channel)?;
-    Ok(records)
+    Ok(all)
 }
 
 #[instrument(skip_all)]
-async fn fetch_users(out_dir: &Path) -> Result<()> {
-    let mut params = BTreeMap::new();
-    params.insert("limit".to_string(), "200".to_string());
-    let raws = paginate("users.list", &params, "members").await?;
-    let records: Vec<Value> = raws
-        .into_iter()
-        .map(|u| {
-            let id = u
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            make_record(&[("user_id", Value::String(id))], u)
-        })
-        .collect();
-    let existing = load_latest_by_key(out_dir, ENTITY_USER, k_user)?;
+async fn fetch_users(store: &mut RawStore) -> Result<()> {
+    let mut base = BTreeMap::new();
+    base.insert("limit".to_string(), "200".to_string());
     let t0 = std::time::Instant::now();
-    let (n_new, _) = diff_and_save(out_dir, ENTITY_USER, &records, &existing, k_user)?;
-    events::indexed_batch(ENTITY_USER, n_new, t0.elapsed().as_millis() as u64);
+    let mut cursor: Option<String> = None;
+    let mut count = 0usize;
+    loop {
+        let mut p = base.clone();
+        if let Some(c) = &cursor {
+            p.insert("cursor".to_string(), c.clone());
+        }
+        let resp = call_and_save(store, M_USERS, &p).await?;
+        if let Some(arr) = resp.get("members").and_then(|v| v.as_array()) {
+            count += arr.len();
+        }
+        cursor = next_cursor(&resp);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    events::indexed_batch("users", count, t0.elapsed().as_millis() as u64);
     Ok(())
 }
 
-async fn fetch_history(
-    channel_id: &str,
-    oldest_ts: &str,
-    inclusive: bool,
-    latest_ts: Option<&str>,
-) -> Result<Vec<Value>> {
-    let mut params = BTreeMap::new();
-    params.insert("channel".to_string(), channel_id.to_string());
-    params.insert("oldest".to_string(), oldest_ts.to_string());
-    params.insert(
-        "inclusive".to_string(),
-        if inclusive { "true" } else { "false" }.to_string(),
-    );
-    params.insert("include_all_metadata".to_string(), "true".to_string());
-    params.insert("limit".to_string(), "200".to_string());
-    if let Some(l) = latest_ts {
-        params.insert("latest".to_string(), l.to_string());
-    }
-    paginate("conversations.history", &params, "messages").await
-}
-
-async fn fetch_replies(channel_id: &str, thread_ts: &str) -> Result<Vec<Value>> {
-    let mut params = BTreeMap::new();
-    params.insert("channel".to_string(), channel_id.to_string());
-    params.insert("ts".to_string(), thread_ts.to_string());
-    params.insert("limit".to_string(), "200".to_string());
-    paginate("conversations.replies", &params, "messages").await
-}
-
-fn make_message_records(channel_id: &str, channel_name: &str, raws: Vec<Value>) -> Vec<Value> {
-    raws.into_iter()
-        .filter_map(|raw| {
-            let ts = raw.get("ts").and_then(|v| v.as_str())?.to_string();
-            Some(make_record(
-                &[
-                    ("channel_id", Value::String(channel_id.to_string())),
-                    ("channel_name", Value::String(channel_name.to_string())),
-                    ("message_ts", Value::String(ts)),
-                ],
-                raw,
-            ))
-        })
-        .collect()
-}
-
-fn make_reply_records(
-    channel_id: &str,
-    channel_name: &str,
-    thread_ts: &str,
-    raws: Vec<Value>,
-) -> Vec<Value> {
-    raws.into_iter()
-        .filter_map(|raw| {
-            let ts = raw.get("ts").and_then(|v| v.as_str())?.to_string();
-            if ts == thread_ts {
-                return None;
-            }
-            Some(make_record(
-                &[
-                    ("channel_id", Value::String(channel_id.to_string())),
-                    ("channel_name", Value::String(channel_name.to_string())),
-                    ("thread_ts", Value::String(thread_ts.to_string())),
-                    ("reply_ts", Value::String(ts)),
-                ],
-                raw,
-            ))
-        })
-        .collect()
-}
-
-fn extract_reactions(
-    channel_id: &str,
-    channel_name: &str,
-    message_records: &[Value],
-    thread_ts: Option<&str>,
-) -> Vec<Value> {
-    let mut out = Vec::new();
-    for r in message_records {
-        let reactions = match r.get("raw").and_then(|v| v.get("reactions")) {
-            Some(v) if !v.is_null() => v.clone(),
-            _ => continue,
-        };
-        let msg_ts = match r
-            .get("raw")
-            .and_then(|raw| raw.get("ts"))
-            .and_then(|v| v.as_str())
-        {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let thread_val = match thread_ts {
-            Some(s) => Value::String(s.to_string()),
-            None => Value::Null,
-        };
-        out.push(make_record(
-            &[
-                ("channel_id", Value::String(channel_id.to_string())),
-                ("channel_name", Value::String(channel_name.to_string())),
-                ("message_ts", Value::String(msg_ts)),
-                ("thread_ts", thread_val),
-            ],
-            json!({ "reactions": reactions }),
-        ));
-    }
-    out
-}
-
-fn channel_latest_ts_map(existing_messages: &BTreeMap<String, Value>) -> BTreeMap<String, String> {
-    let mut latest: BTreeMap<String, String> = BTreeMap::new();
-    for key in existing_messages.keys() {
-        let mut parts = key.split('\t');
-        let cid = parts.next().unwrap_or("").to_string();
-        let ts = parts.next().unwrap_or("").to_string();
-        let entry = latest.entry(cid).or_default();
-        if ts.as_str() > entry.as_str() {
-            *entry = ts;
-        }
-    }
-    latest
-}
-
-fn latest_reply_ts_map(
-    existing_replies: &BTreeMap<String, Value>,
-) -> BTreeMap<(String, String), String> {
-    let mut latest: BTreeMap<(String, String), String> = BTreeMap::new();
-    for key in existing_replies.keys() {
-        let mut parts = key.split('\t');
-        let cid = parts.next().unwrap_or("").to_string();
-        let tts = parts.next().unwrap_or("").to_string();
-        let rts = parts.next().unwrap_or("").to_string();
-        let k = (cid, tts);
-        let entry = latest.entry(k).or_default();
-        if rts.as_str() > entry.as_str() {
-            *entry = rts;
-        }
-    }
-    latest
+fn next_cursor(resp: &Value) -> Option<String> {
+    resp.get("response_metadata")
+        .and_then(|m| m.get("next_cursor"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
-// Per-channel export.
+// Per-channel history + threads.
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
 async fn export_channel(
-    out_dir: &Path,
+    store: &mut RawStore,
     channel_id: &str,
-    channel_name: &str,
     since_ts: &str,
     refresh_window_days: i64,
-    existing_messages: &BTreeMap<String, Value>,
-    existing_replies: &BTreeMap<String, Value>,
-    existing_reactions: &BTreeMap<String, Value>,
     channel_latest_ts: Option<&str>,
     latest_reply_by_thread: &BTreeMap<(String, String), String>,
     now: &DateTime<Utc>,
     media_dir: Option<&Path>,
     media_headers: Option<&BTreeMap<String, String>>,
-) -> Result<(usize, usize, usize, BTreeMap<String, usize>)> {
+    totals: &mut ChannelTotals,
+) -> Result<()> {
     let (forward_oldest, inclusive) = match channel_latest_ts {
         Some(ts) => (ts.to_string(), false),
         None => (since_ts.to_string(), true),
     };
+    paginate_history(
+        store,
+        channel_id,
+        &forward_oldest,
+        inclusive,
+        None,
+        latest_reply_by_thread,
+        media_dir,
+        media_headers,
+        totals,
+    )
+    .await?;
 
-    let forward_raws = fetch_history(channel_id, &forward_oldest, inclusive, None).await?;
-    let forward_records = make_message_records(channel_id, channel_name, forward_raws);
-
-    let mut refresh_records: Vec<Value> = Vec::new();
     if refresh_window_days > 0 {
         if let Some(latest_ts) = channel_latest_ts {
             let window_dt = *now - ChronoDuration::days(refresh_window_days);
@@ -369,127 +210,168 @@ async fn export_channel(
                 } else {
                     since_ts.to_string()
                 };
-                let raws = fetch_history(channel_id, &effective, true, Some(latest_ts)).await?;
-                refresh_records = make_message_records(channel_id, channel_name, raws);
+                paginate_history(
+                    store,
+                    channel_id,
+                    &effective,
+                    true,
+                    Some(latest_ts),
+                    latest_reply_by_thread,
+                    media_dir,
+                    media_headers,
+                    totals,
+                )
+                .await?;
             }
         }
     }
+    Ok(())
+}
 
-    let mut combined_msgs: Vec<Value> = forward_records.clone();
-    combined_msgs.extend(refresh_records.clone());
+#[derive(Default)]
+struct ChannelTotals {
+    messages: usize,
+    replies: usize,
+    media: BTreeMap<String, usize>,
+}
 
-    let (new_msgs, _) = diff_and_save(
-        out_dir,
-        ENTITY_MESSAGE,
-        &combined_msgs,
-        existing_messages,
-        k_message,
-    )?;
-
-    // Identify parent threads to fetch replies for.
-    let mut seen_ts: BTreeSet<String> = BTreeSet::new();
-    let mut parents: Vec<Value> = Vec::new();
-    for r in &combined_msgs {
-        let ts = match r
-            .get("raw")
-            .and_then(|raw| raw.get("ts"))
-            .and_then(|v| v.as_str())
-        {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        if !seen_ts.insert(ts.clone()) {
-            continue;
-        }
-        let reply_count = r
-            .get("raw")
-            .and_then(|raw| raw.get("reply_count"))
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
-        if reply_count > 0 {
-            parents.push(r.clone());
-        }
+/// Walk `conversations.history` page-by-page, saving each page before
+/// requesting the next so a Ctrl-C loses at most one in-flight page.
+#[allow(clippy::too_many_arguments)]
+async fn paginate_history(
+    store: &mut RawStore,
+    channel_id: &str,
+    oldest_ts: &str,
+    inclusive: bool,
+    latest_ts: Option<&str>,
+    latest_reply_by_thread: &BTreeMap<(String, String), String>,
+    media_dir: Option<&Path>,
+    media_headers: Option<&BTreeMap<String, String>>,
+    totals: &mut ChannelTotals,
+) -> Result<()> {
+    let mut base = BTreeMap::new();
+    base.insert("channel".to_string(), channel_id.to_string());
+    base.insert("oldest".to_string(), oldest_ts.to_string());
+    base.insert(
+        "inclusive".to_string(),
+        if inclusive { "true" } else { "false" }.to_string(),
+    );
+    base.insert("include_all_metadata".to_string(), "true".to_string());
+    base.insert("limit".to_string(), "200".to_string());
+    if let Some(l) = latest_ts {
+        base.insert("latest".to_string(), l.to_string());
     }
 
-    let mut new_reply_count = 0usize;
-    let mut all_reply_records: Vec<Value> = Vec::new();
-    for parent in &parents {
-        let thread_ts = match parent
-            .get("raw")
-            .and_then(|raw| raw.get("ts"))
-            .and_then(|v| v.as_str())
-        {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
-        let api_latest = parent
-            .get("raw")
-            .and_then(|raw| raw.get("latest_reply"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        let stored_latest =
-            latest_reply_by_thread.get(&(channel_id.to_string(), thread_ts.clone()));
-        if let (Some(api), Some(stored)) =
-            (api_latest.as_deref(), stored_latest.map(|s| s.as_str()))
-        {
-            if stored >= api {
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut params = base.clone();
+        if let Some(c) = &cursor {
+            params.insert("cursor".to_string(), c.clone());
+        }
+        let resp = call_and_save(store, M_HISTORY, &params).await?;
+        let messages: Vec<Value> = resp
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|a| a.to_vec())
+            .unwrap_or_default();
+
+        totals.messages += messages.len();
+
+        // Threads → conversations.replies. Skip threads whose latest
+        // reply we already have on disk.
+        for m in &messages {
+            let ts = match m.get("ts").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            if reply_count == 0 {
                 continue;
             }
+            let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
+            let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
+            if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
+                if stored >= api {
+                    continue;
+                }
+            }
+            paginate_replies(store, channel_id, ts, media_dir, media_headers, totals).await?;
         }
-        let raws = fetch_replies(channel_id, &thread_ts).await?;
-        let reply_records = make_reply_records(channel_id, channel_name, &thread_ts, raws);
-        all_reply_records.extend(reply_records.clone());
-        let (n_new, _) = diff_and_save(
-            out_dir,
-            ENTITY_REPLY,
-            &reply_records,
-            existing_replies,
-            k_reply,
-        )?;
-        new_reply_count += n_new;
-    }
 
-    let msg_reactions = extract_reactions(channel_id, channel_name, &combined_msgs, None);
-    let mut by_thread: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for rr in &all_reply_records {
-        let tts = rr
-            .get("thread_ts")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        by_thread.entry(tts).or_default().push(rr.clone());
-    }
-    let mut reply_reactions: Vec<Value> = Vec::new();
-    for (tts, replies) in &by_thread {
-        reply_reactions.extend(extract_reactions(
-            channel_id,
-            channel_name,
-            replies,
-            Some(tts),
-        ));
-    }
-    let mut all_reactions = msg_reactions;
-    all_reactions.extend(reply_reactions);
-    let (new_react, _) = diff_and_save(
-        out_dir,
-        ENTITY_REACTION,
-        &all_reactions,
-        existing_reactions,
-        k_reaction,
-    )?;
+        // Media for this page (sequential — Slack hates concurrency on
+        // files.slack.com). Replies fetched above will trigger their own
+        // file downloads via the call_and_save → response path? No — we
+        // didn't keep the replies responses around here. Walk both
+        // messages and any replies we fetched: simpler to fold replies
+        // into media download from inside paginate_replies.
+        if let (Some(md), Some(mh)) = (media_dir, media_headers) {
+            let counts = api::download_files_for_messages(&messages, md, mh).await;
+            for (k, v) in counts {
+                *totals.media.entry(k).or_insert(0) += v;
+            }
+        }
 
-    let mut media_counts: BTreeMap<String, usize> = BTreeMap::new();
-    if let (Some(md), Some(mh)) = (media_dir, media_headers) {
-        let mut all_with_files: Vec<Value> = combined_msgs.clone();
-        all_with_files.extend(all_reply_records.clone());
-        media_counts = api::download_files_for_records(&all_with_files, md, mh).await;
-    }
+        let span = tracing::Span::current();
+        span.record("msgs", totals.messages);
+        span.record("replies", totals.replies);
+        span.record(
+            "media",
+            totals.media.get("downloaded").copied().unwrap_or(0),
+        );
 
-    Ok((new_msgs, new_reply_count, new_react, media_counts))
+        cursor = next_cursor(&resp);
+        if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Paginate `conversations.replies` for one thread, saving each page.
+/// Returns the count of reply messages seen this call. Media downloads
+/// happen inline so file uploads in threaded replies aren't missed.
+async fn paginate_replies(
+    store: &mut RawStore,
+    channel_id: &str,
+    thread_ts: &str,
+    media_dir: Option<&Path>,
+    media_headers: Option<&BTreeMap<String, String>>,
+    totals: &mut ChannelTotals,
+) -> Result<()> {
+    let mut base = BTreeMap::new();
+    base.insert("channel".to_string(), channel_id.to_string());
+    base.insert("ts".to_string(), thread_ts.to_string());
+    base.insert("limit".to_string(), "200".to_string());
+
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut p = base.clone();
+        if let Some(c) = &cursor {
+            p.insert("cursor".to_string(), c.clone());
+        }
+        let resp = call_and_save(store, M_REPLIES, &p).await?;
+        let msgs: Vec<Value> = resp
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .map(|a| a.to_vec())
+            .unwrap_or_default();
+        totals.replies += msgs.len().saturating_sub(1); // exclude the parent
+        if let (Some(md), Some(mh)) = (media_dir, media_headers) {
+            let counts = api::download_files_for_messages(&msgs, md, mh).await;
+            for (k, v) in counts {
+                *totals.media.entry(k).or_insert(0) += v;
+            }
+        }
+        cursor = next_cursor(&resp);
+        if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
+            break;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
-// Public entry point — used by HTTP /api/sync/jobs.
+// Public entry point.
 // ---------------------------------------------------------------------------
 
 pub struct FetchOptions {
@@ -517,7 +399,6 @@ impl Default for FetchOptions {
 pub struct FetchSummary {
     pub messages: usize,
     pub replies: usize,
-    pub reactions: usize,
     pub media: BTreeMap<String, usize>,
 }
 
@@ -530,50 +411,34 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let since_ts = datetime_to_slack_ts(&since_dt);
     let now = Utc::now();
 
-    let out = &opts.out_dir;
-    let existing_channels = load_latest_by_key(out, ENTITY_CHANNEL, k_channel)?;
-    let existing_users = load_latest_by_key(out, ENTITY_USER, k_user)?;
-    let existing_messages = load_latest_by_key(out, ENTITY_MESSAGE, k_message)?;
-    let existing_replies = load_latest_by_key(out, ENTITY_REPLY, k_reply)?;
-    let existing_reactions = load_latest_by_key(out, ENTITY_REACTION, k_reaction)?;
+    let mut store = RawStore::load(&opts.out_dir, items_in_response)?;
 
-    let channel_latest_ts = channel_latest_ts_map(&existing_messages);
-    let latest_reply_by_thread = latest_reply_ts_map(&existing_replies);
+    let channel_latest_ts = latest_ts_by_channel(store.keys_for(M_HISTORY));
+    let latest_reply_map = latest_reply_by_thread(store.keys_for(M_REPLIES));
 
     info!(
         event = "slack_state_loaded",
-        channels = existing_channels.len(),
-        users = existing_users.len(),
-        messages = existing_messages.len(),
-        replies = existing_replies.len(),
-        reactions = existing_reactions.len(),
+        channels_indexed = store.seen_count(M_CHANNELS),
+        users_indexed = store.seen_count(M_USERS),
+        messages_indexed = store.seen_count(M_HISTORY),
+        replies_indexed = store.seen_count(M_REPLIES),
     );
 
-    let _self_rec = fetch_self(out).await?;
-
-    let fresh_channels = fetch_channels(out, opts.members_only, opts.channels.is_some()).await?;
+    fetch_self(&mut store).await?;
+    let fresh_channels =
+        fetch_channels(&mut store, opts.members_only, opts.channels.is_some()).await?;
 
     let mut name_to_id: BTreeMap<String, String> = BTreeMap::new();
     for c in &fresh_channels {
         if let (Some(n), Some(i)) = (
-            c.get("channel_name").and_then(|v| v.as_str()),
-            c.get("channel_id").and_then(|v| v.as_str()),
+            c.get("name").and_then(|v| v.as_str()),
+            c.get("id").and_then(|v| v.as_str()),
         ) {
             name_to_id.insert(n.to_string(), i.to_string());
         }
     }
-    for prior in existing_channels.values() {
-        if let (Some(n), Some(i)) = (
-            prior.get("channel_name").and_then(|v| v.as_str()),
-            prior.get("channel_id").and_then(|v| v.as_str()),
-        ) {
-            name_to_id
-                .entry(n.to_string())
-                .or_insert_with(|| i.to_string());
-        }
-    }
 
-    fetch_users(out).await?;
+    fetch_users(&mut store).await?;
 
     let targets: Vec<(String, String)> = match &opts.channels {
         Some(names) => names
@@ -588,15 +453,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         None => fresh_channels
             .iter()
             .filter_map(|c| {
-                let n = c.get("channel_name").and_then(|v| v.as_str())?;
-                let i = c.get("channel_id").and_then(|v| v.as_str())?;
+                let n = c.get("name").and_then(|v| v.as_str())?;
+                let i = c.get("id").and_then(|v| v.as_str())?;
                 Some((i.to_string(), n.to_string()))
             })
             .collect(),
     };
 
     let media_dir: Option<PathBuf> = if opts.media {
-        Some(out.join("media"))
+        Some(opts.out_dir.join("media"))
     } else {
         None
     };
@@ -612,15 +477,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         media = opts.media,
     );
 
-    let mut totals = FetchSummary {
+    let mut grand = FetchSummary {
         messages: 0,
         replies: 0,
-        reactions: 0,
         media: BTreeMap::new(),
     };
-    // Per-channel progress: each iteration enters a span carrying the
-    // channel name as a field. `indicatif.pb_show` is the marker
-    // tracing-indicatif looks for to render this span as a bar on TTY.
     for (cid, name) in &targets {
         let span = info_span!(
             "channel",
@@ -628,30 +489,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             channel_id = %cid,
             indicatif.pb_show = tracing::field::Empty,
         );
+        let mut totals = ChannelTotals::default();
         let result = export_channel(
-            out,
+            &mut store,
             cid,
-            name,
             &since_ts,
             opts.refresh_window_days,
-            &existing_messages,
-            &existing_replies,
-            &existing_reactions,
             channel_latest_ts.get(cid).map(|s| s.as_str()),
-            &latest_reply_by_thread,
+            &latest_reply_map,
             &now,
             media_dir.as_deref(),
             media_headers.as_ref(),
+            &mut totals,
         )
         .instrument(span)
         .await;
         match result {
-            Ok((n_msg, n_reply, n_react, m_counts)) => {
-                totals.messages += n_msg;
-                totals.replies += n_reply;
-                totals.reactions += n_react;
-                for (k, v) in m_counts {
-                    *totals.media.entry(k).or_insert(0) += v;
+            Ok(()) => {
+                grand.messages += totals.messages;
+                grand.replies += totals.replies;
+                for (k, v) in totals.media {
+                    *grand.media.entry(k).or_insert(0) += v;
                 }
             }
             Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
@@ -660,11 +518,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     info!(
         event = "slack_export_complete",
-        messages = totals.messages,
-        replies = totals.replies,
-        reactions = totals.reactions,
+        messages = grand.messages,
+        replies = grand.replies,
     );
-    Ok(totals)
+    Ok(grand)
 }
 
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {

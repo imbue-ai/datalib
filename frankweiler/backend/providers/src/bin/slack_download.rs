@@ -12,6 +12,15 @@
 //! slack-download --out ~/slack-mirror --since 2025-01-01 --no-media \
 //!     --otlp-endpoint http://localhost:4317
 //! ```
+//!
+//! Manual live test via Bazel (talks to the real Slack workspace — needs
+//! `latchkey` creds on the host):
+//!
+//! ```sh
+//! bazelisk run //frankweiler/backend/providers:slack_download -- \
+//!     --out ~/backups/slack \
+//!     --channel imbue-announce --channel chat-thad --channel chat-glenn
+//! ```
 
 use std::path::PathBuf;
 
@@ -98,7 +107,6 @@ async fn main() -> Result<()> {
         event = "slack_download_complete",
         messages = summary.messages,
         replies = summary.replies,
-        reactions = summary.reactions,
         media_downloaded = summary.media.get("downloaded").copied().unwrap_or(0),
         media_skipped = summary.media.get("skipped").copied().unwrap_or(0),
         media_errors = summary.media.get("error").copied().unwrap_or(0),

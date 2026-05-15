@@ -74,7 +74,7 @@ rust_test(
     name = "slack_live",
     srcs = ["tests/slack_live.rs"],
     crate_root = "tests/slack_live.rs",
-    data = glob(["tests/snapshots/*.snap"]),
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
