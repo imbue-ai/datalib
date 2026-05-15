@@ -628,6 +628,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-schema",
  "insta",
  "opentelemetry",
  "opentelemetry-otlp",
