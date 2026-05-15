@@ -411,7 +411,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let since_ts = datetime_to_slack_ts(&since_dt);
     let now = Utc::now();
 
-    let mut store = RawStore::load(&opts.out_dir, items_in_response)?;
+    let mut store = RawStore::load(&opts.out_dir)?;
 
     let channel_latest_ts = latest_ts_by_channel(store.keys_for(M_HISTORY));
     let latest_reply_map = latest_reply_by_thread(store.keys_for(M_REPLIES));

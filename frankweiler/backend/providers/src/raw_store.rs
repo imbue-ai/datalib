@@ -5,19 +5,25 @@
 //!
 //! ```json
 //! {"_recorded_at": "...", "method": "conversations.history",
-//!  "params": {...}, "duration_ms": 421, "response": {...}}
+//!  "params": {...}, "duration_ms": 421,
+//!  "_item_hashes": {"<channel>\t<ts>": 1234567890, ...},
+//!  "response": {...}}
 //! ```
 //!
 //! On save, the caller hands us a `(item_key, item_value)` list extracted
 //! from the response. We hash each item; if every hash matches what's
 //! already in the dedup index for that `(method, item_key)`, the page is
 //! a no-op and we skip the append. Otherwise the envelope is appended
-//! verbatim and the index updated.
+//! verbatim — with the computed hashes inlined as `_item_hashes` — and
+//! the index updated.
 //!
-//! On startup, [`RawStore::load`] streams the existing JSONL and rebuilds
-//! both the hash index and a per-method `(item_key) -> ts` projection
-//! used as the resume cursor. The raw stream is the single source of
-//! truth — there is no sidecar checkpoint file.
+//! The inlined hashes turn startup into a linear scan of small JSON maps:
+//! [`RawStore::load`] streams the JSONL and copies each envelope's
+//! `_item_hashes` directly into the index. No re-extraction of items, no
+//! rehashing of response bodies. The raw stream is still the single
+//! source of truth — the hashes are derived from `response` and would be
+//! reproducible — but storing them inline saves an order of magnitude of
+//! work on every startup.
 //!
 //! Dedup is keyed `(method, item_key)`. The `item_key` namespace is the
 //! caller's: e.g. `conversations.history` uses `<channel>\t<ts>`,
@@ -60,14 +66,10 @@ pub struct RawStore {
 }
 
 impl RawStore {
-    /// Load existing `raw_api/` streams, rebuilding the dedup index by
-    /// re-extracting items from every stored response. `item_keys_of` is
-    /// the same method-dispatching extractor the caller will use at
-    /// save time.
-    pub fn load<F>(out_dir: &Path, item_keys_of: F) -> Result<Self>
-    where
-        F: Fn(&str, &BTreeMap<String, String>, &Value) -> Vec<(String, Value)>,
-    {
+    /// Load existing `raw_api/` streams, populating the dedup index from
+    /// each envelope's inlined `_item_hashes` map. No response bodies are
+    /// reparsed past the top level.
+    pub fn load(out_dir: &Path) -> Result<Self> {
         let mut store = Self {
             out_dir: out_dir.to_path_buf(),
             seen: BTreeMap::new(),
@@ -97,10 +99,16 @@ impl RawStore {
                 }
                 let env: Value = serde_json::from_str(&line)
                     .with_context(|| format!("parse {}", path.display()))?;
-                let params = params_from_envelope(&env);
-                let response = env.get("response").cloned().unwrap_or(Value::Null);
-                for (k, v) in item_keys_of(&method, &params, &response) {
-                    store.seen.insert((method.clone(), k), canonical_hash(&v));
+                let hashes = env
+                    .get("_item_hashes")
+                    .and_then(|v| v.as_object())
+                    .with_context(|| {
+                        format!("{}: envelope missing _item_hashes", path.display())
+                    })?;
+                for (k, v) in hashes {
+                    if let Some(h) = v.as_u64() {
+                        store.seen.insert((method.clone(), k.clone()), h);
+                    }
                 }
             }
         }
@@ -120,14 +128,14 @@ impl RawStore {
     /// the index. An empty `cap.items` is treated as "not a no-op" — the
     /// caller is asserting there's nothing item-shaped to dedup against,
     /// so the page should always be written.
-    fn page_is_noop(&self, method: &str, items: &[(String, Value)]) -> bool {
+    fn page_is_noop(&self, method: &str, items: &[(String, ItemHash)]) -> bool {
         if items.is_empty() {
             return false;
         }
-        for (k, v) in items {
+        for (k, h) in items {
             let prior = self.seen.get(&(method.to_string(), k.clone()));
             match prior {
-                Some(h) if *h == canonical_hash(v) => {}
+                Some(p) if *p == *h => {}
                 _ => return false,
             }
         }
@@ -139,18 +147,24 @@ impl RawStore {
     /// `(new_items, changed_items)` counts (both zero on no-op).
     pub fn save_page(&mut self, cap: PageCapture<'_>) -> Result<(usize, usize)> {
         let method = cap.method.to_string();
-        if self.page_is_noop(&method, &cap.items) {
+        let hashed: Vec<(String, ItemHash)> = cap
+            .items
+            .iter()
+            .map(|(k, v)| (k.clone(), canonical_hash(v)))
+            .collect();
+        if self.page_is_noop(&method, &hashed) {
             return Ok((0, 0));
         }
 
         let (mut new_count, mut changed_count) = (0, 0);
-        for (k, v) in &cap.items {
-            let h = canonical_hash(v);
-            match self.seen.insert((method.clone(), k.clone()), h) {
+        let mut hash_map = Map::new();
+        for (k, h) in &hashed {
+            match self.seen.insert((method.clone(), k.clone()), *h) {
                 None => new_count += 1,
-                Some(prior) if prior != h => changed_count += 1,
+                Some(prior) if prior != *h => changed_count += 1,
                 _ => {}
             }
+            hash_map.insert(k.clone(), Value::from(*h));
         }
 
         let mut env = Map::new();
@@ -158,6 +172,7 @@ impl RawStore {
         env.insert("method".to_string(), Value::String(method.clone()));
         env.insert("params".to_string(), params_to_value(cap.params));
         env.insert("duration_ms".to_string(), Value::from(cap.duration_ms));
+        env.insert("_item_hashes".to_string(), Value::Object(hash_map));
         env.insert("response".to_string(), cap.response);
 
         let path = self
@@ -189,18 +204,6 @@ impl RawStore {
             .take_while(move |((m, _), _)| m == method)
             .map(|((_, k), _)| k.as_str())
     }
-}
-
-fn params_from_envelope(env: &Value) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    if let Some(obj) = env.get("params").and_then(|v| v.as_object()) {
-        for (k, v) in obj {
-            if let Some(s) = v.as_str() {
-                out.insert(k.clone(), s.to_string());
-            }
-        }
-    }
-    out
 }
 
 fn params_to_value(params: &BTreeMap<String, String>) -> Value {
