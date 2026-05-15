@@ -456,43 +456,27 @@ pub struct JobsAllParams {
     pub limit: Option<usize>,
 }
 
-/// Read sources directly from `~/.config/frankweiler/config.yaml` (or
-/// the file pointed at by `$FRANKWEILER_CONFIG`). We don't go through
-/// the Rust `Config` because it doesn't model `sources:` — the Python
-/// ingest config does, and we just want to surface name + type +
-/// managed flag for the UI. `managed` is derived from whether a `sync:`
-/// block is present (worker can drive a downloader). Unknown / extra
-/// fields are ignored.
+/// Surface the typed `Config.sources` list to the UI as
+/// `{name, type, managed}` entries. We re-load the config on every call
+/// so a user editing the YAML doesn't have to restart the backend.
+/// Returns an empty list (rather than 500) when the file is missing or
+/// fails to parse, mirroring the previous behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
+    let _ = s; // unused; included for symmetry with other handlers.
     let path = frankweiler_core::config::default_config_path();
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
+    let cfg = match frankweiler_core::config::load_config(Some(&path)) {
+        Ok(c) => c,
         Err(_) => return Json(Vec::new()),
     };
-    #[derive(Deserialize)]
-    struct Top {
-        #[serde(default)]
-        sources: Vec<RawSource>,
-    }
-    #[derive(Deserialize)]
-    struct RawSource {
-        name: String,
-        #[serde(rename = "type")]
-        type_: String,
-        #[serde(default)]
-        sync: Option<serde_yaml::Value>,
-    }
-    let parsed: Top = serde_yaml::from_str(&raw).unwrap_or(Top { sources: vec![] });
-    let out: Vec<SourceInfo> = parsed
+    let out: Vec<SourceInfo> = cfg
         .sources
-        .into_iter()
-        .map(|r| SourceInfo {
-            name: r.name,
-            managed: r.sync.is_some(),
-            type_: r.type_,
+        .iter()
+        .map(|src| SourceInfo {
+            name: src.name().to_string(),
+            type_: src.type_str().to_string(),
+            managed: src.is_managed(),
         })
         .collect();
-    let _ = s; // unused; included for symmetry with other handlers.
     Json(out)
 }
 

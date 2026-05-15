@@ -12,6 +12,227 @@ pub struct Config {
     pub backend: BackendConfig,
     #[serde(default)]
     pub dolt: DoltConfig,
+    #[serde(default)]
+    pub sources: Vec<SourceConfig>,
+}
+
+// ---------------------------------------------------------------------------
+// Sources: one `type:` discriminator. `type` collapses what used to be three
+// fields (`provider`, `kind`, `provenance`) into one — think of `type:` as
+// the name of a constructor and the rest of the source dict as its arguments.
+// Mirrors `SourceConfig` in `src/ingest/config.py`.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceCommon {
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub input_path: Option<PathBuf>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub overlap: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ChatgptApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub max_pages: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub sleep_between: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SlackApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub channels: Option<Vec<String>>,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub all_channels: bool,
+    #[serde(default = "default_true")]
+    pub media: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GithubApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub max_prs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GitlabApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub max_mrs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotionInbox {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub types: Option<Vec<String>>,
+    #[serde(default)]
+    pub notification_page_size: Option<i64>,
+    #[serde(default)]
+    pub max_notification_pages: Option<i64>,
+    #[serde(default)]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct NotionSubtrees {
+    #[serde(default)]
+    pub pages: Vec<String>,
+    #[serde(default)]
+    pub max_pages: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct NotionApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    #[serde(default)]
+    pub inbox: Option<NotionInbox>,
+    #[serde(default)]
+    pub subtrees: Option<NotionSubtrees>,
+}
+
+/// Discriminated union over the literal `type:` field. Variant payloads
+/// flatten the common (name/enabled/input_path) fields so the YAML shape
+/// matches the Python pydantic models byte-for-byte.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceConfig {
+    ClaudeExport {
+        #[serde(flatten)]
+        common: SourceCommon,
+    },
+    ClaudeApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<ClaudeApiSync>,
+    },
+    ChatgptApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<ChatgptApiSync>,
+    },
+    SlackApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<SlackApiSync>,
+    },
+    GithubApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<GithubApiSync>,
+    },
+    GitlabApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<GitlabApiSync>,
+    },
+    NotionApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<NotionApiSync>,
+    },
+}
+
+impl SourceConfig {
+    pub fn common(&self) -> &SourceCommon {
+        match self {
+            SourceConfig::ClaudeExport { common }
+            | SourceConfig::ClaudeApi { common, .. }
+            | SourceConfig::ChatgptApi { common, .. }
+            | SourceConfig::SlackApi { common, .. }
+            | SourceConfig::GithubApi { common, .. }
+            | SourceConfig::GitlabApi { common, .. }
+            | SourceConfig::NotionApi { common, .. } => common,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.common().name
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.common().enabled
+    }
+
+    /// Wire-format discriminator value (`"slack_api"`, `"claude_export"`, …).
+    /// Matches the `type:` value in YAML.
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            SourceConfig::ClaudeExport { .. } => "claude_export",
+            SourceConfig::ClaudeApi { .. } => "claude_api",
+            SourceConfig::ChatgptApi { .. } => "chatgpt_api",
+            SourceConfig::SlackApi { .. } => "slack_api",
+            SourceConfig::GithubApi { .. } => "github_api",
+            SourceConfig::GitlabApi { .. } => "gitlab_api",
+            SourceConfig::NotionApi { .. } => "notion_api",
+        }
+    }
+
+    /// True when this source has a `sync:` block — i.e. the worker is
+    /// allowed to download into it.
+    pub fn is_managed(&self) -> bool {
+        match self {
+            SourceConfig::ClaudeExport { .. } => false,
+            SourceConfig::ClaudeApi { sync, .. } => sync.is_some(),
+            SourceConfig::ChatgptApi { sync, .. } => sync.is_some(),
+            SourceConfig::SlackApi { sync, .. } => sync.is_some(),
+            SourceConfig::GithubApi { sync, .. } => sync.is_some(),
+            SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
+            SourceConfig::NotionApi { sync, .. } => sync.is_some(),
+        }
+    }
+
+    /// Resolved on-disk input directory: the explicit `input_path:` if set,
+    /// else `<data_root>/raw/<name>`. Matches `_fill_input_path_defaults`
+    /// in `src/ingest/config.py`.
+    pub fn resolved_input_path(&self, data_root: &Path) -> PathBuf {
+        if let Some(p) = &self.common().input_path {
+            expand_tilde(&p.display().to_string())
+        } else {
+            data_root.join("raw").join(self.name())
+        }
+    }
 }
 
 /// Settings for the managed `dolt sql-server` the backend talks to at
@@ -112,6 +333,15 @@ pub enum ConfigError {
     Yaml(#[from] serde_yaml::Error),
     #[error("data_root does not exist: {0}")]
     DataRootMissing(PathBuf),
+    #[error("duplicate source names: {0:?}")]
+    DuplicateSourceNames(Vec<String>),
+    #[error(
+        "notion_api source {0:?} sync: must enable inbox or list at least one \
+         subtree page (set `inbox.enabled: true` and/or `subtrees.pages: [...]`)"
+    )]
+    NotionSyncEmpty(String),
+    #[error("source name must be non-empty")]
+    EmptySourceName,
 }
 
 impl Config {
@@ -122,6 +352,51 @@ impl Config {
             .index_path
             .replace("${data_root}", &self.data_root.display().to_string());
         expand_tilde(&s)
+    }
+
+    /// Validate cross-source invariants: non-empty names, unique names, and
+    /// per-source sync constraints (currently just Notion). Called by
+    /// `load_config` after deserialize.
+    fn validate(&self) -> Result<(), ConfigError> {
+        let mut names: Vec<&str> = Vec::with_capacity(self.sources.len());
+        for s in &self.sources {
+            let name = s.name();
+            if name.trim().is_empty() {
+                return Err(ConfigError::EmptySourceName);
+            }
+            if let SourceConfig::NotionApi {
+                sync: Some(sync), ..
+            } = s
+            {
+                let inbox_on = sync.inbox.as_ref().is_some_and(|i| i.enabled);
+                let subtrees_on = sync
+                    .subtrees
+                    .as_ref()
+                    .is_some_and(|t| !t.pages.is_empty());
+                if !inbox_on && !subtrees_on {
+                    return Err(ConfigError::NotionSyncEmpty(name.into()));
+                }
+            }
+            names.push(name);
+        }
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        let dupes: Vec<String> = sorted
+            .windows(2)
+            .filter_map(|w| (w[0] == w[1]).then(|| w[0].to_string()))
+            .collect();
+        if !dupes.is_empty() {
+            let mut d = dupes;
+            d.dedup();
+            return Err(ConfigError::DuplicateSourceNames(d));
+        }
+        Ok(())
+    }
+
+    /// Sources with `enabled: true` (default). Mirrors `Config.enabled_sources`
+    /// in `src/ingest/config.py`.
+    pub fn enabled_sources(&self) -> impl Iterator<Item = &SourceConfig> {
+        self.sources.iter().filter(|s| s.enabled())
     }
 
     /// Absolute path to the Dolt repository this backend reads/writes.
@@ -173,6 +448,7 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     if !cfg.data_root.exists() {
         return Err(ConfigError::DataRootMissing(cfg.data_root.clone()));
     }
+    cfg.validate()?;
     Ok(cfg)
 }
 
@@ -220,6 +496,7 @@ mod tests {
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
+            sources: Vec::new(),
         };
         let resolved = cfg.resolved_qmd_index();
         assert!(resolved.starts_with(&tmp));
@@ -246,6 +523,7 @@ mod tests {
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
+            sources: Vec::new(),
         };
         assert_eq!(cfg.dolt_repo_path(), tmp.join("dolt_repo"));
         assert_eq!(
@@ -273,6 +551,128 @@ mod tests {
         assert_eq!(cfg.dolt.repo_dirname, "my_repo");
         assert_eq!(cfg.dolt.host, "127.0.0.1");
         assert_eq!(cfg.dolt_repo_path(), root.join("my_repo"));
+    }
+
+    fn write_cfg(yaml: &str) -> (PathBuf, PathBuf) {
+        let tmp = tempdir();
+        let root = tmp.join("data");
+        std::fs::create_dir_all(&root).unwrap();
+        let cfg_path = tmp.join("config.yaml");
+        let body = yaml.replace("__ROOT__", &root.display().to_string());
+        std::fs::write(&cfg_path, body).unwrap();
+        (cfg_path, root)
+    }
+
+    #[test]
+    fn loads_one_of_each_source_type() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: claude-export
+    type: claude_export
+  - name: claude-api
+    type: claude_api
+    sync: {refresh_window_days: 14, overlap: 2}
+  - name: chatgpt
+    type: chatgpt_api
+    sync: {max_pages: 5}
+  - name: slack
+    type: slack_api
+    sync: {channels: ['c1','c2'], media: false}
+  - name: gh
+    type: github_api
+    sync: {max_prs: 50}
+  - name: gl
+    type: gitlab_api
+    sync: {max_mrs: 50}
+  - name: notion
+    type: notion_api
+    sync:
+      inbox: {enabled: true}
+      subtrees: {pages: ['p1']}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        assert_eq!(cfg.sources.len(), 7);
+        assert_eq!(cfg.sources[0].type_str(), "claude_export");
+        assert!(!cfg.sources[0].is_managed());
+        let slack = cfg
+            .sources
+            .iter()
+            .find(|s| s.name() == "slack")
+            .expect("slack source");
+        assert!(slack.is_managed());
+        if let SourceConfig::SlackApi { sync, .. } = slack {
+            let sync = sync.as_ref().unwrap();
+            assert_eq!(
+                sync.channels.as_deref(),
+                Some(&["c1".to_string(), "c2".to_string()][..])
+            );
+            assert!(!sync.media);
+        } else {
+            panic!("expected SlackApi");
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_source_names() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - {name: dup, type: claude_export}
+  - {name: dup, type: claude_export}
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::DuplicateSourceNames(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_notion_sync_without_inbox_or_subtrees() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: n
+    type: notion_api
+    sync:
+      inbox: {enabled: false}
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::NotionSyncEmpty(_))
+        ));
+    }
+
+    #[test]
+    fn input_path_defaults_under_data_root() {
+        let (cfg_path, root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: slack
+    type: slack_api
+    sync: {channels: ['c']}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let s = &cfg.sources[0];
+        assert_eq!(s.resolved_input_path(&cfg.data_root), root.join("raw/slack"));
+    }
+
+    #[test]
+    fn enabled_sources_filters_disabled() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - {name: on, type: claude_export}
+  - {name: off, type: claude_export, enabled: false}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let names: Vec<&str> = cfg.enabled_sources().map(|s| s.name()).collect();
+        assert_eq!(names, vec!["on"]);
     }
 
     fn tempdir() -> PathBuf {

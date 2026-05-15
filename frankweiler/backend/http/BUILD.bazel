@@ -59,7 +59,10 @@ rust_binary(
     name = "frankweiler_http_bin",
     srcs = ["src/main.rs"],
     edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
+    visibility = [
+        "//frankweiler:__subpackages__",
+        "//tests:__subpackages__",
+    ],
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",

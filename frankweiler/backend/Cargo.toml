@@ -4,6 +4,7 @@ members = [
     "schema",
     "core",
     "http",
+    "providers",
     "qmd_indexer",
     "tauri-backend",
 ]

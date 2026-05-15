@@ -96,6 +96,47 @@ py_test(
     ],
 )
 
+# Live Slack sync integration test. Boots the real frankweiler_http_bin
+# against a fresh tmpdir data_root, drives a download via POST
+# /api/sync/jobs, and asserts on-disk output + grid rows.
+#
+# Non-hermetic: hits real Slack, needs `latchkey` + `dolt` + `python3`
+# on PATH, and credentials for the slack service in latchkey. Tagged
+# `manual` so `//...` skips it; run via
+#     bazelisk test //tests:slack_live_test
+py_test(
+    name = "slack_live_test",
+    size = "enormous",
+    timeout = "long",
+    srcs = [
+        "test_slack_live.py",
+        "conftest_slack_live.py",
+    ],
+    main = "conftest_slack_live.py",
+    data = [
+        "//frankweiler/backend/http:frankweiler_http_bin",
+        "//src/worker",
+    ],
+    # The test shells out to host-installed binaries (latchkey, dolt,
+    # python3) and reads latchkey credentials from $HOME. Pass these
+    # through from the invoker's environment.
+    env_inherit = [
+        "PATH",
+        "HOME",
+    ],
+    tags = [
+        "manual",
+        "external",
+        "requires-network",
+        "no-sandbox",
+        "no-remote",
+    ],
+    deps = [
+        "//src/worker",
+        requirement("pytest"),
+    ],
+)
+
 # Unit tests for the qmd_bridge mapping abstraction. No qmd CLI; pure
 # Python over synthetic hits and a tiny synthetic grid.
 py_test(
