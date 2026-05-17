@@ -311,7 +311,7 @@
           "FILE:@@//frankweiler/backend/schema/Cargo.toml 4a9a9724eaf4bbc8ecc9f487f8bdf9c6474b067a61422dd9808230067d417420",
           "FILE:@@//frankweiler/backend/core/Cargo.toml 0db780b47b5b174fe579a8fd3a881d25a9d272c6b0b1d3eb0a95bade6d864447",
           "FILE:@@//frankweiler/backend/http/Cargo.toml f1e560788bdd9a6e018a10463ad40ca995b37829434af848e327d0297705fed1",
-          "FILE:@@//frankweiler/backend/providers/Cargo.toml 2a8dd0360618bbf43259e205b9a1ecebf47db45b77f0ff12506fc4d299850f6c",
+          "FILE:@@//frankweiler/backend/providers/Cargo.toml 11a8eb2d5c9834877325a42622366f102595f9202401e236fdfc628c67452db2",
           "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml 8a8bb59d265a7a42d67a9a0dc9e1cb97e50fbc0b209be2d24043094c15805117",
           "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1"
         ],

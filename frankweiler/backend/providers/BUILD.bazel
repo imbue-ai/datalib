@@ -15,14 +15,19 @@ rust_library(
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:emojis",
+        "@frankweiler_crates//:once_cell",
         "@frankweiler_crates//:opentelemetry",
         "@frankweiler_crates//:opentelemetry-otlp",
         "@frankweiler_crates//:opentelemetry_sdk",
+        "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
@@ -52,11 +57,84 @@ rust_binary(
     ],
 )
 
+# Translate step: read raw_api/ and emit per-thread .md + grid_rows
+# sidecars. Idempotent via the source_fingerprint frontmatter.
+rust_binary(
+    name = "slack_translate",
+    srcs = ["src/bin/slack_translate.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_providers",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+    ],
+)
+
+# Provider-agnostic Load step: walk *.grid_rows.json sidecars and
+# upsert into Dolt; tracks documents_loaded(qmd_path, fingerprint) for
+# idempotent skips.
+rust_binary(
+    name = "grid_rows_load",
+    srcs = ["src/bin/grid_rows_load.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_providers",
+        "//frankweiler/backend/core:frankweiler_core",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+    ],
+)
+
 rust_test(
     name = "providers_unittests",
     size = "small",
     crate = ":frankweiler_providers",
     edition = "2021",
+)
+
+# Translator golden test against the TNG fixture and render golden test.
+# Both resolve `tests/fixtures/slack_api` relative to `CARGO_MANIFEST_DIR`,
+# which works under `cargo test` but not in the bazel sandbox (the
+# fixture directory isn't in runfiles). Tagged `manual` so they're
+# excluded from `bazel test ...`; run them via `cargo test
+# -p frankweiler-providers` in the inner loop.
+rust_test(
+    name = "slack_translate_test",
+    srcs = ["tests/slack_translate.rs"],
+    crate_root = "tests/slack_translate.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_providers",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "slack_render_test",
+    srcs = ["tests/slack_render.rs"],
+    crate_root = "tests/slack_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_providers",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
 )
 
 # Live Slack snapshot test. Hits api.slack.com via `latchkey curl`, so
