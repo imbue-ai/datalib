@@ -13,8 +13,8 @@ name = "slack-download"
 path = "src/bin/slack_download.rs"
 
 [[bin]]
-name = "slack-render"
-path = "src/bin/slack_render.rs"
+name = "slack-translate"
+path = "src/bin/slack_translate.rs"
 
 [[bin]]
 name = "slack-load"

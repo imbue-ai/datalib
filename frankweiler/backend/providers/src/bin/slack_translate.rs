@@ -1,17 +1,18 @@
-//! `slack-render` — read the raw_api capture written by `slack-download`,
-//! emit one CommonMark `.md` per Slack thread plus a co-located
-//! `*.grid_rows.json` sidecar.
+//! `slack-translate` — Translate step of the Slack ETL: read the raw_api
+//! capture written by `slack-download` and emit one CommonMark `.md` per
+//! Slack thread plus a co-located `*.grid_rows.json` sidecar.
 //!
 //! Incremental: each `.md` carries a `source_fingerprint` derived from
 //! the raw payloads of its messages. Re-running with no upstream
 //! changes is a no-op (zero writes).
 //!
-//! Renderer-only. The Dolt loader is `slack-load`, which reads the
-//! `.md` tree and never touches `raw_api/`.
+//! Translate-only. The Load step is the provider-agnostic
+//! `grid-rows-load` binary, which reads the `.grid_rows.json` tree and
+//! never touches `raw_api/`.
 //!
 //! ```sh
-//! slack-render --out ~/slack-mirror
-//! slack-render --out ~/slack-mirror --otlp-endpoint http://localhost:4317
+//! slack-translate --out ~/slack-mirror
+//! slack-translate --out ~/slack-mirror --otlp-endpoint http://localhost:4317
 //! ```
 
 use std::path::PathBuf;
@@ -27,12 +28,12 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "slack-render",
-    about = "Render captured Slack raw_api into rendered_md/ + grid_rows sidecars."
+    name = "slack-translate",
+    about = "Translate captured Slack raw_api into rendered_md/ + grid_rows sidecars."
 )]
 struct Args {
     /// Output root (same value passed to `slack-download --out`). The
-    /// renderer reads `<out>/raw_api/` and writes to
+    /// translator reads `<out>/raw_api/` and writes to
     /// `<out>/rendered_md/slack/...`.
     #[arg(long, env = "SLACK_OUT")]
     out: PathBuf,
@@ -43,10 +44,10 @@ struct Args {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let _guard = init_obs(&args.obs, "slack-render")?;
+    let _guard = init_obs(&args.obs, "slack-translate")?;
 
     let span = info_span!(
-        "slack_render",
+        "slack_translate",
         out = %args.out.display(),
         threads_done = tracing::field::Empty,
         threads_total = tracing::field::Empty,
@@ -54,7 +55,7 @@ fn main() -> Result<()> {
     );
     let _enter = span.enter();
 
-    info!(event = "slack_render_start");
+    info!(event = "slack_translate_start");
     let t = translate_raw_dir(&args.out)?;
     info!(
         event = "slack_translate_loaded",
@@ -71,7 +72,7 @@ fn main() -> Result<()> {
     })?;
 
     info!(
-        event = "slack_render_complete",
+        event = "slack_translate_complete",
         threads_total = summary.threads_total,
         threads_rendered = summary.threads_rendered,
         threads_skipped = summary.threads_skipped,
