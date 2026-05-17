@@ -17,8 +17,8 @@ name = "slack-translate"
 path = "src/bin/slack_translate.rs"
 
 [[bin]]
-name = "slack-load"
-path = "src/bin/slack_load.rs"
+name = "grid-rows-load"
+path = "src/bin/grid_rows_load.rs"
 
 [dependencies]
 frankweiler-core = { path = "../core" }

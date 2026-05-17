@@ -1,37 +1,40 @@
-//! Load rendered Slack grid_rows sidecars into Dolt.
+//! Generic Load step: walk a `rendered_md/` tree of `.grid_rows.json`
+//! sidecars and upsert their rows into Dolt.
 //!
-//! Reads `<out>/rendered_md/slack/**/*.grid_rows.json`, written by the
-//! `slack-render` binary. The sidecar header carries `source_fingerprint`
-//! and `thread_uuid` (== `document_uuid`); we use the fingerprint to
-//! skip already-loaded threads via a `documents_loaded(qmd_path PK,
-//! source_fingerprint)` table.
+//! The sidecar format is the cross-provider contract between Translate
+//! and Load:
 //!
-//! Per changed thread:
-//!   1. `DELETE FROM grid_rows WHERE document_uuid = ?`
-//!   2. `INSERT INTO grid_rows ...` for every row in the sidecar
-//!   3. UPSERT into `documents_loaded`
-//!   4. `CALL DOLT_COMMIT('-Am', '...')` to publish across connections
-//!      (Dolt's working set is session-scoped under `--no-auto-commit`).
+//! ```jsonc
+//! {
+//!   "header": {
+//!     "document_uuid": "…",            // primary key for the document
+//!     "source_fingerprint": "…",       // hash of upstream payload
+//!     "render_version": 1              // renderer-side schema stamp
+//!   },
+//!   "rows": [GridRow, …]
+//! }
+//! ```
 //!
-//! The loader never reads `raw_api/` — its contract is the `.grid_rows.json`
-//! sidecar, full stop.
-//!
-//! Match the Python `populate_grid_rows` delete-then-insert pattern
-//! (`src/ingest/grid_rows.py:824,839-841`).
+//! Per document we DELETE existing rows by `document_uuid` and INSERT
+//! the fresh set, then UPSERT a row into the `documents_loaded` table
+//! so the next run can skip unchanged files. Same delete-then-insert
+//! pattern as the Python `populate_grid_rows`
+//! (`src/ingest/grid_rows.py:824,839-841`), generalized so any
+//! provider's Translate step can produce a sidecar tree that this
+//! loader consumes verbatim.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
+use serde::{Deserialize, Serialize};
 use sqlx::mysql::MySqlPool;
 use sqlx::Row;
 
-use super::render::Sidecar;
-
-/// `CREATE TABLE` for the loader's own bookkeeping table. The Dolt
-/// `--no-auto-commit` flag affects rows in the working set; DDL is
-/// committed automatically, so this is safe to run on every startup.
+/// `CREATE TABLE` for the loader's own bookkeeping table. DDL is
+/// auto-committed even under Dolt's `--no-auto-commit`, so this is
+/// idempotent across runs.
 pub const DOCUMENTS_LOADED_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents_loaded (
     qmd_path VARCHAR(512) NOT NULL,
     document_uuid VARCHAR(96) NOT NULL,
@@ -40,11 +43,30 @@ pub const DOCUMENTS_LOADED_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents_l
     PRIMARY KEY (qmd_path)
 )"#;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SidecarHeader {
+    /// Stable id for the document this sidecar describes. The Slack
+    /// Translate step sets this to the thread uuid; other providers
+    /// (Notion page, GitHub issue, etc.) plug in their own
+    /// document-level uuid.
+    pub document_uuid: String,
+    pub source_fingerprint: String,
+    pub render_version: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Sidecar {
+    pub header: SidecarHeader,
+    pub rows: Vec<GridRow>,
+}
+
+/// Stats emitted on every load run. Stable shape so a web UI can poll
+/// or stream it without per-provider branches.
+#[derive(Debug, Default, Serialize)]
 pub struct LoadSummary {
-    pub threads_total: usize,
-    pub threads_loaded: usize,
-    pub threads_skipped: usize,
+    pub documents_total: usize,
+    pub documents_loaded: usize,
+    pub documents_skipped: usize,
     pub rows_inserted: usize,
 }
 
@@ -54,32 +76,33 @@ pub async fn init_schema(pool: &MySqlPool) -> Result<()> {
         sqlx::query(ddl)
             .execute(pool)
             .await
-            .with_context(|| "create grid_rows")?;
+            .context("create grid_rows")?;
     }
     sqlx::query(DOCUMENTS_LOADED_DDL)
         .execute(pool)
         .await
-        .with_context(|| "create documents_loaded")?;
+        .context("create documents_loaded")?;
     Ok(())
 }
 
-/// Walk `<out>/rendered_md/slack/` for `.grid_rows.json` sidecars and
-/// load each one into Dolt. `out_dir` is also the prefix for the
-/// `qmd_path` stored in `grid_rows` (relative to the data root).
+/// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar (any
+/// provider) and load each into Dolt. `out_dir` is also the prefix
+/// stripped from the sidecar's `.md` path to derive the
+/// `documents_loaded.qmd_path` key.
 pub async fn load_all(
     pool: &MySqlPool,
     out_dir: &Path,
     progress: impl Fn(&str),
 ) -> Result<LoadSummary> {
-    let slack_root = out_dir.join("rendered_md").join("slack");
+    let rendered_root = out_dir.join("rendered_md");
     let mut sidecars: Vec<PathBuf> = Vec::new();
-    if slack_root.exists() {
-        collect_sidecars(&slack_root, &mut sidecars);
+    if rendered_root.exists() {
+        collect_sidecars(&rendered_root, &mut sidecars);
     }
     sidecars.sort();
 
     let mut summary = LoadSummary {
-        threads_total: sidecars.len(),
+        documents_total: sidecars.len(),
         ..Default::default()
     };
 
@@ -89,36 +112,31 @@ pub async fn load_all(
         let sidecar: Sidecar = serde_json::from_str(&raw)
             .with_context(|| format!("parse {}", sidecar_path.display()))?;
 
-        // qmd_path key: the .md file's path relative to `out_dir`,
-        // matching what render.rs stamps into `grid_rows.qmd_path`.
-        let md_path = sidecar_path.with_extension("").with_extension("md");
-        // `.with_extension("").with_extension("md")` strips `.json` then
-        // `.grid_rows`, leaving `<stem>.md`. Belt-and-braces: derive from
-        // the sidecar filename explicitly.
-        let md_path = derive_md_path(sidecar_path).unwrap_or(md_path);
+        let md_path = derive_md_path(sidecar_path)
+            .with_context(|| format!("derive .md path from {}", sidecar_path.display()))?;
         let qmd_rel = md_path
             .strip_prefix(out_dir)
             .unwrap_or(&md_path)
             .to_string_lossy()
             .to_string();
 
-        let document_uuid = sidecar.header.thread_uuid.clone();
+        let document_uuid = sidecar.header.document_uuid.clone();
         let fingerprint = sidecar.header.source_fingerprint.clone();
 
         if existing_fingerprint(pool, &qmd_rel).await? == Some(fingerprint.clone()) {
-            summary.threads_skipped += 1;
+            summary.documents_skipped += 1;
             continue;
         }
 
-        let inserted = apply_thread(pool, &document_uuid, &qmd_rel, &fingerprint, &sidecar.rows)
+        let inserted = apply_document(pool, &document_uuid, &qmd_rel, &fingerprint, &sidecar.rows)
             .await
             .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
-        summary.threads_loaded += 1;
+        summary.documents_loaded += 1;
         progress(&format!(
             "loaded {}/{}",
-            summary.threads_loaded + summary.threads_skipped,
-            summary.threads_total
+            summary.documents_loaded + summary.documents_skipped,
+            summary.documents_total
         ));
     }
     Ok(summary)
@@ -154,7 +172,7 @@ async fn existing_fingerprint(pool: &MySqlPool, qmd_path: &str) -> Result<Option
     Ok(row.and_then(|r| r.try_get::<String, _>("source_fingerprint").ok()))
 }
 
-async fn apply_thread(
+async fn apply_document(
     pool: &MySqlPool,
     document_uuid: &str,
     qmd_path: &str,
@@ -189,7 +207,7 @@ async fn apply_thread(
     .await
     .context("upsert documents_loaded")?;
 
-    let msg = format!("slack-load: {document_uuid} {fingerprint}");
+    let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
     sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
         .bind(&msg)
         .execute(&mut *conn)

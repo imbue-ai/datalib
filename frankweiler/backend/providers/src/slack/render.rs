@@ -23,10 +23,11 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
+
+use crate::grid_rows_load::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::translate::{slack_link, Message, TranslatedSlack};
@@ -41,19 +42,6 @@ pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
     pub threads_skipped: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SidecarHeader {
-    pub thread_uuid: String,
-    pub source_fingerprint: String,
-    pub render_version: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Sidecar {
-    pub header: SidecarHeader,
-    pub rows: Vec<GridRow>,
 }
 
 /// Render every thread in `t` under `out_dir`. Idempotent: threads
@@ -144,7 +132,7 @@ pub fn render_all(
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
         let sidecar = Sidecar {
             header: SidecarHeader {
-                thread_uuid: thread_uuid.clone(),
+                document_uuid: thread_uuid.clone(),
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },

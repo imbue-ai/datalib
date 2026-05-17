@@ -1,19 +1,23 @@
-//! `slack-load` — read the `.md` + `.grid_rows.json` tree written by
-//! `slack-render` and load grid_rows into Dolt.
+//! `grid-rows-load` — provider-agnostic Load step. Walks
+//! `<out>/rendered_md/**/*.grid_rows.json` (written by any Translate
+//! step) and inserts rows into Dolt.
 //!
 //! Incremental: a `documents_loaded(qmd_path PK, source_fingerprint)`
-//! table tracks which threads have already been ingested. Threads whose
-//! sidecar fingerprint matches the recorded one are skipped (zero
-//! writes, zero DOLT_COMMITs).
+//! table tracks which documents have already been ingested. Sidecars
+//! whose fingerprint matches the recorded one are skipped — zero
+//! writes, zero DOLT_COMMITs.
 //!
 //! Connects to a running `dolt sql-server` if one is already listening
 //! on `--dolt-host:--dolt-port`; otherwise spawns one under
 //! `--dolt-repo-dir` (default `<out>/dolt_repo`). Same connect-or-spawn
 //! semantics as the Python `DoltService`.
 //!
+//! The output schema is stable across providers so a web UI can
+//! consume the `LoadSummary` JSON without per-provider branches.
+//!
 //! ```sh
-//! slack-load --out ~/slack-mirror
-//! slack-load --out ~/slack-mirror --otlp-endpoint http://localhost:4317
+//! grid-rows-load --out ~/mirror
+//! grid-rows-load --out ~/mirror --otlp-endpoint http://localhost:4317
 //! ```
 
 use std::path::PathBuf;
@@ -23,21 +27,22 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_server::DoltServer;
+use frankweiler_providers::grid_rows_load::{init_schema, load_all};
 use frankweiler_providers::obs::{init as init_obs, ObsArgs};
-use frankweiler_providers::slack::load::{init_schema, load_all};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "slack-load",
-    about = "Load rendered Slack grid_rows sidecars into Dolt."
+    name = "grid-rows-load",
+    about = "Load `*.grid_rows.json` sidecars (any provider) into Dolt."
 )]
 struct Args {
-    /// Input root (same value passed to `slack-render --out`). The
-    /// loader reads `<out>/rendered_md/slack/**/*.grid_rows.json`.
-    #[arg(long, env = "SLACK_OUT")]
+    /// Input root. The loader reads
+    /// `<out>/rendered_md/**/*.grid_rows.json` across every provider
+    /// subtree.
+    #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 
     /// Dolt repo directory. Defaults to `<out>/dolt_repo`. If a
@@ -60,7 +65,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let _guard = init_obs(&args.obs, "slack-load")?;
+    let _guard = init_obs(&args.obs, "grid-rows-load")?;
 
     let dolt_repo_dir = args
         .dolt_repo_dir
@@ -79,13 +84,13 @@ async fn main() -> Result<()> {
     };
 
     info!(
-        event = "slack_load_start",
+        event = "grid_rows_load_start",
         out = %args.out.display(),
         dolt_repo = %dolt_repo_dir.display(),
     );
     let server = DoltServer::ensure(&dolt_repo_dir, &dolt_cfg).context("ensure dolt sql-server")?;
     info!(
-        event = "slack_load_dolt_ready",
+        event = "grid_rows_load_dolt_ready",
         url = server.mysql_url(),
         owned = server.owns_server(),
     );
@@ -98,10 +103,10 @@ async fn main() -> Result<()> {
     init_schema(&pool).await?;
 
     let span = info_span!(
-        "slack_load",
-        threads_total = tracing::field::Empty,
-        threads_loaded = tracing::field::Empty,
-        threads_skipped = tracing::field::Empty,
+        "grid_rows_load",
+        documents_total = tracing::field::Empty,
+        documents_loaded = tracing::field::Empty,
+        documents_skipped = tracing::field::Empty,
         indicatif.pb_show = tracing::field::Empty,
     );
     let _enter = span.enter();
@@ -114,10 +119,10 @@ async fn main() -> Result<()> {
     .await?;
 
     info!(
-        event = "slack_load_complete",
-        threads_total = summary.threads_total,
-        threads_loaded = summary.threads_loaded,
-        threads_skipped = summary.threads_skipped,
+        event = "grid_rows_load_complete",
+        documents_total = summary.documents_total,
+        documents_loaded = summary.documents_loaded,
+        documents_skipped = summary.documents_skipped,
         rows_inserted = summary.rows_inserted,
     );
     Ok(())
