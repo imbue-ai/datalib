@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::Result;
 use clap::Parser;
 use frankweiler_etl::obs::{init as init_obs, ObsArgs};
-use frankweiler_etl::providers::slack::translate::render::render_all;
-use frankweiler_etl::providers::slack::translate::translate_raw_dir;
+use frankweiler_etl_slack::translate::render::render_all;
+use frankweiler_etl_slack::translate::translate_raw_dir;
 use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 

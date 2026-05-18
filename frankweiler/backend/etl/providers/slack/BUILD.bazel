@@ -1,0 +1,150 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Filegroup for the checked-in TNG-themed fixture used by both Rust
+# integration tests here and the Python fixture-build pipeline at
+# //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob([
+        "tests/fixtures/slack_api/**/*.jsonl",
+        "tests/fixtures/slack_api/media/**/*",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_slack",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_slack",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:emojis",
+        "@frankweiler_crates//:once_cell",
+        "@frankweiler_crates//:regex",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+# Extract step (Slack). CLI driver. Emits structured tracing events:
+# pretty + tracing-indicatif progress bars on a TTY, NDJSON on stderr
+# otherwise, plus optional OTLP export via --otlp-endpoint. Shells out
+# to host `latchkey` at runtime.
+rust_binary(
+    name = "slack_download",
+    srcs = ["src/bin/slack_download.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_slack",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+    ],
+)
+
+# Translate step (Slack). Reads raw_api/ and emits per-thread .md +
+# grid_rows sidecars. Idempotent via the source_fingerprint frontmatter.
+rust_binary(
+    name = "slack_translate",
+    srcs = ["src/bin/slack_translate.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_slack",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+    ],
+)
+
+rust_test(
+    name = "slack_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_slack",
+    edition = "2021",
+)
+
+# Translator + render golden tests. Now that the TNG fixture lives
+# inside this crate, the tests resolve it via CARGO_MANIFEST_DIR. The
+# fixture tree still isn't in the bazel sandbox runfiles by default,
+# so we tag them `manual`; run them via `cargo test
+# -p frankweiler-etl-slack` in the inner loop.
+rust_test(
+    name = "slack_translate_test",
+    srcs = ["tests/slack_translate.rs"],
+    crate_root = "tests/slack_translate.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_slack",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "slack_render_test",
+    srcs = ["tests/slack_render.rs"],
+    crate_root = "tests/slack_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_slack",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# Live Slack snapshot test. Hits api.slack.com via `latchkey curl`.
+# Tagged `manual` + `external` + `no-sandbox` to exclude from
+# `bazelisk test //...`. Run with:
+#
+#     bazelisk test //frankweiler/backend/etl/providers/slack:slack_live \
+#         --test_arg=--ignored --test_env=PATH --test_env=HOME
+rust_test(
+    name = "slack_live",
+    srcs = ["tests/slack_live.rs"],
+    crate_root = "tests/slack_live.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to api.slack.com
+        "manual",
+        "no-sandbox",  # latchkey reads its keyring from the host
+    ],
+    deps = [
+        ":frankweiler_etl_slack",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+    ],
+)

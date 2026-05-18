@@ -28,12 +28,14 @@ filegroup(
         "anthropic_export/**/*.json",
         "anthropic_api/**/*.json",
         "chatgpt_api/**/*.json",
-        "slack_api/**/*.jsonl",
-        "slack_api/media/**/*",
         "github_api/**/*.jsonl",
         "gitlab_api/**/*.jsonl",
         "notion_web/**/*.jsonl",
-    ]),
+    ]) + [
+        # Slack fixtures moved into the Rust frankweiler-etl-slack crate
+        # so the sample data is co-located with the code under test.
+        "//frankweiler/backend/etl/providers/slack:tng_fixture",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -56,6 +58,9 @@ genrule(
         "tests/fixtures",
         "$(RULEDIR)/ingested",
         "'2369-04-15T00:00:00+00:00'",
+        # Slack fixtures moved into the Rust crate; bazel surfaces them at
+        # their declared package path inside the sandbox.
+        "frankweiler/backend/etl/providers/slack/tests/fixtures",
     ]),
     tags = [
         # Dolt isn't a hermetic toolchain in this repo; rule needs the host

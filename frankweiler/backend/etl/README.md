@@ -21,9 +21,13 @@ uniformly.
 | Translate | `<provider>-translate`      | `<out>/raw_api/`     | `<out>/rendered_md/<provider>/...`         |
 | Load      | `grid-rows-load` (generic)  | `<out>/rendered_md/` | rows in Dolt + `documents_loaded` bookkeeping |
 
-Per-provider code lives under [`src/providers/<name>/`](src/providers/);
-each provider has an `extract/` and a `translate/` submodule. The Load
-step is provider-agnostic and lives at [`src/load.rs`](src/load.rs).
+Each provider is its own crate at
+[`providers/<name>/`](providers/), named `frankweiler-etl-<name>`. The
+provider crate owns its Extract + Translate code, bins, integration
+tests, and the sample fixtures the tests run against — keeping sample
+data right next to the code under test serves as documentation of
+"what this provider's wire format looks like." The Load step is
+provider-agnostic and lives at [`src/load.rs`](src/load.rs).
 
 ## Target schema
 
@@ -67,9 +71,9 @@ deciding to do work.
     `documents_loaded`. Re-running with no upstream changes is a no-op:
     every sidecar is short-circuited before the DELETE/INSERT.
 
-Bump [`RENDER_VERSION`](src/providers/slack/translate/render.rs) (or
-the per-provider equivalent) to force a rebake even when payloads are
-unchanged.
+Bump `RENDER_VERSION` in the per-provider translate module (e.g.
+[`providers/slack/src/translate/render.rs`](providers/slack/src/translate/render.rs))
+to force a rebake even when payloads are unchanged.
 
 ## Observability
 
@@ -89,21 +93,31 @@ produced it.
 
 ## Adding a new provider
 
-1. Create `src/providers/<name>/{extract,translate}/`.
-2. Add a `<name>-download` bin in `src/bin/` and `[[bin]]` /
-   `rust_binary` entries in `Cargo.toml` + `BUILD.bazel`.
-3. Add a `<name>-translate` bin that emits sidecars matching
-   [`Sidecar`](src/sidecar.rs).
-4. The Load step needs no per-provider changes — `grid-rows-load` will
-   pick up the new sidecars on its next run.
+Each provider is a sibling crate under `providers/`. Copy the Slack
+crate as a template:
 
-The Slack provider is the worked example; copy it as a template.
+1. `cp -r providers/slack providers/<name>` (then strip out
+   slack-specific code).
+2. Rename the package in its `Cargo.toml` to `frankweiler-etl-<name>`,
+   lib name `frankweiler_etl_<name>`.
+3. Add `etl/providers/<name>` to the workspace `members =` list in
+   `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
+   manifest list in `MODULE.bazel`.
+4. Implement `<name>-download` (Extract) and `<name>-translate`
+   (Translate) bins. Translate must emit `*.grid_rows.json` sidecars
+   matching [`Sidecar`](src/sidecar.rs).
+5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
+   and write integration tests next to it.
+6. The Load step needs no per-provider changes — `grid-rows-load` will
+   pick up the new sidecars on its next run.
 
 ## Cargo vs Bazel
 
-  * `cargo test -p frankweiler-etl` is the inner loop. It picks up the
-    repo-root `tests/fixtures/slack_api` fixtures via
-    `CARGO_MANIFEST_DIR.ancestors()`.
+  * `cargo test -p frankweiler-etl-<name>` is the inner loop. Each
+    provider crate's tests resolve fixtures via
+    `CARGO_MANIFEST_DIR.join("tests/fixtures/...")`, so they're
+    standalone.
   * `bazelisk test //frankweiler/backend/etl/...` runs the unit tests
-    (`:etl_unittests`). The fixture-backed integration tests are tagged
-    `manual` because the fixture tree isn't in the bazel sandbox runfiles.
+    (`:etl_unittests` and each `:<provider>_unittests`). The
+    fixture-backed integration tests are tagged `manual` because the
+    fixture tree isn't in the bazel sandbox runfiles by default.

@@ -18,6 +18,19 @@ from ingest.providers.slack.parse import parse_api_dir as parse_slack_api_dir
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
+# Slack fixtures moved to the per-provider Rust crate so the data sits
+# next to the code under test. Python tests still consume it from here.
+SLACK_FIXTURE_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "frankweiler"
+    / "backend"
+    / "etl"
+    / "providers"
+    / "slack"
+    / "tests"
+    / "fixtures"
+)
+
 
 def test_anthropic_export_fixture_parses() -> None:
     parsed = parse_export(FIXTURES / "anthropic_export")
@@ -124,7 +137,7 @@ def test_slack_api_fixture_parses_with_unicode_line_separator() -> None:
     Data's-log message embeds a literal U+2028 to guard against
     regression of this exact failure mode.
     """
-    parsed = parse_slack_api_dir(FIXTURES / "slack_api")
+    parsed = parse_slack_api_dir(SLACK_FIXTURE_ROOT / "slack_api")
     log_msgs = [m for m in parsed.messages if "Stardate 47988.1" in (m.text or "")]
     assert len(log_msgs) == 1
     assert "\u2028" in log_msgs[0].text
@@ -145,7 +158,7 @@ def test_slack_api_fixture_dedupes_duplicated_message_records() -> None:
     The parser must emit one MessageRow per uuid in both cases, or the
     row collides with itself in `grid_rows` (PRIMARY KEY uuid).
     """
-    parsed = parse_slack_api_dir(FIXTURES / "slack_api")
+    parsed = parse_slack_api_dir(SLACK_FIXTURE_ROOT / "slack_api")
     uuids = [m.uuid for m in parsed.messages]
     assert len(uuids) == len(set(uuids))
 
@@ -154,7 +167,7 @@ def test_slack_api_fixture_dedupes_duplicated_message_records() -> None:
     # silently green without exercising anything.
     import json
 
-    base = FIXTURES / "slack_api"
+    base = SLACK_FIXTURE_ROOT / "slack_api"
     message_lines = (
         (base / "message" / "created" / "events.jsonl").read_bytes().splitlines()
     )

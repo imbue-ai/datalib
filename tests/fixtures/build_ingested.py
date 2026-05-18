@@ -15,9 +15,12 @@ to happen atomically and would each be ugly in a `cmd =` string:
 Args (positional):
     1: path to the ingest CLI py_binary launcher
     2: workspace-relative dir containing the fixture trees (anthropic_export/,
-       anthropic_api/, chatgpt_api/)
+       anthropic_api/, chatgpt_api/, github_api/, gitlab_api/, notion_web/)
     3: output dir for dump.sql + qmd.tar (Bazel-supplied)
     4: --now value (fixed ISO-8601 timestamp)
+    5: workspace-relative dir containing the slack_api/ fixture tree
+       (lives in the frankweiler-etl-slack crate so the sample data is
+       co-located with the Rust code under test)
 """
 
 from __future__ import annotations
@@ -39,8 +42,9 @@ def _free_port() -> int:
 
 
 def main() -> int:
-    cli, fixtures_dir, out_dir, now = sys.argv[1:5]
+    cli, fixtures_dir, out_dir, now, slack_fixtures_dir = sys.argv[1:6]
     fixtures = Path(fixtures_dir).resolve()
+    slack_fixtures = Path(slack_fixtures_dir).resolve()
     out = Path(out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -68,7 +72,7 @@ sources:
     input_path: {fixtures / "chatgpt_api"}
   - name: slack_api_tng
     type: slack_api
-    input_path: {fixtures / "slack_api"}
+    input_path: {slack_fixtures / "slack_api"}
   - name: github_api_tng
     type: github_api
     input_path: {fixtures / "github_api"}

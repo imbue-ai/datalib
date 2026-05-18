@@ -617,25 +617,42 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "emojis",
  "frankweiler-core",
  "frankweiler-schema",
- "insta",
- "once_cell",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
- "regex",
  "serde",
  "serde_json",
  "sqlx",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-indicatif",
  "tracing-opentelemetry",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "frankweiler-etl-slack"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "emojis",
+ "frankweiler-etl",
+ "frankweiler-schema",
+ "insta",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
  "uuid",
 ]
 

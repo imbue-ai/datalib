@@ -5,21 +5,14 @@
 
 use std::path::PathBuf;
 
-use frankweiler_etl::providers::slack::translate::{
+use frankweiler_etl_slack::translate::{
     grid_rows, slack_message_uuid, slack_thread_uuid, translate_raw_dir, ts_to_iso,
 };
 use insta::assert_json_snapshot;
 use serde_json::json;
 
 fn fixture_root() -> PathBuf {
-    // tests/fixtures/slack_api lives at the repo root, four levels up
-    // from this crate's manifest dir.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .nth(3)
-        .expect("repo root")
-        .join("tests/fixtures/slack_api")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slack_api")
 }
 
 #[test]

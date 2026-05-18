@@ -5,6 +5,7 @@ members = [
     "core",
     "http",
     "etl",
+    "etl/providers/slack",
     "qmd_indexer",
     "tauri-backend",
 ]

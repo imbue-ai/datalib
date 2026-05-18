@@ -1,0 +1,195 @@
+---
+source: providers/tests/slack_render.rs
+expression: bundle
+---
+=== rendered_md/slack/T_NCC1701D/bridge/threads/18661749-ed35-5c92-aa13-7cb73be53387__captain-s-log-stardate-47988-1-sensors-detect-a-romulan-sign.md ===
+---
+provider: slack
+thread_uuid: 18661749-ed35-5c92-aa13-7cb73be53387
+team_id: T_NCC1701D
+channel_id: C_BRIDGE
+channel_name: bridge
+root_ts: 12604000800.000800
+root_ts_iso: "2369-05-28T15:20:00.000800+00:00"
+slack_link: "https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D"
+source_fingerprint: ffc1e34493adbf2e
+render_version: 1
+---
+
+# #bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 
+
+<div class="msg" data-msg-uuid="91592264-62dc-5233-8341-07623d028b40" data-msg-index="0" data-provider="slack">
+
+## Lt. Cmdr. Data
+
+<div class="msg-meta"><em>2369-05-28T15:20:00.000800+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
+
+</div>
+
+=== rendered_md/slack/T_NCC1701D/bridge/threads/8074b3b0-3bd4-5232-843f-c8278649d1a2__mr-data-status-report.md ===
+---
+provider: slack
+thread_uuid: 8074b3b0-3bd4-5232-843f-c8278649d1a2
+team_id: T_NCC1701D
+channel_id: C_BRIDGE
+channel_name: bridge
+root_ts: 12604000100.000100
+root_ts_iso: "2369-05-28T15:08:20.000100+00:00"
+slack_link: "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
+source_fingerprint: 7a860893c8120038
+render_version: 1
+---
+
+# #bridge: Mr. Data, status report.
+
+<div class="msg" data-msg-uuid="a7776276-03f9-5da0-b278-6316e642aabb" data-msg-index="0" data-provider="slack">
+
+## Jean-Luc Picard
+
+<div class="msg-meta"><em>2369-05-28T15:08:20.000100+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+Mr. Data, status report.
+
+</div>
+
+<div class="msg" data-msg-uuid="70c76bbb-e431-5ab9-9118-61407fbccf09" data-msg-index="1" data-provider="slack">
+
+## Lt. Cmdr. Data
+
+<div class="msg-meta"><em>2369-05-28T15:10:00.000200+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000200000200?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
+
+> Reactions: 👍 ×2 :robot_face:
+
+</div>
+
+<div class="msg" data-msg-uuid="16c110a7-360d-5923-a931-652fc7823657" data-msg-index="2" data-provider="slack">
+
+## William T. Riker
+
+<div class="msg-meta"><em>2369-05-28T15:11:40.000300+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000300000300?team=T_NCC1701D&thread_ts=12604000100.000100&cid=C_BRIDGE" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+Set a course, Mr. Data. Warp factor five.
+
+</div>
+
+=== rendered_md/slack/T_NCC1701D/bridge/threads/b5ff7879-d563-59d6-8e89-906b6975dca1__i-recommend-raising-shields-captain.md ===
+---
+provider: slack
+thread_uuid: b5ff7879-d563-59d6-8e89-906b6975dca1
+team_id: T_NCC1701D
+channel_id: C_BRIDGE
+channel_name: bridge
+root_ts: 12604000400.000400
+root_ts_iso: "2369-05-28T15:13:20.000400+00:00"
+slack_link: "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D"
+source_fingerprint: a1cb22a37c2ff728
+render_version: 1
+---
+
+# #bridge: I recommend raising shields, Captain.
+
+<div class="msg" data-msg-uuid="78ad2e40-fc0b-58d0-a6a6-2acb4300003b" data-msg-index="0" data-provider="slack">
+
+## Worf
+
+<div class="msg-meta"><em>2369-05-28T15:13:20.000400+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+I recommend raising shields, Captain.
+
+</div>
+
+=== rendered_md/slack/T_NCC1701D/bridge/threads/be617fe9-49d3-5fe1-b75d-0e210465c5bb__new-combadge-prototypes-thoughts.md ===
+---
+provider: slack
+thread_uuid: be617fe9-49d3-5fe1-b75d-0e210465c5bb
+team_id: T_NCC1701D
+channel_id: C_BRIDGE
+channel_name: bridge
+root_ts: 12604000700.000700
+root_ts_iso: "2369-05-28T15:18:20.000700+00:00"
+slack_link: "https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D"
+source_fingerprint: 187617e936d22090
+render_version: 1
+---
+
+# #bridge: New combadge prototypes — thoughts?
+
+<div class="msg" data-msg-uuid="b528443b-a4b8-5651-9c48-ef6ee9a630cc" data-msg-index="0" data-provider="slack">
+
+## Jean-Luc Picard
+
+<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+New combadge prototypes — thoughts?
+
+![Delta shield prototype](https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)
+
+</div>
+
+=== rendered_md/slack/T_NCC1701D/engineering/threads/b220c513-3e7b-5301-8b0d-13f9b8cf63fc__warp-core-efficiency-at-99-7.md ===
+---
+provider: slack
+thread_uuid: b220c513-3e7b-5301-8b0d-13f9b8cf63fc
+team_id: T_NCC1701D
+channel_id: C_ENG
+channel_name: engineering
+root_ts: 12604000500.000500
+root_ts_iso: "2369-05-28T15:15:00.000500+00:00"
+slack_link: "https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D"
+source_fingerprint: 412434951238ae96
+render_version: 1
+---
+
+# #engineering: Warp core efficiency at 99.7%.
+
+<div class="msg" data-msg-uuid="069e5516-8c53-5c55-bb1c-8741e7f833d9" data-msg-index="0" data-provider="slack">
+
+## Lt. Cmdr. Data
+
+<div class="msg-meta"><em>2369-05-28T15:15:00.000500+00:00</em> · <a href="https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+Warp core efficiency at 99.7%.
+
+</div>
+
+=== rendered_md/slack/T_NCC1701D/ten-forward/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275__anyone-up-for-poker-tonight.md ===
+---
+provider: slack
+thread_uuid: a93e15fa-68d5-5d53-aa9a-590e01b83275
+team_id: T_NCC1701D
+channel_id: C_TENFWD
+channel_name: ten-forward
+root_ts: 12604000600.000600
+root_ts_iso: "2369-05-28T15:16:40.000600+00:00"
+slack_link: "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D"
+source_fingerprint: 9f9a313508e7847b
+render_version: 1
+---
+
+# #ten-forward: Anyone up for poker tonight?
+
+<div class="msg" data-msg-uuid="712dd3b9-7df4-59b6-ab50-ce709b0ab747" data-msg-index="0" data-provider="slack">
+
+## William T. Riker
+
+<div class="msg-meta"><em>2369-05-28T15:16:40.000600+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+Anyone up for poker tonight?
+
+</div>
+
+<div class="msg" data-msg-uuid="c26c0b71-66a5-535c-9b46-e64351034dc6" data-msg-index="1" data-provider="slack">
+
+## Worf
+
+<div class="msg-meta"><em>2369-05-28T15:18:20.000700+00:00</em> · <a href="https://slack.com/archives/C_TENFWD/p12604000700000700?team=T_NCC1701D&thread_ts=12604000600.000600&cid=C_TENFWD" target="_blank" rel="noopener noreferrer" title="View in Slack">↗</a></div>
+
+I do not understand the appeal of this Earth game.
+
+> Reactions: 😂
+
+</div>

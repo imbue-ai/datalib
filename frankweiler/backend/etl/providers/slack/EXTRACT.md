@@ -55,6 +55,6 @@ the contract.
 ## Sample data
 
 A curated [Star Trek: TNG-themed
-fixture](../../../../../../tests/fixtures/slack_api/) demonstrates the
-raw wire format. It's used by both the Python and Rust translators as
-the source of truth for the on-disk shape.
+fixture](tests/fixtures/slack_api/) demonstrates the raw wire format
+and lives next to the code under test. The Python translator currently
+reads it from this location as well.

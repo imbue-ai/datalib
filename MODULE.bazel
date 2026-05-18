@@ -69,6 +69,7 @@ crate.from_cargo(
         "//frankweiler/backend/core:Cargo.toml",
         "//frankweiler/backend/http:Cargo.toml",
         "//frankweiler/backend/etl:Cargo.toml",
+        "//frankweiler/backend/etl/providers/slack:Cargo.toml",
         "//frankweiler/backend/qmd_indexer:Cargo.toml",
         "//frankweiler/backend/tauri-backend:Cargo.toml",
     ],

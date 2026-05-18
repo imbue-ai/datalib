@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use crate::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, Message, TranslatedSlack};

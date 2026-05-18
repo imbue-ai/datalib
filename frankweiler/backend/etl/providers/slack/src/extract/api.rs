@@ -16,7 +16,7 @@ use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
-use crate::obs::events;
+use frankweiler_etl::obs::events;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);

@@ -8,17 +8,12 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl::providers::slack::translate::render::render_all;
-use frankweiler_etl::providers::slack::translate::translate_raw_dir;
+use frankweiler_etl_slack::translate::render::render_all;
+use frankweiler_etl_slack::translate::translate_raw_dir;
 use insta::assert_snapshot;
 
 fn fixture_root() -> PathBuf {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .nth(3)
-        .expect("repo root")
-        .join("tests/fixtures/slack_api")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slack_api")
 }
 
 fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {

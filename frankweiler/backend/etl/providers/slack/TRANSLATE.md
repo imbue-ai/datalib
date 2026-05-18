@@ -55,12 +55,13 @@ though their `source_fingerprint` would otherwise still match.
 ## Goldens
 
 The translator + renderer are pinned by insta snapshots against the
-TNG-themed fixture at `tests/fixtures/slack_api/`. Run them with:
+TNG-themed fixture co-located at `tests/fixtures/slack_api/`. Run them
+with:
 
 ```sh
 cd frankweiler/backend
-cargo test -p frankweiler-etl --test slack_translate
-cargo test -p frankweiler-etl --test slack_render
+cargo test -p frankweiler-etl-slack --test slack_translate
+cargo test -p frankweiler-etl-slack --test slack_render
 ```
 
 Both are tagged `manual` in Bazel because the fixture tree isn't in

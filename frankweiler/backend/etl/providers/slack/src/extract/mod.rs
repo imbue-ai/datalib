@@ -29,9 +29,9 @@ use serde_json::Value;
 use tracing::{info, info_span, instrument, warn, Instrument};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use crate::obs::events;
-use crate::raw_store::{PageCapture, RawStore};
 use api::{call_slack, SlackCall, SlackError};
+use frankweiler_etl::obs::events;
+use frankweiler_etl::raw_store::{PageCapture, RawStore};
 use shapes::{
     items_in_response, latest_reply_by_thread, latest_ts_by_channel, M_AUTH_TEST, M_CHANNELS,
     M_HISTORY, M_REPLIES, M_USERS,

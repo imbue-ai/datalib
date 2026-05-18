@@ -16,7 +16,7 @@
 use std::fs;
 use std::path::Path;
 
-use frankweiler_etl::providers::slack::extract as slack;
+use frankweiler_etl_slack::extract as slack;
 use insta::assert_json_snapshot;
 use serde_json::Value;
 

@@ -2,8 +2,8 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
-# Excludes src/bin/ — those compile as separate `rust_binary` targets
-# below. Globbing them into the library would produce duplicate symbols.
+# Framework crate. Provider-specific Extract/Translate code lives in
+# sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
 rust_library(
     name = "frankweiler_etl",
     srcs = glob(
@@ -19,12 +19,9 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:emojis",
-        "@frankweiler_crates//:once_cell",
         "@frankweiler_crates//:opentelemetry",
         "@frankweiler_crates//:opentelemetry-otlp",
         "@frankweiler_crates//:opentelemetry_sdk",
-        "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
@@ -34,41 +31,6 @@ rust_library(
         "@frankweiler_crates//:tracing-indicatif",
         "@frankweiler_crates//:tracing-opentelemetry",
         "@frankweiler_crates//:tracing-subscriber",
-        "@frankweiler_crates//:uuid",
-    ],
-)
-
-# Extract step (Slack). CLI driver. Emits structured tracing events:
-# pretty + tracing-indicatif progress bars on a TTY, NDJSON on stderr
-# otherwise, plus optional OTLP export via --otlp-endpoint. Shells out
-# to host `latchkey` at runtime.
-rust_binary(
-    name = "slack_download",
-    srcs = ["src/bin/slack_download.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:tokio",
-        "@frankweiler_crates//:tracing",
-    ],
-)
-
-# Translate step (Slack). Reads raw_api/ and emits per-thread .md +
-# grid_rows sidecars. Idempotent via the source_fingerprint frontmatter.
-rust_binary(
-    name = "slack_translate",
-    srcs = ["src/bin/slack_translate.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
     ],
 )
 
@@ -97,68 +59,4 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl",
     edition = "2021",
-)
-
-# Translator + render golden tests against the TNG fixture. Both
-# resolve `tests/fixtures/slack_api` relative to `CARGO_MANIFEST_DIR`,
-# which works under `cargo test` but not in the bazel sandbox (the
-# fixture directory isn't in runfiles). Tagged `manual` so they're
-# excluded from `bazel test ...`; run them via `cargo test
-# -p frankweiler-etl` in the inner loop.
-rust_test(
-    name = "slack_translate_test",
-    srcs = ["tests/slack_translate.rs"],
-    crate_root = "tests/slack_translate.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    tags = ["manual"],
-    deps = [
-        ":frankweiler_etl",
-        "@frankweiler_crates//:insta",
-        "@frankweiler_crates//:serde_json",
-    ],
-)
-
-rust_test(
-    name = "slack_render_test",
-    srcs = ["tests/slack_render.rs"],
-    crate_root = "tests/slack_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    tags = ["manual"],
-    deps = [
-        ":frankweiler_etl",
-        "@frankweiler_crates//:insta",
-        "@frankweiler_crates//:serde_json",
-        "@frankweiler_crates//:tempfile",
-    ],
-)
-
-# Live Slack snapshot test. Hits api.slack.com via `latchkey curl`, so
-# tagged "manual" to exclude it from `bazelisk test //...`. Run with:
-#
-#     bazelisk test //frankweiler/backend/etl:slack_live \
-#         --test_arg=--ignored --test_env=PATH --test_env=HOME
-rust_test(
-    name = "slack_live",
-    srcs = ["tests/slack_live.rs"],
-    crate_root = "tests/slack_live.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",  # talks to api.slack.com
-        "manual",
-        "no-sandbox",  # latchkey reads its keyring from the host
-    ],
-    deps = [
-        ":frankweiler_etl",
-        "@frankweiler_crates//:insta",
-        "@frankweiler_crates//:serde_json",
-        "@frankweiler_crates//:tokio",
-    ],
 )

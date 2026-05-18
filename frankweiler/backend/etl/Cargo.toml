@@ -9,14 +9,6 @@ name = "frankweiler_etl"
 path = "src/lib.rs"
 
 [[bin]]
-name = "slack-download"
-path = "src/bin/slack_download.rs"
-
-[[bin]]
-name = "slack-translate"
-path = "src/bin/slack_translate.rs"
-
-[[bin]]
 name = "grid-rows-load"
 path = "src/bin/grid_rows_load.rs"
 
@@ -29,10 +21,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
-uuid = { workspace = true, features = ["v5"] }
-regex = "1.11"
-once_cell = "1.20"
-emojis = "0.6"
 sqlx = { workspace = true }
 
 # Observability stack — emitted as structured events, rendered as a
@@ -46,8 +34,3 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
 tracing-opentelemetry = "0.28"
-
-[dev-dependencies]
-insta = { version = "1.41", features = ["json", "redactions"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tempfile = "3"
