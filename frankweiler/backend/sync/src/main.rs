@@ -30,6 +30,13 @@ use clap::Parser;
 use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::load::{init_schema, load_all};
+use frankweiler_etl::synthesize::Synthesizer;
+use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
+use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;
+use frankweiler_etl_github::synthesize::GithubSynth;
+use frankweiler_etl_gitlab::synthesize::GitlabSynth;
+use frankweiler_etl_notion::synthesize::NotionSynth;
+use frankweiler_etl_slack::synthesize::SlackSynth;
 use sqlx::mysql::MySqlPoolOptions;
 use tempfile::TempDir;
 
@@ -73,10 +80,21 @@ struct Args {
 
     /// HTTP playback fixture root. When set, the extract phase will
     /// route every `latchkey_curl` call through this tree instead of
-    /// hitting the network. Not yet wired — passing this currently
-    /// errors out.
+    /// hitting the network. Today there is no extract phase wired in
+    /// (we drive Translate directly off pre-staged event-store JSONL),
+    /// so the flag is accepted and stored for the live runner but
+    /// otherwise unused. The synthesizers in `--synthesize-playback-root`
+    /// are what *write* this tree.
     #[arg(long)]
     playback_root: Option<PathBuf>,
+
+    /// Run every provider's HTTP fixture **synthesizer** against the
+    /// input fixture trees and write playback responses into this dir.
+    /// Independent of the regular Translate/Load pipeline — when this
+    /// flag is set, the binary writes fixtures and exits without
+    /// touching Dolt or producing `dump.sql` / `qmd.tar`.
+    #[arg(long)]
+    synthesize_playback_root: Option<PathBuf>,
 }
 
 fn free_port() -> Result<u16> {
@@ -87,10 +105,12 @@ fn free_port() -> Result<u16> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    if args.playback_root.is_some() {
-        bail!("--playback-root not yet supported; HTTP fixture synthesizers are pending");
-    }
     let _ = args.deterministic;
+    let _ = &args.playback_root;
+
+    if let Some(playback_out) = &args.synthesize_playback_root {
+        return run_synthesize(&args, playback_out);
+    }
 
     let shared = args
         .shared_fixtures
@@ -208,6 +228,31 @@ fn translate_gitlab(fixture: &Path, root: &Path) -> Result<()> {
     let parsed =
         parse_api_dir(fixture).with_context(|| format!("gitlab parse {}", fixture.display()))?;
     render_gitlab(&parsed, root).context("render_gitlab")?;
+    Ok(())
+}
+
+fn run_synthesize(args: &Args, out: &Path) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
+    let synths: Vec<Box<dyn Synthesizer>> = vec![
+        Box::new(AnthropicSynth::new(
+            args.anthropic_fixtures.join("anthropic_api"),
+        )),
+        Box::new(ChatgptSynth::new(args.chatgpt_fixtures.join("chatgpt_api"))),
+        Box::new(SlackSynth::new(args.slack_fixtures.join("slack_api"))),
+        Box::new(GithubSynth::new(args.shared_fixtures.join("github_api"))),
+        Box::new(GitlabSynth::new(args.shared_fixtures.join("gitlab_api"))),
+        Box::new(NotionSynth::new(args.shared_fixtures.join("notion_web"))),
+    ];
+    for s in &synths {
+        let report = s
+            .synthesize(out)
+            .with_context(|| format!("synthesize {}", s.name()))?;
+        eprintln!(
+            "[frankweiler-sync] synthesize {}: {} fixtures",
+            s.name(),
+            report.fixtures_written
+        );
+    }
     Ok(())
 }
 

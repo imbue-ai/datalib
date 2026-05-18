@@ -3,4 +3,5 @@
 //! step is provider-agnostic and lives at [`frankweiler_etl::load`].
 
 pub mod extract;
+pub mod synthesize;
 pub mod translate;

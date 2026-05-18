@@ -20,3 +20,4 @@ pub mod load;
 pub mod obs;
 pub mod raw_store;
 pub mod sidecar;
+pub mod synthesize;
