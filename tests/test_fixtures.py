@@ -18,18 +18,14 @@ from ingest.providers.slack.parse import parse_api_dir as parse_slack_api_dir
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
-# Slack fixtures moved to the per-provider Rust crate so the data sits
-# next to the code under test. Python tests still consume it from here.
-SLACK_FIXTURE_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "frankweiler"
-    / "backend"
-    / "etl"
-    / "providers"
-    / "slack"
-    / "tests"
-    / "fixtures"
-)
+# Fixtures for providers that have a Rust crate live next to the code
+# under test (data co-located with the parser/translator/downloader).
+# Python tests still consume them, but reach across the repo for them.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_PROVIDERS = _REPO_ROOT / "frankweiler" / "backend" / "etl" / "providers"
+SLACK_FIXTURE_ROOT = _PROVIDERS / "slack" / "tests" / "fixtures"
+CHATGPT_FIXTURE_ROOT = _PROVIDERS / "chatgpt" / "tests" / "fixtures"
+ANTHROPIC_FIXTURE_ROOT = _PROVIDERS / "anthropic" / "tests" / "fixtures"
 
 
 def test_anthropic_export_fixture_parses() -> None:
@@ -71,7 +67,7 @@ def test_anthropic_export_fixture_parses() -> None:
 
 
 def test_anthropic_api_fixture_has_rich_block_types() -> None:
-    parsed = parse_export(FIXTURES / "anthropic_api")
+    parsed = parse_export(ANTHROPIC_FIXTURE_ROOT / "anthropic_api")
 
     block_types = {b.type for b in parsed.content_blocks}
     # The API-shape fixture is the one expected to exercise non-text blocks.
@@ -83,7 +79,7 @@ def test_anthropic_api_fixture_has_rich_block_types() -> None:
 
 
 def test_chatgpt_api_fixture_parses() -> None:
-    parsed = parse_api_dir(FIXTURES / "chatgpt_api")
+    parsed = parse_api_dir(CHATGPT_FIXTURE_ROOT / "chatgpt_api")
 
     assert len(parsed.accounts) == 1
     assert parsed.accounts[0].name == "Lt. Cmdr. Data"

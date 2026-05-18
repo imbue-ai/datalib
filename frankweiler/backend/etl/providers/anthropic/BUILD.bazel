@@ -1,0 +1,59 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Filegroup for the checked-in TNG-themed fixture used by both Rust
+# integration tests here and the Python fixture-build pipeline at
+# //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/anthropic_api/**/*.json"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_anthropic",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_anthropic",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+    ],
+)
+
+rust_binary(
+    name = "anthropic_download",
+    srcs = ["src/bin/anthropic_download.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [],
+)
+
+rust_binary(
+    name = "anthropic_translate",
+    srcs = ["src/bin/anthropic_translate.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [],
+)
+
+rust_test(
+    name = "anthropic_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_anthropic",
+    edition = "2021",
+)

@@ -5,6 +5,8 @@ members = [
     "core",
     "http",
     "etl",
+    "etl/providers/anthropic",
+    "etl/providers/chatgpt",
     "etl/providers/slack",
     "qmd_indexer",
     "tauri-backend",

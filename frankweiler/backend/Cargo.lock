@@ -634,6 +634,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-anthropic"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-etl",
+ "frankweiler-schema",
+ "insta",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+]
+
+[[package]]
+name = "frankweiler-etl-chatgpt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-etl",
+ "frankweiler-schema",
+ "insta",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+]
+
+[[package]]
 name = "frankweiler-etl-slack"
 version = "0.1.0"
 dependencies = [
