@@ -1,0 +1,62 @@
+---
+source: etl/providers/anthropic/tests/anthropic_live.rs
+expression: view
+---
+{
+  "message_count": 4,
+  "messages": [
+    {
+      "attachments": 0,
+      "block_kinds": [
+        "text"
+      ],
+      "files": 0,
+      "sender": "human",
+      "text_chars": 486
+    },
+    {
+      "attachments": 0,
+      "block_kinds": [
+        "text",
+        "thinking",
+        "text",
+        "tool_use",
+        "tool_result",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "text"
+      ],
+      "files": 0,
+      "sender": "assistant",
+      "text_chars": 11831
+    },
+    {
+      "attachments": 0,
+      "block_kinds": [
+        "text"
+      ],
+      "files": 0,
+      "sender": "human",
+      "text_chars": 234
+    },
+    {
+      "attachments": 0,
+      "block_kinds": [
+        "text",
+        "thinking",
+        "text",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "text"
+      ],
+      "files": 0,
+      "sender": "assistant",
+      "text_chars": 8648
+    }
+  ],
+  "model": "claude-opus-4-7",
+  "name": "Reactive data pipeline composition in Rust",
+  "uuid": "b0c2f022-cc28-4888-b038-702ec040b87b"
+}

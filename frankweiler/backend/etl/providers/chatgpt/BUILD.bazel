@@ -79,6 +79,28 @@ rust_test(
 # CARGO_MANIFEST_DIR which bazel doesn't surface in sandbox runfiles,
 # so tag manual. Run via `cargo test -p frankweiler-etl-chatgpt`.
 rust_test(
+    name = "chatgpt_live",
+    srcs = ["tests/chatgpt_live.rs"],
+    crate_root = "tests/chatgpt_live.rs",
+    data = glob(["tests/snapshots/chatgpt_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to chatgpt.com
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":frankweiler_etl_chatgpt",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
     name = "chatgpt_render_test",
     srcs = ["tests/chatgpt_render.rs"],
     crate_root = "tests/chatgpt_render.rs",

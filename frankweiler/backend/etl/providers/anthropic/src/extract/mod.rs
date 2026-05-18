@@ -36,6 +36,9 @@ pub struct FetchOptions {
     pub export_dir: Option<PathBuf>,
     pub overlap: usize,
     pub sleep_between: Duration,
+    /// If set, fetch only this conversation UUID and merge it into the
+    /// existing cache. The listing/priority walk is skipped entirely.
+    pub conv_uuid: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -118,109 +121,121 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut merged: HashMap<String, Value> = existing_api.clone();
     let mut summary = FetchSummary::default();
 
-    for org in &orgs {
-        let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let org_name = org
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
-            .to_string();
-
-        let listing = match client
-            .list_conversations(org_uuid)
-            .instrument(info_span!("anthropic_org_listing", org = %org_name))
-            .await
-        {
-            Ok(l) => l,
-            Err(ClaudeError::Forbidden(_)) => {
-                info!(
-                    event = "anthropic_org_forbidden",
-                    org = %org_name,
-                    note = "no chat permission for this org"
-                );
-                summary.forbidden_orgs += 1;
-                continue;
-            }
-            Err(e) => return Err(anyhow::anyhow!("list conversations for {org_name}: {e}")),
-        };
-        info!(
-            event = "anthropic_org_listing_count",
-            org = %org_name,
-            count = listing.len()
-        );
-        sleep(SLEEP_BETWEEN).await;
-
-        // Plan: classify each listing item, sort so genuinely-new
-        // conversations come first.
-        let mut plan: Vec<(u8, &Value)> = Vec::new();
-        for item in &listing {
-            let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
+    if let Some(target) = opts.conv_uuid.as_deref() {
+        fetch_single(
+            &mut client,
+            &orgs,
+            target,
+            account_uuid.as_deref(),
+            &mut merged,
+            &mut summary,
+        )
+        .await?;
+    } else {
+        for org in &orgs {
+            let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let api_updated = item
-                .get("updated_at")
+            let org_name = org
+                .get("name")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let in_export = existing_export.get(uuid);
-            let in_api = existing_api.get(uuid);
-            let priority: Option<u8> = if in_export.is_none() && in_api.is_none() {
-                Some(0) // new
-            } else if overlap_uuids.contains(uuid) {
-                Some(1) // overlap
-            } else if let Some(api_prev) = in_api {
-                if api_prev
-                    .get("updated_at")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    != api_updated
-                {
-                    Some(2) // updated
-                } else {
-                    None
-                }
-            } else if let Some(exp_prev) = in_export {
-                if exp_prev
-                    .get("updated_at")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    != api_updated
-                {
-                    Some(3) // export-stale
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            match priority {
-                Some(p) => plan.push((p, item)),
-                None => summary.skipped += 1,
-            }
-        }
-        plan.sort_by_key(|(p, _)| *p);
+                .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
+                .to_string();
 
-        for (_why, item) in plan {
-            let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            match client.get_conversation(org_uuid, uuid).await {
-                Ok(full) => {
-                    let normalized = normalize::normalize_to_export_shape(
-                        full,
-                        account_uuid.as_deref(),
-                        org_uuid,
+            let listing = match client
+                .list_conversations(org_uuid)
+                .instrument(info_span!("anthropic_org_listing", org = %org_name))
+                .await
+            {
+                Ok(l) => l,
+                Err(ClaudeError::Forbidden(_)) => {
+                    info!(
+                        event = "anthropic_org_forbidden",
+                        org = %org_name,
+                        note = "no chat permission for this org"
                     );
-                    merged.insert(uuid.to_string(), normalized);
-                    summary.fetched += 1;
-                    if opts.sleep_between > Duration::ZERO {
-                        sleep(opts.sleep_between).await;
-                    }
+                    summary.forbidden_orgs += 1;
+                    continue;
                 }
-                Err(e) => {
-                    warn!(event = "anthropic_fetch_error", uuid = uuid, error = %e);
-                    summary.errors += 1;
+                Err(e) => return Err(anyhow::anyhow!("list conversations for {org_name}: {e}")),
+            };
+            info!(
+                event = "anthropic_org_listing_count",
+                org = %org_name,
+                count = listing.len()
+            );
+            sleep(SLEEP_BETWEEN).await;
+
+            // Plan: classify each listing item, sort so genuinely-new
+            // conversations come first.
+            let mut plan: Vec<(u8, &Value)> = Vec::new();
+            for item in &listing {
+                let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let api_updated = item
+                    .get("updated_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let in_export = existing_export.get(uuid);
+                let in_api = existing_api.get(uuid);
+                let priority: Option<u8> = if in_export.is_none() && in_api.is_none() {
+                    Some(0) // new
+                } else if overlap_uuids.contains(uuid) {
+                    Some(1) // overlap
+                } else if let Some(api_prev) = in_api {
+                    if api_prev
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        != api_updated
+                    {
+                        Some(2) // updated
+                    } else {
+                        None
+                    }
+                } else if let Some(exp_prev) = in_export {
+                    if exp_prev
+                        .get("updated_at")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        != api_updated
+                    {
+                        Some(3) // export-stale
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                match priority {
+                    Some(p) => plan.push((p, item)),
+                    None => summary.skipped += 1,
+                }
+            }
+            plan.sort_by_key(|(p, _)| *p);
+
+            for (_why, item) in plan {
+                let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                match client.get_conversation(org_uuid, uuid).await {
+                    Ok(full) => {
+                        let normalized = normalize::normalize_to_export_shape(
+                            full,
+                            account_uuid.as_deref(),
+                            org_uuid,
+                        );
+                        merged.insert(uuid.to_string(), normalized);
+                        summary.fetched += 1;
+                        if opts.sleep_between > Duration::ZERO {
+                            sleep(opts.sleep_between).await;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(event = "anthropic_fetch_error", uuid = uuid, error = %e);
+                        summary.errors += 1;
+                    }
                 }
             }
         }
@@ -237,6 +252,64 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
     Ok(summary)
+}
+
+async fn fetch_single(
+    client: &mut ClaudeClient,
+    orgs: &[Value],
+    conv_uuid: &str,
+    account_uuid: Option<&str>,
+    merged: &mut HashMap<String, Value>,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    for org in orgs {
+        let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let org_name = org
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
+            .to_string();
+        match client.get_conversation(org_uuid, conv_uuid).await {
+            Ok(full) => {
+                let normalized = normalize::normalize_to_export_shape(full, account_uuid, org_uuid);
+                merged.insert(conv_uuid.to_string(), normalized);
+                summary.fetched += 1;
+                info!(
+                    event = "anthropic_fetch_single_ok",
+                    uuid = conv_uuid,
+                    org = %org_name
+                );
+                return Ok(());
+            }
+            Err(ClaudeError::Forbidden(_)) => {
+                info!(
+                    event = "anthropic_fetch_single_forbidden",
+                    uuid = conv_uuid,
+                    org = %org_name
+                );
+                continue;
+            }
+            Err(ClaudeError::Permanent(msg)) if msg.contains("HTTP 404") => {
+                info!(
+                    event = "anthropic_fetch_single_not_in_org",
+                    uuid = conv_uuid,
+                    org = %org_name
+                );
+                continue;
+            }
+            Err(e) => {
+                warn!(event = "anthropic_fetch_error", uuid = conv_uuid, error = %e);
+                summary.errors += 1;
+                return Err(anyhow::anyhow!("fetch {conv_uuid}: {e}"));
+            }
+        }
+    }
+    Err(anyhow::anyhow!(
+        "conversation {conv_uuid} not found in any of {} org(s)",
+        orgs.len()
+    ))
 }
 
 fn load_conv_index(path: &Path) -> Result<HashMap<String, Value>> {

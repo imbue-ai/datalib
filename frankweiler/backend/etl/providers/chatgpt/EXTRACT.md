@@ -19,20 +19,76 @@ the incremental-skip key on the next run).
 
 The downloader does not handle ChatGPT cookies directly. It shells
 out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
-injects the cookies registered under the `chatgpt` service.
+injects the `Authorization: Bearer <accessToken>` registered under
+the `chatgpt` service.
+
+### Refreshing the access token
+
+ChatGPT rotates the bearer token frequently. When `latchkey services
+info chatgpt` reports `invalid` or requests come back with
+`HTTP 401 token_expired`, re-run this:
+
+1. Open <https://chatgpt.com> in a logged-in browser tab.
+2. DevTools → **Console** → paste:
+
+   ```js
+   (async () => {
+     const r = await fetch('/api/auth/session', { credentials: 'include' });
+     const j = await r.json();
+     if (!j.accessToken) { console.error('no accessToken:', j); return; }
+     const cmd = `latchkey auth set chatgpt -H "Authorization: Bearer ${j.accessToken}"`;
+     console.log(cmd);
+     await navigator.clipboard.writeText(cmd).catch(() => {});
+   })();
+   ```
+
+3. The console prints (and copies to clipboard) a line like
+   `latchkey auth set chatgpt -H "Authorization: Bearer eyJ…"`. Paste
+   it into your terminal and run it.
+4. Smoke test:
+
+   ```sh
+   latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
+   ```
+
+   Expect a JSON `{id, email, …}`.
 
 `chatgpt.com` is fronted by Cloudflare's managed-challenge system,
 which fingerprints TLS handshakes. To clear the challenge, point
-`LATCHKEY_CURL` at a `curl-impersonate` build before running:
+`LATCHKEY_CURL` at a Chrome-impersonating curl. The simplest option
+is the in-tree `latchkey-curl-shim` bin (a `wreq`-backed shim, mirror
+of `src/download/latchkey_curl_shim.py`):
 
 ```sh
-export LATCHKEY_CURL=/path/to/curl_impersonate-chrome
+cargo build -p frankweiler-etl --bin latchkey-curl-shim
+export LATCHKEY_CURL="$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim"
 chatgpt-download --out ~/backups/chatgpt_api
 ```
 
-Both `latchkey` and `curl_impersonate-chrome` must be on `PATH` /
-referenced by absolute path; the binary fails loudly if `latchkey`
-isn't found.
+A standalone `curl-impersonate` binary works too — point
+`LATCHKEY_CURL` at it instead.
+
+### Why no `cf_clearance` cookie?
+
+Cloudflare gates clients with two layered checks:
+
+1. **TLS fingerprint** (JA3/JA4) — what the handshake *looks* like.
+2. **JS challenge → `cf_clearance` cookie** — issued only when the
+   fingerprint is suspect, to certify "this client passed the
+   challenge once."
+
+Because the shim performs a Chrome 131 handshake from byte zero
+(boring-ssl + the same cipher suite ordering / ALPN / extensions as
+real Chrome), Cloudflare never elevates us to the challenge tier in
+the first place. The `cf_clearance` cookie therefore never gets
+issued and is not needed in the latchkey credential set — a single
+`Authorization: Bearer …` header is the full auth surface.
+
+If you ever *did* need it (e.g. some future tightening, or running
+with plain `curl` as `LATCHKEY_CURL`), grab it from DevTools →
+Application → Cookies → `chatgpt.com` → row `cf_clearance` (HttpOnly,
+so the JS snippet above can't read it) and add another `-H "Cookie:
+cf_clearance=…"` to `latchkey auth set chatgpt`.
 
 ## API surface used
 

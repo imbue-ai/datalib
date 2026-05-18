@@ -76,6 +76,28 @@ rust_test(
 )
 
 rust_test(
+    name = "anthropic_live",
+    srcs = ["tests/anthropic_live.rs"],
+    crate_root = "tests/anthropic_live.rs",
+    data = glob(["tests/snapshots/anthropic_live__*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to claude.ai/api
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        ":frankweiler_etl_anthropic",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
     name = "anthropic_render_test",
     srcs = ["tests/anthropic_render.rs"],
     crate_root = "tests/anthropic_render.rs",

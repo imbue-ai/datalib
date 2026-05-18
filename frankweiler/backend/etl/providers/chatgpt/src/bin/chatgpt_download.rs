@@ -37,6 +37,11 @@ struct Args {
     #[arg(long, default_value_t = SLEEP_BETWEEN.as_secs_f64())]
     sleep_between: f64,
 
+    /// Fetch a single conversation by id, skipping the listing walk.
+    /// Result lands at `<out>/conversations/<id>.json`.
+    #[arg(long, value_name = "ID")]
+    conv_uuid: Option<String>,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -51,6 +56,7 @@ async fn main() -> Result<()> {
         max_pages: args.max_pages,
         limit: args.limit,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        conv_uuid: args.conv_uuid.clone(),
     };
 
     let span = info_span!("chatgpt_download", out = %args.out.display());

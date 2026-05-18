@@ -44,6 +44,10 @@ pub struct FetchOptions {
     pub max_pages: Option<usize>,
     pub limit: Option<usize>,
     pub sleep_between: Duration,
+    /// If set, fetch only this conversation id and write it to
+    /// `<out>/conversations/<id>.json`. Skips the paginated listing
+    /// walk; `me.json` is still fetched (cheap, captures account id).
+    pub conv_uuid: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +83,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         email = me.get("email").and_then(|v| v.as_str()).unwrap_or(""),
         id = me.get("id").and_then(|v| v.as_str()).unwrap_or(""),
     );
+
+    if let Some(target) = opts.conv_uuid.as_deref() {
+        let mut summary = FetchSummary::default();
+        let cache_path = convs_dir.join(format!("{target}.json"));
+        match client.get_conversation(target).await {
+            Ok(mut full) => {
+                if let Some(obj) = full.as_object_mut() {
+                    obj.insert("_fetched_at".into(), Value::String(started_at.clone()));
+                }
+                write_json(&cache_path, &full)?;
+                summary.fetched = 1;
+                info!(event = "chatgpt_fetch_single_ok", id = target);
+            }
+            Err(e) => {
+                warn!(event = "chatgpt_fetch_error", id = target, error = %e);
+                return Err(anyhow::anyhow!("fetch {target}: {e}"));
+            }
+        }
+        summary.requests = client.requests;
+        summary.network_seconds = client.network_seconds;
+        return Ok(summary);
+    }
 
     let listing = list_all_conversations(&mut client, opts.max_pages)
         .instrument(info_span!("chatgpt_list"))

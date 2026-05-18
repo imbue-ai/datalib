@@ -1,0 +1,61 @@
+---
+source: etl/providers/chatgpt/tests/chatgpt_live.rs
+expression: view
+---
+{
+  "default_model_slug": "auto",
+  "id": "69b446c9-f0a0-832f-b9c2-5ccaaf3f108d",
+  "mapping_size": 9,
+  "message_count": 8,
+  "messages": [
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "user",
+      "text_chars": 193
+    },
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "system",
+      "text_chars": 0
+    },
+    {
+      "content_type": "code",
+      "parts": 0,
+      "role": "assistant",
+      "text_chars": 0
+    },
+    {
+      "content_type": "model_editable_context",
+      "parts": 0,
+      "role": "assistant",
+      "text_chars": 0
+    },
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "system",
+      "text_chars": 0
+    },
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "assistant",
+      "text_chars": 3894
+    },
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "system",
+      "text_chars": 0
+    },
+    {
+      "content_type": "text",
+      "parts": 1,
+      "role": "system",
+      "text_chars": 0
+    }
+  ],
+  "title": "Codex exec prompt fix"
+}

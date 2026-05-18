@@ -42,6 +42,13 @@ struct Args {
     #[arg(long, default_value_t = SLEEP_BETWEEN.as_secs_f64())]
     sleep_between: f64,
 
+    /// Fetch a single conversation by UUID instead of walking the full
+    /// listing. Tries each org until one returns 200; 403/404 are
+    /// treated as "wrong org, continue". Merges the result into the
+    /// existing `conversations.json` rather than replacing it.
+    #[arg(long, value_name = "UUID")]
+    conv_uuid: Option<String>,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -56,6 +63,7 @@ async fn main() -> Result<()> {
         export_dir: args.export_dir.clone(),
         overlap: args.overlap,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        conv_uuid: args.conv_uuid.clone(),
     };
 
     let span = info_span!("anthropic_download", out = %args.out.display());

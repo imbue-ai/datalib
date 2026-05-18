@@ -31,16 +31,32 @@ out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
 injects the cookies registered under the `claude-ai` service.
 
 `claude.ai` is fronted by Cloudflare's managed-challenge system. To
-clear the challenge, point `LATCHKEY_CURL` at a `curl-impersonate`
-build before running:
+clear the challenge, point `LATCHKEY_CURL` at a Chrome-impersonating
+curl. The simplest option is the in-tree `latchkey-curl-shim` bin
+(a `wreq`-backed shim, mirror of
+`src/download/latchkey_curl_shim.py`):
 
 ```sh
-export LATCHKEY_CURL=/path/to/curl_impersonate-chrome
+cargo build -p frankweiler-etl --bin latchkey-curl-shim
+export LATCHKEY_CURL="$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim"
 anthropic-download --out ~/backups/claude_api
 ```
 
-Both `latchkey` and `curl_impersonate-chrome` must be on `PATH` /
-referenced by absolute path.
+A standalone `curl-impersonate` binary works too — point
+`LATCHKEY_CURL` at it instead.
+
+### Why no `cf_clearance` cookie?
+
+Cloudflare gates clients in two layers: the TLS fingerprint (JA3/JA4)
+and, when that looks suspect, a JS challenge that issues a
+`cf_clearance` cookie. The shim's Chrome 131 handshake (boring-ssl
+with real-Chrome cipher ordering / ALPN / extensions) keeps us on
+the green path, so `cf_clearance` is never issued — and not needed
+in the latchkey credential set. The `sessionKey` cookie is the full
+auth surface. If a future CF tightening flips us into challenge
+land, grab `cf_clearance` from DevTools → Application → Cookies →
+`claude.ai` (HttpOnly) and add `-H "Cookie: cf_clearance=…"` to
+`latchkey auth set claude-ai`.
 
 ## API surface used
 
@@ -68,6 +84,20 @@ every listing item into one of:
 
 Everything else is skipped. The per-org work queue is sorted by
 priority ascending so genuinely-new conversations are fetched first.
+
+## Single-conversation mode
+
+Pass `--conv-uuid <UUID>` to fetch one specific conversation instead
+of walking the listing. Each org is tried in turn; `403`/`HTTP 404`
+on `get_conversation` are treated as "wrong org, continue". The
+result is merged into the existing `conversations.json`, so prior
+cache entries are preserved.
+
+```sh
+export LATCHKEY_CURL=/path/to/curl_impersonate-chrome
+anthropic-download --out ~/backups/claude_api \
+    --conv-uuid 12345678-90ab-cdef-1234-567890abcdef
+```
 
 ## Rate limits
 

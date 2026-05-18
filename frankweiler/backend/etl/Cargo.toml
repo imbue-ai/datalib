@@ -12,6 +12,14 @@ path = "src/lib.rs"
 name = "grid-rows-load"
 path = "src/bin/grid_rows_load.rs"
 
+# Curl-compatible CLI shim wrapping rquest's Chrome TLS impersonation.
+# Mirror of `src/download/latchkey_curl_shim.py` — point latchkey at it
+# via `LATCHKEY_CURL=<path-to-this-binary>` to clear Cloudflare without
+# a separate curl-impersonate install.
+[[bin]]
+name = "latchkey-curl-shim"
+path = "src/bin/latchkey_curl_shim.rs"
+
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-schema = { path = "../schema" }
@@ -34,3 +42,9 @@ opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
 tracing-opentelemetry = "0.28"
+
+# Curl-compatible TLS-impersonating HTTP client. Used by
+# `latchkey-curl-shim`; gated by a feature in case downstream
+# consumers don't want the boring-ssl build cost.
+wreq = { version = "=6.0.0-rc.28", default-features = false, features = ["webpki-roots"] }
+wreq-util = "=3.0.0-rc.11"
