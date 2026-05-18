@@ -30,6 +30,7 @@ rust_library(
         "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
@@ -43,7 +44,14 @@ rust_binary(
     srcs = ["src/bin/chatgpt_download.rs"],
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
-    deps = [],
+    deps = [
+        ":frankweiler_etl_chatgpt",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+    ],
 )
 
 rust_binary(
