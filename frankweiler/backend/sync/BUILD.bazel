@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 exports_files(["Cargo.toml"])
 
 rust_binary(
-    name = "build_ingested_bin",
+    name = "frankweiler_sync_bin",
     srcs = ["src/main.rs"],
     edition = "2021",
     visibility = ["//visibility:public"],
@@ -19,6 +19,7 @@ rust_binary(
         "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tar",
         "@frankweiler_crates//:tempfile",

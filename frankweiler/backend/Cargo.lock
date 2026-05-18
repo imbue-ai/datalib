@@ -778,28 +778,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "frankweiler-build-ingested"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "frankweiler-core",
- "frankweiler-etl",
- "frankweiler-etl-anthropic",
- "frankweiler-etl-chatgpt",
- "frankweiler-etl-github",
- "frankweiler-etl-gitlab",
- "frankweiler-etl-notion",
- "frankweiler-etl-slack",
- "frankweiler-qmd-indexer",
- "sqlx",
- "tar",
- "tempfile",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "frankweiler-core"
 version = "0.1.0"
 dependencies = [
@@ -1009,6 +987,29 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "frankweiler-sync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-core",
+ "frankweiler-etl",
+ "frankweiler-etl-anthropic",
+ "frankweiler-etl-chatgpt",
+ "frankweiler-etl-github",
+ "frankweiler-etl-gitlab",
+ "frankweiler-etl-notion",
+ "frankweiler-etl-slack",
+ "frankweiler-qmd-indexer",
+ "sqlx",
+ "tar",
+ "tempfile",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]

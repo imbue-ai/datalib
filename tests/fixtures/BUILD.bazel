@@ -38,10 +38,11 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Rust port of the old Python build_ingested.py. The orchestrator
-# (//frankweiler/backend/build_ingested) drives every provider's Translate
-# step over the checked-in fixtures, loads the resulting sidecars into a
-# scratch Dolt repo, then emits dump.sql + qmd.tar.
+# Cacheable, deterministic ingest of the TNG fixtures via
+# //frankweiler/backend/sync:frankweiler_sync_bin. The orchestrator
+# walks every provider's Translate step over the checked-in fixtures,
+# loads the resulting sidecars into a scratch Dolt repo, then emits
+# dump.sql + qmd.tar.
 genrule(
     name = "ingested_tng",
     srcs = [":source_json"],
@@ -50,20 +51,21 @@ genrule(
         "ingested/qmd.tar",
     ],
     tools = [
-        "//frankweiler/backend/build_ingested:build_ingested_bin",
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
     ],
     cmd = " ".join([
-        "$(execpath //frankweiler/backend/build_ingested:build_ingested_bin)",
+        "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
+        "--deterministic",
         # Genrules execute with cwd at the execroot; this is the fixture
         # package's directory inside the sandbox.
-        "tests/fixtures",
-        "$(RULEDIR)/ingested",
-        "'2369-04-15T00:00:00+00:00'",
+        "--shared-fixtures", "tests/fixtures",
+        "--out", "$(RULEDIR)/ingested",
+        "--now", "'2369-04-15T00:00:00+00:00'",
         # Provider fixtures moved into Rust crates; bazel surfaces them
         # at their declared package paths inside the sandbox.
-        "frankweiler/backend/etl/providers/slack/tests/fixtures",
-        "frankweiler/backend/etl/providers/chatgpt/tests/fixtures",
-        "frankweiler/backend/etl/providers/anthropic/tests/fixtures",
+        "--slack-fixtures", "frankweiler/backend/etl/providers/slack/tests/fixtures",
+        "--chatgpt-fixtures", "frankweiler/backend/etl/providers/chatgpt/tests/fixtures",
+        "--anthropic-fixtures", "frankweiler/backend/etl/providers/anthropic/tests/fixtures",
     ]),
     tags = [
         # Dolt isn't a hermetic toolchain in this repo; rule needs the host

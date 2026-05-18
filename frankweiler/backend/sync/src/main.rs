@@ -1,65 +1,82 @@
-//! `frankweiler-build-ingested` — Rust port of `tests/fixtures/build_ingested.py`.
+//! `frankweiler-sync` — incremental ETL orchestrator.
 //!
-//! Drives every provider's Translate step over the checked-in TNG fixtures,
-//! Loads the resulting sidecars into Dolt, then emits two byte-stable
-//! artifacts for the Bazel genrule cache:
+//! Drives Translate → Load → Dump → Archive across every configured
+//! provider. Today this is the same fixtures-mode pipeline the old
+//! `frankweiler-build-ingested` ran for the Bazel genrule: walk
+//! pre-staged event-store JSONL, render markdown + sidecars, load into
+//! an ephemeral Dolt sql-server, dump SQL, tar the rendered tree.
 //!
-//!   * `dump.sql` — `dolt dump` of every table in the working set.
-//!   * `qmd.tar`  — the rendered `rendered_md/` tree, with mtime/uid/gid
-//!     normalized so the tar is hermetic.
+//! The CLI is designed to grow into a real sync runner without breaking
+//! the genrule contract:
 //!
-//! Positional args mirror the old Python entrypoint:
-//!   1: shared fixture dir holding github_api/, gitlab_api/, notion_web/
-//!   2: output dir for dump.sql + qmd.tar (Bazel-supplied)
-//!   3: --now value (currently unused — left here for compat with the
-//!      Python signature so the genrule plumbing doesn't have to change)
-//!   4: slack fixture dir (parent of slack_api/)
-//!   5: chatgpt fixture dir (parent of chatgpt_api/)
-//!   6: anthropic fixture dir (parent of anthropic_api/)
+//!   * `--playback-root` will route the extract phase through
+//!     `frankweiler_etl::http` playback fixtures (currently rejected —
+//!     synthesizers not landed yet).
+//!   * `--deterministic` is the genrule's mode: fixed timestamps,
+//!     hermetic tar, sorted dump. Already the default behaviour here;
+//!     the flag exists so callers (Bazel) can assert intent.
 //!
-//! The `claude_export` source (Claude.ai manual JSON export) is
-//! intentionally dropped — there is no Rust port of that reader. Every
-//! other source from the old Python pipeline is covered by a provider
-//! crate.
+//! Outputs in `--out`:
+//!   * `dump.sql` — `dolt dump --result-format sql` of every table.
+//!   * `qmd.tar` — hermetic tar of `rendered_md/` (mtime/uid/gid zeroed).
 
-use std::ffi::OsString;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::load::{init_schema, load_all};
 use sqlx::mysql::MySqlPoolOptions;
 use tempfile::TempDir;
 
+#[derive(Debug, Parser)]
+#[command(
+    name = "frankweiler-sync",
+    about = "Incremental ETL: translate fixtures, load into Dolt, dump SQL + tar markdown"
+)]
 struct Args {
+    /// Directory holding the shared (github/gitlab/notion) fixture trees.
+    #[arg(long)]
     shared_fixtures: PathBuf,
-    out: PathBuf,
-    _now: String,
-    slack_fixtures: PathBuf,
-    chatgpt_fixtures: PathBuf,
-    anthropic_fixtures: PathBuf,
-}
 
-fn parse_args() -> Result<Args> {
-    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
-    if raw.len() < 6 {
-        bail!(
-            "usage: frankweiler-build-ingested <shared_fixtures> <out> <now> \
-             <slack_fixtures> <chatgpt_fixtures> <anthropic_fixtures>"
-        );
-    }
-    Ok(Args {
-        shared_fixtures: PathBuf::from(&raw[0]),
-        out: PathBuf::from(&raw[1]),
-        _now: raw[2].to_string_lossy().into_owned(),
-        slack_fixtures: PathBuf::from(&raw[3]),
-        chatgpt_fixtures: PathBuf::from(&raw[4]),
-        anthropic_fixtures: PathBuf::from(&raw[5]),
-    })
+    /// Output directory; receives `dump.sql` and `qmd.tar`.
+    #[arg(long)]
+    out: PathBuf,
+
+    /// Fixed timestamp threaded through downstream renderers when they
+    /// need a "now"; required for deterministic builds. Format is
+    /// ISO-8601 / RFC-3339.
+    #[arg(long)]
+    now: String,
+
+    /// Parent of `slack_api/` event-store JSONL.
+    #[arg(long)]
+    slack_fixtures: PathBuf,
+
+    /// Parent of `chatgpt_api/` event-store JSONL.
+    #[arg(long)]
+    chatgpt_fixtures: PathBuf,
+
+    /// Parent of `anthropic_api/` event-store JSONL.
+    #[arg(long)]
+    anthropic_fixtures: PathBuf,
+
+    /// Run in deterministic mode: fixed `--now`, sorted dump, hermetic
+    /// tar. Today this is the only supported mode; the flag exists for
+    /// forward-compat and to let Bazel assert intent.
+    #[arg(long, default_value_t = true)]
+    deterministic: bool,
+
+    /// HTTP playback fixture root. When set, the extract phase will
+    /// route every `latchkey_curl` call through this tree instead of
+    /// hitting the network. Not yet wired — passing this currently
+    /// errors out.
+    #[arg(long)]
+    playback_root: Option<PathBuf>,
 }
 
 fn free_port() -> Result<u16> {
@@ -69,7 +86,13 @@ fn free_port() -> Result<u16> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = parse_args()?;
+    let args = Args::parse();
+    if args.playback_root.is_some() {
+        bail!("--playback-root not yet supported; HTTP fixture synthesizers are pending");
+    }
+    let _ = &args.now;
+    let _ = args.deterministic;
+
     let shared = args
         .shared_fixtures
         .canonicalize()
@@ -89,18 +112,13 @@ async fn main() -> Result<()> {
     fs::create_dir_all(&args.out).with_context(|| format!("create out: {}", args.out.display()))?;
     let out = args.out.canonicalize()?;
 
-    // Hermetic working dir: a fresh tempdir each invocation, cleaned up on
-    // scope exit. Only the two declared genrule outputs (`dump.sql`,
-    // `qmd.tar`) get written into `out`; everything else (Dolt repo,
-    // rendered markdown tree, sidecars) is throwaway state.
     let workspace = TempDir::new().context("create scratch workspace")?;
     let root = workspace.path().to_path_buf();
     let rendered_md = root.join("rendered_md");
     fs::create_dir_all(&rendered_md)?;
 
-    eprintln!("[build-ingested] root = {}", root.display());
+    eprintln!("[frankweiler-sync] root = {}", root.display());
 
-    // ---- Translate every provider ------------------------------------
     translate_anthropic(&anthropic.join("anthropic_api"), &root)?;
     translate_chatgpt(&chatgpt.join("chatgpt_api"), &root)?;
     translate_slack(&slack.join("slack_api"), &root)?;
@@ -108,7 +126,6 @@ async fn main() -> Result<()> {
     translate_gitlab(&shared.join("gitlab_api"), &root)?;
     translate_notion(&shared.join("notion_web"), &root)?;
 
-    // ---- Spawn an ephemeral Dolt sql-server and Load -----------------
     let dolt_repo_dir = root.join("dolt_repo");
     fs::create_dir_all(&dolt_repo_dir)?;
     let port = free_port()?;
@@ -119,7 +136,7 @@ async fn main() -> Result<()> {
         repo_dirname: "dolt_repo".to_string(),
         binary: None,
     };
-    eprintln!("[build-ingested] dolt sql-server port = {port}");
+    eprintln!("[frankweiler-sync] dolt sql-server port = {port}");
     let server = DoltServer::ensure(&dolt_repo_dir, &dolt_cfg).context("dolt sql-server")?;
     let url = server.mysql_url();
     let pool = MySqlPoolOptions::new()
@@ -130,32 +147,27 @@ async fn main() -> Result<()> {
     init_schema(&pool).await?;
     let summary = load_all(&pool, &root, |_| {}).await.context("load_all")?;
     eprintln!(
-        "[build-ingested] loaded documents={}/{} rows={}",
+        "[frankweiler-sync] loaded documents={}/{} rows={}",
         summary.documents_loaded, summary.documents_total, summary.rows_inserted
     );
     drop(pool);
 
-    // ---- Dump SQL ----------------------------------------------------
     let dump_sql = out.join("dump.sql");
     dolt_dump(&dolt_repo_dir, &dump_sql)?;
 
-    // Stop the sql-server we spawned so the test can re-use the repo dir
-    // without contention. (DoltServer drops on scope end already, but we
-    // explicitly drop here before the tar step so any flush happens first.)
     drop(server);
 
-    // ---- Tar the rendered_md tree ------------------------------------
     let qmd_tar = out.join("qmd.tar");
     tar_rendered_md(&root, &qmd_tar)?;
 
-    eprintln!("[build-ingested] wrote {}", dump_sql.display());
-    eprintln!("[build-ingested] wrote {}", qmd_tar.display());
+    eprintln!("[frankweiler-sync] wrote {}", dump_sql.display());
+    eprintln!("[frankweiler-sync] wrote {}", qmd_tar.display());
     Ok(())
 }
 
 fn translate_anthropic(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
-    eprintln!("[build-ingested] anthropic: {}", fixture.display());
+    eprintln!("[frankweiler-sync] anthropic: {}", fixture.display());
     let parsed =
         parse_export(fixture).with_context(|| format!("anthropic parse {}", fixture.display()))?;
     render_all(&parsed, root).context("anthropic render_all")?;
@@ -164,7 +176,7 @@ fn translate_anthropic(fixture: &Path, root: &Path) -> Result<()> {
 
 fn translate_chatgpt(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
-    eprintln!("[build-ingested] chatgpt: {}", fixture.display());
+    eprintln!("[frankweiler-sync] chatgpt: {}", fixture.display());
     let parsed =
         parse_api_dir(fixture).with_context(|| format!("chatgpt parse {}", fixture.display()))?;
     render_all(&parsed, root).context("chatgpt render_all")?;
@@ -173,7 +185,7 @@ fn translate_chatgpt(fixture: &Path, root: &Path) -> Result<()> {
 
 fn translate_slack(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
-    eprintln!("[build-ingested] slack: {}", fixture.display());
+    eprintln!("[frankweiler-sync] slack: {}", fixture.display());
     let t = translate_raw_dir(fixture)
         .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
     render_all(&t, root, |_| {}).context("slack render_all")?;
@@ -182,7 +194,7 @@ fn translate_slack(fixture: &Path, root: &Path) -> Result<()> {
 
 fn translate_github(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_github::translate::{parse_api_dir, render_github};
-    eprintln!("[build-ingested] github: {}", fixture.display());
+    eprintln!("[frankweiler-sync] github: {}", fixture.display());
     let parsed =
         parse_api_dir(fixture).with_context(|| format!("github parse {}", fixture.display()))?;
     render_github(&parsed, root).context("render_github")?;
@@ -191,7 +203,7 @@ fn translate_github(fixture: &Path, root: &Path) -> Result<()> {
 
 fn translate_gitlab(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
-    eprintln!("[build-ingested] gitlab: {}", fixture.display());
+    eprintln!("[frankweiler-sync] gitlab: {}", fixture.display());
     let parsed =
         parse_api_dir(fixture).with_context(|| format!("gitlab parse {}", fixture.display()))?;
     render_gitlab(&parsed, root).context("render_gitlab")?;
@@ -200,7 +212,7 @@ fn translate_gitlab(fixture: &Path, root: &Path) -> Result<()> {
 
 fn translate_notion(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_notion::translate::{parse_api_dir, render::render_notion_official};
-    eprintln!("[build-ingested] notion: {}", fixture.display());
+    eprintln!("[frankweiler-sync] notion: {}", fixture.display());
     let parsed =
         parse_api_dir(fixture).with_context(|| format!("notion parse {}", fixture.display()))?;
     render_notion_official(&parsed, root).context("render_notion_official")?;
@@ -208,7 +220,7 @@ fn translate_notion(fixture: &Path, root: &Path) -> Result<()> {
 }
 
 fn dolt_dump(repo_dir: &Path, dump_sql: &Path) -> Result<()> {
-    eprintln!("[build-ingested] dolt dump -> {}", dump_sql.display());
+    eprintln!("[frankweiler-sync] dolt dump -> {}", dump_sql.display());
     let dolt = frankweiler_core::dolt_server::resolve_dolt_binary(None)
         .context("resolve dolt binary for dump")?;
     let status = Command::new(&dolt)
@@ -232,8 +244,6 @@ fn tar_rendered_md(root: &Path, dest: &Path) -> Result<()> {
     let file = fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
     let mut tar = tar::Builder::new(file);
     if !rendered.is_dir() {
-        // No content — still emit an empty archive so the genrule output
-        // is materialized.
         tar.finish()?;
         return Ok(());
     }

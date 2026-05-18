@@ -63,7 +63,7 @@ once the tokens themselves stabilise.
     │   ├── etl/              shared Translate/Load framework
     │   ├── etl/providers/*/  per-provider Extract/Translate crates
     │   ├── qmd_indexer/      qmd search index binary
-    │   ├── build_ingested/   fixture orchestrator (drives genrule)
+    │   ├── sync/             incremental ETL orchestrator (drives genrule)
     │   ├── http/             axum binary
     │   └── tauri-backend/    Tauri command surface
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
@@ -152,7 +152,7 @@ which opens the browser at `/api/health`. Override the URL with
 Each provider crate under `frankweiler/backend/etl/providers/` exposes
 its own `*_translate` (and where applicable `*_download`) binary; the
 shared Load step is `//frankweiler/backend/etl:grid_rows_load`. The
-fixture orchestrator at `//frankweiler/backend/build_ingested` shows the
+ETL orchestrator at `//frankweiler/backend/sync` shows the
 end-to-end wiring: parse each provider's `raw_api/` dir, render markdown
 + sidecars, then load them into a managed `dolt sql-server`.
 

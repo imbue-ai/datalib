@@ -12,7 +12,7 @@ members = [
     "etl/providers/notion",
     "etl/providers/slack",
     "qmd_indexer",
-    "build_ingested",
+    "sync",
     "tauri-backend",
 ]
 
