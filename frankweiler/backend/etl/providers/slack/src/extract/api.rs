@@ -16,6 +16,7 @@ use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::obs::events;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -72,35 +73,31 @@ async fn call_slack_once(
     params: &BTreeMap<String, String>,
 ) -> Result<Value, SlackError> {
     let url = build_url(method, params);
-    let proc = tokio::time::timeout(
-        LATCHKEY_TIMEOUT,
-        Command::new("latchkey").arg("curl").arg(&url).output(),
-    )
-    .await
-    .map_err(|_| SlackError::Transient(format!("{}: latchkey curl timed out", method)))?
-    .map_err(|e| SlackError::Transient(format!("{}: spawn failed: {}", method, e)))?;
+    let req = HttpRequest::get("slack", &url).timeout(LATCHKEY_TIMEOUT);
+    let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
+        // Curl transport-level errors (DNS/TLS/timeout) are transient
+        // for the slack retry loop; everything else stays permanent.
+        match e {
+            HttpError::Timeout { .. } => SlackError::Transient(format!("{method}: {e}")),
+            HttpError::Curl {
+                exit: 7 | 28 | 35 | 56,
+                ..
+            } => SlackError::Transient(format!("{method}: {e}")),
+            HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
+            _ => SlackError::Permanent(format!("{method}: {e}")),
+        }
+    })?;
 
-    if !proc.status.success() {
-        let code = proc.status.code().unwrap_or(-1);
-        let stderr_tail = String::from_utf8_lossy(&proc.stderr);
-        let tail: String = stderr_tail
-            .chars()
-            .rev()
-            .take(200)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        let msg = format!("latchkey curl {} exit={} stderr={:?}", method, code, tail);
-        return Err(match code {
-            7 | 28 | 35 | 56 => SlackError::Transient(msg),
-            _ => SlackError::Permanent(msg),
-        });
+    if resp.status != 200 {
+        return Err(SlackError::Permanent(format!(
+            "{method}: HTTP {} body={:?}",
+            resp.status,
+            resp.body_str().chars().take(200).collect::<String>()
+        )));
     }
-
-    let stdout = String::from_utf8_lossy(&proc.stdout);
-    let data: Value = serde_json::from_str(&stdout).map_err(|e| {
-        let preview: String = stdout.chars().take(200).collect();
+    let body = resp.body_str();
+    let data: Value = serde_json::from_str(&body).map_err(|e| {
+        let preview: String = body.chars().take(200).collect();
         SlackError::Permanent(format!("{}: invalid JSON: {:?} ({})", method, preview, e))
     })?;
     let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);

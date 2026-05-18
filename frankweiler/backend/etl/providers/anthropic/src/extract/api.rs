@@ -1,16 +1,14 @@
-//! Anthropic (claude.ai) API transport. Shell out to `latchkey curl`
-//! per request, mirroring `src/download/claude_web.py:_get`. Status
-//! comes from `-w "%{http_code}"` (simpler than the ChatGPT side
-//! since claude.ai doesn't 429 us in practice; if that ever changes
-//! we'd grow a backoff loop like `chatgpt/extract/api.rs` has).
+//! Anthropic (claude.ai) API transport. Every request goes through
+//! [`frankweiler_etl::http::latchkey_curl`], which captures the full
+//! response (status + every header + body) and supports playback from
+//! disk fixtures. Mirrors `src/download/claude_web.py:_get`.
 
 use std::time::Duration;
 
-use anyhow::Context;
 use serde_json::Value;
-use tokio::process::Command;
 use tracing::instrument;
 
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://claude.ai/api";
@@ -46,45 +44,21 @@ impl ClaudeClient {
     #[instrument(skip(self), fields(path = path))]
     pub async fn get(&mut self, path: &str) -> Result<Value, ClaudeError> {
         let url = format!("{BASE}{path}");
-        let body_file = tempfile::NamedTempFile::new()
-            .map_err(|e| ClaudeError::Permanent(format!("tempfile: {e}")))?;
-        let body_path = body_file.path().to_path_buf();
-        let t0 = std::time::Instant::now();
-        let proc = tokio::time::timeout(
-            LATCHKEY_TIMEOUT,
-            Command::new("latchkey")
-                .args(["curl", "-sS", "-H", "Accept: application/json", "-o"])
-                .arg(&body_path)
-                .arg("-w")
-                .arg("%{http_code}")
-                .arg(&url)
-                .output(),
-        )
-        .await
-        .map_err(|_| ClaudeError::Permanent(format!("GET {path}: latchkey curl timed out")))?
-        .map_err(|e| ClaudeError::Permanent(format!("GET {path}: spawn failed: {e}")))?;
-        self.network_seconds += t0.elapsed().as_secs_f64();
+        let req = HttpRequest::get("anthropic", &url)
+            .header("Accept", "application/json")
+            .timeout(LATCHKEY_TIMEOUT);
+        let resp = latchkey_curl(&req).await.map_err(map_transport_error)?;
+        self.network_seconds += (resp.duration_ms as f64) / 1000.0;
         self.requests += 1;
 
-        if !proc.status.success() {
-            let stderr = String::from_utf8_lossy(&proc.stderr);
-            return Err(ClaudeError::Permanent(format!(
-                "GET {path}: latchkey curl exit {}; stderr={:?}",
-                proc.status.code().unwrap_or(-1),
-                stderr.chars().take(300).collect::<String>()
-            )));
-        }
-        let status_txt = String::from_utf8_lossy(&proc.stdout).trim().to_string();
-        let status: u16 = status_txt.parse().unwrap_or(0);
-        let body = std::fs::read_to_string(&body_path)
-            .with_context(|| format!("read body for {path}"))
-            .map_err(|e| ClaudeError::Permanent(e.to_string()))?;
-        if status == 403 {
+        let body = resp.body_str();
+        if resp.status == 403 {
             return Err(ClaudeError::Forbidden(format!("GET {path} -> HTTP 403")));
         }
-        if status != 200 {
+        if resp.status != 200 {
             return Err(ClaudeError::Permanent(format!(
-                "GET {path} -> HTTP {status}: {:?}",
+                "GET {path} -> HTTP {}: {:?}",
+                resp.status,
                 body.chars().take(300).collect::<String>()
             )));
         }
@@ -94,7 +68,7 @@ impl ClaudeClient {
                 "GET {path}: invalid JSON: {e}; body[:200]={preview:?}"
             ))
         })?;
-        events::item_fetched(&url, body.len() as u64, t0.elapsed().as_millis() as u64);
+        events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
         Ok(value)
     }
 
@@ -127,4 +101,8 @@ impl ClaudeClient {
         ))
         .await
     }
+}
+
+fn map_transport_error(e: HttpError) -> ClaudeError {
+    ClaudeError::Permanent(e.to_string())
 }

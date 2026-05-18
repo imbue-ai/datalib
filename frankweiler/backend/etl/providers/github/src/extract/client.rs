@@ -1,17 +1,21 @@
-//! GitHub REST API client (`api.github.com`) via `latchkey curl`.
-//! Latchkey injects the `Authorization: Bearer <token>` header for the
-//! `github` service. Don't add it here.
+//! GitHub REST API client (`api.github.com`). Every request goes through
+//! [`frankweiler_etl::http::latchkey_curl`], which handles the latchkey
+//! subprocess and supports playback from disk fixtures. Latchkey injects
+//! the `Authorization: Bearer <token>` header for the `github` service —
+//! don't add it here.
 //!
 //! Port of `_call_github_once` + `call_github` + `paginate` in
 //! `src/download/github_web.py`.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
-use tokio::process::Command;
+
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpResponse};
 
 pub const BASE: &str = "https://api.github.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -42,13 +46,6 @@ impl Default for GitHubClient {
     }
 }
 
-#[derive(Debug)]
-struct RawResponse {
-    status: u16,
-    headers: std::collections::HashMap<String, String>,
-    body: String,
-}
-
 impl GitHubClient {
     pub fn new() -> Self {
         Self::default()
@@ -58,84 +55,41 @@ impl GitHubClient {
         self.requests.load(Ordering::Relaxed)
     }
 
-    async fn request_once(&self, url: &str) -> Result<RawResponse, GitHubError> {
-        let t0 = std::time::Instant::now();
-        let proc = tokio::time::timeout(
-            LATCHKEY_TIMEOUT,
-            Command::new("latchkey")
-                .args(["curl", "-sS", "-D", "-", url])
-                .output(),
-        )
-        .await
-        .map_err(|_| GitHubError::Permanent(format!("{url}: latchkey curl timed out")))?
-        .map_err(|e| GitHubError::Permanent(format!("{url}: spawn: {e}")))?;
-        let elapsed_ms = t0.elapsed().as_millis() as u64;
-        self.network_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+    async fn request_once(&self, url: &str) -> Result<HttpResponse, GitHubError> {
+        let req = HttpRequest::get("github", url).timeout(LATCHKEY_TIMEOUT);
+        let resp = latchkey_curl(&req)
+            .await
+            .map_err(|e: HttpError| GitHubError::Permanent(e.to_string()))?;
+        self.network_ms
+            .fetch_add(resp.duration_ms, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
-
-        if !proc.status.success() {
-            return Err(GitHubError::Permanent(format!(
-                "{url}: latchkey exit {} stderr={:?}",
-                proc.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&proc.stderr)
-                    .chars()
-                    .take(200)
-                    .collect::<String>()
-            )));
-        }
-        let stdout = String::from_utf8_lossy(&proc.stdout).into_owned();
-        // -D - prepends headers. Split on the first blank line.
-        let (head, body) = stdout
-            .split_once("\r\n\r\n")
-            .or_else(|| stdout.split_once("\n\n"))
-            .map(|(h, b)| (h.to_string(), b.to_string()))
-            .unwrap_or_else(|| (stdout.clone(), String::new()));
-
-        let mut headers: std::collections::HashMap<String, String> = Default::default();
-        let mut status: u16 = 0;
-        for (i, line) in head.lines().enumerate() {
-            if i == 0 {
-                // "HTTP/2 200" or "HTTP/1.1 200 OK"
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    status = parts[1].parse().unwrap_or(0);
-                }
-                continue;
-            }
-            if let Some((k, v)) = line.split_once(':') {
-                headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-            }
-        }
-        Ok(RawResponse {
-            status,
-            headers,
-            body,
-        })
+        Ok(resp)
     }
 
     /// GET with exponential backoff on rate-limit / transient failures.
-    /// Returns the parsed JSON body and the response headers (so callers
-    /// can walk the `Link: rel=next` pagination chain).
-    pub async fn get(
-        &self,
-        url: &str,
-    ) -> Result<(Value, std::collections::HashMap<String, String>), GitHubError> {
+    /// Returns the parsed JSON body and response headers so callers can
+    /// walk the `Link: rel=next` pagination chain. The HashMap type is
+    /// preserved (rather than passing the http module's BTreeMap up) so
+    /// callers in `mod.rs` need no change.
+    pub async fn get(&self, url: &str) -> Result<(Value, HashMap<String, String>), GitHubError> {
         let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
         for attempt in 0..=RETRY_MAX {
             let resp = self.request_once(url).await?;
+            let body = resp.body_str().into_owned();
             if resp.status >= 200 && resp.status < 300 {
-                let value: Value = if resp.body.trim().is_empty() {
+                let value: Value = if body.trim().is_empty() {
                     Value::Null
                 } else {
-                    serde_json::from_str(&resp.body).map_err(|e| {
-                        let preview: String = resp.body.chars().take(200).collect();
+                    serde_json::from_str(&body).map_err(|e| {
+                        let preview: String = body.chars().take(200).collect();
                         GitHubError::Permanent(format!(
                             "{url}: HTTP {} but non-JSON: {e}; body[:200]={preview:?}",
                             resp.status
                         ))
                     })?
                 };
-                return Ok((value, resp.headers));
+                let headers: HashMap<String, String> = resp.headers.into_iter().collect();
+                return Ok((value, headers));
             }
             // 403 + x-ratelimit-remaining: 0  → primary rate limit (retry)
             // 429                              → secondary rate limit (retry)
@@ -143,8 +97,7 @@ impl GitHubClient {
             let is_rate_limit = resp.status == 429
                 || (resp.status == 403
                     && resp
-                        .headers
-                        .get("x-ratelimit-remaining")
+                        .header("x-ratelimit-remaining")
                         .map(|v| v == "0")
                         .unwrap_or(false));
             let is_transient = matches!(resp.status, 502..=504);
@@ -156,11 +109,11 @@ impl GitHubClient {
                     )));
                 }
                 let mut sleep_ms = backoff_ms;
-                if let Some(retry_after) = resp.headers.get("retry-after") {
+                if let Some(retry_after) = resp.header("retry-after") {
                     if let Ok(s) = retry_after.parse::<u64>() {
                         sleep_ms = sleep_ms.max(s * 1000);
                     }
-                } else if let Some(reset) = resp.headers.get("x-ratelimit-reset") {
+                } else if let Some(reset) = resp.header("x-ratelimit-reset") {
                     if let Ok(ts) = reset.parse::<i64>() {
                         let now = chrono::Utc::now().timestamp();
                         let delta_s = (ts - now).max(0) as u64;
@@ -179,7 +132,7 @@ impl GitHubClient {
                 backoff_ms = (backoff_ms * 2).min(RETRY_MAX_BACKOFF_MS);
                 continue;
             }
-            let preview: String = resp.body.chars().take(300).collect();
+            let preview: String = body.chars().take(300).collect();
             return Err(GitHubError::Permanent(format!(
                 "{url}: HTTP {} body={preview:?}",
                 resp.status

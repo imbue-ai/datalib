@@ -1,16 +1,19 @@
-//! GitLab REST API client (`gitlab.com/api/v4`) via `latchkey curl`.
-//! Latchkey injects `PRIVATE-TOKEN: <token>` for the `gitlab` service.
+//! GitLab REST API client (`gitlab.com/api/v4`). Every request goes
+//! through [`frankweiler_etl::http::latchkey_curl`]. Latchkey injects
+//! `PRIVATE-TOKEN: <token>` for the `gitlab` service.
 //!
 //! Port of `_call_gitlab_once` + `call_gitlab` + `paginate` in
 //! `src/download/gitlab_web.py`.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
-use tokio::process::Command;
+
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpResponse};
 
 pub const BASE: &str = "https://gitlab.com/api/v4";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -41,13 +44,6 @@ impl Default for GitLabClient {
     }
 }
 
-#[derive(Debug)]
-struct RawResponse {
-    status: u16,
-    headers: std::collections::HashMap<String, String>,
-    body: String,
-}
-
 impl GitLabClient {
     pub fn new() -> Self {
         Self::default()
@@ -57,79 +53,36 @@ impl GitLabClient {
         self.requests.load(Ordering::Relaxed)
     }
 
-    async fn request_once(&self, url: &str) -> Result<RawResponse, GitLabError> {
-        let t0 = std::time::Instant::now();
-        let proc = tokio::time::timeout(
-            LATCHKEY_TIMEOUT,
-            Command::new("latchkey")
-                .args(["curl", "-sS", "-D", "-", url])
-                .output(),
-        )
-        .await
-        .map_err(|_| GitLabError::Permanent(format!("{url}: latchkey curl timed out")))?
-        .map_err(|e| GitLabError::Permanent(format!("{url}: spawn: {e}")))?;
-        let elapsed_ms = t0.elapsed().as_millis() as u64;
-        self.network_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+    async fn request_once(&self, url: &str) -> Result<HttpResponse, GitLabError> {
+        let req = HttpRequest::get("gitlab", url).timeout(LATCHKEY_TIMEOUT);
+        let resp = latchkey_curl(&req)
+            .await
+            .map_err(|e: HttpError| GitLabError::Permanent(e.to_string()))?;
+        self.network_ms
+            .fetch_add(resp.duration_ms, Ordering::Relaxed);
         self.requests.fetch_add(1, Ordering::Relaxed);
-
-        if !proc.status.success() {
-            return Err(GitLabError::Permanent(format!(
-                "{url}: latchkey exit {} stderr={:?}",
-                proc.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&proc.stderr)
-                    .chars()
-                    .take(200)
-                    .collect::<String>()
-            )));
-        }
-        let stdout = String::from_utf8_lossy(&proc.stdout).into_owned();
-        let (head, body) = stdout
-            .split_once("\r\n\r\n")
-            .or_else(|| stdout.split_once("\n\n"))
-            .map(|(h, b)| (h.to_string(), b.to_string()))
-            .unwrap_or_else(|| (stdout.clone(), String::new()));
-
-        let mut headers: std::collections::HashMap<String, String> = Default::default();
-        let mut status: u16 = 0;
-        for (i, line) in head.lines().enumerate() {
-            if i == 0 {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    status = parts[1].parse().unwrap_or(0);
-                }
-                continue;
-            }
-            if let Some((k, v)) = line.split_once(':') {
-                headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-            }
-        }
-        Ok(RawResponse {
-            status,
-            headers,
-            body,
-        })
+        Ok(resp)
     }
 
-    pub async fn get(
-        &self,
-        url: &str,
-    ) -> Result<(Value, std::collections::HashMap<String, String>), GitLabError> {
+    pub async fn get(&self, url: &str) -> Result<(Value, HashMap<String, String>), GitLabError> {
         let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
         for attempt in 0..=RETRY_MAX {
             let resp = self.request_once(url).await?;
+            let body = resp.body_str().into_owned();
             if resp.status >= 200 && resp.status < 300 {
-                let value: Value = if resp.body.trim().is_empty() {
+                let value: Value = if body.trim().is_empty() {
                     Value::Null
                 } else {
-                    serde_json::from_str(&resp.body).map_err(|e| {
-                        let preview: String = resp.body.chars().take(200).collect();
+                    serde_json::from_str(&body).map_err(|e| {
+                        let preview: String = body.chars().take(200).collect();
                         GitLabError::Permanent(format!(
                             "{url}: HTTP {} but non-JSON: {e}; body[:200]={preview:?}",
                             resp.status
                         ))
                     })?
                 };
-                return Ok((value, resp.headers));
+                let headers: HashMap<String, String> = resp.headers.into_iter().collect();
+                return Ok((value, headers));
             }
             let is_rate_limit = resp.status == 429;
             let is_transient = matches!(resp.status, 502..=504);
@@ -141,11 +94,11 @@ impl GitLabClient {
                     )));
                 }
                 let mut sleep_ms = backoff_ms;
-                if let Some(retry_after) = resp.headers.get("retry-after") {
+                if let Some(retry_after) = resp.header("retry-after") {
                     if let Ok(s) = retry_after.parse::<u64>() {
                         sleep_ms = sleep_ms.max(s * 1000);
                     }
-                } else if let Some(reset) = resp.headers.get("ratelimit-reset") {
+                } else if let Some(reset) = resp.header("ratelimit-reset") {
                     if let Ok(ts) = reset.parse::<i64>() {
                         let now = chrono::Utc::now().timestamp();
                         let delta_s = (ts - now).max(0) as u64;
@@ -164,7 +117,7 @@ impl GitLabClient {
                 backoff_ms = (backoff_ms * 2).min(RETRY_MAX_BACKOFF_MS);
                 continue;
             }
-            let preview: String = resp.body.chars().take(300).collect();
+            let preview: String = body.chars().take(300).collect();
             return Err(GitLabError::Permanent(format!(
                 "{url}: HTTP {} body={preview:?}",
                 resp.status

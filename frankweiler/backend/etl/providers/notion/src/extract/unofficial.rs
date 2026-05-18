@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::process::Command;
 
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://www.notion.so/api/v3";
@@ -58,60 +58,21 @@ impl NotionUnofficialClient {
 
     async fn post(&self, method: &str, body: &Value) -> Result<Value, NotionUnofficialError> {
         let url = format!("{BASE}/{method}");
-        let payload = body.to_string();
+        let payload = body.to_string().into_bytes();
         let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
         for attempt in 0..=RETRY_MAX {
-            let body_file = tempfile::Builder::new()
-                .prefix("notion-uo-")
-                .suffix(".json")
-                .tempfile()
-                .map_err(|e| NotionUnofficialError::Permanent(format!("tempfile: {e}")))?;
-            let body_path = body_file.path().to_path_buf();
-            let t0 = std::time::Instant::now();
-            let proc = tokio::time::timeout(
-                LATCHKEY_TIMEOUT,
-                Command::new("latchkey")
-                    .args([
-                        "curl",
-                        "-sS",
-                        "-X",
-                        "POST",
-                        "-H",
-                        "Content-Type: application/json",
-                        "-H",
-                        "Accept: application/json",
-                        "--data",
-                    ])
-                    .arg(&payload)
-                    .arg("-o")
-                    .arg(&body_path)
-                    .args(["-w", "%{http_code}"])
-                    .arg(&url)
-                    .output(),
-            )
-            .await
-            .map_err(|_| {
-                NotionUnofficialError::Permanent(format!("{method}: latchkey curl timed out"))
-            })?
-            .map_err(|e| NotionUnofficialError::Permanent(format!("{method}: spawn: {e}")))?;
-            let elapsed_ms = t0.elapsed().as_millis() as u64;
-            self.network_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+            let req = HttpRequest::post_json("notion_unofficial", &url, payload.clone())
+                .header("Accept", "application/json")
+                .timeout(LATCHKEY_TIMEOUT);
+            let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
+                NotionUnofficialError::Permanent(format!("{method}: {e}"))
+            })?;
+            self.network_ms
+                .fetch_add(resp.duration_ms, Ordering::Relaxed);
             self.requests.fetch_add(1, Ordering::Relaxed);
 
-            if !proc.status.success() {
-                return Err(NotionUnofficialError::Permanent(format!(
-                    "{method}: latchkey exit {}; stderr={:?}",
-                    proc.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&proc.stderr)
-                        .chars()
-                        .take(300)
-                        .collect::<String>()
-                )));
-            }
-            let status_txt = String::from_utf8_lossy(&proc.stdout).trim().to_string();
-            let status: u16 = status_txt.parse().unwrap_or(0);
-            let resp_text = std::fs::read_to_string(&body_path).unwrap_or_default();
-
+            let resp_text = resp.body_str().into_owned();
+            let status = resp.status;
             if status == 200 {
                 let value: Value = serde_json::from_str(&resp_text).map_err(|e| {
                     let preview: String = resp_text.chars().take(200).collect();
@@ -119,7 +80,7 @@ impl NotionUnofficialClient {
                         "{method}: HTTP 200 but non-JSON: {e}; body[:200]={preview:?}"
                     ))
                 })?;
-                events::item_fetched(&url, resp_text.len() as u64, elapsed_ms);
+                events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
                 return Ok(value);
             }
             if status == 403 {

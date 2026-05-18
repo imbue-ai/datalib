@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::process::Command;
 
+use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://api.notion.com/v1";
@@ -60,65 +60,43 @@ impl NotionOfficialClient {
         body: Option<&Value>,
     ) -> Result<Value, NotionOfficialError> {
         let url = format!("{BASE}{path}");
-        let body_str = body.map(|b| b.to_string());
+        let body_bytes: Option<Vec<u8>> = body.map(|b| b.to_string().into_bytes());
 
         let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
         for attempt in 0..=RETRY_MAX {
-            let mut cmd = Command::new("latchkey");
-            cmd.args([
-                "curl",
-                "-sS",
-                "-X",
-                method,
-                "-H",
-                "Accept: application/json",
-            ]);
-            if let Some(ref payload) = body_str {
-                cmd.args(["-H", "Content-Type: application/json", "--data"]);
-                cmd.arg(payload);
-            }
-            cmd.args(["-w", "\n%{http_code}"]).arg(&url);
-
-            let t0 = std::time::Instant::now();
-            let proc = tokio::time::timeout(LATCHKEY_TIMEOUT, cmd.output())
-                .await
-                .map_err(|_| {
-                    NotionOfficialError::Permanent(format!(
-                        "{method} {path}: latchkey curl timed out"
-                    ))
-                })?
-                .map_err(|e| {
-                    NotionOfficialError::Permanent(format!("{method} {path}: spawn: {e}"))
-                })?;
-            let elapsed_ms = t0.elapsed().as_millis() as u64;
-            self.network_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+            let req = match method {
+                "GET" => HttpRequest::get("notion", &url)
+                    .header("Accept", "application/json")
+                    .timeout(LATCHKEY_TIMEOUT),
+                "POST" => {
+                    let payload = body_bytes.clone().unwrap_or_default();
+                    HttpRequest::post_json("notion", &url, payload)
+                        .header("Accept", "application/json")
+                        .timeout(LATCHKEY_TIMEOUT)
+                }
+                other => {
+                    return Err(NotionOfficialError::Permanent(format!(
+                        "{other} {path}: unsupported method"
+                    )));
+                }
+            };
+            let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
+                NotionOfficialError::Permanent(format!("{method} {path}: {e}"))
+            })?;
+            self.network_ms
+                .fetch_add(resp.duration_ms, Ordering::Relaxed);
             self.requests.fetch_add(1, Ordering::Relaxed);
 
-            if !proc.status.success() {
-                return Err(NotionOfficialError::Permanent(format!(
-                    "{method} {path}: latchkey exit {}; stderr={:?}",
-                    proc.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&proc.stderr)
-                        .chars()
-                        .take(300)
-                        .collect::<String>()
-                )));
-            }
-            let stdout = String::from_utf8_lossy(&proc.stdout);
-            let (body_text, status_txt) = match stdout.rfind('\n') {
-                Some(nl) => (&stdout[..nl], stdout[nl + 1..].trim()),
-                None => ("", stdout.trim()),
-            };
-            let status: u16 = status_txt.parse().unwrap_or(0);
-
+            let body_text = resp.body_str().into_owned();
+            let status = resp.status;
             if status == 200 {
-                let value: Value = serde_json::from_str(body_text).map_err(|e| {
+                let value: Value = serde_json::from_str(&body_text).map_err(|e| {
                     let preview: String = body_text.chars().take(200).collect();
                     NotionOfficialError::Permanent(format!(
                         "{method} {path}: HTTP 200 but non-JSON: {e}; body[:200]={preview:?}"
                     ))
                 })?;
-                events::item_fetched(&url, body_text.len() as u64, elapsed_ms);
+                events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
                 return Ok(value);
             }
             if status == 403 {
