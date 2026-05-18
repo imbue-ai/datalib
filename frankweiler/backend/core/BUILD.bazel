@@ -32,34 +32,6 @@ rust_test(
     edition = "2021",
 )
 
-# Verify all grid rows produced from the checked-in TNG fixtures carry a
-# non-empty `when`. Tool_use / tool_result blocks lack an intrinsic
-# timestamp; this test guards the synthetic-timestamp fallback in
-# push_anthropic_blocks (and would also catch a regression in OpenAI
-# message timestamps).
-#
-# Tagged like the upstream fixture: dolt is required to build dump.sql,
-# so the test only runs locally / on hosts with dolt installed.
-rust_test(
-    name = "fixture_timestamps_test",
-    srcs = ["tests/fixture_timestamps.rs"],
-    edition = "2021",
-    data = ["//tests/fixtures:ingested/dump.sql"],
-    env = {
-        "FRANKWEILER_TEST_DUMP_SQL": "$(rootpath //tests/fixtures:ingested/dump.sql)",
-    },
-    tags = [
-        "requires-dolt",
-        "no-remote",
-        "no-sandbox",
-    ],
-    deps = [
-        ":frankweiler_core",
-        "@frankweiler_crates//:sqlx",
-        "@frankweiler_crates//:tokio",
-    ],
-)
-
 # End-to-end test of the production DoltRepo path against a managed
 # `dolt sql-server` in a throwaway repo. Tagged `requires-dolt` to
 # match the upstream fixture target — only runs on hosts that ship

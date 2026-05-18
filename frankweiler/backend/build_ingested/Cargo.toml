@@ -1,0 +1,27 @@
+[package]
+name = "frankweiler-build-ingested"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "frankweiler-build-ingested"
+path = "src/main.rs"
+
+[dependencies]
+frankweiler-core = { path = "../core" }
+frankweiler-etl = { path = "../etl" }
+frankweiler-qmd-indexer = { path = "../qmd_indexer" }
+frankweiler-etl-anthropic = { path = "../etl/providers/anthropic" }
+frankweiler-etl-chatgpt = { path = "../etl/providers/chatgpt" }
+frankweiler-etl-slack = { path = "../etl/providers/slack" }
+frankweiler-etl-github = { path = "../etl/providers/github" }
+frankweiler-etl-gitlab = { path = "../etl/providers/gitlab" }
+frankweiler-etl-notion = { path = "../etl/providers/notion" }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
+chrono = { workspace = true }
+tar = "0.4"
+tempfile = "3"
+walkdir = "2"

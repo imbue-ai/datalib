@@ -8,10 +8,9 @@ reference (2026-05-07): rules_python 2.0.0, rules_rust 0.70.0,
 Rust 1.95.0, Bazel 9.1.0.
 
 Bazel owns:
-  - `src/download/`   Python provider downloaders (chatgpt.com, claude.ai)
-  - `src/ingest/`     Python ingestion (deps from uv.lock via rules_python)
-  - (later) `schemas/` cross-language types
-  - (later) `frankweiler/backend/*` Rust crates
+  - `frankweiler/backend/*` Rust crates (Extract/Translate/Load + HTTP)
+  - `tests/fixtures/`       fixture genrule pipeline
+  - (later) `schemas/`      cross-language types
   - (later) `frankweiler/ui/` Vue + Vitest
 
 Bazel does NOT own:
@@ -71,8 +70,12 @@ crate.from_cargo(
         "//frankweiler/backend/etl:Cargo.toml",
         "//frankweiler/backend/etl/providers/anthropic:Cargo.toml",
         "//frankweiler/backend/etl/providers/chatgpt:Cargo.toml",
+        "//frankweiler/backend/etl/providers/github:Cargo.toml",
+        "//frankweiler/backend/etl/providers/gitlab:Cargo.toml",
+        "//frankweiler/backend/etl/providers/notion:Cargo.toml",
         "//frankweiler/backend/etl/providers/slack:Cargo.toml",
         "//frankweiler/backend/qmd_indexer:Cargo.toml",
+        "//frankweiler/backend/build_ingested:Cargo.toml",
         "//frankweiler/backend/tauri-backend:Cargo.toml",
     ],
 )

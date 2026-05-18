@@ -82,7 +82,6 @@ async fn post_feedback_inserts_and_dolt_commits() {
         repo: Arc::new(dolt),
         dolt_server: Some(Arc::new(server)),
         qmd_daemon: None,
-        worker: None,
     };
     let app = router(app_state.clone());
 

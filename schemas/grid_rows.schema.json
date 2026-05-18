@@ -176,7 +176,7 @@
         },
         "conversation_name": {
           "type": ["string", "null"],
-          "x-sql-type": "VARCHAR(512)",
+          "x-sql-type": "TEXT",
           "description": "Human-readable parent conversation title — drives the Conversation Name grid column. For Chat rows this duplicates the row's own title; for messages/blocks it carries the parent thread's title so each grid row stands alone without a join.",
           "x-mapping": {
             "anthropic": "anthropic_conversations.name",

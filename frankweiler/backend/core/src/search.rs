@@ -1,7 +1,5 @@
-//! Row shape returned by `db::grid_rows`. The legacy in-memory QMD scanner
-//! that used to live here was deleted alongside `qmd.rs` — QMDs are
-//! write-only output, and search runs against the `grid_rows` projection
-//! in `mirror.sqlite`.
+//! Row shape returned by `db::grid_rows`. QMDs are write-only output;
+//! search runs against the `grid_rows` projection in Dolt.
 
 use serde::Serialize;
 

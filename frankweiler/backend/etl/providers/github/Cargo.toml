@@ -1,0 +1,38 @@
+[package]
+name = "frankweiler-etl-github"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_github"
+path = "src/lib.rs"
+
+[[bin]]
+name = "github-download"
+path = "src/bin/github_download.rs"
+
+[[bin]]
+name = "github-translate"
+path = "src/bin/github_translate.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-schema = { path = "../../../schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tracing = "0.1"
+regex = "1.11"
+once_cell = "1.20"
+uuid = { workspace = true }
+urlencoding = "2"
+
+[dev-dependencies]
+insta = { version = "1.41", features = ["json", "redactions"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = "3"

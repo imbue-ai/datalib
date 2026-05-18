@@ -13,3 +13,4 @@ target/
 dolt_repo/
 playwright-report/
 test-results/
+.claude/

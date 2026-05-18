@@ -177,9 +177,9 @@ def _varchar_max_len(prop: dict) -> int | None:
 def _emit_ddl_for(name: str, defn: dict, table: str) -> str:
     """Render a CREATE TABLE IF NOT EXISTS statement for a definition.
 
-    Uses the SQL subset that Dolt, MySQL, and SQLite all accept (per
-    `src/ingest/dump.py`). One column per property; NOT NULL on required
-    columns; PRIMARY KEY clause from the definition's `x-primary-key`.
+    Uses the SQL subset that Dolt and MySQL accept. One column per
+    property; NOT NULL on required columns; PRIMARY KEY clause from the
+    definition's `x-primary-key`.
     """
     pk: list[str] = list(defn.get("x-primary-key", []))
     if not pk:

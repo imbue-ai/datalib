@@ -1,0 +1,21 @@
+---
+source: etl/providers/notion/tests/notion_live.rs
+assertion_line: 79
+expression: view
+---
+{
+  "archived": false,
+  "block_count": 11,
+  "block_kinds": [
+    "bulleted_list_item",
+    "child_page",
+    "code",
+    "image",
+    "paragraph",
+    "toggle"
+  ],
+  "comment_count": 0,
+  "has_id": true,
+  "object": "page",
+  "parent_kind": "page_id"
+}

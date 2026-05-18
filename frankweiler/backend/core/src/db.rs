@@ -1,12 +1,7 @@
-//! Pure helpers used by both `MirrorRepo` implementations.
-//!
-//! Before T6 this module held a rusqlite-based `grid_rows` reader; that
-//! lived alongside ingest's read-only `mirror.sqlite`. T6 routes all SQL
-//! through `sqlx` ([`crate::dolt_repo::DoltRepo`] for production,
-//! [`crate::sqlite_repo::SqliteRepo`] as a reference impl), so the only
-//! things that need to stay here are the dialect-agnostic helpers:
-//! WHERE-builder, snippet generator, and the [`ChatMeta`] row shape both
-//! impls return.
+//! Pure helpers used by `MirrorRepo` implementations: dialect-agnostic
+//! WHERE-builder, snippet generator, and the [`ChatMeta`] row shape the
+//! impl returns. All SQL goes through `sqlx` against
+//! [`crate::dolt_repo::DoltRepo`].
 //!
 //! Both backends speak `?` placeholders and the same `grid_rows`
 //! projection (column names + types written by `src/ingest/sql_writers.py`),

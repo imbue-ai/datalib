@@ -1,0 +1,19 @@
+---
+source: etl/providers/gitlab/tests/gitlab_live.rs
+assertion_line: 93
+expression: view
+---
+{
+  "has_title": true,
+  "has_web_url": true,
+  "mr_iid": 7643,
+  "note_count": 9,
+  "project": "generally-intelligent/generally_intelligent",
+  "rendered_md_exists": true,
+  "sections_present": [
+    "General",
+    "Inline"
+  ],
+  "sidecar_exists": true,
+  "state_known": true
+}

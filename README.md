@@ -2,14 +2,12 @@
 
 Two coupled projects that mirror personal data into a queryable local store:
 
-- **`src/`** — Python packages that download and ingest LLM chat exports
-  (Anthropic + OpenAI) into a Dolt DB and render one QMD per conversation:
-  - `src/download/` — per-provider incremental downloaders.
-  - `src/ingest/` — config-driven CLI that ingests raw + takeout-style
-    inputs into Dolt and emits qmd markdown.
-- **`frankweiler/`** — Vue 3 UI + Rust (axum/Polars) backend that searches and
-  views the mirrored data, packaged as a Tauri desktop app and an Open Host
-  container.
+- **`frankweiler/backend/`** — Rust workspace that downloads + ingests
+  LLM chat exports and other sources (Anthropic, OpenAI, Slack, GitHub,
+  GitLab, Notion) into a Dolt DB, renders one QMD per conversation,
+  builds a qmd search index, and serves the result over axum / Tauri.
+- **`frankweiler/ui/`** — Vue 3 UI that searches and views the mirrored
+  data, packaged as a Tauri desktop app and an Open Host container.
 
 Both projects share row shapes through **`schemas/`**, the single
 source-of-truth that emits Rust / Python / TypeScript types from one JSON
@@ -53,21 +51,19 @@ once the tokens themselves stabilise.
 ├── BUILD.bazel               :all_tests aggregator
 ├── schemas/                  cross-language source of truth
 │   ├── grid_rows.schema.json union row shape backing the grid (see docs/grid_rows.md)
-│   ├── codegen.py            JSON Schema → Rust/Python/TS types + DDL
+│   ├── codegen.py            JSON Schema → Rust/TS types + DDL
 │   └── BUILD.bazel           genrules per language
 ├── docs/                     architecture notes
 │   └── grid_rows.md          how the grid_rows union table works
-├── pyproject.toml + uv.lock  Python project (mixed-up-files) — src layout
-├── requirements.txt          uv-exported, consumed by Bazel pip.parse
-├── src/
-│   ├── download/             per-provider downloaders (claude.ai, chatgpt.com, slack)
-│   └── ingest/               Dolt ingest + qmd renderer CLI
-├── tests/                    pytest suite + fixtures + golden snapshots
+├── tests/fixtures/           checked-in fixture JSON + ingested_tng genrule
 └── frankweiler/
     ├── backend/              Cargo workspace
-    │   ├── Cargo.toml
-    │   ├── schema/           re-exports //schemas:anthropic_rs types
+    │   ├── schema/           re-exports //schemas:*_rs types
     │   ├── core/             query engine + deeplink grammar
+    │   ├── etl/              shared Translate/Load framework
+    │   ├── etl/providers/*/  per-provider Extract/Translate crates
+    │   ├── qmd_indexer/      qmd search index binary
+    │   ├── build_ingested/   fixture orchestrator (drives genrule)
     │   ├── http/             axum binary
     │   └── tauri-backend/    Tauri command surface
     ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
@@ -80,23 +76,20 @@ once the tokens themselves stabilise.
 ```
                        schemas/
                           │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-       src/           frankweiler/        frankweiler/ui
-   (Python ingest)    backend/schema      (TS types)
-                          │
-                          ▼
-                   frankweiler/backend/core ──► dolt + qmd + polars
-                          │             │
-                          ▼             ▼
-                   backend/http   backend/tauri-backend
-                          │             │
-                          ▼             ▼
-                       openhost/     tauri/  ◄── ui/
+                ┌─────────┴─────────┐
+                ▼                   ▼
+       frankweiler/backend     frankweiler/ui
+       (Rust ETL + axum)        (TS types)
+                │
+                ▼
+        frankweiler/backend/core ──► dolt + qmd
+                │             │
+                ▼             ▼
+        backend/http   backend/tauri-backend
+                │             │
+                ▼             ▼
+            openhost/     tauri/  ◄── ui/
 ```
-
-`src/` (download + ingest) and `frankweiler/` may **only** share things
-via `schemas/`. Cargo workspace + Bazel `visibility` enforce this.
 
 ## Building & testing
 
@@ -115,8 +108,7 @@ loops, but they don't see cross-language goldens, the deeplink fixture
 test, or the e2e suite — `bazelisk test //...` does.
 
 Runs:
-- Python smoke tests (`//tests:test_smoke`)
-- Rust unit tests (`//frankweiler/backend/{schema,core,tauri-backend}:*_unittests`)
+- Rust unit tests (`//frankweiler/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
 - Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
   suite loads, asserting both implementations agree)
 - Playwright e2e suite (`//frankweiler/ui:e2e_test`) — non-hermetic by
@@ -157,45 +149,32 @@ which opens the browser at `/api/health`. Override the URL with
 
 ### Re-run ingestion
 
-Re-ingests every enabled source from the config, commits to Dolt, and
-re-renders the qmd tree. Run after editing the renderer, the schema, or
-your downloads.
-
-```sh
-# Bazel (uses an absolute path so the binary's CWD doesn't matter)
-bazelisk run //src/ingest:cli -- ingest --config $(pwd)/configs/thad_dev.yaml
-
-# uv (paths are repo-relative)
-uv run python -m ingest --config configs/thad_dev.yaml
-```
-
-Omit `--config` to use the default (`~/.config/mixed-up-files/config.yaml`).
+Each provider crate under `frankweiler/backend/etl/providers/` exposes
+its own `*_translate` (and where applicable `*_download`) binary; the
+shared Load step is `//frankweiler/backend/etl:grid_rows_load`. The
+fixture orchestrator at `//frankweiler/backend/build_ingested` shows the
+end-to-end wiring: parse each provider's `raw_api/` dir, render markdown
++ sidecars, then load them into a managed `dolt sql-server`.
 
 ### QMD search index (default-on, incremental)
 
-`ingest ingest` rebuilds the qmd search index over `<root>` after the
-markdown tree is rendered. It lives at `<root>/.frankweiler/qmd/index.sqlite`
-and is what the search bar's hybrid / vector queries hit (see
-`src/qmd_bridge/`). Pass `--no-qmd-index` to skip.
+`grid_rows_load --qmd-index` rebuilds the qmd search index over `<root>`
+after the markdown tree is rendered + loaded. It lives at
+`<root>/.frankweiler/qmd/index.sqlite` and is what the search bar's
+hybrid / vector queries hit (see `frankweiler/backend/core/src/qmd/`).
 
 Design notes:
 
-- **Two indexers, one shape**: the production path is Python
-  (`src/ingest/qmd_index.py`); the Bazel-driven fixture path is the Rust
-  binary at `frankweiler/backend/qmd_indexer/`. Both shell out to
-  `npx -y @tobilu/qmd@<version>` with `XDG_CACHE_HOME=<root>/.frankweiler`
-  so the index lands next to `mirror.sqlite`. Keep them in sync when
-  bumping the pinned qmd version.
-- **Incremental** in the production path. qmd's `documents` table keys
-  on `(collection, path, content_hash)`, and `content_vectors` is
-  keyed by hash, so a re-run only rechunks files whose bytes changed
-  and only re-embeds content hashes with no existing vector row.
-  Deletes are detected (rows marked `active=0`) and orphaned content
-  is cleaned. We do **not** wipe `<root>/.frankweiler/qmd/` between
-  runs — the prior wrapper did, which defeated all of this.
-- **Non-incremental** in the Bazel fixture path: that binary clears
-  the index dir each run because hermetic fixture builds want a clean
-  rebuild every time.
+- **One indexer**: `frankweiler/backend/qmd_indexer/` shells out to
+  `npx -y @tobilu/qmd@<version>` with
+  `XDG_CACHE_HOME=<root>/.frankweiler` so the index lands at
+  `<root>/.frankweiler/qmd/index.sqlite`. Used both by `grid_rows_load`
+  and by the Bazel fixture genrule.
+- **Incremental**. qmd's `documents` table keys on `(collection, path,
+  content_hash)`, and `content_vectors` is keyed by hash, so a re-run
+  only rechunks files whose bytes changed and only re-embeds content
+  hashes with no existing vector row. Deletes are detected (rows
+  marked `active=0`) and orphaned content is cleaned.
 - **First run is slow** — embedding all chunks for a fresh `<root>`
   takes several minutes on CPU (one-time cost). qmd streams a live
   progress bar (ETA + chunks/s) to stderr for both `update` and
@@ -203,13 +182,6 @@ Design notes:
   terminal. `qmd embed` is resumable: if it gets interrupted, the
   next run picks up where it left off (it skips content hashes that
   already have vectors), so paying the cost in chunks is fine.
-
-  To watch it run end-to-end:
-
-  ```sh
-  bazelisk run //src/ingest:cli -- ingest \
-      --config $(pwd)/configs/thad_dev.yaml --no-report
-  ```
 
   After a no-op render + dolt commit, you'll see something like:
 
@@ -267,20 +239,10 @@ and require `latchkey` on PATH with creds set for the `slack` service.
   After posting new messages or attachments in the channel, the test
   will fail with a diff; accept the change with `cargo insta review`.
 
-- **Python end-to-end test** (`tests/test_slack_live.py`): boots the
-  full Rust HTTP backend + Python worker against a hermetic data root,
-  drives a download + ingest via the same `/api/sync/jobs` HTTP API
-  the Vue UI uses, and verifies on-disk JSONL plus grid rows.
-
-  ```sh
-  bazelisk test //tests:slack_live_test
-  ```
-
 ### Inner loop (per language, faster)
 
 | Language       | Command (run in the package dir)                |
 |----------------|--------------------------------------------------|
-| Python         | `uv run pytest`                                  |
 | Rust           | `cd frankweiler/backend && cargo test`           |
 | Vue / Vitest   | `cd frankweiler/ui && pnpm test`                 |
 | Vite dev UI    | `cd frankweiler/ui && pnpm dev`                  |
@@ -288,18 +250,14 @@ and require `latchkey` on PATH with creds set for the `slack` service.
 
 ### Regenerating the cross-language types
 
-The generated files (`frankweiler/backend/schema/src/generated/grid_rows.rs`,
-`src/ingest/generated_grid_rows.py`) are checked in. To regenerate after
-editing `schemas/grid_rows.schema.json`:
+The generated Rust file at
+`frankweiler/backend/schema/src/generated/grid_rows.rs` is checked in.
+To regenerate after editing `schemas/grid_rows.schema.json`:
 
 ```sh
 bazelisk build //schemas:grid_rows_all
 cp bazel-bin/schemas/grid_rows.rs   frankweiler/backend/schema/src/generated/
-cp bazel-bin/schemas/grid_rows.py   src/ingest/generated_grid_rows.py
 ```
-
-(A future `bazel run //schemas:update_generated` will fold these copies into
-one command.)
 
 ## Version policy: 7-day burn-in
 
@@ -322,23 +280,9 @@ Current pins (set 2026-05-07):
 | Vitest          | 4.1.5 (exact)  | 2026-04-21 |
 | vue-tsc         | 3.2.7 (exact)  | 2026-04-19 |
 
-Other deps follow standard semver caret ranges; `cargo update`, `pnpm
-update`, and `uv lock --upgrade` are safe within those ranges (Cargo.lock and
-pnpm-lock are committed).
-
-## uv ↔ Bazel — the honest story
-
-`rules_python` 1.x ingests `uv.lock` indirectly through a `requirements.txt`
-that we commit. Procedure when adding a Python dep:
-
-1. `uv add <pkg>`
-2. `uv export --no-emit-project --no-emit-workspace
-   --format requirements-txt > requirements.txt`
-   (Hashes are kept — `rules_python` warns loudly if absent.)
-3. `bazelisk test //...` to refresh the Bazel hub repo.
-
-`uv` continues to own the local `.venv` for editor / inner-loop work. Bazel
-owns hermetic CI runs.
+Other deps follow standard semver caret ranges; `cargo update` and
+`pnpm update` are safe within those ranges (Cargo.lock and pnpm-lock are
+committed).
 
 ## What Bazel does not own (by design, v0)
 
@@ -346,7 +290,6 @@ owns hermetic CI runs.
 - OpenHost docker build (run `docker build` against Bazel outputs).
 - The `dolt sql-server` subprocess (test fixtures or skip if `dolt` is
   missing).
-- The `uv` venv.
 - The Vite build / Vitest under Bazel — currently driven by `pnpm`. A future
   `rules_js` + `rules_ts` integration is on the table once the surface area
   stabilises.

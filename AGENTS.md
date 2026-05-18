@@ -1,23 +1,21 @@
 # mixed-up-files — agent runbook
 
-Quick references for AI/human contributors. See
-`src/download/CLAUDE_WEB_SCHEMA.md` for the conceptual model and
-field-level diffs between the bulk-export and web-API transports.
+Quick references for AI/human contributors. See `docs/grid_rows.md` for
+the union-table architecture behind the grid.
 
 ## Repo layout
 
 ```
 schemas/         cross-language source of truth. Each *.schema.json gets
-                 codegen-emitted Python (DDL + dataclass), Rust (struct +
-                 const DDL), and TypeScript artifacts. See docs/grid_rows.md.
-src/
-  download/    Per-provider incremental downloaders (claude.ai, chatgpt.com).
-               Output a "raw" tree on disk; not under our control schema.
-  ingest/      Config-driven CLI that takes raw + takeout dirs and writes
-               into Dolt + renders qmd markdown. The "owned" output.
-               `grid_rows.py` populates the denormalized grid_rows union
-               table from the per-provider tables on every ingest.
-tests/         pytest suite; Bazel-only goldens under tests/__snapshots__/
+                 codegen-emitted Rust (struct + const DDL) and TypeScript
+                 artifacts. See docs/grid_rows.md.
+frankweiler/
+  backend/     Rust workspace. ETL (extract/translate/load), HTTP API,
+               qmd_indexer, Tauri backend. Per-provider crates under
+               etl/providers/<p>/ each emit *.grid_rows.json sidecars
+               that the shared Load step upserts into Dolt.
+  ui/         Vue + AG Grid frontend.
+tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
 docs/          architecture notes (grid_rows.md, ...).
 third-party/   vendored upstream code (see below).
@@ -83,11 +81,12 @@ When you add or change a `grid_rows` column:
 
 1. Edit `schemas/grid_rows.schema.json` (don't forget `x-mapping`).
 2. Re-run codegen (see README).
-3. Update `src/ingest/grid_rows.py` to populate the new column from each
-   provider's per-provider tables.
-4. Update the row mapper in `frankweiler/backend/core/src/db.rs` to read
-   it back, plus `SearchRow` in `search.rs` if the column reaches the API.
-5. Re-bake snapshots: `uv run pytest tests/test_snapshots.py --snapshot-update`.
+3. Update each provider's `translate/grid_rows.rs` to populate the new
+   column from that provider's parsed data.
+4. Update the row mapper in `frankweiler/backend/core/src/dolt_repo.rs`
+   to read it back, plus `SearchRow` in `search.rs` if the column reaches
+   the API.
+5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
 
@@ -95,7 +94,7 @@ Ingest renders QMD markdown files for human/Quarto consumption. The
 backend serves those files **verbatim** (frontmatter stripped) at
 `/api/chat/{uuid}` — it never parses them back. Structured fields
 (name, account, project, channel, created_at, source_label) come from
-`grid_rows` in `mirror.sqlite`. Per-message anchors used by the UI
+`grid_rows` in Dolt. Per-message anchors used by the UI
 (scroll-to-message, highlight) come from `<div id="m-{uuid}"
 data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
 emits in the body. If you find yourself writing a QMD parser in the
@@ -103,12 +102,9 @@ backend, stop — add the field to `grid_rows` instead.
 
 ## Feedback persistence (Dolt)
 
-The running backend always talks to a managed `dolt sql-server`
-subprocess (`frankweiler/backend/core/src/dolt_server.rs`) — `dolt` must
-be on `$PATH`. `mirror.sqlite` is still emitted by ingest but is a
-reference-only artifact; the production code path goes through
-`DoltRepo` (sqlx::MySqlPool). The `--backend sqlite` flag is a
-debug-only escape hatch.
+The backend talks to a managed `dolt sql-server` subprocess
+(`frankweiler/backend/core/src/dolt_server.rs`) via `sqlx::MySqlPool`
+in `DoltRepo`. `dolt` must be on `$PATH`. There is no SQLite fallback.
 
 Every UUID-bearing UI surface has a "Feedback…" path. Right-click on
 the grid emits `grid_cell` / `grid_row`; the search input emits
@@ -161,28 +157,27 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 
 Then add `requirement("newpkg")` to the relevant `BUILD.bazel` `deps`.
 A `uv run` smoke test won't catch a missing Bazel dep — the venv has it.
-Run `bazelisk build //…` (or `//src/ingest:cli`) to verify.
+Run `bazelisk build //…` (or `//schemas:codegen`) to verify. Python is
+now only used for schema codegen; everything else is Rust.
 
 ## Running tests
 
 **Default to `bazelisk test //...` for any "are tests passing?" question.**
-It's the source of truth: it runs Python, Rust, cross-language goldens,
-and the Playwright e2e suite in one shot, the same way CI does. Bazel's
-action cache makes re-runs cheap — unchanged targets are served from
-cache, so iterating costs only what you actually touched. Reach for
-`uv run pytest` / `cargo test` / `pnpm test` only for tight inner-loop
-iteration on a single language, and confirm with `bazelisk test //...`
-before declaring done.
+It's the source of truth: it runs Rust, cross-language goldens, and the
+Playwright e2e suite in one shot, the same way CI does. Bazel's action
+cache makes re-runs cheap — unchanged targets are served from cache, so
+iterating costs only what you actually touched. Reach for `cargo test`
+/ `pnpm test` only for tight inner-loop iteration on a single language,
+and confirm with `bazelisk test //...` before declaring done.
 
-**Specifically beware `uv run pytest tests/test_snapshots.py`**: those
-tests load `bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which
-is a Bazel genrule output. `uv` does not know how to rebuild it, so if
-you change any ingest/render/schema code and re-run under `uv`, you'll
-diff fresh snapshots against a stale artifact and chase phantom
-failures. Always run snapshot tests via
-`bazelisk test //tests:test_snapshots` (or `//...`); Bazel rebuilds
-`//tests/fixtures:ingested_tng` first. Same caveat applies to anything
-else that consumes a cached Bazel output as input.
+**Beware running snapshot tests outside Bazel**: those tests load
+`bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which is a Bazel
+genrule output. Tools outside Bazel don't know how to rebuild it, so if
+you change any ingest/render/schema code and re-run outside Bazel, you'll
+diff fresh snapshots against a stale artifact and chase phantom failures.
+Always run snapshot tests via `bazelisk test //tests:test_snapshots` (or
+`//...`); Bazel rebuilds `//tests/fixtures:ingested_tng` first. Same
+caveat applies to anything else that consumes a cached Bazel output.
 
 ## Common commands
 
@@ -190,32 +185,23 @@ else that consumes a cached Bazel output as input.
 # Source of truth — run this before claiming tests pass
 bazelisk test //...
 
-# Python-only inner loop (faster, narrower)
-uv run pytest
+# Rust-only inner loop (faster, narrower)
+cargo test --manifest-path frankweiler/backend/Cargo.toml
 
-# Ingest configured sources into the Dolt repo (per ~/.config/mixed-up-files/config.yaml)
-uv run python -m ingest
-
-# Incrementally fetch new conversations from the claude.ai web API
-uv run python -m download.claude_web
-
-# Same for chatgpt.com
-uv run python -m download.chatgpt_web
-
-# Incrementally export Slack channels/threads/messages/reactions to JSONL
-uv run python -m download.slack_web --channels general engineering
+# Rebuild the fixture ingest (dump.sql + qmd.tar)
+bazelisk build //tests/fixtures:ingested_tng
 ```
 
 ## Provenance / "API wins"
 
-Each parsed source carries an `"export"` / `"api"` tag. The
-`merge_anthropic` step in `src/ingest/providers/anthropic/ingest.py`
-applies api-wins precedence in memory: api-tagged rows beat export-tagged
-rows on the same primary key, and api ingests own content
-blocks/attachments wholesale per message (replacing any earlier export
-blocks for that message) so trimmed blocks don't leave orphans. The
-union `grid_rows` table is the only SQL artifact this produces; per-
-provider Dolt tables no longer exist.
+Each parsed source carries an `"export"` / `"api"` tag. The merge step
+in `frankweiler/backend/etl/providers/anthropic/src/translate/` applies
+api-wins precedence: api-tagged rows beat export-tagged rows on the same
+primary key, and api ingests own content blocks/attachments wholesale
+per message (replacing any earlier export blocks for that message) so
+trimmed blocks don't leave orphans. The union `grid_rows` table is the
+only SQL artifact this produces; per-provider Dolt tables no longer
+exist.
 
 Configure provenance in `config.yaml` per source:
 
@@ -253,9 +239,9 @@ the longest offset-suffixed form including microseconds.
 
 ## Auth (web API)
 
-`src/download/claude_web.py` reads the `sessionKey` cookie out of
-`latchkey curl -v` stderr and then issues the actual requests via
-`curl_cffi` with `impersonate="chrome"` so Cloudflare's JA3 wall passes.
-If the cookie is missing or expired, `latchkey auth set claude-ai` fixes
-it; if Cloudflare still 403s, the IP/UA may be flagged — wait it out or
-swap networks.
+The Rust downloaders under `frankweiler/backend/etl/providers/*/src/extract/`
+read the `sessionKey` cookie out of `latchkey curl -v` stderr and then
+issue the actual requests via the `latchkey-curl-shim` so Cloudflare's
+JA3 wall passes. If the cookie is missing or expired,
+`latchkey auth set claude-ai` fixes it; if Cloudflare still 403s, the
+IP/UA may be flagged — wait it out or swap networks.

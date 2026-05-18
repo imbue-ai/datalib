@@ -2,12 +2,11 @@
 //!
 //! Endpoints:
 //!   GET /api/health
-//!   GET /api/search?q=…&limit=…  → grid_rows query against `<root>/mirror.sqlite`
+//!   GET /api/search?q=…&limit=…  → grid_rows query against the managed Dolt repo
 //!   GET /api/columns             → grid column metadata
 //!   GET /api/chat/{uuid}         → conversation header (from grid_rows) + raw QMD body
 //!
-//! Dolt is the source of truth; ingest writes a portable `mirror.sqlite`
-//! mirror that this service reads. **QMDs are write-only output** — the
+//! Dolt is the source of truth. **QMDs are write-only output** — the
 //! `/api/chat` endpoint serves the file body verbatim (sans frontmatter)
 //! and lets the UI render markdown once. We never parse a QMD back into
 //! structured data; structured fields come from `grid_rows`.
@@ -25,7 +24,6 @@ use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
-use frankweiler_core::worker::Worker;
 use frankweiler_schema::feedback::FeedbackRow;
 use frankweiler_schema::sync_jobs::SyncJobRow;
 use serde::{Deserialize, Serialize};
@@ -38,29 +36,21 @@ use tower_http::services::ServeDir;
 pub struct AppState {
     /// Data root on disk — drives the static `/api/media/*` mount and
     /// the `accounts.json` lookup. The SQL store is reached through
-    /// [`AppState::repo`] instead of going to `mirror.sqlite` directly.
+    /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// All SQL flows through this seam. Default is
+    /// All SQL flows through this seam.
     /// [`frankweiler_core::dolt_repo::DoltRepo`] against the managed
-    /// `dolt sql-server`; `--backend sqlite` swaps in
-    /// [`frankweiler_core::sqlite_repo::SqliteRepo`] (read-only,
-    /// reference / debug path).
+    /// `dolt sql-server` is the only impl today.
     pub repo: DynRepo,
     /// Managed `dolt sql-server` subprocess. Held here so its `Drop`
     /// (SIGKILL + wait) runs only when the backend itself shuts down,
-    /// keeping the server alive for every request handler. `None` when
-    /// running under `--backend sqlite`.
+    /// keeping the server alive for every request handler.
     pub dolt_server: Option<Arc<DoltServer>>,
     /// Long-lived `qmd mcp` child for sub-second searches. `None` when
     /// no qmd index is materialized at startup (or its spawn check
     /// failed) — `run_qmd_search` then falls back to the per-call
     /// `npx … query` shell-out path so search still works.
     pub qmd_daemon: Option<Arc<QmdDaemon>>,
-    /// Supervised Python `worker` subprocess that drains `sync_jobs`.
-    /// `None` under `--backend sqlite` (worker writes to Dolt only) or
-    /// when the spawn failed at startup; the `/api/sync/*` endpoints
-    /// still serve reads regardless.
-    pub worker: Option<Arc<Worker>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -591,16 +581,4 @@ mod tests {
         assert_eq!(default_columns().len(), 10);
     }
 
-    #[tokio::test]
-    async fn router_compiles() {
-        let root = Arc::new(PathBuf::from("/tmp/nonexistent-fw-root"));
-        let repo = frankweiler_core::repo::default_repo(root.clone()).await;
-        let _r = router(AppState {
-            root,
-            repo,
-            dolt_server: None,
-            qmd_daemon: None,
-            worker: None,
-        });
-    }
 }

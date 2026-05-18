@@ -1,4 +1,4 @@
-//! Rust port of `src/qmd_bridge/` (Python).
+//! Bridge to the `qmd` search CLI.
 //!
 //! `runner` shells out to the `qmd` CLI via `npx -y @tobilu/qmd@<version>`
 //! and parses its JSON output into `QmdHit`s. `mapping` resolves those hits

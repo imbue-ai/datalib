@@ -6,7 +6,6 @@ exports_files(["requirements.txt"])
 test_suite(
     name = "all_tests",
     tests = [
-        "//tests:test_smoke",
         "//frankweiler/backend/core:core_unittests",
         "//frankweiler/backend/http:http_unittests",
         "//frankweiler/backend/schema:schema_unittests",

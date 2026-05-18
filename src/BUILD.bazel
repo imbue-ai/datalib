@@ -1,8 +1,0 @@
-load("@rules_python//python:defs.bzl", "py_library")
-
-py_library(
-    name = "jsonl_io",
-    srcs = ["jsonl_io.py"],
-    imports = ["."],
-    visibility = ["//visibility:public"],
-)

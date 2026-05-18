@@ -1,17 +1,15 @@
 //! Map qmd search hits to grid rows and back.
 //!
-//! Mirrors `src/qmd_bridge/mapping.py` so unit-test expectations port
-//! over: hit→rows resolves by embedded `m-{uuid}` ids in the snippet
-//! first, then falls back to every row whose normalized `qmd_path`
-//! matches the hit's path. qmd lowercases paths and collapses runs of
-//! `_`/`-` to a single `-` in its internal docid URI, so the same
-//! normalization applies on the grid side.
+//! Hit→rows resolves by embedded `m-{uuid}` ids in the snippet first,
+//! then falls back to every row whose normalized `qmd_path` matches
+//! the hit's path. qmd lowercases paths and collapses runs of `_`/`-`
+//! to a single `-` in its internal docid URI, so the same normalization
+//! applies on the grid side.
 //!
 //! `parse_query` recognizes `qmd:"…"` and `qmd_vsearch:"…"` as predicates
 //! over the search-bar string; anything else is treated as bare hybrid
-//! query text. This parser is `qmd_bridge`-internal — the broader
-//! search-bar parser in `crate::query` calls it after handling structured
-//! `field:value` filters.
+//! query text. The broader search-bar parser in `crate::query` calls
+//! this after handling structured `field:value` filters.
 
 use std::collections::{HashMap, HashSet};
 

@@ -25,7 +25,6 @@
 filegroup(
     name = "source_json",
     srcs = glob([
-        "anthropic_export/**/*.json",
         "github_api/**/*.jsonl",
         "gitlab_api/**/*.jsonl",
         "notion_web/**/*.jsonl",
@@ -39,6 +38,10 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Rust port of the old Python build_ingested.py. The orchestrator
+# (//frankweiler/backend/build_ingested) drives every provider's Translate
+# step over the checked-in fixtures, loads the resulting sidecars into a
+# scratch Dolt repo, then emits dump.sql + qmd.tar.
 genrule(
     name = "ingested_tng",
     srcs = [":source_json"],
@@ -47,12 +50,10 @@ genrule(
         "ingested/qmd.tar",
     ],
     tools = [
-        "//src/ingest:cli",
-        "build_ingested.py",
+        "//frankweiler/backend/build_ingested:build_ingested_bin",
     ],
     cmd = " ".join([
-        "python3 $(execpath build_ingested.py)",
-        "$(execpath //src/ingest:cli)",
+        "$(execpath //frankweiler/backend/build_ingested:build_ingested_bin)",
         # Genrules execute with cwd at the execroot; this is the fixture
         # package's directory inside the sandbox.
         "tests/fixtures",

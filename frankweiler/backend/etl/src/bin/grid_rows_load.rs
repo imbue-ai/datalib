@@ -29,6 +29,7 @@ use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::load::{init_schema, load_all};
 use frankweiler_etl::obs::{init as init_obs, ObsArgs};
+use frankweiler_qmd_indexer::{run_index, IndexOptions};
 use sqlx::mysql::MySqlPoolOptions;
 use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -57,6 +58,17 @@ struct Args {
     dolt_port: u16,
     #[arg(long, default_value = "root", env = "DOLT_USER")]
     dolt_user: String,
+
+    /// After loading, run the qmd indexer over `<out>/rendered_md/`. qmd
+    /// update is incremental — repeated invocations only re-index changed
+    /// `.md` files.
+    #[arg(long, env = "FW_QMD_INDEX")]
+    qmd_index: bool,
+
+    /// Skip the embedding pass when running the qmd indexer. Useful for
+    /// CI / smoke tests where the ~300MB model download isn't desired.
+    #[arg(long, env = "FW_QMD_NO_EMBED")]
+    qmd_no_embed: bool,
 
     #[command(flatten)]
     obs: ObsArgs,
@@ -125,5 +137,18 @@ async fn main() -> Result<()> {
         documents_skipped = summary.documents_skipped,
         rows_inserted = summary.rows_inserted,
     );
+
+    drop(_enter);
+
+    if args.qmd_index {
+        let mut opts = IndexOptions::new(args.out.clone());
+        opts.embed = !args.qmd_no_embed;
+        info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed);
+        let index_path = tokio::task::spawn_blocking(move || run_index(&opts))
+            .await
+            .context("qmd-indexer task panicked")?
+            .context("qmd-indexer failed")?;
+        info!(event = "qmd_index_complete", index = %index_path.display());
+    }
     Ok(())
 }

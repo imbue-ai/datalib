@@ -1,6 +1,17 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 
 exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_qmd_indexer",
+    srcs = ["src/lib.rs"],
+    crate_name = "frankweiler_qmd_indexer",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+    ],
+)
 
 rust_binary(
     name = "qmd_indexer_bin",
@@ -8,6 +19,7 @@ rust_binary(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        ":frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",
     ],
 )

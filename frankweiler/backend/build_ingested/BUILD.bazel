@@ -1,0 +1,28 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+exports_files(["Cargo.toml"])
+
+rust_binary(
+    name = "build_ingested_bin",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
+        "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
+        "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",
+        "//frankweiler/backend/etl/providers/notion:frankweiler_etl_notion",
+        "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",
+        "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tar",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:walkdir",
+    ],
+)

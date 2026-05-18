@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::mysql::MySqlPool;
 use sqlx::Row;
 
@@ -43,6 +44,23 @@ pub const DOCUMENTS_LOADED_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents_l
     source_fingerprint VARCHAR(64) NOT NULL,
     loaded_at VARCHAR(40) NOT NULL,
     PRIMARY KEY (qmd_path)
+)"#;
+
+/// Document-level metadata projection, one row per renderable document.
+/// Mirrors the Python `documents` schema (see `schemas/documents.schema.json`).
+pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
+    document_uuid VARCHAR(96) NOT NULL,
+    source_name VARCHAR(64) NOT NULL,
+    provider VARCHAR(32) NOT NULL,
+    kind VARCHAR(32) NOT NULL,
+    title TEXT,
+    created_at VARCHAR(40),
+    updated_at VARCHAR(40),
+    md_path VARCHAR(1024),
+    row_set_hash CHAR(64) NOT NULL,
+    renderer_version VARCHAR(32) NOT NULL,
+    rendered_at VARCHAR(40),
+    PRIMARY KEY (document_uuid)
 )"#;
 
 /// Stats emitted on every load run. Stable shape so a web UI can poll
@@ -67,7 +85,91 @@ pub async fn init_schema(pool: &MySqlPool) -> Result<()> {
         .execute(pool)
         .await
         .context("create documents_loaded")?;
+    sqlx::query(DOCUMENTS_DDL)
+        .execute(pool)
+        .await
+        .context("create documents")?;
     Ok(())
+}
+
+/// Renderer-side cache stamp. Bump when the canonical-tuple shape in
+/// `compute_row_set_hash` or the rendered `.md` layout changes — every
+/// `documents.row_set_hash` is invalidated and the next ingest will
+/// re-render. `rust-v1` is the clean break from the Python `"v1"` since
+/// the hash encoding differs.
+pub const RENDERER_VERSION: &str = "rust-v1";
+
+/// Map a grid_rows `kind` (string used in the UI) to the
+/// `documents.kind` enum (chat/thread/page/pr/mr). Anything not in this
+/// map is a child row and shouldn't be picked as the canonical document
+/// row — but if it ends up being the only candidate we fall back to
+/// `"chat"`, matching the Python behavior.
+fn doc_kind_for(grid_kind: &str) -> &'static str {
+    match grid_kind {
+        "Chat" => "chat",
+        "Slack Thread" => "thread",
+        "GitHub PR" => "pr",
+        "GitLab MR" => "mr",
+        "Notion Page" | "Notion Database" => "page",
+        "Notion Comment Thread" => "thread",
+        _ => "chat",
+    }
+}
+
+/// SHA-256 over the canonical per-row tuple, sorted by `(when_ts, uuid)`
+/// so the hash is independent of producer order. Encoding is a
+/// `\0`-delimited concatenation of length-prefixed fields — stable across
+/// Rust versions (unlike `Debug`), unlike Python's `repr` but that's
+/// fine: bumping `RENDERER_VERSION` invalidates the old hashes anyway.
+pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
+    let mut sorted: Vec<&GridRow> = rows.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.when_ts
+            .cmp(&b.when_ts)
+            .then_with(|| a.uuid.cmp(&b.uuid))
+    });
+    let mut h = Sha256::new();
+    let push = |h: &mut Sha256, v: Option<&str>| {
+        match v {
+            Some(s) => {
+                h.update(b"S");
+                h.update((s.len() as u64).to_le_bytes());
+                h.update(s.as_bytes());
+            }
+            None => h.update(b"N"),
+        }
+        h.update(b"\x00");
+    };
+    let push_i = |h: &mut Sha256, v: Option<i64>| {
+        match v {
+            Some(n) => {
+                h.update(b"I");
+                h.update(n.to_le_bytes());
+            }
+            None => h.update(b"N"),
+        }
+        h.update(b"\x00");
+    };
+    for r in sorted {
+        push(&mut h, Some(&r.uuid));
+        push(&mut h, Some(&r.kind));
+        push(&mut h, Some(&r.when_ts));
+        push(&mut h, r.author.as_deref());
+        push_i(&mut h, r.message_index);
+        push(&mut h, Some(&r.text));
+        push(&mut h, r.source_url.as_deref());
+        push(&mut h, r.slack_link.as_deref());
+        push(&mut h, r.git_sha.as_deref());
+        push(&mut h, r.external_id.as_deref());
+        push(&mut h, r.notion_page_uuid.as_deref());
+        push(&mut h, r.notion_block_uuid.as_deref());
+    }
+    let digest = h.finalize();
+    let mut s = String::with_capacity(64);
+    for b in digest {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar (any
@@ -113,9 +215,16 @@ pub async fn load_all(
             continue;
         }
 
-        let inserted = apply_document(pool, &document_uuid, &qmd_rel, &fingerprint, &sidecar.rows)
-            .await
-            .with_context(|| format!("load {}", sidecar_path.display()))?;
+        let inserted = apply_document(
+            pool,
+            &document_uuid,
+            &qmd_rel,
+            &fingerprint,
+            sidecar.header.render_version,
+            &sidecar.rows,
+        )
+        .await
+        .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
         summary.documents_loaded += 1;
         progress(&format!(
@@ -162,6 +271,7 @@ async fn apply_document(
     document_uuid: &str,
     qmd_path: &str,
     fingerprint: &str,
+    render_version: u32,
     rows: &[GridRow],
 ) -> Result<usize> {
     let mut conn = pool.acquire().await.context("acquire conn")?;
@@ -192,6 +302,10 @@ async fn apply_document(
     .await
     .context("upsert documents_loaded")?;
 
+    upsert_document(&mut conn, document_uuid, qmd_path, render_version, &loaded_at, rows)
+        .await
+        .context("upsert documents")?;
+
     let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
     sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
         .bind(&msg)
@@ -200,6 +314,71 @@ async fn apply_document(
         .context("dolt_commit")?;
 
     Ok(rows.len())
+}
+
+/// Pick the canonical row for a document — the row whose `uuid` matches
+/// `document_uuid` (the chat/thread/PR/page row). Fallback to the first
+/// row if nothing matches, mirroring the Python `documents.py:175`
+/// behavior.
+fn pick_canonical<'a>(rows: &'a [GridRow], document_uuid: &str) -> Option<&'a GridRow> {
+    rows.iter()
+        .find(|r| r.uuid == document_uuid)
+        .or_else(|| rows.first())
+}
+
+async fn upsert_document(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    document_uuid: &str,
+    qmd_path: &str,
+    render_version: u32,
+    rendered_at: &str,
+    rows: &[GridRow],
+) -> Result<()> {
+    let Some(canonical) = pick_canonical(rows, document_uuid) else {
+        return Ok(());
+    };
+    let kind = doc_kind_for(&canonical.kind);
+    let timestamps: Vec<&str> = rows
+        .iter()
+        .map(|r| r.when_ts.as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let created_at = timestamps.iter().min().copied();
+    let updated_at = timestamps.iter().max().copied();
+    let row_set_hash = compute_row_set_hash(rows);
+    let version_str = format!("{RENDERER_VERSION}.{render_version}");
+    // source_name is the human-friendly name from config.sources[].name in
+    // the Python loader. We don't have that wiring yet on the Rust side,
+    // so we default to the provider — callers can refine when sources
+    // config lands in frankweiler-core::config.
+    let source_name = canonical.provider.clone();
+
+    sqlx::query("DELETE FROM documents WHERE document_uuid = ?")
+        .bind(document_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior documents row")?;
+    sqlx::query(
+        "INSERT INTO documents \
+         (document_uuid, source_name, provider, kind, title, created_at, updated_at, \
+          md_path, row_set_hash, renderer_version, rendered_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(document_uuid)
+    .bind(&source_name)
+    .bind(&canonical.provider)
+    .bind(kind)
+    .bind(&canonical.conversation_name)
+    .bind(created_at)
+    .bind(updated_at)
+    .bind(qmd_path)
+    .bind(&row_set_hash)
+    .bind(&version_str)
+    .bind(rendered_at)
+    .execute(&mut **conn)
+    .await
+    .context("insert documents row")?;
+    Ok(())
 }
 
 async fn insert_grid_row(

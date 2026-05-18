@@ -1,0 +1,20 @@
+---
+source: etl/providers/github/tests/github_live.rs
+assertion_line: 97
+expression: view
+---
+{
+  "comment_count": 51,
+  "has_html_url": true,
+  "has_title": true,
+  "pr_number": 1650,
+  "rendered_md_exists": true,
+  "repo": "imbue-ai/mngr",
+  "sections_present": [
+    "Review",
+    "General",
+    "Inline"
+  ],
+  "sidecar_exists": true,
+  "state_known": true
+}

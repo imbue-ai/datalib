@@ -7,8 +7,12 @@ members = [
     "etl",
     "etl/providers/anthropic",
     "etl/providers/chatgpt",
+    "etl/providers/github",
+    "etl/providers/gitlab",
+    "etl/providers/notion",
     "etl/providers/slack",
     "qmd_indexer",
+    "build_ingested",
     "tauri-backend",
 ]
 
@@ -28,12 +32,10 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = "0.8"
 tower-http = { version = "0.6.8", features = ["cors", "fs"] }
-# sqlx is the shared client behind the upcoming MirrorRepo seam: the same
-# trait points at either `mysql://` (managed dolt sql-server, the
-# production path) or `sqlite://mirror.sqlite` (reference / debug path).
-# Features:
+# sqlx is the MySQL client driving DoltRepo against the managed
+# `dolt sql-server`. Features:
 #   runtime-tokio-rustls — async runtime + pure-rust TLS, avoids OpenSSL
-#   mysql + sqlite       — both backends live behind one client
+#   mysql                — only backend
 #   macros               — `query!` / `query_as!` (not yet used; cheap)
 #   chrono               — map ISO-8601 strings to/from chrono types
 #   json                 — `context_json` column on the feedback table
@@ -41,7 +43,6 @@ tower-http = { version = "0.6.8", features = ["cors", "fs"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "mysql",
-    "sqlite",
     "macros",
     "chrono",
     "json",

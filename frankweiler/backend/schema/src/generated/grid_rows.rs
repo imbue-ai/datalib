@@ -251,7 +251,7 @@ pub const DDL: &[(&str, &str)] = &[
     account VARCHAR(96),
     project VARCHAR(96),
     channel VARCHAR(255),
-    conversation_name VARCHAR(512),
+    conversation_name TEXT,
     conversation_uuid VARCHAR(96) NOT NULL,
     message_index INT,
     entire_chat VARCHAR(255) NOT NULL,

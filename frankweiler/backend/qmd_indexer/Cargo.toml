@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lib]
+name = "frankweiler_qmd_indexer"
+path = "src/lib.rs"
+
 [[bin]]
 name = "frankweiler-qmd-indexer"
 path = "src/main.rs"
