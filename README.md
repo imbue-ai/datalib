@@ -242,25 +242,25 @@ Two tests exercise the full Slack pipeline against the real Slack API
 (`#thad-testing-channel`). Both are excluded from `bazelisk test //...`
 and require `latchkey` on PATH with creds set for the `slack` service.
 
-- **Rust downloader snapshot test** (`frankweiler/backend/providers/tests/slack_live.rs`):
+- **Rust downloader snapshot test** (`frankweiler/backend/etl/tests/slack_live.rs`):
   downloads the test channel via the Rust port of the Slack downloader,
   then asserts each per-entity `events.jsonl` against committed
   [insta](https://insta.rs) snapshots under
-  `frankweiler/backend/providers/tests/snapshots/`. Volatile fields
+  `frankweiler/backend/etl/tests/snapshots/`. Volatile fields
   (signed URLs, timestamps) are redacted; channel/user records are
   trimmed to those relevant to the test channel so the rest of the
   workspace doesn't churn the snapshot.
 
   ```sh
   cd frankweiler/backend
-  cargo test -p frankweiler-providers --test slack_live -- --ignored
+  cargo test -p frankweiler-etl --test slack_live -- --ignored
   ```
 
   Or via Bazel (tagged `manual` + `no-sandbox` because it shells out to
   host `latchkey`):
 
   ```sh
-  bazelisk test //frankweiler/backend/providers:slack_live \
+  bazelisk test //frankweiler/backend/etl:slack_live \
       --test_arg=--ignored --test_env=PATH --test_env=HOME --test_env=USER
   ```
 

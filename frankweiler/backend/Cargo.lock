@@ -611,26 +611,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "frankweiler-http"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum 0.8.9",
- "chrono",
- "frankweiler-core",
- "frankweiler-schema",
- "serde",
- "serde_json",
- "serde_yaml",
- "sqlx",
- "tokio",
- "tower 0.5.3",
- "tower-http",
- "uuid",
-]
-
-[[package]]
-name = "frankweiler-providers"
+name = "frankweiler-etl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -655,6 +636,25 @@ dependencies = [
  "tracing-indicatif",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "frankweiler-http"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "chrono",
+ "frankweiler-core",
+ "frankweiler-schema",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "tokio",
+ "tower 0.5.3",
+ "tower-http",
  "uuid",
 ]
 

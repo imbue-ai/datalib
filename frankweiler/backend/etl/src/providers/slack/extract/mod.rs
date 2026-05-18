@@ -18,10 +18,7 @@
 //! zero writes.
 
 pub mod api;
-pub mod mrkdwn;
-pub mod render;
 pub mod shapes;
-pub mod translate;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

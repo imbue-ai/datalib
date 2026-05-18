@@ -14,6 +14,9 @@
 //! That's the whole point — we want the cutover to be a write-through
 //! swap, not a re-keying of every existing grid_rows entry.
 
+pub mod mrkdwn;
+pub mod render;
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -26,7 +29,7 @@ use uuid::Uuid;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use super::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
+use super::extract::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 /// Shared namespace for v5-derived Slack UUIDs. Must match the Python
 /// constant in `src/ingest/providers/slack/parse.py`.
@@ -471,7 +474,7 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
 
 // Mention resolution is shared with the renderer in `mrkdwn` — that
 // keeps the grid-row text and the .md preview spelling identical.
-pub use super::mrkdwn::resolve_user_mentions;
+pub use mrkdwn::resolve_user_mentions;
 
 pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&str>) -> String {
     let ts_no_dot: String = ts.chars().filter(|c| *c != '.').collect();

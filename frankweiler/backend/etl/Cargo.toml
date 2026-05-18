@@ -1,11 +1,11 @@
 [package]
-name = "frankweiler-providers"
+name = "frankweiler-etl"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [lib]
-name = "frankweiler_providers"
+name = "frankweiler_etl"
 path = "src/lib.rs"
 
 [[bin]]

@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_providers::slack::render::render_all;
-use frankweiler_providers::slack::translate::translate_raw_dir;
+use frankweiler_etl::providers::slack::translate::render::render_all;
+use frankweiler_etl::providers::slack::translate::translate_raw_dir;
 use insta::assert_snapshot;
 
 fn fixture_root() -> PathBuf {

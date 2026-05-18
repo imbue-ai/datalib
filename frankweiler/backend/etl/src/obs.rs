@@ -22,13 +22,13 @@
 //! #[derive(clap::Parser)]
 //! struct Args {
 //!     #[command(flatten)]
-//!     obs: frankweiler_providers::obs::ObsArgs,
+//!     obs: frankweiler_etl::obs::ObsArgs,
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let args = <Args as clap::Parser>::parse();
-//!     let _guard = frankweiler_providers::obs::init(&args.obs, "slack-download")?;
+//!     let _guard = frankweiler_etl::obs::init(&args.obs, "slack-download")?;
 //!     // ... work ...
 //!     Ok(())
 //! }

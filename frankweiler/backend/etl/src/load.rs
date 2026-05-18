@@ -28,9 +28,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::mysql::MySqlPool;
 use sqlx::Row;
+
+use crate::sidecar::Sidecar;
 
 /// `CREATE TABLE` for the loader's own bookkeeping table. DDL is
 /// auto-committed even under Dolt's `--no-auto-commit`, so this is
@@ -42,23 +44,6 @@ pub const DOCUMENTS_LOADED_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents_l
     loaded_at VARCHAR(40) NOT NULL,
     PRIMARY KEY (qmd_path)
 )"#;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SidecarHeader {
-    /// Stable id for the document this sidecar describes. The Slack
-    /// Translate step sets this to the thread uuid; other providers
-    /// (Notion page, GitHub issue, etc.) plug in their own
-    /// document-level uuid.
-    pub document_uuid: String,
-    pub source_fingerprint: String,
-    pub render_version: u32,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Sidecar {
-    pub header: SidecarHeader,
-    pub rows: Vec<GridRow>,
-}
 
 /// Stats emitted on every load run. Stable shape so a web UI can poll
 /// or stream it without per-provider branches.

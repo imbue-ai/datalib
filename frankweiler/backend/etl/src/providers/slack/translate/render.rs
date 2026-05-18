@@ -27,10 +27,10 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use crate::grid_rows_load::{Sidecar, SidecarHeader};
+use crate::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
-use super::translate::{slack_link, Message, TranslatedSlack};
+use super::{slack_link, Message, TranslatedSlack};
 
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale `.md` files even though their `source_fingerprint`
@@ -330,7 +330,7 @@ fn build_thread_rows(
     channel_name: &str,
     user_labels: &BTreeMap<String, String>,
 ) -> Vec<GridRow> {
-    let qmd = super::translate::slack_qmd_path(
+    let qmd = super::slack_qmd_path(
         &root.team_id,
         channel_name,
         thread_uuid,

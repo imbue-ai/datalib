@@ -5,7 +5,7 @@
 //! with redactions for volatile fields. Marked `#[ignore]` so
 //! `cargo test` skips it; run explicitly with:
 //!
-//!     cargo test -p frankweiler-providers --test slack_live -- --ignored
+//!     cargo test -p frankweiler-etl --test slack_live -- --ignored
 //!
 //! Snapshots live in `providers/tests/snapshots/`. Accept changes with
 //! `cargo insta review` after posting messages / attachments to the
@@ -16,7 +16,7 @@
 use std::fs;
 use std::path::Path;
 
-use frankweiler_providers::slack;
+use frankweiler_etl::providers::slack::extract as slack;
 use insta::assert_json_snapshot;
 use serde_json::Value;
 

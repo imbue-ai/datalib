@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use frankweiler_providers::slack::translate::{
+use frankweiler_etl::providers::slack::translate::{
     grid_rows, slack_message_uuid, slack_thread_uuid, translate_raw_dir, ts_to_iso,
 };
 use insta::assert_json_snapshot;

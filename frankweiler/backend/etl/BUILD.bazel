@@ -5,12 +5,12 @@ exports_files(["Cargo.toml"])
 # Excludes src/bin/ — those compile as separate `rust_binary` targets
 # below. Globbing them into the library would produce duplicate symbols.
 rust_library(
-    name = "frankweiler_providers",
+    name = "frankweiler_etl",
     srcs = glob(
         ["src/**/*.rs"],
         exclude = ["src/bin/**"],
     ),
-    crate_name = "frankweiler_providers",
+    crate_name = "frankweiler_etl",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
@@ -38,18 +38,17 @@ rust_library(
     ],
 )
 
-# CLI driver for the Slack downloader. Emits structured tracing events:
+# Extract step (Slack). CLI driver. Emits structured tracing events:
 # pretty + tracing-indicatif progress bars on a TTY, NDJSON on stderr
 # otherwise, plus optional OTLP export via --otlp-endpoint. Shells out
-# to host `latchkey` at runtime; the worker / orchestrator passes
-# `--otlp-endpoint` when monitoring is enabled.
+# to host `latchkey` at runtime.
 rust_binary(
     name = "slack_download",
     srcs = ["src/bin/slack_download.rs"],
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
@@ -57,15 +56,15 @@ rust_binary(
     ],
 )
 
-# Translate step: read raw_api/ and emit per-thread .md + grid_rows
-# sidecars. Idempotent via the source_fingerprint frontmatter.
+# Translate step (Slack). Reads raw_api/ and emits per-thread .md +
+# grid_rows sidecars. Idempotent via the source_fingerprint frontmatter.
 rust_binary(
     name = "slack_translate",
     srcs = ["src/bin/slack_translate.rs"],
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tracing",
@@ -82,7 +81,7 @@ rust_binary(
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "//frankweiler/backend/core:frankweiler_core",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
@@ -94,18 +93,18 @@ rust_binary(
 )
 
 rust_test(
-    name = "providers_unittests",
+    name = "etl_unittests",
     size = "small",
-    crate = ":frankweiler_providers",
+    crate = ":frankweiler_etl",
     edition = "2021",
 )
 
-# Translator golden test against the TNG fixture and render golden test.
-# Both resolve `tests/fixtures/slack_api` relative to `CARGO_MANIFEST_DIR`,
+# Translator + render golden tests against the TNG fixture. Both
+# resolve `tests/fixtures/slack_api` relative to `CARGO_MANIFEST_DIR`,
 # which works under `cargo test` but not in the bazel sandbox (the
 # fixture directory isn't in runfiles). Tagged `manual` so they're
 # excluded from `bazel test ...`; run them via `cargo test
-# -p frankweiler-providers` in the inner loop.
+# -p frankweiler-etl` in the inner loop.
 rust_test(
     name = "slack_translate_test",
     srcs = ["tests/slack_translate.rs"],
@@ -115,7 +114,7 @@ rust_test(
     env = {"INSTA_WORKSPACE_ROOT": "."},
     tags = ["manual"],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
     ],
@@ -130,7 +129,7 @@ rust_test(
     env = {"INSTA_WORKSPACE_ROOT": "."},
     tags = ["manual"],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
@@ -140,14 +139,8 @@ rust_test(
 # Live Slack snapshot test. Hits api.slack.com via `latchkey curl`, so
 # tagged "manual" to exclude it from `bazelisk test //...`. Run with:
 #
-#     bazelisk test //frankweiler/backend/providers:slack_live \
+#     bazelisk test //frankweiler/backend/etl:slack_live \
 #         --test_arg=--ignored --test_env=PATH --test_env=HOME
-#
-# Target name matches the cargo test stem (`tests/slack_live.rs`) so
-# insta snapshot filenames are identical between bazel and cargo runs.
-# INSTA_WORKSPACE_ROOT="." because bazel runs tests with cwd at the
-# runfiles workspace root, and insta's `file!()` already includes
-# `frankweiler/backend/providers/tests/slack_live.rs` relative to it.
 rust_test(
     name = "slack_live",
     srcs = ["tests/slack_live.rs"],
@@ -163,7 +156,7 @@ rust_test(
         "no-sandbox",  # latchkey reads its keyring from the host
     ],
     deps = [
-        ":frankweiler_providers",
+        ":frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tokio",
