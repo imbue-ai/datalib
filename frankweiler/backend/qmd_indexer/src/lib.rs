@@ -76,9 +76,8 @@ pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
     std::fs::create_dir_all(&qmd_dir)
         .with_context(|| format!("failed to create {}", qmd_dir.display()))?;
 
-    std::fs::create_dir_all(&opts.models_dir).with_context(|| {
-        format!("failed to create models dir {}", opts.models_dir.display())
-    })?;
+    std::fs::create_dir_all(&opts.models_dir)
+        .with_context(|| format!("failed to create models dir {}", opts.models_dir.display()))?;
     ensure_models_symlink(&qmd_dir, &opts.models_dir)?;
 
     let qmd_pkg = format!("@tobilu/qmd@{}", opts.qmd_version);
@@ -93,7 +92,10 @@ pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
     );
     eprintln!("[qmd-indexer] qmd package = {qmd_pkg}");
     eprintln!("[qmd-indexer] embed       = {}", opts.embed);
-    eprintln!("[qmd-indexer] mode        = {}", if first_run { "create" } else { "incremental" });
+    eprintln!(
+        "[qmd-indexer] mode        = {}",
+        if first_run { "create" } else { "incremental" }
+    );
 
     if first_run {
         run_qmd(

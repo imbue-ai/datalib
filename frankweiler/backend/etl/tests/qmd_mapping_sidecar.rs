@@ -118,7 +118,12 @@ fn make_fixture(root: &Path) {
         root,
         chat,
         vec![
-            row("c0000001-1701-4d00-8000-00000000c001", "Chat", chat, "anthropic"),
+            row(
+                "c0000001-1701-4d00-8000-00000000c001",
+                "Chat",
+                chat,
+                "anthropic",
+            ),
             row(
                 "30000001-1701-4d00-8000-000000030001",
                 "User Input",
@@ -139,9 +144,24 @@ fn make_fixture(root: &Path) {
         root,
         pr_thread,
         vec![
-            row("aaaaaaaa-bbbb-cccc-dddd-000000000001", "GitHub PR Comment", pr_thread, "github"),
-            row("aaaaaaaa-bbbb-cccc-dddd-000000000002", "GitHub Review Comment", pr_thread, "github"),
-            row("aaaaaaaa-bbbb-cccc-dddd-000000000003", "GitHub PR Comment", pr_thread, "github"),
+            row(
+                "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+                "GitHub PR Comment",
+                pr_thread,
+                "github",
+            ),
+            row(
+                "aaaaaaaa-bbbb-cccc-dddd-000000000002",
+                "GitHub Review Comment",
+                pr_thread,
+                "github",
+            ),
+            row(
+                "aaaaaaaa-bbbb-cccc-dddd-000000000003",
+                "GitHub PR Comment",
+                pr_thread,
+                "github",
+            ),
         ],
     );
 }
@@ -243,9 +263,10 @@ fn thread_hit_returns_comment_rows_not_container() {
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| r.kind != "GitHub PR"));
-    assert!(rows
-        .iter()
-        .all(|r| matches!(r.kind.as_str(), "GitHub PR Comment" | "GitHub Review Comment")));
+    assert!(rows.iter().all(|r| matches!(
+        r.kind.as_str(),
+        "GitHub PR Comment" | "GitHub Review Comment"
+    )));
 }
 
 #[test]
@@ -307,8 +328,7 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
         .iter()
         .map(|p| {
             let rel = p.strip_prefix(tmp.path()).unwrap();
-            rel.to_string_lossy()
-                .replace(".grid_rows.json", ".md")
+            rel.to_string_lossy().replace(".grid_rows.json", ".md")
         })
         .collect();
 

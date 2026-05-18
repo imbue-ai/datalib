@@ -6,7 +6,7 @@
 //!
 //!   * `dump.sql` — `dolt dump` of every table in the working set.
 //!   * `qmd.tar`  — the rendered `rendered_md/` tree, with mtime/uid/gid
-//!                  normalized so the tar is hermetic.
+//!     normalized so the tar is hermetic.
 //!
 //! Positional args mirror the old Python entrypoint:
 //!   1: shared fixture dir holding github_api/, gitlab_api/, notion_web/
@@ -86,8 +86,7 @@ async fn main() -> Result<()> {
         .anthropic_fixtures
         .canonicalize()
         .with_context(|| format!("anthropic fixtures: {}", args.anthropic_fixtures.display()))?;
-    fs::create_dir_all(&args.out)
-        .with_context(|| format!("create out: {}", args.out.display()))?;
+    fs::create_dir_all(&args.out).with_context(|| format!("create out: {}", args.out.display()))?;
     let out = args.out.canonicalize()?;
 
     // Hermetic working dir: a fresh tempdir each invocation, cleaned up on
@@ -157,8 +156,8 @@ async fn main() -> Result<()> {
 fn translate_anthropic(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
     eprintln!("[build-ingested] anthropic: {}", fixture.display());
-    let parsed = parse_export(fixture)
-        .with_context(|| format!("anthropic parse {}", fixture.display()))?;
+    let parsed =
+        parse_export(fixture).with_context(|| format!("anthropic parse {}", fixture.display()))?;
     render_all(&parsed, root).context("anthropic render_all")?;
     Ok(())
 }
@@ -166,8 +165,8 @@ fn translate_anthropic(fixture: &Path, root: &Path) -> Result<()> {
 fn translate_chatgpt(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
     eprintln!("[build-ingested] chatgpt: {}", fixture.display());
-    let parsed = parse_api_dir(fixture)
-        .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
+    let parsed =
+        parse_api_dir(fixture).with_context(|| format!("chatgpt parse {}", fixture.display()))?;
     render_all(&parsed, root).context("chatgpt render_all")?;
     Ok(())
 }
@@ -184,8 +183,8 @@ fn translate_slack(fixture: &Path, root: &Path) -> Result<()> {
 fn translate_github(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_github::translate::{parse_api_dir, render_github};
     eprintln!("[build-ingested] github: {}", fixture.display());
-    let parsed = parse_api_dir(fixture)
-        .with_context(|| format!("github parse {}", fixture.display()))?;
+    let parsed =
+        parse_api_dir(fixture).with_context(|| format!("github parse {}", fixture.display()))?;
     render_github(&parsed, root).context("render_github")?;
     Ok(())
 }
@@ -193,8 +192,8 @@ fn translate_github(fixture: &Path, root: &Path) -> Result<()> {
 fn translate_gitlab(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
     eprintln!("[build-ingested] gitlab: {}", fixture.display());
-    let parsed = parse_api_dir(fixture)
-        .with_context(|| format!("gitlab parse {}", fixture.display()))?;
+    let parsed =
+        parse_api_dir(fixture).with_context(|| format!("gitlab parse {}", fixture.display()))?;
     render_gitlab(&parsed, root).context("render_gitlab")?;
     Ok(())
 }
@@ -202,8 +201,8 @@ fn translate_gitlab(fixture: &Path, root: &Path) -> Result<()> {
 fn translate_notion(fixture: &Path, root: &Path) -> Result<()> {
     use frankweiler_etl_notion::translate::{parse_api_dir, render::render_notion_official};
     eprintln!("[build-ingested] notion: {}", fixture.display());
-    let parsed = parse_api_dir(fixture)
-        .with_context(|| format!("notion parse {}", fixture.display()))?;
+    let parsed =
+        parse_api_dir(fixture).with_context(|| format!("notion parse {}", fixture.display()))?;
     render_notion_official(&parsed, root).context("render_notion_official")?;
     Ok(())
 }
@@ -228,8 +227,7 @@ fn dolt_dump(repo_dir: &Path, dump_sql: &Path) -> Result<()> {
 
 fn tar_rendered_md(root: &Path, dest: &Path) -> Result<()> {
     let rendered = root.join("rendered_md");
-    let file = fs::File::create(dest)
-        .with_context(|| format!("create {}", dest.display()))?;
+    let file = fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
     let mut tar = tar::Builder::new(file);
     if !rendered.is_dir() {
         // No content — still emit an empty archive so the genrule output

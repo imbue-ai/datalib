@@ -75,7 +75,7 @@ pub fn fingerprint_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> String {
     format!("{:016x}", h.finish())
 }
 
-fn ordered_notes<'a>(notes: &'a [NoteRow]) -> Vec<&'a NoteRow> {
+fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
     let mut general: Vec<&NoteRow> = notes
         .iter()
         .filter(|n| n.section == NoteSection::General)

@@ -23,10 +23,18 @@ pub static GITLAB_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
 });
 
 pub fn gitlab_mr_uuid(proj: &str, iid: u32) -> String {
-    Uuid::new_v5(&GITLAB_UUID_NS, format!("gitlab:{proj}:mr:{iid}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &GITLAB_UUID_NS,
+        format!("gitlab:{proj}:mr:{iid}").as_bytes(),
+    )
+    .to_string()
 }
 pub fn gitlab_note_uuid(proj: &str, id: i64) -> String {
-    Uuid::new_v5(&GITLAB_UUID_NS, format!("gitlab:{proj}:note:{id}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &GITLAB_UUID_NS,
+        format!("gitlab:{proj}:note:{id}").as_bytes(),
+    )
+    .to_string()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -163,7 +171,9 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
     for rec in load_latest_by(api_dir, ENTITY_MR, |rec| {
         format!(
             "{}!{}",
-            rec.get("project_full_path").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("project_full_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0)
         )
     })? {
@@ -182,26 +192,54 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
             uuid: gitlab_mr_uuid(&proj, iid),
             project_full_path: proj,
             mr_iid: iid,
-            title: raw.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            title: raw
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             body: raw
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string(),
             state: raw.get("state").and_then(|v| v.as_str()).map(String::from),
-            web_url: raw.get("web_url").and_then(|v| v.as_str()).map(String::from),
-            head_sha: diff_refs.get("head_sha").and_then(|v| v.as_str()).map(String::from),
-            base_sha: diff_refs.get("base_sha").and_then(|v| v.as_str()).map(String::from),
-            source_branch: raw.get("source_branch").and_then(|v| v.as_str()).map(String::from),
-            target_branch: raw.get("target_branch").and_then(|v| v.as_str()).map(String::from),
+            web_url: raw
+                .get("web_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            head_sha: diff_refs
+                .get("head_sha")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            base_sha: diff_refs
+                .get("base_sha")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            source_branch: raw
+                .get("source_branch")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            target_branch: raw
+                .get("target_branch")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             author_username: raw
                 .get("author")
                 .and_then(|a| a.get("username"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: raw.get("created_at").and_then(|v| v.as_str()).map(String::from),
-            updated_at: raw.get("updated_at").and_then(|v| v.as_str()).map(String::from),
-            merged_at: raw.get("merged_at").and_then(|v| v.as_str()).map(String::from),
+            created_at: raw
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            updated_at: raw
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            merged_at: raw
+                .get("merged_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         });
     }
 
@@ -209,9 +247,13 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
     for rec in load_latest_by(api_dir, ENTITY_DISCUSSION, |rec| {
         format!(
             "{}!{}#{}",
-            rec.get("project_full_path").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("project_full_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0),
-            rec.get("discussion_id").and_then(|v| v.as_str()).unwrap_or("")
+            rec.get("discussion_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
         )
     })? {
         let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
@@ -299,14 +341,28 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
                     .and_then(|a| a.get("username"))
                     .and_then(|v| v.as_str())
                     .map(String::from),
-                body: n.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                body: n
+                    .get("body")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 web_url,
                 path,
                 line,
-                commit_sha: position.get("head_sha").and_then(|v| v.as_str()).map(String::from),
+                commit_sha: position
+                    .get("head_sha")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
                 system,
-                created_at: n.get("created_at").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                updated_at: n.get("updated_at").and_then(|v| v.as_str()).map(String::from),
+                created_at: n
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                updated_at: n
+                    .get("updated_at")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             });
         }
     }

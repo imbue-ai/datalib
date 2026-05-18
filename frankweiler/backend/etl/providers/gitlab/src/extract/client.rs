@@ -19,8 +19,7 @@ const RETRY_MAX: u32 = 7;
 const RETRY_INITIAL_BACKOFF_MS: u64 = 2_000;
 const RETRY_MAX_BACKOFF_MS: u64 = 60_000;
 
-static LINK_NEXT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
+static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitLabError {
@@ -104,7 +103,11 @@ impl GitLabClient {
                 headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
             }
         }
-        Ok(RawResponse { status, headers, body })
+        Ok(RawResponse {
+            status,
+            headers,
+            body,
+        })
     }
 
     pub async fn get(
@@ -129,7 +132,7 @@ impl GitLabClient {
                 return Ok((value, resp.headers));
             }
             let is_rate_limit = resp.status == 429;
-            let is_transient = matches!(resp.status, 502 | 503 | 504);
+            let is_transient = matches!(resp.status, 502..=504);
             if is_rate_limit || is_transient {
                 if attempt == RETRY_MAX {
                     return Err(GitLabError::Permanent(format!(

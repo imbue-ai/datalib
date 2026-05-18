@@ -158,7 +158,10 @@ mod tests {
     use tempfile::tempdir;
 
     fn key_id(v: &Value) -> String {
-        v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string()
+        v.get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()
     }
 
     #[test]
@@ -182,8 +185,14 @@ mod tests {
         k2.insert("id".into(), Value::String("p2".into()));
         let r1 = make_record(k1.clone(), json!({"title": "a"}));
         let r2 = make_record(k2.clone(), json!({"title": "b"}));
-        let counts = diff_and_save(out, "ent", &[r1.clone(), r2.clone()], &HashMap::new(), key_id)
-            .unwrap();
+        let counts = diff_and_save(
+            out,
+            "ent",
+            &[r1.clone(), r2.clone()],
+            &HashMap::new(),
+            key_id,
+        )
+        .unwrap();
         assert_eq!(counts.new, 2);
         assert_eq!(counts.updated, 0);
         // Round 2: same p1, changed p2.
@@ -191,8 +200,8 @@ mod tests {
         existing.insert("p1".into(), r1.clone());
         existing.insert("p2".into(), r2.clone());
         let r2b = make_record(k2.clone(), json!({"title": "b2"}));
-        let counts = diff_and_save(out, "ent", &[r1.clone(), r2b.clone()], &existing, key_id)
-            .unwrap();
+        let counts =
+            diff_and_save(out, "ent", &[r1.clone(), r2b.clone()], &existing, key_id).unwrap();
         assert_eq!(counts.new, 0);
         assert_eq!(counts.updated, 1);
         // Walk back via load_latest_by_key — p2 must be the updated version.

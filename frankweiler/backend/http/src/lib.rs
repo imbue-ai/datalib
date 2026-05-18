@@ -580,5 +580,4 @@ mod tests {
     fn default_columns_listed() {
         assert_eq!(default_columns().len(), 10);
     }
-
 }

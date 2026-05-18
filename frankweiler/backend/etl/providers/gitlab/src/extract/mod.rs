@@ -128,16 +128,22 @@ fn key_self(rec: &Value) -> String {
 fn key_mr(rec: &Value) -> String {
     format!(
         "{}!{}",
-        rec.get("project_full_path").and_then(|v| v.as_str()).unwrap_or(""),
+        rec.get("project_full_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0)
     )
 }
 fn key_discussion(rec: &Value) -> String {
     format!(
         "{}!{}#{}",
-        rec.get("project_full_path").and_then(|v| v.as_str()).unwrap_or(""),
+        rec.get("project_full_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0),
-        rec.get("discussion_id").and_then(|v| v.as_str()).unwrap_or("")
+        rec.get("discussion_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
     )
 }
 
@@ -334,12 +340,19 @@ async fn fetch_one_mr(
         tracing::error!(proj, iid, "MR record missing project/iid");
         return Ok(());
     };
-    let counts = diff_and_save(out_dir, ENTITY_MR, &[mr_rec.clone()], existing_mrs, key_mr)?;
+    let counts = diff_and_save(
+        out_dir,
+        ENTITY_MR,
+        std::slice::from_ref(&mr_rec),
+        existing_mrs,
+        key_mr,
+    )?;
     summary.new_mrs += counts.new;
     summary.upd_mrs += counts.updated;
     existing_mrs.insert(key_mr(&mr_rec), mr_rec);
 
-    let disc_url = format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
+    let disc_url =
+        format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
     let discussions = client.paginate(&disc_url).await.unwrap_or_default();
     let disc_recs: Vec<Value> = discussions
         .iter()

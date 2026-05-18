@@ -123,11 +123,7 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
 /// fine: bumping `RENDERER_VERSION` invalidates the old hashes anyway.
 pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     let mut sorted: Vec<&GridRow> = rows.iter().collect();
-    sorted.sort_by(|a, b| {
-        a.when_ts
-            .cmp(&b.when_ts)
-            .then_with(|| a.uuid.cmp(&b.uuid))
-    });
+    sorted.sort_by(|a, b| a.when_ts.cmp(&b.when_ts).then_with(|| a.uuid.cmp(&b.uuid)));
     let mut h = Sha256::new();
     let push = |h: &mut Sha256, v: Option<&str>| {
         match v {
@@ -302,9 +298,16 @@ async fn apply_document(
     .await
     .context("upsert documents_loaded")?;
 
-    upsert_document(&mut conn, document_uuid, qmd_path, render_version, &loaded_at, rows)
-        .await
-        .context("upsert documents")?;
+    upsert_document(
+        &mut conn,
+        document_uuid,
+        qmd_path,
+        render_version,
+        &loaded_at,
+        rows,
+    )
+    .await
+    .context("upsert documents")?;
 
     let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
     sqlx::query("CALL DOLT_COMMIT('-Am', ?)")

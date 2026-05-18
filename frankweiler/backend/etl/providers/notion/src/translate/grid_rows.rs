@@ -20,8 +20,7 @@ use serde_json::Value;
 
 use super::parse::ParsedNotionOfficial;
 use super::render::{
-    notion_thread_url, notion_url, page_qmd_path_rel, slugify, thread_qmd_path_rel,
-    thread_snippet,
+    notion_thread_url, notion_url, page_qmd_path_rel, slugify, thread_qmd_path_rel, thread_snippet,
 };
 
 pub const RENDER_VERSION: u32 = 1;
@@ -69,7 +68,11 @@ fn comment_text_plain(c: &Value) -> String {
 fn build_page_titles(pages: &[Value], blocks: &[Value]) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
     for p in pages {
-        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = p
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if !id.is_empty() {
             out.insert(id, page_title_from(p));
         }
@@ -98,7 +101,11 @@ fn block_to_page_id(blocks: &[Value]) -> HashMap<String, String> {
     for b in blocks {
         let parent = b.get("parent");
         if parent.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("page_id") {
-            let bid = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let bid = b
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let pid = parent
                 .and_then(|v| v.get("page_id"))
                 .and_then(|v| v.as_str())
@@ -120,7 +127,10 @@ fn resolve_comment_page_id(
     let parent = comment.get("parent")?;
     let ptype = parent.get("type").and_then(|v| v.as_str()).unwrap_or("");
     if ptype == "page_id" {
-        return parent.get("page_id").and_then(|v| v.as_str()).map(String::from);
+        return parent
+            .get("page_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
     }
     if ptype == "block_id" {
         let bid = parent.get("block_id").and_then(|v| v.as_str())?;
@@ -128,7 +138,11 @@ fn resolve_comment_page_id(
         for b in blocks {
             let par = b.get("parent");
             if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
-                let id = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = b
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let pp = par
                     .and_then(|v| v.get("block_id"))
                     .and_then(|v| v.as_str())
@@ -161,14 +175,14 @@ fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<Strin
         }
     }
     let s: String = uid.chars().take(8).collect();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
-fn page_row(
-    page: &Value,
-    title: &str,
-    user_names: &HashMap<String, String>,
-) -> GridRow {
+fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> GridRow {
     let pid = page
         .get("id")
         .and_then(|v| v.as_str())
@@ -236,7 +250,7 @@ fn thread_rows(
         .unwrap_or("");
     let aggregated_text: String = members_sorted
         .iter()
-        .map(|c| comment_text_plain(c))
+        .map(comment_text_plain)
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
@@ -385,7 +399,11 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
     let mut blocks_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
     for b in &parsed.blocks {
         // Walk up to find owning page.
-        let bid = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let bid = b
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut cur = Some(bid.clone());
         let mut seen = std::collections::HashSet::new();
         let mut owner: Option<String> = None;
@@ -393,7 +411,11 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
         for bb in &parsed.blocks {
             let par = bb.get("parent");
             if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
-                let id = bb.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let id = bb
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let pp = par
                     .and_then(|v| v.get("block_id"))
                     .and_then(|v| v.as_str())
@@ -442,7 +464,11 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
     }
 
     for page in &parsed.pages {
-        let pid = page.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let pid = page
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if pid.is_empty() {
             continue;
         }
@@ -467,7 +493,10 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
     // Discussions.
     let mut by_disc: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for c in &parsed.comments {
-        let did = c.get("discussion_id").and_then(|v| v.as_str()).unwrap_or("");
+        let did = c
+            .get("discussion_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if did.is_empty() {
             continue;
         }
@@ -494,7 +523,10 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             .unwrap_or_else(|| "(untitled)".into());
         let parent = first.get("parent").cloned().unwrap_or(Value::Null);
         let parent_block_id = if parent.get("type").and_then(|v| v.as_str()) == Some("block_id") {
-            parent.get("block_id").and_then(|v| v.as_str()).map(String::from)
+            parent
+                .get("block_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
         } else {
             None
         };

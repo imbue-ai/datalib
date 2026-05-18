@@ -20,8 +20,7 @@ const RETRY_MAX: u32 = 7;
 const RETRY_INITIAL_BACKOFF_MS: u64 = 2_000;
 const RETRY_MAX_BACKOFF_MS: u64 = 120_000;
 
-static LINK_NEXT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
+static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitHubError {
@@ -107,7 +106,11 @@ impl GitHubClient {
                 headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
             }
         }
-        Ok(RawResponse { status, headers, body })
+        Ok(RawResponse {
+            status,
+            headers,
+            body,
+        })
     }
 
     /// GET with exponential backoff on rate-limit / transient failures.
@@ -144,7 +147,7 @@ impl GitHubClient {
                         .get("x-ratelimit-remaining")
                         .map(|v| v == "0")
                         .unwrap_or(false));
-            let is_transient = matches!(resp.status, 502 | 503 | 504);
+            let is_transient = matches!(resp.status, 502..=504);
             if is_rate_limit || is_transient {
                 if attempt == RETRY_MAX {
                     return Err(GitHubError::Permanent(format!(

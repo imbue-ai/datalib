@@ -78,7 +78,10 @@ fn unofficial_inner(raw: &Value) -> Option<&Value> {
 fn user_names_from_unofficial(api_dir: &Path) -> Result<HashMap<String, String>> {
     let mut out: HashMap<String, String> = HashMap::new();
     for stream in ["created", "updated"] {
-        let path = api_dir.join("notion_user").join(stream).join("events.jsonl");
+        let path = api_dir
+            .join("notion_user")
+            .join(stream)
+            .join("events.jsonl");
         if !path.exists() {
             continue;
         }
@@ -229,12 +232,7 @@ mod tests {
         let by_v: std::collections::HashMap<_, _> = out
             .pages
             .iter()
-            .map(|r| {
-                (
-                    r["v"].as_i64().unwrap(),
-                    1,
-                )
-            })
+            .map(|r| (r["v"].as_i64().unwrap(), 1))
             .collect();
         // abc → v=2 (updated stream wins), xyz → v=9
         assert!(by_v.contains_key(&2));

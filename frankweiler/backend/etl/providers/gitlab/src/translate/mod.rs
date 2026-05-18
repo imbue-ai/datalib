@@ -6,5 +6,5 @@ pub mod grid_rows;
 pub mod parse;
 pub mod render;
 
-pub use parse::{parse_api_dir, ParsedGitlabApi, MergeRequestRow, NoteRow};
+pub use parse::{parse_api_dir, MergeRequestRow, NoteRow, ParsedGitlabApi};
 pub use render::{render_gitlab, RenderSummary};

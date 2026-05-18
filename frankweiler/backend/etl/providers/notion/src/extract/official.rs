@@ -65,7 +65,14 @@ impl NotionOfficialClient {
         let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
         for attempt in 0..=RETRY_MAX {
             let mut cmd = Command::new("latchkey");
-            cmd.args(["curl", "-sS", "-X", method, "-H", "Accept: application/json"]);
+            cmd.args([
+                "curl",
+                "-sS",
+                "-X",
+                method,
+                "-H",
+                "Accept: application/json",
+            ]);
             if let Some(ref payload) = body_str {
                 cmd.args(["-H", "Content-Type: application/json", "--data"]);
                 cmd.arg(payload);
@@ -146,7 +153,8 @@ impl NotionOfficialClient {
     }
 
     pub async fn get_page(&self, page_id: &str) -> Result<Value, NotionOfficialError> {
-        self.request("GET", &format!("/pages/{page_id}"), None).await
+        self.request("GET", &format!("/pages/{page_id}"), None)
+            .await
     }
 
     pub async fn get_block_children(

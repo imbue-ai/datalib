@@ -102,7 +102,9 @@ fn yaml_scalar(v: &Value) -> String {
         Value::String(s) => s.clone(),
         other => other.to_string(),
     };
-    let needs_quote = s.chars().any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
+    let needs_quote = s
+        .chars()
+        .any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
         || s != s.trim();
     if needs_quote {
         // serde_json::to_string handles escaping like Python's json.dumps.
@@ -432,7 +434,11 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
                 url = ctx.media_urls.get(block_id).cloned().unwrap_or_default();
             }
             let caption_raw = rt("caption");
-            let caption = if caption_raw.is_empty() { "image".to_string() } else { caption_raw };
+            let caption = if caption_raw.is_empty() {
+                "image".to_string()
+            } else {
+                caption_raw
+            };
             if !url.is_empty() {
                 lines.push(format!("![{caption}]({url})"));
             } else {
@@ -485,9 +491,17 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
             let url = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
             let mut caption = rt("caption");
             if caption.is_empty() {
-                caption = ctx.bookmark_titles.get(block_id).cloned().unwrap_or_default();
+                caption = ctx
+                    .bookmark_titles
+                    .get(block_id)
+                    .cloned()
+                    .unwrap_or_default();
             }
-            let label = if !caption.is_empty() { caption.clone() } else { url.into() };
+            let label = if !caption.is_empty() {
+                caption.clone()
+            } else {
+                url.into()
+            };
             lines.push(format!("[{label}]({url})"));
             lines.push(String::new());
         }
@@ -497,10 +511,7 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
             lines.push(String::new());
         }
         "link_to_page" => {
-            let target_type = payload
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let target_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let target_id = if !target_type.is_empty() {
                 payload
                     .get(target_type)
@@ -602,10 +613,7 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
                     vec![String::new(); ncols]
                 };
                 lines.push(format!("| {} |", header.join(" | ")));
-                lines.push(format!(
-                    "| {} |",
-                    vec!["---"; ncols].join(" | ")
-                ));
+                lines.push(format!("| {} |", vec!["---"; ncols].join(" | ")));
                 let body_rows: &[Vec<String>] = if has_header {
                     &rendered_rows[1..]
                 } else {
@@ -626,7 +634,10 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
             lines.push(String::new());
         }
         "equation" => {
-            let expr = payload.get("expression").and_then(|v| v.as_str()).unwrap_or("");
+            let expr = payload
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             lines.push(format!("$$ {expr} $$"));
             lines.push(String::new());
         }
@@ -666,7 +677,11 @@ fn page_title(page: &Value) -> String {
 fn build_page_titles(pages: &[Value], blocks: &[Value]) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
     for p in pages {
-        let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let id = p
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if !id.is_empty() {
             out.insert(id, page_title(p));
         }
@@ -697,13 +712,19 @@ fn index_children(blocks: &[Value]) -> HashMap<String, Vec<Value>> {
         let ptype = parent.get("type").and_then(|v| v.as_str()).unwrap_or("");
         let pid = match ptype {
             "page_id" => parent.get("page_id").and_then(|v| v.as_str()).unwrap_or(""),
-            "block_id" => parent.get("block_id").and_then(|v| v.as_str()).unwrap_or(""),
+            "block_id" => parent
+                .get("block_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             _ => "",
         };
         if pid.is_empty() {
             continue;
         }
-        by_parent.entry(pid.to_string()).or_default().push(b.clone());
+        by_parent
+            .entry(pid.to_string())
+            .or_default()
+            .push(b.clone());
     }
     by_parent
 }
@@ -771,13 +792,14 @@ fn collect_sub_pages_dir(
     children_by_parent: &HashMap<String, Vec<Value>>,
 ) -> HashMap<String, String> {
     let mut out: HashMap<String, String> = HashMap::new();
-    let mut stack: Vec<Value> = children_by_parent
-        .get(pid)
-        .cloned()
-        .unwrap_or_default();
+    let mut stack: Vec<Value> = children_by_parent.get(pid).cloned().unwrap_or_default();
     while let Some(b) = stack.pop() {
         if b.get("type").and_then(|v| v.as_str()) == Some("child_page") {
-            let bid = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let bid = b
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let title = b
                 .get("child_page")
                 .and_then(|v| v.get("title"))
@@ -894,10 +916,15 @@ pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
 
 pub fn thread_filename(discussion_id: &str, snippet: &str) -> String {
     let snip = slugify(snippet);
-    let snip = if snip == "untitled" { "thread".into() } else { snip };
+    let snip = if snip == "untitled" {
+        "thread".into()
+    } else {
+        snip
+    };
     format!("{}__{}.md", short_id(discussion_id), snip)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_thread(
     discussion_id: &str,
     page_id: &str,
@@ -958,12 +985,13 @@ fn render_thread(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
                 let s: String = author_id.chars().take(8).collect();
-                if s.is_empty() { "unknown".into() } else { s }
+                if s.is_empty() {
+                    "unknown".into()
+                } else {
+                    s
+                }
             });
-        let created = c
-            .get("created_time")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let created = c.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
         parts.push(format!(r#"<a id="c-{}"></a>"#, short_id(cid)));
         parts.push(String::new());
         parts.push(format!("## {author}"));
@@ -984,7 +1012,11 @@ pub fn pages_subdir() -> PathBuf {
 
 pub fn page_qmd_path_rel(page_id: &str, page_title_str: &str) -> String {
     let seg = page_dir_segment(page_id, page_title_str);
-    pages_subdir().join(seg).join("index.md").to_string_lossy().into_owned()
+    pages_subdir()
+        .join(seg)
+        .join("index.md")
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub fn thread_qmd_path_rel(

@@ -44,19 +44,28 @@ pub fn slugify(name: &str) -> String {
         return "untitled".into();
     }
     let lower = name.to_lowercase();
-    let s = SLUG_RE.replace_all(&lower, "-").trim_matches('-').to_string();
+    let s = SLUG_RE
+        .replace_all(&lower, "-")
+        .trim_matches('-')
+        .to_string();
     if s.is_empty() {
         return "untitled".into();
     }
     let mut s: String = s.chars().take(SLUG_MAX_LEN).collect();
     s = s.trim_end_matches('-').to_string();
-    if s.is_empty() { "untitled".into() } else { s }
+    if s.is_empty() {
+        "untitled".into()
+    } else {
+        s
+    }
 }
 
 /// Relative path from the data root to a PR's `index.md`.
 pub fn pr_qmd_path_rel(repo_full_name: &str, pr_number: u32, title: &str) -> String {
     let slug = slugify(title);
-    let (owner, repo) = repo_full_name.split_once('/').unwrap_or(("unknown", repo_full_name));
+    let (owner, repo) = repo_full_name
+        .split_once('/')
+        .unwrap_or(("unknown", repo_full_name));
     format!("rendered_md/github/{owner}/{repo}/pr-{pr_number}__{slug}/index.md")
 }
 
@@ -94,7 +103,13 @@ fn quote_body(body: &str) -> String {
         return "> *(empty)*".into();
     }
     body.lines()
-        .map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") })
+        .map(|l| {
+            if l.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {l}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -121,11 +136,7 @@ fn comment_header(c: &CommentRow) -> String {
     format!("**@{who}**{state}{reply} @ {when}{link}")
 }
 
-fn render_one_pr(
-    pr: &PullRequestRow,
-    comments: &[CommentRow],
-    root: &Path,
-) -> Result<PathBuf> {
+fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> Result<PathBuf> {
     let dir = pr_dir(root, &pr.repo_full_name, pr.pr_number, &pr.title);
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let md_path = dir.join("index.md");
@@ -139,9 +150,18 @@ fn render_one_pr(
     out.push_str(&format!("title: {}\n", yaml_scalar(&pr.title)));
     out.push_str(&format!("state: {}\n", yaml_opt(pr.state.as_deref())));
     out.push_str(&format!("author: {}\n", yaml_opt(pr.user_login.as_deref())));
-    out.push_str(&format!("created_at: {}\n", yaml_opt(pr.created_at.as_deref())));
-    out.push_str(&format!("updated_at: {}\n", yaml_opt(pr.updated_at.as_deref())));
-    out.push_str(&format!("merged_at: {}\n", yaml_opt(pr.merged_at.as_deref())));
+    out.push_str(&format!(
+        "created_at: {}\n",
+        yaml_opt(pr.created_at.as_deref())
+    ));
+    out.push_str(&format!(
+        "updated_at: {}\n",
+        yaml_opt(pr.updated_at.as_deref())
+    ));
+    out.push_str(&format!(
+        "merged_at: {}\n",
+        yaml_opt(pr.merged_at.as_deref())
+    ));
     out.push_str(&format!("head_sha: {}\n", yaml_opt(pr.head_sha.as_deref())));
     out.push_str(&format!("base_sha: {}\n", yaml_opt(pr.base_sha.as_deref())));
     out.push_str(&format!("head_ref: {}\n", yaml_opt(pr.head_ref.as_deref())));
@@ -178,7 +198,11 @@ fn render_one_pr(
         .iter()
         .filter(|c| c.section == CommentSection::Review)
         .collect();
-    reviews.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.external_id.cmp(&b.external_id)));
+    reviews.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then(a.external_id.cmp(&b.external_id))
+    });
     out.push_str("## Reviews\n\n");
     if reviews.is_empty() {
         out.push_str("*(no reviews)*\n\n");
@@ -198,7 +222,11 @@ fn render_one_pr(
         .iter()
         .filter(|c| c.section == CommentSection::General)
         .collect();
-    general.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.external_id.cmp(&b.external_id)));
+    general.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then(a.external_id.cmp(&b.external_id))
+    });
     out.push_str("## General discussion\n\n");
     if general.is_empty() {
         out.push_str("*(no general comments)*\n\n");
@@ -284,11 +312,8 @@ fn render_one_pr(
         rows,
     };
     let sidecar_path = md_path.with_extension("grid_rows.json");
-    fs::write(
-        &sidecar_path,
-        serde_json::to_string_pretty(&sidecar)?,
-    )
-    .with_context(|| format!("write {}", sidecar_path.display()))?;
+    fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)
+        .with_context(|| format!("write {}", sidecar_path.display()))?;
 
     Ok(md_path)
 }

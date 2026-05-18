@@ -87,17 +87,25 @@ pub fn fingerprint_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Strin
 }
 
 /// Sort comments into rendered order (matches `render.rs`).
-fn ordered_comments<'a>(comments: &'a [CommentRow]) -> Vec<&'a CommentRow> {
+fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {
     let mut reviews: Vec<&CommentRow> = comments
         .iter()
         .filter(|c| c.section == CommentSection::Review)
         .collect();
-    reviews.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.external_id.cmp(&b.external_id)));
+    reviews.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then(a.external_id.cmp(&b.external_id))
+    });
     let mut general: Vec<&CommentRow> = comments
         .iter()
         .filter(|c| c.section == CommentSection::General)
         .collect();
-    general.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.external_id.cmp(&b.external_id)));
+    general.sort_by(|a, b| {
+        a.created_at
+            .cmp(&b.created_at)
+            .then(a.external_id.cmp(&b.external_id))
+    });
 
     // Inline grouped by (path, line) anchor; replies inherit parent's anchor.
     let inline: Vec<&CommentRow> = comments
@@ -156,7 +164,11 @@ pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Vec<GridRow>
         provider: "github".into(),
         kind: "GitHub PR".into(),
         source_label: "GitHub".into(),
-        when_ts: pr.updated_at.clone().or_else(|| pr.created_at.clone()).unwrap_or_default(),
+        when_ts: pr
+            .updated_at
+            .clone()
+            .or_else(|| pr.created_at.clone())
+            .unwrap_or_default(),
         author: pr.user_login.clone(),
         account: None,
         project: Some(pr.repo_full_name.clone()),

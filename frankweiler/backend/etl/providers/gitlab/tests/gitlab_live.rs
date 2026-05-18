@@ -64,16 +64,28 @@ async fn gitlab_live_single_mr_snapshot() {
         &mr.title,
     );
     let qmd_abs = render_root.join(&qmd_rel);
-    assert!(qmd_abs.exists(), "rendered md missing: {}", qmd_abs.display());
+    assert!(
+        qmd_abs.exists(),
+        "rendered md missing: {}",
+        qmd_abs.display()
+    );
     let sidecar = qmd_abs.with_extension("grid_rows.json");
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
     use frankweiler_etl_gitlab::translate::parse::NoteSection;
-    if parsed.notes.iter().any(|n| n.section == NoteSection::General) {
+    if parsed
+        .notes
+        .iter()
+        .any(|n| n.section == NoteSection::General)
+    {
         sections.push("General");
     }
-    if parsed.notes.iter().any(|n| n.section == NoteSection::Inline) {
+    if parsed
+        .notes
+        .iter()
+        .any(|n| n.section == NoteSection::Inline)
+    {
         sections.push("Inline");
     }
 

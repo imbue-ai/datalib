@@ -1,0 +1,45 @@
+//! Translate-side smoke test against the checked-in TNG fixture under
+//! `tests/fixtures/chatgpt_api`. Bazel doesn't surface fixture dirs via
+//! `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an integration
+//! test tagged `manual` and is run via `cargo test`.
+
+use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
+use std::path::PathBuf;
+
+fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chatgpt_api")
+}
+
+#[test]
+fn parses_tng_fixture() {
+    let parsed = parse_api_dir(&fixture_dir()).expect("parse");
+
+    assert_eq!(parsed.accounts.len(), 1);
+    assert_eq!(parsed.accounts[0].name.as_deref(), Some("Lt. Cmdr. Data"));
+
+    let titles: std::collections::HashSet<_> = parsed
+        .conversations
+        .iter()
+        .filter_map(|c| c.title.clone())
+        .collect();
+    assert!(titles.contains("Sonnet on a Cat Named Spot"));
+    assert!(titles.contains("Polynomial Fit for Sensor Calibration"));
+    assert!(
+        titles
+            .iter()
+            .any(|t| t.starts_with("I have been reviewing") && t.len() > 512),
+        "expected long auto-title to be preserved"
+    );
+
+    let has_meta = parsed
+        .messages
+        .iter()
+        .any(|m| m.content_type.as_deref() == Some("model_editable_context"));
+    assert!(has_meta);
+
+    let has_python_code = parsed
+        .content_parts
+        .iter()
+        .any(|p| p.kind == "code" && p.language.as_deref() == Some("python"));
+    assert!(has_python_code);
+}

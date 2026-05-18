@@ -75,6 +75,20 @@ rust_test(
     edition = "2021",
 )
 
+# Translate smoke test against the in-crate TNG fixture. Resolves the
+# fixture via CARGO_MANIFEST_DIR, which Bazel doesn't surface in the
+# sandbox — tag manual; run via `cargo test -p frankweiler-etl-chatgpt`.
+rust_test(
+    name = "chatgpt_translate_test",
+    srcs = ["tests/chatgpt_translate.rs"],
+    crate_root = "tests/chatgpt_translate.rs",
+    edition = "2021",
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_chatgpt",
+    ],
+)
+
 # Render golden test. Fixture lives in-crate; resolved via
 # CARGO_MANIFEST_DIR which bazel doesn't surface in sandbox runfiles,
 # so tag manual. Run via `cargo test -p frankweiler-etl-chatgpt`.

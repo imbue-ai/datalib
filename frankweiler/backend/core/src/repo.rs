@@ -106,4 +106,3 @@ pub trait MirrorRepo: Send + Sync {
 /// Convenience type alias for the dyn-dispatched repo handle used by
 /// HTTP handlers via `axum::State`.
 pub type DynRepo = Arc<dyn MirrorRepo>;
-

@@ -65,19 +65,35 @@ async fn github_live_single_pr_snapshot() {
         &pr.title,
     );
     let qmd_abs = render_root.join(&qmd_rel);
-    assert!(qmd_abs.exists(), "rendered md missing: {}", qmd_abs.display());
+    assert!(
+        qmd_abs.exists(),
+        "rendered md missing: {}",
+        qmd_abs.display()
+    );
     let sidecar = qmd_abs.with_extension("grid_rows.json");
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
     use frankweiler_etl_github::translate::parse::CommentSection;
-    if parsed.comments.iter().any(|c| c.section == CommentSection::Review) {
+    if parsed
+        .comments
+        .iter()
+        .any(|c| c.section == CommentSection::Review)
+    {
         sections.push("Review");
     }
-    if parsed.comments.iter().any(|c| c.section == CommentSection::General) {
+    if parsed
+        .comments
+        .iter()
+        .any(|c| c.section == CommentSection::General)
+    {
         sections.push("General");
     }
-    if parsed.comments.iter().any(|c| c.section == CommentSection::Inline) {
+    if parsed
+        .comments
+        .iter()
+        .any(|c| c.section == CommentSection::Inline)
+    {
         sections.push("Inline");
     }
 

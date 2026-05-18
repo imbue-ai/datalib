@@ -101,7 +101,10 @@ fn page_record(page: &Value) -> Value {
         "last_edited_time".into(),
         page.get("last_edited_time").cloned().unwrap_or(Value::Null),
     );
-    k.insert("parent".into(), page.get("parent").cloned().unwrap_or(Value::Null));
+    k.insert(
+        "parent".into(),
+        page.get("parent").cloned().unwrap_or(Value::Null),
+    );
     make_record(k, page.clone())
 }
 
@@ -117,7 +120,10 @@ fn block_record(block: &Value, page_id: &str) -> Value {
     );
     k.insert(
         "last_edited_time".into(),
-        block.get("last_edited_time").cloned().unwrap_or(Value::Null),
+        block
+            .get("last_edited_time")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     make_record(k, block.clone())
 }
@@ -147,23 +153,29 @@ fn comment_record(comment: &Value, page_id: &str) -> Value {
     );
     k.insert(
         "last_edited_time".into(),
-        comment.get("last_edited_time").cloned().unwrap_or(Value::Null),
+        comment
+            .get("last_edited_time")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     make_record(k, comment.clone())
 }
 
-async fn fetch_all_children(
-    client: &NotionOfficialClient,
-    parent_id: &str,
-) -> Result<Vec<Value>> {
+async fn fetch_all_children(client: &NotionOfficialClient, parent_id: &str) -> Result<Vec<Value>> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
-        let resp = client.get_block_children(parent_id, cursor.as_deref()).await?;
+        let resp = client
+            .get_block_children(parent_id, cursor.as_deref())
+            .await?;
         if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
             out.extend(arr.iter().cloned());
         }
-        if !resp.get("has_more").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if !resp
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(out);
         }
         let nc = resp.get("next_cursor").and_then(|v| v.as_str());
@@ -175,10 +187,7 @@ async fn fetch_all_children(
     }
 }
 
-async fn walk_page_blocks(
-    client: &NotionOfficialClient,
-    page_id: &str,
-) -> Result<Vec<Value>> {
+async fn walk_page_blocks(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
     let mut collected: Vec<Value> = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut seen: HashSet<String> = HashSet::new();
@@ -194,7 +203,11 @@ async fn walk_page_blocks(
             if t == "child_page" || t == "child_database" {
                 continue;
             }
-            if ch.get("has_children").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if ch
+                .get("has_children")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 if let Some(id) = ch.get("id").and_then(|v| v.as_str()) {
                     queue.push_back(id.into());
                 }
@@ -212,10 +225,7 @@ fn child_page_ids(blocks: &[Value]) -> Vec<String> {
         .collect()
 }
 
-async fn fetch_all_comments(
-    client: &NotionOfficialClient,
-    page_id: &str,
-) -> Result<Vec<Value>> {
+async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -223,7 +233,11 @@ async fn fetch_all_comments(
         if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
             out.extend(arr.iter().cloned());
         }
-        if !resp.get("has_more").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if !resp
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return Ok(out);
         }
         let nc = resp.get("next_cursor").and_then(|v| v.as_str());
@@ -275,7 +289,7 @@ async fn walk_inbox(
                 .cloned()
                 .unwrap_or(Value::Object(Default::default()));
             for r in extract_inbox_pages(&rm) {
-                if !seen.iter().any(|x| *x == r) {
+                if !seen.contains(&r) {
                     seen.push(r);
                 }
             }
@@ -311,8 +325,13 @@ async fn mirror_page(
         }
     };
     let prec = page_record(&page);
-    let counts =
-        diff_and_save(out_dir, ENTITY_PAGE, &[prec.clone()], existing_pages, key_id)?;
+    let counts = diff_and_save(
+        out_dir,
+        ENTITY_PAGE,
+        std::slice::from_ref(&prec),
+        existing_pages,
+        key_id,
+    )?;
     summary.new_pages += counts.new;
     summary.upd_pages += counts.updated;
     existing_pages.insert(pid.into(), prec);
@@ -325,8 +344,13 @@ async fn mirror_page(
         }
     };
     let block_records: Vec<Value> = blocks.iter().map(|b| block_record(b, pid)).collect();
-    let counts =
-        diff_and_save(out_dir, ENTITY_BLOCK, &block_records, existing_blocks, key_id)?;
+    let counts = diff_and_save(
+        out_dir,
+        ENTITY_BLOCK,
+        &block_records,
+        existing_blocks,
+        key_id,
+    )?;
     summary.new_blocks += counts.new;
     summary.upd_blocks += counts.updated;
     for br in &block_records {
@@ -338,8 +362,7 @@ async fn mirror_page(
     let comments = fetch_all_comments(client, pid).await.unwrap_or_default();
     if !comments.is_empty() {
         let crecs: Vec<Value> = comments.iter().map(|c| comment_record(c, pid)).collect();
-        let counts =
-            diff_and_save(out_dir, ENTITY_COMMENT, &crecs, existing_comments, key_id)?;
+        let counts = diff_and_save(out_dir, ENTITY_COMMENT, &crecs, existing_comments, key_id)?;
         summary.new_comments += counts.new;
         summary.upd_comments += counts.updated;
         for cr in &crecs {

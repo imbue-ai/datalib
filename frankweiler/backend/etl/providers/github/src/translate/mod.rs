@@ -6,5 +6,5 @@ pub mod grid_rows;
 pub mod parse;
 pub mod render;
 
-pub use parse::{parse_api_dir, ParsedGithubApi, PullRequestRow, CommentRow};
+pub use parse::{parse_api_dir, CommentRow, ParsedGithubApi, PullRequestRow};
 pub use render::{render_github, RenderSummary};

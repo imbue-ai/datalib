@@ -75,6 +75,20 @@ rust_test(
     edition = "2021",
 )
 
+# Translate smoke test against the in-crate TNG fixture. Resolves the
+# fixture via CARGO_MANIFEST_DIR, which Bazel doesn't surface in the
+# sandbox — tag manual; run via `cargo test -p frankweiler-etl-anthropic`.
+rust_test(
+    name = "anthropic_translate_test",
+    srcs = ["tests/anthropic_translate.rs"],
+    crate_root = "tests/anthropic_translate.rs",
+    edition = "2021",
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_anthropic",
+    ],
+)
+
 rust_test(
     name = "anthropic_live",
     srcs = ["tests/anthropic_live.rs"],

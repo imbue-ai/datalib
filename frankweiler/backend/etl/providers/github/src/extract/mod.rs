@@ -149,21 +149,27 @@ fn key_self(rec: &Value) -> String {
 fn key_pr(rec: &Value) -> String {
     format!(
         "{}#{}",
-        rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+        rec.get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         rec.get("pr_number").and_then(|v| v.as_i64()).unwrap_or(0)
     )
 }
 fn key_comment(rec: &Value) -> String {
     format!(
         "{}#{}",
-        rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+        rec.get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         rec.get("comment_id").and_then(|v| v.as_i64()).unwrap_or(0)
     )
 }
 fn key_review(rec: &Value) -> String {
     format!(
         "{}#{}",
-        rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+        rec.get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
         rec.get("review_id").and_then(|v| v.as_i64()).unwrap_or(0)
     )
 }
@@ -189,10 +195,22 @@ fn make_pr_record(repo: &str, data: &Value) -> Value {
     );
     let head = data.get("head").cloned().unwrap_or(Value::Null);
     let base = data.get("base").cloned().unwrap_or(Value::Null);
-    k.insert("head_sha".into(), head.get("sha").cloned().unwrap_or(Value::Null));
-    k.insert("head_ref".into(), head.get("ref").cloned().unwrap_or(Value::Null));
-    k.insert("base_sha".into(), base.get("sha").cloned().unwrap_or(Value::Null));
-    k.insert("base_ref".into(), base.get("ref").cloned().unwrap_or(Value::Null));
+    k.insert(
+        "head_sha".into(),
+        head.get("sha").cloned().unwrap_or(Value::Null),
+    );
+    k.insert(
+        "head_ref".into(),
+        head.get("ref").cloned().unwrap_or(Value::Null),
+    );
+    k.insert(
+        "base_sha".into(),
+        base.get("sha").cloned().unwrap_or(Value::Null),
+    );
+    k.insert(
+        "base_ref".into(),
+        base.get("ref").cloned().unwrap_or(Value::Null),
+    );
     k.insert(
         "updated_at".into(),
         data.get("updated_at").cloned().unwrap_or(Value::Null),
@@ -232,7 +250,10 @@ fn make_review_record(repo: &str, num: u32, r: &Value) -> Value {
     let mut k = Map::new();
     k.insert("repo_full_name".into(), Value::String(repo.into()));
     k.insert("pr_number".into(), Value::from(num));
-    k.insert("review_id".into(), r.get("id").cloned().unwrap_or(Value::Null));
+    k.insert(
+        "review_id".into(),
+        r.get("id").cloned().unwrap_or(Value::Null),
+    );
     k.insert(
         "html_url".into(),
         r.get("html_url").cloned().unwrap_or(Value::Null),
@@ -242,7 +263,10 @@ fn make_review_record(repo: &str, num: u32, r: &Value) -> Value {
         "user_login".into(),
         user.get("login").cloned().unwrap_or(Value::Null),
     );
-    k.insert("state".into(), r.get("state").cloned().unwrap_or(Value::Null));
+    k.insert(
+        "state".into(),
+        r.get("state").cloned().unwrap_or(Value::Null),
+    );
     k.insert(
         "commit_id".into(),
         r.get("commit_id").cloned().unwrap_or(Value::Null),
@@ -268,7 +292,9 @@ fn make_review_comment_record(repo: &str, num: u32, c: &Value) -> Value {
     );
     k.insert(
         "pull_request_review_id".into(),
-        c.get("pull_request_review_id").cloned().unwrap_or(Value::Null),
+        c.get("pull_request_review_id")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     k.insert(
         "html_url".into(),
@@ -326,11 +352,7 @@ async fn fetch_self(client: &GitHubClient, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn search_prs(
-    client: &GitHubClient,
-    scope: &str,
-    since: Option<&str>,
-) -> Result<Vec<Value>> {
+async fn search_prs(client: &GitHubClient, scope: &str, since: Option<&str>) -> Result<Vec<Value>> {
     let mut q = format!("is:pr {scope}");
     if let Some(s) = since {
         q.push_str(&format!(" updated:>={s}"));
@@ -364,7 +386,10 @@ async fn discover_prs(
             }
         };
         for item in &results {
-            let repo_url = item.get("repository_url").and_then(|v| v.as_str()).unwrap_or("");
+            let repo_url = item
+                .get("repository_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let repo = repo_url.rsplit("/repos/").next().unwrap_or("");
             let num = item.get("number").and_then(|v| v.as_u64()).unwrap_or(0);
             if !repo.is_empty() && num > 0 && repo.contains('/') {
@@ -381,6 +406,7 @@ async fn discover_prs(
     Ok((seen.into_iter().collect(), new_state))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_one_pr(
     client: &GitHubClient,
     out_dir: &Path,
@@ -406,7 +432,13 @@ async fn fetch_one_pr(
         return Ok(());
     }
     let pr_rec = make_pr_record(repo, &pr_data);
-    let counts = diff_and_save(out_dir, ENTITY_PR, &[pr_rec.clone()], existing_prs, key_pr)?;
+    let counts = diff_and_save(
+        out_dir,
+        ENTITY_PR,
+        std::slice::from_ref(&pr_rec),
+        existing_prs,
+        key_pr,
+    )?;
     summary.new_prs += counts.new;
     summary.upd_prs += counts.updated;
     existing_prs.insert(key_pr(&pr_rec), pr_rec);
@@ -419,7 +451,13 @@ async fn fetch_one_pr(
         .map(|c| make_issue_comment_record(repo, num, c))
         .collect();
     if !ic_recs.is_empty() {
-        let counts = diff_and_save(out_dir, ENTITY_ISSUE_COMMENT, &ic_recs, existing_ic, key_comment)?;
+        let counts = diff_and_save(
+            out_dir,
+            ENTITY_ISSUE_COMMENT,
+            &ic_recs,
+            existing_ic,
+            key_comment,
+        )?;
         summary.new_issue_comments += counts.new;
         summary.upd_issue_comments += counts.updated;
         for r in &ic_recs {
@@ -480,8 +518,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut existing_prs = load_latest_by_key(&opts.out_dir, ENTITY_PR, key_pr)?;
     let mut existing_ic = load_latest_by_key(&opts.out_dir, ENTITY_ISSUE_COMMENT, key_comment)?;
     let mut existing_r = load_latest_by_key(&opts.out_dir, ENTITY_PR_REVIEW, key_review)?;
-    let mut existing_rc =
-        load_latest_by_key(&opts.out_dir, ENTITY_PR_REVIEW_COMMENT, key_comment)?;
+    let mut existing_rc = load_latest_by_key(&opts.out_dir, ENTITY_PR_REVIEW_COMMENT, key_comment)?;
 
     let pr_keys: Vec<(String, u32)> = if let Some(spr) = &opts.single_pr {
         vec![spr.clone()]
@@ -540,7 +577,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// Parse `owner/repo#123` (or `owner/repo/pull/123`) into `(repo, number)`.
 pub fn parse_pr_ref(s: &str) -> Result<(String, u32)> {
     if let Some((repo, num)) = s.split_once('#') {
-        let n: u32 = num.parse().with_context(|| format!("bad PR number {num:?}"))?;
+        let n: u32 = num
+            .parse()
+            .with_context(|| format!("bad PR number {num:?}"))?;
         return Ok((repo.to_string(), n));
     }
     // URL form

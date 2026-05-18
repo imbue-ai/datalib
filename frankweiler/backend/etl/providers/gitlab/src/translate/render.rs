@@ -40,13 +40,20 @@ pub fn slugify(name: &str) -> String {
         return "untitled".into();
     }
     let lower = name.to_lowercase();
-    let s = SLUG_RE.replace_all(&lower, "-").trim_matches('-').to_string();
+    let s = SLUG_RE
+        .replace_all(&lower, "-")
+        .trim_matches('-')
+        .to_string();
     if s.is_empty() {
         return "untitled".into();
     }
     let mut s: String = s.chars().take(SLUG_MAX_LEN).collect();
     s = s.trim_end_matches('-').to_string();
-    if s.is_empty() { "untitled".into() } else { s }
+    if s.is_empty() {
+        "untitled".into()
+    } else {
+        s
+    }
 }
 
 pub fn mr_qmd_path_rel(project_full_path: &str, iid: u32, title: &str) -> String {
@@ -86,7 +93,13 @@ fn quote_body(body: &str) -> String {
         return "> *(empty)*".into();
     }
     body.lines()
-        .map(|l| if l.is_empty() { ">".to_string() } else { format!("> {l}") })
+        .map(|l| {
+            if l.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {l}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -115,14 +128,29 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     let mut out = String::new();
     out.push_str("---\n");
     out.push_str("provider: gitlab\n");
-    out.push_str(&format!("project: {}\n", yaml_scalar(&mr.project_full_path)));
+    out.push_str(&format!(
+        "project: {}\n",
+        yaml_scalar(&mr.project_full_path)
+    ));
     out.push_str(&format!("mr_iid: {}\n", mr.mr_iid));
     out.push_str(&format!("title: {}\n", yaml_scalar(&mr.title)));
     out.push_str(&format!("state: {}\n", yaml_opt(mr.state.as_deref())));
-    out.push_str(&format!("author: {}\n", yaml_opt(mr.author_username.as_deref())));
-    out.push_str(&format!("created_at: {}\n", yaml_opt(mr.created_at.as_deref())));
-    out.push_str(&format!("updated_at: {}\n", yaml_opt(mr.updated_at.as_deref())));
-    out.push_str(&format!("merged_at: {}\n", yaml_opt(mr.merged_at.as_deref())));
+    out.push_str(&format!(
+        "author: {}\n",
+        yaml_opt(mr.author_username.as_deref())
+    ));
+    out.push_str(&format!(
+        "created_at: {}\n",
+        yaml_opt(mr.created_at.as_deref())
+    ));
+    out.push_str(&format!(
+        "updated_at: {}\n",
+        yaml_opt(mr.updated_at.as_deref())
+    ));
+    out.push_str(&format!(
+        "merged_at: {}\n",
+        yaml_opt(mr.merged_at.as_deref())
+    ));
     out.push_str(&format!("head_sha: {}\n", yaml_opt(mr.head_sha.as_deref())));
     out.push_str(&format!("base_sha: {}\n", yaml_opt(mr.base_sha.as_deref())));
     out.push_str(&format!(

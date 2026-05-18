@@ -133,7 +133,13 @@ impl NotionUnofficialClient {
                         "{method}: HTTP {status} after {attempt} retries"
                     )));
                 }
-                tracing::warn!(method, status, backoff_ms, attempt = attempt + 1, "transient; sleeping");
+                tracing::warn!(
+                    method,
+                    status,
+                    backoff_ms,
+                    attempt = attempt + 1,
+                    "transient; sleeping"
+                );
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                 backoff_ms = (backoff_ms * 2).min(RETRY_MAX_BACKOFF_MS);
                 continue;
@@ -147,11 +153,13 @@ impl NotionUnofficialClient {
     }
 
     pub async fn load_user_content(&self) -> Result<Value, NotionUnofficialError> {
-        self.post("loadUserContent", &Value::Object(Default::default())).await
+        self.post("loadUserContent", &Value::Object(Default::default()))
+            .await
     }
 
     pub async fn get_spaces(&self) -> Result<Value, NotionUnofficialError> {
-        self.post("getSpaces", &Value::Object(Default::default())).await
+        self.post("getSpaces", &Value::Object(Default::default()))
+            .await
     }
 
     pub async fn get_notification_log(

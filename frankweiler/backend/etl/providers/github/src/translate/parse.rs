@@ -27,7 +27,11 @@ pub static GITHUB_UUID_NS: Lazy<Uuid> = Lazy::new(|| {
 });
 
 pub fn github_pr_uuid(repo: &str, number: u32) -> String {
-    Uuid::new_v5(&GITHUB_UUID_NS, format!("github:{repo}:pr:{number}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &GITHUB_UUID_NS,
+        format!("github:{repo}:pr:{number}").as_bytes(),
+    )
+    .to_string()
 }
 pub fn github_issue_comment_uuid(repo: &str, id: i64) -> String {
     Uuid::new_v5(
@@ -161,7 +165,11 @@ fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(|x| x.as_str())
 }
 fn str_or_raw<'a>(rec: &'a Value, k: &str) -> Option<&'a str> {
-    str_of(rec, k).or_else(|| rec.get("raw").and_then(|r| r.get(k)).and_then(|v| v.as_str()))
+    str_of(rec, k).or_else(|| {
+        rec.get("raw")
+            .and_then(|r| r.get(k))
+            .and_then(|v| v.as_str())
+    })
 }
 
 pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
@@ -199,7 +207,9 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
     for rec in load_latest_by(api_dir, ENTITY_PR, |rec| {
         format!(
             "{}#{}",
-            rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("repo_full_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("pr_number").and_then(|v| v.as_i64()).unwrap_or(0)
         )
     })? {
@@ -221,36 +231,63 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
             uuid: github_pr_uuid(&repo, num),
             repo_full_name: repo,
             pr_number: num,
-            title: raw.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            body: raw.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            title: raw
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            body: raw
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             state: str_or_raw(&rec, "state").map(String::from),
             html_url: str_or_raw(&rec, "html_url").map(String::from),
             head_sha: rec
                 .get("head_sha")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("head").and_then(|h| h.get("sha")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    raw.get("head")
+                        .and_then(|h| h.get("sha"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(String::from),
             base_sha: rec
                 .get("base_sha")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("base").and_then(|h| h.get("sha")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    raw.get("base")
+                        .and_then(|h| h.get("sha"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(String::from),
             head_ref: rec
                 .get("head_ref")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("head").and_then(|h| h.get("ref")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    raw.get("head")
+                        .and_then(|h| h.get("ref"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(String::from),
             base_ref: rec
                 .get("base_ref")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("base").and_then(|h| h.get("ref")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    raw.get("base")
+                        .and_then(|h| h.get("ref"))
+                        .and_then(|v| v.as_str())
+                })
                 .map(String::from),
             user_login: raw
                 .get("user")
                 .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: raw.get("created_at").and_then(|v| v.as_str()).map(String::from),
+            created_at: raw
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             updated_at: rec
                 .get("updated_at")
                 .and_then(|v| v.as_str())
@@ -264,12 +301,18 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
     for rec in load_latest_by(api_dir, ENTITY_ISSUE_COMMENT, |rec| {
         format!(
             "{}#{}",
-            rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("repo_full_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("comment_id").and_then(|v| v.as_i64()).unwrap_or(0)
         )
     })? {
         let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let repo = rec
+            .get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let id = rec
             .get("comment_id")
@@ -296,7 +339,11 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
                         .and_then(|v| v.as_str())
                 })
                 .map(String::from),
-            body: raw.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            body: raw
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             html_url: str_or_raw(&rec, "html_url").map(String::from),
             path: None,
             line: None,
@@ -311,12 +358,18 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
     for rec in load_latest_by(api_dir, ENTITY_PR_REVIEW, |rec| {
         format!(
             "{}#{}",
-            rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("repo_full_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("review_id").and_then(|v| v.as_i64()).unwrap_or(0)
         )
     })? {
         let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let repo = rec
+            .get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let id = rec
             .get("review_id")
@@ -326,7 +379,11 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
         if repo.is_empty() || num == 0 || id == 0 {
             continue;
         }
-        let body = raw.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let body = raw
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let state = rec
             .get("state")
             .and_then(|v| v.as_str())
@@ -373,12 +430,18 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
     for rec in load_latest_by(api_dir, ENTITY_PR_REVIEW_COMMENT, |rec| {
         format!(
             "{}#{}",
-            rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or(""),
+            rec.get("repo_full_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
             rec.get("comment_id").and_then(|v| v.as_i64()).unwrap_or(0)
         )
     })? {
         let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec.get("repo_full_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let repo = rec
+            .get("repo_full_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let id = rec
             .get("comment_id")
@@ -409,7 +472,11 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
                         .and_then(|v| v.as_str())
                 })
                 .map(String::from),
-            body: raw.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            body: raw
+                .get("body")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             html_url: str_or_raw(&rec, "html_url").map(String::from),
             path: rec
                 .get("path")
