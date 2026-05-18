@@ -176,6 +176,7 @@ pub async fn load_all(
     pool: &MySqlPool,
     out_dir: &Path,
     progress: impl Fn(&str),
+    now_override: Option<&str>,
 ) -> Result<LoadSummary> {
     let rendered_root = out_dir.join("rendered_md");
     let mut sidecars: Vec<PathBuf> = Vec::new();
@@ -218,6 +219,7 @@ pub async fn load_all(
             &fingerprint,
             sidecar.header.render_version,
             &sidecar.rows,
+            now_override,
         )
         .await
         .with_context(|| format!("load {}", sidecar_path.display()))?;
@@ -269,6 +271,7 @@ async fn apply_document(
     fingerprint: &str,
     render_version: u32,
     rows: &[GridRow],
+    now_override: Option<&str>,
 ) -> Result<usize> {
     let mut conn = pool.acquire().await.context("acquire conn")?;
 
@@ -282,7 +285,9 @@ async fn apply_document(
         insert_grid_row(&mut conn, row).await?;
     }
 
-    let loaded_at = chrono::Utc::now().to_rfc3339();
+    let loaded_at = now_override
+        .map(str::to_string)
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
     sqlx::query(
         "INSERT INTO documents_loaded (qmd_path, document_uuid, source_fingerprint, loaded_at) \
          VALUES (?, ?, ?, ?) \

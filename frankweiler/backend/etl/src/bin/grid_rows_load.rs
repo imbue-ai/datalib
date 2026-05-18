@@ -124,10 +124,15 @@ async fn main() -> Result<()> {
     let _enter = span.enter();
 
     let done = AtomicUsize::new(0);
-    let summary = load_all(&pool, &args.out, |msg| {
-        let _ = done.fetch_add(1, Ordering::Relaxed);
-        tracing::Span::current().pb_set_message(msg);
-    })
+    let summary = load_all(
+        &pool,
+        &args.out,
+        |msg| {
+            let _ = done.fetch_add(1, Ordering::Relaxed);
+            tracing::Span::current().pb_set_message(msg);
+        },
+        None,
+    )
     .await?;
 
     info!(

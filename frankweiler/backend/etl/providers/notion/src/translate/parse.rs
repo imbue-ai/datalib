@@ -16,7 +16,7 @@
 //! - `notion_block` — for `prod-files-secure` media URLs and bookmark
 //!   titles that the official API leaves blank.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -39,7 +39,7 @@ pub struct ParsedNotionOfficial {
 }
 
 fn load_latest_raw(api_dir: &Path, entity: &str) -> Result<Vec<Value>> {
-    let mut latest: HashMap<String, Value> = HashMap::new();
+    let mut latest: BTreeMap<String, Value> = BTreeMap::new();
     for stream in ["created", "updated"] {
         let path = api_dir.join(entity).join(stream).join("events.jsonl");
         if !path.exists() {

@@ -90,7 +90,6 @@ async fn main() -> Result<()> {
     if args.playback_root.is_some() {
         bail!("--playback-root not yet supported; HTTP fixture synthesizers are pending");
     }
-    let _ = &args.now;
     let _ = args.deterministic;
 
     let shared = args
@@ -145,7 +144,9 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("connect dolt at {url}"))?;
     init_schema(&pool).await?;
-    let summary = load_all(&pool, &root, |_| {}).await.context("load_all")?;
+    let summary = load_all(&pool, &root, |_| {}, Some(&args.now))
+        .await
+        .context("load_all")?;
     eprintln!(
         "[frankweiler-sync] loaded documents={}/{} rows={}",
         summary.documents_loaded, summary.documents_total, summary.rows_inserted
