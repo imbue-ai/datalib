@@ -56,7 +56,7 @@ fn url_encode(s: &str) -> String {
     out
 }
 
-fn build_url(method: &str, params: &BTreeMap<String, String>) -> String {
+pub(crate) fn build_url(method: &str, params: &BTreeMap<String, String>) -> String {
     let base = format!("https://slack.com/api/{}", method);
     if params.is_empty() {
         return base;
