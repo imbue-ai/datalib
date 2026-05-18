@@ -10,6 +10,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{json, Value};
 
+use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+
+use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{AttachmentRow, ContentBlockRow, ConversationRow, MessageRow, ParsedExport};
 
 const SLUG_MAX_LEN: usize = 60;
@@ -341,6 +344,20 @@ pub fn render_all(
             std::fs::create_dir_all(dir)?;
         }
         std::fs::write(&abs, &r.body)?;
+
+        let rows = rows_for_conversation(parsed, &conv.conversation_uuid);
+        let sidecar = Sidecar {
+            header: SidecarHeader {
+                document_uuid: conv.conversation_uuid.clone(),
+                source_fingerprint: fingerprint_for_conversation(parsed, &conv.conversation_uuid),
+                render_version: RENDER_VERSION,
+            },
+            rows,
+        };
+        let sidecar_abs = abs.with_extension("grid_rows.json");
+        let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
+        std::fs::write(&sidecar_abs, sidecar_json)?;
+
         written.push(rel);
     }
     Ok(written)

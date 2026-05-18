@@ -9,12 +9,15 @@ use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use regex::Regex;
 
+use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+
+use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi};
 
 const SLUG_MAX_LEN: usize = 60;
 static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
 
-fn slugify(name: Option<&str>) -> String {
+pub(crate) fn slugify(name: Option<&str>) -> String {
     let Some(name) = name else {
         return "untitled".into();
     };
@@ -125,6 +128,20 @@ pub fn render_all(
             std::fs::create_dir_all(dir)?;
         }
         std::fs::write(&abs, &r.body)?;
+
+        let rows = rows_for_conversation(parsed, &conv.conversation_id);
+        let sidecar = Sidecar {
+            header: SidecarHeader {
+                document_uuid: conv.conversation_id.clone(),
+                source_fingerprint: fingerprint_for_conversation(parsed, &conv.conversation_id),
+                render_version: RENDER_VERSION,
+            },
+            rows,
+        };
+        let sidecar_abs = abs.with_extension("grid_rows.json");
+        let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
+        std::fs::write(&sidecar_abs, sidecar_json)?;
+
         written.push(rel);
     }
     Ok(written)

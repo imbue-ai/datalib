@@ -1,7 +1,56 @@
-//! Stub for `anthropic-translate`. Implemented at Stage 4 of the
-//! porting plan.
+//! `anthropic-translate` — read the raw API capture written by
+//! `anthropic-download` and emit one CommonMark `.md` per Claude
+//! conversation plus a co-located `*.grid_rows.json` sidecar.
 
-fn main() {
-    eprintln!("anthropic-translate: not implemented yet (porting in progress)");
-    std::process::exit(1);
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use frankweiler_etl::obs::{init as init_obs, ObsArgs};
+use frankweiler_etl_anthropic::translate::parse::parse_export;
+use frankweiler_etl_anthropic::translate::render::render_all;
+use tracing::{info, info_span};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "anthropic-translate",
+    about = "Translate captured Anthropic raw_api into rendered_md/ + grid_rows sidecars."
+)]
+struct Args {
+    /// Output root (same value passed to `anthropic-download --out`).
+    /// The translator reads `<out>/raw_api/` and writes to
+    /// `<out>/rendered_md/anthropic/...`.
+    #[arg(long, env = "ANTHROPIC_OUT")]
+    out: PathBuf,
+
+    #[command(flatten)]
+    obs: ObsArgs,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let _guard = init_obs(&args.obs, "anthropic-translate")?;
+
+    let span = info_span!("anthropic_translate", out = %args.out.display());
+    let _enter = span.enter();
+
+    info!(event = "anthropic_translate_start");
+    let api_dir = args.out.join("raw_api");
+    let parsed =
+        parse_export(&api_dir).with_context(|| format!("parse_export({})", api_dir.display()))?;
+    info!(
+        event = "anthropic_translate_loaded",
+        accounts = parsed.accounts.len(),
+        conversations = parsed.conversations.len(),
+        messages = parsed.messages.len(),
+        blocks = parsed.content_blocks.len(),
+        attachments = parsed.attachments.len(),
+    );
+
+    let written = render_all(&parsed, &args.out)?;
+    info!(
+        event = "anthropic_translate_complete",
+        documents = written.len()
+    );
+    Ok(())
 }

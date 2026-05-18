@@ -51,7 +51,13 @@ rust_binary(
     srcs = ["src/bin/anthropic_translate.rs"],
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
-    deps = [],
+    deps = [
+        ":frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tracing",
+    ],
 )
 
 rust_test(
