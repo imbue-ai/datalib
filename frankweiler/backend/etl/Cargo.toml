@@ -32,6 +32,7 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 sqlx = { workspace = true }
 sha2 = "0.10"
+tempfile = "3"
 
 # Observability stack — emitted as structured events, rendered as a
 # progress UI on a TTY, JSON on stderr otherwise, and optionally

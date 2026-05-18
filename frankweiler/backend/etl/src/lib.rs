@@ -15,6 +15,7 @@
 //! `documents_loaded` and skips unchanged inputs on subsequent runs.
 
 pub mod event_store;
+pub mod http;
 pub mod load;
 pub mod obs;
 pub mod raw_store;
