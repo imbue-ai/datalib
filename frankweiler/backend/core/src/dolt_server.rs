@@ -199,9 +199,15 @@ impl Drop for DoltServer {
     }
 }
 
-fn resolve_dolt_binary(override_path: Option<&Path>) -> Result<PathBuf, DoltServerError> {
+pub fn resolve_dolt_binary(override_path: Option<&Path>) -> Result<PathBuf, DoltServerError> {
     if let Some(p) = override_path {
         return Ok(p.to_path_buf());
+    }
+    // `DOLT_BIN` lets direnv (or any other env-var source) pin the
+    // binary without depending on a sandboxed `PATH`. Forwarded into
+    // bazel actions via `build --action_env=DOLT_BIN` in `.bazelrc`.
+    if let Some(p) = std::env::var_os("DOLT_BIN") {
+        return Ok(PathBuf::from(p));
     }
     which_on_path("dolt").ok_or(DoltServerError::DoltMissing)
 }

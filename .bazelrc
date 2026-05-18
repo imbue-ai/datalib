@@ -2,6 +2,13 @@ common --enable_bzlmod
 common --noenable_workspace
 build --incompatible_strict_action_env
 test --test_output=errors
+# Pin per-developer tools (currently just `dolt`) via env vars rather
+# than forwarding the whole PATH — keeps the action cache stable when
+# unrelated PATH bits change between invocations. Set `DOLT_BIN` in
+# your `.envrc` (e.g. `export DOLT_BIN=$(which dolt)`). Consumed by
+# `frankweiler-core::dolt_server::resolve_dolt_binary`.
+build --action_env=DOLT_BIN
+test --test_env=DOLT_BIN
 
 # Stamp builds with the git hash via tools/workspace_status.sh. Consumers
 # read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing

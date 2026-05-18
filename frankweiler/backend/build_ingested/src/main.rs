@@ -209,7 +209,9 @@ fn translate_notion(fixture: &Path, root: &Path) -> Result<()> {
 
 fn dolt_dump(repo_dir: &Path, dump_sql: &Path) -> Result<()> {
     eprintln!("[build-ingested] dolt dump -> {}", dump_sql.display());
-    let status = Command::new("dolt")
+    let dolt = frankweiler_core::dolt_server::resolve_dolt_binary(None)
+        .context("resolve dolt binary for dump")?;
+    let status = Command::new(&dolt)
         .arg("dump")
         .arg("--result-format")
         .arg("sql")
