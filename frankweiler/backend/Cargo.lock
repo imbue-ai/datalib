@@ -643,6 +643,8 @@ dependencies = [
  "frankweiler-etl",
  "frankweiler-schema",
  "insta",
+ "once_cell",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -650,6 +652,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-indicatif",
+ "uuid",
 ]
 
 [[package]]
@@ -662,6 +665,8 @@ dependencies = [
  "frankweiler-etl",
  "frankweiler-schema",
  "insta",
+ "once_cell",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -669,6 +674,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-indicatif",
+ "uuid",
 ]
 
 [[package]]

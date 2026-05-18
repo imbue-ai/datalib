@@ -26,12 +26,15 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:once_cell",
+        "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:tracing-indicatif",
+        "@frankweiler_crates//:uuid",
     ],
 )
 
@@ -56,4 +59,22 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl_chatgpt",
     edition = "2021",
+)
+
+# Render golden test. Fixture lives in-crate; resolved via
+# CARGO_MANIFEST_DIR which bazel doesn't surface in sandbox runfiles,
+# so tag manual. Run via `cargo test -p frankweiler-etl-chatgpt`.
+rust_test(
+    name = "chatgpt_render_test",
+    srcs = ["tests/chatgpt_render.rs"],
+    crate_root = "tests/chatgpt_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_chatgpt",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:tempfile",
+    ],
 )

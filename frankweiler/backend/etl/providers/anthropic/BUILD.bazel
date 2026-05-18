@@ -26,12 +26,15 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:once_cell",
+        "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:tracing-indicatif",
+        "@frankweiler_crates//:uuid",
     ],
 )
 
@@ -56,4 +59,19 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl_anthropic",
     edition = "2021",
+)
+
+rust_test(
+    name = "anthropic_render_test",
+    srcs = ["tests/anthropic_render.rs"],
+    crate_root = "tests/anthropic_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {"INSTA_WORKSPACE_ROOT": "."},
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_etl_anthropic",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:tempfile",
+    ],
 )

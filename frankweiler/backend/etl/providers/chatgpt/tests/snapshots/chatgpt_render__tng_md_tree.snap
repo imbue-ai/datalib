@@ -1,0 +1,147 @@
+---
+source: tests/chatgpt_render.rs
+expression: bundle
+snapshot_kind: text
+---
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot.md ===
+---
+provider: openai
+id: 68fa0001-fake-7000-8000-positronic0001
+title: Sonnet on a Cat Named Spot
+account_id: user-FAKE0DATAANDROID0POSITRONIC1
+create_time: "2370-10-24T08:00:00.000000+00:00"
+update_time: "2370-10-24T08:05:00.000000+00:00"
+default_model_slug: gpt-5
+---
+
+# Sonnet on a Cat Named Spot
+
+<div id="m-msg-fake-spot-0001" data-msg-index="0" class="msg msg--openai">
+
+## User
+
+*2370-10-24T08:00:00.000000+00:00*
+
+<a id="b-msg-fake-spot-0001-0"></a>Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.
+
+</div>
+
+<div id="m-msg-fake-spot-0002" data-msg-index="1" class="msg msg--openai">
+
+## Assistant
+
+*2370-10-24T08:02:00.000000+00:00 · gpt-5*
+
+<a id="b-msg-fake-spot-0002-0"></a>Upon the bridge, where duty bids us stand,
+A tabby of the warmest tangerine,
+With feline grace defies the captain's hand
+And treads the helm with footfall light, serene.
+
+No Klingon foe nor anomaly arrayed
+Can match the menace of his sudden leap;
+The console glows where Spot in mirth has played,
+And alarms ring out where he chose to sleep.
+
+Yet Data, faithful keeper, smiles unseen —
+An android's joy, though circuited and spare —
+For in this beast a mystery serene
+Reflects the very life he hopes to share.
+
+So bless thee, Spot, of fur and quiet purr:
+Thou art my muse, my console saboteur.
+
+</div>
+
+<div id="m-msg-fake-spot-0003" data-msg-index="2" class="msg msg--openai">
+
+## User
+
+*2370-10-24T08:05:00.000000+00:00*
+
+<a id="b-msg-fake-spot-0003-0"></a>Curious. The closing couplet is satisfying. Thank you.
+
+</div>
+
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration.md ===
+---
+provider: openai
+id: 68fa0002-fake-7000-8000-positronic0002
+title: Polynomial Fit for Sensor Calibration
+account_id: user-FAKE0DATAANDROID0POSITRONIC1
+create_time: "2370-10-25T08:00:00.000000+00:00"
+update_time: "2370-10-25T08:05:20.000000+00:00"
+default_model_slug: gpt-5
+---
+
+# Polynomial Fit for Sensor Calibration
+
+<div id="m-msg-fake-poly-0001" data-msg-index="0" class="msg msg--openai">
+
+## User
+
+*2370-10-25T08:00:00.000000+00:00*
+
+<a id="b-msg-fake-poly-0001-0"></a>Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.
+
+</div>
+
+<div id="m-msg-fake-poly-0002" data-msg-index="1" class="msg msg--openai">
+
+## Assistant
+
+*2370-10-25T08:03:20.000000+00:00 · gpt-5*
+
+<a id="b-msg-fake-poly-0002-0"></a>
+```python
+import numpy as np
+x = np.array([1,2,3,4,5])
+y = np.array([2.1, 4.0, 9.1, 15.8, 25.0])
+coeffs = np.polyfit(x, y, 2)
+print(coeffs)
+```
+
+</div>
+
+<div id="m-msg-fake-poly-0003" data-msg-index="2" class="msg msg--openai">
+
+## Assistant
+
+*2370-10-25T08:05:20.000000+00:00 · gpt-5*
+
+<a id="b-msg-fake-poly-0003-0"></a>The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.
+
+</div>
+
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-sub.md ===
+---
+provider: openai
+id: 68fa0003-fake-7000-8000-positronic0003
+title: "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?"
+account_id: user-FAKE0DATAANDROID0POSITRONIC1
+create_time: "2370-10-26T08:00:00.000000+00:00"
+update_time: "2370-10-26T08:05:00.000000+00:00"
+default_model_slug: gpt-5
+---
+
+# I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
+
+<div id="m-msg-fake-warp-0001" data-msg-index="0" class="msg msg--openai">
+
+## User
+
+*2370-10-26T08:00:00.000000+00:00*
+
+<a id="b-msg-fake-warp-0001-0"></a>I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
+
+</div>
+
+<div id="m-msg-fake-warp-0002" data-msg-index="1" class="msg msg--openai">
+
+## Assistant
+
+*2370-10-26T08:05:00.000000+00:00 · gpt-5*
+
+<a id="b-msg-fake-warp-0002-0"></a>The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.
+
+</div>
+

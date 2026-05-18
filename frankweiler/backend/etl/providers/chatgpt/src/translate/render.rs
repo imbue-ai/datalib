@@ -1,0 +1,318 @@
+//! Port of `_render_one_openai` from `src/ingest/render.py`, plus the
+//! shared `_slugify` / `_yaml_scalar` / `_bump_iso` / `_msg_div_open`
+//! helpers (kept private here; if the Anthropic crate's copies and
+//! these drift, we'll promote them into `frankweiler-etl`).
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, FixedOffset};
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+use super::parse::{OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi};
+
+const SLUG_MAX_LEN: usize = 60;
+static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
+
+fn slugify(name: Option<&str>) -> String {
+    let Some(name) = name else {
+        return "untitled".into();
+    };
+    let lower = name.to_lowercase();
+    let dashed = SLUG_RE.replace_all(&lower, "-");
+    let trimmed = dashed.trim_matches('-');
+    if trimmed.is_empty() {
+        return "untitled".into();
+    }
+    let cut: String = trimmed.chars().take(SLUG_MAX_LEN).collect();
+    let trimmed_tail = cut.trim_end_matches('-');
+    if trimmed_tail.is_empty() {
+        "untitled".into()
+    } else {
+        trimmed_tail.into()
+    }
+}
+
+fn yaml_scalar(v: Option<&str>) -> String {
+    let Some(s) = v else {
+        return "null".into();
+    };
+    let needs_quote = s
+        .chars()
+        .any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
+        || s != s.trim();
+    if needs_quote {
+        serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+    } else {
+        s.into()
+    }
+}
+
+fn bump_iso(ts: &str) -> String {
+    let parse_input = if let Some(prefix) = ts.strip_suffix('Z') {
+        format!("{prefix}+00:00")
+    } else {
+        ts.to_string()
+    };
+    let Ok(dt) = DateTime::<FixedOffset>::parse_from_rfc3339(&parse_input) else {
+        return ts.to_string();
+    };
+    let bumped = dt + chrono::Duration::microseconds(1);
+    let mut out = bumped.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false);
+    if ts.ends_with('Z') && out.ends_with("+00:00") {
+        out.truncate(out.len() - 6);
+        out.push('Z');
+    }
+    out
+}
+
+fn msg_div_open(msg_uuid: &str, msg_index: usize, provider: &str) -> String {
+    format!(
+        "<div id=\"m-{msg_uuid}\" data-msg-index=\"{msg_index}\" class=\"msg msg--{provider}\">"
+    )
+}
+
+const MSG_DIV_CLOSE: &str = "</div>";
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => {
+            let mut out: String = c.to_uppercase().collect();
+            for rest in chars {
+                out.extend(rest.to_lowercase());
+            }
+            out
+        }
+    }
+}
+
+pub struct Rendered {
+    pub conversation_id: String,
+    pub slug: String,
+    pub account_id: String,
+    pub body: String,
+}
+
+impl Rendered {
+    /// Relative path under `<root>/` matching `_render_one_openai`'s
+    /// Python output: `rendered_md/openai/<account>/llm_chats/<conv>__<slug>.md`.
+    pub fn relative_path(&self) -> std::path::PathBuf {
+        std::path::PathBuf::from("rendered_md/openai")
+            .join(&self.account_id)
+            .join("llm_chats")
+            .join(format!("{}__{}.md", self.conversation_id, self.slug))
+    }
+}
+
+/// Render every conversation into `<root>/rendered_md/...`. Returns the
+/// list of paths written. Matches `render_openai` semantics minus the
+/// orphan cleanup (the Rust translator's idempotency story rides on
+/// `.grid_rows.json` sidecars added in Stage 4).
+pub fn render_all(
+    parsed: &ParsedChatGPTApi,
+    root: &std::path::Path,
+) -> std::io::Result<Vec<std::path::PathBuf>> {
+    let mut written = Vec::new();
+    for conv in &parsed.conversations {
+        let Some(r) = render_one(parsed, &conv.conversation_id) else {
+            continue;
+        };
+        let rel = r.relative_path();
+        let abs = root.join(&rel);
+        if let Some(dir) = abs.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&abs, &r.body)?;
+        written.push(rel);
+    }
+    Ok(written)
+}
+
+pub fn render_one(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Option<Rendered> {
+    let conv: &OAConversationRow = parsed
+        .conversations
+        .iter()
+        .find(|c| c.conversation_id == conversation_id)?;
+
+    let mut msgs_by_conv: HashMap<&str, Vec<&OAMessageRow>> = HashMap::new();
+    for m in &parsed.messages {
+        msgs_by_conv.entry(&m.conversation_id).or_default().push(m);
+    }
+    let mut parts_by_msg: HashMap<&str, Vec<&OAContentPartRow>> = HashMap::new();
+    for p in &parsed.content_parts {
+        parts_by_msg.entry(&p.message_id).or_default().push(p);
+    }
+
+    let msgs = msgs_by_conv
+        .get(conv.conversation_id.as_str())
+        .cloned()
+        .unwrap_or_default();
+    let msg_by_id: HashMap<&str, &OAMessageRow> =
+        msgs.iter().map(|m| (m.message_id.as_str(), *m)).collect();
+
+    // Walk current_node → root via parent_id; fall back to create_time sort.
+    let mut path: Vec<&OAMessageRow> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cursor = conv.current_node.clone();
+    while let Some(cid) = cursor {
+        if seen.contains(&cid) {
+            break;
+        }
+        let Some(m) = msg_by_id.get(cid.as_str()) else {
+            break;
+        };
+        seen.insert(cid.clone());
+        path.push(*m);
+        cursor = m.parent_id.clone();
+    }
+    path.reverse();
+    if path.is_empty() {
+        let mut sorted: Vec<&OAMessageRow> = msgs.clone();
+        sorted.sort_by(|a, b| {
+            a.create_time
+                .as_deref()
+                .unwrap_or("")
+                .cmp(b.create_time.as_deref().unwrap_or(""))
+        });
+        path = sorted;
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    out.push("---".into());
+    out.push("provider: openai".into());
+    out.push(format!("id: {}", yaml_scalar(Some(&conv.conversation_id))));
+    out.push(format!("title: {}", yaml_scalar(conv.title.as_deref())));
+    out.push(format!(
+        "account_id: {}",
+        yaml_scalar(conv.account_id.as_deref())
+    ));
+    out.push(format!(
+        "create_time: {}",
+        yaml_scalar(conv.create_time.as_deref())
+    ));
+    out.push(format!(
+        "update_time: {}",
+        yaml_scalar(conv.update_time.as_deref())
+    ));
+    if let Some(slug) = conv.default_model_slug.as_deref() {
+        if !slug.is_empty() {
+            out.push(format!("default_model_slug: {}", yaml_scalar(Some(slug))));
+        }
+    }
+    out.push("---".into());
+    out.push(String::new());
+    out.push(format!(
+        "# {}",
+        conv.title.as_deref().unwrap_or("(untitled)")
+    ));
+    out.push(String::new());
+
+    let mut last_ts: Option<String> = conv.create_time.clone();
+    let mut msg_index = 0usize;
+    for m in &path {
+        if m.role.as_deref() == Some("system")
+            || m.content_type.as_deref() == Some("model_editable_context")
+        {
+            continue;
+        }
+        let mut msg_created = m.create_time.clone();
+        if msg_created.is_none() {
+            if let Some(prev) = &last_ts {
+                msg_created = Some(bump_iso(prev));
+            }
+        }
+        if let Some(ts) = &msg_created {
+            last_ts = Some(ts.clone());
+        }
+        let heading = capitalize(m.role.as_deref().unwrap_or("unknown"));
+        out.push(msg_div_open(&m.message_id, msg_index, "openai"));
+        out.push(String::new());
+        out.push(format!("## {heading}"));
+        msg_index += 1;
+
+        let mut meta_bits: Vec<String> = Vec::new();
+        if let Some(ts) = &msg_created {
+            meta_bits.push(ts.clone());
+        }
+        if let Some(slug) = m.model_slug.as_deref() {
+            if !slug.is_empty() {
+                meta_bits.push(slug.into());
+            }
+        }
+        if !meta_bits.is_empty() {
+            out.push(String::new());
+            out.push(format!("*{}*", meta_bits.join(" · ")));
+        }
+        out.push(String::new());
+
+        let mut parts = parts_by_msg
+            .get(m.message_id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        parts.sort_by_key(|p| p.part_index);
+        for p in parts {
+            let has_text = p.text.as_deref().is_some_and(|s| !s.is_empty());
+            if !has_text && p.kind != "execution_output" && p.kind != "code" {
+                continue;
+            }
+            let anchor = format!("<a id=\"b-{}-{}\"></a>", m.message_id, p.part_index);
+            match p.kind.as_str() {
+                "text" => {
+                    out.push(format!(
+                        "{anchor}{}",
+                        p.text.as_deref().unwrap_or("").trim_end()
+                    ));
+                    out.push(String::new());
+                }
+                "code" => {
+                    out.push(anchor);
+                    out.push(
+                        format!("```{}", p.language.as_deref().unwrap_or(""))
+                            .trim_end()
+                            .to_string(),
+                    );
+                    out.push(p.text.as_deref().unwrap_or("").trim_end().into());
+                    out.push("```".into());
+                    out.push(String::new());
+                }
+                "execution_output" => {
+                    out.push(anchor);
+                    out.push("```".into());
+                    out.push(p.text.as_deref().unwrap_or("").trim_end().into());
+                    out.push("```".into());
+                    out.push(String::new());
+                }
+                "thoughts" | "reasoning_recap" => {
+                    out.push(format!("{anchor}<!-- {} -->", p.kind));
+                    out.push(format!(
+                        "> {}",
+                        p.text.as_deref().unwrap_or("").replace('\n', "\n> ")
+                    ));
+                    out.push(String::new());
+                }
+                other => {
+                    out.push(format!("{anchor}<!-- {other} -->"));
+                    out.push(p.text.as_deref().unwrap_or("").trim_end().into());
+                    out.push(String::new());
+                }
+            }
+        }
+        out.push(MSG_DIV_CLOSE.into());
+        out.push(String::new());
+    }
+
+    let mut body = out.join("\n");
+    while body.ends_with('\n') || body.ends_with('\r') {
+        body.pop();
+    }
+    body.push('\n');
+
+    Some(Rendered {
+        conversation_id: conv.conversation_id.clone(),
+        slug: slugify(conv.title.as_deref()),
+        account_id: conv.account_id.clone().unwrap_or_else(|| "unknown".into()),
+        body,
+    })
+}
