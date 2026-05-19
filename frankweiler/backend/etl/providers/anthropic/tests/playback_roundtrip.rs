@@ -73,6 +73,7 @@ async fn anthropic_synth_playback_extract_roundtrip() {
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuid: None,
+        ..Default::default()
     })
     .await
     .unwrap();

@@ -57,6 +57,7 @@ async fn main() -> Result<()> {
         limit: args.limit,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         conv_uuid: args.conv_uuid.clone(),
+        ..Default::default()
     };
 
     let span = info_span!("chatgpt_download", out = %args.out.display());

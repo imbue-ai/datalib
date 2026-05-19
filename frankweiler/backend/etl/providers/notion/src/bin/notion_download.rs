@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
         max_pages: args.max_pages,
         page: args.page.clone(),
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        ..Default::default()
     };
 
     let span = info_span!("notion_download", out = %args.out.display());

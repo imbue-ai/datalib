@@ -53,6 +53,7 @@ pub struct FetchOptions {
     /// Skip the sync_state.json read so this run does a full backfill.
     pub full_sync: bool,
     pub sleep_between: Duration,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 impl Default for FetchOptions {
@@ -65,6 +66,7 @@ impl Default for FetchOptions {
             single_pr: None,
             full_sync: false,
             sleep_between: Duration::ZERO,
+            progress: frankweiler_etl::progress::Progress::noop(),
         }
     }
 }

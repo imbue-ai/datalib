@@ -64,6 +64,7 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
         limit: None,
         sleep_between: Duration::ZERO,
         conv_uuid: None,
+        ..Default::default()
     })
     .await
     .unwrap();

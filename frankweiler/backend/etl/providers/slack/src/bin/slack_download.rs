@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         refresh_window_days: args.refresh_window_days,
         members_only: args.members_only,
         media: args.media,
+        ..Default::default()
     };
 
     // Root span: every downstream span hangs off this, and OTLP gets a

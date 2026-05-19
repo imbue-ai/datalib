@@ -388,6 +388,7 @@ pub struct FetchOptions {
     pub refresh_window_days: i64,
     pub members_only: bool,
     pub media: bool,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 impl Default for FetchOptions {
@@ -399,6 +400,7 @@ impl Default for FetchOptions {
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             members_only: true,
             media: true,
+            progress: frankweiler_etl::progress::Progress::noop(),
         }
     }
 }

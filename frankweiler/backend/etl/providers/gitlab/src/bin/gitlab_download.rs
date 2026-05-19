@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
         single_mr,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        ..Default::default()
     };
 
     let span = info_span!("gitlab_download", out = %args.out.display());

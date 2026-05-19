@@ -30,7 +30,7 @@ use api::{ClaudeClient, ClaudeError};
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
     pub out_dir: PathBuf,
     pub export_dir: Option<PathBuf>,
@@ -39,6 +39,7 @@ pub struct FetchOptions {
     /// If set, fetch only this conversation UUID and merge it into the
     /// existing cache. The listing/priority walk is skipped entirely.
     pub conv_uuid: Option<String>,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 #[derive(Debug, Default)]

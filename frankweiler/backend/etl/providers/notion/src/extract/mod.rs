@@ -39,6 +39,7 @@ pub struct FetchOptions {
     /// Single-page mode — short-circuit. Fetch only this page.
     pub page: Option<String>,
     pub sleep_between: Duration,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 impl Default for FetchOptions {
@@ -54,6 +55,7 @@ impl Default for FetchOptions {
             max_pages: 5000,
             page: None,
             sleep_between: Duration::ZERO,
+            progress: frankweiler_etl::progress::Progress::noop(),
         }
     }
 }

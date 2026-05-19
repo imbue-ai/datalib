@@ -350,6 +350,7 @@ async fn run_extract_phase(
         overlap: usize::MAX,
         sleep_between: Duration::ZERO,
         conv_uuid: None,
+        ..Default::default()
     })
     .await
     .context("anthropic extract")?;
@@ -361,6 +362,7 @@ async fn run_extract_phase(
         limit: None,
         sleep_between: Duration::ZERO,
         conv_uuid: None,
+        ..Default::default()
     })
     .await
     .context("chatgpt extract")?;
@@ -373,6 +375,7 @@ async fn run_extract_phase(
         refresh_window_days: 0,
         members_only: false,
         media: false,
+        ..Default::default()
     })
     .await
     .context("slack extract")?;

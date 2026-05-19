@@ -41,6 +41,7 @@ pub struct FetchOptions {
     pub single_mr: Option<(String, u32)>, // (project_full_path, iid)
     pub full_sync: bool,
     pub sleep_between: Duration,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 impl Default for FetchOptions {
@@ -53,6 +54,7 @@ impl Default for FetchOptions {
             single_mr: None,
             full_sync: false,
             sleep_between: Duration::ZERO,
+            progress: frankweiler_etl::progress::Progress::noop(),
         }
     }
 }

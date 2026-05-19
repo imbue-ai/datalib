@@ -13,7 +13,38 @@ pub struct Config {
     #[serde(default)]
     pub dolt: DoltConfig,
     #[serde(default)]
+    pub sync: SyncConfig,
+    #[serde(default)]
     pub sources: Vec<SourceConfig>,
+}
+
+/// Settings for `frankweiler-sync` — the one-shot pipeline that walks
+/// every enabled source's Extract → Translate → Load → Dump chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Output directory the pipeline writes `dump.sql`, `rendered_md/`,
+    /// and (unless [`QmdConfig::skip`]) `qmd_index.sqlite` to. Templated:
+    /// `${data_root}` expands to `Config.data_root`. Defaults to
+    /// `${data_root}/build`.
+    #[serde(default = "default_sync_out")]
+    pub out: String,
+    /// Run extract for all enabled sources concurrently. Translate/Load
+    /// remain sequential since they write into a shared Dolt repo.
+    #[serde(default = "default_true")]
+    pub parallel: bool,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            out: default_sync_out(),
+            parallel: true,
+        }
+    }
+}
+
+fn default_sync_out() -> String {
+    "${data_root}/build".into()
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +329,17 @@ pub struct QmdConfig {
     /// qmd collection name passed to `qmd collection add` at index time;
     /// also forms the `qmd://<collection>/…` URIs the runner reads back.
     pub collection: String,
+    /// Skip building the qmd index during `frankweiler-sync`. Useful in
+    /// CI environments without Node.js, or when iterating on the ETL
+    /// pipeline and the embedding step is too slow.
+    #[serde(default)]
+    pub skip: bool,
+    /// Directory where `qmd` should cache its ~300MB embedding model.
+    /// Defaults to `~/.cache/qmd-models`. The sync runner symlinks this
+    /// into its scratch workspace so the model blob stays outside the
+    /// data root.
+    #[serde(default)]
+    pub models_dir: Option<PathBuf>,
 }
 
 impl Default for QmdConfig {
@@ -306,6 +348,8 @@ impl Default for QmdConfig {
             index_path: format!("${{data_root}}/{}", crate::qmd::QMD_INDEX_REL),
             qmd_version: crate::qmd::DEFAULT_QMD_VERSION.into(),
             collection: crate::qmd::DEFAULT_COLLECTION.into(),
+            skip: false,
+            models_dir: None,
         }
     }
 }
@@ -348,6 +392,15 @@ impl Config {
         let s = self
             .qmd
             .index_path
+            .replace("${data_root}", &self.data_root.display().to_string());
+        expand_tilde(&s)
+    }
+
+    /// Resolve `${data_root}` and `~` in `sync.out`.
+    pub fn resolved_sync_out(&self) -> PathBuf {
+        let s = self
+            .sync
+            .out
             .replace("${data_root}", &self.data_root.display().to_string());
         expand_tilde(&s)
     }
@@ -478,6 +531,7 @@ mod tests {
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
+            sync: SyncConfig::default(),
             sources: Vec::new(),
         };
         let resolved = cfg.resolved_qmd_index();
@@ -505,6 +559,7 @@ mod tests {
             qmd: QmdConfig::default(),
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
+            sync: SyncConfig::default(),
             sources: Vec::new(),
         };
         assert_eq!(cfg.dolt_repo_path(), tmp.join("dolt_repo"));

@@ -38,7 +38,7 @@ use api::{ChatGPTClient, ChatGPTError};
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(100);
 pub const PAGE_SIZE: usize = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
     pub out_dir: PathBuf,
     pub max_pages: Option<usize>,
@@ -48,6 +48,7 @@ pub struct FetchOptions {
     /// `<out>/conversations/<id>.json`. Skips the paginated listing
     /// walk; `me.json` is still fetched (cheap, captures account id).
     pub conv_uuid: Option<String>,
+    pub progress: frankweiler_etl::progress::Progress,
 }
 
 #[derive(Debug, Default)]

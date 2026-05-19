@@ -48,6 +48,7 @@ async fn anthropic_live_single_conv_snapshot() {
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuid: Some(TARGET_UUID.to_string()),
+        ..Default::default()
     };
     anthropic::fetch(opts)
         .await

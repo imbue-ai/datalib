@@ -93,6 +93,7 @@ async fn slack_synth_playback_extract_roundtrip() {
         refresh_window_days: 0,
         members_only: false,
         media: false,
+        ..Default::default()
     })
     .await
     .unwrap();

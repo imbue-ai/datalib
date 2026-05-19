@@ -18,6 +18,7 @@ pub mod event_store;
 pub mod http;
 pub mod load;
 pub mod obs;
+pub mod progress;
 pub mod raw_store;
 pub mod sidecar;
 pub mod synthesize;
