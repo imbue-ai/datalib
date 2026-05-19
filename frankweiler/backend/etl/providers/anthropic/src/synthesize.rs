@@ -45,8 +45,15 @@ fn req_get(url: &str) -> HttpRequest {
 }
 
 fn org_uuid_of(conv: &Value) -> Option<String> {
-    conv.get("organization_uuid")
+    let direct = conv
+        .get("organization_uuid")
         .or_else(|| conv.get("organization").and_then(|o| o.get("uuid")))
+        .and_then(|v| v.as_str());
+    if let Some(s) = direct {
+        return Some(s.to_string());
+    }
+    conv.get("_source")
+        .and_then(|s| s.get("org_uuid"))
         .and_then(|v| v.as_str())
         .map(String::from)
 }

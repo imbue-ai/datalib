@@ -265,7 +265,10 @@ async fn run_extract_phase(
     frankweiler_etl_anthropic::extract::fetch(frankweiler_etl_anthropic::extract::FetchOptions {
         out_dir: inputs.anthropic_api.clone(),
         export_dir: Some(anthropic_fixtures.join("anthropic_api")),
-        overlap: 0,
+        // Force every export conversation to be refetched from playback
+        // so the merged output carries the synthesized detail body
+        // (with chat_messages) rather than just the export skeleton.
+        overlap: usize::MAX,
         sleep_between: Duration::ZERO,
         conv_uuid: None,
     })

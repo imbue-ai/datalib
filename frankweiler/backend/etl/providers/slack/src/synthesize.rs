@@ -12,13 +12,13 @@
 //! `auth.test`, `users.list`, `conversations.list`,
 //! `conversations.history`, `conversations.replies`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::http::HttpRequest;
+use frankweiler_etl::http::{fixture_key, HttpRequest};
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
@@ -51,6 +51,73 @@ fn parse_params(rec: &Value) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Top-level array fields in Slack responses that paginate / accumulate
+/// across calls with the same params. When two recorded responses hash
+/// to the same fixture_key, we union these arrays (deduped by `MERGE_DEDUP_KEYS`).
+const MERGE_ARRAY_FIELDS: &[&str] = &["messages", "members", "channels"];
+/// Per-array unique-id field used to dedup entries during merge.
+const MERGE_DEDUP_KEYS: &[(&str, &str)] =
+    &[("messages", "ts"), ("members", "id"), ("channels", "id")];
+
+fn dedup_key_for(field: &str) -> Option<&'static str> {
+    MERGE_DEDUP_KEYS
+        .iter()
+        .find(|(f, _)| *f == field)
+        .map(|(_, k)| *k)
+}
+
+/// Merge `incoming` into `base` in place. The base response keeps its
+/// scalar/object fields (so `has_more`/`response_metadata` reflect the
+/// last recorded call), and known array fields are unioned.
+fn merge_response(base: &mut Value, incoming: Value) {
+    let Value::Object(in_obj) = incoming else {
+        *base = base.take();
+        return;
+    };
+    let base_obj = match base {
+        Value::Object(o) => o,
+        _ => {
+            *base = Value::Object(in_obj);
+            return;
+        }
+    };
+    for field in MERGE_ARRAY_FIELDS {
+        let Some(in_arr) = in_obj.get(*field).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let entry = base_obj
+            .entry((*field).to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let Value::Array(base_arr) = entry else {
+            continue;
+        };
+        if let Some(key) = dedup_key_for(field) {
+            let mut seen: HashSet<String> = base_arr
+                .iter()
+                .filter_map(|v| v.get(key).and_then(|k| k.as_str()).map(String::from))
+                .collect();
+            for item in in_arr {
+                let id = item.get(key).and_then(|k| k.as_str()).map(String::from);
+                if let Some(id) = id {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                }
+                base_arr.push(item.clone());
+            }
+        } else {
+            base_arr.extend(in_arr.iter().cloned());
+        }
+    }
+    // Carry forward last-seen scalars / pagination metadata.
+    for (k, v) in in_obj {
+        if MERGE_ARRAY_FIELDS.contains(&k.as_str()) {
+            continue;
+        }
+        base_obj.insert(k, v);
+    }
+}
+
 impl Synthesizer for SlackSynth {
     fn name(&self) -> &'static str {
         "slack"
@@ -61,13 +128,17 @@ impl Synthesizer for SlackSynth {
         if !raw_root.is_dir() {
             return Ok(SynthesizeReport::default());
         }
-        let mut count = 0usize;
         let mut method_dirs: Vec<PathBuf> = fs::read_dir(&raw_root)
             .with_context(|| format!("read {}", raw_root.display()))?
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.is_dir())
             .collect();
         method_dirs.sort();
+
+        // Group recorded responses by fixture_key so multiple recordings
+        // that hit the same URL get merged into one playback fixture
+        // instead of last-write-wins.
+        let mut grouped: BTreeMap<String, (HttpRequest, Value)> = BTreeMap::new();
 
         for method_dir in method_dirs {
             let method = method_dir
@@ -98,10 +169,20 @@ impl Synthesizer for SlackSynth {
                     let params = parse_params(&rec);
                     let response = rec.get("response").cloned().unwrap_or(Value::Null);
                     let req = req_for(&method, &params);
-                    write_fixture(out_root, &req, &json_response(&response))?;
-                    count += 1;
+                    let key = fixture_key(&req);
+                    match grouped.get_mut(&key) {
+                        Some((_, base)) => merge_response(base, response),
+                        None => {
+                            grouped.insert(key, (req, response));
+                        }
+                    }
                 }
             }
+        }
+
+        let count = grouped.len();
+        for (_, (req, body)) in grouped {
+            write_fixture(out_root, &req, &json_response(&body))?;
         }
 
         Ok(SynthesizeReport {
