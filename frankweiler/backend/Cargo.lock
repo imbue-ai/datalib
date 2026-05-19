@@ -1005,6 +1005,7 @@ dependencies = [
  "frankweiler-etl-notion",
  "frankweiler-etl-slack",
  "frankweiler-qmd-indexer",
+ "serde_json",
  "sqlx",
  "tar",
  "tempfile",

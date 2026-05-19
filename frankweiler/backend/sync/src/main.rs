@@ -9,9 +9,10 @@
 //! The CLI is designed to grow into a real sync runner without breaking
 //! the genrule contract:
 //!
-//!   * `--playback-root` will route the extract phase through
-//!     `frankweiler_etl::http` playback fixtures (currently rejected —
-//!     synthesizers not landed yet).
+//!   * `--playback-root` routes the extract phase through
+//!     `frankweiler_etl::http` playback fixtures: every provider's
+//!     `extract::fetch` runs against the synthesized tree into a
+//!     workspace `extracted/` dir, then Translate reads from there.
 //!   * `--deterministic` is the genrule's mode: fixed timestamps,
 //!     hermetic tar, sorted dump. Already the default behaviour here;
 //!     the flag exists so callers (Bazel) can assert intent.
@@ -24,11 +25,13 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_server::DoltServer;
+use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{init_schema, load_all};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
@@ -78,13 +81,14 @@ struct Args {
     #[arg(long, default_value_t = true)]
     deterministic: bool,
 
-    /// HTTP playback fixture root. When set, the extract phase will
-    /// route every `latchkey_curl` call through this tree instead of
-    /// hitting the network. Today there is no extract phase wired in
-    /// (we drive Translate directly off pre-staged event-store JSONL),
-    /// so the flag is accepted and stored for the live runner but
-    /// otherwise unused. The synthesizers in `--synthesize-playback-root`
-    /// are what *write* this tree.
+    /// HTTP playback fixture root. When set, runs each provider's
+    /// `extract::fetch` against this tree (via `FRANKWEILER_HTTP_PLAYBACK`)
+    /// into a workspace `extracted/` directory, and the Translate phase
+    /// reads from there instead of from the `--*-fixtures` event-stores.
+    /// The `--*-fixtures` flags remain required (anthropic uses
+    /// `anthropic_api/users.json` from its tree as `export_dir` so the
+    /// account UUID flows through normalization), but their event-store
+    /// contents are otherwise unused in this mode.
     #[arg(long)]
     playback_root: Option<PathBuf>,
 
@@ -106,7 +110,6 @@ fn free_port() -> Result<u16> {
 async fn main() -> Result<()> {
     let args = Args::parse();
     let _ = args.deterministic;
-    let _ = &args.playback_root;
 
     if let Some(playback_out) = &args.synthesize_playback_root {
         return run_synthesize(&args, playback_out);
@@ -138,12 +141,28 @@ async fn main() -> Result<()> {
 
     eprintln!("[frankweiler-sync] root = {}", root.display());
 
-    translate_anthropic(&anthropic.join("anthropic_api"), &root)?;
-    translate_chatgpt(&chatgpt.join("chatgpt_api"), &root)?;
-    translate_slack(&slack.join("slack_api"), &root)?;
-    translate_github(&shared.join("github_api"), &root)?;
-    translate_gitlab(&shared.join("gitlab_api"), &root)?;
-    translate_notion(&shared.join("notion_web"), &root)?;
+    let extract_inputs = if let Some(playback_root) = args.playback_root.as_ref() {
+        let pb = playback_root
+            .canonicalize()
+            .with_context(|| format!("playback root: {}", playback_root.display()))?;
+        run_extract_phase(&pb, &root, &anthropic).await?
+    } else {
+        ExtractInputs {
+            anthropic_api: anthropic.join("anthropic_api"),
+            chatgpt_api: chatgpt.join("chatgpt_api"),
+            slack_api: slack.join("slack_api"),
+            github_api: shared.join("github_api"),
+            gitlab_api: shared.join("gitlab_api"),
+            notion_web: shared.join("notion_web"),
+        }
+    };
+
+    translate_anthropic(&extract_inputs.anthropic_api, &root)?;
+    translate_chatgpt(&extract_inputs.chatgpt_api, &root)?;
+    translate_slack(&extract_inputs.slack_api, &root)?;
+    translate_github(&extract_inputs.github_api, &root)?;
+    translate_gitlab(&extract_inputs.gitlab_api, &root)?;
+    translate_notion(&extract_inputs.notion_web, &root)?;
 
     let dolt_repo_dir = root.join("dolt_repo");
     fs::create_dir_all(&dolt_repo_dir)?;
@@ -184,6 +203,174 @@ async fn main() -> Result<()> {
     eprintln!("[frankweiler-sync] wrote {}", dump_sql.display());
     eprintln!("[frankweiler-sync] wrote {}", qmd_tar.display());
     Ok(())
+}
+
+/// Per-provider extract output directories — the path each `translate_*`
+/// step reads from. In playback mode these live under the scratch
+/// workspace; otherwise they point at the user-supplied `--*-fixtures`
+/// event-store trees.
+struct ExtractInputs {
+    anthropic_api: PathBuf,
+    chatgpt_api: PathBuf,
+    slack_api: PathBuf,
+    github_api: PathBuf,
+    gitlab_api: PathBuf,
+    notion_web: PathBuf,
+}
+
+/// Drive each provider's `extract::fetch` against a playback fixture
+/// tree, writing event-store JSONL (or snapshots) into the workspace.
+///
+/// Sets the process-wide `FRANKWEILER_HTTP_PLAYBACK` env var so the
+/// shared HTTP transport returns synthesized responses instead of
+/// hitting the network. The anthropic step needs `users.json` to recover
+/// the account UUID for normalization; we pass the user-supplied
+/// `--anthropic-fixtures` tree as `export_dir` to satisfy that.
+///
+/// Notion has no listing endpoint, so seeds are derived from the
+/// playback fixtures themselves: every `<playback>/notion/*.json` whose
+/// response body parses as a Notion page becomes a `subtree_pages` seed.
+async fn run_extract_phase(
+    playback_root: &Path,
+    workspace: &Path,
+    anthropic_fixtures: &Path,
+) -> Result<ExtractInputs> {
+    std::env::set_var(PLAYBACK_ENV, playback_root);
+    eprintln!(
+        "[frankweiler-sync] playback root = {}",
+        playback_root.display()
+    );
+
+    let extracted = workspace.join("extracted");
+    let inputs = ExtractInputs {
+        anthropic_api: extracted.join("anthropic_api"),
+        chatgpt_api: extracted.join("chatgpt_api"),
+        slack_api: extracted.join("slack_api"),
+        github_api: extracted.join("github_api"),
+        gitlab_api: extracted.join("gitlab_api"),
+        notion_web: extracted.join("notion_web"),
+    };
+    for d in [
+        &inputs.anthropic_api,
+        &inputs.chatgpt_api,
+        &inputs.slack_api,
+        &inputs.github_api,
+        &inputs.gitlab_api,
+        &inputs.notion_web,
+    ] {
+        fs::create_dir_all(d).with_context(|| format!("create {}", d.display()))?;
+    }
+
+    eprintln!("[frankweiler-sync] extract: anthropic");
+    frankweiler_etl_anthropic::extract::fetch(frankweiler_etl_anthropic::extract::FetchOptions {
+        out_dir: inputs.anthropic_api.clone(),
+        export_dir: Some(anthropic_fixtures.join("anthropic_api")),
+        overlap: 0,
+        sleep_between: Duration::ZERO,
+        conv_uuid: None,
+    })
+    .await
+    .context("anthropic extract")?;
+
+    eprintln!("[frankweiler-sync] extract: chatgpt");
+    frankweiler_etl_chatgpt::extract::fetch(frankweiler_etl_chatgpt::extract::FetchOptions {
+        out_dir: inputs.chatgpt_api.clone(),
+        max_pages: None,
+        limit: None,
+        sleep_between: Duration::ZERO,
+        conv_uuid: None,
+    })
+    .await
+    .context("chatgpt extract")?;
+
+    eprintln!("[frankweiler-sync] extract: slack");
+    frankweiler_etl_slack::extract::fetch(frankweiler_etl_slack::extract::FetchOptions {
+        out_dir: inputs.slack_api.clone(),
+        channels: None,
+        since: frankweiler_etl_slack::extract::DEFAULT_SINCE.to_string(),
+        refresh_window_days: 0,
+        members_only: false,
+        media: false,
+    })
+    .await
+    .context("slack extract")?;
+
+    eprintln!("[frankweiler-sync] extract: github");
+    frankweiler_etl_github::extract::fetch(frankweiler_etl_github::extract::FetchOptions {
+        out_dir: inputs.github_api.clone(),
+        full_sync: true,
+        refresh_window_days: 0,
+        sleep_between: Duration::ZERO,
+        ..frankweiler_etl_github::extract::FetchOptions::default()
+    })
+    .await
+    .context("github extract")?;
+
+    eprintln!("[frankweiler-sync] extract: gitlab");
+    frankweiler_etl_gitlab::extract::fetch(frankweiler_etl_gitlab::extract::FetchOptions {
+        out_dir: inputs.gitlab_api.clone(),
+        full_sync: true,
+        refresh_window_days: 0,
+        sleep_between: Duration::ZERO,
+        ..frankweiler_etl_gitlab::extract::FetchOptions::default()
+    })
+    .await
+    .context("gitlab extract")?;
+
+    let notion_seeds = derive_notion_seeds(&playback_root.join("notion"))
+        .context("derive notion seeds from playback fixtures")?;
+    eprintln!(
+        "[frankweiler-sync] extract: notion ({} seed page(s))",
+        notion_seeds.len()
+    );
+    frankweiler_etl_notion::extract::fetch(frankweiler_etl_notion::extract::FetchOptions {
+        out_dir: inputs.notion_web.clone(),
+        subtree_pages: notion_seeds,
+        sleep_between: Duration::ZERO,
+        ..frankweiler_etl_notion::extract::FetchOptions::default()
+    })
+    .await
+    .context("notion extract")?;
+
+    Ok(inputs)
+}
+
+/// Walk `<playback>/notion/*.json`, decode each as an `HttpResponse`,
+/// parse the body as JSON, and collect every `id` whose `object` field
+/// is `"page"`. That set of UUIDs is what notion's extract walks via
+/// BFS — its `visited` HashSet handles dedup so feeding all known
+/// pages (not just roots) is harmless.
+fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
+    let mut seeds = Vec::new();
+    if !notion_dir.is_dir() {
+        return Ok(seeds);
+    }
+    for entry in
+        fs::read_dir(notion_dir).with_context(|| format!("read_dir {}", notion_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+        let resp: HttpResponse = match serde_json::from_slice(&bytes) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let body: serde_json::Value = match serde_json::from_slice(&resp.body) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if body.get("object").and_then(|v| v.as_str()) == Some("page") {
+            if let Some(id) = body.get("id").and_then(|v| v.as_str()) {
+                seeds.push(id.to_string());
+            }
+        }
+    }
+    seeds.sort();
+    seeds.dedup();
+    Ok(seeds)
 }
 
 fn translate_anthropic(fixture: &Path, root: &Path) -> Result<()> {
