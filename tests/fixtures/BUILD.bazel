@@ -41,8 +41,10 @@ filegroup(
 # Cacheable, deterministic ingest of the TNG fixtures via
 # //frankweiler/backend/sync:frankweiler_sync_bin. The orchestrator
 # walks every provider's Translate step over the checked-in fixtures,
-# loads the resulting sidecars into a scratch Dolt repo, then emits
-# dump.sql + qmd.tar.
+# loads the resulting sidecars into a scratch Dolt repo, then writes
+# dump.sql + rendered_md/ to a staging dir; this rule then tars the
+# markdown tree into qmd.tar. Tar packaging is *not* the pipeline
+# binary's concern — it operates at the layer of DB + qmd files.
 genrule(
     name = "ingested_tng",
     srcs = [":source_json"],
@@ -52,20 +54,34 @@ genrule(
     ],
     tools = [
         "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "tar_qmd.py",
     ],
-    cmd = " ".join([
-        "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
-        "--deterministic",
-        # Genrules execute with cwd at the execroot; this is the fixture
-        # package's directory inside the sandbox.
-        "--shared-fixtures", "tests/fixtures",
-        "--out", "$(RULEDIR)/ingested",
-        "--now", "'2369-04-15T00:00:00+00:00'",
-        # Provider fixtures moved into Rust crates; bazel surfaces them
-        # at their declared package paths inside the sandbox.
-        "--slack-fixtures", "frankweiler/backend/etl/providers/slack/tests/fixtures",
-        "--chatgpt-fixtures", "frankweiler/backend/etl/providers/chatgpt/tests/fixtures",
-        "--anthropic-fixtures", "frankweiler/backend/etl/providers/anthropic/tests/fixtures",
+    cmd = " && ".join([
+        # 1. Run sync into a per-action staging dir.
+        " ".join([
+            "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
+            "--deterministic",
+            # Genrules execute with cwd at the execroot; this is the fixture
+            # package's directory inside the sandbox.
+            "--shared-fixtures", "tests/fixtures",
+            "--out", "$(RULEDIR)/sync_staging",
+            "--now", "'2369-04-15T00:00:00+00:00'",
+            # Provider fixtures moved into Rust crates; bazel surfaces them
+            # at their declared package paths inside the sandbox.
+            "--slack-fixtures", "frankweiler/backend/etl/providers/slack/tests/fixtures",
+            "--chatgpt-fixtures", "frankweiler/backend/etl/providers/chatgpt/tests/fixtures",
+            "--anthropic-fixtures", "frankweiler/backend/etl/providers/anthropic/tests/fixtures",
+            # QMD index is produced by :ingested_tng_qmd, not this rule.
+            "--skip-qmd-index",
+        ]),
+        # 2. Promote dump.sql to its declared output path.
+        "cp $(RULEDIR)/sync_staging/dump.sql $(execpath ingested/dump.sql)",
+        # 3. Tar the rendered_md tree hermetically into qmd.tar.
+        " ".join([
+            "python3 $(execpath tar_qmd.py)",
+            "$(RULEDIR)/sync_staging",
+            "$(execpath ingested/qmd.tar)",
+        ]),
     ]),
     tags = [
         # Dolt isn't a hermetic toolchain in this repo; rule needs the host

@@ -18,10 +18,14 @@
 //!     the flag exists so callers (Bazel) can assert intent.
 //!
 //! Outputs in `--out`:
-//!   * `dump.sql` — `dolt dump --result-format sql` of every table.
-//!   * `qmd.tar` — hermetic tar of `rendered_md/` (mtime/uid/gid zeroed).
+//!   * `dump.sql`         — `dolt dump --result-format sql` of every table.
+//!   * `rendered_md/`     — the rendered conversation markdown tree.
 //!   * `qmd_index.sqlite` — BM25 + embedding index built by `qmd_indexer`
-//!     over the rendered markdown tree (skipped with `--skip-qmd-index`).
+//!     over the markdown tree (skipped with `--skip-qmd-index`).
+//!
+//! Tar packaging of `rendered_md/` and `qmd_index.sqlite` for Bazel
+//! distribution is a concern of the calling genrule, not of this binary —
+//! see `tests/fixtures/BUILD.bazel`.
 
 use std::fs;
 use std::net::TcpListener;
@@ -55,7 +59,8 @@ struct Args {
     #[arg(long)]
     shared_fixtures: PathBuf,
 
-    /// Output directory; receives `dump.sql` and `qmd.tar`.
+    /// Output directory; receives `dump.sql`, the `rendered_md/` tree,
+    /// and (unless `--skip-qmd-index`) `qmd_index.sqlite`.
     #[arg(long)]
     out: PathBuf,
 
@@ -98,7 +103,7 @@ struct Args {
     /// input fixture trees and write playback responses into this dir.
     /// Independent of the regular Translate/Load pipeline — when this
     /// flag is set, the binary writes fixtures and exits without
-    /// touching Dolt or producing `dump.sql` / `qmd.tar`.
+    /// touching Dolt or producing dump.sql / rendered_md/.
     #[arg(long)]
     synthesize_playback_root: Option<PathBuf>,
 
@@ -210,11 +215,11 @@ async fn main() -> Result<()> {
 
     drop(server);
 
-    let qmd_tar = out.join("qmd.tar");
-    tar_rendered_md(&root, &qmd_tar)?;
+    let rendered_dest = out.join("rendered_md");
+    copy_tree(&root.join("rendered_md"), &rendered_dest)?;
 
     eprintln!("[frankweiler-sync] wrote {}", dump_sql.display());
-    eprintln!("[frankweiler-sync] wrote {}", qmd_tar.display());
+    eprintln!("[frankweiler-sync] wrote {}/", rendered_dest.display());
 
     if !args.skip_qmd_index {
         let qmd_index_out = out.join("qmd_index.sqlite");
@@ -222,6 +227,39 @@ async fn main() -> Result<()> {
         eprintln!("[frankweiler-sync] wrote {}", qmd_index_out.display());
     } else {
         eprintln!("[frankweiler-sync] qmd index: skipped (--skip-qmd-index)");
+    }
+    Ok(())
+}
+
+/// Mirror `src` into `dest` as a plain directory tree. We don't tar at
+/// this layer — the genrule that wraps `frankweiler-sync` is responsible
+/// for hermetic archive packaging.
+fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+    if dest.exists() {
+        fs::remove_dir_all(dest).with_context(|| format!("clear existing {}", dest.display()))?;
+    }
+    if !src.exists() {
+        fs::create_dir_all(dest)?;
+        return Ok(());
+    }
+    for entry in walkdir::WalkDir::new(src).sort_by_file_name() {
+        let entry = entry?;
+        let rel = entry
+            .path()
+            .strip_prefix(src)
+            .with_context(|| format!("strip_prefix {}", entry.path().display()))?;
+        let target = dest.join(rel);
+        let ft = entry.file_type();
+        if ft.is_dir() {
+            fs::create_dir_all(&target).with_context(|| format!("mkdir {}", target.display()))?;
+        } else if ft.is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(entry.path(), &target).with_context(|| {
+                format!("copy {} -> {}", entry.path().display(), target.display())
+            })?;
+        }
     }
     Ok(())
 }
@@ -512,52 +550,5 @@ fn dolt_dump(repo_dir: &Path, dump_sql: &Path) -> Result<()> {
     if !status.success() {
         bail!("dolt dump failed: {status}");
     }
-    Ok(())
-}
-
-fn tar_rendered_md(root: &Path, dest: &Path) -> Result<()> {
-    let rendered = root.join("rendered_md");
-    let file = fs::File::create(dest).with_context(|| format!("create {}", dest.display()))?;
-    let mut tar = tar::Builder::new(file);
-    if !rendered.is_dir() {
-        tar.finish()?;
-        return Ok(());
-    }
-    let mut entries: Vec<PathBuf> = walkdir::WalkDir::new(&rendered)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .map(|e| e.into_path())
-        .collect();
-    entries.sort();
-    for p in entries {
-        let rel = p
-            .strip_prefix(root)
-            .with_context(|| format!("strip_prefix {}", p.display()))?;
-        let arcname = format!("qmd/{}", rel.to_string_lossy());
-        let meta = fs::symlink_metadata(&p)?;
-        if meta.file_type().is_dir() {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_mode(0o755);
-            header.set_size(0);
-            header.set_mtime(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_cksum();
-            tar.append_data(&mut header, arcname, std::io::empty())?;
-        } else if meta.file_type().is_file() {
-            let data = fs::read(&p)?;
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Regular);
-            header.set_mode(0o644);
-            header.set_size(data.len() as u64);
-            header.set_mtime(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_cksum();
-            tar.append_data(&mut header, arcname, data.as_slice())?;
-        }
-    }
-    tar.finish()?;
     Ok(())
 }
