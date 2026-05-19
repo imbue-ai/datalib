@@ -20,6 +20,8 @@
 //! Outputs in `--out`:
 //!   * `dump.sql` — `dolt dump --result-format sql` of every table.
 //!   * `qmd.tar` — hermetic tar of `rendered_md/` (mtime/uid/gid zeroed).
+//!   * `qmd_index.sqlite` — BM25 + embedding index built by `qmd_indexer`
+//!     over the rendered markdown tree (skipped with `--skip-qmd-index`).
 
 use std::fs;
 use std::net::TcpListener;
@@ -99,6 +101,17 @@ struct Args {
     /// touching Dolt or producing `dump.sql` / `qmd.tar`.
     #[arg(long)]
     synthesize_playback_root: Option<PathBuf>,
+
+    /// Skip the QMD index build. Useful for CI environments without
+    /// Node.js or when iterating on the ETL pipeline.
+    #[arg(long, default_value_t = false)]
+    skip_qmd_index: bool,
+
+    /// Where `qmd` should cache its ~300MB embedding model. Defaults to
+    /// `~/.cache/qmd-models`. Symlinked into the workspace so the model
+    /// blob stays outside the data root.
+    #[arg(long)]
+    qmd_models_dir: Option<PathBuf>,
 }
 
 fn free_port() -> Result<u16> {
@@ -202,6 +215,33 @@ async fn main() -> Result<()> {
 
     eprintln!("[frankweiler-sync] wrote {}", dump_sql.display());
     eprintln!("[frankweiler-sync] wrote {}", qmd_tar.display());
+
+    if !args.skip_qmd_index {
+        let qmd_index_out = out.join("qmd_index.sqlite");
+        build_qmd_index(&root, args.qmd_models_dir.as_deref(), &qmd_index_out)?;
+        eprintln!("[frankweiler-sync] wrote {}", qmd_index_out.display());
+    } else {
+        eprintln!("[frankweiler-sync] qmd index: skipped (--skip-qmd-index)");
+    }
+    Ok(())
+}
+
+/// Build the QMD index over the workspace's `rendered_md/` tree and copy
+/// the resulting sqlite db to `dest`. Runs `qmd` via `npx` under the hood;
+/// requires Node.js to be available on PATH (or `NPX_BIN` set).
+fn build_qmd_index(root: &Path, models_dir: Option<&Path>, dest: &Path) -> Result<()> {
+    let mut opts = frankweiler_qmd_indexer::IndexOptions::new(root);
+    if let Some(d) = models_dir {
+        opts.models_dir = d.to_path_buf();
+    }
+    let index_path = frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")?;
+    fs::copy(&index_path, dest).with_context(|| {
+        format!(
+            "copy qmd index {} -> {}",
+            index_path.display(),
+            dest.display()
+        )
+    })?;
     Ok(())
 }
 
