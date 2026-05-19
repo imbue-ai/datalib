@@ -4,7 +4,8 @@
 //! provider. Today this is the same fixtures-mode pipeline the old
 //! `frankweiler-build-ingested` ran for the Bazel genrule: walk
 //! pre-staged event-store JSONL, render markdown + sidecars, load into
-//! an ephemeral Dolt sql-server, dump SQL, tar the rendered tree.
+//! an ephemeral Dolt sql-server, dump SQL, and emit the rendered tree
+//! and QMD index as plain files.
 //!
 //! The CLI is designed to grow into a real sync runner without breaking
 //! the genrule contract:
@@ -52,7 +53,7 @@ use tempfile::TempDir;
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
-    about = "Incremental ETL: translate fixtures, load into Dolt, dump SQL + tar markdown"
+    about = "Incremental ETL: translate fixtures, load into Dolt, emit dump.sql + rendered_md/ + qmd_index.sqlite"
 )]
 struct Args {
     /// Directory holding the shared (github/gitlab/notion) fixture trees.
