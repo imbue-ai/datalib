@@ -551,7 +551,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
     tracing::info!(count = pr_keys.len(), "PRs to fetch");
 
+    opts.progress.set_length(Some(pr_keys.len() as u64));
     for (repo, num) in &pr_keys {
+        opts.progress.inc(1);
+        opts.progress.set_message(&format!("{repo}#{num}"));
         if let Err(e) = fetch_one_pr(
             &client,
             &opts.out_dir,

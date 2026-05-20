@@ -21,11 +21,15 @@
 //!     turn checked-in JSONL into replay tapes.
 //!   * `--playback-root <DIR>`: redirect every provider's HTTP transport
 //!     to `<DIR>` (via `FRANKWEILER_HTTP_PLAYBACK`) and run extract for
-//!     each managed source into its resolved `input_path`. Without this
-//!     flag, extract is skipped — sources are assumed to be pre-staged.
-//!   * default: translate every enabled source's `input_path`, load into
-//!     a scratch Dolt repo, emit `dump.sql` + `rendered_md/` + (unless
-//!     `qmd.skip`) `qmd_index.sqlite` to `sync.out`.
+//!     each managed source into its resolved `input_path`. Used by the
+//!     hermetic Bazel genrule.
+//!   * `--skip-extract`: skip the extract phase entirely and translate
+//!     against pre-staged `input_path`s. Useful for iterating on
+//!     translate/load without re-hitting the network.
+//!   * default: extract live from every managed source's provider API,
+//!     translate, load into a scratch Dolt repo, emit `dump.sql` +
+//!     `rendered_md/` + (unless `qmd.skip`) `qmd_index.sqlite` to
+//!     `sync.out`.
 //!
 //! Extract runs concurrently across managed sources when
 //! `sync.parallel: true` (the default); translate/load remain sequential
@@ -46,6 +50,7 @@ use frankweiler_core::config::{
 use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{init_schema, load_all};
+use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
 use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;
@@ -56,6 +61,9 @@ use frankweiler_etl_slack::synthesize::SlackSynth;
 use sqlx::mysql::MySqlPoolOptions;
 use tempfile::TempDir;
 use tokio::task::JoinSet;
+
+mod progress;
+use crate::progress::{make_bar, make_multi, IndicatifSink};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -84,6 +92,12 @@ struct Args {
     #[arg(long)]
     playback_root: Option<PathBuf>,
 
+    /// Skip the extract phase and translate against pre-staged
+    /// `input_path`s. Useful for iterating on translate/load without
+    /// re-hitting the network.
+    #[arg(long)]
+    skip_extract: bool,
+
     /// Synth-only mode: build HTTP playback fixtures for every source
     /// (reading from each source's `input_path`) and exit. Doesn't load
     /// or dump.
@@ -102,7 +116,167 @@ fn free_port() -> Result<u16> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+    match run().await {
+        Ok(()) => {}
+        Err(e) => {
+            render_error(&e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Walk the anyhow error chain top-to-bottom (so the user reads
+/// "extract foo (type=bar)" → "fetch /me" → "HTTP 403 …" in order) and,
+/// when the failure looks auth-related, append source-specific
+/// instructions for fixing latchkey credentials.
+fn render_error(e: &anyhow::Error) {
+    eprintln!("\n[frankweiler-sync] FAILED");
+    for (i, cause) in e.chain().enumerate() {
+        let prefix = if i == 0 { "error:" } else { "  caused by:" };
+        eprintln!("{prefix} {cause}");
+    }
+    let chain_text: String = e
+        .chain()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if looks_like_auth_failure(&chain_text) {
+        if let Some(provider) = extract_provider_type(&chain_text) {
+            eprintln!("\n--- auth hint ---");
+            eprintln!("{}", auth_hint_for(provider));
+        } else {
+            eprintln!("\n--- auth hint ---");
+            eprintln!("{GENERIC_AUTH_HINT}");
+        }
+    }
+    if std::env::var("RUST_BACKTRACE").as_deref() == Ok("1") {
+        eprintln!("\n(set RUST_BACKTRACE=full for a deeper trace)");
+    }
+}
+
+fn looks_like_auth_failure(s: &str) -> bool {
+    s.contains("HTTP 401")
+        || s.contains("HTTP 403")
+        || s.contains("cf-mitigated")
+        || s.contains("challenge")
+        || s.contains("Unauthorized")
+        || s.contains("Forbidden")
+}
+
+fn extract_provider_type(s: &str) -> Option<&'static str> {
+    // The `with_context` strings include "(type=<type_str>)" — pull
+    // that out so we can print the right hint.
+    for marker in [
+        "type=claude_api",
+        "type=chatgpt_api",
+        "type=slack_api",
+        "type=github_api",
+        "type=gitlab_api",
+        "type=notion_api",
+    ] {
+        if s.contains(marker) {
+            return Some(&marker["type=".len()..]);
+        }
+    }
+    None
+}
+
+const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
+This usually means latchkey credentials are missing or expired. \
+See <provider>/EXTRACT.md for setup. Confirm LATCHKEY_CURL points at \
+the curl impersonator binary and that `latchkey auth list` shows entries.";
+
+fn auth_hint_for(provider: &str) -> String {
+    match provider {
+        "chatgpt_api" => "\
+chatgpt access token expired or missing.
+
+  1. Open https://chatgpt.com in a logged-in browser, then in DevTools
+     console run:
+       const r = await fetch('/api/auth/session');
+       const j = await r.json();
+       console.log(`latchkey auth set chatgpt -H \"Authorization: Bearer ${j.accessToken}\"`);
+  2. Paste the printed `latchkey auth set …` command into your shell.
+  3. Smoke-test:
+       LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim \\
+         latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
+     Expect a JSON object with your account id. If you still see a
+     Cloudflare challenge, also paste `Cookie: cf_clearance=…` into the
+     same `latchkey auth set chatgpt` call.
+
+See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
+            .into(),
+        "claude_api" => "\
+anthropic sessionKey expired or missing.
+
+  1. Open https://claude.ai logged in. In DevTools → Application →
+     Cookies → claude.ai, copy the `sessionKey` value.
+  2. Run:
+       latchkey auth set claude-ai -H 'Cookie: sessionKey=sk-ant-…'
+  3. Smoke-test:
+       LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim \\
+         latchkey curl -s https://claude.ai/api/organizations | head -c 200
+
+See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
+            .into(),
+        "slack_api" => "\
+slack token expired or missing.
+
+  1. Grab a user-scope OAuth token (xoxc/xoxp/xoxd).
+  2. Run:
+       latchkey auth set slack -H 'Authorization: Bearer xoxc-…'
+  3. Smoke-test:
+       latchkey curl -s https://slack.com/api/auth.test | head -c 200
+
+See frankweiler/backend/etl/providers/slack/EXTRACT.md for details."
+            .into(),
+        "github_api" => "\
+github PAT expired or missing.
+
+  1. Create a fine-grained PAT at https://github.com/settings/tokens
+     with `repo` + `read:user` scopes.
+  2. Run:
+       latchkey auth set github -H 'Authorization: Bearer github_pat_…'
+  3. Smoke-test:
+       latchkey curl -s https://api.github.com/user | head -c 200
+
+See frankweiler/backend/etl/providers/github/EXTRACT.md for details."
+            .into(),
+        "gitlab_api" => "\
+gitlab token expired or missing.
+
+  1. Create a personal token at https://gitlab.com/-/profile/personal_access_tokens
+     with `read_api` scope.
+  2. Run:
+       latchkey auth set gitlab -H 'Authorization: Bearer glpat-…'
+  3. Smoke-test:
+       latchkey curl -s https://gitlab.com/api/v4/user | head -c 200
+
+See frankweiler/backend/etl/providers/gitlab/EXTRACT.md for details."
+            .into(),
+        "notion_api" => "\
+notion integration token expired or missing.
+
+  1. Create an internal integration at https://www.notion.so/profile/integrations
+     and copy the secret.
+  2. Run:
+       latchkey auth set notion -H 'Authorization: Bearer secret_…'
+  3. Smoke-test:
+       latchkey curl -s -X POST https://api.notion.com/v1/search \\
+         -H 'Notion-Version: 2022-06-28' -H 'Content-Type: application/json' \\
+         -d '{}' | head -c 200
+
+See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
+            .into(),
+        _ => GENERIC_AUTH_HINT.into(),
+    }
+}
+
+async fn run() -> Result<()> {
     let args = Args::parse();
     let _ = args.deterministic;
 
@@ -126,17 +300,18 @@ async fn main() -> Result<()> {
     fs::create_dir_all(root.join("rendered_md"))?;
     eprintln!("[frankweiler-sync] workspace = {}", root.display());
 
-    if let Some(playback_root) = args.playback_root.as_ref() {
+    if args.skip_extract {
+        eprintln!("[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths");
+    } else if let Some(playback_root) = args.playback_root.as_ref() {
         let pb = playback_root
             .canonicalize()
             .with_context(|| format!("playback root: {}", playback_root.display()))?;
         std::env::set_var(PLAYBACK_ENV, &pb);
         eprintln!("[frankweiler-sync] playback root = {}", pb.display());
-        run_extract_phase(&cfg, &pb, &args.now).await?;
+        run_extract_phase(&cfg, Some(&pb), &args.now).await?;
     } else {
-        eprintln!(
-            "[frankweiler-sync] extract: skipped (no --playback-root); using staged input_paths"
-        );
+        eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
+        run_extract_phase(&cfg, None, &args.now).await?;
     }
 
     for src in cfg.enabled_sources() {
@@ -194,8 +369,8 @@ async fn main() -> Result<()> {
 /// Drive every managed source's `extract::fetch` against the playback
 /// tree. Each source writes into its resolved `input_path`. Runs
 /// concurrently when `cfg.sync.parallel`.
-async fn run_extract_phase(cfg: &Config, playback_root: &Path, now: &str) -> Result<()> {
-    let plans: Vec<ExtractPlan> = cfg
+async fn run_extract_phase(cfg: &Config, playback_root: Option<&Path>, now: &str) -> Result<()> {
+    let mut plans: Vec<ExtractPlan> = cfg
         .enabled_sources()
         .filter_map(|s| ExtractPlan::for_source(s, cfg, playback_root, now))
         .collect::<Result<Vec<_>>>()?;
@@ -203,6 +378,19 @@ async fn run_extract_phase(cfg: &Config, playback_root: &Path, now: &str) -> Res
     for p in &plans {
         fs::create_dir_all(&p.out_dir)
             .with_context(|| format!("create {}", p.out_dir.display()))?;
+    }
+
+    // One MultiProgress for the whole extract phase; one bar per plan
+    // fanned out to a TracingSink so structured consumers see the same
+    // stream.
+    let multi = make_multi();
+    for plan in &mut plans {
+        let bar = make_bar(&multi, plan.name.clone());
+        let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
+            std::sync::Arc::new(IndicatifSink::new(bar)),
+            std::sync::Arc::new(TracingSink::new(plan.name.clone())),
+        ];
+        plan.progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
     }
 
     if cfg.sync.parallel {
@@ -214,7 +402,7 @@ async fn run_extract_phase(cfg: &Config, playback_root: &Path, now: &str) -> Res
                 eprintln!("[extract] start {name} ({type_str})");
                 plan.run()
                     .await
-                    .with_context(|| format!("extract {name}"))?;
+                    .with_context(|| format!("extract {name} (type={type_str})"))?;
                 eprintln!("[extract] done  {name}");
                 Ok(())
             });
@@ -229,7 +417,7 @@ async fn run_extract_phase(cfg: &Config, playback_root: &Path, now: &str) -> Res
             eprintln!("[extract] {name} ({type_str})");
             plan.run()
                 .await
-                .with_context(|| format!("extract {name}"))?;
+                .with_context(|| format!("extract {name} (type={type_str})"))?;
         }
     }
     Ok(())
@@ -243,6 +431,7 @@ struct ExtractPlan {
     type_str: &'static str,
     out_dir: PathBuf,
     now: String,
+    progress: Progress,
     kind: ExtractKind,
 }
 
@@ -264,7 +453,7 @@ enum ExtractKind {
     },
     Notion {
         sync: NotionApiSync,
-        playback_root: PathBuf,
+        playback_root: Option<PathBuf>,
     },
 }
 
@@ -273,7 +462,7 @@ impl ExtractPlan {
     fn for_source(
         src: &SourceConfig,
         cfg: &Config,
-        playback_root: &Path,
+        playback_root: Option<&Path>,
         now: &str,
     ) -> Option<Result<Self>> {
         if !src.is_managed() {
@@ -300,7 +489,7 @@ impl ExtractPlan {
             },
             SourceConfig::NotionApi { sync, .. } => ExtractKind::Notion {
                 sync: sync.clone().unwrap_or_default(),
-                playback_root: playback_root.to_path_buf(),
+                playback_root: playback_root.map(|p| p.to_path_buf()),
             },
             SourceConfig::ClaudeExport { .. } => return None,
         };
@@ -309,12 +498,14 @@ impl ExtractPlan {
             type_str,
             out_dir,
             now: now.to_string(),
+            progress: Progress::noop(),
             kind,
         }))
     }
 
     async fn run(self) -> Result<()> {
-        match self.kind {
+        let progress = self.progress.clone();
+        let result = match self.kind {
             ExtractKind::Anthropic { sync } => {
                 frankweiler_etl_anthropic::extract::fetch(
                     frankweiler_etl_anthropic::extract::FetchOptions {
@@ -327,7 +518,7 @@ impl ExtractPlan {
                         overlap: sync.overlap.map(|v| v as usize).unwrap_or(usize::MAX),
                         sleep_between: Duration::ZERO,
                         conv_uuid: None,
-                        ..Default::default()
+                        progress: progress.clone(),
                     },
                 )
                 .await
@@ -341,7 +532,7 @@ impl ExtractPlan {
                     sleep_between: Duration::ZERO,
                     conv_uuid: None,
                     fetched_at: Some(self.now.clone()),
-                    ..Default::default()
+                    progress: progress.clone(),
                 },
             )
             .await
@@ -357,7 +548,7 @@ impl ExtractPlan {
                     refresh_window_days: sync.refresh_window_days.unwrap_or(0),
                     members_only: !sync.all_channels && sync.channels.is_none(),
                     media: sync.media,
-                    ..Default::default()
+                    progress: progress.clone(),
                 },
             )
             .await
@@ -372,6 +563,7 @@ impl ExtractPlan {
                         .unwrap_or(0),
                     max_prs: sync.max_prs.map(|v| v as usize),
                     sleep_between: Duration::ZERO,
+                    progress: progress.clone(),
                     ..Default::default()
                 },
             )
@@ -387,6 +579,7 @@ impl ExtractPlan {
                         .unwrap_or(0),
                     max_mrs: sync.max_mrs.map(|v| v as usize),
                     sleep_between: Duration::ZERO,
+                    progress: progress.clone(),
                     ..Default::default()
                 },
             )
@@ -405,9 +598,11 @@ impl ExtractPlan {
                     .as_ref()
                     .map(|t| t.pages.clone())
                     .unwrap_or_default();
-                let derived = derive_notion_seeds(&playback_root.join("notion"))
-                    .context("derive notion seeds")?;
-                seeds.extend(derived);
+                if let Some(pb) = playback_root.as_ref() {
+                    let derived =
+                        derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
+                    seeds.extend(derived);
+                }
                 seeds.sort();
                 seeds.dedup();
                 frankweiler_etl_notion::extract::fetch(
@@ -417,13 +612,16 @@ impl ExtractPlan {
                         inbox: sync.inbox.as_ref().is_some_and(|i| i.enabled),
                         space: sync.inbox.as_ref().and_then(|i| i.space.clone()),
                         sleep_between: Duration::ZERO,
+                        progress: progress.clone(),
                         ..Default::default()
                     },
                 )
                 .await
                 .map(|_| ())
             }
-        }
+        };
+        progress.finish("done");
+        result
     }
 }
 

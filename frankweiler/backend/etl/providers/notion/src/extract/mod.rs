@@ -456,6 +456,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         if !visited.insert(pid.clone()) {
             continue;
         }
+        opts.progress
+            .set_length(Some((visited.len() + queue.len()) as u64));
+        opts.progress.inc(1);
+        opts.progress.set_message(&pid);
         let blocks = mirror_page(
             &official,
             &opts.out_dir,

@@ -72,3 +72,87 @@ impl std::fmt::Debug for Progress {
 
 struct NoopSink;
 impl ProgressSink for NoopSink {}
+
+/// Structured-event sink: each progress call becomes a `tracing::info!`
+/// event with a fixed `event = "progress.*"` field plus a `source`
+/// discriminator. Lets non-TTY consumers (JSON log shipping, Tauri's
+/// tracing-bridge) pick up the same stream the indicatif renderer
+/// consumes.
+pub struct TracingSink {
+    source: String,
+}
+
+impl TracingSink {
+    pub fn new(source: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+        }
+    }
+}
+
+impl ProgressSink for TracingSink {
+    fn set_length(&self, total: Option<u64>) {
+        tracing::info!(
+            event = "progress.length",
+            source = %self.source,
+            total = total.map(|t| t as i64).unwrap_or(-1),
+        );
+    }
+    fn inc(&self, delta: u64) {
+        tracing::info!(
+            event = "progress.inc",
+            source = %self.source,
+            delta = delta,
+        );
+    }
+    fn set_message(&self, msg: &str) {
+        tracing::info!(
+            event = "progress.message",
+            source = %self.source,
+            msg = msg,
+        );
+    }
+    fn finish(&self, msg: &str) {
+        tracing::info!(
+            event = "progress.finish",
+            source = %self.source,
+            msg = msg,
+        );
+    }
+}
+
+/// Fan a single `Progress` call out to several sinks. Used by sync to
+/// drive both an indicatif bar and the tracing event stream from one
+/// emission point.
+pub struct FanOut {
+    sinks: Vec<Arc<dyn ProgressSink>>,
+}
+
+impl FanOut {
+    pub fn new(sinks: Vec<Arc<dyn ProgressSink>>) -> Self {
+        Self { sinks }
+    }
+}
+
+impl ProgressSink for FanOut {
+    fn set_length(&self, total: Option<u64>) {
+        for s in &self.sinks {
+            s.set_length(total);
+        }
+    }
+    fn inc(&self, delta: u64) {
+        for s in &self.sinks {
+            s.inc(delta);
+        }
+    }
+    fn set_message(&self, msg: &str) {
+        for s in &self.sinks {
+            s.set_message(msg);
+        }
+    }
+    fn finish(&self, msg: &str) {
+        for s in &self.sinks {
+            s.finish(msg);
+        }
+    }
+}

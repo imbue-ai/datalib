@@ -114,7 +114,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         return Ok(summary);
     }
 
-    let listing = list_all_conversations(&mut client, opts.max_pages)
+    opts.progress.set_message("listing conversations");
+    let listing = list_all_conversations(&mut client, opts.max_pages, &opts.progress)
         .instrument(info_span!("chatgpt_list"))
         .await?;
     info!(event = "chatgpt_listing", convs = listing.len());
@@ -140,7 +141,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let ordered: Vec<&Value> = missing.into_iter().chain(present).collect();
+    opts.progress.set_length(Some(ordered.len() as u64));
     for item in ordered {
+        opts.progress.inc(1);
         if let Some(limit) = opts.limit {
             if summary.fetched + summary.errors >= limit {
                 info!(event = "chatgpt_limit_reached", limit = limit);
@@ -150,6 +153,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
+        opts.progress.set_message(cid);
         let api_update = item.get("update_time").cloned().unwrap_or(Value::Null);
         let cache_path = convs_dir.join(format!("{cid}.json"));
         if let Some(cached) = read_json(&cache_path)? {
@@ -203,6 +207,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn list_all_conversations(
     client: &mut ChatGPTClient,
     max_pages: Option<usize>,
+    progress: &frankweiler_etl::progress::Progress,
 ) -> Result<Vec<Value>> {
     let mut items: Vec<Value> = Vec::new();
     let mut offset = 0usize;
@@ -229,6 +234,7 @@ async fn list_all_conversations(
         items.extend(page_items);
         offset += got;
         pages += 1;
+        progress.set_message(&format!("listing page {pages}, {} convs", items.len()));
         if got == 0 {
             break;
         }

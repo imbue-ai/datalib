@@ -27,7 +27,6 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use tracing::{info, info_span, instrument, warn, Instrument};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use api::{call_slack, SlackCall, SlackError};
 use frankweiler_etl::obs::events;
@@ -183,6 +182,7 @@ async fn export_channel(
     media_dir: Option<&Path>,
     media_headers: Option<&BTreeMap<String, String>>,
     totals: &mut ChannelTotals,
+    progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
     let (forward_oldest, inclusive) = match channel_latest_ts {
         Some(ts) => (ts.to_string(), false),
@@ -198,6 +198,7 @@ async fn export_channel(
         media_dir,
         media_headers,
         totals,
+        progress,
     )
     .await?;
 
@@ -221,6 +222,7 @@ async fn export_channel(
                     media_dir,
                     media_headers,
                     totals,
+                    progress,
                 )
                 .await?;
             }
@@ -249,6 +251,7 @@ async fn paginate_history(
     media_dir: Option<&Path>,
     media_headers: Option<&BTreeMap<String, String>>,
     totals: &mut ChannelTotals,
+    progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -312,17 +315,12 @@ async fn paginate_history(
             }
         }
 
-        // tracing-indicatif 0.3 doesn't hook `on_record`, so `span.record`
-        // never reaches the bar. `pb_set_message` is the supported path
-        // for live cumulative counters. We also record the fields so a
-        // JSON renderer sees them at span close.
-        let span = tracing::Span::current();
+        // Push cumulative counters through the unified Progress sink.
+        // Both the indicatif bar and any structured (tracing) sink
+        // receive them from the same emission point.
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
-        span.record("msgs", totals.messages);
-        span.record("replies", totals.replies);
-        span.record("media", media_downloaded);
-        span.pb_set_message(&format!(
-            "msgs={} replies={} media={}",
+        progress.set_message(&format!(
+            "{channel_id} msgs={} replies={} media={}",
             totals.messages, totals.replies, media_downloaded
         ));
 
@@ -491,20 +489,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         replies: 0,
         media: BTreeMap::new(),
     };
+    opts.progress.set_length(Some(targets.len() as u64));
     for (cid, name) in &targets {
-        // Fields declared `Empty` here become live slots on the span,
-        // so `span.record("msgs", ...)` etc. inside paginate_history
-        // update the indicatif progress bar in place (it renders
-        // `{span_fields}` by default).
-        let span = info_span!(
-            "channel",
-            channel_name = %name,
-            channel_id = %cid,
-            msgs = tracing::field::Empty,
-            replies = tracing::field::Empty,
-            media = tracing::field::Empty,
-            indicatif.pb_show = tracing::field::Empty,
-        );
+        opts.progress.inc(1);
+        opts.progress.set_message(name);
+        let span = info_span!("channel", channel_name = %name, channel_id = %cid);
         let mut totals = ChannelTotals::default();
         let result = export_channel(
             &mut store,
@@ -517,6 +506,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             media_dir.as_deref(),
             media_headers.as_ref(),
             &mut totals,
+            &opts.progress,
         )
         .instrument(span)
         .await;

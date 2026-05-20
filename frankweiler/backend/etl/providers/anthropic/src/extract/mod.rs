@@ -133,6 +133,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         )
         .await?;
     } else {
+        opts.progress.set_message("listing orgs");
         for org in &orgs {
             let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
                 continue;
@@ -216,10 +217,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             plan.sort_by_key(|(p, _)| *p);
 
+            opts.progress.set_length(Some(plan.len() as u64));
             for (_why, item) in plan {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
+                opts.progress.inc(1);
+                opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
                         let normalized = normalize::normalize_to_export_shape(

@@ -4,7 +4,10 @@ exports_files(["Cargo.toml"])
 
 rust_binary(
     name = "frankweiler_sync_bin",
-    srcs = ["src/main.rs"],
+    srcs = [
+        "src/main.rs",
+        "src/progress.rs",
+    ],
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
@@ -20,6 +23,7 @@ rust_binary(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:indicatif",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
