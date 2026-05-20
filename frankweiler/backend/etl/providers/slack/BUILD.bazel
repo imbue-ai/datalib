@@ -34,6 +34,7 @@ rust_library(
         "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
