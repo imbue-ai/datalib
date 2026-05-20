@@ -75,8 +75,15 @@ genrule(
             "tests/fixtures/gitlab_api",
             "tests/fixtures/notion_web",
         ]),
-        # 2. Promote dump.sql to its declared output path.
-        "cp $(RULEDIR)/sync_staging/dump.sql $(execpath ingested/dump.sql)",
+        # 2. Dump the populated Dolt repo to SQL. `dolt dump` writes
+        #    `--file-name` relative to its cwd, so resolve an absolute
+        #    output path first, then cd into the repo.
+        " ".join([
+            "(DUMP_ABS=$$(pwd)/$(execpath ingested/dump.sql);",
+            "cd $(RULEDIR)/sync_staging/dolt_repo &&",
+            "$${DOLT_BIN:-dolt} dump --result-format sql --no-batch",
+            "--file-name $$DUMP_ABS)",
+        ]),
         # 3. Tar the rendered_md tree hermetically into qmd.tar.
         " ".join([
             "python3 $(execpath tar_qmd.py)",

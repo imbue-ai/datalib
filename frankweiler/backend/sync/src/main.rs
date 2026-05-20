@@ -1,6 +1,6 @@
 //! `frankweiler-sync` — config-driven ETL orchestrator.
 //!
-//! Drives Extract → Translate → Load → Dump → Archive across every
+//! Drives Extract → Translate → Load → Archive across every
 //! enabled source in the user's `~/.config/frankweiler/config.yaml`.
 //! Each source is dispatched on its `type:` discriminator; sources with
 //! a `sync:` block (the "managed" ones) get their downloader invoked,
@@ -27,9 +27,10 @@
 //!     against pre-staged `input_path`s. Useful for iterating on
 //!     translate/load without re-hitting the network.
 //!   * default: extract live from every managed source's provider API,
-//!     translate, load into a scratch Dolt repo, emit `dump.sql` +
+//!     translate, load into a scratch Dolt repo, emit `dolt_repo/` +
 //!     `rendered_md/` + (unless `qmd.skip`) `qmd_index.sqlite` to
-//!     `sync.out`.
+//!     `sync.out`. SQL dumping (if needed) is downstream — e.g. a Bazel
+//!     genrule that consumes `dolt_repo/` and runs `dolt dump`.
 //!
 //! Extract runs concurrently across managed sources when
 //! `sync.parallel: true` (the default); translate/load remain sequential
@@ -38,10 +39,9 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync, GitlabApiSync,
@@ -68,7 +68,7 @@ use crate::progress::{make_bar, make_multi, IndicatifSink};
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
-    about = "Config-driven ETL: extract every enabled source, translate, load into Dolt, emit dump.sql + rendered_md/ + qmd_index.sqlite"
+    about = "Config-driven ETL: extract every enabled source, translate, load into Dolt, emit dolt_repo/ + rendered_md/ + qmd_index.sqlite"
 )]
 struct Args {
     /// Path to the YAML config. Defaults to `$FRANKWEILER_CONFIG` or
@@ -341,14 +341,15 @@ async fn run() -> Result<()> {
     );
     drop(pool);
 
-    let dump_sql = out_dir.join("dump.sql");
-    dolt_dump(&dolt_repo_dir, &dump_sql)?;
     drop(server);
+
+    let dolt_repo_dest = out_dir.join("dolt_repo");
+    copy_tree(&dolt_repo_dir, &dolt_repo_dest)?;
 
     let rendered_dest = out_dir.join("rendered_md");
     copy_tree(&root.join("rendered_md"), &rendered_dest)?;
 
-    eprintln!("[frankweiler-sync] wrote {}", dump_sql.display());
+    eprintln!("[frankweiler-sync] wrote {}/", dolt_repo_dest.display());
     eprintln!("[frankweiler-sync] wrote {}/", rendered_dest.display());
 
     if !cfg.qmd.skip {
@@ -817,31 +818,5 @@ fn build_qmd_index(root: &Path, models_dir: Option<&Path>, dest: &Path) -> Resul
             dest.display()
         )
     })?;
-    Ok(())
-}
-
-fn dolt_dump(repo_dir: &Path, dump_sql: &Path) -> Result<()> {
-    eprintln!("[frankweiler-sync] dolt dump -> {}", dump_sql.display());
-    // dolt dump refuses to overwrite an existing target; pre-clear so
-    // repeated bazel runs (sharing `$RULEDIR/sync_staging/`) don't fail.
-    if dump_sql.exists() {
-        fs::remove_file(dump_sql)
-            .with_context(|| format!("remove stale {}", dump_sql.display()))?;
-    }
-    let dolt = frankweiler_core::dolt_server::resolve_dolt_binary(None)
-        .context("resolve dolt binary for dump")?;
-    let status = Command::new(&dolt)
-        .arg("dump")
-        .arg("--result-format")
-        .arg("sql")
-        .arg("--no-batch")
-        .arg("--file-name")
-        .arg(dump_sql)
-        .current_dir(repo_dir)
-        .status()
-        .context("spawn dolt dump")?;
-    if !status.success() {
-        bail!("dolt dump failed: {status}");
-    }
     Ok(())
 }
