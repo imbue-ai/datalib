@@ -321,13 +321,16 @@ pub struct QmdConfig {
     /// Path to the qmd index file. `${data_root}` is expanded against
     /// `Config.data_root` after load. Defaults to the canonical location the
     /// `frankweiler-qmd-indexer` writes to.
+    #[serde(default = "default_qmd_index_path")]
     pub index_path: String,
     /// npm package version of `@tobilu/qmd` to invoke via `npx`. Must
     /// match the version the indexer wrote with — the on-disk SQLite
     /// schema isn't versioned in a way the runner can detect.
+    #[serde(default = "default_qmd_version")]
     pub qmd_version: String,
     /// qmd collection name passed to `qmd collection add` at index time;
     /// also forms the `qmd://<collection>/…` URIs the runner reads back.
+    #[serde(default = "default_qmd_collection")]
     pub collection: String,
     /// Skip building the qmd index during `frankweiler-sync`. Useful in
     /// CI environments without Node.js, or when iterating on the ETL
@@ -345,13 +348,23 @@ pub struct QmdConfig {
 impl Default for QmdConfig {
     fn default() -> Self {
         Self {
-            index_path: format!("${{data_root}}/{}", crate::qmd::QMD_INDEX_REL),
-            qmd_version: crate::qmd::DEFAULT_QMD_VERSION.into(),
-            collection: crate::qmd::DEFAULT_COLLECTION.into(),
+            index_path: default_qmd_index_path(),
+            qmd_version: default_qmd_version(),
+            collection: default_qmd_collection(),
             skip: false,
             models_dir: None,
         }
     }
+}
+
+fn default_qmd_index_path() -> String {
+    format!("${{data_root}}/{}", crate::qmd::QMD_INDEX_REL)
+}
+fn default_qmd_version() -> String {
+    crate::qmd::DEFAULT_QMD_VERSION.into()
+}
+fn default_qmd_collection() -> String {
+    crate::qmd::DEFAULT_COLLECTION.into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -54,25 +54,26 @@ genrule(
     ],
     tools = [
         "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
     cmd = " && ".join([
-        # 1. Run sync into a per-action staging dir.
+        # 1. Drive sync via the python helper: it emits two YAML configs
+        #    (synth + extract) and runs each phase of the pipeline.
         " ".join([
+            "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
-            "--deterministic",
-            # Genrules execute with cwd at the execroot; this is the fixture
-            # package's directory inside the sandbox.
-            "--shared-fixtures", "tests/fixtures",
-            "--out", "$(RULEDIR)/sync_staging",
-            "--now", "'2369-04-15T00:00:00+00:00'",
-            # Provider fixtures moved into Rust crates; bazel surfaces them
-            # at their declared package paths inside the sandbox.
-            "--slack-fixtures", "frankweiler/backend/etl/providers/slack/tests/fixtures",
-            "--chatgpt-fixtures", "frankweiler/backend/etl/providers/chatgpt/tests/fixtures",
-            "--anthropic-fixtures", "frankweiler/backend/etl/providers/anthropic/tests/fixtures",
-            # QMD index is produced by :ingested_tng_qmd, not this rule.
-            "--skip-qmd-index",
+            "'2369-04-15T00:00:00+00:00'",
+            "$(RULEDIR)/sync_staging",
+            "$(RULEDIR)/sync_workspace",
+            # Per-source raw fixture trees. Order matches the helper's
+            # positional args: anthropic, chatgpt, slack, github, gitlab, notion.
+            "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+            "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+            "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+            "tests/fixtures/github_api",
+            "tests/fixtures/gitlab_api",
+            "tests/fixtures/notion_web",
         ]),
         # 2. Promote dump.sql to its declared output path.
         "cp $(RULEDIR)/sync_staging/dump.sql $(execpath ingested/dump.sql)",

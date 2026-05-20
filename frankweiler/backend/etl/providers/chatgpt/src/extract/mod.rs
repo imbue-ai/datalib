@@ -48,6 +48,10 @@ pub struct FetchOptions {
     /// `<out>/conversations/<id>.json`. Skips the paginated listing
     /// walk; `me.json` is still fetched (cheap, captures account id).
     pub conv_uuid: Option<String>,
+    /// Override the `_fetched_at` provenance stamp. When `None`, the
+    /// extractor uses `Local::now()`. The sync orchestrator passes its
+    /// `--now` value here so deterministic builds get a stable stamp.
+    pub fetched_at: Option<String>,
     pub progress: frankweiler_etl::progress::Progress,
 }
 
@@ -70,7 +74,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .with_context(|| format!("mkdir {}", convs_dir.display()))?;
     let index_path = out_dir.join("conversations.json");
     let me_path = out_dir.join("me.json");
-    let started_at = Local::now().to_rfc3339();
+    let started_at = opts
+        .fetched_at
+        .clone()
+        .unwrap_or_else(|| Local::now().to_rfc3339());
 
     let mut client = ChatGPTClient::new();
 

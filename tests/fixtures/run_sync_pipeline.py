@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""Driver for the `:ingested_tng` genrule.
+
+Generates the two YAML configs `frankweiler-sync` needs (one for the
+synth phase, one for the extract+translate phase), runs both phases, and
+leaves the staged outputs where `tar_qmd.py` can pick them up.
+
+Splitting the genrule into a python driver keeps the Bazel `cmd =` block
+readable and concentrates the file-layout logic in one place — the
+fixture trees live under different parent directories so a single
+`--synth-input-root` flag wouldn't have worked.
+
+Args (positional):
+    1: path to `frankweiler-sync` binary
+    2: --now stamp (ISO-8601)
+    3: output staging directory (where dump.sql + rendered_md/ land)
+    4: scratch workspace dir for intermediate state (yamls, playback,
+       per-source raw dirs)
+    5: anthropic_api fixture dir (input)
+    6: chatgpt_api  fixture dir
+    7: slack_api    fixture dir
+    8: github_api   fixture dir
+    9: gitlab_api   fixture dir
+    10: notion_web  fixture dir
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    sync_bin = Path(sys.argv[1]).resolve()
+    now = sys.argv[2]
+    staging = Path(sys.argv[3]).resolve()
+    workspace = Path(sys.argv[4]).resolve()
+    anth_fx, cgpt_fx, slack_fx, gh_fx, gl_fx, notion_fx = (
+        Path(p).resolve() for p in sys.argv[5:11]
+    )
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    staging.mkdir(parents=True, exist_ok=True)
+    raw_root = workspace / "raw"
+    raw_root.mkdir(exist_ok=True)
+    playback = workspace / "playback"
+
+    # Synth YAML: each source's input_path points at the checked-in
+    # fixture tree. The synth phase reads from those and writes HTTP
+    # playback responses into `playback/`.
+    synth_yaml = workspace / "synth.yaml"
+    synth_yaml.write_text(
+        _yaml(
+            workspace,
+            {
+                "anthropic-api": ("claude_api", anth_fx),
+                "chatgpt-api": ("chatgpt_api", cgpt_fx),
+                "slack": ("slack_api", slack_fx),
+                "github": ("github_api", gh_fx),
+                "gitlab": ("gitlab_api", gl_fx),
+                "notion": ("notion_api", notion_fx),
+            },
+        )
+    )
+
+    # Extract YAML: each source's input_path points at a fresh per-source
+    # subdir of the workspace. Extract writes there; translate reads from
+    # the same place. We hand notion a seed page id from the fixture
+    # tree so the (still-validated) `sync:` block is non-empty; the
+    # extract phase additionally derives BFS seeds from the playback
+    # responses, so this seed needn't be reachable on its own.
+    notion_seed = _first_notion_page_id(notion_fx)
+    extract_yaml = workspace / "extract.yaml"
+    extract_yaml.write_text(
+        _yaml(
+            workspace,
+            {
+                "anthropic-api": ("claude_api", raw_root / "anthropic-api"),
+                "chatgpt-api": ("chatgpt_api", raw_root / "chatgpt-api"),
+                "slack": ("slack_api", raw_root / "slack"),
+                "github": ("github_api", raw_root / "github"),
+                "gitlab": ("gitlab_api", raw_root / "gitlab"),
+                "notion": ("notion_api", raw_root / "notion"),
+            },
+            notion_seed=notion_seed,
+        )
+    )
+
+    # Anthropic extract reads users.json from `export_dir` (== input_path
+    # in our wiring) — that file is a bulk-export artifact, not an HTTP
+    # response, so seed it from the checked-in fixture tree.
+    anth_raw = raw_root / "anthropic-api"
+    anth_raw.mkdir(parents=True, exist_ok=True)
+    users_src = anth_fx / "users.json"
+    if users_src.exists():
+        shutil.copy(users_src, anth_raw / "users.json")
+
+    print(f"[run_sync_pipeline] synth → {playback}", flush=True)
+    _run(
+        [
+            str(sync_bin),
+            "--config",
+            str(synth_yaml),
+            "--now",
+            now,
+            "--synthesize-playback-root",
+            str(playback),
+        ]
+    )
+
+    print(f"[run_sync_pipeline] extract+translate → {staging}", flush=True)
+    _run(
+        [
+            str(sync_bin),
+            "--config",
+            str(extract_yaml),
+            "--now",
+            now,
+            "--out",
+            str(staging),
+            "--playback-root",
+            str(playback),
+        ]
+    )
+    return 0
+
+
+def _yaml(
+    data_root: Path,
+    sources: dict[str, tuple[str, Path]],
+    notion_seed: str | None = None,
+) -> str:
+    """Render a minimal YAML covering all six sources.
+
+    `sources` maps name → (type_str, input_path). Notion needs a non-empty
+    sync block to pass validation — pass `notion_seed` to use a real page
+    id as a `subtrees.pages` entry. When `notion_seed` is None (the synth
+    phase, which doesn't actually fetch) we fall back to `inbox.enabled`.
+    """
+    lines = [
+        f"data_root: {data_root}",
+        "qmd:",
+        "  skip: true",
+        "sources:",
+    ]
+    for name, (type_str, path) in sources.items():
+        lines.append(f"  - name: {name}")
+        lines.append(f"    type: {type_str}")
+        lines.append(f"    input_path: {path}")
+        if type_str == "notion_api":
+            lines.append("    sync:")
+            if notion_seed:
+                lines.append(f"      subtrees: {{pages: ['{notion_seed}']}}")
+            else:
+                lines.append("      inbox: {enabled: true}")
+        elif type_str == "slack_api":
+            # Disable media so extract doesn't fall back to the direct
+            # `latchkey curl -v` path for file downloads (not on PATH in
+            # the bazel sandbox, and the fixtures don't exercise media).
+            lines.append("    sync: {media: false}")
+        elif type_str != "claude_export":
+            lines.append("    sync: {}")
+    return "\n".join(lines) + "\n"
+
+
+def _first_notion_page_id(notion_fx: Path) -> str | None:
+    """Pick any page id from the notion fixture tree to anchor the
+    config's required `subtrees.pages` entry. BFS in extract derives
+    the actual fetched set from playback fixtures, so this seed only
+    needs to satisfy validation."""
+    import json
+
+    candidate = notion_fx / "notion_official_page" / "created" / "events.jsonl"
+    if not candidate.exists():
+        return None
+    with candidate.open() as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("id"):
+                return obj["id"]
+    return None
+
+
+def _run(argv: list[str]) -> None:
+    print("[run_sync_pipeline] $", " ".join(argv), flush=True)
+    subprocess.run(argv, check=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
