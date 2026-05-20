@@ -11,10 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
+use super::grid_rows::gather_documents;
 use super::parse::ParsedNotionOfficial;
 
 pub const RENDER_VERSION: u32 = 1;
@@ -1055,8 +1057,9 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
         .collect();
     let block_owning_page = block_to_page_id(&parsed.blocks);
 
+    let mut page_paths: HashMap<String, PathBuf> = HashMap::new();
     for page in &parsed.pages {
-        render_one_page(
+        let target = render_one_page(
             page,
             &children_by_parent,
             &parsed.user_names,
@@ -1065,9 +1068,13 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
             &parsed.bookmark_titles,
             &pages_root,
         )?;
+        if let Some(pid) = page.get("id").and_then(|v| v.as_str()) {
+            page_paths.insert(pid.to_string(), target);
+        }
         summary.rendered += 1;
     }
 
+    let mut thread_paths: HashMap<String, PathBuf> = HashMap::new();
     let mut by_disc: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for c in &parsed.comments {
         let did = c
@@ -1108,7 +1115,7 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
             None
         };
         let page_dir = pages_root.join(page_dir_segment(&page_id, &title));
-        if let Some(_p) = render_thread(
+        if let Some(p) = render_thread(
             &disc_id,
             &page_id,
             &title,
@@ -1118,8 +1125,43 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
             &page_titles,
             &page_dir,
         )? {
+            thread_paths.insert(disc_id.clone(), p);
             summary.rendered += 1;
         }
+    }
+
+    let docs = gather_documents(parsed);
+    for pd in &docs.pages {
+        let Some(md_path) = page_paths.get(&pd.page_uuid) else {
+            continue;
+        };
+        let sidecar = Sidecar {
+            header: SidecarHeader {
+                document_uuid: pd.page_uuid.clone(),
+                source_fingerprint: pd.source_fingerprint.clone(),
+                render_version: RENDER_VERSION,
+            },
+            rows: pd.rows.clone(),
+        };
+        let sidecar_path = md_path.with_extension("grid_rows.json");
+        let json = serde_json::to_string_pretty(&sidecar)?;
+        fs::write(&sidecar_path, json)?;
+    }
+    for td in &docs.threads {
+        let Some(md_path) = thread_paths.get(&td.discussion_uuid) else {
+            continue;
+        };
+        let sidecar = Sidecar {
+            header: SidecarHeader {
+                document_uuid: td.discussion_uuid.clone(),
+                source_fingerprint: td.source_fingerprint.clone(),
+                render_version: RENDER_VERSION,
+            },
+            rows: td.rows.clone(),
+        };
+        let sidecar_path = md_path.with_extension("grid_rows.json");
+        let json = serde_json::to_string_pretty(&sidecar)?;
+        fs::write(&sidecar_path, json)?;
     }
     Ok(summary)
 }
