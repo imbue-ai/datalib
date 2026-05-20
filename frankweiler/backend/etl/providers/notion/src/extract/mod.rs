@@ -163,13 +163,16 @@ fn comment_record(comment: &Value, page_id: &str) -> Value {
     make_record(k, comment.clone())
 }
 
+#[tracing::instrument(skip(client), fields(parent_id, pages, children))]
 async fn fetch_all_children(client: &NotionOfficialClient, parent_id: &str) -> Result<Vec<Value>> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut pages: u32 = 0;
     loop {
         let resp = client
             .get_block_children(parent_id, cursor.as_deref())
             .await?;
+        pages += 1;
         if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
             out.extend(arr.iter().cloned());
         }
@@ -178,22 +181,28 @@ async fn fetch_all_children(client: &NotionOfficialClient, parent_id: &str) -> R
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::Span::current().record("pages", pages);
+            tracing::Span::current().record("children", out.len());
             return Ok(out);
         }
         let nc = resp.get("next_cursor").and_then(|v| v.as_str());
         if let Some(c) = nc {
             cursor = Some(c.to_string());
         } else {
+            tracing::Span::current().record("pages", pages);
+            tracing::Span::current().record("children", out.len());
             return Ok(out);
         }
     }
 }
 
+#[tracing::instrument(skip(client), fields(page_id, blocks, recursed))]
 async fn walk_page_blocks(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
     let mut collected: Vec<Value> = Vec::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     let mut seen: HashSet<String> = HashSet::new();
     queue.push_back(page_id.to_string());
+    let mut recursed: u32 = 0;
     while let Some(pid) = queue.pop_front() {
         if !seen.insert(pid.clone()) {
             continue;
@@ -211,11 +220,14 @@ async fn walk_page_blocks(client: &NotionOfficialClient, page_id: &str) -> Resul
                 .unwrap_or(false)
             {
                 if let Some(id) = ch.get("id").and_then(|v| v.as_str()) {
+                    recursed += 1;
                     queue.push_back(id.into());
                 }
             }
         }
     }
+    tracing::Span::current().record("blocks", collected.len());
+    tracing::Span::current().record("recursed", recursed);
     Ok(collected)
 }
 
@@ -227,11 +239,14 @@ fn child_page_ids(blocks: &[Value]) -> Vec<String> {
         .collect()
 }
 
+#[tracing::instrument(skip(client), fields(page_id, pages, comments))]
 async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Result<Vec<Value>> {
     let mut out: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut pages: u32 = 0;
     loop {
         let resp = client.get_comments(page_id, cursor.as_deref()).await?;
+        pages += 1;
         if let Some(arr) = resp.get("results").and_then(|v| v.as_array()) {
             out.extend(arr.iter().cloned());
         }
@@ -240,12 +255,16 @@ async fn fetch_all_comments(client: &NotionOfficialClient, page_id: &str) -> Res
             .and_then(|v| v.as_bool())
             .unwrap_or(false)
         {
+            tracing::Span::current().record("pages", pages);
+            tracing::Span::current().record("comments", out.len());
             return Ok(out);
         }
         let nc = resp.get("next_cursor").and_then(|v| v.as_str());
         if let Some(c) = nc {
             cursor = Some(c.to_string());
         } else {
+            tracing::Span::current().record("pages", pages);
+            tracing::Span::current().record("comments", out.len());
             return Ok(out);
         }
     }
@@ -310,6 +329,7 @@ async fn walk_inbox(
     Ok(seen)
 }
 
+#[tracing::instrument(skip_all, fields(page_id = %pid, blocks, comments, page_ms, blocks_ms, comments_ms))]
 async fn mirror_page(
     client: &NotionOfficialClient,
     out_dir: &Path,
@@ -319,6 +339,10 @@ async fn mirror_page(
     existing_comments: &mut HashMap<String, Value>,
     summary: &mut FetchSummary,
 ) -> Result<Vec<Value>> {
+    // Per-page timing is emitted at `info` so it shows up in the default
+    // log stream — that's the only way to see *which* page is dragging
+    // without enabling debug.
+    let page_t = std::time::Instant::now();
     let page = match client.get_page(pid).await {
         Ok(p) => p,
         Err(e) => {
@@ -326,6 +350,7 @@ async fn mirror_page(
             return Ok(Vec::new());
         }
     };
+    let page_ms = page_t.elapsed().as_millis() as u64;
     let prec = page_record(&page);
     let counts = diff_and_save(
         out_dir,
@@ -338,6 +363,7 @@ async fn mirror_page(
     summary.upd_pages += counts.updated;
     existing_pages.insert(pid.into(), prec);
 
+    let blocks_t = std::time::Instant::now();
     let blocks = match walk_page_blocks(client, pid).await {
         Ok(b) => b,
         Err(e) => {
@@ -345,6 +371,7 @@ async fn mirror_page(
             return Ok(Vec::new());
         }
     };
+    let blocks_ms = blocks_t.elapsed().as_millis() as u64;
     let block_records: Vec<Value> = blocks.iter().map(|b| block_record(b, pid)).collect();
     let counts = diff_and_save(
         out_dir,
@@ -361,7 +388,9 @@ async fn mirror_page(
         }
     }
 
+    let comments_t = std::time::Instant::now();
     let comments = fetch_all_comments(client, pid).await.unwrap_or_default();
+    let comments_ms = comments_t.elapsed().as_millis() as u64;
     if !comments.is_empty() {
         let crecs: Vec<Value> = comments.iter().map(|c| comment_record(c, pid)).collect();
         let counts = diff_and_save(out_dir, ENTITY_COMMENT, &crecs, existing_comments, key_id)?;
@@ -373,6 +402,22 @@ async fn mirror_page(
             }
         }
     }
+
+    let span = tracing::Span::current();
+    span.record("blocks", blocks.len());
+    span.record("comments", comments.len());
+    span.record("page_ms", page_ms);
+    span.record("blocks_ms", blocks_ms);
+    span.record("comments_ms", comments_ms);
+    tracing::info!(
+        page_id = %pid,
+        blocks = blocks.len(),
+        comments = comments.len(),
+        page_ms,
+        blocks_ms,
+        comments_ms,
+        "mirror_page done"
+    );
     Ok(blocks)
 }
 

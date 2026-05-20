@@ -53,12 +53,14 @@ impl NotionOfficialClient {
         (self.network_ms.load(Ordering::Relaxed) as f64) / 1000.0
     }
 
+    #[tracing::instrument(skip(self, body), fields(method = %method, path = %path, attempts, total_ms))]
     async fn request(
         &self,
         method: &str,
         path: &str,
         body: Option<&Value>,
     ) -> Result<Value, NotionOfficialError> {
+        let req_start = std::time::Instant::now();
         let url = format!("{BASE}{path}");
         let body_bytes: Option<Vec<u8>> = body.map(|b| b.to_string().into_bytes());
 
@@ -97,6 +99,8 @@ impl NotionOfficialClient {
                     ))
                 })?;
                 events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
+                tracing::Span::current().record("attempts", attempt + 1);
+                tracing::Span::current().record("total_ms", req_start.elapsed().as_millis() as u64);
                 return Ok(value);
             }
             if status == 403 {
