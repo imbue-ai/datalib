@@ -6,35 +6,11 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset};
-use once_cell::sync::Lazy;
-use regex::Regex;
 
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi};
-
-const SLUG_MAX_LEN: usize = 60;
-static SLUG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"[^a-z0-9]+").unwrap());
-
-pub(crate) fn slugify(name: Option<&str>) -> String {
-    let Some(name) = name else {
-        return "untitled".into();
-    };
-    let lower = name.to_lowercase();
-    let dashed = SLUG_RE.replace_all(&lower, "-");
-    let trimmed = dashed.trim_matches('-');
-    if trimmed.is_empty() {
-        return "untitled".into();
-    }
-    let cut: String = trimmed.chars().take(SLUG_MAX_LEN).collect();
-    let trimmed_tail = cut.trim_end_matches('-');
-    if trimmed_tail.is_empty() {
-        "untitled".into()
-    } else {
-        trimmed_tail.into()
-    }
-}
 
 fn yaml_scalar(v: Option<&str>) -> String {
     let Some(s) = v else {
@@ -93,19 +69,16 @@ fn capitalize(s: &str) -> String {
 
 pub struct Rendered {
     pub conversation_id: String,
-    pub slug: String,
     pub account_id: String,
     pub body: String,
 }
 
 impl Rendered {
-    /// Relative path under `<root>/` matching `_render_one_openai`'s
-    /// Python output: `rendered_md/openai/<account>/llm_chats/<conv>__<slug>.md`.
     pub fn relative_path(&self) -> std::path::PathBuf {
         std::path::PathBuf::from("rendered_md/openai")
             .join(&self.account_id)
             .join("llm_chats")
-            .join(format!("{}__{}.md", self.conversation_id, self.slug))
+            .join(format!("{}.md", self.conversation_id))
     }
 }
 
@@ -328,7 +301,6 @@ pub fn render_one(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Option<Re
 
     Some(Rendered {
         conversation_id: conv.conversation_id.clone(),
-        slug: slugify(conv.title.as_deref()),
         account_id: conv.account_id.clone().unwrap_or_else(|| "unknown".into()),
         body,
     })

@@ -61,22 +61,20 @@ pub fn slugify(name: &str) -> String {
 }
 
 /// Relative path from the data root to a PR's `index.md`.
-pub fn pr_qmd_path_rel(repo_full_name: &str, pr_number: u32, title: &str) -> String {
-    let slug = slugify(title);
+pub fn pr_qmd_path_rel(repo_full_name: &str, pr_number: u32) -> String {
     let (owner, repo) = repo_full_name
         .split_once('/')
         .unwrap_or(("unknown", repo_full_name));
-    format!("rendered_md/github/{owner}/{repo}/pr-{pr_number}__{slug}/index.md")
+    format!("rendered_md/github/{owner}/{repo}/pr-{pr_number}/index.md")
 }
 
-fn pr_dir(root: &Path, repo: &str, num: u32, title: &str) -> PathBuf {
-    let slug = slugify(title);
+fn pr_dir(root: &Path, repo: &str, num: u32) -> PathBuf {
     let (owner, name) = repo.split_once('/').unwrap_or(("unknown", repo));
     root.join("rendered_md")
         .join("github")
         .join(owner)
         .join(name)
-        .join(format!("pr-{num}__{slug}"))
+        .join(format!("pr-{num}"))
 }
 
 fn yaml_scalar(s: &str) -> String {
@@ -137,7 +135,7 @@ fn comment_header(c: &CommentRow) -> String {
 }
 
 fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> Result<PathBuf> {
-    let dir = pr_dir(root, &pr.repo_full_name, pr.pr_number, &pr.title);
+    let dir = pr_dir(root, &pr.repo_full_name, pr.pr_number);
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let md_path = dir.join("index.md");
 

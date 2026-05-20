@@ -1,8 +1,8 @@
 ---
-source: providers/tests/slack_render.rs
+source: etl/providers/slack/tests/slack_render.rs
 expression: bundle
 ---
-=== rendered_md/slack/T_NCC1701D/bridge/threads/18661749-ed35-5c92-aa13-7cb73be53387__captain-s-log-stardate-47988-1-sensors-detect-a-romulan-sign.md ===
+=== rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/18661749-ed35-5c92-aa13-7cb73be53387.md ===
 ---
 provider: slack
 thread_uuid: 18661749-ed35-5c92-aa13-7cb73be53387
@@ -28,7 +28,7 @@ Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 27
 
 </div>
 
-=== rendered_md/slack/T_NCC1701D/bridge/threads/8074b3b0-3bd4-5232-843f-c8278649d1a2__mr-data-status-report.md ===
+=== rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/8074b3b0-3bd4-5232-843f-c8278649d1a2.md ===
 ---
 provider: slack
 thread_uuid: 8074b3b0-3bd4-5232-843f-c8278649d1a2
@@ -76,7 +76,7 @@ Set a course, Mr. Data. Warp factor five.
 
 </div>
 
-=== rendered_md/slack/T_NCC1701D/bridge/threads/b5ff7879-d563-59d6-8e89-906b6975dca1__i-recommend-raising-shields-captain.md ===
+=== rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/b5ff7879-d563-59d6-8e89-906b6975dca1.md ===
 ---
 provider: slack
 thread_uuid: b5ff7879-d563-59d6-8e89-906b6975dca1
@@ -102,7 +102,7 @@ I recommend raising shields, Captain.
 
 </div>
 
-=== rendered_md/slack/T_NCC1701D/bridge/threads/be617fe9-49d3-5fe1-b75d-0e210465c5bb__new-combadge-prototypes-thoughts.md ===
+=== rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/be617fe9-49d3-5fe1-b75d-0e210465c5bb.md ===
 ---
 provider: slack
 thread_uuid: be617fe9-49d3-5fe1-b75d-0e210465c5bb
@@ -130,7 +130,7 @@ New combadge prototypes — thoughts?
 
 </div>
 
-=== rendered_md/slack/T_NCC1701D/engineering/threads/b220c513-3e7b-5301-8b0d-13f9b8cf63fc__warp-core-efficiency-at-99-7.md ===
+=== rendered_md/slack/T_NCC1701D/C_ENG/threads/b220c513-3e7b-5301-8b0d-13f9b8cf63fc.md ===
 ---
 provider: slack
 thread_uuid: b220c513-3e7b-5301-8b0d-13f9b8cf63fc
@@ -156,7 +156,7 @@ Warp core efficiency at 99.7%.
 
 </div>
 
-=== rendered_md/slack/T_NCC1701D/ten-forward/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275__anyone-up-for-poker-tonight.md ===
+=== rendered_md/slack/T_NCC1701D/C_TENFWD/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275.md ===
 ---
 provider: slack
 thread_uuid: a93e15fa-68d5-5d53-aa9a-590e01b83275

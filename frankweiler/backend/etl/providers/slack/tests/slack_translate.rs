@@ -72,7 +72,7 @@ fn translate_tng_fixture_grid_rows_snapshot() {
         .qmd_path
         .as_deref()
         .unwrap()
-        .starts_with("rendered_md/slack/T_NCC1701D/bridge/threads/"));
+        .starts_with("rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/"));
 
     // Root message row's uuid is distinct from its thread's uuid (so the
     // two rows don't collide on the `uuid` PK in grid_rows).

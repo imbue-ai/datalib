@@ -83,14 +83,8 @@ pub fn render_all(
             .unwrap_or_else(|| root.channel_id.clone());
 
         let fingerprint = compute_fingerprint(&msgs);
-        let (md_path, json_path) = output_paths(
-            out_dir,
-            &root.team_id,
-            &cname,
-            &thread_uuid,
-            root,
-            &user_labels,
-        );
+        let (md_path, json_path) =
+            output_paths(out_dir, &root.team_id, &root.channel_id, &thread_uuid);
 
         if existing_fingerprint(&md_path).as_deref() == Some(fingerprint.as_str()) {
             summary.threads_skipped += 1;
@@ -177,21 +171,17 @@ fn compute_fingerprint(msgs: &[&Message]) -> String {
 fn output_paths(
     out_dir: &Path,
     team_id: &str,
-    channel_name: &str,
+    channel_id: &str,
     thread_uuid: &str,
-    root: &Message,
-    user_labels: &BTreeMap<String, String>,
 ) -> (PathBuf, PathBuf) {
-    let title = thread_title(&root.text, user_labels);
-    let slug = slugify(&title);
     let dir = out_dir
         .join("rendered_md")
         .join("slack")
         .join(team_id)
-        .join(channel_name)
+        .join(channel_id)
         .join("threads");
-    let md = dir.join(format!("{thread_uuid}__{slug}.md"));
-    let json = dir.join(format!("{thread_uuid}__{slug}.grid_rows.json"));
+    let md = dir.join(format!("{thread_uuid}.md"));
+    let json = dir.join(format!("{thread_uuid}.grid_rows.json"));
     (md, json)
 }
 
@@ -330,13 +320,7 @@ fn build_thread_rows(
     channel_name: &str,
     user_labels: &BTreeMap<String, String>,
 ) -> Vec<GridRow> {
-    let qmd = super::slack_qmd_path(
-        &root.team_id,
-        channel_name,
-        thread_uuid,
-        &root.text,
-        user_labels,
-    );
+    let qmd = super::slack_qmd_path(&root.team_id, &root.channel_id, thread_uuid);
     let author = root
         .user_id
         .as_deref()
@@ -457,43 +441,6 @@ fn reactions(raw: &Value) -> Vec<(String, usize)> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-// ---------------------------------------------------------------------------
-// Tiny helpers: slug, yaml-scalar.
-// ---------------------------------------------------------------------------
-
-const SLUG_MAX_LEN: usize = 60;
-
-fn slugify(name: &str) -> String {
-    let mut s = String::with_capacity(name.len());
-    let mut prev_dash = true;
-    for ch in name.chars() {
-        let c = ch.to_ascii_lowercase();
-        if c.is_ascii_alphanumeric() {
-            s.push(c);
-            prev_dash = false;
-        } else if !prev_dash {
-            s.push('-');
-            prev_dash = true;
-        }
-    }
-    while s.ends_with('-') {
-        s.pop();
-    }
-    if s.is_empty() {
-        return "untitled".to_string();
-    }
-    if s.len() > SLUG_MAX_LEN {
-        s.truncate(SLUG_MAX_LEN);
-        while s.ends_with('-') {
-            s.pop();
-        }
-        if s.is_empty() {
-            return "untitled".to_string();
-        }
-    }
-    s
 }
 
 fn yaml_scalar(s: &str) -> String {

@@ -1,9 +1,8 @@
 ---
-source: tests/chatgpt_render.rs
+source: etl/providers/chatgpt/tests/chatgpt_render.rs
 expression: bundle
-snapshot_kind: text
 ---
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001.md ===
 ---
 provider: openai
 id: 68fa0001-fake-7000-8000-positronic0001
@@ -62,7 +61,7 @@ Thou art my muse, my console saboteur.
 
 </div>
 
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002.md ===
 ---
 provider: openai
 id: 68fa0002-fake-7000-8000-positronic0002
@@ -112,7 +111,7 @@ print(coeffs)
 
 </div>
 
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-sub.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003.md ===
 ---
 provider: openai
 id: 68fa0003-fake-7000-8000-positronic0003
@@ -144,4 +143,3 @@ default_model_slug: gpt-5
 <a id="b-msg-fake-warp-0002-0"></a>The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.
 
 </div>
-

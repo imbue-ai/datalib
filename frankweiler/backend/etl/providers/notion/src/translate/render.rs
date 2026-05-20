@@ -61,8 +61,8 @@ pub fn short_id(uuid_str: &str) -> String {
     s
 }
 
-pub fn page_dir_segment(page_id: &str, title: &str) -> String {
-    format!("{}__{}", slugify(title), short_id(page_id))
+pub fn page_dir_segment(page_id: &str, _title: &str) -> String {
+    page_id.to_string()
 }
 
 pub fn notion_url(page_id: &str) -> String {
@@ -916,14 +916,8 @@ pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
     s.chars().take(60).collect()
 }
 
-pub fn thread_filename(discussion_id: &str, snippet: &str) -> String {
-    let snip = slugify(snippet);
-    let snip = if snip == "untitled" {
-        "thread".into()
-    } else {
-        snip
-    };
-    format!("{}__{}.md", short_id(discussion_id), snip)
+pub fn thread_filename(discussion_id: &str, _snippet: &str) -> String {
+    format!("{discussion_id}.md")
 }
 
 #[allow(clippy::too_many_arguments)]

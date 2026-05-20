@@ -61,7 +61,6 @@ async fn gitlab_live_single_mr_snapshot() {
     let qmd_rel = frankweiler_etl_gitlab::translate::render::mr_qmd_path_rel(
         &mr.project_full_path,
         mr.mr_iid,
-        &mr.title,
     );
     let qmd_abs = render_root.join(&qmd_rel);
     assert!(

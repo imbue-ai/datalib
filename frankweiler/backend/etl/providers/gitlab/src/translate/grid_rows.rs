@@ -115,7 +115,7 @@ fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
 }
 
 pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
-    let qmd = super::render::mr_qmd_path_rel(&mr.project_full_path, mr.mr_iid, &mr.title);
+    let qmd = super::render::mr_qmd_path_rel(&mr.project_full_path, mr.mr_iid);
     let entire_chat = format!("/chat/{}", mr.uuid);
 
     let mut rows: Vec<GridRow> = Vec::new();

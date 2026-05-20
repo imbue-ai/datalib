@@ -56,18 +56,16 @@ pub fn slugify(name: &str) -> String {
     }
 }
 
-pub fn mr_qmd_path_rel(project_full_path: &str, iid: u32, title: &str) -> String {
-    let slug = slugify(title);
-    format!("rendered_md/gitlab/{project_full_path}/mr-{iid}__{slug}/index.md")
+pub fn mr_qmd_path_rel(project_full_path: &str, iid: u32) -> String {
+    format!("rendered_md/gitlab/{project_full_path}/mr-{iid}/index.md")
 }
 
-fn mr_dir(root: &Path, project: &str, iid: u32, title: &str) -> PathBuf {
-    let slug = slugify(title);
+fn mr_dir(root: &Path, project: &str, iid: u32) -> PathBuf {
     let mut p = root.join("rendered_md").join("gitlab");
     for part in project.split('/') {
         p = p.join(part);
     }
-    p.join(format!("mr-{iid}__{slug}"))
+    p.join(format!("mr-{iid}"))
 }
 
 fn yaml_scalar(s: &str) -> String {
@@ -121,7 +119,7 @@ fn note_header(n: &NoteRow) -> String {
 }
 
 fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result<PathBuf> {
-    let dir = mr_dir(root, &mr.project_full_path, mr.mr_iid, &mr.title);
+    let dir = mr_dir(root, &mr.project_full_path, mr.mr_iid);
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let md_path = dir.join("index.md");
 

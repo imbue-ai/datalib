@@ -413,10 +413,8 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
             slack_link: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
             qmd_path: Some(slack_qmd_path(
                 &root.team_id,
-                &cname,
+                &root.channel_id,
                 &thread_uuid,
-                &root.text,
-                &user_labels,
             )),
             source_url: None,
             git_sha: None,
@@ -451,10 +449,8 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
                 slack_link: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
                 qmd_path: Some(slack_qmd_path(
                     &root.team_id,
-                    &cname,
+                    &root.channel_id,
                     &thread_uuid,
-                    &root.text,
-                    &user_labels,
                 )),
                 source_url: None,
                 git_sha: None,
@@ -487,59 +483,8 @@ pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&
     url
 }
 
-const SLUG_MAX_LEN: usize = 60;
-
-fn slugify(name: &str) -> String {
-    let mut s = String::with_capacity(name.len());
-    let mut prev_dash = true;
-    for ch in name.chars() {
-        let c = ch.to_ascii_lowercase();
-        if c.is_ascii_alphanumeric() {
-            s.push(c);
-            prev_dash = false;
-        } else if !prev_dash {
-            s.push('-');
-            prev_dash = true;
-        }
-    }
-    while s.ends_with('-') {
-        s.pop();
-    }
-    if s.is_empty() {
-        return "untitled".to_string();
-    }
-    if s.len() > SLUG_MAX_LEN {
-        s.truncate(SLUG_MAX_LEN);
-        while s.ends_with('-') {
-            s.pop();
-        }
-        if s.is_empty() {
-            return "untitled".to_string();
-        }
-    }
-    s
-}
-
-fn slack_thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> String {
-    let resolved = resolve_user_mentions(root_text, user_labels);
-    let first = resolved
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .unwrap_or("(empty thread)")
-        .to_string();
-    first.chars().take(80).collect()
-}
-
-pub fn slack_qmd_path(
-    team_id: &str,
-    channel_name: &str,
-    thread_uuid: &str,
-    root_text: &str,
-    user_labels: &BTreeMap<String, String>,
-) -> String {
-    let slug = slugify(&slack_thread_title(root_text, user_labels));
-    format!("rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug}.md")
+pub fn slack_qmd_path(team_id: &str, channel_id: &str, thread_uuid: &str) -> String {
+    format!("rendered_md/slack/{team_id}/{channel_id}/threads/{thread_uuid}.md")
 }
 
 // ---------------------------------------------------------------------------

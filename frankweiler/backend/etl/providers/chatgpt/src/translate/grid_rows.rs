@@ -12,7 +12,6 @@ use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 use super::parse::{OAConversationRow, OAMessageRow, ParsedChatGPTApi};
-use super::render::slugify;
 
 /// Bumped on render-layout changes so a forced rebake is possible even
 /// when the upstream payload hasn't moved. Matches the constant on the
@@ -46,12 +45,10 @@ fn bump_micros(ts: &str, n: i64) -> String {
     bumped.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
 }
 
-fn qmd_path(account_id: Option<&str>, conv_id: &str, title: Option<&str>) -> String {
+fn qmd_path(account_id: Option<&str>, conv_id: &str) -> String {
     format!(
-        "rendered_md/openai/{}/llm_chats/{}__{}.md",
+        "rendered_md/openai/{}/llm_chats/{conv_id}.md",
         account_id.unwrap_or("unknown"),
-        conv_id,
-        slugify(title),
     )
 }
 
@@ -120,11 +117,7 @@ fn chat_row(conv: &OAConversationRow) -> GridRow {
         entire_chat: format!("/chat/{}", conv.conversation_id),
         text: conv.title.clone().unwrap_or_default(),
         slack_link: None,
-        qmd_path: Some(qmd_path(
-            conv.account_id.as_deref(),
-            &conv.conversation_id,
-            conv.title.as_deref(),
-        )),
+        qmd_path: Some(qmd_path(conv.account_id.as_deref(), &conv.conversation_id)),
         source_url: None,
         git_sha: None,
         external_id: None,
@@ -161,11 +154,7 @@ fn message_row(conv: &OAConversationRow, m: &OAMessageRow, idx: usize, conv_time
         entire_chat: format!("/chat/{}", conv.conversation_id),
         text: m.text.clone(),
         slack_link: None,
-        qmd_path: Some(qmd_path(
-            conv.account_id.as_deref(),
-            &conv.conversation_id,
-            conv.title.as_deref(),
-        )),
+        qmd_path: Some(qmd_path(conv.account_id.as_deref(), &conv.conversation_id)),
         source_url: None,
         git_sha: None,
         external_id: None,

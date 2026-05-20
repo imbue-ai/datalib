@@ -10,7 +10,6 @@ use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 use super::parse::{ContentBlockRow, ConversationRow, MessageRow, ParsedExport};
-use super::render::slugify;
 
 pub const RENDER_VERSION: u32 = 1;
 
@@ -46,13 +45,8 @@ fn bump_micros(ts: &str, n: i64) -> String {
     bumped.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
 }
 
-fn qmd_path(account_uuid: &str, conv_uuid: &str, name: Option<&str>) -> String {
-    format!(
-        "rendered_md/anthropic/{}/llm_chats/{}__{}.md",
-        account_uuid,
-        conv_uuid,
-        slugify(name),
-    )
+fn qmd_path(account_uuid: &str, conv_uuid: &str) -> String {
+    format!("rendered_md/anthropic/{account_uuid}/llm_chats/{conv_uuid}.md")
 }
 
 pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<GridRow> {
@@ -135,11 +129,7 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
             entire_chat: format!("/chat/{conv_uuid}"),
             text: row_text,
             slack_link: None,
-            qmd_path: Some(qmd_path(
-                &conv.account_uuid,
-                conv_uuid,
-                conv.name.as_deref(),
-            )),
+            qmd_path: Some(qmd_path(&conv.account_uuid, conv_uuid)),
             source_url: None,
             git_sha: None,
             external_id: None,
@@ -194,11 +184,7 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
                     btext
                 },
                 slack_link: None,
-                qmd_path: Some(qmd_path(
-                    &conv.account_uuid,
-                    conv_uuid,
-                    conv.name.as_deref(),
-                )),
+                qmd_path: Some(qmd_path(&conv.account_uuid, conv_uuid)),
                 source_url: None,
                 git_sha: None,
                 external_id: None,
@@ -239,11 +225,7 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
         entire_chat: format!("/chat/{}", conv.conversation_uuid),
         text,
         slack_link: None,
-        qmd_path: Some(qmd_path(
-            &conv.account_uuid,
-            &conv.conversation_uuid,
-            conv.name.as_deref(),
-        )),
+        qmd_path: Some(qmd_path(&conv.account_uuid, &conv.conversation_uuid)),
         source_url: None,
         git_sha: None,
         external_id: None,

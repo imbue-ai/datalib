@@ -62,7 +62,6 @@ async fn github_live_single_pr_snapshot() {
     let qmd_rel = frankweiler_etl_github::translate::render::pr_qmd_path_rel(
         &pr.repo_full_name,
         pr.pr_number,
-        &pr.title,
     );
     let qmd_abs = render_root.join(&qmd_rel);
     assert!(
