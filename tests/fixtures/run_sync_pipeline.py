@@ -13,15 +13,14 @@ fixture trees live under different parent directories so a single
 Args (positional):
     1: path to `frankweiler-sync` binary
     2: --now stamp (ISO-8601)
-    3: output staging directory (where dump.sql + rendered_md/ land)
-    4: scratch workspace dir for intermediate state (yamls, playback,
-       per-source raw dirs)
-    5: anthropic_api fixture dir (input)
-    6: chatgpt_api  fixture dir
-    7: slack_api    fixture dir
-    8: github_api   fixture dir
-    9: gitlab_api   fixture dir
-    10: notion_web  fixture dir
+    3: data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
+       directly underneath; YAMLs + playback also stashed here)
+    4: anthropic_api fixture dir (input)
+    5: chatgpt_api  fixture dir
+    6: slack_api    fixture dir
+    7: github_api   fixture dir
+    8: gitlab_api   fixture dir
+    9: notion_web   fixture dir
 """
 
 from __future__ import annotations
@@ -35,15 +34,17 @@ from pathlib import Path
 def main() -> int:
     sync_bin = Path(sys.argv[1]).resolve()
     now = sys.argv[2]
-    staging = Path(sys.argv[3]).resolve()
-    workspace = Path(sys.argv[4]).resolve()
+    data_root = Path(sys.argv[3]).resolve()
     anth_fx, cgpt_fx, slack_fx, gh_fx, gl_fx, notion_fx = (
-        Path(p).resolve() for p in sys.argv[5:11]
+        Path(p).resolve() for p in sys.argv[4:10]
     )
 
-    workspace.mkdir(parents=True, exist_ok=True)
-    staging.mkdir(parents=True, exist_ok=True)
-    raw_root = workspace / "raw"
+    data_root.mkdir(parents=True, exist_ok=True)
+    # YAML configs + playback fixtures + per-source raw dirs all stashed
+    # under the data_root. The sync binary lays out its own `rendered_md/`,
+    # `dolt_db/`, and `qmd/` directly under data_root.
+    workspace = data_root
+    raw_root = data_root / "raw"
     raw_root.mkdir(exist_ok=True)
     playback = workspace / "playback"
 
@@ -110,7 +111,7 @@ def main() -> int:
         ]
     )
 
-    print(f"[run_sync_pipeline] extract+translate → {staging}", flush=True)
+    print(f"[run_sync_pipeline] extract+translate → {data_root}", flush=True)
     _run(
         [
             str(sync_bin),
@@ -118,8 +119,6 @@ def main() -> int:
             str(extract_yaml),
             "--now",
             now,
-            "--out",
-            str(staging),
             "--playback-root",
             str(playback),
         ]

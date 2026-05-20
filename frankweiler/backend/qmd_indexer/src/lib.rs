@@ -5,9 +5,9 @@
 //! `npx -y @tobilu/qmd@<version>` so callers don't need a global install.
 //!
 //! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
-//! it inside the data root by setting `XDG_CACHE_HOME=<root>/.frankweiler`,
-//! so the resulting index lives at `<root>/.frankweiler/qmd/index.sqlite`
-//! alongside everything else the backend owns.
+//! it inside the data root by setting `XDG_CACHE_HOME=<root>` directly,
+//! so the resulting index lives at `<root>/qmd/index.sqlite` alongside
+//! `rendered_md/` and `dolt_db/`.
 //!
 //! The run is **incremental** — qmd's `update` only re-indexes changed
 //! files. The first run lazily creates the collection via `collection add`
@@ -17,9 +17,9 @@
 //! qmd stores its ~300MB embedding model under
 //! `<XDG_CACHE_HOME>/qmd/models/`, which would otherwise land inside the
 //! data root and bloat any archive of it. The models cache is independent
-//! of the index, so we pre-create `<root>/.frankweiler/qmd/models` as a
-//! symlink to a shared `models_dir` (default `~/.cache/qmd-models`). qmd
-//! treats the symlink transparently and models stay outside the data root.
+//! of the index, so we pre-create `<root>/qmd/models` as a symlink to a
+//! shared `models_dir` (default `~/.cache/qmd-models`). qmd treats the
+//! symlink transparently and models stay outside the data root.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -71,7 +71,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
         .canonicalize()
         .with_context(|| format!("root does not exist: {}", opts.root.display()))?;
 
-    let cache_home = root.join(".frankweiler");
+    let cache_home = root.clone();
     let qmd_dir = cache_home.join("qmd");
     std::fs::create_dir_all(&qmd_dir)
         .with_context(|| format!("failed to create {}", qmd_dir.display()))?;

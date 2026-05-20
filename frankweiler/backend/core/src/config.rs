@@ -19,15 +19,11 @@ pub struct Config {
 }
 
 /// Settings for `frankweiler-sync` — the one-shot pipeline that walks
-/// every enabled source's Extract → Translate → Load → Dump chain.
+/// every enabled source's Extract → Translate → Load chain. Outputs land
+/// directly under `Config.data_root` in fixed subdirs (`rendered_md/`,
+/// `dolt_db/`, `qmd/`), so there's no `out:` knob anymore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
-    /// Output directory the pipeline writes `dump.sql`, `rendered_md/`,
-    /// and (unless [`QmdConfig::skip`]) `qmd_index.sqlite` to. Templated:
-    /// `${data_root}` expands to `Config.data_root`. Defaults to
-    /// `${data_root}/build`.
-    #[serde(default = "default_sync_out")]
-    pub out: String,
     /// Run extract for all enabled sources concurrently. Translate/Load
     /// remain sequential since they write into a shared Dolt repo.
     #[serde(default = "default_true")]
@@ -36,15 +32,8 @@ pub struct SyncConfig {
 
 impl Default for SyncConfig {
     fn default() -> Self {
-        Self {
-            out: default_sync_out(),
-            parallel: true,
-        }
+        Self { parallel: true }
     }
-}
-
-fn default_sync_out() -> String {
-    "${data_root}/build".into()
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +315,7 @@ fn default_dolt_user() -> String {
     "root".into()
 }
 fn default_dolt_repo_dirname() -> String {
-    "dolt_repo".into()
+    "dolt_db".into()
 }
 
 impl Default for DoltConfig {
@@ -434,13 +423,9 @@ impl Config {
         expand_tilde(&s)
     }
 
-    /// Resolve `${data_root}` and `~` in `sync.out`.
-    pub fn resolved_sync_out(&self) -> PathBuf {
-        let s = self
-            .sync
-            .out
-            .replace("${data_root}", &self.data_root.display().to_string());
-        expand_tilde(&s)
+    /// Absolute path to the rendered-markdown tree.
+    pub fn rendered_md_path(&self) -> PathBuf {
+        self.data_root.join("rendered_md")
     }
 
     /// Validate cross-source invariants: non-empty names, unique names, and
@@ -490,7 +475,7 @@ impl Config {
     ///
     /// Resolves to `<root>/<dolt.repo_dirname>`. Matches the layout
     /// established by `DoltService` in `src/ingest/dolt_service.py`.
-    pub fn dolt_repo_path(&self) -> PathBuf {
+    pub fn dolt_db_path(&self) -> PathBuf {
         self.data_root.join(&self.dolt.repo_dirname)
     }
 
@@ -585,12 +570,12 @@ mod tests {
         assert_eq!(cfg.host, "127.0.0.1");
         assert_eq!(cfg.port, 3306);
         assert_eq!(cfg.user, "root");
-        assert_eq!(cfg.repo_dirname, "dolt_repo");
+        assert_eq!(cfg.repo_dirname, "dolt_db");
         assert!(cfg.binary.is_none());
     }
 
     #[test]
-    fn dolt_repo_path_and_url() {
+    fn dolt_db_path_and_url() {
         let tmp = tempdir();
         let cfg = Config {
             data_root: tmp.clone(),
@@ -600,11 +585,8 @@ mod tests {
             sync: SyncConfig::default(),
             sources: Vec::new(),
         };
-        assert_eq!(cfg.dolt_repo_path(), tmp.join("dolt_repo"));
-        assert_eq!(
-            cfg.dolt_mysql_url(),
-            "mysql://root@127.0.0.1:3306/dolt_repo"
-        );
+        assert_eq!(cfg.dolt_db_path(), tmp.join("dolt_db"));
+        assert_eq!(cfg.dolt_mysql_url(), "mysql://root@127.0.0.1:3306/dolt_db");
     }
 
     #[test]
@@ -625,7 +607,7 @@ mod tests {
         assert_eq!(cfg.dolt.port, 13306);
         assert_eq!(cfg.dolt.repo_dirname, "my_repo");
         assert_eq!(cfg.dolt.host, "127.0.0.1");
-        assert_eq!(cfg.dolt_repo_path(), root.join("my_repo"));
+        assert_eq!(cfg.dolt_db_path(), root.join("my_repo"));
     }
 
     fn write_cfg(yaml: &str) -> (PathBuf, PathBuf) {

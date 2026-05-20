@@ -6,16 +6,15 @@
 //   bazel-bin/tests/fixtures/ingested/qmd.tar    -- rendered conversation tree
 //
 // Backend layout expected at <root>:
-//   <root>/dolt_repo/         (initialized + dump loaded)
+//   <root>/dolt_db/           (initialized + dump loaded)
 //   <root>/config.yaml        (ephemeral dolt port; backend reads via
 //                              FRANKWEILER_CONFIG)
-//   <root>/anthropic/<account>/llm_chats/*.qmd
-//   <root>/openai/<account>/llm_chats/*.qmd
+//   <root>/rendered_md/<provider>/...
+//   <root>/qmd/index.sqlite
 //
 // The tar archive's entries are prefixed with `qmd/`, matching the directory
-// the genrule writes into. The backend's qmd::scan_root expects
-// <root>/{anthropic,openai} directly, so we extract with `--strip-components=1`
-// so the inner provider dirs sit at <root>/.
+// the genrule writes into. We extract with `--strip-components=1` so
+// `rendered_md/`, `qmd/`, etc. sit at <root>/.
 //
 // Usage:
 //   node prepare-fixture.cjs <out-root>
@@ -102,7 +101,7 @@ function loadDumpIntoDolt(dumpPath, repoDir) {
   const dump = fs.readFileSync(dumpPath, "utf8");
   execSync("dolt sql", {
     cwd: repoDir,
-    input: `USE dolt_repo;\n${dump}`,
+    input: `USE dolt_db;\n${dump}`,
     stdio: ["pipe", "inherit", "inherit"],
   });
 }
@@ -127,8 +126,8 @@ function main() {
   });
   // Overlay qmd-index.tar with the same strip — its archive paths are
   // also rooted at `qmd/`, so the index file lands at
-  // <root>/.frankweiler/qmd/index.sqlite, exactly where the backend
-  // expects it (frankweiler_core::qmd::QMD_INDEX_REL).
+  // <root>/qmd/index.sqlite, exactly where the backend expects it
+  // (frankweiler_core::qmd::QMD_INDEX_REL).
   execFileSync(
     "tar",
     ["-xf", qmdIndex, "-C", outRoot, "--strip-components=1"],
@@ -136,7 +135,7 @@ function main() {
   );
 
   const doltPort = freePortSync();
-  loadDumpIntoDolt(dump, path.join(outRoot, "dolt_repo"));
+  loadDumpIntoDolt(dump, path.join(outRoot, "dolt_db"));
   // Ephemeral dolt port avoids 3306 collisions when multiple bazel test
   // shards (or a host-side dev dolt) run concurrently. The backend reads
   // this via FRANKWEILER_CONFIG (set by playwright.config.ts).
@@ -184,7 +183,7 @@ function main() {
     );
     process.exit(3);
   }
-  const modelsLink = path.join(outRoot, ".frankweiler", "qmd", "models");
+  const modelsLink = path.join(outRoot, "qmd", "models");
   fs.mkdirSync(path.dirname(modelsLink), { recursive: true });
   try {
     fs.symlinkSync(sharedModels, modelsLink);

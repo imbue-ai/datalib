@@ -28,9 +28,11 @@
 //!     translate/load without re-hitting the network.
 //!   * default: extract live from every managed source's provider API,
 //!     translate, load into a scratch Dolt repo, emit `dolt_repo/` +
-//!     `rendered_md/` + (unless `qmd.skip`) `qmd_index.sqlite` to
-//!     `sync.out`. SQL dumping (if needed) is downstream — e.g. a Bazel
-//!     genrule that consumes `dolt_repo/` and runs `dolt dump`.
+//!     the configured Dolt repo at `<data_root>/dolt_db/`, write the
+//!     rendered markdown tree to `<data_root>/rendered_md/`, and (unless
+//!     `qmd.skip`) build the qmd index at `<data_root>/qmd/index.sqlite`.
+//!     SQL dumping (if needed) is downstream — e.g. a Bazel genrule that
+//!     consumes `dolt_db/` and runs `dolt dump`.
 //!
 //! Extract runs concurrently across managed sources when
 //! `sync.parallel: true` (the default); translate/load remain sequential
@@ -59,7 +61,6 @@ use frankweiler_etl_gitlab::synthesize::GitlabSynth;
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use frankweiler_etl_slack::synthesize::SlackSynth;
 use sqlx::mysql::MySqlPoolOptions;
-use tempfile::TempDir;
 use tokio::task::JoinSet;
 
 mod progress;
@@ -68,7 +69,7 @@ use crate::progress::{make_bar, make_multi, IndicatifSink};
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
-    about = "Config-driven ETL: extract every enabled source, translate, load into Dolt, emit dolt_repo/ + rendered_md/ + qmd_index.sqlite"
+    about = "Config-driven ETL: extract every enabled source, translate, load into Dolt at <data_root>/dolt_db/ + rendered_md/ + qmd/index.sqlite"
 )]
 struct Args {
     /// Path to the YAML config. Defaults to `$FRANKWEILER_CONFIG` or
@@ -81,10 +82,6 @@ struct Args {
     /// builds and for the Bazel genrule.
     #[arg(long)]
     now: String,
-
-    /// Override `sync.out` from config. Created if missing.
-    #[arg(long)]
-    out: Option<PathBuf>,
 
     /// Run extract against this HTTP playback fixture tree instead of
     /// the network. Required for hermetic Bazel builds; outside of those
@@ -290,14 +287,11 @@ async fn run() -> Result<()> {
         return run_synthesize(&cfg, playback_out);
     }
 
-    let out_dir = args.out.clone().unwrap_or_else(|| cfg.resolved_sync_out());
-    fs::create_dir_all(&out_dir).with_context(|| format!("create out: {}", out_dir.display()))?;
-    let out_dir = out_dir.canonicalize()?;
-
-    let workspace = TempDir::new().context("create scratch workspace")?;
-    let root = workspace.path().to_path_buf();
+    fs::create_dir_all(&cfg.data_root)
+        .with_context(|| format!("create data_root: {}", cfg.data_root.display()))?;
+    let root = cfg.data_root.canonicalize()?;
     fs::create_dir_all(root.join("rendered_md"))?;
-    eprintln!("[frankweiler-sync] workspace = {}", root.display());
+    eprintln!("[frankweiler-sync] data_root = {}", root.display());
 
     if args.skip_extract {
         eprintln!("[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths");
@@ -317,14 +311,13 @@ async fn run() -> Result<()> {
         translate_source(src, &cfg, &root)?;
     }
 
-    let dolt_repo_dir = root.join("dolt_repo");
-    fs::create_dir_all(&dolt_repo_dir)?;
+    let dolt_db_dir = cfg.dolt_db_path();
+    fs::create_dir_all(&dolt_db_dir)?;
     let port = free_port()?;
     let mut dolt_cfg = cfg.dolt.clone();
     dolt_cfg.port = port;
-    dolt_cfg.repo_dirname = "dolt_repo".to_string();
     eprintln!("[frankweiler-sync] dolt sql-server port = {port}");
-    let server = DoltServer::ensure(&dolt_repo_dir, &dolt_cfg).context("dolt sql-server")?;
+    let server = DoltServer::ensure(&dolt_db_dir, &dolt_cfg).context("dolt sql-server")?;
     let url = server.mysql_url();
     let pool = MySqlPoolOptions::new()
         .max_connections(2)
@@ -340,22 +333,20 @@ async fn run() -> Result<()> {
         summary.documents_loaded, summary.documents_total, summary.rows_inserted
     );
     drop(pool);
-
     drop(server);
 
-    let dolt_repo_dest = out_dir.join("dolt_repo");
-    copy_tree(&dolt_repo_dir, &dolt_repo_dest)?;
-
-    let rendered_dest = out_dir.join("rendered_md");
-    copy_tree(&root.join("rendered_md"), &rendered_dest)?;
-
-    eprintln!("[frankweiler-sync] wrote {}/", dolt_repo_dest.display());
-    eprintln!("[frankweiler-sync] wrote {}/", rendered_dest.display());
+    eprintln!("[frankweiler-sync] wrote {}/", dolt_db_dir.display());
+    eprintln!(
+        "[frankweiler-sync] wrote {}/",
+        root.join("rendered_md").display()
+    );
 
     if !cfg.qmd.skip {
-        let qmd_index_out = out_dir.join("qmd_index.sqlite");
-        build_qmd_index(&root, cfg.qmd.models_dir.as_deref(), &qmd_index_out)?;
-        eprintln!("[frankweiler-sync] wrote {}", qmd_index_out.display());
+        build_qmd_index(&root, cfg.qmd.models_dir.as_deref())?;
+        eprintln!(
+            "[frankweiler-sync] wrote {}",
+            root.join("qmd/index.sqlite").display()
+        );
     } else {
         eprintln!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
     }
@@ -772,51 +763,14 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Helpers (copied verbatim from the prior implementation)
+// Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
-    if dest.exists() {
-        fs::remove_dir_all(dest).with_context(|| format!("clear existing {}", dest.display()))?;
-    }
-    if !src.exists() {
-        fs::create_dir_all(dest)?;
-        return Ok(());
-    }
-    for entry in walkdir::WalkDir::new(src).sort_by_file_name() {
-        let entry = entry?;
-        let rel = entry
-            .path()
-            .strip_prefix(src)
-            .with_context(|| format!("strip_prefix {}", entry.path().display()))?;
-        let target = dest.join(rel);
-        let ft = entry.file_type();
-        if ft.is_dir() {
-            fs::create_dir_all(&target).with_context(|| format!("mkdir {}", target.display()))?;
-        } else if ft.is_file() {
-            if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(entry.path(), &target).with_context(|| {
-                format!("copy {} -> {}", entry.path().display(), target.display())
-            })?;
-        }
-    }
-    Ok(())
-}
-
-fn build_qmd_index(root: &Path, models_dir: Option<&Path>, dest: &Path) -> Result<()> {
+fn build_qmd_index(root: &Path, models_dir: Option<&Path>) -> Result<()> {
     let mut opts = frankweiler_qmd_indexer::IndexOptions::new(root);
     if let Some(d) = models_dir {
         opts.models_dir = d.to_path_buf();
     }
-    let index_path = frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")?;
-    fs::copy(&index_path, dest).with_context(|| {
-        format!(
-            "copy qmd index {} -> {}",
-            index_path.display(),
-            dest.display()
-        )
-    })?;
+    frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")?;
     Ok(())
 }

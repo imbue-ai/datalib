@@ -6,15 +6,15 @@ resulting SQLite index.
 The output is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
 prefix so the two tars layer cleanly. Extracting both with
 `tar -x --strip-components=1` into a directory yields a complete root data
-directory — markdown tree under `<root>/{anthropic,openai,slack}/...` plus
-the qmd index at `<root>/.frankweiler/qmd/index.sqlite`.
+directory — markdown tree under `<root>/rendered_md/...` plus the qmd index
+at `<root>/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd.tar`) — we have to extract it to a
      real directory before qmd's `collection add` can walk it.
   2. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. The
-     indexer binary pins XDG_CACHE_HOME inside the extracted root, so we
-     pull `.frankweiler/qmd/` back out as a tar overlay.
+     indexer binary pins XDG_CACHE_HOME at the data root, so we pull
+     `qmd/` back out as a tar overlay.
   3. qmd is invoked via `npx`, which needs `node` on PATH and writes to a
      per-user cache. Bazel scrubs PATH and HOME for hermeticity, so we
      re-add the common host install locations and point HOME at the sandbox.
@@ -93,7 +93,7 @@ def main() -> int:
     if r.returncode != 0:
         return r.returncode
 
-    produced = work / ".frankweiler" / "qmd" / "index.sqlite"
+    produced = work / "qmd" / "index.sqlite"
     if not produced.exists():
         sys.stderr.write(f"qmd_indexer did not produce {produced}\n")
         return 1
@@ -102,8 +102,8 @@ def main() -> int:
     # "qmd/..." so callers can extract both archives into the same root
     # directory and have everything end up in the right place. Skip the
     # `models` symlink — it points at a shared cache outside the data root.
-    overlay_root = work / ".frankweiler"
-    models_link = overlay_root / "qmd" / "models"
+    overlay_root = work / "qmd"
+    models_link = overlay_root / "models"
 
     def is_under(p: Path, parent: Path) -> bool:
         try:
@@ -120,8 +120,8 @@ def main() -> int:
         and not is_under(p, models_link)
     )
     with tarfile.open(out_tar_path, "w") as tf:
-        # Include the .frankweiler/ directory entry itself for completeness.
-        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/.frankweiler")
+        # Include the `qmd/qmd/` directory entry itself for completeness.
+        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/qmd")
         ti.mtime = 0
         ti.uid = 0
         ti.gid = 0
@@ -129,7 +129,7 @@ def main() -> int:
         ti.gname = ""
         tf.addfile(ti)
         for p in entries:
-            arcname = "qmd/.frankweiler/" + str(p.relative_to(overlay_root))
+            arcname = "qmd/qmd/" + str(p.relative_to(overlay_root))
             ti = tf.gettarinfo(str(p), arcname=arcname)
             ti.mtime = 0
             ti.uid = 0

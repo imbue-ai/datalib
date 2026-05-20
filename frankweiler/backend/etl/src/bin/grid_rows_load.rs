@@ -9,7 +9,7 @@
 //!
 //! Connects to a running `dolt sql-server` if one is already listening
 //! on `--dolt-host:--dolt-port`; otherwise spawns one under
-//! `--dolt-repo-dir` (default `<out>/dolt_repo`). Same connect-or-spawn
+//! `--dolt-repo-dir` (default `<out>/dolt_db`). Same connect-or-spawn
 //! semantics as the Python `DoltService`.
 //!
 //! The output schema is stable across providers so a web UI can
@@ -46,7 +46,7 @@ struct Args {
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 
-    /// Dolt repo directory. Defaults to `<out>/dolt_repo`. If a
+    /// Dolt repo directory. Defaults to `<out>/dolt_db`. If a
     /// `dolt sql-server` is already running on `--dolt-host:--dolt-port`,
     /// the loader attaches to it and ignores this path for spawning.
     #[arg(long, env = "DOLT_REPO_DIR")]
@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
     let dolt_repo_dir = args
         .dolt_repo_dir
         .clone()
-        .unwrap_or_else(|| args.out.join("dolt_repo"));
+        .unwrap_or_else(|| args.out.join("dolt_db"));
 
     let dolt_cfg = DoltConfig {
         host: args.dolt_host.clone(),
@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
         repo_dirname: dolt_repo_dir
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "dolt_repo".into()),
+            .unwrap_or_else(|| "dolt_db".into()),
         binary: None,
     };
 

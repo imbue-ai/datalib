@@ -90,7 +90,7 @@ async fn build_repo(
 ) -> anyhow::Result<(DynRepo, Option<Arc<DoltServer>>)> {
     let dolt_cfg = cfg.map(|c| c.dolt.clone()).unwrap_or_default();
     let repo_dir = match cfg {
-        Some(c) => c.dolt_repo_path(),
+        Some(c) => c.dolt_db_path(),
         None => root.as_ref().join(&dolt_cfg.repo_dirname),
     };
     eprintln!(

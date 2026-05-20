@@ -59,12 +59,13 @@ genrule(
     ],
     cmd = " && ".join([
         # 1. Drive sync via the python helper: it emits two YAML configs
-        #    (synth + extract) and runs each phase of the pipeline.
+        #    (synth + extract) and runs each phase of the pipeline. The
+        #    sync binary writes rendered_md/ + dolt_db/ directly into the
+        #    data_root we pass.
         " ".join([
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
             "'2369-04-15T00:00:00+00:00'",
-            "$(RULEDIR)/sync_staging",
             "$(RULEDIR)/sync_workspace",
             # Per-source raw fixture trees. Order matches the helper's
             # positional args: anthropic, chatgpt, slack, github, gitlab, notion.
@@ -80,14 +81,14 @@ genrule(
         #    output path first, then cd into the repo.
         " ".join([
             "(DUMP_ABS=$$(pwd)/$(execpath ingested/dump.sql);",
-            "cd $(RULEDIR)/sync_staging/dolt_repo &&",
+            "cd $(RULEDIR)/sync_workspace/dolt_db &&",
             "$${DOLT_BIN:-dolt} dump --result-format sql --no-batch",
             "--file-name $$DUMP_ABS)",
         ]),
         # 3. Tar the rendered_md tree hermetically into qmd.tar.
         " ".join([
             "python3 $(execpath tar_qmd.py)",
-            "$(RULEDIR)/sync_staging",
+            "$(RULEDIR)/sync_workspace",
             "$(execpath ingested/qmd.tar)",
         ]),
     ]),

@@ -26,8 +26,6 @@ rust_binary(
         "@frankweiler_crates//:indicatif",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
-        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
-        "@frankweiler_crates//:walkdir",
     ],
 )
