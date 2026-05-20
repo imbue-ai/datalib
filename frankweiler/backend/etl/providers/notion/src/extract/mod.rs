@@ -30,6 +30,9 @@ pub struct FetchOptions {
     pub subtree_pages: Vec<String>,
     /// If set, also discover pages via the unofficial getNotificationLog.
     pub inbox: bool,
+    /// When false, walk the inbox to discover referenced page IDs but
+    /// don't actually BFS into them. Defaults to true.
+    pub inbox_mirror_referenced: bool,
     /// Restrict inbox discovery to one space id.
     pub space: Option<String>,
     pub notification_page_size: u32,
@@ -48,6 +51,7 @@ impl Default for FetchOptions {
             out_dir: PathBuf::new(),
             subtree_pages: Vec::new(),
             inbox: false,
+            inbox_mirror_referenced: true,
             space: None,
             notification_page_size: 40,
             max_notification_pages: 50,
@@ -329,11 +333,13 @@ async fn walk_inbox(
     Ok(seen)
 }
 
-#[tracing::instrument(skip_all, fields(page_id = %pid, blocks, comments, page_ms, blocks_ms, comments_ms))]
+#[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, blocks, comments, page_ms, blocks_ms, comments_ms))]
+#[allow(clippy::too_many_arguments)]
 async fn mirror_page(
     client: &NotionOfficialClient,
     out_dir: &Path,
     pid: &str,
+    origin: &'static str,
     existing_pages: &mut HashMap<String, Value>,
     existing_blocks: &mut HashMap<String, Value>,
     existing_comments: &mut HashMap<String, Value>,
@@ -411,6 +417,7 @@ async fn mirror_page(
     span.record("comments_ms", comments_ms);
     tracing::info!(
         page_id = %pid,
+        origin = %origin,
         blocks = blocks.len(),
         comments = comments.len(),
         page_ms,
@@ -419,6 +426,60 @@ async fn mirror_page(
         "mirror_page done"
     );
     Ok(blocks)
+}
+
+/// Drain a BFS queue, mirroring each page and (unless `single_page`)
+/// queueing its `child_page` descendants. `origin` tags every emitted
+/// `mirror_page` span so log readers can tell subtree-driven work
+/// apart from inbox-driven work.
+#[allow(clippy::too_many_arguments)]
+async fn bfs_drain(
+    client: &NotionOfficialClient,
+    opts: &FetchOptions,
+    origin: &'static str,
+    mut queue: VecDeque<String>,
+    queued: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+    existing_pages: &mut HashMap<String, Value>,
+    existing_blocks: &mut HashMap<String, Value>,
+    existing_comments: &mut HashMap<String, Value>,
+    summary: &mut FetchSummary,
+    single_page: bool,
+) -> Result<()> {
+    while let Some(pid) = queue.pop_front() {
+        if visited.len() >= opts.max_pages {
+            break;
+        }
+        if !visited.insert(pid.clone()) {
+            continue;
+        }
+        opts.progress
+            .set_length(Some((visited.len() + queue.len()) as u64));
+        opts.progress.inc(1);
+        opts.progress.set_message(&pid);
+        let blocks = mirror_page(
+            client,
+            &opts.out_dir,
+            &pid,
+            origin,
+            existing_pages,
+            existing_blocks,
+            existing_comments,
+            summary,
+        )
+        .await?;
+        if !single_page {
+            for cid in child_page_ids(&blocks) {
+                if queued.insert(cid.clone()) {
+                    queue.push_back(cid);
+                }
+            }
+        }
+        if opts.sleep_between > Duration::ZERO {
+            tokio::time::sleep(opts.sleep_between).await;
+        }
+    }
+    Ok(())
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -433,28 +494,71 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut existing_comments = load_latest_by_key(&opts.out_dir, ENTITY_COMMENT, key_id)?;
 
     let mut summary = FetchSummary::default();
-
-    // Build BFS queue.
-    let mut queue: VecDeque<String> = VecDeque::new();
+    let mut visited: HashSet<String> = HashSet::new();
     let mut queued: HashSet<String> = HashSet::new();
 
     if let Some(single) = opts.page.as_deref() {
         let id = format_uuid(single);
-        queue.push_back(id.clone());
-        queued.insert(id);
+        queued.insert(id.clone());
+        let mut q = VecDeque::new();
+        q.push_back(id);
+        bfs_drain(
+            &official,
+            &opts,
+            "single",
+            q,
+            &mut queued,
+            &mut visited,
+            &mut existing_pages,
+            &mut existing_blocks,
+            &mut existing_comments,
+            &mut summary,
+            true,
+        )
+        .await?;
     } else {
-        for raw in &opts.subtree_pages {
-            // Accept either a bare page id (dashed or undashed) or a
-            // paste-able `https://www.notion.so/.../<title>-<hex32>`
-            // URL. Normalize at the latest possible moment so `raw`
-            // survives in logs.
-            let stripped = frankweiler_etl::ids::normalize_id_token(raw);
-            let id = format_uuid(&stripped);
-            if queued.insert(id.clone()) {
-                queue.push_back(id);
+        // Pass 1: subtree pages — drained to completion (including all
+        // child_page descendants) before the inbox pass starts, so
+        // pages reachable from the configured subtrees don't get
+        // re-discovered + re-mirrored under "inbox".
+        {
+            let span = tracing::info_span!("notion_subtree_pass", pages = opts.subtree_pages.len());
+            let _enter = span.enter();
+            let mut subtree_queue: VecDeque<String> = VecDeque::new();
+            for raw in &opts.subtree_pages {
+                // Accept either a bare page id (dashed or undashed) or a
+                // paste-able `https://www.notion.so/.../<title>-<hex32>`
+                // URL. Normalize at the latest possible moment so `raw`
+                // survives in logs.
+                let stripped = frankweiler_etl::ids::normalize_id_token(raw);
+                let id = format_uuid(&stripped);
+                if queued.insert(id.clone()) {
+                    subtree_queue.push_back(id);
+                }
             }
+            bfs_drain(
+                &official,
+                &opts,
+                "subtree",
+                subtree_queue,
+                &mut queued,
+                &mut visited,
+                &mut existing_pages,
+                &mut existing_blocks,
+                &mut existing_comments,
+                &mut summary,
+                false,
+            )
+            .await?;
+            tracing::info!(visited = visited.len(), "subtree pass done");
         }
+
+        // Pass 2: inbox-discovered pages. Skipped entirely if inbox is
+        // disabled. Pages already visited by the subtree pass are
+        // filtered out so the inbox pass only mirrors the leftovers.
         if opts.inbox {
+            let span = tracing::info_span!("notion_inbox_pass");
+            let _enter = span.enter();
             let uo = NotionUnofficialClient::new();
             uo.load_user_content().await?;
             let spaces_resp = uo.get_spaces().await?;
@@ -477,6 +581,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 out
             };
             tracing::info!(?space_ids, "inbox spaces");
+            let mut inbox_queue: VecDeque<String> = VecDeque::new();
+            let mut total_refs = 0usize;
+            let mut already_mirrored = 0usize;
             for sid in space_ids {
                 let refs = walk_inbox(
                     &uo,
@@ -487,51 +594,49 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 )
                 .await?;
                 tracing::info!(space = %sid, found = refs.len(), "inbox refs");
+                total_refs += refs.len();
                 for rid in refs {
                     let pid = format_uuid(&rid);
+                    if visited.contains(&pid) {
+                        already_mirrored += 1;
+                        continue;
+                    }
                     if queued.insert(pid.clone()) {
-                        queue.push_back(pid);
+                        inbox_queue.push_back(pid);
                     }
                 }
             }
             summary.unofficial_requests = uo.request_count();
+            if !opts.inbox_mirror_referenced {
+                tracing::info!(
+                    refs = total_refs,
+                    already_mirrored,
+                    "inbox refs collected; not mirroring (inbox_mirror_referenced=false)"
+                );
+            } else {
+                tracing::info!(
+                    queued = inbox_queue.len(),
+                    already_mirrored,
+                    "inbox pages queued for mirror"
+                );
+                bfs_drain(
+                    &official,
+                    &opts,
+                    "inbox",
+                    inbox_queue,
+                    &mut queued,
+                    &mut visited,
+                    &mut existing_pages,
+                    &mut existing_blocks,
+                    &mut existing_comments,
+                    &mut summary,
+                    false,
+                )
+                .await?;
+            }
         }
     }
 
-    let mut visited: HashSet<String> = HashSet::new();
-    while let Some(pid) = queue.pop_front() {
-        if visited.len() >= opts.max_pages {
-            break;
-        }
-        if !visited.insert(pid.clone()) {
-            continue;
-        }
-        opts.progress
-            .set_length(Some((visited.len() + queue.len()) as u64));
-        opts.progress.inc(1);
-        opts.progress.set_message(&pid);
-        let blocks = mirror_page(
-            &official,
-            &opts.out_dir,
-            &pid,
-            &mut existing_pages,
-            &mut existing_blocks,
-            &mut existing_comments,
-            &mut summary,
-        )
-        .await?;
-        // Single-page mode means "just this page" — don't walk descendants.
-        if opts.page.is_none() {
-            for cid in child_page_ids(&blocks) {
-                if queued.insert(cid.clone()) {
-                    queue.push_back(cid);
-                }
-            }
-        }
-        if opts.sleep_between > Duration::ZERO {
-            tokio::time::sleep(opts.sleep_between).await;
-        }
-    }
     summary.official_requests = official.request_count();
     let _ = json!(summary.official_requests); // silence unused-import warning
     Ok(summary)

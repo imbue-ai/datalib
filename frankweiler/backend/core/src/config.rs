@@ -149,6 +149,12 @@ pub struct NotionInbox {
     pub max_notification_pages: Option<i64>,
     #[serde(default)]
     pub space: Option<String>,
+    /// When `false`, walk the inbox to discover referenced page IDs (and
+    /// log them) but don't BFS into them. Useful for keeping the inbox
+    /// signal without dragging hundreds of unrelated pages through the
+    /// mirror. Defaults to `true` for back-compat.
+    #[serde(default)]
+    pub mirror_referenced_pages: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

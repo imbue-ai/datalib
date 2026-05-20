@@ -609,6 +609,11 @@ impl ExtractPlan {
                         out_dir: self.out_dir.clone(),
                         subtree_pages: seeds,
                         inbox: sync.inbox.as_ref().is_some_and(|i| i.enabled),
+                        inbox_mirror_referenced: sync
+                            .inbox
+                            .as_ref()
+                            .and_then(|i| i.mirror_referenced_pages)
+                            .unwrap_or(true),
                         space: sync.inbox.as_ref().and_then(|i| i.space.clone()),
                         sleep_between: Duration::ZERO,
                         progress: progress.clone(),
