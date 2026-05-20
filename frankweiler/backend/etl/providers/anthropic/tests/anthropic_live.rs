@@ -47,7 +47,7 @@ async fn anthropic_live_single_conv_snapshot() {
         export_dir: None,
         overlap: 0,
         sleep_between: Duration::ZERO,
-        conv_uuid: Some(TARGET_UUID.to_string()),
+        conv_uuids: vec![TARGET_UUID.to_string()],
         ..Default::default()
     };
     anthropic::fetch(opts)

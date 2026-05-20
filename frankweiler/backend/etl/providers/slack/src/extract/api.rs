@@ -17,6 +17,7 @@ use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use frankweiler_etl::latchkey::latchkey_tokio_command;
 use frankweiler_etl::obs::events;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -179,7 +180,7 @@ pub async fn call_slack(
 pub async fn extract_file_auth() -> Result<BTreeMap<String, String>> {
     let proc = tokio::time::timeout(
         LATCHKEY_TIMEOUT,
-        Command::new("latchkey")
+        latchkey_tokio_command()
             .args([
                 "curl",
                 "-v",

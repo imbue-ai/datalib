@@ -118,7 +118,7 @@ fn free_port() -> Result<u16> {
 #[tokio::main]
 async fn main() {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
-        std::env::set_var("RUST_BACKTRACE", "1");
+        std::env::set_var("RUST_BACKTRACE", "full");
     }
     match run().await {
         Ok(()) => {}
@@ -153,9 +153,6 @@ fn render_error(e: &anyhow::Error) {
             eprintln!("{GENERIC_AUTH_HINT}");
         }
     }
-    if std::env::var("RUST_BACKTRACE").as_deref() == Ok("1") {
-        eprintln!("\n(set RUST_BACKTRACE=full for a deeper trace)");
-    }
 }
 
 fn looks_like_auth_failure(s: &str) -> bool {
@@ -187,8 +184,10 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
 
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
-See <provider>/EXTRACT.md for setup. Confirm LATCHKEY_CURL points at \
-the curl impersonator binary and that `latchkey auth list` shows entries.";
+See <provider>/EXTRACT.md for setup. Confirm the in-tree curl shim is \
+built (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`), or \
+set $FRANKWEILER_CURL_SHIM / $LATCHKEY_CURL explicitly, and that \
+`latchkey auth list` shows entries.";
 
 fn auth_hint_for(provider: &str) -> String {
     match provider {
@@ -517,7 +516,7 @@ impl ExtractPlan {
                         export_dir: Some(self.out_dir.clone()),
                         overlap: sync.overlap.map(|v| v as usize).unwrap_or(usize::MAX),
                         sleep_between: Duration::ZERO,
-                        conv_uuid: None,
+                        conv_uuids: sync.conv_uuids.clone(),
                         progress: progress.clone(),
                     },
                 )
@@ -530,7 +529,7 @@ impl ExtractPlan {
                     max_pages: sync.max_pages.map(|v| v as usize),
                     limit: sync.limit.map(|v| v as usize),
                     sleep_between: Duration::ZERO,
-                    conv_uuid: None,
+                    conv_uuids: sync.conv_uuids.clone(),
                     fetched_at: Some(self.now.clone()),
                     progress: progress.clone(),
                 },

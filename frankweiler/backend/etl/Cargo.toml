@@ -33,6 +33,10 @@ tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-
 sqlx = { workspace = true }
 sha2 = "0.10"
 tempfile = "3"
+# Bazel runfiles lookup, so the shared `latchkey::ensure_curl_shim`
+# resolver can find our Chrome-impersonating curl shim under
+# `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
+runfiles = "0.2"
 
 # Observability stack — emitted as structured events, rendered as a
 # progress UI on a TTY, JSON on stderr otherwise, and optionally

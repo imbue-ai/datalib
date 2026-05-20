@@ -16,6 +16,8 @@
 
 pub mod event_store;
 pub mod http;
+pub mod ids;
+pub mod latchkey;
 pub mod load;
 pub mod obs;
 pub mod progress;

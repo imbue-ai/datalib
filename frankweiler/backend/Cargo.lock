@@ -797,6 +797,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "runfiles",
  "serde",
  "serde_json",
  "sha2",
@@ -2307,6 +2308,12 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
+
+[[package]]
+name = "runfiles"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f730e313f0558b5a8e7684197c08464ed9cfbaf4bcc85fc70763d87eec4982c5"
 
 [[package]]
 name = "rustc-hash"

@@ -22,6 +22,7 @@ rust_library(
         "@frankweiler_crates//:opentelemetry",
         "@frankweiler_crates//:opentelemetry-otlp",
         "@frankweiler_crates//:opentelemetry_sdk",
+        "@frankweiler_crates//:runfiles",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sha2",
@@ -35,6 +36,16 @@ rust_library(
         "@frankweiler_crates//:tracing-subscriber",
     ],
 )
+
+# NOTE: a `rust_binary` target for `latchkey_curl_shim` is intentionally
+# *not* defined here yet. The shim depends on `wreq` → `boring-sys2`,
+# which invokes `cmake` from a build script; rules_rust's sandbox does
+# not currently expose a host cmake, so the bazel-built shim fails. The
+# `frankweiler_etl::latchkey` resolver instead picks up a cargo-built
+# shim (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`) via
+# `BUILD_WORKING_DIRECTORY` when run under `bazel run`. Add a
+# `rust_binary` target + `data = [":latchkey_curl_shim"]` on
+# `frankweiler_etl` once cmake is wired into the build.
 
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
 # upsert into Dolt; tracks documents_loaded(qmd_path, fingerprint) for

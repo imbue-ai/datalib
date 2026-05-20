@@ -36,9 +36,10 @@ pub struct FetchOptions {
     pub export_dir: Option<PathBuf>,
     pub overlap: usize,
     pub sleep_between: Duration,
-    /// If set, fetch only this conversation UUID and merge it into the
-    /// existing cache. The listing/priority walk is skipped entirely.
-    pub conv_uuid: Option<String>,
+    /// When non-empty, fetch only these conversation UUIDs and merge
+    /// them into the existing cache. The listing/priority walk is
+    /// skipped entirely.
+    pub conv_uuids: Vec<String>,
     pub progress: frankweiler_etl::progress::Progress,
 }
 
@@ -122,16 +123,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut merged: HashMap<String, Value> = existing_api.clone();
     let mut summary = FetchSummary::default();
 
-    if let Some(target) = opts.conv_uuid.as_deref() {
-        fetch_single(
-            &mut client,
-            &orgs,
-            target,
-            account_uuid.as_deref(),
-            &mut merged,
-            &mut summary,
-        )
-        .await?;
+    if !opts.conv_uuids.is_empty() {
+        opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
+        for raw in &opts.conv_uuids {
+            opts.progress.inc(1);
+            opts.progress.set_message(raw);
+            // Accept either a bare UUID or a `https://claude.ai/chat/<uuid>`
+            // URL. Normalize as late as possible so the user's original
+            // input survives in logs and progress messages.
+            let target = frankweiler_etl::ids::normalize_id_token(raw);
+            fetch_single(
+                &mut client,
+                &orgs,
+                &target,
+                account_uuid.as_deref(),
+                &mut merged,
+                &mut summary,
+            )
+            .await?;
+        }
     } else {
         opts.progress.set_message("listing orgs");
         for org in &orgs {

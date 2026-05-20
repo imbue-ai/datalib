@@ -72,7 +72,7 @@ async fn anthropic_synth_playback_extract_roundtrip() {
         export_dir: None,
         overlap: 0,
         sleep_between: Duration::ZERO,
-        conv_uuid: None,
+        conv_uuids: Vec::new(),
         ..Default::default()
     })
     .await

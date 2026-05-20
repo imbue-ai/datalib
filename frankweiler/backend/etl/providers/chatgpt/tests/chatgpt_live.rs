@@ -45,7 +45,7 @@ async fn chatgpt_live_single_conv_snapshot() {
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
-        conv_uuid: Some(TARGET_ID.to_string()),
+        conv_uuids: vec![TARGET_ID.to_string()],
         ..Default::default()
     };
     chatgpt::fetch(opts).await.expect("chatgpt fetch failed");

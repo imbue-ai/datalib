@@ -74,6 +74,13 @@ pub struct ClaudeApiSync {
     pub refresh_window_days: Option<i64>,
     #[serde(default)]
     pub overlap: Option<i64>,
+    /// When non-empty, restrict the fetch to exactly these conversation
+    /// UUIDs. Accepts either the bare UUID or a paste-able browser URL
+    /// (`https://claude.ai/chat/<uuid>`); URLs are normalized to the
+    /// trailing path segment. Skips org listing entirely; each UUID is
+    /// looked up across all orgs the account has access to.
+    #[serde(default)]
+    pub conv_uuids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -87,6 +94,13 @@ pub struct ChatgptApiSync {
     pub limit: Option<i64>,
     #[serde(default)]
     pub sleep_between: Option<f64>,
+    /// When non-empty, restrict the fetch to exactly these conversation
+    /// IDs. Accepts either the bare id or a paste-able browser URL
+    /// (`https://chatgpt.com/c/<id>`); URLs are normalized to the
+    /// trailing path segment. Skips paginated listing entirely;
+    /// `me.json` is still fetched.
+    #[serde(default)]
+    pub conv_uuids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,6 +154,11 @@ pub struct NotionInbox {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionSubtrees {
+    /// Page IDs at the root of each subtree to walk. Accepts bare page
+    /// IDs (dashed or undashed) or paste-able browser URLs
+    /// (`https://www.notion.so/<workspace>/<title>-<hex32>`); URLs are
+    /// reduced to the trailing 32-hex token before being passed through
+    /// `format_uuid` in the notion extractor.
     #[serde(default)]
     pub pages: Vec<String>,
     #[serde(default)]

@@ -28,7 +28,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
+
+use crate::latchkey::latchkey_tokio_command;
 
 /// HTTP method. We only model the methods any provider currently issues;
 /// extend as needed.
@@ -202,7 +203,7 @@ mod live {
         })?;
         let body_path = body_file.path().to_path_buf();
 
-        let mut cmd = Command::new("latchkey");
+        let mut cmd = latchkey_tokio_command();
         cmd.arg("curl").arg("-sS");
         // -D - dumps the response header block to stdout so we can
         // parse every header. -o <path> writes the body to a tempfile

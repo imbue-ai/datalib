@@ -25,7 +25,7 @@ use frankweiler_etl::event_store::{diff_and_save, load_latest_by_key, make_recor
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub use client::{auto_set_latchkey_curl, GitHubClient, GitHubError, BASE, PER_PAGE};
+pub use client::{GitHubClient, GitHubError, BASE, PER_PAGE};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_PR: &str = "pull_request";
@@ -511,7 +511,7 @@ async fn fetch_one_pr(
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     std::fs::create_dir_all(&opts.out_dir)
         .with_context(|| format!("create {}", opts.out_dir.display()))?;
-    auto_set_latchkey_curl();
+    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
     let client = GitHubClient::new();
     let mut summary = FetchSummary::default();
 

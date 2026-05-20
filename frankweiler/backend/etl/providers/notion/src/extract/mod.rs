@@ -379,7 +379,7 @@ async fn mirror_page(
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     std::fs::create_dir_all(&opts.out_dir)
         .with_context(|| format!("create {}", opts.out_dir.display()))?;
-    auto_set_latchkey_curl()?;
+    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
 
     let official = NotionOfficialClient::new();
 
@@ -399,7 +399,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         queued.insert(id);
     } else {
         for raw in &opts.subtree_pages {
-            let id = format_uuid(raw);
+            // Accept either a bare page id (dashed or undashed) or a
+            // paste-able `https://www.notion.so/.../<title>-<hex32>`
+            // URL. Normalize at the latest possible moment so `raw`
+            // survives in logs.
+            let stripped = frankweiler_etl::ids::normalize_id_token(raw);
+            let id = format_uuid(&stripped);
             if queued.insert(id.clone()) {
                 queue.push_back(id);
             }
@@ -485,31 +490,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.official_requests = official.request_count();
     let _ = json!(summary.official_requests); // silence unused-import warning
     Ok(summary)
-}
-
-/// If `LATCHKEY_CURL` is unset, point it at the in-tree
-/// `latchkey-curl-shim` binary so Cloudflare-fronted unofficial endpoints
-/// clear the green path automatically.
-fn auto_set_latchkey_curl() -> Result<()> {
-    if std::env::var_os("LATCHKEY_CURL").is_some() {
-        return Ok(());
-    }
-    // Best-effort: look for a sibling binary in the standard cargo
-    // target dirs under the current crate.
-    let candidates = [
-        "target/debug/latchkey-curl-shim",
-        "target/release/latchkey-curl-shim",
-        "frankweiler/backend/target/debug/latchkey-curl-shim",
-        "frankweiler/backend/target/release/latchkey-curl-shim",
-    ];
-    for c in candidates {
-        if std::path::Path::new(c).exists() {
-            std::env::set_var("LATCHKEY_CURL", c);
-            tracing::info!(shim = c, "auto-set LATCHKEY_CURL");
-            return Ok(());
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

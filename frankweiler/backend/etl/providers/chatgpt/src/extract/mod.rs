@@ -44,10 +44,11 @@ pub struct FetchOptions {
     pub max_pages: Option<usize>,
     pub limit: Option<usize>,
     pub sleep_between: Duration,
-    /// If set, fetch only this conversation id and write it to
-    /// `<out>/conversations/<id>.json`. Skips the paginated listing
-    /// walk; `me.json` is still fetched (cheap, captures account id).
-    pub conv_uuid: Option<String>,
+    /// When non-empty, fetch only these conversation ids and write
+    /// each to `<out>/conversations/<id>.json`. Skips the paginated
+    /// listing walk; `me.json` is still fetched (cheap, captures
+    /// account id).
+    pub conv_uuids: Vec<String>,
     /// Override the `_fetched_at` provenance stamp. When `None`, the
     /// extractor uses `Local::now()`. The sync orchestrator passes its
     /// `--now` value here so deterministic builds get a stable stamp.
@@ -92,21 +93,30 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         id = me.get("id").and_then(|v| v.as_str()).unwrap_or(""),
     );
 
-    if let Some(target) = opts.conv_uuid.as_deref() {
+    if !opts.conv_uuids.is_empty() {
         let mut summary = FetchSummary::default();
-        let cache_path = convs_dir.join(format!("{target}.json"));
-        match client.get_conversation(target).await {
-            Ok(mut full) => {
-                if let Some(obj) = full.as_object_mut() {
-                    obj.insert("_fetched_at".into(), Value::String(started_at.clone()));
+        opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
+        for raw in &opts.conv_uuids {
+            opts.progress.inc(1);
+            opts.progress.set_message(raw);
+            // Accept either a bare id or a `https://chatgpt.com/c/<id>`
+            // URL. Normalized at the last moment so logs/progress show
+            // the user's literal input.
+            let target = frankweiler_etl::ids::normalize_id_token(raw);
+            let cache_path = convs_dir.join(format!("{target}.json"));
+            match client.get_conversation(&target).await {
+                Ok(mut full) => {
+                    if let Some(obj) = full.as_object_mut() {
+                        obj.insert("_fetched_at".into(), Value::String(started_at.clone()));
+                    }
+                    write_json(&cache_path, &full)?;
+                    summary.fetched += 1;
+                    info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                 }
-                write_json(&cache_path, &full)?;
-                summary.fetched = 1;
-                info!(event = "chatgpt_fetch_single_ok", id = target);
-            }
-            Err(e) => {
-                warn!(event = "chatgpt_fetch_error", id = target, error = %e);
-                return Err(anyhow::anyhow!("fetch {target}: {e}"));
+                Err(e) => {
+                    warn!(event = "chatgpt_fetch_error", raw = raw, id = %target, error = %e);
+                    return Err(anyhow::anyhow!("fetch {raw}: {e}"));
+                }
             }
         }
         summary.requests = client.requests;

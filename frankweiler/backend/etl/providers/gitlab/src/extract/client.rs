@@ -150,20 +150,3 @@ impl GitLabClient {
         }
     }
 }
-
-pub fn auto_set_latchkey_curl() {
-    if std::env::var_os("LATCHKEY_CURL").is_some() {
-        return;
-    }
-    for c in [
-        "target/debug/latchkey-curl-shim",
-        "target/release/latchkey-curl-shim",
-        "frankweiler/backend/target/debug/latchkey-curl-shim",
-        "frankweiler/backend/target/release/latchkey-curl-shim",
-    ] {
-        if std::path::Path::new(c).exists() {
-            std::env::set_var("LATCHKEY_CURL", c);
-            return;
-        }
-    }
-}

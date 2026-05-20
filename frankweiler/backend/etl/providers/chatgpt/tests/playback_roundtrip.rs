@@ -63,7 +63,7 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
-        conv_uuid: None,
+        conv_uuids: Vec::new(),
         ..Default::default()
     })
     .await
