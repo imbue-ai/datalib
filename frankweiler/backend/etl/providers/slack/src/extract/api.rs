@@ -1,22 +1,8 @@
 //! Slack API transport: latchkey curl shellout with retry.
 //!
-//! Slack's web API (`slack.com/api/`) is reached through the standard
-//! `latchkey_curl` transport (the `slack` service injects Bearer + d
-//! cookie). File bytes live on `files.slack.com`, which upstream
-//! latchkey does NOT include in the slack service's allowlist — so we
-//! rely on a user-registered self-hosted service named `slack_files`:
-//!
-//! ```sh
-//! latchkey services register slack_files \
-//!     --service-family slack \
-//!     --base-api-url 'https://files.slack.com/' \
-//!     --login-url 'https://slack.com/signin'
-//! latchkey auth browser slack_files
-//! ```
-//!
-//! TODO(slack-files): drop the `slack_files` registration and route
-//! file downloads through the regular `slack` service once upstream
-//! latchkey adds `https://files.slack.com/` to slack's baseApiUrls.
+//! Both `slack.com/api/` and `files.slack.com/` are covered by the
+//! `slack` service's `baseApiUrls` (latchkey ≥ 2.11.2), so a single
+//! credential signs both API calls and file downloads.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -185,36 +171,9 @@ pub async fn call_slack(
 }
 
 // ---------------------------------------------------------------------------
-// File-download path: `latchkey curl` against the `slack_files`
-// self-hosted service so latchkey injects the same Bearer + d cookie
-// it would for slack.com/api/.
+// File-download path: `latchkey curl` against files.slack.com, which
+// the `slack` service's baseApiUrls covers (latchkey ≥ 2.11.2).
 // ---------------------------------------------------------------------------
-
-/// Build a multi-line hint instructing the user to register the
-/// `slack_files` self-hosted latchkey service. Emitted when `latchkey
-/// curl` rejects a `files.slack.com` URL — see EXTRACT.md for the long
-/// form of the same explanation.
-fn slack_files_setup_hint(latchkey_stderr: &str) -> String {
-    format!(
-        "latchkey rejected a files.slack.com URL.\n\
-         \n\
-         This means the `slack_files` self-hosted latchkey service\n\
-         hasn't been registered on this machine. Run, once:\n\
-         \n\
-         \x20   latchkey services register slack_files \\\n\
-         \x20       --service-family slack \\\n\
-         \x20       --base-api-url 'https://files.slack.com/' \\\n\
-         \x20       --login-url 'https://slack.com/signin'\n\
-         \x20   latchkey auth browser slack_files\n\
-         \n\
-         See frankweiler/backend/etl/providers/slack/EXTRACT.md \
-         for background and the TODO to drop this once upstream\n\
-         latchkey allowlists files.slack.com under the `slack` service.\n\
-         \n\
-         latchkey stderr: {}",
-        latchkey_stderr.trim()
-    )
-}
 
 fn safe_filename(name: Option<&str>, fallback: &str) -> String {
     let s = match name {
@@ -273,9 +232,9 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
     }
     std::fs::create_dir_all(&target_dir)?;
 
-    // Goes through latchkey → in-tree curl shim. URL matches the
-    // user-registered `slack_files` service (see module docstring), so
-    // latchkey injects the same auth it would for slack.com/api/.
+    // Goes through latchkey → in-tree curl shim. files.slack.com is
+    // in the `slack` service's baseApiUrls, so latchkey injects the
+    // same auth it would for slack.com/api/.
     let mut cmd = latchkey_tokio_command();
     cmd.arg("curl").arg("-fSL").arg("-o").arg(&target).arg(url);
 
@@ -286,14 +245,6 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
     if !proc.status.success() {
         let _ = std::fs::remove_file(&target);
         let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
-        // latchkey rejects unknown URLs with "No service matches URL:".
-        // If the user hasn't registered `slack_files`, every file fails
-        // with this — surface the README path as a fatal so the run
-        // doesn't quietly mark hundreds of files as errors.
-        if stderr_full.contains("No service matches URL") && stderr_full.contains("files.slack.com")
-        {
-            anyhow::bail!("{}", slack_files_setup_hint(&stderr_full));
-        }
         let tail: String = stderr_full
             .chars()
             .rev()
@@ -341,10 +292,6 @@ pub async fn download_files_for_messages(
         }
     }
     for f in &targets {
-        // Per-file `Err` is reserved for setup problems the user must
-        // fix once (e.g. missing slack_files registration). Genuinely
-        // per-file failures stay inside `download_one_file` and get
-        // counted as "error" via its Ok("error") return.
         let outcome = download_one_file(f, media_dir).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }

@@ -1,6 +1,15 @@
 //! Anthropic downloader entry point. Port of
 //! `src/download/claude_web.py`.
 //!
+//! TODO(anthropic-incremental): unlike the Slack split (download →
+//! render → load with a `source_fingerprint` stamped on date-stamped
+//! outputs that skip re-write when unchanged), anthropic's extract
+//! still overwrites `conversations.json` and `users.json` wholesale on
+//! every run. The `/api/account` call is at least gated on
+//! users.json's existence, but the conversation index is a full merge +
+//! rewrite. Worth revisiting when we port anthropic to the same
+//! binary-split pattern.
+//!
 //! On-disk layout matches the Python downloader so the existing
 //! fixture / translator path is reused unchanged:
 //!
@@ -104,6 +113,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
 
+    let mut client = ClaudeClient::new();
+
+    // If we still don't have a users.json (no --export-dir, or its export
+    // didn't ship one), synthesize one from `GET /api/account`. The
+    // translator hard-requires users.json, and this is what claude.ai's
+    // own web app uses to identify the current user.
+    if !out_users_path.exists() {
+        match client.current_account().await {
+            Ok(acct) => {
+                let entry = pick_user_fields(&acct);
+                write_json(&out_users_path, &Value::Array(vec![entry]))?;
+                info!(event = "anthropic_users_json_synthesized");
+            }
+            Err(e) => {
+                warn!(
+                    event = "anthropic_current_account_failed",
+                    error = %e,
+                    note = "could not fetch /api/account — users.json will be absent"
+                );
+            }
+        }
+    }
+
     let account_uuid = account_uuid_from_users(opts.export_dir.as_deref())
         .or_else(|| account_uuid_from_users(Some(out_dir.as_path())));
     if account_uuid.is_none() {
@@ -112,8 +144,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             note = "users.json missing — conversation.account.uuid will be empty"
         );
     }
-
-    let mut client = ClaudeClient::new();
     let orgs = client
         .list_orgs()
         .await
@@ -342,6 +372,20 @@ fn load_conv_index(path: &Path) -> Result<HashMap<String, Value>> {
         }
     }
     Ok(out)
+}
+
+/// Pull just the fields the translator (and our parse step) reads off a
+/// user record: `uuid`, `email_address`, `full_name`. `/api/account` also
+/// returns memberships + settings, which we drop — they're orthogonal to
+/// the accounts table and would bloat users.json.
+fn pick_user_fields(acct: &Value) -> Value {
+    let mut obj = serde_json::Map::new();
+    for key in ["uuid", "email_address", "full_name"] {
+        if let Some(v) = acct.get(key) {
+            obj.insert(key.into(), v.clone());
+        }
+    }
+    Value::Object(obj)
 }
 
 fn account_uuid_from_users(dir: Option<&Path>) -> Option<String> {

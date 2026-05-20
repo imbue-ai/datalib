@@ -72,6 +72,14 @@ impl ClaudeClient {
         Ok(value)
     }
 
+    /// `GET /api/account` — current authenticated user. Returns the
+    /// raw object so the caller can keep whatever fields it cares about
+    /// (`uuid`, `email_address`, `full_name`, plus a `memberships` block
+    /// we ignore).
+    pub async fn current_account(&mut self) -> Result<Value, ClaudeError> {
+        self.get("/account").await
+    }
+
     pub async fn list_orgs(&mut self) -> Result<Vec<Value>, ClaudeError> {
         let v = self.get("/organizations").await?;
         v.as_array()
