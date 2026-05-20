@@ -1,18 +1,29 @@
 //! Slack API transport: latchkey curl shellout with retry.
 //!
-//! Slack accepts the latchkey-injected `Authorization: Bearer <token>` on
-//! api.slack.com directly. The `files.slack.com` host is not in latchkey's
-//! URL allowlist for the `slack` service, so file downloads harvest the
-//! Bearer + d-cookie from `latchkey curl -v` stderr and replay with plain
-//! curl. Mirrors `src/download/slack_web.py`.
+//! Slack's web API (`slack.com/api/`) is reached through the standard
+//! `latchkey_curl` transport (the `slack` service injects Bearer + d
+//! cookie). File bytes live on `files.slack.com`, which upstream
+//! latchkey does NOT include in the slack service's allowlist — so we
+//! rely on a user-registered self-hosted service named `slack_files`:
+//!
+//! ```sh
+//! latchkey services register slack_files \
+//!     --service-family slack \
+//!     --base-api-url 'https://files.slack.com/' \
+//!     --login-url 'https://slack.com/signin'
+//! latchkey auth browser slack_files
+//! ```
+//!
+//! TODO(slack-files): drop the `slack_files` registration and route
+//! file downloads through the regular `slack` service once upstream
+//! latchkey adds `https://files.slack.com/` to slack's baseApiUrls.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde_json::Value;
-use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
@@ -174,45 +185,35 @@ pub async fn call_slack(
 }
 
 // ---------------------------------------------------------------------------
-// File-download path: harvest Bearer/Cookie from `latchkey curl -v` stderr.
+// File-download path: `latchkey curl` against the `slack_files`
+// self-hosted service so latchkey injects the same Bearer + d cookie
+// it would for slack.com/api/.
 // ---------------------------------------------------------------------------
 
-pub async fn extract_file_auth() -> Result<BTreeMap<String, String>> {
-    let proc = tokio::time::timeout(
-        LATCHKEY_TIMEOUT,
-        latchkey_tokio_command()
-            .args([
-                "curl",
-                "-v",
-                "-o",
-                "/dev/null",
-                "-s",
-                "https://slack.com/api/auth.test",
-            ])
-            .output(),
+/// Build a multi-line hint instructing the user to register the
+/// `slack_files` self-hosted latchkey service. Emitted when `latchkey
+/// curl` rejects a `files.slack.com` URL — see EXTRACT.md for the long
+/// form of the same explanation.
+fn slack_files_setup_hint(latchkey_stderr: &str) -> String {
+    format!(
+        "latchkey rejected a files.slack.com URL.\n\
+         \n\
+         This means the `slack_files` self-hosted latchkey service\n\
+         hasn't been registered on this machine. Run, once:\n\
+         \n\
+         \x20   latchkey services register slack_files \\\n\
+         \x20       --service-family slack \\\n\
+         \x20       --base-api-url 'https://files.slack.com/' \\\n\
+         \x20       --login-url 'https://slack.com/signin'\n\
+         \x20   latchkey auth browser slack_files\n\
+         \n\
+         See frankweiler/backend/etl/providers/slack/EXTRACT.md \
+         for background and the TODO to drop this once upstream\n\
+         latchkey allowlists files.slack.com under the `slack` service.\n\
+         \n\
+         latchkey stderr: {}",
+        latchkey_stderr.trim()
     )
-    .await
-    .context("latchkey curl -v timed out")?
-    .context("latchkey curl -v spawn failed")?;
-
-    let stderr = String::from_utf8_lossy(&proc.stderr);
-    let mut headers: BTreeMap<String, String> = BTreeMap::new();
-    for name in ["Authorization", "Cookie", "User-Agent"] {
-        for line in stderr.lines() {
-            let prefix = format!("> {}: ", name);
-            if let Some(rest) = line.strip_prefix(&prefix) {
-                headers.insert(name.to_string(), rest.trim().to_string());
-                break;
-            }
-        }
-    }
-    if !headers.contains_key("Authorization") {
-        bail!(
-            "could not extract Authorization header from `latchkey curl -v`; \
-             is the `slack` service registered with `latchkey auth set`?"
-        );
-    }
-    Ok(headers)
 }
 
 fn safe_filename(name: Option<&str>, fallback: &str) -> String {
@@ -238,11 +239,7 @@ fn safe_filename(name: Option<&str>, fallback: &str) -> String {
     }
 }
 
-pub async fn download_one_file(
-    file_obj: &Value,
-    media_dir: &Path,
-    headers: &BTreeMap<String, String>,
-) -> Result<&'static str> {
+pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => return Ok("tombstone"),
@@ -276,12 +273,11 @@ pub async fn download_one_file(
     }
     std::fs::create_dir_all(&target_dir)?;
 
-    let mut cmd = Command::new("curl");
-    cmd.arg("-fSL").arg("-o").arg(&target);
-    for (k, v) in headers {
-        cmd.arg("-H").arg(format!("{}: {}", k, v));
-    }
-    cmd.arg(url);
+    // Goes through latchkey → in-tree curl shim. URL matches the
+    // user-registered `slack_files` service (see module docstring), so
+    // latchkey injects the same auth it would for slack.com/api/.
+    let mut cmd = latchkey_tokio_command();
+    cmd.arg("curl").arg("-fSL").arg("-o").arg(&target).arg(url);
 
     let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
         .await
@@ -289,8 +285,16 @@ pub async fn download_one_file(
         .context("file curl spawn failed")?;
     if !proc.status.success() {
         let _ = std::fs::remove_file(&target);
-        let stderr_tail = String::from_utf8_lossy(&proc.stderr);
-        let tail: String = stderr_tail
+        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
+        // latchkey rejects unknown URLs with "No service matches URL:".
+        // If the user hasn't registered `slack_files`, every file fails
+        // with this — surface the README path as a fatal so the run
+        // doesn't quietly mark hundreds of files as errors.
+        if stderr_full.contains("No service matches URL") && stderr_full.contains("files.slack.com")
+        {
+            anyhow::bail!("{}", slack_files_setup_hint(&stderr_full));
+        }
+        let tail: String = stderr_full
             .chars()
             .rev()
             .take(200)
@@ -323,8 +327,7 @@ pub async fn download_one_file(
 pub async fn download_files_for_messages(
     messages: &[Value],
     media_dir: &Path,
-    headers: &BTreeMap<String, String>,
-) -> BTreeMap<String, usize> {
+) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
         counts.insert(k.to_string(), 0);
@@ -338,13 +341,11 @@ pub async fn download_files_for_messages(
         }
     }
     for f in &targets {
-        let outcome = match download_one_file(f, media_dir, headers).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(event = "slack_media_error", error = %e);
-                "error"
-            }
-        };
+        // Per-file `Err` is reserved for setup problems the user must
+        // fix once (e.g. missing slack_files registration). Genuinely
+        // per-file failures stay inside `download_one_file` and get
+        // counted as "error" via its Ok("error") return.
+        let outcome = download_one_file(f, media_dir).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(
@@ -354,5 +355,5 @@ pub async fn download_files_for_messages(
         errors = counts.get("error").copied().unwrap_or(0),
         external = counts.get("external").copied().unwrap_or(0),
     );
-    counts
+    Ok(counts)
 }

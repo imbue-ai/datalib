@@ -17,6 +17,36 @@ Required Slack OAuth scopes (user token):
   * `channels:read`, `groups:read`, `im:read`, `mpim:read`
   * `users:read`, `auth:test`
 
+### `slack_files` self-hosted service (file downloads)
+
+File bytes live on `https://files.slack.com/`, which upstream latchkey
+does **not** include in the `slack` service's allowlist. Until that's
+fixed in latchkey, file downloads go through a self-hosted service
+named `slack_files`. Register it once on each machine:
+
+```sh
+latchkey services register slack_files \
+    --service-family slack \
+    --base-api-url 'https://files.slack.com/' \
+    --login-url 'https://slack.com/signin'
+
+latchkey auth browser slack_files
+```
+
+The browser login uses the slack family's Playwright session and
+captures the same Bearer + d cookie that the `slack` service uses; they
+just have to be stored under the second service name because latchkey
+keys its credential store by service name.
+
+If `download_one_file` fails with `No service matches URL:
+https://files.slack.com/...`, this is the cause — `slack_files` was
+never registered, or its credential expired.
+
+TODO(slack-files): drop `slack_files` once upstream latchkey adds
+`https://files.slack.com/` to the built-in slack service's
+`baseApiUrls`. At that point the registration step disappears and file
+downloads can use the regular `slack` service.
+
 ## API surface used
 
 | Method                      | Purpose                                  |

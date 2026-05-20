@@ -27,7 +27,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use wreq::header::{HeaderMap, HeaderName, HeaderValue};
@@ -173,8 +173,28 @@ async fn main() -> ExitCode {
         .unwrap_or(Method::GET);
     let url = args.url.as_deref().unwrap();
     let mut req = client.request(method, url).headers(header_map);
-    if let Some(body) = args.data.as_ref() {
-        req = req.body(body.clone());
+    if let Some(spec) = args.data.as_ref() {
+        // curl convention for --data-binary / --data: a leading `@` means
+        // "read from this source": `@-` is stdin, `@<path>` is a file.
+        // Bare strings are sent verbatim. Our downloaders rely on `@-`
+        // to stream JSON bodies through stdin.
+        let body_bytes: Vec<u8> = if let Some(rest) = spec.strip_prefix('@') {
+            if rest == "-" {
+                let mut buf = Vec::new();
+                if let Err(e) = std::io::stdin().read_to_end(&mut buf) {
+                    die(format!("read stdin for --data: {e}"));
+                }
+                buf
+            } else {
+                match std::fs::read(rest) {
+                    Ok(b) => b,
+                    Err(e) => die(format!("read {rest}: {e}")),
+                }
+            }
+        } else {
+            spec.clone().into_bytes()
+        };
+        req = req.body(body_bytes);
     }
 
     let resp = match req.send().await {
