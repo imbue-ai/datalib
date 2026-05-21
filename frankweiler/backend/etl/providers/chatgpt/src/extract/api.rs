@@ -17,6 +17,7 @@ use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use frankweiler_etl::latchkey::latchkey_tokio_command;
 use frankweiler_etl::media::safe_filename;
 use frankweiler_etl::obs::events;
 
@@ -205,10 +206,18 @@ pub async fn download_one_file(
         }
     };
 
-    // Step 2: signed-url GET. Azure rejects chatgpt cookies, so call
-    // raw curl (not via the `chatgpt` latchkey service).
-    let mut cmd = tokio::process::Command::new("curl");
-    cmd.arg("-fSL").arg("-o").arg(&target).arg(&signed);
+    // Step 2: signed-url GET. The signed URL points at Cloudflare-fronted
+    // storage that rejects vanilla curl's TLS fingerprint (exit 56). Go
+    // through `latchkey curl`, which runs the in-tree Chrome-impersonating
+    // shim. latchkey only attaches auth for URLs in a registered service's
+    // baseApiUrls — the signed host isn't one, so we get an unauth'd hop
+    // (which is what we want; the URL signature carries authorization).
+    let mut cmd = latchkey_tokio_command();
+    cmd.arg("curl")
+        .arg("-fSL")
+        .arg("-o")
+        .arg(&target)
+        .arg(&signed);
     let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
         .await
         .context("file curl timed out")?

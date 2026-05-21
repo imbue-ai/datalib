@@ -113,8 +113,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                     write_json(&cache_path, &full)?;
                     summary.fetched += 1;
-                    let _ = download_attachments_for_conversation(&mut client, &full, &media_dir)
-                        .await;
+                    let _ =
+                        download_attachments_for_conversation(&mut client, &full, &media_dir).await;
                     info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                 }
                 Err(e) => {
@@ -190,8 +190,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 write_json(&cache_path, &full)?;
                 summary.fetched += 1;
-                let _ =
-                    download_attachments_for_conversation(&mut client, &full, &media_dir).await;
+                let _ = download_attachments_for_conversation(&mut client, &full, &media_dir).await;
                 if opts.sleep_between > Duration::ZERO {
                     sleep(opts.sleep_between).await;
                 }

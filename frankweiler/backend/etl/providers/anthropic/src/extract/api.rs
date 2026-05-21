@@ -137,10 +137,23 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
     let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
         return Ok("error");
     };
-    let preview_path = file_obj.get("preview_url").and_then(|v| v.as_str());
+    // `files[].preview_url` is set for images. For documents (PDFs etc.),
+    // claude.ai exposes the original bytes via `document_asset.url`. Fall
+    // back to that so PDFs come through too.
+    let preview_path = file_obj
+        .get("preview_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            file_obj
+                .get("document_asset")
+                .and_then(|d| d.get("url"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        });
     let preview_path = match preview_path {
-        Some(p) if !p.is_empty() => p,
-        _ => {
+        Some(p) => p,
+        None => {
             warn!(
                 event = "anthropic_media_no_preview_url",
                 file_uuid = file_uuid,

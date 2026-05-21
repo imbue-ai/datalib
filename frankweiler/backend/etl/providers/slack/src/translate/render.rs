@@ -296,11 +296,8 @@ fn render_thread_md(
                 .or_else(|| f.name.clone())
                 .unwrap_or_else(|| "file".into())
                 .replace(']', "");
-            let link = file_link(source_name, md_rel_path, &f).unwrap_or_else(|| {
-                f.url
-                    .clone()
-                    .unwrap_or_else(|| "about:blank".to_string())
-            });
+            let link = file_link(source_name, md_rel_path, &f)
+                .unwrap_or_else(|| f.url.clone().unwrap_or_else(|| "about:blank".to_string()));
             if f.is_image {
                 p.push(format!("![{alt}]({link})"));
             } else {

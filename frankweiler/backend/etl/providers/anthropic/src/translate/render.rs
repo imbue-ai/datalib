@@ -341,11 +341,7 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(
-    parsed: &ParsedExport,
-    conv_uuid: &str,
-    source_name: &str,
-) -> Option<Rendered> {
+pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> Option<Rendered> {
     let conv: &ConversationRow = parsed
         .conversations
         .iter()
@@ -459,10 +455,7 @@ pub fn render_one(
             parts.push("**Attachments:**".into());
             parts.push(String::new());
             for at in atts {
-                parts.push(format!(
-                    "- {}",
-                    attachment_md(source_name, &md_rel, at)
-                ));
+                parts.push(format!("- {}", attachment_md(source_name, &md_rel, at)));
             }
             parts.push(String::new());
         }
@@ -487,11 +480,7 @@ pub fn render_one(
 /// `raw/<source_name>/media/<id>/<name>` (the canonical staged path).
 /// Images get `![alt](link)`; everything else becomes `[\[file\] alt](link)`.
 /// Falls back to a plain label when the upstream record lacks an id.
-fn attachment_md(
-    source_name: &str,
-    md_rel: &std::path::Path,
-    at: &AttachmentRow,
-) -> String {
+fn attachment_md(source_name: &str, md_rel: &std::path::Path, at: &AttachmentRow) -> String {
     let raw_obj = at.raw_json.as_object();
     let label = raw_obj
         .and_then(|o| {

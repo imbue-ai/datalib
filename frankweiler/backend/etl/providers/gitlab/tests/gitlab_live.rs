@@ -14,7 +14,6 @@
 //! cargo test -p frankweiler-etl-gitlab --test gitlab_live -- --ignored
 //! ```
 
-
 use frankweiler_etl_gitlab::extract::{self as gitlab, parse_mr_ref, FetchOptions};
 use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
 use insta::assert_json_snapshot;
