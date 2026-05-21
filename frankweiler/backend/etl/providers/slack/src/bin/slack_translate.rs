@@ -39,7 +39,7 @@ struct Args {
     out: PathBuf,
 
     /// Source name (matches `sources[].name` in sync config). Used as
-    /// the directory key under `raw/<source_name>/media/...` when
+    /// the directory key under `raw/<source_name>/blobs/...` when
     /// resolving relative media links from rendered markdown.
     #[arg(long, default_value = "slack")]
     source_name: String,

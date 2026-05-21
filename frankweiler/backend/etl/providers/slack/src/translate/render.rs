@@ -50,7 +50,7 @@ pub struct RenderSummary {
 ///
 /// `source_name` is the config-level identifier for this Slack source
 /// (e.g. `tiny-slack`). It's needed for relative-path links into
-/// `raw/<source_name>/media/...`, which is where the downloader stages
+/// `raw/<source_name>/blobs/...`, which is where the downloader stages
 /// `files[]` attachments.
 pub fn render_all(
     t: &TranslatedSlack,
@@ -283,7 +283,7 @@ fn render_thread_md(
         p.push(String::new());
 
         // Files: link to the local copy the downloader staged at
-        // `raw/<source>/media/<id>/<file>`. Image-typed files render as
+        // `raw/<source>/blobs/<id>/<file>`. Image-typed files render as
         // an inline image; everything else (PDFs, docs, etc.) as a plain
         // text link with a `[file]` tag. The `url_private` URL is kept
         // as a title-only fallback for files that the downloader

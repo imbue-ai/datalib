@@ -327,7 +327,7 @@ pub fn render_one(
 
 /// Markdown line for one attachment: `![alt](rel-link)` for images,
 /// `[\[file\] name](rel-link)` for everything else. Always emits the
-/// canonical relative path into `raw/<source_name>/media/<id>/<name>`;
+/// canonical relative path into `raw/<source_name>/blobs/<id>/<name>`;
 /// the downloader is responsible for actually staging the file there.
 fn attachment_md(source_name: &str, md_rel: &std::path::Path, a: &OAAttachmentRef) -> String {
     let name = safe_filename(a.name.as_deref(), &a.file_id);

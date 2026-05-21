@@ -3,7 +3,7 @@
 //! Conventions:
 //!
 //! - Every downloader writes its attachments under
-//!   `<data_root>/raw/<source_name>/media/<file_id>/<file_name>`.
+//!   `<data_root>/raw/<source_name>/blobs/<file_id>/<file_name>`.
 //!   `file_id` is whatever the upstream API calls the immutable handle
 //!   for the file (Slack's `F0...`, ChatGPT's `file_...`, Anthropic's
 //!   per-file UUID). `file_name` is the original filename, sanitized.
@@ -13,20 +13,25 @@
 
 use std::path::{Component, Path, PathBuf};
 
-/// `<data_root>/raw/<source_name>/media`. All per-source media lives
+/// On-disk directory segment for per-source binary attachments. Lives
+/// here so every provider agrees on the same name; renaming this
+/// constant moves every `raw/<source>/<BLOBS_DIR>/` tree at once.
+pub const BLOBS_DIR: &str = "blobs";
+
+/// `<data_root>/raw/<source_name>/blobs`. All per-source media lives
 /// under here.
 pub fn raw_media_dir(data_root: &Path, source_name: &str) -> PathBuf {
-    data_root.join("raw").join(source_name).join("media")
+    data_root.join("raw").join(source_name).join(BLOBS_DIR)
 }
 
-/// `<data_root>/raw/<source_name>/media/<file_id>`. Each file gets its
+/// `<data_root>/raw/<source_name>/blobs/<file_id>`. Each file gets its
 /// own directory keyed by the upstream id so multiple variants
 /// (preview/thumbnail/original) can coexist if a provider exposes them.
 pub fn raw_media_file_dir(data_root: &Path, source_name: &str, file_id: &str) -> PathBuf {
     raw_media_dir(data_root, source_name).join(file_id)
 }
 
-/// `<data_root>/raw/<source_name>/media/<file_id>/<file_name>`.
+/// `<data_root>/raw/<source_name>/blobs/<file_id>/<file_name>`.
 pub fn raw_media_file_path(
     data_root: &Path,
     source_name: &str,
@@ -42,7 +47,7 @@ pub fn raw_media_file_path(
 pub fn media_relpath(source_name: &str, file_id: &str, file_name: &str) -> PathBuf {
     PathBuf::from("raw")
         .join(source_name)
-        .join("media")
+        .join(BLOBS_DIR)
         .join(file_id)
         .join(file_name)
 }
@@ -130,20 +135,20 @@ mod tests {
 
     #[test]
     fn rel_link_up_and_over() {
-        // md at rendered_md/slack/T/C/threads/x.md → target raw/src/media/F/y.png
+        // md at rendered_md/slack/T/C/threads/x.md → target raw/src/blobs/F/y.png
         let md = Path::new("rendered_md/slack/T/C/threads/x.md");
-        let tgt = Path::new("raw/src/media/F/y.png");
+        let tgt = Path::new("raw/src/blobs/F/y.png");
         let link = relative_link(md, tgt);
-        assert_eq!(link, "../../../../../raw/src/media/F/y.png");
+        assert_eq!(link, "../../../../../raw/src/blobs/F/y.png");
     }
 
     #[test]
     fn rel_link_chatgpt_depth() {
-        // md at rendered_md/openai/<acct>/llm_chats/<id>.md → target raw/<src>/media/<id>/<name>
+        // md at rendered_md/openai/<acct>/llm_chats/<id>.md → target raw/<src>/blobs/<id>/<name>
         let md = Path::new("rendered_md/openai/acct/llm_chats/c.md");
-        let tgt = Path::new("raw/chatgpt-api/media/file_x/pic.png");
+        let tgt = Path::new("raw/chatgpt-api/blobs/file_x/pic.png");
         let link = relative_link(md, tgt);
-        assert_eq!(link, "../../../../raw/chatgpt-api/media/file_x/pic.png");
+        assert_eq!(link, "../../../../raw/chatgpt-api/blobs/file_x/pic.png");
     }
 
     #[test]
@@ -160,7 +165,7 @@ mod tests {
         let p = media_relpath("tiny-slack", "F_X", "file.png");
         assert_eq!(
             p.to_str().unwrap().replace('\\', "/"),
-            "raw/tiny-slack/media/F_X/file.png"
+            "raw/tiny-slack/blobs/F_X/file.png"
         );
     }
 }

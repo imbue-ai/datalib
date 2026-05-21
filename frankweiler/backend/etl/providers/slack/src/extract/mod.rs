@@ -463,7 +463,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let media_dir: Option<PathBuf> = if opts.media {
-        Some(opts.out_dir.join("media"))
+        Some(opts.out_dir.join(frankweiler_etl::media::BLOBS_DIR))
     } else {
         None
     };

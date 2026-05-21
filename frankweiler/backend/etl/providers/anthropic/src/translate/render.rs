@@ -477,7 +477,7 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
 }
 
 /// Render one attachment as a markdown link into
-/// `raw/<source_name>/media/<id>/<name>` (the canonical staged path).
+/// `raw/<source_name>/blobs/<id>/<name>` (the canonical staged path).
 /// Images get `![alt](link)`; everything else becomes `[\[file\] alt](link)`.
 /// Falls back to a plain label when the upstream record lacks an id.
 fn attachment_md(source_name: &str, md_rel: &std::path::Path, at: &AttachmentRow) -> String {

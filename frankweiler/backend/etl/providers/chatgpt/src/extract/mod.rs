@@ -80,7 +80,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .clone()
         .unwrap_or_else(|| Local::now().to_rfc3339());
 
-    let media_dir = out_dir.join("media");
+    let media_dir = out_dir.join(frankweiler_etl::media::BLOBS_DIR);
 
     let mut client = ChatGPTClient::new();
 
