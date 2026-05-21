@@ -13,6 +13,10 @@ rust_library(
     crate_name = "frankweiler_etl",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
+    # The shim travels with the library so any binary that links
+    # `frankweiler_etl` gets it in runfiles; `latchkey::ensure_curl_shim`
+    # then resolves it via the bazel runfiles lookup in `resolve()`.
+    data = [":latchkey_curl_shim"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/schema:frankweiler_schema",
@@ -37,15 +41,22 @@ rust_library(
     ],
 )
 
-# NOTE: a `rust_binary` target for `latchkey_curl_shim` is intentionally
-# *not* defined here yet. The shim depends on `wreq` → `boring-sys2`,
-# which invokes `cmake` from a build script; rules_rust's sandbox does
-# not currently expose a host cmake, so the bazel-built shim fails. The
-# `frankweiler_etl::latchkey` resolver instead picks up a cargo-built
-# shim (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`) via
-# `BUILD_WORKING_DIRECTORY` when run under `bazel run`. Add a
-# `rust_binary` target + `data = [":latchkey_curl_shim"]` on
-# `frankweiler_etl` once cmake is wired into the build.
+# Chrome-impersonating curl shim. Depends transitively on `boring-sys2`,
+# whose build script shells out to `cmake` + a C toolchain to build
+# boringssl. We rely on the host having those on PATH (forwarded via
+# `--action_env=PATH` in `.bazelrc`) rather than going through
+# rules_foreign_cc — same non-hermetic trade-off as `DOLT_BIN` / `NPX_BIN`.
+rust_binary(
+    name = "latchkey_curl_shim",
+    srcs = ["src/bin/latchkey_curl_shim.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:wreq",
+        "@frankweiler_crates//:wreq-util",
+    ],
+)
 
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
 # upsert into Dolt; tracks documents_loaded(qmd_path, fingerprint) for

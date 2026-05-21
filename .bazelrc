@@ -3,15 +3,22 @@ common --noenable_workspace
 test --test_output=errors
 # Pin per-developer tools via env vars set in `.envrc` (direnv) rather
 # than relying on whatever PATH the action inherits. Resolvers:
-#   * DOLT_BIN      — frankweiler_core::dolt_server::resolve_dolt_binary
-#   * NPX_BIN       — frankweiler_qmd_indexer::run_qmd
-#                     and frankweiler_etl::latchkey::latchkey_command
-#                     (latchkey is now invoked via `npx -y latchkey`)
-#   * LATCHKEY_CURL — frankweiler_etl::latchkey::resolve
-#                     (in-tree Chrome-impersonating curl shim)
+#   * DOLT_BIN — frankweiler_core::dolt_server::resolve_dolt_binary
+#   * NPX_BIN  — frankweiler_qmd_indexer::run_qmd
+#                and frankweiler_etl::latchkey::latchkey_command
+#                (latchkey is now invoked via `npx -y latchkey`)
 # Forwarded to both build (genrules) and test actions.
-build --action_env=DOLT_BIN --action_env=NPX_BIN --action_env=LATCHKEY_CURL
-test --test_env=DOLT_BIN --test_env=NPX_BIN --test_env=LATCHKEY_CURL
+build --action_env=DOLT_BIN --action_env=NPX_BIN
+test --test_env=DOLT_BIN --test_env=NPX_BIN
+
+# boring-sys2's build script shells out to `cmake` + a C toolchain to
+# build boringssl. Pin the action PATH to the minimum set of directories
+# that hold those tools (cmake from brew; make/perl/cc from the system)
+# rather than inheriting the dev's whole host PATH. Same non-hermetic
+# trade-off as the `DOLT_BIN` / `NPX_BIN` pins above.
+build --action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
+build --host_action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
+test --test_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
 
 # Stamp builds with the git hash via tools/workspace_status.sh. Consumers
 # read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
