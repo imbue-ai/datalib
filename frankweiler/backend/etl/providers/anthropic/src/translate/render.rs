@@ -9,6 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
+use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
@@ -308,10 +309,11 @@ impl Rendered {
 pub fn render_all(
     parsed: &ParsedExport,
     root: &std::path::Path,
+    source_name: &str,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut written = Vec::new();
     for conv in &parsed.conversations {
-        let Some(r) = render_one(parsed, &conv.conversation_uuid) else {
+        let Some(r) = render_one(parsed, &conv.conversation_uuid, source_name) else {
             continue;
         };
         let rel = r.relative_path();
@@ -339,7 +341,11 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(parsed: &ParsedExport, conv_uuid: &str) -> Option<Rendered> {
+pub fn render_one(
+    parsed: &ParsedExport,
+    conv_uuid: &str,
+    source_name: &str,
+) -> Option<Rendered> {
     let conv: &ConversationRow = parsed
         .conversations
         .iter()
@@ -446,19 +452,17 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str) -> Option<Rendered> {
             .unwrap_or_default();
         atts.sort_by_key(|a| a.attachment_index);
         if !atts.is_empty() {
+            let md_rel = std::path::PathBuf::from("rendered_md/anthropic")
+                .join(&conv.account_uuid)
+                .join("llm_chats")
+                .join(format!("{conv_uuid}.md"));
             parts.push("**Attachments:**".into());
             parts.push(String::new());
             for at in atts {
-                let raw_obj = at.raw_json.as_object();
-                let label = raw_obj
-                    .and_then(|o| {
-                        o.get("file_name")
-                            .or_else(|| o.get("name"))
-                            .or_else(|| o.get("file_kind"))
-                    })
-                    .and_then(Value::as_str)
-                    .unwrap_or("(unnamed)");
-                parts.push(format!("- [{}] {}", at.kind, label));
+                parts.push(format!(
+                    "- {}",
+                    attachment_md(source_name, &md_rel, at)
+                ));
             }
             parts.push(String::new());
         }
@@ -477,6 +481,52 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str) -> Option<Rendered> {
         account_uuid: conv.account_uuid.clone(),
         body,
     })
+}
+
+/// Render one attachment as a markdown link into
+/// `raw/<source_name>/media/<id>/<name>` (the canonical staged path).
+/// Images get `![alt](link)`; everything else becomes `[\[file\] alt](link)`.
+/// Falls back to a plain label when the upstream record lacks an id.
+fn attachment_md(
+    source_name: &str,
+    md_rel: &std::path::Path,
+    at: &AttachmentRow,
+) -> String {
+    let raw_obj = at.raw_json.as_object();
+    let label = raw_obj
+        .and_then(|o| {
+            o.get("file_name")
+                .or_else(|| o.get("name"))
+                .or_else(|| o.get("file_kind"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("(unnamed)")
+        .to_string();
+    let id = raw_obj
+        .and_then(|o| {
+            o.get("file_uuid")
+                .or_else(|| o.get("id"))
+                .or_else(|| o.get("uuid"))
+        })
+        .and_then(Value::as_str)
+        .map(String::from);
+    let is_image = raw_obj
+        .and_then(|o| o.get("file_kind").or_else(|| o.get("file_type")))
+        .and_then(Value::as_str)
+        .map(|s| s.eq_ignore_ascii_case("image") || s.starts_with("image/"))
+        .unwrap_or(false);
+    let Some(id) = id else {
+        return format!("[{}] {}", at.kind, label);
+    };
+    let name = safe_filename(Some(&label), &id);
+    let target = media_relpath(source_name, &id, &name);
+    let link = relative_link(md_rel, &target);
+    let alt = label.replace(']', "");
+    if is_image {
+        format!("![{alt}]({link})")
+    } else {
+        format!("[\\[file\\] {alt}]({link})")
+    }
 }
 
 fn capitalize(s: &str) -> String {

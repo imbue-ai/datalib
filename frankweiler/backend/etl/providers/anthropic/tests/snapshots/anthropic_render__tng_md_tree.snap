@@ -1,5 +1,6 @@
 ---
 source: etl/providers/anthropic/tests/anthropic_render.rs
+assertion_line: 56
 expression: bundle
 ---
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md ===
@@ -170,7 +171,7 @@ summary: Pasted a tricorder readout image; asked for interpretation.
 
 **Attachments:**
 
-- [file] tricorder-readout.png
+- ![tricorder-readout.png](../../../../raw/anthropic_api/media/f0000001-1701-4d00-8000-0000000f0001/tricorder-readout.png)
 
 </div>
 

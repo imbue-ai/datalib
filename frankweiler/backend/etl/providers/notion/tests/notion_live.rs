@@ -18,8 +18,6 @@
 //! cargo test -p frankweiler-etl-notion --test notion_live -- --ignored
 //! ```
 
-use std::fs;
-
 use frankweiler_etl_notion::extract::{self as notion, FetchOptions};
 use frankweiler_etl_notion::translate::parse_api_dir;
 use insta::assert_json_snapshot;
@@ -35,16 +33,9 @@ async fn notion_live_single_page_snapshot() {
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_TARGET_PAGE.to_string());
 
-    let tmp = std::env::temp_dir().join(format!(
-        "notion-live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let tmp = tempfile::TempDir::with_prefix("notion-live-")
+        .expect("create tempdir")
+        .keep();
     eprintln!("[test] downloading {page} -> {}", tmp.display());
 
     let opts = FetchOptions {

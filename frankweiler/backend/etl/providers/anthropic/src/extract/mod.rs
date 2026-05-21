@@ -34,7 +34,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
-use api::{ClaudeClient, ClaudeError};
+use api::{download_files_for_conversation, ClaudeClient, ClaudeError};
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
@@ -167,6 +167,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &orgs,
                 &target,
                 account_uuid.as_deref(),
+                &out_dir.join("media"),
                 &mut merged,
                 &mut summary,
             )
@@ -266,6 +267,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
+                        let media_dir = out_dir.join("media");
+                        let _ = download_files_for_conversation(&full, &media_dir).await;
                         let normalized = normalize::normalize_to_export_shape(
                             full,
                             account_uuid.as_deref(),
@@ -304,6 +307,7 @@ async fn fetch_single(
     orgs: &[Value],
     conv_uuid: &str,
     account_uuid: Option<&str>,
+    media_dir: &Path,
     merged: &mut HashMap<String, Value>,
     summary: &mut FetchSummary,
 ) -> Result<()> {
@@ -318,6 +322,7 @@ async fn fetch_single(
             .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
+                let _ = download_files_for_conversation(&full, media_dir).await;
                 let normalized = normalize::normalize_to_export_shape(full, account_uuid, org_uuid);
                 merged.insert(conv_uuid.to_string(), normalized);
                 summary.fetched += 1;

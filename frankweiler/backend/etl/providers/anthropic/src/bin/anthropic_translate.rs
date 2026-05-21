@@ -23,6 +23,12 @@ struct Args {
     #[arg(long, env = "ANTHROPIC_OUT")]
     out: PathBuf,
 
+    /// Source name (matches `sources[].name` in sync config). Used as
+    /// the directory key under `raw/<source_name>/media/...` when
+    /// resolving relative media links from rendered markdown.
+    #[arg(long, default_value = "anthropic")]
+    source_name: String,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -47,7 +53,7 @@ fn main() -> Result<()> {
         attachments = parsed.attachments.len(),
     );
 
-    let written = render_all(&parsed, &args.out)?;
+    let written = render_all(&parsed, &args.out, &args.source_name)?;
     info!(
         event = "anthropic_translate_complete",
         documents = written.len()

@@ -14,8 +14,6 @@
 //! cargo test -p frankweiler-etl-github --test github_live -- --ignored
 //! ```
 
-use std::fs;
-
 use frankweiler_etl_github::extract::{self as github, parse_pr_ref, FetchOptions};
 use frankweiler_etl_github::translate::{parse_api_dir, render_github};
 use insta::assert_json_snapshot;
@@ -32,16 +30,9 @@ async fn github_live_single_pr_snapshot() {
         .unwrap_or_else(|| DEFAULT_TARGET_PR.to_string());
     let (repo, num) = parse_pr_ref(&pr_ref).expect("parse pr ref");
 
-    let tmp = std::env::temp_dir().join(format!(
-        "github-live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let tmp = tempfile::TempDir::with_prefix("github-live-")
+        .expect("create tempdir")
+        .keep();
     eprintln!("[test] downloading {repo}#{num} -> {}", tmp.display());
 
     let opts = FetchOptions {

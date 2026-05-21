@@ -42,7 +42,7 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
 fn renders_tng_fixture() {
     let parsed = parse_export(&fixture_dir()).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
-    render_all(&parsed, tmp.path()).expect("render");
+    render_all(&parsed, tmp.path(), "anthropic_api").expect("render");
 
     let md = collect_by_ext(tmp.path(), ".md");
     let mut bundle = String::new();

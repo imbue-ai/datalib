@@ -751,7 +751,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
             let parsed = parse_export(&fixture)
                 .with_context(|| format!("anthropic parse {}", fixture.display()))?;
-            render_all(&parsed, root)
+            render_all(&parsed, root, name)
                 .context("anthropic render_all")
                 .map(|_| ())
         }
@@ -759,7 +759,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(&parsed, root)
+            render_all(&parsed, root, name)
                 .context("chatgpt render_all")
                 .map(|_| ())
         }
@@ -767,7 +767,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
             let t = translate_raw_dir(&fixture)
                 .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-            render_all(&t, root, |_| {})
+            render_all(&t, root, name, |_| {})
                 .context("slack render_all")
                 .map(|_| ())
         }

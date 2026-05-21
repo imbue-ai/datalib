@@ -75,16 +75,9 @@ fn extract_items(rows: &[Value], array_field: &str, sort_keys: &[&str]) -> Vec<V
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn slack_live_download_snapshot() {
-    let tmp = std::env::temp_dir().join(format!(
-        "slack-live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let tmp = tempfile::TempDir::with_prefix("slack-live-")
+        .expect("create tempdir")
+        .keep();
 
     eprintln!("[test] downloading to {}", tmp.display());
 

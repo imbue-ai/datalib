@@ -38,6 +38,12 @@ struct Args {
     #[arg(long, env = "SLACK_OUT")]
     out: PathBuf,
 
+    /// Source name (matches `sources[].name` in sync config). Used as
+    /// the directory key under `raw/<source_name>/media/...` when
+    /// resolving relative media links from rendered markdown.
+    #[arg(long, default_value = "slack")]
+    source_name: String,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -66,7 +72,7 @@ fn main() -> Result<()> {
 
     // Indicatif progress bar driven by a closure passed into `render_all`.
     let done = AtomicUsize::new(0);
-    let summary = render_all(&t, &args.out, |msg| {
+    let summary = render_all(&t, &args.out, &args.source_name, |msg| {
         let _ = done.fetch_add(1, Ordering::Relaxed);
         tracing::Span::current().pb_set_message(msg);
     })?;

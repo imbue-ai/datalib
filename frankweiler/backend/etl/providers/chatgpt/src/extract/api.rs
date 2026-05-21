@@ -7,17 +7,22 @@
 //! `LATCHKEY_CURL=/path/to/curl_impersonate-chrome` before running the
 //! download binary live.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio::time::sleep;
-use tracing::{instrument, warn};
+use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use frankweiler_etl::media::safe_filename;
 use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://chatgpt.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
+pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 /// When ChatGPT 429s us it tends to do so for many minutes. Give up
 /// after this much total backoff so the user can resume later via the
 /// incremental-skip path.
@@ -138,6 +143,159 @@ fn backoff_from_retry_after(retry_after: Option<&str>, waited: Duration) -> Dura
     let n = (waited.as_secs() / 5).min(4) as u32;
     let secs = 5u64.saturating_mul(1u64 << n).min(60);
     Duration::from_secs(secs)
+}
+
+// ---------------------------------------------------------------------------
+// File-download path. ChatGPT serves attachment bytes via
+// `/backend-api/files/<file_id>/download`, which returns JSON with a
+// short-lived `download_url` (Azure blob storage). We fetch the
+// metadata JSON via latchkey (auth header attached automatically),
+// then `curl -fSL` the signed URL directly — Azure rejects the
+// chatgpt cookie, so we deliberately drop auth on the second hop.
+// ---------------------------------------------------------------------------
+
+/// Download a single ChatGPT attachment into
+/// `<media_dir>/<file_id>/<safe(name)>`. Returns one of
+/// `downloaded` / `skipped` / `error`. Never panics — errors are logged
+/// and counted by the caller so a single bad file doesn't tank a sync.
+pub async fn download_one_file(
+    client: &mut ChatGPTClient,
+    file_id: &str,
+    name: Option<&str>,
+    media_dir: &Path,
+) -> Result<&'static str> {
+    let safe = safe_filename(name, file_id);
+    let target_dir = media_dir.join(file_id);
+    let target = target_dir.join(&safe);
+    if let Ok(meta) = std::fs::metadata(&target) {
+        if meta.len() > 0 {
+            return Ok("skipped");
+        }
+    }
+    std::fs::create_dir_all(&target_dir)
+        .with_context(|| format!("mkdir {}", target_dir.display()))?;
+
+    // Step 1: metadata fetch via latchkey (auth attached).
+    let meta = match client
+        .get(&format!("/backend-api/files/{file_id}/download"))
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(
+                event = "chatgpt_media_meta_failed",
+                file_id = file_id,
+                error = %e,
+            );
+            return Ok("error");
+        }
+    };
+    let signed = match meta.get("download_url").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            warn!(
+                event = "chatgpt_media_no_download_url",
+                file_id = file_id,
+                meta_keys = ?meta
+                    .as_object()
+                    .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default(),
+            );
+            return Ok("error");
+        }
+    };
+
+    // Step 2: signed-url GET. Azure rejects chatgpt cookies, so call
+    // raw curl (not via the `chatgpt` latchkey service).
+    let mut cmd = tokio::process::Command::new("curl");
+    cmd.arg("-fSL").arg("-o").arg(&target).arg(&signed);
+    let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
+        .await
+        .context("file curl timed out")?
+        .context("file curl spawn failed")?;
+    if !proc.status.success() {
+        let _ = std::fs::remove_file(&target);
+        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
+        let tail: String = stderr_full
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        warn!(
+            event = "chatgpt_media_failed",
+            file_id = file_id,
+            name = %safe,
+            exit = proc.status.code().unwrap_or(-1),
+            stderr = %tail.trim(),
+        );
+        return Ok("error");
+    }
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    events::item_fetched(&signed, bytes, 0);
+    debug!(
+        event = "chatgpt_media_downloaded",
+        file_id = file_id,
+        bytes = bytes
+    );
+    Ok("downloaded")
+}
+
+/// Walk a conversation tree's `mapping.*.message.metadata.attachments[]`
+/// and pull each unique file. Returns outcome counts.
+pub async fn download_attachments_for_conversation(
+    client: &mut ChatGPTClient,
+    conv: &Value,
+    media_dir: &Path,
+) -> Result<BTreeMap<String, usize>> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for k in ["downloaded", "skipped", "error"] {
+        counts.insert(k.to_string(), 0);
+    }
+    let mapping = match conv.get("mapping").and_then(|v| v.as_object()) {
+        Some(m) => m,
+        None => return Ok(counts),
+    };
+    // Dedupe by file_id within a conversation: identical assets often
+    // appear under multiple parts (asset_pointer + attachments mirror).
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut targets: Vec<(String, Option<String>)> = Vec::new();
+    for node in mapping.values() {
+        let Some(msg) = node.get("message").and_then(|v| v.as_object()) else {
+            continue;
+        };
+        if let Some(atts) = msg
+            .get("metadata")
+            .and_then(|m| m.get("attachments"))
+            .and_then(|a| a.as_array())
+        {
+            for att in atts {
+                let Some(id) = att.get("id").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                if seen.insert(id.to_string()) {
+                    let name = att
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    targets.push((id.to_string(), name));
+                }
+            }
+        }
+    }
+    for (id, name) in targets {
+        let outcome = download_one_file(client, &id, name.as_deref(), media_dir).await?;
+        *counts.entry(outcome.to_string()).or_insert(0) += 1;
+    }
+    debug!(
+        event = "chatgpt_media_summary",
+        downloaded = counts.get("downloaded").copied().unwrap_or(0),
+        skipped = counts.get("skipped").copied().unwrap_or(0),
+        errors = counts.get("error").copied().unwrap_or(0),
+    );
+    Ok(counts)
 }
 
 #[cfg(test)]

@@ -41,16 +41,12 @@ fn pick_free_port() -> u16 {
 }
 
 fn unique_repo_dir() -> PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "fw-dolt-itest-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&p).unwrap();
-    p
+    // pytest-tmp_path-style: mkdtemp gives a guaranteed-unique path
+    // (atomic at the kernel level), so parallel test runs can never
+    // collide on the same name the way the old pid+nanos suffix could.
+    tempfile::TempDir::with_prefix("fw-dolt-itest-")
+        .expect("create tempdir")
+        .keep()
 }
 
 #[tokio::test]

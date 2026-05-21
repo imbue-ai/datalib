@@ -30,16 +30,9 @@ const TARGET_UUID: &str = "b0c2f022-cc28-4888-b038-702ec040b87b";
 #[tokio::test(flavor = "multi_thread")]
 #[ignore]
 async fn anthropic_live_single_conv_snapshot() {
-    let tmp = std::env::temp_dir().join(format!(
-        "anthropic-live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let tmp = tempfile::TempDir::with_prefix("anthropic-live-")
+        .expect("create tempdir")
+        .keep();
     eprintln!("[test] downloading to {}", tmp.display());
 
     let opts = anthropic::FetchOptions {

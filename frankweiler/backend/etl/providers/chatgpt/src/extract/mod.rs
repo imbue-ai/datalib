@@ -30,7 +30,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
-use api::{ChatGPTClient, ChatGPTError};
+use api::{download_attachments_for_conversation, ChatGPTClient, ChatGPTError};
 
 /// Inter-fetch sleep. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop without
@@ -80,6 +80,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         .clone()
         .unwrap_or_else(|| Local::now().to_rfc3339());
 
+    let media_dir = out_dir.join("media");
+
     let mut client = ChatGPTClient::new();
 
     let me = client
@@ -111,6 +113,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                     write_json(&cache_path, &full)?;
                     summary.fetched += 1;
+                    let _ = download_attachments_for_conversation(&mut client, &full, &media_dir)
+                        .await;
                     info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                 }
                 Err(e) => {
@@ -186,6 +190,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
                 write_json(&cache_path, &full)?;
                 summary.fetched += 1;
+                let _ =
+                    download_attachments_for_conversation(&mut client, &full, &media_dir).await;
                 if opts.sleep_between > Duration::ZERO {
                     sleep(opts.sleep_between).await;
                 }

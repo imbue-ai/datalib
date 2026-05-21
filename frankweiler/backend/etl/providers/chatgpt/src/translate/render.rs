@@ -7,10 +7,13 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset};
 
+use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
-use super::parse::{OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi};
+use super::parse::{
+    OAAttachmentRef, OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi,
+};
 
 fn yaml_scalar(v: Option<&str>) -> String {
     let Some(s) = v else {
@@ -89,10 +92,11 @@ impl Rendered {
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
     root: &std::path::Path,
+    source_name: &str,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
     let mut written = Vec::new();
     for conv in &parsed.conversations {
-        let Some(r) = render_one(parsed, &conv.conversation_id) else {
+        let Some(r) = render_one(parsed, &conv.conversation_id, source_name) else {
             continue;
         };
         let rel = r.relative_path();
@@ -120,7 +124,11 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Option<Rendered> {
+pub fn render_one(
+    parsed: &ParsedChatGPTApi,
+    conversation_id: &str,
+    source_name: &str,
+) -> Option<Rendered> {
     let conv: &OAConversationRow = parsed
         .conversations
         .iter()
@@ -289,6 +297,17 @@ pub fn render_one(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Option<Re
                 }
             }
         }
+        if !m.attachments.is_empty() {
+            let md_rel = std::path::PathBuf::from("rendered_md/openai")
+                .join(conv.account_id.as_deref().unwrap_or("unknown"))
+                .join("llm_chats")
+                .join(format!("{}.md", conv.conversation_id));
+            for a in &m.attachments {
+                out.push(attachment_md(source_name, &md_rel, a));
+                out.push(String::new());
+            }
+        }
+
         out.push(MSG_DIV_CLOSE.into());
         out.push(String::new());
     }
@@ -304,4 +323,24 @@ pub fn render_one(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Option<Re
         account_id: conv.account_id.clone().unwrap_or_else(|| "unknown".into()),
         body,
     })
+}
+
+/// Markdown line for one attachment: `![alt](rel-link)` for images,
+/// `[\[file\] name](rel-link)` for everything else. Always emits the
+/// canonical relative path into `raw/<source_name>/media/<id>/<name>`;
+/// the downloader is responsible for actually staging the file there.
+fn attachment_md(source_name: &str, md_rel: &std::path::Path, a: &OAAttachmentRef) -> String {
+    let name = safe_filename(a.name.as_deref(), &a.file_id);
+    let alt = a
+        .name
+        .clone()
+        .unwrap_or_else(|| a.file_id.clone())
+        .replace(']', "");
+    let target = media_relpath(source_name, &a.file_id, &name);
+    let link = relative_link(md_rel, &target);
+    if a.is_image {
+        format!("![{alt}]({link})")
+    } else {
+        format!("[\\[file\\] {alt}]({link})")
+    }
 }

@@ -55,6 +55,21 @@ pub struct OAMessageRow {
     pub create_time: Option<String>,
     pub update_time: Option<String>,
     pub raw_json: Value,
+    /// Surfaced attachments — both `metadata.attachments[]` entries and
+    /// `image_asset_pointer` parts in `multimodal_text` content. The
+    /// renderer emits one link per attachment.
+    pub attachments: Vec<OAAttachmentRef>,
+}
+
+/// One surfaced ChatGPT attachment: either a `metadata.attachments[]`
+/// entry (the usual "user uploaded a file" path) or an
+/// `image_asset_pointer` content part (the inline-image path).
+#[derive(Debug, Clone)]
+pub struct OAAttachmentRef {
+    pub file_id: String,
+    pub name: Option<String>,
+    pub mime_type: Option<String>,
+    pub is_image: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +167,68 @@ fn synthesize_text(content: Option<&Value>) -> String {
             .to_string(),
         _ => String::new(),
     }
+}
+
+/// Walk a message's `metadata.attachments[]` plus any
+/// `image_asset_pointer` parts inside `content` (multimodal_text). The
+/// `sediment://file_xxx` form on `asset_pointer` is normalized to the
+/// bare `file_xxx` id.
+fn collect_attachments(m: &Map<String, Value>) -> Vec<OAAttachmentRef> {
+    let mut out: Vec<OAAttachmentRef> = Vec::new();
+    if let Some(arr) = m
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|md| md.get("attachments"))
+        .and_then(Value::as_array)
+    {
+        for a in arr {
+            let Some(id) = a.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let mime = a
+                .get("mime_type")
+                .or_else(|| a.get("mimeType"))
+                .and_then(Value::as_str)
+                .map(String::from);
+            let is_image = mime.as_deref().is_some_and(|s| s.starts_with("image/"));
+            out.push(OAAttachmentRef {
+                file_id: id.to_string(),
+                name: a.get("name").and_then(Value::as_str).map(String::from),
+                mime_type: mime,
+                is_image,
+            });
+        }
+    }
+    if let Some(parts) = m
+        .get("content")
+        .and_then(Value::as_object)
+        .and_then(|c| c.get("parts"))
+        .and_then(Value::as_array)
+    {
+        for p in parts {
+            let Some(obj) = p.as_object() else { continue };
+            if obj.get("content_type").and_then(Value::as_str) != Some("image_asset_pointer") {
+                continue;
+            }
+            let Some(ptr) = obj.get("asset_pointer").and_then(Value::as_str) else {
+                continue;
+            };
+            let id = ptr
+                .strip_prefix("sediment://")
+                .or_else(|| ptr.strip_prefix("file-service://"))
+                .unwrap_or(ptr);
+            if out.iter().any(|a| a.file_id == id) {
+                continue;
+            }
+            out.push(OAAttachmentRef {
+                file_id: id.to_string(),
+                name: None,
+                mime_type: None,
+                is_image: true,
+            });
+        }
+    }
+    out
 }
 
 fn value_as_string_loose(v: &Value) -> String {
@@ -453,6 +530,8 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
             let mut msg_raw = m.clone();
             msg_raw.remove("content");
 
+            let attachments = collect_attachments(m);
+
             out.messages.push(OAMessageRow {
                 conversation_id: cid.clone(),
                 message_id: mid.clone(),
@@ -478,6 +557,7 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
                 create_time: epoch_to_iso(m.get("create_time").unwrap_or(&Value::Null)),
                 update_time: epoch_to_iso(m.get("update_time").unwrap_or(&Value::Null)),
                 raw_json: Value::Object(msg_raw),
+                attachments,
             });
 
             out.content_parts.extend(content_parts(&mid, content));

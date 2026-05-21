@@ -3,16 +3,23 @@
 //! response (status + every header + body) and supports playback from
 //! disk fixtures. Mirrors `src/download/claude_web.py:_get`.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
+use anyhow::{Context, Result};
 use serde_json::Value;
-use tracing::instrument;
+use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use frankweiler_etl::latchkey::latchkey_tokio_command;
+use frankweiler_etl::media::safe_filename;
 use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);
+pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
 #[derive(thiserror::Error, Debug)]
 pub enum ClaudeError {
@@ -113,4 +120,123 @@ impl ClaudeClient {
 
 fn map_transport_error(e: HttpError) -> ClaudeError {
     ClaudeError::Permanent(e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// File-download path. `preview_url` on a message's `files[]` entry is a
+// relative `/api/<...>/preview` that returns image bytes directly (no
+// signed-URL indirection). latchkey covers `claude.ai` URLs, so a single
+// shellout suffices.
+// ---------------------------------------------------------------------------
+
+/// Download one Anthropic attachment into
+/// `<media_dir>/<file_uuid>/<safe(file_name)>`. Returns
+/// `downloaded` / `skipped` / `error`. The caller passes the `files[]`
+/// entry as-is.
+pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'static str> {
+    let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
+        return Ok("error");
+    };
+    let preview_path = file_obj.get("preview_url").and_then(|v| v.as_str());
+    let preview_path = match preview_path {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            warn!(
+                event = "anthropic_media_no_preview_url",
+                file_uuid = file_uuid,
+            );
+            return Ok("error");
+        }
+    };
+    let url = if preview_path.starts_with("http") {
+        preview_path.to_string()
+    } else {
+        format!("{CLAUDE_ORIGIN}{preview_path}")
+    };
+    let name = file_obj.get("file_name").and_then(|v| v.as_str());
+    let safe = safe_filename(name, file_uuid);
+    let target_dir = media_dir.join(file_uuid);
+    let target = target_dir.join(&safe);
+    if let Ok(meta) = std::fs::metadata(&target) {
+        if meta.len() > 0 {
+            return Ok("skipped");
+        }
+    }
+    std::fs::create_dir_all(&target_dir)
+        .with_context(|| format!("mkdir {}", target_dir.display()))?;
+
+    let mut cmd = latchkey_tokio_command();
+    cmd.arg("curl").arg("-fSL").arg("-o").arg(&target).arg(&url);
+    let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
+        .await
+        .context("file curl timed out")?
+        .context("file curl spawn failed")?;
+    if !proc.status.success() {
+        let _ = std::fs::remove_file(&target);
+        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
+        let tail: String = stderr_full
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        warn!(
+            event = "anthropic_media_failed",
+            file_uuid = file_uuid,
+            name = %safe,
+            exit = proc.status.code().unwrap_or(-1),
+            stderr = %tail.trim(),
+        );
+        return Ok("error");
+    }
+    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
+    events::item_fetched(&url, bytes, 0);
+    debug!(
+        event = "anthropic_media_downloaded",
+        file_uuid = file_uuid,
+        bytes = bytes
+    );
+    Ok("downloaded")
+}
+
+/// Walk every message in a conversation tree and download its `files[]`.
+/// Dedupes by `file_uuid`.
+pub async fn download_files_for_conversation(
+    conv: &Value,
+    media_dir: &Path,
+) -> Result<BTreeMap<String, usize>> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for k in ["downloaded", "skipped", "error"] {
+        counts.insert(k.to_string(), 0);
+    }
+    let messages = match conv.get("chat_messages").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return Ok(counts),
+    };
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut targets: Vec<Value> = Vec::new();
+    for msg in messages {
+        if let Some(files) = msg.get("files").and_then(|v| v.as_array()) {
+            for f in files {
+                if let Some(id) = f.get("file_uuid").and_then(|v| v.as_str()) {
+                    if seen.insert(id.to_string()) {
+                        targets.push(f.clone());
+                    }
+                }
+            }
+        }
+    }
+    for f in &targets {
+        let outcome = download_one_file(f, media_dir).await?;
+        *counts.entry(outcome.to_string()).or_insert(0) += 1;
+    }
+    debug!(
+        event = "anthropic_media_summary",
+        downloaded = counts.get("downloaded").copied().unwrap_or(0),
+        skipped = counts.get("skipped").copied().unwrap_or(0),
+        errors = counts.get("error").copied().unwrap_or(0),
+    );
+    Ok(counts)
 }

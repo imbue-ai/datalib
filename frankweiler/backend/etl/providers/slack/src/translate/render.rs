@@ -27,6 +27,7 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
+use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
@@ -46,9 +47,15 @@ pub struct RenderSummary {
 
 /// Render every thread in `t` under `out_dir`. Idempotent: threads
 /// whose fingerprint already matches the on-disk `.md` are left alone.
+///
+/// `source_name` is the config-level identifier for this Slack source
+/// (e.g. `tiny-slack`). It's needed for relative-path links into
+/// `raw/<source_name>/media/...`, which is where the downloader stages
+/// `files[]` attachments.
 pub fn render_all(
     t: &TranslatedSlack,
     out_dir: &Path,
+    source_name: &str,
     progress: impl Fn(&str),
 ) -> Result<RenderSummary> {
     let user_labels: BTreeMap<String, String> = t
@@ -92,6 +99,10 @@ pub fn render_all(
         }
 
         let rows = build_thread_rows(t, &thread_uuid, &msgs, root, &cname, &user_labels);
+        let md_rel = md_path
+            .strip_prefix(out_dir)
+            .unwrap_or(&md_path)
+            .to_path_buf();
         let md = render_thread_md(
             &thread_uuid,
             &fingerprint,
@@ -99,6 +110,8 @@ pub fn render_all(
             &cname,
             &msgs,
             &user_labels,
+            source_name,
+            &md_rel,
         );
 
         if let Some(parent) = md_path.parent() {
@@ -211,6 +224,7 @@ fn existing_fingerprint(md_path: &Path) -> Option<String> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_thread_md(
     thread_uuid: &str,
     fingerprint: &str,
@@ -218,6 +232,8 @@ fn render_thread_md(
     channel_name: &str,
     msgs: &[&Message],
     user_labels: &BTreeMap<String, String>,
+    source_name: &str,
+    md_rel_path: &Path,
 ) -> String {
     let title = thread_title(&root.text, user_labels);
     let team_id = &root.team_id;
@@ -266,20 +282,31 @@ fn render_thread_md(
         p.push(to_commonmark(m.text.trim_end(), user_labels));
         p.push(String::new());
 
-        // Files: include verbatim url_private references. The downloader
-        // captures them locally, but the renderer is intentionally
-        // decoupled — we don't depend on a parallel media directory.
+        // Files: link to the local copy the downloader staged at
+        // `raw/<source>/media/<id>/<file>`. Image-typed files render as
+        // an inline image; everything else (PDFs, docs, etc.) as a plain
+        // text link with a `[file]` tag. The `url_private` URL is kept
+        // as a title-only fallback for files that the downloader
+        // skipped (external / tombstoned / errored), so the rendered
+        // markdown still surfaces *something* clickable.
         for f in files(&m.raw_json) {
             let alt = f
                 .title
-                .or(f.name)
+                .clone()
+                .or_else(|| f.name.clone())
                 .unwrap_or_else(|| "file".into())
                 .replace(']', "");
-            let url = f.url.unwrap_or_default();
-            if !url.is_empty() {
-                p.push(format!("![{alt}]({url})"));
-                p.push(String::new());
+            let link = file_link(source_name, md_rel_path, &f).unwrap_or_else(|| {
+                f.url
+                    .clone()
+                    .unwrap_or_else(|| "about:blank".to_string())
+            });
+            if f.is_image {
+                p.push(format!("![{alt}]({link})"));
+            } else {
+                p.push(format!("[\\[file\\] {alt}]({link})"));
             }
+            p.push(String::new());
         }
 
         // Reactions: collapse to `:name: ×N` lines per emoji.
@@ -394,9 +421,12 @@ fn build_thread_rows(
 // ---------------------------------------------------------------------------
 
 struct FileRef {
+    id: Option<String>,
     name: Option<String>,
     title: Option<String>,
     url: Option<String>,
+    is_image: bool,
+    external: bool,
 }
 
 fn files(raw: &Value) -> Vec<FileRef> {
@@ -404,18 +434,46 @@ fn files(raw: &Value) -> Vec<FileRef> {
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
-                .map(|f| FileRef {
-                    name: f.get("name").and_then(|v| v.as_str()).map(str::to_string),
-                    title: f.get("title").and_then(|v| v.as_str()).map(str::to_string),
-                    url: f
-                        .get("url_private")
-                        .or_else(|| f.get("permalink"))
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string),
+                .map(|f| {
+                    let mimetype = f.get("mimetype").and_then(|v| v.as_str()).unwrap_or("");
+                    let filetype = f.get("filetype").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_image = mimetype.starts_with("image/")
+                        || matches!(filetype, "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg");
+                    let external = f
+                        .get("is_external")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                        || f.get("mode").and_then(|v| v.as_str()) == Some("tombstone");
+                    FileRef {
+                        id: f.get("id").and_then(|v| v.as_str()).map(str::to_string),
+                        name: f.get("name").and_then(|v| v.as_str()).map(str::to_string),
+                        title: f.get("title").and_then(|v| v.as_str()).map(str::to_string),
+                        url: f
+                            .get("url_private")
+                            .or_else(|| f.get("permalink"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        is_image,
+                        external,
+                    }
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Compute the relative link from `md_rel_path` (relative to data_root)
+/// to the locally-staged copy of `f` (also relative to data_root). Files
+/// without an `id` or that the downloader skips (external / tombstone)
+/// return `None` so the caller can fall back to the `url_private` URL.
+fn file_link(source_name: &str, md_rel_path: &Path, f: &FileRef) -> Option<String> {
+    if f.external {
+        return None;
+    }
+    let id = f.id.as_deref()?;
+    let name = safe_filename(f.name.as_deref(), id);
+    let target = media_relpath(source_name, id, &name);
+    Some(relative_link(md_rel_path, &target))
 }
 
 /// `[(name, count), ...]` in source order, summing user lists.

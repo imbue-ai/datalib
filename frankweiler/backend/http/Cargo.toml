@@ -27,4 +27,5 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

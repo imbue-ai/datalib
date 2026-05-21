@@ -14,7 +14,6 @@
 //! cargo test -p frankweiler-etl-gitlab --test gitlab_live -- --ignored
 //! ```
 
-use std::fs;
 
 use frankweiler_etl_gitlab::extract::{self as gitlab, parse_mr_ref, FetchOptions};
 use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
@@ -32,16 +31,9 @@ async fn gitlab_live_single_mr_snapshot() {
         .unwrap_or_else(|| DEFAULT_TARGET_MR.to_string());
     let (proj, iid) = parse_mr_ref(&mr_ref).expect("parse mr ref");
 
-    let tmp = std::env::temp_dir().join(format!(
-        "gitlab-live-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let _ = fs::remove_dir_all(&tmp);
-    fs::create_dir_all(&tmp).unwrap();
+    let tmp = tempfile::TempDir::with_prefix("gitlab-live-")
+        .expect("create tempdir")
+        .keep();
     eprintln!("[test] downloading {proj}!{iid} -> {}", tmp.display());
 
     let opts = FetchOptions {

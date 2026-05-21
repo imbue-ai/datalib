@@ -290,19 +290,13 @@ mod tests {
             binary: Some(PathBuf::from("/definitely/not/a/real/path/dolt-nope")),
             ..DoltConfig::default()
         };
-        let tmp = std::env::temp_dir().join(format!("fw-dolt-test-{}", std::process::id()));
-        // Don't bother creating the dir; resolve_dolt_binary is the
-        // failure point and it just returns the path as-is. Real
-        // failure happens when `dolt init` runs, which we exercise
-        // via ensure() — but that requires a non-existent binary to
-        // produce the right error. Here we just confirm resolution
-        // honors the override (path is returned even if non-existent).
+        // resolve_dolt_binary just returns the override path as-is; the
+        // real failure happens later in `dolt init`. Here we just confirm
+        // resolution honors the override.
         let resolved = resolve_dolt_binary(cfg.binary.as_deref()).unwrap();
         assert_eq!(
             resolved,
             PathBuf::from("/definitely/not/a/real/path/dolt-nope")
         );
-        // Suppress unused warning.
-        let _ = tmp;
     }
 }

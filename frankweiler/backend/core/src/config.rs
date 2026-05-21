@@ -735,16 +735,14 @@ sources:
         assert_eq!(names, vec!["on"]);
     }
 
+    /// Pytest-tmp_path-style: every call yields a brand-new, uniquely-named
+    /// directory under the OS temp area. We use `tempfile::TempDir` for the
+    /// uniqueness guarantee (mkdtemp under the hood) and detach it with
+    /// `.into_path()` so the caller can return a `PathBuf` and tests can
+    /// run in parallel without colliding on a shared name.
     fn tempdir() -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "fw-cfg-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        tempfile::TempDir::with_prefix("fw-cfg-")
+            .expect("create tempdir")
+            .keep()
     }
 }

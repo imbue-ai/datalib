@@ -15,6 +15,7 @@ use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
+use frankweiler_etl::media::safe_filename;
 use frankweiler_etl::obs::events;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -174,29 +175,6 @@ pub async fn call_slack(
 // File-download path: `latchkey curl` against files.slack.com, which
 // the `slack` service's baseApiUrls covers (latchkey ≥ 2.11.2).
 // ---------------------------------------------------------------------------
-
-fn safe_filename(name: Option<&str>, fallback: &str) -> String {
-    let s = match name {
-        Some(n) if !n.is_empty() => n,
-        _ => return fallback.to_string(),
-    };
-    let cleaned: String = s
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '-' | '.' | '_' | ' ') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let trimmed = cleaned.trim();
-    if trimmed.is_empty() {
-        fallback.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
 
 pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
