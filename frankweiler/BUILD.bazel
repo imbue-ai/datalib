@@ -28,7 +28,7 @@ sh_binary(
     srcs = ["dev_tng.sh"],
     data = [
         ":dev",
-        "//tests/fixtures:ingested_tng",
+        "//tests/fixtures:materialize_tng_root",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

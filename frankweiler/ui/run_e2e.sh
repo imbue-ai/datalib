@@ -57,6 +57,13 @@ if [[ -n "$BACKEND_BIN_RUNFILE" && -x "$BACKEND_BIN_RUNFILE" ]]; then
   export FRANKWEILER_HTTP_BIN="$BACKEND_BIN_RUNFILE"
 fi
 
+# Resolve the shared TNG materializer so playwright.config.ts can spawn
+# it directly (same script as `bazelisk run //frankweiler:dev_tng`).
+MATERIALIZE_RUNFILE="$(rlocation _main/tests/fixtures/materialize_tng_root)" || MATERIALIZE_RUNFILE=""
+if [[ -n "$MATERIALIZE_RUNFILE" && -x "$MATERIALIZE_RUNFILE" ]]; then
+  export FW_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
+fi
+
 # Pass through any extra args (e.g. test names).
 cd "$UI_DIR"
 exec pnpm exec playwright test "$@"

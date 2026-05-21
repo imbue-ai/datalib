@@ -32,19 +32,26 @@ function cachedPort(envVar: string): number {
 }
 
 // Materialize the bazel-built fixture once, before any worker starts.
-// Tests share the resulting data root via FRANKWEILER_ROOT. Cache the
-// path in env so worker subprocesses (which re-import this config)
-// don't each rebuild the fixture into a fresh temp dir.
+// Tests share the resulting data root via FW_E2E_FIXTURE_ROOT — cached
+// in env so worker subprocesses (which re-import this config) don't
+// each rebuild the fixture into a fresh temp dir.
+//
+// The materializer is the same script `bazelisk run
+// //frankweiler:dev_tng` uses, so this test and that command produce
+// byte-identical data roots. Under `bazel test` run_e2e.sh resolves the
+// runfiles path and passes it via FW_E2E_MATERIALIZE_TNG_ROOT;
+// interactive `pnpm exec playwright test` falls back to the source-tree
+// bazel-bin symlink.
 const here = path.dirname(fileURLToPath(import.meta.url));
 function ensureFixtureRoot(): string {
   const existing = process.env.FW_E2E_FIXTURE_ROOT;
   if (existing) return existing;
+  const workspace = path.resolve(here, "../..");
+  const materializer =
+    process.env.FW_E2E_MATERIALIZE_TNG_ROOT ||
+    path.join(workspace, "bazel-bin/tests/fixtures/materialize_tng_root");
   const root = mkdtempSync(path.join(tmpdir(), "fw-e2e-"));
-  execFileSync(
-    "node",
-    [path.join(here, "tests/e2e/prepare-fixture.cjs"), root],
-    { stdio: "inherit" },
-  );
+  execFileSync(materializer, [root], { stdio: "inherit" });
   process.env.FW_E2E_FIXTURE_ROOT = root;
   return root;
 }

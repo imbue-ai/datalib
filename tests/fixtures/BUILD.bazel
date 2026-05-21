@@ -1,3 +1,20 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+# Materialize a frankweiler data root from :ingested_tng + :ingested_tng_qmd
+# into a caller-provided directory. Used by both `//frankweiler:dev_tng`
+# (interactive eyeballing) and the UI e2e test (fixture setup) so the two
+# paths can't drift apart.
+sh_binary(
+    name = "materialize_tng_root",
+    srcs = ["materialize_tng_root.sh"],
+    data = [
+        ":ingested_tng",
+        ":ingested_tng_qmd",
+    ],
+    visibility = ["//visibility:public"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # Cacheable, ingested-fixture artifact.
 #
 # `bazelisk build //tests/fixtures:ingested_tng` runs the full

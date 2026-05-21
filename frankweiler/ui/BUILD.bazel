@@ -17,8 +17,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 _E2E_DATA = [
     "//frankweiler/backend/http:frankweiler_http_bin",
-    "//tests/fixtures:ingested_tng",
-    "//tests/fixtures:ingested_tng_qmd",
+    "//tests/fixtures:materialize_tng_root",
     "package.json",
 ]
 
