@@ -153,15 +153,26 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// shim on first call. If the shim can't be found, logs a warning and
 /// returns the `Command` anyway — callers may still succeed against
 /// non-CF endpoints.
+///
+/// We invoke latchkey via `npx -y latchkey` (same pattern as qmd in
+/// `frankweiler_qmd_indexer::run_qmd`) so callers don't need a global
+/// install. `NPX_BIN` lets direnv / `.bazelrc --action_env` pin the
+/// binary independent of whatever PATH the action inherits.
 pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
-    std::process::Command::new("latchkey")
+    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
+    let mut cmd = std::process::Command::new(npx);
+    cmd.arg("-y").arg("latchkey");
+    cmd
 }
 
 /// Tokio variant.
 pub fn latchkey_tokio_command() -> tokio::process::Command {
     warn_if_missing();
-    tokio::process::Command::new("latchkey")
+    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
+    let mut cmd = tokio::process::Command::new(npx);
+    cmd.arg("-y").arg("latchkey");
+    cmd
 }
 
 fn warn_if_missing() {

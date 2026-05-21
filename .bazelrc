@@ -3,11 +3,15 @@ common --noenable_workspace
 test --test_output=errors
 # Pin per-developer tools via env vars set in `.envrc` (direnv) rather
 # than relying on whatever PATH the action inherits. Resolvers:
-#   * DOLT_BIN — frankweiler_core::dolt_server::resolve_dolt_binary
-#   * NPX_BIN  — frankweiler_qmd_indexer::run_qmd
+#   * DOLT_BIN      — frankweiler_core::dolt_server::resolve_dolt_binary
+#   * NPX_BIN       — frankweiler_qmd_indexer::run_qmd
+#                     and frankweiler_etl::latchkey::latchkey_command
+#                     (latchkey is now invoked via `npx -y latchkey`)
+#   * LATCHKEY_CURL — frankweiler_etl::latchkey::resolve
+#                     (in-tree Chrome-impersonating curl shim)
 # Forwarded to both build (genrules) and test actions.
-build --action_env=DOLT_BIN --action_env=NPX_BIN
-test --test_env=DOLT_BIN --test_env=NPX_BIN
+build --action_env=DOLT_BIN --action_env=NPX_BIN --action_env=LATCHKEY_CURL
+test --test_env=DOLT_BIN --test_env=NPX_BIN --test_env=LATCHKEY_CURL
 
 # Stamp builds with the git hash via tools/workspace_status.sh. Consumers
 # read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
