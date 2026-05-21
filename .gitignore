@@ -14,3 +14,4 @@ dolt_repo/
 playwright-report/
 test-results/
 .claude/
+*.snap.new

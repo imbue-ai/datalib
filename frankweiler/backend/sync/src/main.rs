@@ -107,6 +107,22 @@ struct Args {
     deterministic: bool,
 }
 
+/// Install a minimal stderr `tracing` subscriber so `warn!`/`error!`
+/// events from the provider crates (per-file media download failures,
+/// channel-level fetch errors, etc.) actually reach the user. Without
+/// this, every `tracing::warn!` in extract code is silently dropped and
+/// failures look like successes.
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter};
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn"));
+    let _ = fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
+
 fn free_port() -> Result<u16> {
     let l = TcpListener::bind(("127.0.0.1", 0))?;
     Ok(l.local_addr()?.port())
@@ -117,6 +133,7 @@ async fn main() {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::env::set_var("RUST_BACKTRACE", "full");
     }
+    init_tracing();
     match run().await {
         Ok(()) => {}
         Err(e) => {
@@ -391,10 +408,11 @@ async fn run_extract_phase(cfg: &Config, playback_root: Option<&Path>, now: &str
             let type_str = plan.type_str;
             set.spawn(async move {
                 eprintln!("[extract] start {name} ({type_str})");
-                plan.run()
+                let summary = plan
+                    .run()
                     .await
                     .with_context(|| format!("extract {name} (type={type_str})"))?;
-                eprintln!("[extract] done  {name}");
+                eprintln!("[extract] done  {name}: {summary}");
                 Ok(())
             });
         }
@@ -406,9 +424,11 @@ async fn run_extract_phase(cfg: &Config, playback_root: Option<&Path>, now: &str
             let name = plan.name.clone();
             let type_str = plan.type_str;
             eprintln!("[extract] {name} ({type_str})");
-            plan.run()
+            let summary = plan
+                .run()
                 .await
                 .with_context(|| format!("extract {name} (type={type_str})"))?;
+            eprintln!("[extract] done  {name}: {summary}");
         }
     }
     Ok(())
@@ -494,9 +514,13 @@ impl ExtractPlan {
         }))
     }
 
-    async fn run(self) -> Result<()> {
+    /// Returns a one-line per-source summary on success. Provider-specific
+    /// shape — what makes it onto stderr is whatever's interesting for
+    /// that source (slack media outcomes including `error` counts, claude
+    /// fetched/skipped/errors, etc).
+    async fn run(self) -> Result<String> {
         let progress = self.progress.clone();
-        let result = match self.kind {
+        let result: Result<String> = match self.kind {
             ExtractKind::Anthropic { sync } => {
                 frankweiler_etl_anthropic::extract::fetch(
                     frankweiler_etl_anthropic::extract::FetchOptions {
@@ -513,7 +537,12 @@ impl ExtractPlan {
                     },
                 )
                 .await
-                .map(|_| ())
+                .map(|s| {
+                    format!(
+                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={}",
+                        s.fetched, s.skipped, s.errors, s.forbidden_orgs, s.total, s.requests,
+                    )
+                })
             }
             ExtractKind::Chatgpt { sync } => frankweiler_etl_chatgpt::extract::fetch(
                 frankweiler_etl_chatgpt::extract::FetchOptions {
@@ -527,7 +556,12 @@ impl ExtractPlan {
                 },
             )
             .await
-            .map(|_| ()),
+            .map(|s| {
+                format!(
+                    "fetched={} skipped={} errors={} listing={} requests={}",
+                    s.fetched, s.skipped, s.errors, s.listing, s.requests,
+                )
+            }),
             ExtractKind::Slack { sync } => frankweiler_etl_slack::extract::fetch(
                 frankweiler_etl_slack::extract::FetchOptions {
                     out_dir: self.out_dir.clone(),
@@ -543,7 +577,18 @@ impl ExtractPlan {
                 },
             )
             .await
-            .map(|_| ()),
+            .map(|s| {
+                let media = s
+                    .media
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(
+                    "msgs={} replies={} media[{}]",
+                    s.messages, s.replies, media
+                )
+            }),
             ExtractKind::Github { sync } => frankweiler_etl_github::extract::fetch(
                 frankweiler_etl_github::extract::FetchOptions {
                     out_dir: self.out_dir.clone(),
@@ -559,7 +604,19 @@ impl ExtractPlan {
                 },
             )
             .await
-            .map(|_| ()),
+            .map(|s| {
+                format!(
+                    "prs(new={}/upd={}) issue_comments(new={}/upd={}) reviews(new={}/upd={}) review_comments(new={}/upd={})",
+                    s.new_prs,
+                    s.upd_prs,
+                    s.new_issue_comments,
+                    s.upd_issue_comments,
+                    s.new_reviews,
+                    s.upd_reviews,
+                    s.new_review_comments,
+                    s.upd_review_comments,
+                )
+            }),
             ExtractKind::Gitlab { sync } => frankweiler_etl_gitlab::extract::fetch(
                 frankweiler_etl_gitlab::extract::FetchOptions {
                     out_dir: self.out_dir.clone(),
@@ -575,7 +632,12 @@ impl ExtractPlan {
                 },
             )
             .await
-            .map(|_| ()),
+            .map(|s| {
+                format!(
+                    "mrs(new={}/upd={}) discussions(new={}/upd={}) requests={}",
+                    s.new_mrs, s.upd_mrs, s.new_discussions, s.upd_discussions, s.requests,
+                )
+            }),
             ExtractKind::Notion {
                 sync,
                 playback_root,
@@ -613,7 +675,19 @@ impl ExtractPlan {
                     },
                 )
                 .await
-                .map(|_| ())
+                .map(|s| {
+                    format!(
+                        "pages(new={}/upd={}) blocks(new={}/upd={}) comments(new={}/upd={}) requests(official={}/unofficial={})",
+                        s.new_pages,
+                        s.upd_pages,
+                        s.new_blocks,
+                        s.upd_blocks,
+                        s.new_comments,
+                        s.upd_comments,
+                        s.official_requests,
+                        s.unofficial_requests,
+                    )
+                })
             }
         };
         progress.finish("done");

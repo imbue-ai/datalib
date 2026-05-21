@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 exports_files(["Cargo.toml"])
 
@@ -27,5 +27,41 @@ rust_binary(
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-subscriber",
+    ],
+)
+
+# Live end-to-end golden test. Drives the sync binary against
+# configs/thad_tiny.yaml into a fresh tempdir and snapshots the raw +
+# rendered_md trees. Manual: hits the network, needs latchkey creds.
+rust_test(
+    name = "live_sync_golden",
+    srcs = ["tests/live_sync_golden.rs"],
+    crate_root = "tests/live_sync_golden.rs",
+    data = [
+        ":frankweiler_sync_bin",
+        "//configs:thad_tiny.yaml",
+    ] + glob(
+        ["tests/snapshots/**/*.snap"],
+        allow_empty = True,
+    ),
+    edition = "2021",
+    env = {
+        "FRANKWEILER_SYNC_BIN": "$(rootpath :frankweiler_sync_bin)",
+        "FRANKWEILER_TEST_CONFIG": "$(rootpath //configs:thad_tiny.yaml)",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",  # talks to real provider APIs
+        "manual",
+        "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
+    ],
+    deps = [
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:walkdir",
     ],
 )

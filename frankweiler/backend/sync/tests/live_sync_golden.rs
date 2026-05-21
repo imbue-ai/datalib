@@ -1,0 +1,356 @@
+//! Live end-to-end golden test for `frankweiler-sync`.
+//!
+//! Spawns the sync binary against `configs/thad_tiny.yaml` (with a few
+//! test-only tweaks: tempdir `data_root`, `qmd.skip=true`, slack
+//! `refresh_window_days=30`), hitting real provider APIs through
+//! `latchkey curl`. Then snapshots the produced data tree, one
+//! `.snap` per file under `tests/snapshots/`, mirroring the data layout:
+//!
+//!   tests/snapshots/
+//!     manifest.snap                              ← list of paths
+//!     raw/tiny-slack/raw_api/auth.test/run-_.snap
+//!     raw/notion-api/notion_official_page/created/events.snap
+//!     rendered_md/slack/.../threads/<uuid>.md.snap
+//!     rendered_md/slack/.../threads/<uuid>.grid_rows.json.snap
+//!     …
+//!
+//! Per-file `.snap`s mean `cargo insta review` walks them one at a time,
+//! diffs stay local to the file that actually changed, and the file
+//! layout under `snapshots/` mirrors what frankweiler-sync wrote.
+//!
+//! Normalization:
+//!   * `_recorded_at`, `duration_ms`, `_item_hashes`, `request_id`,
+//!     `fetched_at`, `last_edited_time`, `created_time`, `cache_ts`,
+//!     `updated`, and `source_fingerprint` keys keep their position but
+//!     get their value replaced with `"[redacted]"`.
+//!   * `source_fingerprint:` lines in `.md` frontmatter get the same
+//!     treatment.
+//!   * `run-<timestamp>` filename segments collapse to `run-_`.
+//!   * `conversations.list` and `users.list` slack endpoints are dropped
+//!     entirely — they're workspace-wide listings that leak unrelated
+//!     channels/users and churn on every join/leave.
+//!   * Binary media files become `<binary N bytes>` markers.
+//!
+//! Dolt + qmd are deliberately skipped — too noisy / not deterministic.
+//!
+//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
+//!
+//! ```sh
+//! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
+//! cargo test -p frankweiler-sync --test live_sync_golden -- --ignored --nocapture
+//! # then to accept changes:
+//! cargo insta review
+//! ```
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use insta::{assert_json_snapshot, assert_snapshot};
+use serde_json::Value;
+use walkdir::WalkDir;
+
+/// Keys whose value is an array we want sorted before snapshotting.
+/// Use only for arrays known to be set-like (order is not meaningful).
+const SORTED_ARRAY_KEYS: &[&str] = &["safe_urls"];
+
+const VOLATILE_KEYS: &[&str] = &[
+    "_recorded_at",
+    "duration_ms",
+    "_item_hashes",
+    "request_id",
+    "fetched_at",
+    "last_edited_time",
+    "created_time",
+    "cache_ts",
+    "updated",
+    // Renderer-derived hash. Stable inputs produce a stable value, but
+    // any volatile field upstream (which we redact above) would flip it,
+    // so redact here too — a real algorithm change will surface as
+    // every sidecar/markdown header churning at once.
+    "source_fingerprint",
+];
+
+const REDACTED: &str = "[redacted]";
+
+/// Path components whose entire contents we deliberately omit. Slack's
+/// workspace-wide listings: every channel the user is in, every user in
+/// the workspace. Don't belong in a committed golden.
+const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list"];
+
+fn workspace_root() -> PathBuf {
+    // CARGO_MANIFEST_DIR is .../frankweiler/backend/sync
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .expect("workspace root above sync/")
+        .to_path_buf()
+}
+
+fn sync_binary() -> PathBuf {
+    if let Ok(p) = std::env::var("FRANKWEILER_SYNC_BIN") {
+        return PathBuf::from(p);
+    }
+    if let Some(p) = option_env!("CARGO_BIN_EXE_frankweiler-sync") {
+        return PathBuf::from(p);
+    }
+    panic!("FRANKWEILER_SYNC_BIN not set and no cargo-provided binary path")
+}
+
+#[test]
+#[ignore]
+fn live_sync_thad_tiny_golden() {
+    let src_config = match std::env::var("FRANKWEILER_TEST_CONFIG") {
+        Ok(p) => PathBuf::from(p),
+        Err(_) => workspace_root().join("configs/thad_tiny.yaml"),
+    };
+    assert!(src_config.exists(), "missing {}", src_config.display());
+    let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let data_root = tmp.path().join("data");
+    std::fs::create_dir_all(&data_root).unwrap();
+
+    let cfg_out = rewrite_config(&cfg_text, &data_root);
+    let cfg_path = tmp.path().join("thad_tiny.yaml");
+    std::fs::write(&cfg_path, &cfg_out).unwrap();
+
+    let bin = sync_binary();
+    assert!(bin.exists(), "sync binary missing: {}", bin.display());
+    eprintln!("[test] sync bin = {}", bin.display());
+    eprintln!("[test] data_root = {}", data_root.display());
+
+    let status = Command::new(&bin)
+        .arg("--config")
+        .arg(&cfg_path)
+        .arg("--now")
+        .arg("2026-05-21T18:00:00Z")
+        .status()
+        .expect("spawn sync");
+    assert!(status.success(), "sync failed: {status:?}");
+
+    let mut manifest: Vec<String> = Vec::new();
+    snapshot_tree(&data_root.join("raw"), "raw", &mut manifest);
+    snapshot_tree(&data_root.join("rendered_md"), "rendered_md", &mut manifest);
+    manifest.sort();
+
+    // Manifest pins which files we expect to find. Catches additions /
+    // removals without having to diff every per-file snapshot.
+    insta::with_settings!({
+        snapshot_path => "snapshots",
+        prepend_module_to_snapshot => false,
+    }, {
+        assert_snapshot!("manifest", manifest.join("\n"));
+    });
+}
+
+/// Walk `root` and emit one snapshot per file. Each snapshot lives at
+/// `tests/snapshots/<top>/<rel_dir>/<filename>.snap`, mirroring the
+/// data layout. `manifest` collects the snapshot key (top + rel path)
+/// for the overall manifest assertion.
+fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
+    if !root.is_dir() {
+        return;
+    }
+    for entry in WalkDir::new(root).sort_by_file_name() {
+        let entry = entry.expect("walk tree");
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry.path().strip_prefix(root).unwrap();
+        if rel
+            .components()
+            .any(|c| SKIP_PATH_SEGMENTS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+        {
+            continue;
+        }
+        let canonical_rel = canonicalize_path(rel);
+        let manifest_key = format!("{top}/{canonical_rel}");
+        manifest.push(manifest_key.clone());
+
+        // snapshot_path is relative to the test source file. Insta
+        // creates the directories as needed.
+        let canonical_rel_path = PathBuf::from(&canonical_rel);
+        let snap_parent = canonical_rel_path.parent().unwrap_or(Path::new(""));
+        let snap_dir = PathBuf::from("snapshots").join(top).join(snap_parent);
+        let snap_name = canonical_rel_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let value = summarize_file(entry.path());
+        insta::with_settings!({
+            snapshot_path => snap_dir.display().to_string(),
+            prepend_module_to_snapshot => false,
+            sort_maps => true,
+            description => manifest_key,
+        }, {
+            match value {
+                SnapValue::Json(v) => assert_json_snapshot!(snap_name, v),
+                SnapValue::Text(s) => assert_snapshot!(snap_name, s),
+            }
+        });
+    }
+}
+
+enum SnapValue {
+    Json(Value),
+    Text(String),
+}
+
+/// File → snapshot payload. JSONL is parsed line-by-line, sorted, and
+/// stripped of volatile fields. JSON likewise. Markdown is text with
+/// frontmatter redactions. Anything else (media) becomes a size marker.
+fn summarize_file(path: &Path) -> SnapValue {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name.ends_with(".jsonl") {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut lines: Vec<Value> = text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| match serde_json::from_str::<Value>(l) {
+                Ok(mut v) => {
+                    strip_volatile(&mut v);
+                    v
+                }
+                Err(_) => Value::String(l.to_string()),
+            })
+            .collect();
+        lines.sort_by_key(|v| v.to_string());
+        SnapValue::Json(Value::Array(lines))
+    } else if name.ends_with(".json") {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        match serde_json::from_str::<Value>(&text) {
+            Ok(mut v) => {
+                strip_volatile(&mut v);
+                SnapValue::Json(v)
+            }
+            Err(_) => SnapValue::Text(text),
+        }
+    } else if name.ends_with(".md") {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        SnapValue::Text(redact_markdown(&text))
+    } else {
+        // Try text first, fall back to a size marker for binary.
+        match std::fs::read_to_string(path) {
+            Ok(t) => SnapValue::Text(t),
+            Err(_) => {
+                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                SnapValue::Text(format!("<binary {size} bytes>"))
+            }
+        }
+    }
+}
+
+/// Patch the YAML: swap `data_root`, force `qmd.skip=true`, and bump
+/// slack `refresh_window_days` so a fresh data_root re-downloads media.
+fn rewrite_config(text: &str, data_root: &Path) -> String {
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(text).expect("parse config yaml");
+    let map = doc.as_mapping_mut().expect("config root mapping");
+    map.insert(
+        serde_yaml::Value::String("data_root".into()),
+        serde_yaml::Value::String(data_root.display().to_string()),
+    );
+    let qmd = serde_yaml::Mapping::from_iter([(
+        serde_yaml::Value::String("skip".into()),
+        serde_yaml::Value::Bool(true),
+    )]);
+    map.insert(
+        serde_yaml::Value::String("qmd".into()),
+        serde_yaml::Value::Mapping(qmd),
+    );
+    if let Some(sources) = map
+        .get_mut(serde_yaml::Value::String("sources".into()))
+        .and_then(|v| v.as_sequence_mut())
+    {
+        for src in sources {
+            let Some(m) = src.as_mapping_mut() else {
+                continue;
+            };
+            let is_slack = m
+                .get(serde_yaml::Value::String("type".into()))
+                .and_then(|v| v.as_str())
+                == Some("slack_api");
+            if !is_slack {
+                continue;
+            }
+            let sync_entry = m
+                .entry(serde_yaml::Value::String("sync".into()))
+                .or_insert(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            if let Some(sync_map) = sync_entry.as_mapping_mut() {
+                sync_map.insert(
+                    serde_yaml::Value::String("refresh_window_days".into()),
+                    serde_yaml::Value::Number(30.into()),
+                );
+            }
+        }
+    }
+    serde_yaml::to_string(&doc).expect("serialize yaml")
+}
+
+/// Replace `run-<timestamp>` segments in a path with `run-_` so per-run
+/// filenames don't churn the snapshot layout.
+fn canonicalize_path(rel: &Path) -> String {
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| {
+            let s = c.as_os_str().to_string_lossy().to_string();
+            if let Some(rest) = s.strip_prefix("run-") {
+                let tail_ext = rest.find('.').map(|i| &rest[i..]).unwrap_or("");
+                format!("run-_{tail_ext}")
+            } else {
+                s
+            }
+        })
+        .collect();
+    parts.join("/")
+}
+
+/// Line-level redaction for rendered markdown. Frontmatter lines like
+/// `source_fingerprint: ba02d4dd774685c7` get their value replaced.
+fn redact_markdown(text: &str) -> String {
+    let prefixes = ["source_fingerprint:"];
+    let mut out = text
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            for p in &prefixes {
+                if trimmed.starts_with(p) {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    return format!("{indent}{p} [redacted]");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn strip_volatile(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            for (k, child) in map.iter_mut() {
+                if VOLATILE_KEYS.contains(&k.as_str()) {
+                    *child = Value::String(REDACTED.into());
+                    continue;
+                }
+                strip_volatile(child);
+                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
+                    if let Value::Array(items) = child {
+                        items.sort_by_key(|a| a.to_string());
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                strip_volatile(item);
+            }
+        }
+        _ => {}
+    }
+}

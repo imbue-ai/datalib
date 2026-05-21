@@ -18,6 +18,7 @@
 //! -s / --silent           accepted, no-op
 //! -S / --show-error       accepted, no-op
 //! -L / --location         enable redirect following
+//! -f / --fail             exit 22 on HTTP >= 400 (no body to -o)
 //! --compressed            accepted, no-op
 //! -v / --verbose          accepted, no-op
 //! ```
@@ -43,6 +44,7 @@ struct Args {
     dump_header_path: Option<String>,
     write_out: Option<String>,
     follow_redirects: bool,
+    fail_on_http_error: bool,
     url: Option<String>,
 }
 
@@ -52,7 +54,7 @@ fn die(msg: impl AsRef<str>) -> ! {
 }
 
 fn valueless_shorts() -> HashSet<char> {
-    "sSLv".chars().collect()
+    "sSLvf".chars().collect()
 }
 fn value_shorts() -> HashSet<char> {
     "XHdoOwD".chars().collect()
@@ -123,6 +125,7 @@ fn parse(argv: Vec<String>) -> Args {
             "-w" | "--write-out" => out.write_out = Some(need(&tok, &mut it)),
             "-s" | "--silent" | "-S" | "--show-error" | "--compressed" | "-v" | "--verbose" => {}
             "-L" | "--location" => out.follow_redirects = true,
+            "-f" | "--fail" => out.fail_on_http_error = true,
             other if other.starts_with('-') => die(format!("unsupported flag {other:?}")),
             _ => {
                 if out.url.is_some() {
@@ -207,6 +210,29 @@ async fn main() -> ExitCode {
 
     let status = resp.status();
     let resp_headers = resp.headers().clone();
+
+    // curl -f / --fail: suppress body, return 22 on HTTP >= 400. We still
+    // dump headers via -D so callers can inspect what happened, matching
+    // real curl's behavior with -f -D.
+    if args.fail_on_http_error && status.as_u16() >= 400 {
+        if let Some(ref path) = args.dump_header_path {
+            let mut buf = String::new();
+            let reason = status.canonical_reason().unwrap_or("");
+            buf.push_str(&format!("HTTP/1.1 {} {}\r\n", status.as_u16(), reason));
+            for (n, v) in resp_headers.iter() {
+                let val = v.to_str().unwrap_or("");
+                buf.push_str(&format!("{}: {}\r\n", n.as_str(), val));
+            }
+            buf.push_str("\r\n");
+            if path == "-" {
+                let _ = std::io::stdout().write_all(buf.as_bytes());
+            } else if let Ok(mut f) = File::create(path) {
+                let _ = f.write_all(buf.as_bytes());
+            }
+        }
+        eprintln!("latchkey-curl-shim: HTTP {} for {}", status.as_u16(), url,);
+        return ExitCode::from(22);
+    }
 
     // -D dump headers
     if let Some(ref path) = args.dump_header_path {

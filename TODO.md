@@ -1,0 +1,2 @@
+* Notion: The order of the blocks in this markdown looks wrong: /Users/thad/mixed_up_files.thad_tiny_1/rendered_md/notion/pages/364a550f-af95-80de-829f-c5fccb3021fd/index.md
+* Make sure that markdown for Notion and Slack has relative links for other documents and media.

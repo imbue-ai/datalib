@@ -1,0 +1,7 @@
+exports_files(
+    [
+        "thad_dev.yaml",
+        "thad_tiny.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
