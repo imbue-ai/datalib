@@ -19,15 +19,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # bazelisk is preinstalled on macos-14 runners as `bazelisk` and
-      # also symlinked as `bazel`; no setup-bazel action needed.
+      # bazel-contrib/setup-bazel wires actions/cache to bazel's various
+      # caches so subsequent runs skip the ~10-minute cold-cache rebuild
+      # of boring-sys2 / tokio / wreq etc. The four cache flags below
+      # each pin a different layer:
+      #   bazelisk-cache       — the bazel binary itself (~50 MB)
+      #   disk-cache           — bazel's action cache (build outputs)
+      #   repository-cache     — http_archive downloads (rules_rust, etc.)
+      #   external-cache       — fully-resolved external repos (crate_universe deps)
+      # All four share the 10 GB-per-repo actions/cache quota. The action
+      # keys caches on the runner OS so cross-platform runs don't collide.
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: true
+          repository-cache: true
+          external-cache: true
+
       - name: Show toolchain versions
         run: |
-          bazelisk version
+          bazel version
           rustc --version || true
 
       - name: Build dist bins
-        run: bazelisk build //frankweiler/backend:dist -c opt
+        run: bazel build //frankweiler/backend:dist -c opt
 
       - name: Stage tarball
         id: stage
