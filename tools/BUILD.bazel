@@ -1,0 +1,4 @@
+exports_files([
+    "check_version_consistency.sh",
+    "workspace_status.sh",
+])
