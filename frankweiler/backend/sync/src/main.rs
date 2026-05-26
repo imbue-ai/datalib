@@ -66,9 +66,17 @@ use tokio::task::JoinSet;
 mod progress;
 use crate::progress::{make_bar, make_multi, IndicatifSink};
 
+// `FRANKWEILER_GIT_HASH` is set at build time by either
+//   - Bazel: rustc_env.txt resolves {STABLE_GIT_HASH} from
+//     tools/workspace_status.sh; or
+//   - cargo: build.rs runs `git rev-parse HEAD` (falls back to "unknown").
+// Both paths guarantee the env is set, so `env!` (compile-time) composes
+// cleanly with `concat!` to build the clap --version string.
+
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FRANKWEILER_GIT_HASH"), ")"),
     about = "Config-driven ETL: extract every enabled source, translate, load into Dolt at <data_root>/dolt_db/ + rendered_md/ + qmd/index.sqlite"
 )]
 struct Args {

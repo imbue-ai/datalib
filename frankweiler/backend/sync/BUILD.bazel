@@ -9,6 +9,19 @@ rust_binary(
         "src/progress.rs",
     ],
     edition = "2021",
+    # Mirror frankweiler-sync's Cargo workspace version so `env!("CARGO_PKG_VERSION")`
+    # in src/main.rs produces the same `--version` prefix under cargo and bazel.
+    # Keep in sync with [workspace.package].version in frankweiler/backend/Cargo.toml.
+    version = "0.1.0",
+    # Stamp the binary with STABLE_GIT_HASH from tools/workspace_status.sh
+    # so `frankweiler-sync --version` reports the commit it was built from.
+    # `stamp = -1` defers to the --stamp flag (forced on by .bazelrc), and
+    # rustc_env.txt resolves {STABLE_GIT_HASH} into the FRANKWEILER_GIT_HASH
+    # env consumed by `option_env!` in src/main.rs. Wired on the binary
+    # only — not on frankweiler_core — to keep the per-commit invalidation
+    # off the rest of the build graph.
+    rustc_env_files = ["rustc_env.txt"],
+    stamp = -1,
     visibility = ["//visibility:public"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",

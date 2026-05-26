@@ -13,6 +13,20 @@ Both projects share row shapes through **`schemas/`**, the single
 source-of-truth that emits Rust / Python / TypeScript types from one JSON
 Schema.
 
+## Installing the CLI
+
+macOS arm64 only for now. Downloads the latest tagged release and
+drops the binaries into `~/.local/bin` (override with
+`FRANKWEILER_INSTALL_DIR`):
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/scripts/install.sh | sh
+```
+
+Releases are produced by `.github/workflows/release.yml` when a `v*`
+tag is pushed; the set of shipped binaries is whatever
+`//frankweiler/backend:dist` depends on.
+
 ## Slug + UUID identifiers (Notion-style)
 
 Wherever a row has both a stable UUID and a human-readable name —
