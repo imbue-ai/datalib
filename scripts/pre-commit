@@ -11,16 +11,31 @@ cd "$REPO_ROOT"
 
 echo "Running pre-commit checks..."
 
+# Snapshot the set of files the user explicitly staged for this commit
+# *before* running any formatter. We use this list (not `git diff` after
+# the fact) to decide what to re-stage post-format. Capturing it now
+# prevents the hook from folding unrelated working-tree dirt into the
+# commit just because a formatter happened to touch (or `git diff`
+# happened to list) it. --diff-filter=ACMR ignores deletions and
+# typechanges so we don't try to `git add` a path that no longer exists.
+STAGED_FILES="$(git diff --cached --name-only --diff-filter=ACMR)"
+restage_if_staged() {
+    if [ -n "$STAGED_FILES" ]; then
+        # NUL-safe would be nicer but the filenames in this repo don't
+        # contain newlines; keep it readable.
+        echo "$STAGED_FILES" | xargs -r git add --
+    fi
+}
+
 # --- Python (ruff + pyright via uv) ---
 echo "[python] ruff check"
 uv run ruff check .
 
 echo "[python] ruff format"
 uv run ruff format .
-# Re-stage any files ruff just reformatted (only those already dirty in the
-# working tree). Avoid `git add -u` which can fold unrelated deletions into
-# the commit in sparse worktrees.
-git diff --name-only | xargs -r git add --
+# ruff format mutates files in place. Re-stage only the files that were
+# already part of this commit; never fold in unstaged dirt.
+restage_if_staged
 
 echo "[python] pyright"
 uv run pyright
