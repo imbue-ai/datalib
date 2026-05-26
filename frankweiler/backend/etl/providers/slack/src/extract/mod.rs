@@ -179,7 +179,7 @@ async fn export_channel(
     channel_latest_ts: Option<&str>,
     latest_reply_by_thread: &BTreeMap<(String, String), String>,
     now: &DateTime<Utc>,
-    media_dir: Option<&Path>,
+    blob_dir: Option<&Path>,
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
@@ -194,7 +194,7 @@ async fn export_channel(
         inclusive,
         None,
         latest_reply_by_thread,
-        media_dir,
+        blob_dir,
         totals,
         progress,
     )
@@ -217,7 +217,7 @@ async fn export_channel(
                     true,
                     Some(latest_ts),
                     latest_reply_by_thread,
-                    media_dir,
+                    blob_dir,
                     totals,
                     progress,
                 )
@@ -245,7 +245,7 @@ async fn paginate_history(
     inclusive: bool,
     latest_ts: Option<&str>,
     latest_reply_by_thread: &BTreeMap<(String, String), String>,
-    media_dir: Option<&Path>,
+    blob_dir: Option<&Path>,
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
@@ -295,7 +295,7 @@ async fn paginate_history(
                     continue;
                 }
             }
-            paginate_replies(store, channel_id, ts, media_dir, totals).await?;
+            paginate_replies(store, channel_id, ts, blob_dir, totals).await?;
         }
 
         // Media for this page (sequential — Slack hates concurrency on
@@ -304,7 +304,7 @@ async fn paginate_history(
         // didn't keep the replies responses around here. Walk both
         // messages and any replies we fetched: simpler to fold replies
         // into media download from inside paginate_replies.
-        if let Some(md) = media_dir {
+        if let Some(md) = blob_dir {
             let counts = api::download_files_for_messages(&messages, md).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
@@ -335,7 +335,7 @@ async fn paginate_replies(
     store: &mut RawStore,
     channel_id: &str,
     thread_ts: &str,
-    media_dir: Option<&Path>,
+    blob_dir: Option<&Path>,
     totals: &mut ChannelTotals,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
@@ -356,7 +356,7 @@ async fn paginate_replies(
             .map(|a| a.to_vec())
             .unwrap_or_default();
         totals.replies += msgs.len().saturating_sub(1); // exclude the parent
-        if let Some(md) = media_dir {
+        if let Some(md) = blob_dir {
             let counts = api::download_files_for_messages(&msgs, md).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
@@ -462,7 +462,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .collect(),
     };
 
-    let media_dir: Option<PathBuf> = if opts.media {
+    let blob_dir: Option<PathBuf> = if opts.media {
         Some(opts.out_dir.join(frankweiler_etl::blobs::BLOBS_DIR))
     } else {
         None
@@ -492,7 +492,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             channel_latest_ts.get(cid).map(|s| s.as_str()),
             &latest_reply_map,
             &now,
-            media_dir.as_deref(),
+            blob_dir.as_deref(),
             &mut totals,
             &opts.progress,
         )

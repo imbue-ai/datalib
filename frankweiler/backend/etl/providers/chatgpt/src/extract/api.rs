@@ -156,17 +156,17 @@ fn backoff_from_retry_after(retry_after: Option<&str>, waited: Duration) -> Dura
 // ---------------------------------------------------------------------------
 
 /// Download a single ChatGPT attachment into
-/// `<media_dir>/<file_id>/<safe(name)>`. Returns one of
+/// `<blob_dir>/<file_id>/<safe(name)>`. Returns one of
 /// `downloaded` / `skipped` / `error`. Never panics — errors are logged
 /// and counted by the caller so a single bad file doesn't tank a sync.
 pub async fn download_one_file(
     client: &mut ChatGPTClient,
     file_id: &str,
     name: Option<&str>,
-    media_dir: &Path,
+    blob_dir: &Path,
 ) -> Result<&'static str> {
     let safe = safe_filename(name, file_id);
-    let target_dir = media_dir.join(file_id);
+    let target_dir = blob_dir.join(file_id);
     let target = target_dir.join(&safe);
     if let Ok(meta) = std::fs::metadata(&target) {
         if meta.len() > 0 {
@@ -257,7 +257,7 @@ pub async fn download_one_file(
 pub async fn download_attachments_for_conversation(
     client: &mut ChatGPTClient,
     conv: &Value,
-    media_dir: &Path,
+    blob_dir: &Path,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "error"] {
@@ -295,7 +295,7 @@ pub async fn download_attachments_for_conversation(
         }
     }
     for (id, name) in targets {
-        let outcome = download_one_file(client, &id, name.as_deref(), media_dir).await?;
+        let outcome = download_one_file(client, &id, name.as_deref(), blob_dir).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(

@@ -176,7 +176,7 @@ pub async fn call_slack(
 // the `slack` service's baseApiUrls covers (latchkey ≥ 2.11.2).
 // ---------------------------------------------------------------------------
 
-pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'static str> {
+pub async fn download_one_file(file_obj: &Value, blob_dir: &Path) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => return Ok("tombstone"),
@@ -201,7 +201,7 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
     };
 
     let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
-    let target_dir = media_dir.join(file_id);
+    let target_dir = blob_dir.join(file_id);
     let target = target_dir.join(&name);
     if let Ok(meta) = std::fs::metadata(&target) {
         if meta.len() > 0 {
@@ -255,7 +255,7 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
 /// `conversations.replies` response.
 pub async fn download_files_for_messages(
     messages: &[Value],
-    media_dir: &Path,
+    blob_dir: &Path,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
@@ -270,7 +270,7 @@ pub async fn download_files_for_messages(
         }
     }
     for f in &targets {
-        let outcome = download_one_file(f, media_dir).await?;
+        let outcome = download_one_file(f, blob_dir).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(

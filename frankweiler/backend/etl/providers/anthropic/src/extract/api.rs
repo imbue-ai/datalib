@@ -130,10 +130,10 @@ fn map_transport_error(e: HttpError) -> ClaudeError {
 // ---------------------------------------------------------------------------
 
 /// Download one Anthropic attachment into
-/// `<media_dir>/<file_uuid>/<safe(file_name)>`. Returns
+/// `<blob_dir>/<file_uuid>/<safe(file_name)>`. Returns
 /// `downloaded` / `skipped` / `error`. The caller passes the `files[]`
 /// entry as-is.
-pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'static str> {
+pub async fn download_one_file(file_obj: &Value, blob_dir: &Path) -> Result<&'static str> {
     let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
         return Ok("error");
     };
@@ -168,7 +168,7 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
     };
     let name = file_obj.get("file_name").and_then(|v| v.as_str());
     let safe = safe_filename(name, file_uuid);
-    let target_dir = media_dir.join(file_uuid);
+    let target_dir = blob_dir.join(file_uuid);
     let target = target_dir.join(&safe);
     if let Ok(meta) = std::fs::metadata(&target) {
         if meta.len() > 0 {
@@ -218,7 +218,7 @@ pub async fn download_one_file(file_obj: &Value, media_dir: &Path) -> Result<&'s
 /// Dedupes by `file_uuid`.
 pub async fn download_files_for_conversation(
     conv: &Value,
-    media_dir: &Path,
+    blob_dir: &Path,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "error"] {
@@ -242,7 +242,7 @@ pub async fn download_files_for_conversation(
         }
     }
     for f in &targets {
-        let outcome = download_one_file(f, media_dir).await?;
+        let outcome = download_one_file(f, blob_dir).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(

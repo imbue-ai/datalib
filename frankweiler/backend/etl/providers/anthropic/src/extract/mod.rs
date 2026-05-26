@@ -267,8 +267,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
-                        let media_dir = out_dir.join(frankweiler_etl::blobs::BLOBS_DIR);
-                        let _ = download_files_for_conversation(&full, &media_dir).await;
+                        let blob_dir = out_dir.join(frankweiler_etl::blobs::BLOBS_DIR);
+                        let _ = download_files_for_conversation(&full, &blob_dir).await;
                         let normalized = normalize::normalize_to_export_shape(
                             full,
                             account_uuid.as_deref(),
@@ -307,7 +307,7 @@ async fn fetch_single(
     orgs: &[Value],
     conv_uuid: &str,
     account_uuid: Option<&str>,
-    media_dir: &Path,
+    blob_dir: &Path,
     merged: &mut HashMap<String, Value>,
     summary: &mut FetchSummary,
 ) -> Result<()> {
@@ -322,7 +322,7 @@ async fn fetch_single(
             .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
-                let _ = download_files_for_conversation(&full, media_dir).await;
+                let _ = download_files_for_conversation(&full, blob_dir).await;
                 let normalized = normalize::normalize_to_export_shape(full, account_uuid, org_uuid);
                 merged.insert(conv_uuid.to_string(), normalized);
                 summary.fetched += 1;
