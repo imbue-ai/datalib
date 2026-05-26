@@ -3,10 +3,19 @@
 # tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`). The tarball
 # is published with a stable, un-versioned filename so the install
 # script's `releases/latest/download/<name>` URL stays valid.
+#
+# Also runs on every push to main, with the release-publish steps
+# skipped. The main-branch runs exist purely to warm the bazel caches:
+# GitHub Actions caches are scoped by ref, and a tag push can only
+# read caches written by its own ref or by the *default* branch, so
+# tag-triggered runs would otherwise always pay the full cold-cache
+# cost. Letting main write the cache means tag runs hit the warm cache.
 name: release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -46,6 +55,7 @@ jobs:
 
       - name: Stage tarball
         id: stage
+        if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -68,6 +78,7 @@ jobs:
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: |
