@@ -37,7 +37,7 @@
 //!
 //! ```sh
 //! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
-//! cargo test -p frankweiler-sync --test live_sync_golden -- --ignored --nocapture
+//! cargo test -p frankweiler-sync --test manual_e2e_live_sync_golden -- --ignored --nocapture
 //! # then to accept changes:
 //! cargo insta review
 //! ```
@@ -63,6 +63,16 @@ const VOLATILE_KEYS: &[&str] = &[
     "created_time",
     "cache_ts",
     "updated",
+    // Fields of `sync_summary_<now>.json` that don't reproduce
+    // byte-identically across runs.
+    "started_at",
+    "finished_at",
+    "duration_secs",
+    "data_root",
+    // Per-source stats are provider-specific and capture counts of
+    // items fetched; on a live API they jitter with whatever new
+    // activity has happened. Snapshot the structure, not the values.
+    "stats",
     // Renderer-derived hash. Stable inputs produce a stable value, but
     // any volatile field upstream (which we redact above) would flip it,
     // so redact here too — a real algorithm change will surface as
@@ -98,7 +108,7 @@ fn sync_binary() -> PathBuf {
 
 #[test]
 #[ignore]
-fn live_sync_thad_tiny_golden() {
+fn manual_e2e_live_sync_golden() {
     let src_config = match std::env::var("FRANKWEILER_TEST_CONFIG") {
         Ok(p) => PathBuf::from(p),
         Err(_) => workspace_root().join("configs/thad_tiny.yaml"),
@@ -119,14 +129,39 @@ fn live_sync_thad_tiny_golden() {
     eprintln!("[test] sync bin = {}", bin.display());
     eprintln!("[test] data_root = {}", data_root.display());
 
+    let now = "2026-05-21T18:00:00Z";
     let status = Command::new(&bin)
         .arg("--config")
         .arg(&cfg_path)
         .arg("--now")
-        .arg("2026-05-21T18:00:00Z")
+        .arg(now)
         .status()
         .expect("spawn sync");
     assert!(status.success(), "sync failed: {status:?}");
+
+    // `sync_summary_<now>.json` must exist regardless of how each
+    // source went. The path is derived from the `--now` arg with `:`
+    // replaced by `-` (see main.rs).
+    let safe_now = now.replace(':', "-");
+    let summary_path = data_root.join(format!("sync_summary_{safe_now}.json"));
+    assert!(
+        summary_path.is_file(),
+        "expected sync summary at {}",
+        summary_path.display()
+    );
+    let summary_text = std::fs::read_to_string(&summary_path).expect("read summary");
+    let mut summary_json: Value = serde_json::from_str(&summary_text).expect("parse summary JSON");
+    strip_volatile(&mut summary_json);
+    // Sanity: on a clean live run we expect overall_status="ok" and
+    // not interrupted. If a source flakes, the snapshot diff will make
+    // the failure mode obvious instead of just exiting non-zero.
+    insta::with_settings!({
+        snapshot_path => "snapshots",
+        prepend_module_to_snapshot => false,
+        sort_maps => true,
+    }, {
+        assert_json_snapshot!("sync_summary", summary_json);
+    });
 
     let mut manifest: Vec<String> = Vec::new();
     snapshot_tree(&data_root.join("raw"), "raw", &mut manifest);

@@ -43,9 +43,9 @@ rust_library(
 
 # Chrome-impersonating curl shim. Depends transitively on `boring-sys2`,
 # whose build script shells out to `cmake` + a C toolchain to build
-# boringssl. We rely on the host having those on PATH (forwarded via
-# `--action_env=PATH` in `.bazelrc`) rather than going through
-# rules_foreign_cc — same non-hermetic trade-off as `DOLT_BIN` / `NPX_BIN`.
+# boringssl. We rely on the host having those on PATH (pinned to a
+# deterministic value via `--action_env=PATH=…` in `.bazelrc`) rather
+# than going through rules_foreign_cc.
 rust_binary(
     name = "latchkey_curl_shim",
     srcs = ["src/bin/latchkey_curl_shim.rs"],

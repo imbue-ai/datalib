@@ -7,6 +7,7 @@ rust_binary(
     srcs = [
         "src/main.rs",
         "src/progress.rs",
+        "src/summary.rs",
     ],
     edition = "2021",
     visibility = ["//visibility:public"],
@@ -34,11 +35,12 @@ rust_binary(
 
 # Live end-to-end golden test. Drives the sync binary against
 # configs/thad_tiny.yaml into a fresh tempdir and snapshots the raw +
-# rendered_md trees. Manual: hits the network, needs latchkey creds.
+# rendered_md trees plus the sync_summary_<now>.json. Manual: hits the
+# network, needs latchkey creds.
 rust_test(
-    name = "live_sync_golden",
-    srcs = ["tests/live_sync_golden.rs"],
-    crate_root = "tests/live_sync_golden.rs",
+    name = "manual_e2e_live_sync_golden",
+    srcs = ["tests/manual_e2e_live_sync_golden.rs"],
+    crate_root = "tests/manual_e2e_live_sync_golden.rs",
     data = [
         ":frankweiler_sync_bin",
         "//configs:thad_tiny.yaml",

@@ -156,8 +156,10 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 ///
 /// We invoke latchkey via `npx -y latchkey` (same pattern as qmd in
 /// `frankweiler_qmd_indexer::run_qmd`) so callers don't need a global
-/// install. `NPX_BIN` lets direnv / `.bazelrc --action_env` pin the
-/// binary independent of whatever PATH the action inherits.
+/// install. Runtime override: `$NPX_BIN` lets a developer pin a
+/// specific npx when running outside bazel. Bazel actions don't get
+/// this var forwarded (it would bust the action cache key per shell);
+/// they rely on the pinned `PATH` from `.bazelrc` instead.
 pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
     let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());

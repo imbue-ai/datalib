@@ -319,7 +319,7 @@
           "FILE:@@//frankweiler/backend/etl/providers/notion/Cargo.toml c00a3ad4325d4061d85998e60f293e364680396a3346506546ac4c6a099e2634",
           "FILE:@@//frankweiler/backend/etl/providers/slack/Cargo.toml 16c07952a36b7fbd1165f47b616de54b87d38201fa4b413b29c2dc4c603470e0",
           "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml bff8394d593bf2fddb7c6a9af7b3a6399c2b21ac526e46178d221de44e1b454b",
-          "FILE:@@//frankweiler/backend/sync/Cargo.toml 703f89a26f3aa80c415e3f8300481918a72305002cae0274c347f0ac3586705a",
+          "FILE:@@//frankweiler/backend/sync/Cargo.toml 5f9ef20bf9424f3224f03043f087302aadcf742d7aee8b4a752037357730edee",
           "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1"
         ],
         "generatedRepoSpecs": {

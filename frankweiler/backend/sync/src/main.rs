@@ -41,7 +41,8 @@
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -64,7 +65,9 @@ use sqlx::mysql::MySqlPoolOptions;
 use tokio::task::JoinSet;
 
 mod progress;
+mod summary;
 use crate::progress::{make_bar, make_multi, IndicatifSink};
+use crate::summary::{ErrorKind, PhaseOutcome, Status, SyncSummary};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -134,13 +137,87 @@ async fn main() {
         std::env::set_var("RUST_BACKTRACE", "full");
     }
     init_tracing();
-    match run().await {
-        Ok(()) => {}
-        Err(e) => {
-            render_error(&e);
-            std::process::exit(1);
+
+    let summary = Arc::new(Mutex::new(SyncSummary::new()));
+    let start = Instant::now();
+
+    // Ctrl-C: best-effort flush of the summary before exit. We can't
+    // join the running task graph from here cleanly, so we accept that
+    // mid-flight extract work is abandoned. The summary still captures
+    // every source that finished (or failed) before the signal.
+    let s_sig = summary.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\n[frankweiler-sync] caught Ctrl-C; writing partial summary…");
+            let mut s = s_sig.lock().unwrap();
+            s.interrupted = true;
+            s.finalize(start);
+            match s.write() {
+                Ok(Some(p)) => {
+                    eprintln!("[frankweiler-sync] summary: {}", summary::pretty_path(&p))
+                }
+                Ok(None) => eprintln!("[frankweiler-sync] summary: <no data_root yet>"),
+                Err(e) => eprintln!("[frankweiler-sync] failed to write summary: {e}"),
+            }
+            std::process::exit(130);
+        }
+    });
+
+    let fatal: Option<anyhow::Error> = run(&summary).await.err();
+
+    let mut s = summary.lock().unwrap();
+    if let Some(e) = fatal.as_ref() {
+        s.fatal_error = Some(
+            e.chain()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(": "),
+        );
+    }
+    s.finalize(start);
+
+    // Print per-error auth hints based on the collected outcomes
+    // (rather than only on a single bubbled-up error). The user reads
+    // these alongside the JSON summary path.
+    for outcome in s.extract.iter().chain(s.translate.iter()) {
+        if outcome.status == Status::Error {
+            eprintln!(
+                "\n[{}] {} ({}): {}",
+                outcome.error_kind.map(|k| k.as_str()).unwrap_or("error"),
+                outcome.name,
+                outcome.type_str,
+                outcome.error.as_deref().unwrap_or(""),
+            );
+            if outcome.error_kind == Some(ErrorKind::Auth) {
+                eprintln!("--- auth hint ---");
+                eprintln!("{}", auth_hint_for(&outcome.type_str));
+            }
         }
     }
+    if let Some(e) = fatal.as_ref() {
+        render_error(e);
+    }
+
+    match s.write() {
+        Ok(Some(p)) => eprintln!("\n[frankweiler-sync] summary: {}", summary::pretty_path(&p)),
+        Ok(None) => eprintln!("\n[frankweiler-sync] summary: <not written; no data_root>"),
+        Err(e) => eprintln!("\n[frankweiler-sync] failed to write summary: {e}"),
+    }
+
+    let any_phase_err = s.extract.iter().any(|o| o.status == Status::Error)
+        || s.translate.iter().any(|o| o.status == Status::Error)
+        || s.load.as_ref().is_some_and(|l| l.error.is_some())
+        || s.qmd_index
+            .as_ref()
+            .is_some_and(|o| o.status == Status::Error);
+    let code = if fatal.is_some() {
+        1
+    } else if any_phase_err {
+        2
+    } else {
+        0
+    };
+    std::process::exit(code);
 }
 
 /// Walk the anyhow error chain top-to-bottom (so the user reads
@@ -170,12 +247,18 @@ fn render_error(e: &anyhow::Error) {
 }
 
 fn looks_like_auth_failure(s: &str) -> bool {
+    // Note: `cf-mitigated=None` is the literal Debug rendering of an
+    // absent header (we format the response with `{:?}` on
+    // `Option<&str>`), so a substring match on "cf-mitigated" alone
+    // triggers on every non-200 chatgpt response — including transient
+    // HTTP 500s — and pushes the user toward a useless re-auth dance.
+    // Only treat cf-mitigated as auth-related when it's actually set
+    // (i.e. `Some(...)`), or when we got a true 401/403 status.
     s.contains("HTTP 401")
         || s.contains("HTTP 403")
-        || s.contains("cf-mitigated")
-        || s.contains("challenge")
         || s.contains("Unauthorized")
         || s.contains("Forbidden")
+        || s.contains("cf-mitigated=Some(")
 }
 
 fn extract_provider_type(s: &str) -> Option<&'static str> {
@@ -289,7 +372,7 @@ See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
     }
 }
 
-async fn run() -> Result<()> {
+async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     let args = Args::parse();
     let _ = args.deterministic;
 
@@ -301,6 +384,8 @@ async fn run() -> Result<()> {
     );
 
     if let Some(playback_out) = &args.synthesize_playback_root {
+        // Synth-only doesn't write into data_root, so don't bother
+        // staging the summary file there. Run and exit.
         return run_synthesize(&cfg, playback_out);
     }
 
@@ -310,24 +395,155 @@ async fn run() -> Result<()> {
     fs::create_dir_all(root.join("rendered_md"))?;
     eprintln!("[frankweiler-sync] data_root = {}", root.display());
 
+    {
+        let mut s = summary.lock().unwrap();
+        s.data_root = Some(root.clone());
+        // Stamp the run's `--now` into the filename so successive runs
+        // don't clobber each other and CI can attach the JSON as a
+        // build artifact keyed by run timestamp. `:` is legal on Unix
+        // filesystems but trips up Windows; replace with `-` for
+        // portability.
+        let safe_now = args.now.replace(':', "-");
+        s.output_path = Some(root.join(format!("sync_summary_{safe_now}.json")));
+    }
+
+    // ── Extract ────────────────────────────────────────────────────
     if args.skip_extract {
         eprintln!("[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths");
-    } else if let Some(playback_root) = args.playback_root.as_ref() {
-        let pb = playback_root
-            .canonicalize()
-            .with_context(|| format!("playback root: {}", playback_root.display()))?;
-        std::env::set_var(PLAYBACK_ENV, &pb);
-        eprintln!("[frankweiler-sync] playback root = {}", pb.display());
-        run_extract_phase(&cfg, Some(&pb), &args.now).await?;
+        let mut s = summary.lock().unwrap();
+        for src in cfg.enabled_sources() {
+            s.extract.push(PhaseOutcome {
+                name: src.name().to_string(),
+                type_str: src.type_str().to_string(),
+                status: Status::Skipped,
+                error: None,
+                error_kind: None,
+                stats: Some("skipped (--skip-extract)".into()),
+            });
+        }
     } else {
-        eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
-        run_extract_phase(&cfg, None, &args.now).await?;
+        let pb = if let Some(playback_root) = args.playback_root.as_ref() {
+            let pb = playback_root
+                .canonicalize()
+                .with_context(|| format!("playback root: {}", playback_root.display()))?;
+            std::env::set_var(PLAYBACK_ENV, &pb);
+            eprintln!("[frankweiler-sync] playback root = {}", pb.display());
+            Some(pb)
+        } else {
+            eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
+            None
+        };
+        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &args.now).await;
+        summary.lock().unwrap().extract.extend(outcomes);
     }
 
+    // ── Translate ──────────────────────────────────────────────────
+    // Translate only runs against sources whose extract succeeded (or
+    // was skipped via --skip-extract). A source whose extract errored
+    // out probably has missing/partial fixtures on disk, so attempting
+    // to translate it just produces a second, downstream failure
+    // confusing the summary.
+    let extract_failed: std::collections::HashSet<String> = summary
+        .lock()
+        .unwrap()
+        .extract
+        .iter()
+        .filter(|o| o.status == Status::Error)
+        .map(|o| o.name.clone())
+        .collect();
     for src in cfg.enabled_sources() {
-        translate_source(src, &cfg, &root)?;
+        let name = src.name().to_string();
+        let type_str = src.type_str().to_string();
+        if extract_failed.contains(&name) {
+            summary.lock().unwrap().translate.push(PhaseOutcome {
+                name,
+                type_str,
+                status: Status::Skipped,
+                error: None,
+                error_kind: None,
+                stats: Some("skipped (extract failed)".into()),
+            });
+            continue;
+        }
+        let res = translate_source(src, &cfg, &root).map(|_| "ok".to_string());
+        summary
+            .lock()
+            .unwrap()
+            .translate
+            .push(summary::outcome_from(&name, &type_str, res));
     }
 
+    // ── Load ───────────────────────────────────────────────────────
+    let load_res = run_load_phase(&cfg, &root, &args.now).await;
+    match load_res {
+        Ok(load_summary) => {
+            eprintln!(
+                "[frankweiler-sync] loaded documents={}/{} rows={}",
+                load_summary.documents_loaded,
+                load_summary.documents_total,
+                load_summary.rows_inserted
+            );
+            summary.lock().unwrap().load = Some(summary::LoadOutcome {
+                documents_loaded: load_summary.documents_loaded,
+                documents_total: load_summary.documents_total,
+                rows_inserted: load_summary.rows_inserted,
+                error: None,
+            });
+        }
+        Err(e) => {
+            eprintln!("[frankweiler-sync] load FAILED: {e:#}");
+            summary.lock().unwrap().load = Some(summary::LoadOutcome {
+                documents_loaded: 0,
+                documents_total: 0,
+                rows_inserted: 0,
+                error: Some(
+                    e.chain()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(": "),
+                ),
+            });
+        }
+    }
+
+    eprintln!(
+        "[frankweiler-sync] wrote {}/",
+        root.join("rendered_md").display()
+    );
+
+    // ── QMD index ──────────────────────────────────────────────────
+    if !cfg.qmd.skip {
+        match build_qmd_index(&root, cfg.qmd.models_dir.as_deref()) {
+            Ok(()) => {
+                eprintln!(
+                    "[frankweiler-sync] wrote {}",
+                    root.join("qmd/index.sqlite").display()
+                );
+                summary.lock().unwrap().qmd_index = Some(PhaseOutcome::ok(
+                    "qmd",
+                    "qmd",
+                    root.join("qmd/index.sqlite").display().to_string(),
+                ));
+            }
+            Err(e) => {
+                eprintln!("[frankweiler-sync] qmd index FAILED: {e:#}");
+                summary.lock().unwrap().qmd_index = Some(PhaseOutcome::err("qmd", "qmd", &e));
+            }
+        }
+    } else {
+        eprintln!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
+    }
+    Ok(())
+}
+
+/// Boot dolt, init schema, run `load_all`. Pulled out of `run()` so the
+/// orchestrator can catch failures here without short-circuiting the
+/// summary write.
+async fn run_load_phase(
+    cfg: &Config,
+    root: &Path,
+    now: &str,
+) -> Result<frankweiler_etl::load::LoadSummary> {
     let dolt_db_dir = cfg.dolt_db_path();
     fs::create_dir_all(&dolt_db_dir)?;
     let port = free_port()?;
@@ -342,32 +558,13 @@ async fn run() -> Result<()> {
         .await
         .with_context(|| format!("connect dolt at {url}"))?;
     init_schema(&pool).await?;
-    let summary = load_all(&pool, &root, |_| {}, Some(&args.now))
+    let summary = load_all(&pool, root, |_| {}, Some(now))
         .await
         .context("load_all")?;
-    eprintln!(
-        "[frankweiler-sync] loaded documents={}/{} rows={}",
-        summary.documents_loaded, summary.documents_total, summary.rows_inserted
-    );
     drop(pool);
     drop(server);
-
     eprintln!("[frankweiler-sync] wrote {}/", dolt_db_dir.display());
-    eprintln!(
-        "[frankweiler-sync] wrote {}/",
-        root.join("rendered_md").display()
-    );
-
-    if !cfg.qmd.skip {
-        build_qmd_index(&root, cfg.qmd.models_dir.as_deref())?;
-        eprintln!(
-            "[frankweiler-sync] wrote {}",
-            root.join("qmd/index.sqlite").display()
-        );
-    } else {
-        eprintln!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
-    }
-    Ok(())
+    Ok(summary)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -377,16 +574,41 @@ async fn run() -> Result<()> {
 /// Drive every managed source's `extract::fetch` against the playback
 /// tree. Each source writes into its resolved `input_path`. Runs
 /// concurrently when `cfg.sync.parallel`.
-async fn run_extract_phase(cfg: &Config, playback_root: Option<&Path>, now: &str) -> Result<()> {
-    let mut plans: Vec<ExtractPlan> = cfg
-        .enabled_sources()
-        .filter_map(|s| ExtractPlan::for_source(s, cfg, playback_root, now))
-        .collect::<Result<Vec<_>>>()?;
-
-    for p in &plans {
-        fs::create_dir_all(&p.out_dir)
-            .with_context(|| format!("create {}", p.out_dir.display()))?;
+///
+/// Keep-going: a per-source error does NOT abort the phase. We return
+/// one [`PhaseOutcome`] per managed source; the orchestrator decides
+/// what (if anything) to do with the failures. Two exceptions: an
+/// `out_dir` mkdir failure (filesystem permissions etc.) and a task
+/// panic both surface as the source's own error so they can't take the
+/// whole pipeline down.
+async fn run_extract_phase(
+    cfg: &Config,
+    playback_root: Option<&Path>,
+    now: &str,
+) -> Vec<PhaseOutcome> {
+    let mut outcomes: Vec<PhaseOutcome> = Vec::new();
+    let mut plans: Vec<ExtractPlan> = Vec::new();
+    for s in cfg.enabled_sources() {
+        let Some(plan_res) = ExtractPlan::for_source(s, cfg, playback_root, now) else {
+            continue;
+        };
+        match plan_res {
+            Ok(plan) => plans.push(plan),
+            Err(e) => outcomes.push(PhaseOutcome::err(s.name(), s.type_str(), &e)),
+        }
     }
+
+    // Pre-create out_dirs; an mkdir failure becomes a source-level
+    // outcome rather than a phase-wide abort.
+    plans.retain_mut(|p| {
+        if let Err(e) = fs::create_dir_all(&p.out_dir) {
+            let err = anyhow::Error::new(e).context(format!("create {}", p.out_dir.display()));
+            outcomes.push(PhaseOutcome::err(&p.name, p.type_str, &err));
+            false
+        } else {
+            true
+        }
+    });
 
     // One MultiProgress for the whole extract phase; one bar per plan
     // fanned out to a TracingSink so structured consumers see the same
@@ -402,36 +624,54 @@ async fn run_extract_phase(cfg: &Config, playback_root: Option<&Path>, now: &str
     }
 
     if cfg.sync.parallel {
-        let mut set: JoinSet<Result<()>> = JoinSet::new();
+        let mut set: JoinSet<(String, &'static str, Result<String>)> = JoinSet::new();
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
             set.spawn(async move {
                 eprintln!("[extract] start {name} ({type_str})");
-                let summary = plan
+                let r = plan
                     .run()
                     .await
-                    .with_context(|| format!("extract {name} (type={type_str})"))?;
-                eprintln!("[extract] done  {name}: {summary}");
-                Ok(())
+                    .with_context(|| format!("extract {name} (type={type_str})"));
+                match &r {
+                    Ok(s) => eprintln!("[extract] done  {name}: {s}"),
+                    Err(e) => eprintln!("[extract] FAIL  {name}: {e:#}"),
+                }
+                (name, type_str, r)
             });
         }
         while let Some(joined) = set.join_next().await {
-            joined.context("extract task panicked")??;
+            match joined {
+                Ok((name, type_str, r)) => {
+                    outcomes.push(summary::outcome_from(&name, type_str, r));
+                }
+                Err(e) => {
+                    // Task panicked — we don't know which source. Record
+                    // a generic outcome so the panic shows up in the
+                    // summary instead of disappearing silently.
+                    let err = anyhow::anyhow!("extract task panicked: {e}");
+                    outcomes.push(PhaseOutcome::err("<unknown>", "unknown", &err));
+                }
+            }
         }
     } else {
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
             eprintln!("[extract] {name} ({type_str})");
-            let summary = plan
+            let r = plan
                 .run()
                 .await
-                .with_context(|| format!("extract {name} (type={type_str})"))?;
-            eprintln!("[extract] done  {name}: {summary}");
+                .with_context(|| format!("extract {name} (type={type_str})"));
+            match &r {
+                Ok(s) => eprintln!("[extract] done  {name}: {s}"),
+                Err(e) => eprintln!("[extract] FAIL  {name}: {e:#}"),
+            }
+            outcomes.push(summary::outcome_from(&name, type_str, r));
         }
     }
-    Ok(())
+    outcomes
 }
 
 /// One source's extract closure. Holds owned data so it can be moved

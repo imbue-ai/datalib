@@ -203,9 +203,14 @@ pub fn resolve_dolt_binary(override_path: Option<&Path>) -> Result<PathBuf, Dolt
     if let Some(p) = override_path {
         return Ok(p.to_path_buf());
     }
-    // `DOLT_BIN` lets direnv (or any other env-var source) pin the
-    // binary without depending on a sandboxed `PATH`. Forwarded into
-    // bazel actions via `build --action_env=DOLT_BIN` in `.bazelrc`.
+    // Runtime override: `$DOLT_BIN` lets a developer point at a
+    // specific dolt binary when running the sync binary directly (e.g.
+    // from `bazel run` or a shell). Bazel does NOT forward this into
+    // build-action env on purpose — forwarding would tie every action's
+    // cache key to the caller's shell context. See the comment block in
+    // the repo-root `.bazelrc` for the full reasoning. Bazel actions
+    // fall through to the `PATH` lookup below, which is pinned in
+    // `.bazelrc` to a deterministic value.
     if let Some(p) = std::env::var_os("DOLT_BIN") {
         return Ok(PathBuf::from(p));
     }

@@ -149,9 +149,11 @@ fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
 }
 
 fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
-    // `NPX_BIN` lets direnv (or bazel `--action_env`) pin the binary
-    // without depending on whatever PATH the action inherits — same
-    // pattern as `DOLT_BIN` in `frankweiler_core::dolt_server`.
+    // Runtime override only: `$NPX_BIN` pins the binary when running
+    // outside bazel. Bazel actions don't get it forwarded (would bust
+    // action cache keys) and instead rely on `PATH` (pinned in
+    // `.bazelrc`). Same pattern as `DOLT_BIN` in
+    // `frankweiler_core::dolt_server`.
     let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
     let mut cmd = Command::new(&npx);
     cmd.arg("-y").arg(qmd_pkg).args(args);
