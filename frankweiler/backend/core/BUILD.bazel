@@ -30,6 +30,9 @@ rust_test(
     size = "small",
     crate = ":frankweiler_core",
     edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
 )
 
 # End-to-end test of the production DoltRepo path against a managed
@@ -49,6 +52,7 @@ rust_test(
         ":frankweiler_core",
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],
 )
