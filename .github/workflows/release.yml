@@ -72,8 +72,14 @@ jobs:
               exit 1
           fi
 
+      # Both bazel invocations pass `-c opt` so they share the same
+      # analysis cache. Mixing fastbuild + opt across consecutive
+      # invocations would discard the analysis cache between them
+      # ("WARNING: Build option --compilation_mode has changed,
+      # discarding analysis cache"), costing ~30s of re-analysis on
+      # the second invocation despite the action cache being warm.
       - name: Run version-consistency test
-        run: bazel test //frankweiler/backend:version_consistency_test
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt
 
       - name: Build dist bins
         run: bazel build //frankweiler/backend:dist -c opt
