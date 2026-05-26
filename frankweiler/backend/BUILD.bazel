@@ -2,3 +2,16 @@ exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
+
+# Set of rust_binary targets bundled into the install.sh release tarball.
+# Adding a binary here gets it shipped to users on the next tagged release;
+# .github/workflows/release.yml renames each bazel output to its public
+# `frankweiler-<name>` form before tarring, and scripts/install.sh drops
+# the result into the user's install dir (default ~/.local/bin).
+filegroup(
+    name = "dist",
+    srcs = [
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
+    ],
+    visibility = ["//visibility:public"],
+)

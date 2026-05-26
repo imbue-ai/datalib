@@ -1,0 +1,112 @@
+#!/bin/sh
+# frankweiler installer — modeled on https://astral.sh/uv/install.sh
+#
+#   curl -LsSf https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/scripts/install.sh | sh
+#
+# Downloads the latest release tarball from
+#   https://github.com/imbue-ai/mixed_up_files/releases
+# and drops the binaries into ${FRANKWEILER_INSTALL_DIR:-$HOME/.local/bin}.
+#
+# Env vars:
+#   FRANKWEILER_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
+#   FRANKWEILER_VERSION       release tag to install (default: latest)
+#
+# Only macOS arm64 (aarch64-apple-darwin) is supported today.
+
+set -eu
+
+REPO="imbue-ai/mixed_up_files"
+TRIPLE="aarch64-apple-darwin"
+TARBALL="frankweiler-${TRIPLE}.tar.gz"
+INSTALL_DIR="${FRANKWEILER_INSTALL_DIR:-${HOME}/.local/bin}"
+VERSION="${FRANKWEILER_VERSION:-latest}"
+
+say() { printf 'frankweiler-install: %s\n' "$1"; }
+err() { printf 'frankweiler-install: error: %s\n' "$1" >&2; exit 1; }
+
+# --- platform check ---
+os="$(uname -s)"
+arch="$(uname -m)"
+case "${os}/${arch}" in
+    Darwin/arm64) ;;
+    *) err "unsupported platform ${os}/${arch}; only macOS arm64 is supported today" ;;
+esac
+
+# --- tool check ---
+need() { command -v "$1" >/dev/null 2>&1 || err "required tool not found: $1"; }
+need curl
+need tar
+need mkdir
+need mv
+need uname
+
+# --- resolve download URL ---
+if [ "${VERSION}" = "latest" ]; then
+    url="https://github.com/${REPO}/releases/latest/download/${TARBALL}"
+    sha_url="${url}.sha256"
+else
+    url="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+    sha_url="${url}.sha256"
+fi
+
+# --- download to tmpdir ---
+tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t frankweiler-install)"
+trap 'rm -rf "${tmpdir}"' EXIT INT TERM
+
+say "downloading ${url}"
+if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
+        -o "${tmpdir}/${TARBALL}" "${url}"; then
+    err "download failed (${url})"
+fi
+
+# --- optional checksum verification ---
+if curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
+        -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}" 2>/dev/null; then
+    if command -v shasum >/dev/null 2>&1; then
+        say "verifying checksum"
+        # The .sha256 file lists the bare filename; cd into tmpdir so
+        # `shasum -c` finds it.
+        (cd "${tmpdir}" && shasum -a 256 -c "${TARBALL}.sha256") \
+            || err "checksum verification failed"
+    fi
+else
+    say "checksum file not published; skipping verification"
+fi
+
+# --- extract ---
+say "extracting"
+tar -xzf "${tmpdir}/${TARBALL}" -C "${tmpdir}"
+
+# Find the unpacked dir: `frankweiler-<version>-<triple>/`. Glob is fine
+# because the tarball contains exactly one top-level dir.
+staged=""
+for d in "${tmpdir}"/frankweiler-*-"${TRIPLE}"; do
+    [ -d "$d" ] && staged="$d" && break
+done
+[ -n "${staged}" ] || err "tarball did not contain expected frankweiler-*-${TRIPLE}/ dir"
+
+# --- install ---
+mkdir -p "${INSTALL_DIR}"
+installed=""
+for bin in "${staged}"/*; do
+    [ -f "${bin}" ] || continue
+    name="$(basename "${bin}")"
+    mv -f "${bin}" "${INSTALL_DIR}/${name}"
+    chmod +x "${INSTALL_DIR}/${name}"
+    installed="${installed} ${name}"
+done
+[ -n "${installed}" ] || err "no binaries found in tarball"
+
+say "installed:${installed} -> ${INSTALL_DIR}"
+
+# --- PATH hint ---
+case ":${PATH}:" in
+    *":${INSTALL_DIR}:"*)
+        ;;
+    *)
+        say ""
+        say "${INSTALL_DIR} is not on your PATH. Add it with one of:"
+        say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc"
+        say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc"
+        ;;
+esac
