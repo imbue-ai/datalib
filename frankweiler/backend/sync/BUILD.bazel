@@ -1,6 +1,9 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
-exports_files(["Cargo.toml"])
+exports_files([
+    "BUILD.bazel",  # read by //frankweiler/backend:version_consistency_test
+    "Cargo.toml",
+])
 
 rust_binary(
     name = "frankweiler_sync_bin",
@@ -10,10 +13,13 @@ rust_binary(
         "src/summary.rs",
     ],
     edition = "2021",
-    # Mirror frankweiler-sync's Cargo workspace version so `env!("CARGO_PKG_VERSION")`
-    # in src/main.rs produces the same `--version` prefix under cargo and bazel.
-    # Keep in sync with [workspace.package].version in frankweiler/backend/Cargo.toml.
-    version = "0.1.0",
+    # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read Cargo.toml).
+    # The clap --version stamp now goes through FRANKWEILER_VERSION (git
+    # describe), so this field is no longer user-facing — but other consumers
+    # like http's /api/version still rely on CARGO_PKG_VERSION. Must match
+    # [workspace.package].version in frankweiler/backend/Cargo.toml; the
+    # //frankweiler/backend:version_consistency_test asserts that.
+    version = "0.1.3",
     # Stamp the binary with STABLE_GIT_HASH from tools/workspace_status.sh
     # so `frankweiler-sync --version` reports the commit it was built from.
     # `stamp = -1` defers to the --stamp flag (forced on by .bazelrc), and

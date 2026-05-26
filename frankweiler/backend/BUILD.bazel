@@ -1,7 +1,25 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
 exports_files([
     "Cargo.toml",
     "Cargo.lock",
 ])
+
+# Enforces that frankweiler/backend/sync/BUILD.bazel's `rust_binary
+# version = "..."` matches [workspace.package].version in
+# frankweiler/backend/Cargo.toml (the single source of truth). Picked
+# up by `bazelisk test //...`; fails with a diff that names both
+# files so the bump is obvious.
+sh_test(
+    name = "version_consistency_test",
+    size = "small",
+    srcs = ["//tools:check_version_consistency.sh"],
+    data = [
+        "Cargo.toml",
+        "//frankweiler/backend/sync:BUILD.bazel",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
 
 # Set of rust_binary targets bundled into the install.sh release tarball.
 # Adding a binary here gets it shipped to users on the next tagged release;

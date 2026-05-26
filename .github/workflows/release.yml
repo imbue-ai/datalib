@@ -27,6 +27,11 @@ jobs:
     runs-on: macos-14  # Apple Silicon
     steps:
       - uses: actions/checkout@v6
+        with:
+          # `tools/workspace_status.sh` runs `git describe --tags`; the
+          # default shallow clone has no tag history, so describe would
+          # always fall back to a bare sha.
+          fetch-depth: 0
 
       # bazel-contrib/setup-bazel wires actions/cache to bazel's various
       # caches so subsequent runs skip the ~10-minute cold-cache rebuild
@@ -49,6 +54,32 @@ jobs:
         run: |
           bazel version
           rustc --version || true
+
+      # Defense in depth against "tagged the wrong version" or "forgot
+      # to bump Cargo.toml before tagging". The bazel test below already
+      # asserts Cargo.toml == BUILD.bazel; this asserts tag == Cargo.toml.
+      - name: Assert tag matches Cargo.toml version
+        if: github.ref_type == 'tag'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_version="${REF_NAME#v}"
+          cargo_version="$(grep -E '^version = "[^"]+"$' frankweiler/backend/Cargo.toml | head -n1 | sed -E 's/^version = "([^"]+)"$/\1/')"
+          if [[ "$tag_version" != "$cargo_version" ]]; then
+              echo "Tag ${REF_NAME} disagrees with Cargo.toml workspace version ${cargo_version}." >&2
+              echo "Bump frankweiler/backend/Cargo.toml [workspace.package].version to ${tag_version} before re-tagging." >&2
+              exit 1
+          fi
+
+      # Both bazel invocations pass `-c opt` so they share the same
+      # analysis cache. Mixing fastbuild + opt across consecutive
+      # invocations would discard the analysis cache between them
+      # ("WARNING: Build option --compilation_mode has changed,
+      # discarding analysis cache"), costing ~30s of re-analysis on
+      # the second invocation despite the action cache being warm.
+      - name: Run version-consistency test
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt
 
       - name: Build dist bins
         run: bazel build //frankweiler/backend:dist -c opt
