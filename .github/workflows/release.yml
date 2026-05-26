@@ -67,7 +67,12 @@ jobs:
 
           # Map bazel output paths -> public `frankweiler-<name>` names.
           # Add a line here when you add a binary to //frankweiler/backend:dist.
+          # NOTE: keep the shim's installed name in sync with
+          # `SIBLING_NAMES` in frankweiler/backend/etl/src/latchkey.rs —
+          # `frankweiler-sync` resolves the shim via a sibling lookup
+          # against this exact filename at runtime.
           cp bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin "${stage}/frankweiler-sync"
+          cp bazel-bin/frankweiler/backend/etl/latchkey_curl_shim "${stage}/frankweiler-latchkey-curl-shim"
           chmod +x "${stage}"/*
 
           tarball="frankweiler-${triple}.tar.gz"

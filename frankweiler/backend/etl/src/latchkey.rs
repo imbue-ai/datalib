@@ -18,7 +18,12 @@
 //!   4. Cargo dev fallback: walk up from CWD and the etl crate dir
 //!      looking for `frankweiler/backend/target/{debug,release}/latchkey-curl-shim`
 //!      or `target/{debug,release}/latchkey-curl-shim`.
-//!   5. `which latchkey-curl-shim` on `$PATH`.
+//!   5. Sibling of `current_exe()` — installed releases drop the shim
+//!      next to `frankweiler-sync` (see scripts/install.sh +
+//!      .github/workflows/release.yml), so a user who only has
+//!      `~/.local/bin/{frankweiler-sync,frankweiler-latchkey-curl-shim}`
+//!      and never sets `LATCHKEY_CURL` still gets CF impersonation.
+//!   6. `which latchkey-curl-shim` on `$PATH`.
 //!
 //! On miss, the `Command` is still returned but a `warn!` is logged so
 //! the caller can see why CF-fronted endpoints are 403-ing.
@@ -34,6 +39,16 @@ const SHIM_BIN: &str = "latchkey-curl-shim";
 const RUNFILES_PATHS: &[&str] = &[
     "_main/frankweiler/backend/etl/latchkey_curl_shim",
     "_main/frankweiler/backend/etl/latchkey-curl-shim",
+];
+
+// Filenames to look for next to `current_exe()`. `frankweiler-…` is the
+// public release name (see .github/workflows/release.yml's stage step
+// and //frankweiler/backend:dist); the un-prefixed forms cover hand-
+// built / locally-symlinked layouts.
+const SIBLING_NAMES: &[&str] = &[
+    "frankweiler-latchkey-curl-shim",
+    "latchkey-curl-shim",
+    "latchkey_curl_shim",
 ];
 
 static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -74,7 +89,29 @@ fn resolve() -> Option<PathBuf> {
     if let Some(p) = from_workspace_walk() {
         return Some(p);
     }
+    if let Some(p) = from_exe_dir() {
+        return Some(p);
+    }
     which_on_path(SHIM_BIN)
+}
+
+/// Look for the shim next to `current_exe()`. This is how an installed
+/// release (frankweiler-sync at e.g. `~/.local/bin/frankweiler-sync`)
+/// finds its bundled `frankweiler-latchkey-curl-shim` sibling without
+/// needing `~/.local/bin` on `PATH` or any env override. Follow the
+/// symlink that scripts/install.sh resolved to so we look in the real
+/// install dir, not a shim dir.
+fn from_exe_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+    let dir = exe.parent()?;
+    for name in SIBLING_NAMES {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn env_path(name: &str) -> Option<PathBuf> {
