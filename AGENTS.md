@@ -162,6 +162,13 @@ now only used for schema codegen; everything else is Rust.
 
 ## Running tests
 
+**"Build green" means `bazelisk test //...` passes — nothing less.** A
+narrower invocation (`bazel build //some/subtree/...`,
+`cargo test -p <crate>`, a single target's tests) is fine for inner-loop
+iteration, but don't call the tree green based on one of those. If you
+report "build green" without having run `bazelisk test //...`, say what
+you actually ran instead.
+
 **Default to `bazelisk test //...` for any "are tests passing?" question.**
 It's the source of truth: it runs Rust, cross-language goldens, and the
 Playwright e2e suite in one shot, the same way CI does. Bazel's action
