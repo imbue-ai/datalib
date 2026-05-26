@@ -17,7 +17,7 @@ jobs:
   macos-arm64:
     runs-on: macos-14  # Apple Silicon
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # bazel-contrib/setup-bazel wires actions/cache to bazel's various
       # caches so subsequent runs skip the ~10-minute cold-cache rebuild
@@ -68,7 +68,7 @@ jobs:
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ${{ steps.stage.outputs.tarball }}
