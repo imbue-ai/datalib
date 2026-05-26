@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset};
 
-use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
+use frankweiler_etl::blobs::{blob_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
@@ -336,7 +336,7 @@ fn attachment_md(source_name: &str, md_rel: &std::path::Path, a: &OAAttachmentRe
         .clone()
         .unwrap_or_else(|| a.file_id.clone())
         .replace(']', "");
-    let target = media_relpath(source_name, &a.file_id, &name);
+    let target = blob_relpath(source_name, &a.file_id, &name);
     let link = relative_link(md_rel, &target);
     if a.is_image {
         format!("![{alt}]({link})")

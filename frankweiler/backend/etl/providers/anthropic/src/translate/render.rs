@@ -9,7 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
-use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
+use frankweiler_etl::blobs::{blob_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
@@ -508,7 +508,7 @@ fn attachment_md(source_name: &str, md_rel: &std::path::Path, at: &AttachmentRow
         return format!("[{}] {}", at.kind, label);
     };
     let name = safe_filename(Some(&label), &id);
-    let target = media_relpath(source_name, &id, &name);
+    let target = blob_relpath(source_name, &id, &name);
     let link = relative_link(md_rel, &target);
     let alt = label.replace(']', "");
     if is_image {

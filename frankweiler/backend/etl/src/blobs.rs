@@ -1,4 +1,4 @@
-//! Shared utilities for binary attachments ("media") across providers.
+//! Shared utilities for binary attachments ("blobs") across providers.
 //!
 //! Conventions:
 //!
@@ -18,33 +18,33 @@ use std::path::{Component, Path, PathBuf};
 /// constant moves every `raw/<source>/<BLOBS_DIR>/` tree at once.
 pub const BLOBS_DIR: &str = "blobs";
 
-/// `<data_root>/raw/<source_name>/blobs`. All per-source media lives
+/// `<data_root>/raw/<source_name>/blobs`. All per-source blobs live
 /// under here.
-pub fn raw_media_dir(data_root: &Path, source_name: &str) -> PathBuf {
+pub fn raw_blob_dir(data_root: &Path, source_name: &str) -> PathBuf {
     data_root.join("raw").join(source_name).join(BLOBS_DIR)
 }
 
 /// `<data_root>/raw/<source_name>/blobs/<file_id>`. Each file gets its
 /// own directory keyed by the upstream id so multiple variants
 /// (preview/thumbnail/original) can coexist if a provider exposes them.
-pub fn raw_media_file_dir(data_root: &Path, source_name: &str, file_id: &str) -> PathBuf {
-    raw_media_dir(data_root, source_name).join(file_id)
+pub fn raw_blob_file_dir(data_root: &Path, source_name: &str, file_id: &str) -> PathBuf {
+    raw_blob_dir(data_root, source_name).join(file_id)
 }
 
 /// `<data_root>/raw/<source_name>/blobs/<file_id>/<file_name>`.
-pub fn raw_media_file_path(
+pub fn raw_blob_file_path(
     data_root: &Path,
     source_name: &str,
     file_id: &str,
     file_name: &str,
 ) -> PathBuf {
-    raw_media_file_dir(data_root, source_name, file_id).join(file_name)
+    raw_blob_file_dir(data_root, source_name, file_id).join(file_name)
 }
 
-/// Relative-to-`data_root` POSIX path for a media file. Useful when you
+/// Relative-to-`data_root` POSIX path for a blob file. Useful when you
 /// need a path for [`relative_link`] without resolving against the
 /// actual `data_root`.
-pub fn media_relpath(source_name: &str, file_id: &str, file_name: &str) -> PathBuf {
+pub fn blob_relpath(source_name: &str, file_id: &str, file_name: &str) -> PathBuf {
     PathBuf::from("raw")
         .join(source_name)
         .join(BLOBS_DIR)
@@ -161,8 +161,8 @@ mod tests {
     }
 
     #[test]
-    fn media_relpath_shape() {
-        let p = media_relpath("tiny-slack", "F_X", "file.png");
+    fn blob_relpath_shape() {
+        let p = blob_relpath("tiny-slack", "F_X", "file.png");
         assert_eq!(
             p.to_str().unwrap().replace('\\', "/"),
             "raw/tiny-slack/blobs/F_X/file.png"

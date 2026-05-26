@@ -167,7 +167,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &orgs,
                 &target,
                 account_uuid.as_deref(),
-                &out_dir.join(frankweiler_etl::media::BLOBS_DIR),
+                &out_dir.join(frankweiler_etl::blobs::BLOBS_DIR),
                 &mut merged,
                 &mut summary,
             )
@@ -267,7 +267,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
-                        let media_dir = out_dir.join(frankweiler_etl::media::BLOBS_DIR);
+                        let media_dir = out_dir.join(frankweiler_etl::blobs::BLOBS_DIR);
                         let _ = download_files_for_conversation(&full, &media_dir).await;
                         let normalized = normalize::normalize_to_export_shape(
                             full,

@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use frankweiler_etl::media::{media_relpath, relative_link, safe_filename};
+use frankweiler_etl::blobs::{blob_relpath, relative_link, safe_filename};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
@@ -469,7 +469,7 @@ fn file_link(source_name: &str, md_rel_path: &Path, f: &FileRef) -> Option<Strin
     }
     let id = f.id.as_deref()?;
     let name = safe_filename(f.name.as_deref(), id);
-    let target = media_relpath(source_name, id, &name);
+    let target = blob_relpath(source_name, id, &name);
     Some(relative_link(md_rel_path, &target))
 }
 

@@ -14,12 +14,12 @@
 //! stamped into each sidecar; the loader stores it in
 //! `documents_loaded` and skips unchanged inputs on subsequent runs.
 
+pub mod blobs;
 pub mod event_store;
 pub mod http;
 pub mod ids;
 pub mod latchkey;
 pub mod load;
-pub mod media;
 pub mod obs;
 pub mod progress;
 pub mod raw_store;
