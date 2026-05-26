@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-anthropic"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-chatgpt"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-github"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-gitlab"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-notion"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-slack"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-http"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -969,14 +969,14 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-qmd-indexer"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "frankweiler-schema"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -984,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-sync"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",
