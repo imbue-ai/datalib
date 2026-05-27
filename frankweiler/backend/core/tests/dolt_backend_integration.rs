@@ -1,92 +1,38 @@
-//! End-to-end integration test for the Dolt backend.
+//! End-to-end integration test for the doltlite backend.
 //!
-//! Spawns a managed `dolt sql-server` against a throwaway repo in a
-//! temp directory, connects [`DoltRepo`], creates the `grid_rows` table,
-//! inserts a handful of fixture rows, and verifies that
-//! [`MirrorRepo::search`] returns them in the expected order — the same
-//! invariants the SQLite snapshot tests check.
+//! Opens a doltlite file in a temp directory, connects [`DoltRepo`],
+//! creates the `grid_rows` table, inserts a handful of fixture rows, and
+//! verifies that [`MirrorRepo::search`] returns them in the expected order.
 //!
-//! Requires `dolt` on `$PATH`. The test prints a skip notice and passes
-//! when `dolt` is missing so the inner `cargo test` loop stays unblocked
-//! in CI environments that don't ship Dolt.
+//! No subprocess, no port — just a file on disk. This test runs anywhere
+//! `sqlite`-compatible doltlite is linked (the sqlx-sqlite driver opens
+//! the file natively).
 
-use frankweiler_core::config::DoltConfig;
 use frankweiler_core::dolt_repo::DoltRepo;
-use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::query::parse_query;
 use frankweiler_core::repo::MirrorRepo;
 use frankweiler_schema::grid_rows::DDL as GRID_DDL;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-fn dolt_available() -> bool {
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            if dir.join("dolt").is_file() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn pick_free_port() -> u16 {
-    // Bind, read port, drop. The port may be reused briefly under
-    // TIME_WAIT, but for a one-shot test that's fine — the dolt
-    // server will fail loudly if it can't bind, and re-runs pick a
-    // new port.
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
-fn unique_repo_dir() -> PathBuf {
-    // pytest-tmp_path-style: mkdtemp gives a guaranteed-unique path
-    // (atomic at the kernel level), so parallel test runs can never
-    // collide on the same name the way the old pid+nanos suffix could.
+fn unique_db_path() -> PathBuf {
     tempfile::TempDir::with_prefix("fw-dolt-itest-")
         .expect("create tempdir")
         .keep()
+        .join("mirror.db")
 }
 
 #[tokio::test]
 async fn dolt_repo_round_trip_search_and_chat_meta() {
-    if !dolt_available() {
-        eprintln!("skipping: `dolt` not on $PATH");
-        return;
-    }
-
-    let repo_dir = unique_repo_dir();
-    let cfg = DoltConfig {
-        host: "127.0.0.1".into(),
-        port: pick_free_port(),
-        user: "root".into(),
-        repo_dirname: repo_dir.file_name().unwrap().to_string_lossy().into_owned(),
-        binary: None,
-    };
-
-    let server = DoltServer::ensure(&repo_dir, &cfg).expect("dolt sql-server ready");
-
-    // The URL the server returns uses its own derived db_name; we
-    // pass the parent dir of repo_dir to DoltServer so that's
-    // repo_dir.file_name(). Just use what the server reports.
-    let url = server.mysql_url();
-
-    let root = Arc::new(repo_dir.parent().unwrap().to_path_buf());
-    let repo = DoltRepo::connect(&url, root)
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(&db_path, root.clone())
         .await
-        .unwrap_or_else(|e| panic!("connect dolt at {url}: {e}"));
+        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
 
-    // The Dolt working set is per-session (per-connection). With
-    // sqlx's connection pool, a SELECT from a different connection
-    // than the INSERT won't see uncommitted rows — so we pin to one
-    // connection for setup and run `CALL DOLT_COMMIT(...)` to publish
-    // changes once. This mirrors what production writes will do via
-    // T12's `insert_feedback` + DOLT_COMMIT pair.
-    let mut conn = repo.pool().acquire().await.expect("acquire pool conn");
     for (_t, ddl) in GRID_DDL {
         sqlx::query(ddl)
-            .execute(&mut *conn)
+            .execute(repo.pool())
             .await
             .expect("create grid_rows");
     }
@@ -98,7 +44,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
                  'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1')",
     )
-    .execute(&mut *conn)
+    .execute(repo.pool())
     .await
     .expect("insert chat row");
     sqlx::query(
@@ -108,14 +54,9 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
          VALUES ('m-1','anthropic','User Input','Claude','2026-04-01T10:01:00+00:00', \
                  'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','')",
     )
-    .execute(&mut *conn)
+    .execute(repo.pool())
     .await
     .expect("insert message row");
-    sqlx::query("CALL DOLT_COMMIT('-Am', 'test fixture setup')")
-        .execute(&mut *conn)
-        .await
-        .expect("dolt commit");
-    drop(conn);
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
@@ -143,16 +84,11 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     );
 
     let qmd = repo.qmd_path_for_conversation("c-1").await.unwrap();
-    // Should be absolute, joined with the root we passed in.
     assert!(qmd.is_some());
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
     assert!(qmd.to_string_lossy().ends_with("chats/c-1.md"));
 
-    // Drop the server explicitly to kill the subprocess before we
-    // clean up the temp dir — otherwise the dolt server keeps the
-    // dir locked.
     drop(repo);
-    drop(server);
-    let _ = std::fs::remove_dir_all(&repo_dir);
+    let _ = std::fs::remove_file(&db_path);
 }

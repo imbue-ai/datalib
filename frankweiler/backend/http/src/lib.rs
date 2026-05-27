@@ -18,7 +18,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
 use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, RepoError};
@@ -39,13 +38,9 @@ pub struct AppState {
     /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
     /// All SQL flows through this seam.
-    /// [`frankweiler_core::dolt_repo::DoltRepo`] against the managed
-    /// `dolt sql-server` is the only impl today.
+    /// [`frankweiler_core::dolt_repo::DoltRepo`] against a single
+    /// doltlite file is the only impl today.
     pub repo: DynRepo,
-    /// Managed `dolt sql-server` subprocess. Held here so its `Drop`
-    /// (SIGKILL + wait) runs only when the backend itself shuts down,
-    /// keeping the server alive for every request handler.
-    pub dolt_server: Option<Arc<DoltServer>>,
     /// Long-lived `qmd mcp` child for sub-second searches. `None` when
     /// no qmd index is materialized at startup (or its spawn check
     /// failed) — `run_qmd_search` then falls back to the per-call

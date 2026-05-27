@@ -32,20 +32,33 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 axum = "0.8"
 tower-http = { version = "0.6.8", features = ["cors", "fs"] }
-# sqlx is the MySQL client driving DoltRepo against the managed
-# `dolt sql-server`. Features:
-#   runtime-tokio-rustls — async runtime + pure-rust TLS, avoids OpenSSL
-#   mysql                — only backend
+# sqlx is the SQLite client driving DoltRepo against a single file at
+# `<data_root>/<dolt.db_filename>`. End-state intent is that the file is
+# a *doltlite* file with the full version-control superpowers
+# (`SELECT dolt_commit(...)` etc.); the runtime probe in
+# `frankweiler-core::dolt_repo` already short-circuits cleanly when the
+# linked libsqlite3 is plain SQLite.
+#
+# Today we use sqlx's `sqlite` feature, which routes through
+# `libsqlite3-sys`'s `bundled` mode and statically compiles upstream
+# SQLite's amalgamation. The doltlite source is fetched + built by
+# Bazel at `//third-party/doltlite:libsqlite3_doltlite` and ready to
+# swap in; see the TODO in MODULE.bazel and the docs in
+# third-party/doltlite/README.md for the bridge between
+# `libsqlite3-sys` and the bazel-built archive.
+#
+# Features:
+#   runtime-tokio-rustls — async runtime
+#   sqlite               — bundled libsqlite3-sys (today: stock SQLite,
+#                          eventually: doltlite via the crate annotation)
 #   macros               — `query!` / `query_as!` (not yet used; cheap)
 #   chrono               — map ISO-8601 strings to/from chrono types
-#   json                 — `context_json` column on the feedback table
 #   uuid                 — `feedback_uuid` primary keys
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
-    "mysql",
+    "sqlite",
     "macros",
     "chrono",
-    "json",
     "uuid",
 ] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }

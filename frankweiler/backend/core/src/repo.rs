@@ -2,8 +2,7 @@
 //! underlying SQL store.
 //!
 //! Sole implementation today: [`crate::dolt_repo::DoltRepo`] —
-//! `sqlx::MySqlPool` against the managed `dolt sql-server`. The trait
-//! seam survives a previous SQLite reference impl that has been removed.
+//! `sqlx::SqlitePool` against a doltlite file on disk.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,9 +59,9 @@ pub trait MirrorRepo: Send + Sync {
         limit: usize,
     ) -> Result<Vec<SearchRow>, RepoError>;
 
-    /// Append a feedback row and stamp the change as its own `dolt log`
-    /// entry. The default impl returns [`RepoError::ReadOnly`]; only
-    /// [`crate::dolt_repo::DoltRepo`] overrides it.
+    /// Append a feedback row. The default impl returns
+    /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::DoltRepo`]
+    /// overrides it.
     async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }

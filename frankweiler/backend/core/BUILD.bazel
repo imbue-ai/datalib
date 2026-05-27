@@ -35,19 +35,12 @@ rust_test(
     ],
 )
 
-# End-to-end test of the production DoltRepo path against a managed
-# `dolt sql-server` in a throwaway repo. Tagged `requires-dolt` to
-# match the upstream fixture target — only runs on hosts that ship
-# the `dolt` binary.
+# End-to-end test of the production DoltRepo path against a doltlite
+# file in a throwaway temp dir. No subprocess, no port — runs anywhere.
 rust_test(
     name = "dolt_backend_integration_test",
     srcs = ["tests/dolt_backend_integration.rs"],
     edition = "2021",
-    tags = [
-        "requires-dolt",
-        "no-remote",
-        "no-sandbox",
-    ],
     deps = [
         ":frankweiler_core",
         "//frankweiler/backend/schema:frankweiler_schema",

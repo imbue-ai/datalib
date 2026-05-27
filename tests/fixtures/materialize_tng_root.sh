@@ -6,18 +6,18 @@
 #   * `bazelisk test //frankweiler/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
-#   dolt_db/                Dolt repo with the fixture dump loaded.
+#   mirror.db               doltlite (SQLite-compatible) file the backend reads.
 #   rendered_md/...         Conversation markdown tree (from qmd.tar).
 #   qmd/index.sqlite        QMD index (from qmd-index.tar).
 #   qmd/models -> ~/.cache/qmd-models  (shared, populated externally)
-#   config.yaml             { data_root, dolt.port } — backend reads via
+#   config.yaml             { data_root, dolt.db_filename } — backend reads via
 #                           FRANKWEILER_CONFIG.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
-# Requires dolt + python3 on PATH. The qmd model cache at
-# ~/.cache/qmd-models must already contain the required GGUF files —
-# this script refuses to trigger a download (silent multi-minute stall).
+# Requires python3 on PATH. The qmd model cache at ~/.cache/qmd-models
+# must already contain the required GGUF files — this script refuses to
+# trigger a download (silent multi-minute stall).
 
 set -eo pipefail
 
@@ -33,14 +33,13 @@ set -u
 OUT_ROOT="${1:-}"
 [[ -n "$OUT_ROOT" ]] || { echo "usage: $0 <out-root>" >&2; exit 2; }
 
-DUMP="$(rlocation _main/tests/fixtures/ingested/dump.sql)"
+DB_FILE="$(rlocation _main/tests/fixtures/ingested/mirror.db)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
-[[ -f "$DUMP" ]]          || { echo "ERROR: dump.sql not found at $DUMP" >&2; exit 1; }
+[[ -f "$DB_FILE" ]]       || { echo "ERROR: mirror.db not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
 
-command -v dolt >/dev/null    || { echo "ERROR: dolt not on PATH" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1; }
 
 mkdir -p "$OUT_ROOT"
@@ -51,24 +50,15 @@ mkdir -p "$OUT_ROOT"
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
-# Init Dolt at <root>/dolt_db and load the byte-stable dump. Repo dir
-# name == database name (frankweiler-core's DoltServer derives it from
-# file_name()), so this MUST stay `dolt_db` to match the `USE dolt_db;`
-# below and the backend's expected default.
-mkdir -p "$OUT_ROOT/dolt_db"
-(
-  cd "$OUT_ROOT/dolt_db"
-  dolt init --name "Frankweiler TNG" --email "tng@frankweiler.local" >/dev/null
-  { echo "USE dolt_db;"; cat "$DUMP"; } | dolt sql
-)
+# Drop the doltlite file straight in — the backend opens it directly
+# via `<data_root>/<dolt.db_filename>`.
+cp "$DB_FILE" "$OUT_ROOT/mirror.db"
+chmod u+w "$OUT_ROOT/mirror.db"
 
-# Ephemeral Dolt port so concurrent runs (e2e shards, a second dev_tng,
-# a host-side dev backend on 3306) don't collide.
-DOLT_PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 cat > "$OUT_ROOT/config.yaml" <<EOF
 data_root: $OUT_ROOT
 dolt:
-  port: $DOLT_PORT
+  db_filename: mirror.db
 EOF
 
 # qmd models live once in ~/.cache/qmd-models (~1.6 GB) and every data

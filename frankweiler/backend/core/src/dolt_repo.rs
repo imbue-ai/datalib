@@ -1,25 +1,26 @@
 //! `DoltRepo` — production [`MirrorRepo`](crate::repo::MirrorRepo) backed
-//! by a `sqlx::MySqlPool` against the managed [`DoltServer`](crate::dolt_server::DoltServer).
+//! by a `sqlx::SqlitePool` against a single doltlite file on disk.
 //!
-//! Reads: grid search + chat-preview metadata. Writes: [`Self::insert_feedback`]
-//! appends a row to the `feedback` table and calls `DOLT_COMMIT` so each
-//! piece of feedback becomes its own entry in `dolt log` (lazy man's audit
-//! trail). The `feedback` table itself is created on connect via the DDL
-//! shipped by [`frankweiler_schema::feedback`]; the `CREATE TABLE IF NOT
-//! EXISTS` makes the init idempotent across restarts.
+//! doltlite is a SQLite fork: the C API and on-disk format are
+//! libsqlite3-compatible, so we drop the `dolt sql-server` subprocess
+//! and the TCP port. The audit-trail story stays — doltlite preserves
+//! the `dolt_commit()` / `dolt_log()` SQL functions, just invoked via
+//! SQLite's scalar-function syntax (`SELECT dolt_commit(...)`) instead
+//! of MySQL's `CALL DOLT_COMMIT(...)`.
 //!
-//! Dialect notes: SQL strings use `?` placeholders, which works for both
-//! MySQL (sqlx bind index) and the legacy SQLite path. We reuse
-//! [`crate::db::build_where`] verbatim. `grid_rows` is written into Dolt
-//! by `src/ingest/sql_writers.py` with the same column shape ingest
-//! materializes to SQLite, so reads are schema-compatible without
-//! per-backend branches.
+//! Reads: grid search + chat-preview metadata. Writes:
+//! [`Self::insert_feedback`] appends a row to the `feedback` table and
+//! stamps `SELECT dolt_commit('-Am', ?)` so each piece of feedback gets
+//! its own entry in `dolt_log` (lazy man's audit trail). The DDL is
+//! shipped by [`frankweiler_schema::feedback`]; `CREATE TABLE IF NOT
+//! EXISTS` keeps the init idempotent across restarts.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::db::{build_where, snippet, ChatMeta};
@@ -30,41 +31,92 @@ use crate::search::SearchRow;
 use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use frankweiler_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 
-/// MySQL/Dolt-backed implementation of [`MirrorRepo`].
+/// SQLite/doltlite-backed implementation of [`MirrorRepo`].
 ///
 /// `root` is the data root (e.g. `~/Documents/mixed-up-files`) — needed
 /// because `qmd_path` in `grid_rows` is stored relative to the root and
 /// the trait contract returns an absolute path.
 pub struct DoltRepo {
-    pool: MySqlPool,
+    pool: SqlitePool,
     root: Arc<PathBuf>,
+    /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
+    /// Probed once at connect time via `pragma_function_list`. When
+    /// false, every `commit_version` call is a no-op — the row still
+    /// lands, you just don't get the dolt_log audit entry. This keeps
+    /// CI hosts without doltlite installed runnable; production hosts
+    /// should always have doltlite linked.
+    has_dolt: bool,
 }
 
 impl DoltRepo {
-    /// Wrap an existing pool. Tests / callers that manage their own pool
-    /// use this.
-    pub fn from_pool(pool: MySqlPool, root: Arc<PathBuf>) -> Self {
-        Self { pool, root }
+    /// Wrap an existing pool. Probes for doltlite extensions; the caller
+    /// can also use [`from_pool_with_dolt`](Self::from_pool_with_dolt)
+    /// to skip the probe in tests that know the answer.
+    pub async fn from_pool(pool: SqlitePool, root: Arc<PathBuf>) -> Self {
+        let has_dolt = probe_dolt_extensions(&pool).await;
+        Self {
+            pool,
+            root,
+            has_dolt,
+        }
     }
 
-    /// Connect to the Dolt MySQL endpoint at `mysql_url` (typically from
-    /// [`crate::dolt_server::DoltServer::mysql_url`]) and ensure the
-    /// `feedback` table exists. The DDL is `CREATE TABLE IF NOT EXISTS`,
-    /// so a real ingest-populated repo is left untouched.
-    pub async fn connect(mysql_url: &str, root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
-        let pool = MySqlPoolOptions::new()
+    pub fn from_pool_with_dolt(pool: SqlitePool, root: Arc<PathBuf>, has_dolt: bool) -> Self {
+        Self {
+            pool,
+            root,
+            has_dolt,
+        }
+    }
+
+    /// True when the linked libsqlite3 is doltlite and version-control
+    /// SQL functions (`dolt_commit`, `dolt_log`, ...) are available.
+    pub fn has_dolt_extensions(&self) -> bool {
+        self.has_dolt
+    }
+
+    /// Stamp a doltlite version commit covering the working set on this
+    /// connection. No-op when the linked libsqlite3 is stock SQLite.
+    async fn commit_version(
+        &self,
+        conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+        message: &str,
+    ) -> Result<(), RepoError> {
+        if !self.has_dolt {
+            return Ok(());
+        }
+        sqlx::query("SELECT dolt_commit('-Am', ?)")
+            .bind(message)
+            .execute(&mut **conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        Ok(())
+    }
+
+    /// Open (or create) a doltlite file at `db_path` and ensure the
+    /// `feedback` + `sync_jobs` tables exist. DDL is `CREATE TABLE IF NOT
+    /// EXISTS`, so a real ingest-populated file is left untouched.
+    pub async fn open(db_path: &std::path::Path, root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+            .create_if_missing(true)
+            // WAL gives readers + writers concurrency without our own
+            // connection pinning. NORMAL sync is fine — the file is the
+            // source of truth, not an in-flight transaction log.
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+        let pool = SqlitePoolOptions::new()
             .max_connections(8)
-            .connect(mysql_url)
+            .connect_with(opts)
             .await?;
-        let repo = Self::from_pool(pool, root);
+        let repo = Self::from_pool(pool, root).await;
         repo.init_feedback_table().await?;
         repo.init_sync_jobs_table().await?;
         Ok(repo)
     }
 
-    /// Apply the feedback DDL. Idempotent — `CREATE TABLE IF NOT EXISTS`
-    /// is a no-op when the table already exists. Dolt auto-commits DDL
-    /// even with `--no-auto-commit`, so no DOLT_COMMIT is needed here.
     async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in FEEDBACK_DDL {
             sqlx::query(ddl).execute(&self.pool).await?;
@@ -72,8 +124,6 @@ impl DoltRepo {
         Ok(())
     }
 
-    /// Apply the sync_jobs DDL. The Python worker also runs this on its
-    /// own startup; double-application is a no-op.
     async fn init_sync_jobs_table(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in SYNC_JOBS_DDL {
             sqlx::query(ddl).execute(&self.pool).await?;
@@ -81,7 +131,7 @@ impl DoltRepo {
         Ok(())
     }
 
-    pub fn pool(&self) -> &MySqlPool {
+    pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 }
@@ -183,12 +233,12 @@ impl MirrorRepo for DoltRepo {
     }
 
     async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
-        // Pin INSERT + DOLT_COMMIT to one connection: Dolt's working set
-        // is session-scoped under `--no-auto-commit`, so a SELECT from a
-        // different connection in the pool wouldn't see the uncommitted
-        // row. DOLT_COMMIT here publishes the row across every connection
-        // *and* stamps a `dolt log` entry — that audit trail is the whole
-        // point of routing feedback through Dolt instead of SQLite.
+        // The INSERT and the `dolt_commit` ride the same connection so
+        // the commit covers exactly the row we just wrote, with no
+        // chance of a concurrent writer's INSERT slipping into the same
+        // dolt_log entry. (The pool may hand a different connection to
+        // a sibling task, which is fine — doltlite's working set is
+        // per-file, not per-connection.)
         let mut conn = self
             .pool
             .acquire()
@@ -210,11 +260,7 @@ impl MirrorRepo for DoltRepo {
         .await
         .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
         let msg = format!("feedback: {}", row.feedback_uuid);
-        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
-            .bind(msg)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        self.commit_version(&mut conn, &msg).await?;
         Ok(())
     }
 
@@ -388,10 +434,6 @@ impl MirrorRepo for DoltRepo {
             progress_pct: None,
             progress_msg: None,
         };
-        // Pin INSERT + DOLT_COMMIT to one connection: same rationale as
-        // `insert_feedback` — Dolt's working set is session-scoped under
-        // `--no-auto-commit`, so the worker (on a different connection)
-        // wouldn't see an uncommitted row.
         let mut conn = self
             .pool
             .acquire()
@@ -419,11 +461,7 @@ impl MirrorRepo for DoltRepo {
         .await
         .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
         let msg = format!("sync_job: {} pending", row.id);
-        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
-            .bind(msg)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        self.commit_version(&mut conn, &msg).await?;
         Ok(row)
     }
 
@@ -433,9 +471,6 @@ impl MirrorRepo for DoltRepo {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        // Match the Python `request_cancel` semantics: flip pending/running
-        // rows to `canceled` so the worker picks it up on the next poll.
-        // Terminal rows are left alone (no-op).
         sqlx::query(
             "UPDATE sync_jobs SET state = 'canceled' \
              WHERE id = ? AND state IN ('pending', 'running')",
@@ -445,11 +480,7 @@ impl MirrorRepo for DoltRepo {
         .await
         .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
         let msg = format!("sync_job: {job_id} cancel-requested");
-        sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
-            .bind(msg)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
+        self.commit_version(&mut conn, &msg).await?;
         Ok(())
     }
 
@@ -472,7 +503,21 @@ impl MirrorRepo for DoltRepo {
     }
 }
 
-fn row_to_sync_job(r: &sqlx::mysql::MySqlRow) -> SyncJobRow {
+/// Ask the linked libsqlite3 whether `dolt_commit` is a registered
+/// scalar function. `pragma_function_list` is a SQLite built-in
+/// table-valued pragma that's been there since 3.30; doltlite inherits
+/// it. Probe failures fall through to `false` — we'd rather skip the
+/// audit trail than refuse to start.
+async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
+    let res = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
+    )
+    .fetch_one(pool)
+    .await;
+    matches!(res, Ok(n) if n > 0)
+}
+
+fn row_to_sync_job(r: &sqlx::sqlite::SqliteRow) -> SyncJobRow {
     SyncJobRow {
         id: r.try_get("id").unwrap_or_default(),
         source_name: r.try_get("source_name").ok(),
@@ -483,7 +528,7 @@ fn row_to_sync_job(r: &sqlx::mysql::MySqlRow) -> SyncJobRow {
         started_at: r.try_get("started_at").ok(),
         finished_at: r.try_get("finished_at").ok(),
         error: r.try_get("error").ok(),
-        pid: r.try_get::<i32, _>("pid").ok().map(|n| n as i64),
+        pid: r.try_get::<i64, _>("pid").ok(),
         progress_pct: r.try_get("progress_pct").ok(),
         progress_msg: r.try_get("progress_msg").ok(),
     }

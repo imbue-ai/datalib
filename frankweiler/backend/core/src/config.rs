@@ -280,52 +280,27 @@ impl SourceConfig {
     }
 }
 
-/// Settings for the managed `dolt sql-server` the backend talks to at
-/// runtime. Mirrors the shape of `DoltConfig` in `src/ingest/config.py` so
-/// the same `~/.config/mixed-up-files/config.yaml` `dolt:` block can drive
-/// both ingest and the Rust backend.
+/// Settings for the single doltlite file the backend reads/writes.
 ///
-/// `repo_dirname` is the directory under `Config.data_root` that holds the Dolt
-/// repository; defaults to `"dolt_repo"`, matching `DOLT_REPO_DIRNAME` in
-/// `src/ingest/dolt_service.py`.
-///
-/// `binary` is an optional override for the `dolt` executable; `None` means
-/// look up `dolt` on `$PATH`.
+/// doltlite is a SQLite fork; the SQL store is just a file on disk,
+/// `<Config.data_root>/<dolt.db_filename>`. No subprocess, no TCP port,
+/// no auth — the file system is the access boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoltConfig {
-    #[serde(default = "default_dolt_host")]
-    pub host: String,
-    #[serde(default = "default_dolt_port")]
-    pub port: u16,
-    #[serde(default = "default_dolt_user")]
-    pub user: String,
-    #[serde(default = "default_dolt_repo_dirname")]
-    pub repo_dirname: String,
-    #[serde(default)]
-    pub binary: Option<PathBuf>,
+    /// Filename of the doltlite database, relative to `Config.data_root`.
+    /// Defaults to `mirror.db`.
+    #[serde(default = "default_dolt_db_filename")]
+    pub db_filename: String,
 }
 
-fn default_dolt_host() -> String {
-    "127.0.0.1".into()
-}
-fn default_dolt_port() -> u16 {
-    3306
-}
-fn default_dolt_user() -> String {
-    "root".into()
-}
-fn default_dolt_repo_dirname() -> String {
-    "dolt_db".into()
+fn default_dolt_db_filename() -> String {
+    "mirror.db".into()
 }
 
 impl Default for DoltConfig {
     fn default() -> Self {
         Self {
-            host: default_dolt_host(),
-            port: default_dolt_port(),
-            user: default_dolt_user(),
-            repo_dirname: default_dolt_repo_dirname(),
-            binary: None,
+            db_filename: default_dolt_db_filename(),
         }
     }
 }
@@ -471,24 +446,11 @@ impl Config {
         self.sources.iter().filter(|s| s.enabled())
     }
 
-    /// Absolute path to the Dolt repository this backend reads/writes.
+    /// Absolute path to the single doltlite file this backend reads/writes.
     ///
-    /// Resolves to `<root>/<dolt.repo_dirname>`. Matches the layout
-    /// established by `DoltService` in `src/ingest/dolt_service.py`.
+    /// Resolves to `<root>/<dolt.db_filename>`.
     pub fn dolt_db_path(&self) -> PathBuf {
-        self.data_root.join(&self.dolt.repo_dirname)
-    }
-
-    /// MySQL connection URL for the running `dolt sql-server`. The database
-    /// name is the repo directory name (Dolt's default).
-    pub fn dolt_mysql_url(&self) -> String {
-        format!(
-            "mysql://{user}@{host}:{port}/{db}",
-            user = self.dolt.user,
-            host = self.dolt.host,
-            port = self.dolt.port,
-            db = self.dolt.repo_dirname,
-        )
+        self.data_root.join(&self.dolt.db_filename)
     }
 }
 
@@ -563,19 +525,13 @@ mod tests {
     }
 
     #[test]
-    fn dolt_defaults_match_python_ingest() {
-        // Defaults must stay aligned with `DoltConfig` in
-        // `src/ingest/config.py` so a single yaml drives both.
+    fn dolt_defaults() {
         let cfg = DoltConfig::default();
-        assert_eq!(cfg.host, "127.0.0.1");
-        assert_eq!(cfg.port, 3306);
-        assert_eq!(cfg.user, "root");
-        assert_eq!(cfg.repo_dirname, "dolt_db");
-        assert!(cfg.binary.is_none());
+        assert_eq!(cfg.db_filename, "mirror.db");
     }
 
     #[test]
-    fn dolt_db_path_and_url() {
+    fn dolt_db_path_default() {
         let tmp = tempdir();
         let cfg = Config {
             data_root: tmp.clone(),
@@ -585,8 +541,7 @@ mod tests {
             sync: SyncConfig::default(),
             sources: Vec::new(),
         };
-        assert_eq!(cfg.dolt_db_path(), tmp.join("dolt_db"));
-        assert_eq!(cfg.dolt_mysql_url(), "mysql://root@127.0.0.1:3306/dolt_db");
+        assert_eq!(cfg.dolt_db_path(), tmp.join("mirror.db"));
     }
 
     #[test]
@@ -598,16 +553,14 @@ mod tests {
         std::fs::write(
             &cfg_path,
             format!(
-                "data_root: {}\ndolt:\n  port: 13306\n  repo_dirname: my_repo\n",
+                "data_root: {}\ndolt:\n  db_filename: my.db\n",
                 root.display()
             ),
         )
         .unwrap();
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        assert_eq!(cfg.dolt.port, 13306);
-        assert_eq!(cfg.dolt.repo_dirname, "my_repo");
-        assert_eq!(cfg.dolt.host, "127.0.0.1");
-        assert_eq!(cfg.dolt_db_path(), root.join("my_repo"));
+        assert_eq!(cfg.dolt.db_filename, "my.db");
+        assert_eq!(cfg.dolt_db_path(), root.join("my.db"));
     }
 
     fn write_cfg(yaml: &str) -> (PathBuf, PathBuf) {

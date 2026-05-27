@@ -9,19 +9,19 @@
 //! config file, else 127.0.0.1:8731. The env override exists primarily for
 //! tests that need a non-default port without writing a config file.
 //!
-//! Backend: [`DoltRepo`](frankweiler_core::dolt_repo::DoltRepo). We spawn
-//! (or attach to) a managed `dolt sql-server` at
-//! `<root>/<dolt.repo_dirname>` and connect a `sqlx::MySqlPool`.
+//! Backend: [`DoltRepo`](frankweiler_core::dolt_repo::DoltRepo). Opens a
+//! `sqlx::SqlitePool` against the doltlite file at
+//! `<root>/<dolt.db_filename>` — no subprocess, no port.
 //!
-//! The server starts even if the root or Dolt repo doesn't exist yet —
-//! `/api/search` will just return zero rows. `/api/health` reports the
-//! resolved root and whether it exists, which is handy when wiring up the UI.
+//! The server starts even if the root doesn't exist yet — we create the
+//! directory and the doltlite file on demand. `/api/search` will just
+//! return zero rows. `/api/health` reports the resolved root and whether
+//! it exists.
 
 use frankweiler_core::config::{
     default_config_path, load_config, BackendConfig, Config, ConfigError,
 };
 use frankweiler_core::dolt_repo::DoltRepo;
-use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_core::repo::DynRepo;
 use frankweiler_http::{router, AppState};
@@ -30,9 +30,6 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Load config: missing default config path is fine (we fall back to env +
-    // defaults), but any other error (parse, IO, validation) is fatal —
-    // silently swallowing them masks typos in $FRANKWEILER_CONFIG.
     let cfg_path = default_config_path();
     let explicit_cfg = std::env::var("FRANKWEILER_CONFIG").is_ok();
     let cfg_opt = match load_config(Some(&cfg_path)) {
@@ -49,8 +46,6 @@ async fn main() -> anyhow::Result<()> {
         "frankweiler-http listening on http://{}",
         listener.local_addr()?
     );
-    // Auto-create the data root so a fresh install (or a typo'd dev config
-    // pointing at a not-yet-created dir) doesn't require manual mkdir.
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data_root {}: {e}", root.display()))?;
@@ -60,10 +55,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let root = Arc::new(root);
-    let (repo, dolt_server) = build_repo(cfg_opt.as_ref(), root.clone()).await?;
-    // Best-effort daemon spawn. If the index isn't materialized yet
-    // `QmdDaemon::new` fails fast; the search path then falls back to
-    // the per-call CLI shell-out, so /api/search still works.
+    let repo = build_repo(cfg_opt.as_ref(), root.clone()).await?;
     let qmd_daemon = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
         Ok(d) => {
             eprintln!("qmd daemon: ready (lazy spawn on first search)");
@@ -77,35 +69,22 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState {
         root,
         repo,
-        dolt_server,
         qmd_daemon,
     };
     axum::serve(listener, router(state)).await?;
     Ok(())
 }
 
-async fn build_repo(
-    cfg: Option<&Config>,
-    root: Arc<PathBuf>,
-) -> anyhow::Result<(DynRepo, Option<Arc<DoltServer>>)> {
-    let dolt_cfg = cfg.map(|c| c.dolt.clone()).unwrap_or_default();
-    let repo_dir = match cfg {
+async fn build_repo(cfg: Option<&Config>, root: Arc<PathBuf>) -> anyhow::Result<DynRepo> {
+    let db_path = match cfg {
         Some(c) => c.dolt_db_path(),
-        None => root.as_ref().join(&dolt_cfg.repo_dirname),
+        None => root.as_ref().join("mirror.db"),
     };
-    eprintln!(
-        "dolt repo: {} (host={} port={})",
-        repo_dir.display(),
-        dolt_cfg.host,
-        dolt_cfg.port
-    );
-    let server = DoltServer::ensure(&repo_dir, &dolt_cfg)
-        .map_err(|e| anyhow::anyhow!("dolt sql-server: {e}"))?;
-    let url = server.mysql_url();
-    let repo = DoltRepo::connect(&url, root)
+    eprintln!("dolt db: {}", db_path.display());
+    let repo = DoltRepo::open(&db_path, root)
         .await
-        .map_err(|e| anyhow::anyhow!("connect dolt mysql at {url}: {e}"))?;
-    Ok((Arc::new(repo), Some(Arc::new(server))))
+        .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
+    Ok(Arc::new(repo))
 }
 
 fn resolve_bind_and_root(cfg: Option<&Config>) -> (String, PathBuf) {

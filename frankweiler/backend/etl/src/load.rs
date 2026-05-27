@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::mysql::MySqlPool;
+use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::sidecar::Sidecar;
@@ -74,7 +74,7 @@ pub struct LoadSummary {
 }
 
 /// Apply DDL for `grid_rows` and `documents_loaded`. Idempotent.
-pub async fn init_schema(pool: &MySqlPool) -> Result<()> {
+pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for (_table, ddl) in GRID_ROWS_DDL {
         sqlx::query(ddl)
             .execute(pool)
@@ -173,7 +173,7 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
 /// stripped from the sidecar's `.md` path to derive the
 /// `documents_loaded.qmd_path` key.
 pub async fn load_all(
-    pool: &MySqlPool,
+    pool: &SqlitePool,
     out_dir: &Path,
     progress: impl Fn(&str),
     now_override: Option<&str>,
@@ -256,7 +256,20 @@ fn derive_md_path(sidecar: &Path) -> Option<PathBuf> {
     Some(sidecar.with_file_name(format!("{stem}.md")))
 }
 
-async fn existing_fingerprint(pool: &MySqlPool, qmd_path: &str) -> Result<Option<String>> {
+/// Probe the connection's libsqlite3 for the `dolt_commit` scalar
+/// function. Same probe as [`frankweiler_core::dolt_repo`] uses at
+/// connect-time, but at the connection level so the loader doesn't
+/// need a `DoltRepo` handle.
+async fn has_dolt_extensions(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> bool {
+    let res = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
+    )
+    .fetch_one(&mut **conn)
+    .await;
+    matches!(res, Ok(n) if n > 0)
+}
+
+async fn existing_fingerprint(pool: &SqlitePool, qmd_path: &str) -> Result<Option<String>> {
     let row = sqlx::query("SELECT source_fingerprint FROM documents_loaded WHERE qmd_path = ?")
         .bind(qmd_path)
         .fetch_optional(pool)
@@ -265,7 +278,7 @@ async fn existing_fingerprint(pool: &MySqlPool, qmd_path: &str) -> Result<Option
 }
 
 async fn apply_document(
-    pool: &MySqlPool,
+    pool: &SqlitePool,
     document_uuid: &str,
     qmd_path: &str,
     fingerprint: &str,
@@ -291,9 +304,9 @@ async fn apply_document(
     sqlx::query(
         "INSERT INTO documents_loaded (qmd_path, document_uuid, source_fingerprint, loaded_at) \
          VALUES (?, ?, ?, ?) \
-         ON DUPLICATE KEY UPDATE document_uuid = VALUES(document_uuid), \
-                                 source_fingerprint = VALUES(source_fingerprint), \
-                                 loaded_at = VALUES(loaded_at)",
+         ON CONFLICT(qmd_path) DO UPDATE SET document_uuid = excluded.document_uuid, \
+                                             source_fingerprint = excluded.source_fingerprint, \
+                                             loaded_at = excluded.loaded_at",
     )
     .bind(qmd_path)
     .bind(document_uuid)
@@ -314,12 +327,20 @@ async fn apply_document(
     .await
     .context("upsert documents")?;
 
-    let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
-    sqlx::query("CALL DOLT_COMMIT('-Am', ?)")
-        .bind(&msg)
-        .execute(&mut *conn)
-        .await
-        .context("dolt_commit")?;
+    // Stamp the document as its own dolt_log entry so re-ingests are
+    // human-auditable. doltlite exposes `dolt_commit` as a SQLite
+    // scalar function — same semantics as the dolt-sql-server's
+    // `CALL DOLT_COMMIT(...)`, just SELECT-shaped. With stock libsqlite3
+    // the function isn't registered, so we skip the call silently;
+    // production runs against doltlite will populate dolt_log normally.
+    if has_dolt_extensions(&mut conn).await {
+        let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
+        sqlx::query("SELECT dolt_commit('-Am', ?)")
+            .bind(&msg)
+            .execute(&mut *conn)
+            .await
+            .context("dolt_commit")?;
+    }
 
     Ok(rows.len())
 }
@@ -335,7 +356,7 @@ fn pick_canonical<'a>(rows: &'a [GridRow], document_uuid: &str) -> Option<&'a Gr
 }
 
 async fn upsert_document(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     document_uuid: &str,
     qmd_path: &str,
     render_version: u32,
@@ -390,7 +411,7 @@ async fn upsert_document(
 }
 
 async fn insert_grid_row(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::MySql>,
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &GridRow,
 ) -> Result<()> {
     sqlx::query(

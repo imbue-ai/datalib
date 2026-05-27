@@ -4,7 +4,6 @@ pub mod config;
 pub mod db;
 pub mod deeplink;
 pub mod dolt_repo;
-pub mod dolt_server;
 pub mod qmd;
 pub mod query;
 pub mod repo;

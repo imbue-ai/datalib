@@ -39,8 +39,8 @@
 //! since they share a single Dolt repo and `rendered_md/` tree.
 
 use std::fs;
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -50,7 +50,6 @@ use frankweiler_core::config::{
     load_config, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync, GitlabApiSync,
     NotionApiSync, SlackApiSync, SourceConfig,
 };
-use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{init_schema, load_all};
 use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
@@ -61,7 +60,7 @@ use frankweiler_etl_github::synthesize::GithubSynth;
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use frankweiler_etl_slack::synthesize::SlackSynth;
-use sqlx::mysql::MySqlPoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinSet;
 
 mod progress;
@@ -135,11 +134,6 @@ fn init_tracing() {
         .with_target(false)
         .with_writer(std::io::stderr)
         .try_init();
-}
-
-fn free_port() -> Result<u16> {
-    let l = TcpListener::bind(("127.0.0.1", 0))?;
-    Ok(l.local_addr()?.port())
 }
 
 #[tokio::main]
@@ -560,34 +554,34 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     Ok(())
 }
 
-/// Boot dolt, init schema, run `load_all`. Pulled out of `run()` so the
-/// orchestrator can catch failures here without short-circuiting the
-/// summary write.
+/// Open the doltlite file at `<data_root>/<dolt.db_filename>`, init
+/// schema, run `load_all`. Pulled out of `run()` so the orchestrator can
+/// catch failures here without short-circuiting the summary write.
 async fn run_load_phase(
     cfg: &Config,
     root: &Path,
     now: &str,
 ) -> Result<frankweiler_etl::load::LoadSummary> {
-    let dolt_db_dir = cfg.dolt_db_path();
-    fs::create_dir_all(&dolt_db_dir)?;
-    let port = free_port()?;
-    let mut dolt_cfg = cfg.dolt.clone();
-    dolt_cfg.port = port;
-    eprintln!("[frankweiler-sync] dolt sql-server port = {port}");
-    let server = DoltServer::ensure(&dolt_db_dir, &dolt_cfg).context("dolt sql-server")?;
-    let url = server.mysql_url();
-    let pool = MySqlPoolOptions::new()
+    let db_path = cfg.dolt_db_path();
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    eprintln!("[frankweiler-sync] doltlite db = {}", db_path.display());
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+    let pool = SqlitePoolOptions::new()
         .max_connections(2)
-        .connect(&url)
+        .connect_with(opts)
         .await
-        .with_context(|| format!("connect dolt at {url}"))?;
+        .with_context(|| format!("open doltlite at {}", db_path.display()))?;
     init_schema(&pool).await?;
     let summary = load_all(&pool, root, |_| {}, Some(now))
         .await
         .context("load_all")?;
     drop(pool);
-    drop(server);
-    eprintln!("[frankweiler-sync] wrote {}/", dolt_db_dir.display());
+    eprintln!("[frankweiler-sync] wrote {}", db_path.display());
     Ok(summary)
 }
 

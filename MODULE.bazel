@@ -27,6 +27,24 @@ module(
 # Rules Shell — provides sh_binary etc. (split out of bazel core in Bazel 8/9).
 bazel_dep(name = "rules_shell", version = "0.6.1")
 
+# Rules CC — needed for the cc_library that compiles doltlite's
+# amalgamation. Pulled in transitively by rules_rust today but worth
+# declaring explicitly since our own BUILD files use it directly.
+bazel_dep(name = "rules_cc", version = "0.2.17")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+# doltlite amalgamation — the SQLite-fork source we statically link
+# into every Rust binary via sqlx-sqlite. Pinned to a sha so the fetch
+# is one-time-per-pin; consumed by `//third-party/doltlite:libsqlite3_doltlite`.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+http_archive(
+    name = "doltlite_amalgamation",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.2/doltlite-amalgamation-0.11.2.zip"],
+    sha256 = "7153139278ceebddc029177d503e79dc5d5f887f08397b80a2504c0eca256395",
+    strip_prefix = "doltlite-amalgamation-0.11.2",
+    build_file = "//third-party/doltlite:amalgamation.BUILD",
+)
+
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.0.0")
 
@@ -59,6 +77,33 @@ use_repo(rust, "rust_toolchains")
 register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+
+# TODO(doltlite-integration): route `libsqlite3-sys` at our bazel-built
+# doltlite static archive (`//third-party/doltlite:libsqlite3_doltlite`)
+# instead of letting the crate bundle stock SQLite via its `bundled`
+# feature. Today the Rust build still compiles upstream SQLite source
+# via `libsqlite3-sys`'s build script; doltlite is fetched + compiled by
+# Bazel but not yet linked in. Once we cut the bridge, every binary
+# embeds doltlite directly, no host install required.
+#
+# The blocker: `libsqlite3-sys`'s `src/lib.rs` does
+#   `include!(concat!(env!("OUT_DIR"), "/bindgen.rs"))`
+# so its bindings module always needs the build script to have run.
+# `gen_build_script = "off"` therefore can't be the path. Two viable
+# routes, both real work:
+#
+#   1. Let the build script run, point `SQLITE3_INCLUDE_DIR` at the
+#      bazel-built header dir via `build_script_env` + `build_script_data`.
+#      Needs a directory-shaped filegroup (bazel's `$(execpath ...)`
+#      yields a file path, not a dir) — likely a small wrapper script.
+#
+#   2. Fork `libsqlite3-sys` via `[patch.crates-io]`, replace its
+#      vendored `sqlite3/sqlite3.{c,h}` with doltlite's amalgamation,
+#      keep its `bundled` feature path. Two-file diff; the fork tracks
+#      upstream by re-applying the swap on bumps.
+#
+# See third-party/doltlite/README.md for the full design.
+
 crate.from_cargo(
     name = "frankweiler_crates",
     cargo_lockfile = "//frankweiler/backend:Cargo.lock",

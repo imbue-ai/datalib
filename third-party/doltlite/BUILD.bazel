@@ -1,0 +1,74 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+# `libsqlite3_doltlite` — doltlite's SQLite amalgamation, compiled once
+# by Bazel and statically linked into every Rust binary that pulls in
+# sqlx-sqlite (transitively via `libsqlite3-sys`).
+#
+# Cache shape:
+#   * The doltlite source lives in `@doltlite_amalgamation//` — a bzlmod
+#     http_archive pinned by sha256 in MODULE.bazel. Bazel fetches the
+#     ~2.6 MB zip exactly once per pin, ever, across every build/host.
+#   * This cc_library action is keyed on the doltlite zip's sha + the
+#     C toolchain hermetic action key, so it rebuilds only when one of
+#     those moves. Touching Rust code never invalidates it.
+#   * Downstream Rust crates depend on `:libsqlite3_doltlite` via a
+#     crate_universe annotation on `libsqlite3-sys` (see MODULE.bazel)
+#     so a single .a flows into every binary.
+#
+# Why we rename `doltlite.{c,h}` → `sqlite3.{c,h}`:
+#   doltlite's public header is byte-equivalent to upstream SQLite's
+#   `sqlite3.h` (same `#ifndef SQLITE3_H`, same `sqlite3_*` prototypes).
+#   `libsqlite3-sys` and every other SQLite-shaped Rust crate looks for
+#   the header at `sqlite3.h`, so we expose it under that name. Cheap
+#   genrule that just copies the bytes.
+
+genrule(
+    name = "rename_amalgamation",
+    srcs = [
+        "@doltlite_amalgamation//:doltlite.c",
+        "@doltlite_amalgamation//:doltlite.h",
+    ],
+    outs = [
+        "sqlite3.c",
+        "sqlite3.h",
+    ],
+    cmd = """
+        cp $(location @doltlite_amalgamation//:doltlite.c) $(location sqlite3.c)
+        cp $(location @doltlite_amalgamation//:doltlite.h) $(location sqlite3.h)
+    """,
+)
+
+cc_library(
+    name = "libsqlite3_doltlite",
+    srcs = ["sqlite3.c"],
+    hdrs = ["sqlite3.h"],
+    # Expose the header dir so libsqlite3-sys's build-time bindgen can
+    # find `#include <sqlite3.h>`.
+    includes = ["."],
+    # Standard SQLite compile flags. Match upstream's recommended
+    # production set so doltlite behaves like a "modern" SQLite to
+    # everything above the C ABI.
+    copts = [
+        "-DSQLITE_ENABLE_FTS5",
+        "-DSQLITE_ENABLE_JSON1",
+        "-DSQLITE_ENABLE_RTREE",
+        "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
+        "-DSQLITE_THREADSAFE=1",
+        "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+        # Silence the noisier of doltlite's own build warnings — they're
+        # in upstream-SQLite-shaped code we don't own.
+        "-Wno-unused-but-set-variable",
+        "-Wno-unused-function",
+        "-Wno-unused-parameter",
+    ],
+    linkopts = select({
+        # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
+        # ever calls sqlite3_load_extension at runtime (we don't, but
+        # the symbol references dlopen so the linker complains
+        # otherwise on Linux).
+        "@platforms//os:linux": ["-lpthread", "-ldl", "-lm"],
+        "@platforms//os:macos": [],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+)

@@ -31,19 +31,12 @@ rust_test(
     deps = ["@frankweiler_crates//:tokio"],
 )
 
-# End-to-end test for POST /api/feedback, mirroring the dolt fixture
-# pattern from frankweiler/backend/core: spawn dolt sql-server, drive
-# the axum router, verify the row landed plus the per-row DOLT_COMMIT.
-# Tagged `requires-dolt` so CI hosts without dolt skip it cleanly.
+# End-to-end test for POST /api/feedback against a doltlite file in a
+# temp dir. No subprocess, no port — runs anywhere.
 rust_test(
     name = "feedback_endpoint_test",
     srcs = ["tests/feedback_endpoint.rs"],
     edition = "2021",
-    tags = [
-        "requires-dolt",
-        "no-remote",
-        "no-sandbox",
-    ],
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",

@@ -1,19 +1,11 @@
 //! `grid-rows-load` — provider-agnostic Load step. Walks
 //! `<out>/rendered_md/**/*.grid_rows.json` (written by any Translate
-//! step) and inserts rows into Dolt.
+//! step) and inserts rows into the doltlite file at `<out>/<db_filename>`.
 //!
 //! Incremental: a `documents_loaded(qmd_path PK, source_fingerprint)`
 //! table tracks which documents have already been ingested. Sidecars
 //! whose fingerprint matches the recorded one are skipped — zero
-//! writes, zero DOLT_COMMITs.
-//!
-//! Connects to a running `dolt sql-server` if one is already listening
-//! on `--dolt-host:--dolt-port`; otherwise spawns one under
-//! `--dolt-repo-dir` (default `<out>/dolt_db`). Same connect-or-spawn
-//! semantics as the Python `DoltService`.
-//!
-//! The output schema is stable across providers so a web UI can
-//! consume the `LoadSummary` JSON without per-provider branches.
+//! writes.
 //!
 //! ```sh
 //! grid-rows-load --out ~/mirror
@@ -21,23 +13,22 @@
 //! ```
 
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_core::config::DoltConfig;
-use frankweiler_core::dolt_server::DoltServer;
 use frankweiler_etl::load::{init_schema, load_all};
 use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_qmd_indexer::{run_index, IndexOptions};
-use sqlx::mysql::MySqlPoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "grid-rows-load",
-    about = "Load `*.grid_rows.json` sidecars (any provider) into Dolt."
+    about = "Load `*.grid_rows.json` sidecars (any provider) into the doltlite file."
 )]
 struct Args {
     /// Input root. The loader reads
@@ -46,18 +37,9 @@ struct Args {
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 
-    /// Dolt repo directory. Defaults to `<out>/dolt_db`. If a
-    /// `dolt sql-server` is already running on `--dolt-host:--dolt-port`,
-    /// the loader attaches to it and ignores this path for spawning.
-    #[arg(long, env = "DOLT_REPO_DIR")]
-    dolt_repo_dir: Option<PathBuf>,
-
-    #[arg(long, default_value = "127.0.0.1", env = "DOLT_HOST")]
-    dolt_host: String,
-    #[arg(long, default_value_t = 3306, env = "DOLT_PORT")]
-    dolt_port: u16,
-    #[arg(long, default_value = "root", env = "DOLT_USER")]
-    dolt_user: String,
+    /// Path to the doltlite database file. Defaults to `<out>/mirror.db`.
+    #[arg(long, env = "DOLT_DB_PATH")]
+    dolt_db_path: Option<PathBuf>,
 
     /// After loading, run the qmd indexer over `<out>/rendered_md/`. qmd
     /// update is incremental — repeated invocations only re-index changed
@@ -79,39 +61,29 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "grid-rows-load")?;
 
-    let dolt_repo_dir = args
-        .dolt_repo_dir
+    let db_path = args
+        .dolt_db_path
         .clone()
-        .unwrap_or_else(|| args.out.join("dolt_db"));
-
-    let dolt_cfg = DoltConfig {
-        host: args.dolt_host.clone(),
-        port: args.dolt_port,
-        user: args.dolt_user.clone(),
-        repo_dirname: dolt_repo_dir
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "dolt_db".into()),
-        binary: None,
-    };
+        .unwrap_or_else(|| args.out.join("mirror.db"));
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
 
     info!(
         event = "grid_rows_load_start",
         out = %args.out.display(),
-        dolt_repo = %dolt_repo_dir.display(),
-    );
-    let server = DoltServer::ensure(&dolt_repo_dir, &dolt_cfg).context("ensure dolt sql-server")?;
-    info!(
-        event = "grid_rows_load_dolt_ready",
-        url = server.mysql_url(),
-        owned = server.owns_server(),
+        db = %db_path.display(),
     );
 
-    let pool = MySqlPoolOptions::new()
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
+        .create_if_missing(true)
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+    let pool = SqlitePoolOptions::new()
         .max_connections(4)
-        .connect(&server.mysql_url())
+        .connect_with(opts)
         .await
-        .context("connect to dolt")?;
+        .context("open doltlite file")?;
     init_schema(&pool).await?;
 
     let span = info_span!(
