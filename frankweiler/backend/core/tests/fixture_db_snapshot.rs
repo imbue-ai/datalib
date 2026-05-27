@@ -71,12 +71,16 @@ fn fixture_db_path() -> PathBuf {
 }
 
 async fn open_readonly(path: &std::path::Path) -> SqlitePool {
-    // Open read-only so the test can't accidentally write to the
-    // shared bazel-bin artifact. `synchronous = NORMAL` is fine for a
-    // ro open; we set it anyway to silence sqlx's default.
+    // `immutable(true)` (not just `read_only`) is load-bearing under
+    // bazel's darwin-sandbox: the runfiles directory is mounted r/o,
+    // and the fixture DB is WAL-mode, so a plain `mode=ro` open still
+    // tries to touch a `-shm` sidecar in that directory and fails with
+    // SQLITE_CANTOPEN (code 14). `immutable=1` tells SQLite to skip all
+    // WAL/locking/change-detection and treat the file as frozen.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
         .expect("parse url")
         .read_only(true)
+        .immutable(true)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
     SqlitePoolOptions::new()
         .max_connections(1)
