@@ -57,14 +57,17 @@ function ensureFixtureRoot(): string {
 }
 const fixtureRoot = ensureFixtureRoot();
 
-// Ephemeral ports so concurrent runs (`bazel test --runs_per_test=N`,
-// two devs on one machine) don't collide. Previously hardcoded to
-// 8741 / 5183 — distinct from the dev defaults (5173 / 8731) but
-// still fixed across runs.
+// Ephemeral port so concurrent runs (`bazel test --runs_per_test=N`,
+// two devs on one machine) don't collide on a fixed port.
+//
+// The Vite dev server used to be a second webServer here, with the UI
+// loaded from source and `/api/*` proxied to the backend. Now the
+// backend binary embeds the Vite-built SPA (see
+// frankweiler/backend/http/src/embed.rs) and serves it at `/`, so
+// Playwright drives the *packaged artifact* against the same origin —
+// closer to what users run.
 const BACKEND_PORT = cachedPort("FW_E2E_BACKEND_PORT");
-const VITE_PORT = cachedPort("FW_E2E_VITE_PORT");
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`;
-const VITE_URL = `http://127.0.0.1:${VITE_PORT}`;
 
 // Locate the bazel-built http binary. Built via:
 //   bazelisk build //frankweiler/backend/http:frankweiler_http_bin
@@ -96,7 +99,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   use: {
-    baseURL: VITE_URL,
+    baseURL: BACKEND_URL,
     headless: true,
     trace: "retain-on-failure",
   },
@@ -111,25 +114,16 @@ export default defineConfig({
       // Backend takes the data root as its only positional arg; bind
       // address comes from FRANKWEILER_BIND so each test run claims its
       // own ephemeral port. The fixture root produced by
-      // materialize_tng_root.sh IS the data root (see config.yaml inside
-      // it — that file is still used by frankweiler-sync, not the http
-      // binary, which now reads no config).
-      command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)}`,
+      // materialize_tng_root.sh IS the data root.
+      // `--no-open` skips the default browser auto-open; Playwright
+      // drives chromium itself, we don't want a second tab fighting
+      // for focus every test run.
+      command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)} --no-open`,
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
       env: {
         FRANKWEILER_BIND: `127.0.0.1:${BACKEND_PORT}`,
-      },
-    },
-    {
-      command: `pnpm exec vite --port ${VITE_PORT} --strictPort`,
-      url: VITE_URL,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      cwd: here,
-      env: {
-        FRANKWEILER_BACKEND: BACKEND_URL,
       },
     },
   ],

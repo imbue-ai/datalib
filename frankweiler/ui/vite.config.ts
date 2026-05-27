@@ -10,6 +10,20 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "src"),
     },
+    // Under aspect_rules_js, npm deps land at virtual paths like
+    // `node_modules/.aspect_rules_js/<pkg>@<ver>/node_modules/<pkg>`
+    // *and* at `node_modules/<pkg>` (symlinked back to the same place).
+    // Vite's resolver, walking from different importers, hits both
+    // paths and bundles vue-router twice. Each copy then declares its
+    // own `const routeLocationKey = Symbol()`, so `useRoute()`'s
+    // `inject(...)` and the router's `app.provide(...)` key on
+    // *different* symbols and `useRoute()` returns undefined.
+    //
+    // `dedupe` tells Vite to collapse multiple resolutions of these
+    // packages to a single instance. Host `pnpm install` doesn't need
+    // this because its node_modules layout doesn't expose the double
+    // path; the issue is specific to the aspect_rules_js virtual tree.
+    dedupe: ["vue", "vue-router", "pinia"],
   },
   server: {
     host: "127.0.0.1",

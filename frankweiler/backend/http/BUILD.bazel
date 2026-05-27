@@ -79,5 +79,6 @@ rust_binary(
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:webbrowser",
     ],
 )

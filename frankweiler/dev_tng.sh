@@ -20,9 +20,9 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
 set -u
 
 MATERIALIZE="$(rlocation _main/tests/fixtures/materialize_tng_root)"
-DEV_SH="$(rlocation _main/frankweiler/dev.sh)"
+SERVE_SH="$(rlocation _main/frankweiler/serve_dev.sh)"
 [[ -x "$MATERIALIZE" ]] || { echo "ERROR: materialize_tng_root not found at $MATERIALIZE" >&2; exit 1; }
-[[ -x "$DEV_SH" ]]      || { echo "ERROR: dev.sh not found at $DEV_SH" >&2; exit 1; }
+[[ -x "$SERVE_SH" ]]    || { echo "ERROR: serve_dev.sh not found at $SERVE_SH" >&2; exit 1; }
 
 ROOT="$(mktemp -d -t frankweiler-tng.XXXXXX)"
 trap 'rm -rf "$ROOT"' EXIT INT TERM
@@ -30,5 +30,9 @@ echo "TNG data root: $ROOT" >&2
 
 "$MATERIALIZE" "$ROOT" >/dev/null
 
-export FRANKWEILER_CONFIG="$ROOT/config.yaml"
-exec "$DEV_SH" "$ROOT"
+# Use serve_dev.sh (backend-only) rather than dev.sh (backend + vite).
+# The packaged `frankweiler_http_bin` embeds the Vite-built SPA via
+# rust-embed, so a single binary serves both UI and `/api/*` — no
+# separate Vite dev server needed. The binary auto-opens the browser;
+# serve_dev.sh also opens its own URL after the health probe.
+exec "$SERVE_SH" "$ROOT"

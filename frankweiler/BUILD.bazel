@@ -17,17 +17,19 @@ sh_binary(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Same as :dev, but materializes a one-shot data root from the
+# Same as :serve, but materializes a one-shot data root from the
 # checked-in TNG fixtures (`//tests/fixtures:ingested_tng`) into a
 # tmpdir and points the backend at it. Useful for eyeballing the grid
-# without needing a real on-disk mixed-up-files root. Requires sqlite3
+# without needing a real on-disk mixed-up-files root. The packaged
+# `frankweiler_http_bin` serves both the embedded SPA and `/api/*`, so
+# we go through serve_dev.sh (no Vite dev server). Requires sqlite3
 # on PATH (Bazel runs the genrule as `requires-dolt`, so dolt must
 # also be available the first time the artifact is built).
 sh_binary(
     name = "dev_tng",
     srcs = ["dev_tng.sh"],
     data = [
-        ":dev",
+        ":serve",
         "//tests/fixtures:materialize_tng_root",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],

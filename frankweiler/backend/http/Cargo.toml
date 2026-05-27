@@ -24,6 +24,7 @@ mime_guess = "2"
 # outside the sandbox + for a shipped release tarball.
 rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 serde = { workspace = true }
+webbrowser = "1"
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 anyhow = { workspace = true }

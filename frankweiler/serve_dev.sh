@@ -32,7 +32,9 @@ else
 fi
 echo "data root: $ROOT_ARG"
 
-"$BIN" "$ROOT_ARG" &
+# `--no-open` because this wrapper opens the URL itself (below) after
+# waiting for the health endpoint to come up.
+"$BIN" "$ROOT_ARG" --no-open &
 BIN_PID=$!
 trap 'kill "$BIN_PID" 2>/dev/null || true' EXIT INT TERM
 

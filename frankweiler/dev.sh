@@ -77,8 +77,11 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   exit 1
 fi
 
-# Start the backend.
-"$BIN" "$ROOT_ARG" &
+# Start the backend. `--no-open` because this script opens the Vite
+# URL (not the backend's bundled UI) itself after waiting for Vite to
+# bind — letting the backend also auto-open would spawn a duplicate
+# tab pointed at the static SPA.
+"$BIN" "$ROOT_ARG" --no-open &
 BACKEND_PID=$!
 
 # Start Vite (foreground-stdio, but in the background process-wise).
