@@ -55,9 +55,11 @@ struct DaemonState {
 }
 
 impl QmdDaemon {
-    /// Build a daemon handle. The child isn't spawned yet — that happens
-    /// on the first query so we don't pay startup cost when nobody is
-    /// searching.
+    /// Build a daemon handle. The child isn't spawned yet — that
+    /// happens on the first query so we don't pay startup cost when
+    /// nobody is searching. Callers who want predictable first-query
+    /// latency (e.g. e2e tests that race against qmd's cold start)
+    /// should follow up with [`QmdDaemon::warm_up`].
     pub fn new(cfg: QmdDaemonConfig) -> Result<Self> {
         let idx = qmd_index_path(&cfg.qmd_root);
         if !idx.exists() {
@@ -75,6 +77,27 @@ impl QmdDaemon {
                 next_id: 0,
             }),
         })
+    }
+
+    /// Force the child to spawn, the MCP handshake to complete, and a
+    /// throwaway query to run end-to-end so the model + index are
+    /// loaded. Once this returns successfully, the first user-driven
+    /// `search()` is a hot call.
+    ///
+    /// We use a search rather than `tools/list` because qmd 2.1.0 loads
+    /// its model + index lazily on the first `query`, not on
+    /// `initialize`. Without a real query during warmup, the first
+    /// real query still pays the cold-start cost.
+    ///
+    /// On failure the daemon is torn down and the error returned —
+    /// callers may still proceed; the lazy path will retry on the next
+    /// search.
+    pub fn warm_up(&self) -> Result<()> {
+        // A query string nothing in our corpus matches, with limit=1.
+        // We don't care about the result, only that qmd responded with
+        // a well-formed `structuredContent.results` envelope.
+        let _ = self.search(QueryMode::Hybrid, "_qmd_warmup_zzy_", 1)?;
+        Ok(())
     }
 
     pub fn config(&self) -> &QmdDaemonConfig {
@@ -166,14 +189,25 @@ fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> {
         .stdout
         .take()
         .ok_or_else(|| anyhow!("qmd mcp: missing stdout"))?;
-    // Drain stderr in a background thread. Without this, qmd's banner
-    // and progress output eventually fills the pipe buffer and blocks
-    // the child. Lines are dropped on the floor — they're noise we
-    // don't surface anywhere useful.
+    // Forward qmd's stderr to ours, line-by-line with a `[qmd]` prefix
+    // so it's distinguishable from the rest of our process output.
+    // Without this, qmd's banner / progress / error lines either fill
+    // the pipe buffer and block the child, or get dropped on the floor
+    // and make daemon failures opaque. Errors reading from the child's
+    // stderr are themselves prefixed and logged — the thread exits
+    // silently only when the pipe closes naturally on child exit.
     if let Some(stderr) = child.stderr.take() {
         thread::spawn(move || {
             let r = BufReader::new(stderr);
-            for _ in r.lines().map_while(Result::ok) {}
+            for line in r.lines() {
+                match line {
+                    Ok(text) => eprintln!("[qmd] {text}"),
+                    Err(e) => {
+                        eprintln!("[qmd] (stderr read error: {e})");
+                        break;
+                    }
+                }
+            }
         });
     }
     state.child = Some(child);
@@ -263,7 +297,23 @@ fn parse_query_response(resp: &serde_json::Value, collection: &str) -> Result<Ve
         .and_then(|r| r.get("structuredContent"))
         .and_then(|s| s.get("results"))
         .and_then(|r| r.as_array())
-        .ok_or_else(|| anyhow!("qmd mcp: missing result.structuredContent.results"))?;
+        .ok_or_else(|| {
+            // Include the raw response (truncated) so the next failure
+            // tells us exactly what qmd returned instead of just "no
+            // structuredContent" — usually the response has an
+            // `isError: true` content block with the actual diagnostic.
+            let snippet = serde_json::to_string(resp).unwrap_or_else(|_| "<unserializable>".into());
+            let snippet = if snippet.len() > 1000 {
+                format!(
+                    "{}…(truncated, full len {})",
+                    &snippet[..1000],
+                    snippet.len()
+                )
+            } else {
+                snippet
+            };
+            anyhow!("qmd mcp: missing result.structuredContent.results; response: {snippet}")
+        })?;
     let mut out = Vec::with_capacity(results.len());
     for d in results {
         let raw_file = d.get("file").and_then(|v| v.as_str()).unwrap_or("");

@@ -80,8 +80,25 @@ async fn main() -> anyhow::Result<()> {
     let repo = build_repo(root.clone()).await?;
     let qmd_daemon = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
         Ok(d) => {
-            eprintln!("qmd daemon: ready (lazy spawn on first search)");
-            Some(Arc::new(d))
+            // Pre-warm so the first user query doesn't race against
+            // qmd's npx/model/index cold start (~5-15s). Without this,
+            // a request that lands while qmd is still loading causes
+            // an MCP error response → daemon teardown → fallback to
+            // the LIKE-based path → "no results" for what should be a
+            // hot query. We run warmup on a blocking thread so the
+            // tokio runtime stays free. Failures are non-fatal — the
+            // lazy path will retry on the next real search.
+            eprintln!("qmd daemon: warming up…");
+            let daemon = Arc::new(d);
+            let warm = daemon.clone();
+            match tokio::task::spawn_blocking(move || warm.warm_up()).await {
+                Ok(Ok(())) => eprintln!("qmd daemon: ready"),
+                Ok(Err(e)) => eprintln!(
+                    "qmd daemon: warmup failed ({e:#}); lazy-spawn fallback on first search"
+                ),
+                Err(e) => eprintln!("qmd daemon: warmup task panicked ({e})"),
+            }
+            Some(daemon)
         }
         Err(e) => {
             eprintln!("qmd daemon: disabled ({e:#}); falling back to CLI per call");
