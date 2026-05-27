@@ -42,7 +42,7 @@ def main() -> int:
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
     # under the data_root. The sync binary lays out its own `rendered_md/`
-    # and `mirror.db` directly under data_root. The enclosing genrule is
+    # and `backend_index.doltlite_db` directly under data_root. The enclosing genrule is
     # sandboxed (no `no-sandbox` tag; see scripts/lint_no_sandbox.py),
     # so this dir is fresh per action — no need to clean it ourselves.
     workspace = data_root

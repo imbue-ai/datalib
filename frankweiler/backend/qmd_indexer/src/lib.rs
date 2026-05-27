@@ -7,7 +7,7 @@
 //! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
 //! it inside the data root by setting `XDG_CACHE_HOME=<root>` directly,
 //! so the resulting index lives at `<root>/qmd/index.sqlite` alongside
-//! `rendered_md/` and `dolt_db/`.
+//! `rendered_md/` and `backend_index.doltlite_db`.
 //!
 //! The run is **incremental** — qmd's `update` only re-indexes changed
 //! files. The first run lazily creates the collection via `collection add`

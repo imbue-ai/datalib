@@ -8,14 +8,16 @@ end-to-end. macOS arm64 only for now.
 You'll need a few host tools on `PATH`:
 
 ```sh
-brew install node gh dolt
+brew install node gh
 ```
 
 - `gh` — used below to pull the release tarball.
-- `dolt` — `frankweiler-sync` manages a `dolt sql-server` subprocess
-  against `<data_root>/dolt_db/`.
 - `node` — the qmd indexer shells out to `npx -y @tobilu/qmd@<version>`
   during the index phase.
+
+(doltlite is embedded directly in the backend binary; no separate
+install is required. The SQL store lives at
+`<data_root>/backend_index.doltlite_db`.)
 
 Also make sure you're authenticated with GitHub for the `gh` download:
 
@@ -123,8 +125,8 @@ First run does the slow work; subsequent runs are mostly cache hits.
   `claude.ai/api`. New conversations are fetched first.
 - A `translate` phase: each conversation rendered into the export-shaped
   JSON cache and then into Markdown.
-- A `load` phase: rows written into a managed `dolt sql-server` at
-  `<data_root>/dolt_db/`.
+- A `load` phase: rows written into the doltlite SQL store at
+  `<data_root>/backend_index.doltlite_db`.
 - A `qmd index` phase: builds the search index. **First run is slow** —
   embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
@@ -138,7 +140,7 @@ First run does the slow work; subsequent runs are mostly cache hits.
 │   ├── conversations.json     # export-shaped cache, the source of truth for incremental
 │   └── users.json
 ├── rendered_md/               # one .qmd per conversation
-├── dolt_db/                   # managed Dolt repo (rows for the grid)
+├── backend_index.doltlite_db  # doltlite SQL store (grid rows + audit log)
 └── .frankweiler/qmd/
     ├── index.sqlite           # search index hit by hybrid / vector queries
     └── models -> ~/.cache/qmd-models

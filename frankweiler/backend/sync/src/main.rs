@@ -585,8 +585,9 @@ async fn run_load_phase(
     // get merged into the main `.db` file on a checkpoint. sqlx's
     // default close path runs only a PASSIVE checkpoint, which copies
     // bytes but leaves the WAL file populated — so a downstream
-    // process that copies just `mirror.db` ends up with an empty file.
-    // The genrule that ships `tests/fixtures/ingested/mirror.db`
+    // process that copies just `backend_index.doltlite_db` ends up
+    // with an empty file. The genrule that ships
+    // `tests/fixtures/ingested/backend_index.doltlite_db`
     // hit exactly this: 4KB-empty `.db`, all data in `.db-wal`,
     // every e2e test asserts zero rows. TRUNCATE checkpoints + zeros
     // the WAL so the `.db` file is self-contained.

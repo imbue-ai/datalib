@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://imbue.com/schemas/grid_rows.schema.json",
   "title": "GridRowsSchema",
-  "description": "Provider-agnostic union table that backs the AG Grid in frankweiler. Every searchable entity in the system (chat conversations, individual messages, content blocks, slack messages, ...) emits one row here at ingest time, keyed by a provider-namespaced UUID. The Rust grid backend reads this table from <root>/mirror.sqlite with a single query and renders rows directly. Per-provider tables (anthropic_*, openai_*, slack_*) remain the authoritative store for raw payloads + render input; grid_rows is the denormalized projection. Single source of truth for column names, types, and per-provider mappings — codegen produces matching Python dataclass + DDL, Rust struct, and TypeScript interface.",
+  "description": "Provider-agnostic union table that backs the AG Grid in frankweiler. Every searchable entity in the system (chat conversations, individual messages, content blocks, slack messages, ...) emits one row here at ingest time, keyed by a provider-namespaced UUID. The Rust grid backend reads this table from <root>/backend_index.doltlite_db with a single query and renders rows directly. Per-provider tables (anthropic_*, openai_*, slack_*) remain the authoritative store for raw payloads + render input; grid_rows is the denormalized projection. Single source of truth for column names, types, and per-provider mappings — codegen produces matching Python dataclass + DDL, Rust struct, and TypeScript interface.",
   "type": "object",
   "definitions": {
     "GridRow": {

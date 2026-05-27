@@ -78,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
 async fn build_repo(cfg: Option<&Config>, root: Arc<PathBuf>) -> anyhow::Result<DynRepo> {
     let db_path = match cfg {
         Some(c) => c.dolt_db_path(),
-        None => root.as_ref().join("mirror.db"),
+        None => root.as_ref().join("backend_index.doltlite_db"),
     };
     eprintln!("dolt db: {}", db_path.display());
     let repo = DoltRepo::open(&db_path, root)

@@ -10,7 +10,7 @@
 //! under. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`,
 //! so we point `XDG_CACHE_HOME` directly at the data root and the index
 //! lands at `<root>/qmd/index.sqlite` alongside `rendered_md/` and
-//! `dolt_db/`.
+//! `backend_index.doltlite_db`.
 
 pub mod daemon;
 pub mod mapping;

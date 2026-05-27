@@ -6,8 +6,8 @@ Why this exists
 `no-sandbox` opts a Bazel action out of the sandbox, so it runs
 directly in `bazel-out/`. The action's working directory persists
 across runs, which means stale state can leak between invocations —
-the bug that bit us when doltlite's `mirror.db-wal` from a prior
-genrule run got replayed on top of a fresh-looking `mirror.db`,
+the bug that bit us when doltlite's `backend_index.doltlite_db-wal` from a prior
+genrule run got replayed on top of a fresh-looking `backend_index.doltlite_db`,
 breaking the very first INSERT of the next run with
 `UNIQUE constraint failed`.
 

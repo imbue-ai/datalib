@@ -37,7 +37,8 @@ struct Args {
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 
-    /// Path to the doltlite database file. Defaults to `<out>/mirror.db`.
+    /// Path to the doltlite database file. Defaults to
+    /// `<out>/backend_index.doltlite_db`.
     #[arg(long, env = "DOLT_DB_PATH")]
     dolt_db_path: Option<PathBuf>,
 
@@ -64,7 +65,7 @@ async fn main() -> Result<()> {
     let db_path = args
         .dolt_db_path
         .clone()
-        .unwrap_or_else(|| args.out.join("mirror.db"));
+        .unwrap_or_else(|| args.out.join("backend_index.doltlite_db"));
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }

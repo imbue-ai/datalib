@@ -4,7 +4,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 
 - **`frankweiler/backend/`** — Rust workspace that downloads + ingests
   LLM chat exports and other sources (Anthropic, OpenAI, Slack, GitHub,
-  GitLab, Notion) into a Dolt DB, renders one QMD per conversation,
+  GitLab, Notion) into a doltlite DB, renders one QMD per conversation,
   builds a qmd search index, and serves the result over axum / Tauri.
 - **`frankweiler/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and an Open Host container.
@@ -96,7 +96,7 @@ once the tokens themselves stabilise.
        (Rust ETL + axum)        (TS types)
                 │
                 ▼
-        frankweiler/backend/core ──► dolt + qmd
+        frankweiler/backend/core ──► doltlite + qmd
                 │             │
                 ▼             ▼
         backend/http   backend/tauri-backend
@@ -146,8 +146,8 @@ the same time, and opens your browser at the Vite URL
 (`http://127.0.0.1:5173/`). Vite proxies `/api/*` to the backend on
 `127.0.0.1:8731`. Ctrl-C tears both down.
 
-Data root resolution (the QMDs feed the search index — Dolt remains the
-source of truth):
+Data root resolution (the QMDs feed the search index —
+`backend_index.doltlite_db` remains the source of truth):
 
 1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
 2. `$FRANKWEILER_ROOT`
@@ -168,7 +168,7 @@ its own `*_translate` (and where applicable `*_download`) binary; the
 shared Load step is `//frankweiler/backend/etl:grid_rows_load`. The
 ETL orchestrator at `//frankweiler/backend/sync` shows the
 end-to-end wiring: parse each provider's `raw_api/` dir, render markdown
-+ sidecars, then load them into a managed `dolt sql-server`.
++ sidecars, then load them into `<root>/backend_index.doltlite_db`.
 
 ### QMD search index (default-on, incremental)
 
@@ -197,7 +197,7 @@ Design notes:
   next run picks up where it left off (it skips content hashes that
   already have vectors), so paying the cost in chunks is fine.
 
-  After a no-op render + dolt commit, you'll see something like:
+  After a no-op render + dolt_commit, you'll see something like:
 
   ```
   [1/1] mirror (**/*.qmd)
@@ -302,8 +302,6 @@ committed).
 
 - Tauri bundler (`pnpm tauri` / `cargo tauri`).
 - OpenHost docker build (run `docker build` against Bazel outputs).
-- The `dolt sql-server` subprocess (test fixtures or skip if `dolt` is
-  missing).
 - The Vite build / Vitest under Bazel — currently driven by `pnpm`. A future
   `rules_js` + `rules_ts` integration is on the table once the surface area
   stabilises.

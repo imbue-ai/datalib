@@ -50,7 +50,7 @@ rust_test(
     ],
 )
 
-# Insta snapshot of the TNG fixture's `mirror.db` contents. Catches
+# Insta snapshot of the TNG fixture's `backend_index.doltlite_db` contents. Catches
 # silent data drift in the load pipeline — most recently the
 # WAL-not-checkpointed bug where the genrule shipped an empty .db.
 # Update by running `cargo insta review` from frankweiler/backend.
@@ -64,14 +64,14 @@ rust_test(
     # different files.
     crate_name = "fixture_db_snapshot",
     data = [
-        "//tests/fixtures:ingested/mirror.db",
+        "//tests/fixtures:ingested/backend_index.doltlite_db",
     ] + glob(
         ["tests/snapshots/fixture_db_snapshot__*.snap"],
         allow_empty = True,
     ),
     edition = "2021",
     env = {
-        "FW_FIXTURE_DB": "$(rootpath //tests/fixtures:ingested/mirror.db)",
+        "FW_FIXTURE_DB": "$(rootpath //tests/fixtures:ingested/backend_index.doltlite_db)",
         # insta defaults to writing .new files next to the source file,
         # which it locates via CARGO_MANIFEST_DIR. Bazel doesn't surface
         # the source tree to the test, so point insta at the workspace

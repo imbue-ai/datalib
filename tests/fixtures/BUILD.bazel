@@ -21,7 +21,7 @@ sh_binary(
 # pipeline (ingest -> render) against the checked-in TNG-themed source
 # JSON and emits two outputs:
 #
-#   * mirror.db -- the doltlite (SQLite-compatible) file the backend reads.
+#   * backend_index.doltlite_db -- the doltlite (SQLite-compatible) file the backend reads.
 #   * qmd.tar   -- the rendered conversation markdown tree.
 
 filegroup(
@@ -51,7 +51,7 @@ genrule(
     name = "ingested_tng",
     srcs = [":source_json"],
     outs = [
-        "ingested/mirror.db",
+        "ingested/backend_index.doltlite_db",
         "ingested/qmd.tar",
     ],
     tools = [
@@ -73,7 +73,7 @@ genrule(
             "tests/fixtures/notion_web",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
-        "cp $(RULEDIR)/sync_workspace/mirror.db $(execpath ingested/mirror.db)",
+        "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
         # Tar the rendered_md tree hermetically into qmd.tar.
         " ".join([
             "python3 $(execpath tar_qmd.py)",

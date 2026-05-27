@@ -288,13 +288,13 @@ impl SourceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoltConfig {
     /// Filename of the doltlite database, relative to `Config.data_root`.
-    /// Defaults to `mirror.db`.
+    /// Defaults to `backend_index.doltlite_db`.
     #[serde(default = "default_dolt_db_filename")]
     pub db_filename: String,
 }
 
 fn default_dolt_db_filename() -> String {
-    "mirror.db".into()
+    "backend_index.doltlite_db".into()
 }
 
 impl Default for DoltConfig {
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn dolt_defaults() {
         let cfg = DoltConfig::default();
-        assert_eq!(cfg.db_filename, "mirror.db");
+        assert_eq!(cfg.db_filename, "backend_index.doltlite_db");
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
             sync: SyncConfig::default(),
             sources: Vec::new(),
         };
-        assert_eq!(cfg.dolt_db_path(), tmp.join("mirror.db"));
+        assert_eq!(cfg.dolt_db_path(), tmp.join("backend_index.doltlite_db"));
     }
 
     #[test]

@@ -6,7 +6,7 @@
 #   * `bazelisk test //frankweiler/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
-#   mirror.db               doltlite (SQLite-compatible) file the backend reads.
+#   backend_index.doltlite_db               doltlite (SQLite-compatible) file the backend reads.
 #   rendered_md/...         Conversation markdown tree (from qmd.tar).
 #   qmd/index.sqlite        QMD index (from qmd-index.tar).
 #   qmd/models -> ~/.cache/qmd-models  (shared, populated externally)
@@ -33,10 +33,10 @@ set -u
 OUT_ROOT="${1:-}"
 [[ -n "$OUT_ROOT" ]] || { echo "usage: $0 <out-root>" >&2; exit 2; }
 
-DB_FILE="$(rlocation _main/tests/fixtures/ingested/mirror.db)"
+DB_FILE="$(rlocation _main/tests/fixtures/ingested/backend_index.doltlite_db)"
 QMD_TAR="$(rlocation _main/tests/fixtures/ingested/qmd.tar)"
 QMD_INDEX_TAR="$(rlocation _main/tests/fixtures/ingested/qmd-index.tar)"
-[[ -f "$DB_FILE" ]]       || { echo "ERROR: mirror.db not found at $DB_FILE" >&2; exit 1; }
+[[ -f "$DB_FILE" ]]       || { echo "ERROR: backend_index.doltlite_db not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$QMD_TAR" ]]       || { echo "ERROR: qmd.tar not found at $QMD_TAR" >&2; exit 1; }
 [[ -f "$QMD_INDEX_TAR" ]] || { echo "ERROR: qmd-index.tar not found at $QMD_INDEX_TAR" >&2; exit 1; }
 
@@ -52,13 +52,13 @@ tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the doltlite file straight in — the backend opens it directly
 # via `<data_root>/<dolt.db_filename>`.
-cp "$DB_FILE" "$OUT_ROOT/mirror.db"
-chmod u+w "$OUT_ROOT/mirror.db"
+cp "$DB_FILE" "$OUT_ROOT/backend_index.doltlite_db"
+chmod u+w "$OUT_ROOT/backend_index.doltlite_db"
 
 cat > "$OUT_ROOT/config.yaml" <<EOF
 data_root: $OUT_ROOT
 dolt:
-  db_filename: mirror.db
+  db_filename: backend_index.doltlite_db
 EOF
 
 # qmd models live once in ~/.cache/qmd-models (~1.6 GB) and every data

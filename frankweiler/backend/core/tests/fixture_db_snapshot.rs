@@ -1,9 +1,10 @@
-//! Snapshot of the TNG fixture's `mirror.db` contents.
+//! Snapshot of the TNG fixture's `backend_index.doltlite_db` contents.
 //!
 //! Catches silent data regressions in the load pipeline. Most recently
 //! the "WAL not checkpointed at sync close" bug, where the genrule
-//! shipped a 4 KB empty `mirror.db` while all the actual rows sat in
-//! the discarded `mirror.db-wal` — every e2e test got back zero rows
+//! shipped a 4 KB empty `backend_index.doltlite_db` while all the
+//! actual rows sat in the discarded `backend_index.doltlite_db-wal` —
+//! every e2e test got back zero rows
 //! and we only noticed via the UI failures. A snapshot at the SQL
 //! level fails immediately on that kind of drift, and shows a
 //! reviewable diff of exactly what changed.
@@ -28,7 +29,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-/// Locate `mirror.db`. Under Bazel, the test sees it at the path
+/// Locate `backend_index.doltlite_db`. Under Bazel, the test sees it at the path
 /// rules_rust resolves via `$(rootpath)` (passed via the `FW_FIXTURE_DB`
 /// env in BUILD.bazel). Under plain `cargo test`, fall back to the
 /// workspace's `bazel-bin/` convenience symlink — the developer has to
@@ -44,11 +45,11 @@ fn fixture_db_path() -> PathBuf {
     }
     let cargo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let bazel_bin = cargo_root
-        .join("../../../bazel-bin/tests/fixtures/ingested/mirror.db")
+        .join("../../../bazel-bin/tests/fixtures/ingested/backend_index.doltlite_db")
         .canonicalize()
         .unwrap_or_else(|_| {
             panic!(
-                "fixture mirror.db not found. Run \
+                "fixture backend_index.doltlite_db not found. Run \
                  `bazelisk build //tests/fixtures:ingested_tng` first."
             )
         });
@@ -209,5 +210,5 @@ async fn snapshot_grid_rows_and_documents() {
     // Pretty-printed JSON is the most diff-friendly representation —
     // one field per line, sorted keys, no insta-yaml quoting surprises.
     let snapshot = serde_json::to_string_pretty(&bundle).expect("serialize");
-    insta::assert_snapshot!("fixture_mirror_db", snapshot);
+    insta::assert_snapshot!("fixture_backend_index", snapshot);
 }

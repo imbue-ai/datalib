@@ -2,10 +2,11 @@ import { test, expect } from "@playwright/test";
 
 // Smoke test: the grid actually renders rows from the TNG fixture.
 //
-// Catches the dev_tng regression where the script materialized
-// `mirror.sqlite` but the backend defaulted to Dolt, so the grid came up
-// empty. The e2e harness materializes a Dolt repo from the same fixture
-// dump dev_tng uses, so a green run here means the dev_tng path works too.
+// Catches regressions where the harness materializes
+// `backend_index.doltlite_db` but the backend looks somewhere else, so
+// the grid comes up empty. The e2e harness materializes from the same
+// fixture dump `dev_tng` uses, so a green run here means the dev_tng
+// path works too.
 
 test("the grid populates with rows from the fixture", async ({
   page,
