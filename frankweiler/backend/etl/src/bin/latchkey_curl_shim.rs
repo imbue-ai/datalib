@@ -87,6 +87,18 @@ fn split_combined(tok: &str) -> Vec<String> {
 }
 
 fn parse(argv: Vec<String>) -> Args {
+    // Handle --version / -V before any other parsing so it works without
+    // a URL. Matches `frankweiler-sync --version` (clap-rendered) by
+    // printing `<bin-name> <FRANKWEILER_VERSION>` where the version is
+    // the `git describe --tags --always --dirty` slug stamped at build
+    // time (cargo: build.rs; bazel: rustc_env.txt + stamp).
+    for tok in &argv {
+        if tok == "--version" || tok == "-V" {
+            println!("latchkey-curl-shim {}", env!("FRANKWEILER_VERSION"));
+            std::process::exit(0);
+        }
+    }
+
     let mut expanded: Vec<String> = Vec::new();
     for tok in argv {
         if tok.starts_with('-') && !tok.starts_with("--") && tok.len() > 2 {

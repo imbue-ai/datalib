@@ -1,14 +1,13 @@
-//! Stamps `frankweiler-sync` with build metadata via `cargo:rustc-env`
-//! for `cargo build` users. Bazel builds get the same values from
-//! `rustc_env.txt` + `--workspace_status_command=tools/workspace_status.sh`,
-//! so this build.rs is the cargo-side counterpart only.
+//! Stamps `frankweiler-etl`'s binaries (notably `latchkey-curl-shim`)
+//! with build metadata via `cargo:rustc-env` for `cargo build` users.
+//! Bazel builds get the same values from `rustc_env.txt` +
+//! `--workspace_status_command=tools/workspace_status.sh`, so this
+//! build.rs is the cargo-side counterpart only. Mirror of
+//! `frankweiler/backend/sync/build.rs`.
 //!
 //! Emitted env:
 //!   FRANKWEILER_GIT_HASH       full HEAD SHA
 //!   FRANKWEILER_VERSION        `git describe --tags --always --dirty`
-//!
-//! Both are read at compile time by `src/main.rs` via `env!`; the version
-//! string is what clap's `--version` flag renders.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -24,10 +23,6 @@ fn main() {
     );
 }
 
-// Best-effort wrapper around a git invocation. Returns the trimmed
-// stdout on success or the literal string "unknown" on any failure,
-// so the emitted env is always non-empty (lets src/main.rs use `env!`
-// rather than `option_env!` and compose cleanly with `concat!`).
 fn git(subcmd: &str, args: &[&str]) -> String {
     std::process::Command::new("git")
         .arg(subcmd)

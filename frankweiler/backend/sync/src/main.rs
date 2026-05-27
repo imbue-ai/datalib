@@ -299,21 +299,34 @@ set $FRANKWEILER_CURL_SHIM / $LATCHKEY_CURL explicitly, and that \
 
 fn auth_hint_for(provider: &str) -> String {
     match provider {
+        // All hints route the secret through the macOS clipboard so it
+        // never lands in shell history: a one-liner copies the token to
+        // the pasteboard, then the printed `latchkey auth set …` command
+        // expands `$(pbpaste)` at exec time. zsh/bash record the literal
+        // `$(pbpaste)`, not the resolved value.
         "chatgpt_api" => "\
 chatgpt access token expired or missing.
 
   1. Open https://chatgpt.com in a logged-in browser, then in DevTools
-     console run:
+     console run (clipboard write needs page focus, so it waits for a
+     click on the page):
        const r = await fetch('/api/auth/session');
        const j = await r.json();
-       console.log(`latchkey auth set chatgpt -H \"Authorization: Bearer ${j.accessToken}\"`);
-  2. Paste the printed `latchkey auth set …` command into your shell.
+       addEventListener('click', async () => {
+         await navigator.clipboard.writeText(j.accessToken);
+         console.log('  latchkey auth set chatgpt -H \"Authorization: Bearer $(pbpaste)\"');
+       }, { once: true });
+     Then click anywhere on the chatgpt page; the console prints the
+     command to run.
+  2. Paste the printed `latchkey auth set …` line into your shell and
+     run it. zsh/bash record the literal `$(pbpaste)`, not the resolved
+     token, so the secret never lands in shell history.
   3. Smoke-test:
-       LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim \\
-         latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
+       latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
      Expect a JSON object with your account id. If you still see a
-     Cloudflare challenge, also paste `Cookie: cf_clearance=…` into the
-     same `latchkey auth set chatgpt` call.
+     Cloudflare challenge, copy `cf_clearance` from DevTools → Application
+     → Cookies → chatgpt.com and add a second `-H \"Cookie: cf_clearance=$(pbpaste)\"`
+     to the `latchkey auth set chatgpt` call.
 
 See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
             .into(),
@@ -321,21 +334,21 @@ See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
 anthropic sessionKey expired or missing.
 
   1. Open https://claude.ai logged in. In DevTools → Application →
-     Cookies → claude.ai, copy the `sessionKey` value.
-  2. Run:
-       latchkey auth set claude-ai -H 'Cookie: sessionKey=sk-ant-…'
+     Cookies → claude.ai, copy the `sessionKey` value to the clipboard.
+  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"
   3. Smoke-test:
-       LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim \\
-         latchkey curl -s https://claude.ai/api/organizations | head -c 200
+       latchkey curl -s https://claude.ai/api/organizations | head -c 200
 
 See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
             .into(),
         "slack_api" => "\
 slack token expired or missing.
 
-  1. Grab a user-scope OAuth token (xoxc/xoxp/xoxd).
-  2. Run:
-       latchkey auth set slack -H 'Authorization: Bearer xoxc-…'
+  1. Grab a user-scope OAuth token (xoxc/xoxp/xoxd) and copy it to the
+     clipboard.
+  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set slack -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
        latchkey curl -s https://slack.com/api/auth.test | head -c 200
 
@@ -345,9 +358,9 @@ See frankweiler/backend/etl/providers/slack/EXTRACT.md for details."
 github PAT expired or missing.
 
   1. Create a fine-grained PAT at https://github.com/settings/tokens
-     with `repo` + `read:user` scopes.
-  2. Run:
-       latchkey auth set github -H 'Authorization: Bearer github_pat_…'
+     with `repo` + `read:user` scopes; copy it to the clipboard.
+  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set github -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
        latchkey curl -s https://api.github.com/user | head -c 200
 
@@ -357,9 +370,9 @@ See frankweiler/backend/etl/providers/github/EXTRACT.md for details."
 gitlab token expired or missing.
 
   1. Create a personal token at https://gitlab.com/-/profile/personal_access_tokens
-     with `read_api` scope.
-  2. Run:
-       latchkey auth set gitlab -H 'Authorization: Bearer glpat-…'
+     with `read_api` scope; copy it to the clipboard.
+  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set gitlab -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
        latchkey curl -s https://gitlab.com/api/v4/user | head -c 200
 
@@ -369,9 +382,9 @@ See frankweiler/backend/etl/providers/gitlab/EXTRACT.md for details."
 notion integration token expired or missing.
 
   1. Create an internal integration at https://www.notion.so/profile/integrations
-     and copy the secret.
-  2. Run:
-       latchkey auth set notion -H 'Authorization: Bearer secret_…'
+     and copy the secret to the clipboard.
+  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set notion -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
        latchkey curl -s -X POST https://api.notion.com/v1/search \\
          -H 'Notion-Version: 2022-06-28' -H 'Content-Type: application/json' \\

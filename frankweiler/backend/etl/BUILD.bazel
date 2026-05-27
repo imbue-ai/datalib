@@ -50,6 +50,12 @@ rust_binary(
     name = "latchkey_curl_shim",
     srcs = ["src/bin/latchkey_curl_shim.rs"],
     edition = "2021",
+    # Stamp the binary with FRANKWEILER_VERSION (git describe slug) so
+    # `latchkey-curl-shim --version` reports the commit it was built from
+    # in the same format as `frankweiler-sync --version`. Mirrors
+    # //frankweiler/backend/sync:frankweiler_sync_bin.
+    rustc_env_files = ["rustc_env.txt"],
+    stamp = -1,
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "@frankweiler_crates//:tokio",

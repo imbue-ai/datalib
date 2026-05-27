@@ -59,20 +59,22 @@ need to set `LATCHKEY_CURL` yourself.
    latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
-3. Open [claude.ai](https://claude.ai) in a logged-in browser tab, open
-   DevTools → Console, and paste this snippet. It reads your
-   `sessionKey` cookie and prints a ready-to-run `latchkey` command:
+3. Open [claude.ai](https://claude.ai) in a logged-in browser tab. The
+   `sessionKey` cookie is `HttpOnly`, so it's not visible to
+   `document.cookie` — you have to read it from DevTools directly:
 
-   ```js
-   (() => {
-     const sk = document.cookie.split('; ').find(c => c.startsWith('sessionKey='));
-     if (!sk) { console.error('sessionKey cookie not found — are you logged into claude.ai?'); return; }
-     const value = decodeURIComponent(sk.slice('sessionKey='.length));
-     console.log(`latchkey auth set claude-ai -H 'Cookie: sessionKey=${value}'`);
-   })();
+   - Open DevTools → **Application** tab → **Storage** → **Cookies** →
+     `https://claude.ai`.
+   - Find the row named `sessionKey` and copy its **Value**.
+
+4. Register it with latchkey. Use `pbpaste` rather than pasting the
+   cookie value literally — zsh/bash record the pre-expansion command in
+   history, so the file ends up storing the harmless `$(pbpaste)` text
+   instead of your live session token:
+
+   ```sh
+   latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
    ```
-
-4. Copy the printed command into your terminal and run it.
 
 
 ## 3. Sample configuration

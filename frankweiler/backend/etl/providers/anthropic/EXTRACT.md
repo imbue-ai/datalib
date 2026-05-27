@@ -55,8 +55,12 @@ the green path, so `cf_clearance` is never issued — and not needed
 in the latchkey credential set. The `sessionKey` cookie is the full
 auth surface. If a future CF tightening flips us into challenge
 land, grab `cf_clearance` from DevTools → Application → Cookies →
-`claude.ai` (HttpOnly) and add `-H "Cookie: cf_clearance=…"` to
-`latchkey auth set claude-ai`.
+`claude.ai` (HttpOnly), copy its value to the clipboard, and add it
+via `$(pbpaste)` so the cookie doesn't land in shell history:
+
+```sh
+latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
+```
 
 ## API surface used
 

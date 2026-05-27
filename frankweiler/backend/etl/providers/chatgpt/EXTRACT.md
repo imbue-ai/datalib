@@ -36,15 +36,26 @@ info chatgpt` reports `invalid` or requests come back with
      const r = await fetch('/api/auth/session', { credentials: 'include' });
      const j = await r.json();
      if (!j.accessToken) { console.error('no accessToken:', j); return; }
-     const cmd = `latchkey auth set chatgpt -H "Authorization: Bearer ${j.accessToken}"`;
-     console.log(cmd);
-     await navigator.clipboard.writeText(cmd).catch(() => {});
+     // navigator.clipboard.writeText only works when the page is focused,
+     // and pressing Enter in DevTools leaves DevTools focused. Wait for
+     // the next click anywhere on the page, then copy.
+     console.log('click anywhere on the page to copy the token to clipboard...');
+     addEventListener('click', async () => {
+       await navigator.clipboard.writeText(j.accessToken);
+       console.log('access token copied to clipboard. Run:');
+       console.log('  latchkey auth set chatgpt -H "Authorization: Bearer $(pbpaste)"');
+     }, { once: true });
    })();
    ```
 
-3. The console prints (and copies to clipboard) a line like
-   `latchkey auth set chatgpt -H "Authorization: Bearer eyJ…"`. Paste
-   it into your terminal and run it.
+   The clipboard holds *only the access token*; the printed command
+   uses `$(pbpaste)` so the token never appears in console output or
+   shell history.
+
+3. Paste the printed `latchkey auth set …` line into your terminal
+   and run it. zsh/bash record the literal `$(pbpaste)`, not the
+   resolved token, so nothing sensitive lands in `~/.zsh_history`.
+
 4. Smoke test:
 
    ```sh
@@ -87,8 +98,13 @@ issued and is not needed in the latchkey credential set — a single
 If you ever *did* need it (e.g. some future tightening, or running
 with plain `curl` as `LATCHKEY_CURL`), grab it from DevTools →
 Application → Cookies → `chatgpt.com` → row `cf_clearance` (HttpOnly,
-so the JS snippet above can't read it) and add another `-H "Cookie:
-cf_clearance=…"` to `latchkey auth set chatgpt`.
+so the JS snippet above can't read it), copy its value to the
+clipboard, and add another header via `$(pbpaste)` so the cookie
+doesn't land in shell history either:
+
+```sh
+latchkey auth set chatgpt -H "Cookie: cf_clearance=$(pbpaste)"
+```
 
 ## API surface used
 
