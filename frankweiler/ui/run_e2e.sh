@@ -35,10 +35,13 @@ else
 fi
 [[ -d "$UI_DIR" ]] || { echo "ERROR: UI dir not found: $UI_DIR" >&2; exit 1; }
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "ERROR: pnpm not on PATH. Install via 'brew install pnpm'." >&2
-  exit 1
-fi
+# pnpm is pinned in frankweiler/ui/package.json's `packageManager` field
+# and provisioned on demand via corepack (ships with Node 16.9+). See
+# scripts/ensure_pnpm.sh for the bootstrap logic. UI_DIR is
+# `<workspace>/frankweiler/ui`, so `../../scripts/` is the workspace
+# scripts dir in both `bazel run` and `bazel test` modes.
+# shellcheck source=../../scripts/ensure_pnpm.sh
+source "$UI_DIR/../../scripts/ensure_pnpm.sh"
 
 if [[ ! -d "$UI_DIR/node_modules" ]]; then
   (cd "$UI_DIR" && pnpm install)

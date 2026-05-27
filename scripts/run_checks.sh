@@ -59,6 +59,10 @@ uv run pyright
 # --- TypeScript (frankweiler/ui) ---
 if [ -d frankweiler/ui ]; then
     echo "[ui] vue-tsc"
+    # pnpm pinned via frankweiler/ui/package.json's `packageManager`;
+    # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
+    # shellcheck source=ensure_pnpm.sh
+    source scripts/ensure_pnpm.sh
     (
         cd frankweiler/ui
         if [ ! -d node_modules ]; then

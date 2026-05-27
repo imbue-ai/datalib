@@ -58,6 +58,11 @@ if [[ $# -ge 1 && -n "$1" ]]; then
   echo "data root: $FRANKWEILER_ROOT"
 fi
 
+# pnpm pinned via frankweiler/ui/package.json's `packageManager`;
+# provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
+# shellcheck source=../scripts/ensure_pnpm.sh
+source "$WORKSPACE/scripts/ensure_pnpm.sh"
+
 # Ensure UI deps are installed.
 if [[ ! -d "$UI_DIR/node_modules" ]]; then
   echo "first run: installing UI deps via pnpm…"

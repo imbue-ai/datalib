@@ -580,6 +580,20 @@ async fn run_load_phase(
     let summary = load_all(&pool, root, |_| {}, Some(now))
         .await
         .context("load_all")?;
+    // Force-checkpoint the WAL into the main DB before closing the
+    // pool. Under WAL mode, all writes go to `<db>.db-wal` and only
+    // get merged into the main `.db` file on a checkpoint. sqlx's
+    // default close path runs only a PASSIVE checkpoint, which copies
+    // bytes but leaves the WAL file populated — so a downstream
+    // process that copies just `mirror.db` ends up with an empty file.
+    // The genrule that ships `tests/fixtures/ingested/mirror.db`
+    // hit exactly this: 4KB-empty `.db`, all data in `.db-wal`,
+    // every e2e test asserts zero rows. TRUNCATE checkpoints + zeros
+    // the WAL so the `.db` file is self-contained.
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool)
+        .await
+        .context("wal_checkpoint at end of load")?;
     drop(pool);
     eprintln!("[frankweiler-sync] wrote {}", db_path.display());
     Ok(summary)
