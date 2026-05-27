@@ -67,13 +67,6 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "frankweiler/backend/sync:manual_e2e_live_sync_golden": (
         "manual end-to-end test, latchkey needs host keychain"
     ),
-    # Fixture genrule that runs the qmd indexer (npx + ~2GB embedding
-    # models in ~/.cache/qmd-models). The indexer needs network on
-    # first run and reuses the host cache afterward — sandboxing
-    # would force a multi-GB re-download per action.
-    "tests/fixtures:ingested_tng_qmd": (
-        "shells out to npx + reuses ~/.cache/qmd-models"
-    ),
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
