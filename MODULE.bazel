@@ -78,31 +78,69 @@ register_toolchains("@rust_toolchains//:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
-# TODO(doltlite-integration): route `libsqlite3-sys` at our bazel-built
-# doltlite static archive (`//third-party/doltlite:libsqlite3_doltlite`)
-# instead of letting the crate bundle stock SQLite via its `bundled`
-# feature. Today the Rust build still compiles upstream SQLite source
-# via `libsqlite3-sys`'s build script; doltlite is fetched + compiled by
-# Bazel but not yet linked in. Once we cut the bridge, every binary
-# embeds doltlite directly, no host install required.
+# Route `libsqlite3-sys` at our bazel-built doltlite static archive
+# (`//third-party/doltlite:sqlite3`) instead of compiling upstream
+# SQLite. Every Rust binary downstream of sqlx-sqlite ends up statically
+# linked against doltlite — no system install, no runtime dep.
 #
-# The blocker: `libsqlite3-sys`'s `src/lib.rs` does
-#   `include!(concat!(env!("OUT_DIR"), "/bindgen.rs"))`
-# so its bindings module always needs the build script to have run.
-# `gen_build_script = "off"` therefore can't be the path. Two viable
-# routes, both real work:
+# Mechanics:
 #
-#   1. Let the build script run, point `SQLITE3_INCLUDE_DIR` at the
-#      bazel-built header dir via `build_script_env` + `build_script_data`.
-#      Needs a directory-shaped filegroup (bazel's `$(execpath ...)`
-#      yields a file path, not a dir) — likely a small wrapper script.
+#   * `gen_build_script = "on"` (the default): we KEEP libsqlite3-sys's
+#     build script. Its `lib.rs` does `include!(concat!(env!("OUT_DIR"),
+#     "/bindgen.rs"))` unconditionally, so the bindings module needs
+#     the build script to have populated OUT_DIR with bindgen output.
+#     Disabling it breaks compilation of lib.rs ("cannot find type
+#     `sqlite3_vtab`" etc.).
 #
-#   2. Fork `libsqlite3-sys` via `[patch.crates-io]`, replace its
-#      vendored `sqlite3/sqlite3.{c,h}` with doltlite's amalgamation,
-#      keep its `bundled` feature path. Two-file diff; the fork tracks
-#      upstream by re-applying the swap on bumps.
+#   * `build_script_env` points the build script at our bazel-built
+#     header + archive. The dirname problem (Bazel's `$(execpath ...)`
+#     gives file paths, not directory paths) is solved by Bazel's
+#     built-in `$(BINDIR)` make-variable, which expands to
+#     `bazel-out/<config>/bin`. Our genrule deposits `sqlite3.h` and
+#     our cc_library deposits `libsqlite3.a` both at
+#     `$(BINDIR)/third-party/doltlite/`, so a single static dir works
+#     for both INCLUDE_DIR and LIB_DIR. SQLITE3_STATIC=1 makes the
+#     build script emit `cargo:rustc-link-lib=static=sqlite3` instead
+#     of dynamic.
 #
-# See third-party/doltlite/README.md for the full design.
+#   * `build_script_data` materializes the header + archive into the
+#     execroot the build script runs in, so $(BINDIR) paths resolve.
+#
+#   * `deps = ["//third-party/doltlite:sqlite3"]` threads the same
+#     static archive into the rust_library link step as a native
+#     compile dep, so rustc's final link command actually has the
+#     `.a` available on the search path (the build script's emitted
+#     `cargo:rustc-link-search=` is redundant with this but harmless).
+crate.annotation(
+    crate = "libsqlite3-sys",
+    # Patch build.rs to absolutize workspace-relative `bazel-out/...`
+    # paths in $SQLITE3_INCLUDE_DIR / $SQLITE3_LIB_DIR. Bazel's
+    # `$(BINDIR)` substitution emits workspace-relative paths, but the
+    # build script runs in a deep subdirectory of execroot, so those
+    # paths don't resolve. The patch derives the absolute execroot from
+    # CARGO_MANIFEST_DIR (which bazel always sets to an absolute path)
+    # and rewrites bazel-out paths against it. Hermetic, no host env
+    # required.
+    patches = ["@@//third-party/doltlite:libsqlite3-sys.patch"],
+    patch_args = ["-p1"],
+    deps = ["@@//third-party/doltlite:sqlite3"],
+    build_script_data = [
+        "@@//third-party/doltlite:sqlite3.h",
+        "@@//third-party/doltlite:sqlite3",
+    ],
+    build_script_env = {
+        "SQLITE3_INCLUDE_DIR": "$(BINDIR)/third-party/doltlite",
+        "SQLITE3_LIB_DIR": "$(BINDIR)/third-party/doltlite",
+        "SQLITE3_STATIC": "1",
+        # bindgen (transitively required by sqlx-sqlite's `unbundled`
+        # feature, which enables `libsqlite3-sys/buildtime_bindgen`)
+        # needs libclang to parse `sqlite3.h`. Point it at Homebrew's
+        # LLVM install which ships libclang.dylib. On Linux hosts
+        # override with `--action_env=LIBCLANG_PATH=...` pointing at
+        # /usr/lib/llvm-*/lib or wherever clang lives.
+        "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+    },
+)
 
 crate.from_cargo(
     name = "frankweiler_crates",

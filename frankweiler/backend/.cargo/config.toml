@@ -1,0 +1,38 @@
+# Local cargo config for the frankweiler-backend workspace.
+#
+# `sqlx` is enabled with the `sqlite-unbundled` feature in workspace
+# `Cargo.toml`, which routes through `libsqlite3-sys`'s unbundled mode.
+# Unbundled mode runs `bindgen` at build time against `sqlite3.h` and
+# emits a `cargo:rustc-link-lib=sqlite3` directive.
+#
+# Under Bazel the wiring is done by the `crate.annotation(crate =
+# "libsqlite3-sys", ...)` entry in MODULE.bazel, which points the build
+# script at the hermetic doltlite static archive built from
+# `//third-party/doltlite:sqlite3`. Bazel binaries thus ship with
+# doltlite statically linked — no system dep, no host install.
+#
+# Cargo (used only for the inner-loop `cargo fmt --check` and
+# `cargo clippy` checks driven by `scripts/run_checks.sh`) doesn't see
+# the Bazel annotation. So we point it at the SAME doltlite header +
+# archive that Bazel produces, under `bazel-bin/third-party/doltlite/`.
+# This requires a one-time `bazelisk build //third-party/doltlite:sqlite3`
+# before the first cargo run, but afterward the bazel-out artifact is
+# stable and cargo finds:
+#   * sqlite3.h with the full SQLite C API (incl. sqlite3_load_extension
+#     and sqlite3_unlock_notify, both stripped from the macOS SDK header)
+#   * libsqlite3.a containing doltlite's prolly-tree engine + every
+#     sqlite3_* symbol sqlx-sqlite imports
+#
+# Falls back gracefully on Linux/CI hosts that have `apt install
+# libsqlite3-dev` (provides full sqlite3.h via pkg-config); cargo's
+# pkg-config probe runs if these env vars are unset.
+[env]
+SQLITE3_INCLUDE_DIR = { value = "../../bazel-bin/third-party/doltlite", relative = true, force = true }
+SQLITE3_LIB_DIR = { value = "../../bazel-bin/third-party/doltlite", relative = true, force = true }
+# Without this, cargo's linker prefers the macOS-shipped
+# `/usr/lib/libsqlite3.dylib` (which omits sqlite3_load_extension +
+# sqlite3_unlock_notify) over our static archive at $SQLITE3_LIB_DIR.
+# SQLITE3_STATIC=1 makes libsqlite3-sys emit
+# `cargo:rustc-link-lib=static=sqlite3` so the linker picks our
+# libsqlite3.a (doltlite) explicitly.
+SQLITE3_STATIC = "1"

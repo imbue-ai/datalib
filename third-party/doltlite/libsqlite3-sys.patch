@@ -1,0 +1,44 @@
+--- a/build.rs
++++ b/build.rs
+@@ -1,5 +1,32 @@
+ use std::env;
+-use std::path::Path;
++use std::path::{Path, PathBuf};
++
++/// Absolutize `SQLITE3_INCLUDE_DIR` / `SQLITE3_LIB_DIR` when they're
++/// passed as workspace-relative `bazel-out/...` paths.
++///
++/// rules_rust's `build_script_env` supports `$(BINDIR)` substitution,
++/// which emits a workspace-relative path. But the build script runs
++/// from a deep subdirectory of execroot, so bindgen's relative-path
++/// resolution against the build script's CWD fails. This shim derives
++/// the absolute execroot from `CARGO_MANIFEST_DIR` (bazel always sets
++/// that to an absolute path) and rewrites the env vars before any
++/// downstream code reads them. Outside bazel (regular cargo build),
++/// `CARGO_MANIFEST_DIR` doesn't contain `bazel-out/` and this is a
++/// no-op.
++fn absolutize_bazel_env(name: &str) {
++    let Ok(val) = env::var(name) else { return };
++    if val.is_empty() || Path::new(&val).is_absolute() {
++        return;
++    }
++    let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") else { return };
++    let Some(idx) = manifest.find("/bazel-out/") else { return };
++    let execroot = &manifest[..idx];
++    let abs = PathBuf::from(execroot).join(&val);
++    if abs.exists() {
++        env::set_var(name, abs.as_os_str());
++    }
++}
+
+ /// Tells whether we're building for Windows. This is more suitable than a plain
+ /// `cfg!(windows)`, since the latter does not properly handle cross-compilation
+@@ -37,6 +64,8 @@
+ }
+
+ fn main() {
++    absolutize_bazel_env("SQLITE3_INCLUDE_DIR");
++    absolutize_bazel_env("SQLITE3_LIB_DIR");
+     let out_dir = env::var("OUT_DIR").unwrap();
+     let out_path = Path::new(&out_dir).join("bindgen.rs");
+     if cfg!(feature = "in_gecko") {

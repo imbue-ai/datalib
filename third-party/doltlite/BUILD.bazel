@@ -1,5 +1,11 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
+# Public patches consumed by crate_universe annotations in MODULE.bazel.
+exports_files(
+    glob(["*.patch"]),
+    visibility = ["//visibility:public"],
+)
+
 # `libsqlite3_doltlite` — doltlite's SQLite amalgamation, compiled once
 # by Bazel and statically linked into every Rust binary that pulls in
 # sqlx-sqlite (transitively via `libsqlite3-sys`).
@@ -36,10 +42,17 @@ genrule(
         cp $(location @doltlite_amalgamation//:doltlite.c) $(location sqlite3.c)
         cp $(location @doltlite_amalgamation//:doltlite.h) $(location sqlite3.h)
     """,
+    # Public so the libsqlite3-sys crate_universe annotation can pull
+    # sqlite3.h into the build script's runfiles.
+    visibility = ["//visibility:public"],
 )
 
+# cc_library named `sqlite3` so Bazel emits `libsqlite3.a` (Bazel's
+# convention is to prepend `lib` to the rule name). This matches what
+# `libsqlite3-sys`'s build script expects to find when it emits
+# `cargo:rustc-link-lib=sqlite3` against `SQLITE3_LIB_DIR`.
 cc_library(
-    name = "libsqlite3_doltlite",
+    name = "sqlite3",
     srcs = ["sqlite3.c"],
     hdrs = ["sqlite3.h"],
     # Expose the header dir so libsqlite3-sys's build-time bindgen can
@@ -53,6 +66,11 @@ cc_library(
         "-DSQLITE_ENABLE_JSON1",
         "-DSQLITE_ENABLE_RTREE",
         "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
+        # sqlx-sqlite calls sqlite3_column_{database,origin,table}_name
+        # for nullability inference. They're only defined when SQLite is
+        # built with this flag; without it, link fails with "Undefined
+        # symbols for architecture arm64: _sqlite3_column_origin_name".
+        "-DSQLITE_ENABLE_COLUMN_METADATA",
         "-DSQLITE_THREADSAFE=1",
         "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
         # Silence the noisier of doltlite's own build warnings — they're
