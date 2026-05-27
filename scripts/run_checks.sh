@@ -38,6 +38,14 @@ cd "$WORKSPACE"
 
 echo "Running pre-commit checks (read-only) in $WORKSPACE"
 
+# --- Bazel hygiene: prevent silent `no-sandbox` creep ---
+# `no-sandbox` actions persist their working dir across runs, which
+# leaks stale state (see scripts/lint_no_sandbox.py for the doltlite
+# WAL incident that motivated this lint). Every new use must be
+# explicitly allowlisted with a one-line rationale.
+echo "[bazel] no-sandbox allowlist"
+python3 scripts/lint_no_sandbox.py
+
 # --- Python (ruff + pyright via uv) ---
 echo "[python] ruff check"
 uv run ruff check .

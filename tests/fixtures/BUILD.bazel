@@ -81,10 +81,6 @@ genrule(
             "$(execpath ingested/qmd.tar)",
         ]),
     ]),
-    tags = [
-        "no-remote",
-        "no-sandbox",
-    ],
     visibility = ["//visibility:public"],
 )
 
