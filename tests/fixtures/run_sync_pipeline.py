@@ -39,10 +39,20 @@ def main() -> int:
         Path(p).resolve() for p in sys.argv[4:10]
     )
 
+    # Wipe the workspace before every run. The genrule is tagged
+    # `no-sandbox` (the sync binary expects to write into a stable
+    # absolute path), so unless we clean explicitly, prior-run state
+    # accumulates here — most importantly `mirror.db` plus its
+    # `mirror.db-wal` write-ahead log. A stale WAL plus a fresh-looking
+    # `mirror.db` causes SQLite/doltlite to replay the prior run's
+    # writes on open, so the first `INSERT INTO grid_rows` of the new
+    # run fails with `UNIQUE constraint failed: grid_rows.uuid`.
+    if data_root.exists():
+        shutil.rmtree(data_root)
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
-    # under the data_root. The sync binary lays out its own `rendered_md/`,
-    # `dolt_db/`, and `qmd/` directly under data_root.
+    # under the data_root. The sync binary lays out its own `rendered_md/`
+    # and `mirror.db` directly under data_root.
     workspace = data_root
     raw_root = data_root / "raw"
     raw_root.mkdir(exist_ok=True)
