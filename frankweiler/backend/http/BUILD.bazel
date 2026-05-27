@@ -10,15 +10,15 @@ rust_library(
     ],
     crate_name = "frankweiler_http",
     edition = "2021",
-    # The rust-embed proc macro reads `../../ui/dist` relative to
-    # CARGO_MANIFEST_DIR at proc-macro expansion time. rules_rust
-    # doesn't set CARGO_MANIFEST_DIR for `rust_library` (only for
-    # cargo_build_script), so we set it explicitly to this crate's
-    # package path. compile_data materializes the source-tree dist
-    # files at the matching execroot path.
-    compile_data = ["//frankweiler/ui:dist_files"],
+    # The rust-embed proc macro reads `$FRANKWEILER_UI_DIST` (env-var
+    # interpolation via the `interpolate-folder-path` feature). We
+    # point it at the hermetic Bazel-built dist; the `compile_data`
+    # entry makes those files visible to the rustc invocation.
+    # `$(execpath)` expands to the execroot-relative path of the
+    # directory output — usable directly from rustc's CWD (execroot).
+    compile_data = ["//frankweiler/ui:dist"],
     rustc_env = {
-        "CARGO_MANIFEST_DIR": "frankweiler/backend/http",
+        "FRANKWEILER_UI_DIST": "$(execpath //frankweiler/ui:dist)",
     },
     visibility = ["//frankweiler:__subpackages__"],
     deps = [

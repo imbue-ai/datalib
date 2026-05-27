@@ -1,25 +1,88 @@
+load("@aspect_bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//frankweiler/ui:vite/package_json.bzl", vite_bin = "bin")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-# Pre-built Vite output. Today this is a checked-out source-tree
-# `dist/` directory (run `pnpm build` in this dir to regenerate); a
-# follow-up will replace this filegroup with an `aspect_rules_js`
-# `vite_build` rule that produces it hermetically under Bazel. The
-# `frankweiler_http` rust_library consumes this via `compile_data`
-# so the rust-embed proc macro bakes the bytes into the binary at
-# compile time.
+# Materializes the npm dep graph from pnpm-lock.yaml into a virtual
+# node_modules/ tree backing the js_run_binary action below.
+npm_link_all_packages(name = "node_modules")
+
+# Vite binary exposed by the link target above. The `bin` symbol comes
+# from the auto-generated `@npm//frankweiler/ui:vite/package_json.bzl`
+# which lists every executable declared in vite's package.json#bin.
+vite_bin.vite_binary(
+    name = "vite",
+    # Show vite's stdout even on success so we can see "✓ N modules
+    # transformed" / output sizes. Default rules_js behavior suppresses
+    # action output on success.
+    #
+    # `patch_node_fs = False`: aspect_rules_js patches Node's fs API
+    # by default to constrain reads to declared srcs (good hermeticity
+    # signal) but also intercepts writes — vite 8 + rolldown 1.0 emits
+    # via paths that the patch mishandles, so the bundle "succeeds" but
+    # leaves the out_dirs empty. Disable the patch so vite's writes
+    # land where bazel expects to read them.
+    env = {
+        "JS_BINARY__SILENT_ON_SUCCESS": "",
+    },
+    patch_node_fs = False,
+)
+
+# Hermetic vite build. Inputs are the static UI sources + linked
+# node_modules; output is the `dist/` directory the rust-embed proc
+# macro reads from at compile time.
 #
-# `allow_empty = False`: refuse to build silently against an empty
-# dist/. A fresh checkout has no dist/ (it's `.gitignore`d), so this
-# fires "you forgot to `pnpm build`" instead of producing a binary
-# that 500s on every UI request.
-filegroup(
-    name = "dist_files",
+# `chdir = package_name()` makes vite resolve `vite.config.ts` and
+# entrypoints relative to this package, matching plain `pnpm build`.
+# `out_dirs = ["dist"]` declares the directory output so downstream
+# rules can depend on it; rules_js places it at
+# `bazel-out/<config>/bin/frankweiler/ui/dist/`.
+# Stage source files into bazel-bin so vite's path resolution stays
+# entirely under bazel-out. Without this, vite ends up computing paths
+# that mix execroot source-tree locations with bazel-out destinations,
+# and rolldown's html-emit plugin rejects the resulting non-relative
+# string ("must be neither absolute nor relative").
+copy_to_bin(
+    name = "vite_inputs",
     srcs = glob(
-        ["dist/**"],
-        allow_empty = False,
-    ),
+        [
+            "src/**",
+            "public/**",
+        ],
+        allow_empty = True,
+    ) + [
+        "index.html",
+        "package.json",
+        "tsconfig.json",
+        "vite.config.ts",
+    ],
+)
+
+js_run_binary(
+    name = "dist",
+    srcs = [
+        ":node_modules",
+        ":vite_inputs",
+    ],
+    out_dirs = ["dist"],
+    chdir = package_name(),
+    tool = ":vite",
+    args = ["build"],
     visibility = ["//frankweiler:__subpackages__"],
+    # Sandbox + vite 8 + rolldown's directory-output writes don't get
+    # along: vite reports successful writes to the bazel-out dist/
+    # path, but inside the macOS darwin-sandbox they end up in a
+    # namespace that gets thrown away on action completion, leaving
+    # out_dirs empty. Local execution avoids the sandbox path-mapping
+    # layer entirely. We pay for it with weaker hermeticity (vite can
+    # see the host filesystem), but the inputs are still bazel-tracked
+    # and pnpm-lock pins every transitive npm dep, so determinism is
+    # essentially preserved.
+    #
+    # Allowlisted in scripts/lint_no_sandbox.py.
+    tags = ["no-sandbox"],
 )
 
 # Playwright e2e suite, exposed two ways from the same wrapper script:

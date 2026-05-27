@@ -136,6 +136,7 @@ jobs:
           # `frankweiler-sync` resolves the shim via a sibling lookup
           # against this exact filename at runtime.
           cp bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin "${stage}/frankweiler-sync"
+          cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_shim "${stage}/frankweiler-latchkey-curl-shim"
           chmod +x "${stage}"/*
 

@@ -38,6 +38,11 @@ filegroup(
         # `frankweiler-` prefix mapping in release.yml's stage step in
         # sync with the sibling-name list in latchkey.rs.
         "//frankweiler/backend/etl:latchkey_curl_shim",
+        # HTTP backend with the Vite-built UI embedded via rust-embed
+        # (see frankweiler/backend/http/src/embed.rs). Single binary
+        # serves the full search experience given a data root path —
+        # `frankweiler-http <data_root>` is the user-facing invocation.
+        "//frankweiler/backend/http:frankweiler_http_bin",
         "//frankweiler/backend/sync:frankweiler_sync_bin",
     ],
     visibility = ["//visibility:public"],

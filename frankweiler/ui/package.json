@@ -32,5 +32,9 @@
     "vite": "8.0.10",
     "vitest": "4.1.5",
     "vue-tsc": "3.2.7"
+  },
+  "pnpm": {
+    "//": "Declares which transitive deps may run postinstall lifecycle scripts under aspect_rules_js. Required by npm_translate_lock; empty list means nothing in our tree needs install scripts. Add packages here if a dep starts failing under Bazel because its native build step was skipped.",
+    "onlyBuiltDependencies": []
   }
 }

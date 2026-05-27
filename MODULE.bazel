@@ -149,6 +149,29 @@ crate.annotation(
     },
 )
 
+# aspect_rules_js — hermetic JS/TS toolchain so the Vite-built UI
+# bundle (consumed by frankweiler_http via rust-embed) is produced by
+# Bazel without any host pnpm/Node. Mirrors the install snippet
+# published with aspect_rules_js v3.1.2 (released 2026-05-13).
+bazel_dep(name = "aspect_rules_js", version = "3.1.2")
+# Pulled in transitively by aspect_rules_js, but we use it directly
+# via `copy_to_bin` to stage Vite inputs into bazel-out.
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//frankweiler/ui:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
+# Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
+# frankweiler/ui install` works without a host install — useful for
+# refreshing the lockfile after editing frankweiler/ui/package.json.
+pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm", dev_dependency = True)
+use_repo(pnpm, "pnpm")
+
 crate.from_cargo(
     name = "frankweiler_crates",
     cargo_lockfile = "//frankweiler/backend:Cargo.lock",

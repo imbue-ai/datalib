@@ -22,7 +22,7 @@ mime_guess = "2"
 # disk at *runtime* using the compile-time absolute path — fine for
 # `cargo run` in-tree, broken for a Bazel-built binary that runs
 # outside the sandbox + for a shipped release tarball.
-rust-embed = { version = "8", features = ["debug-embed"] }
+rust-embed = { version = "8", features = ["debug-embed", "interpolate-folder-path"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

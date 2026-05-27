@@ -1,14 +1,18 @@
-//! Embeds the Vite-built UI (`frankweiler/ui/dist/`) into the binary
-//! via `rust-embed`, then serves it through axum.
+//! Embeds the Vite-built UI into the binary via `rust-embed`, then
+//! serves it through axum.
 //!
-//! Path is relative to this crate's `CARGO_MANIFEST_DIR` — set
-//! identically by cargo and by rules_rust, so the same literal works
-//! in both. The `compile_data = [//frankweiler/ui:dist_files]` line in
-//! BUILD.bazel makes the files visible under the same relative path
-//! inside the Bazel execroot. A follow-up will introduce a
-//! `vite_build` rule whose output replaces the source-tree dist; at
-//! that point this becomes `$FRANKWEILER_UI_DIST` interpolation with
-//! the `interpolate-folder-path` rust-embed feature enabled.
+//! Folder path is `$FRANKWEILER_UI_DIST`, set at proc-macro time by:
+//!   - Bazel (`rust_library.rustc_env`) — points at the bazel-out
+//!     directory produced by `//frankweiler/ui:dist`.
+//!   - Cargo — caller must export it explicitly (cargo isn't used to
+//!     build the http crate today because the workspace's sqlx-sqlite
+//!     `unbundled` feature wants Bazel-built doltlite headers; if that
+//!     changes, add a `build.rs` that sets a sensible default).
+//!
+//! The rust-embed `interpolate-folder-path` feature does the env-var
+//! substitution; `debug-embed` ensures bytes are baked into the binary
+//! even in debug builds (otherwise debug mode reads files from the
+//! compile-time path at runtime, which fails outside the sandbox).
 //!
 //! SPA fallback: any GET that doesn't match a static asset returns
 //! `index.html` (200), so client-side routing works. API routes are
@@ -21,7 +25,7 @@ use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../../ui/dist"]
+#[folder = "$FRANKWEILER_UI_DIST"]
 struct UiAssets;
 
 pub async fn serve_ui(uri: Uri) -> Response {
