@@ -49,3 +49,40 @@ rust_test(
         "@frankweiler_crates//:tokio",
     ],
 )
+
+# Insta snapshot of the TNG fixture's `mirror.db` contents. Catches
+# silent data drift in the load pipeline — most recently the
+# WAL-not-checkpointed bug where the genrule shipped an empty .db.
+# Update by running `cargo insta review` from frankweiler/backend.
+rust_test(
+    name = "fixture_db_snapshot_test",
+    srcs = ["tests/fixture_db_snapshot.rs"],
+    # Force the crate name so insta's `.snap` lookup ("<crate>__<test>.snap")
+    # agrees with what cargo would generate. Without this, bazel uses the
+    # rule name (`fixture_db_snapshot_test`) while cargo uses the source
+    # filename (`fixture_db_snapshot`), and the two would write/read
+    # different files.
+    crate_name = "fixture_db_snapshot",
+    data = [
+        "//tests/fixtures:ingested/mirror.db",
+    ] + glob(
+        ["tests/snapshots/fixture_db_snapshot__*.snap"],
+        allow_empty = True,
+    ),
+    edition = "2021",
+    env = {
+        "FW_FIXTURE_DB": "$(rootpath //tests/fixtures:ingested/mirror.db)",
+        # insta defaults to writing .new files next to the source file,
+        # which it locates via CARGO_MANIFEST_DIR. Bazel doesn't surface
+        # the source tree to the test, so point insta at the workspace
+        # root explicitly. Same trick the per-provider snapshot tests use.
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+    ],
+)

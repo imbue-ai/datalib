@@ -36,3 +36,11 @@ SQLITE3_LIB_DIR = { value = "../../bazel-bin/third-party/doltlite", relative = t
 # `cargo:rustc-link-lib=static=sqlite3` so the linker picks our
 # libsqlite3.a (doltlite) explicitly.
 SQLITE3_STATIC = "1"
+# Without this, cargo's libsqlite3-sys probes pkg-config, which on
+# macOS silently succeeds against `/usr/lib/libsqlite3.dylib` (Apple's
+# system sqlite — strips both `sqlite3_load_extension` and
+# `sqlite3_unlock_notify` from the binary, breaking the final link).
+# `SQLITE3_NO_PKG_CONFIG` forces the build script to emit
+# `cargo:rustc-link-search=$SQLITE3_LIB_DIR` so our doltlite static
+# archive wins the linker search.
+SQLITE3_NO_PKG_CONFIG = "1"
