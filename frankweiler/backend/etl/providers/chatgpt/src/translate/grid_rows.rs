@@ -16,7 +16,10 @@ use super::parse::{OAConversationRow, OAMessageRow, ParsedChatGPTApi};
 /// Bumped on render-layout changes so a forced rebake is possible even
 /// when the upstream payload hasn't moved. Matches the constant on the
 /// Slack side.
-pub const RENDER_VERSION: u32 = 1;
+///
+/// Bumped from 1 to 2 when `data-msg-index` was dropped in favor of
+/// `data-section-uuid` on the per-message wrapper div.
+pub const RENDER_VERSION: u32 = 2;
 
 fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'static str {
     match role.unwrap_or("").to_ascii_lowercase().as_str() {

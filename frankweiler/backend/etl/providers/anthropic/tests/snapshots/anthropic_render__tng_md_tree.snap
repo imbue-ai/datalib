@@ -17,29 +17,35 @@ summary: Drafting an opening for a Klingon diplomatic exchange.
 
 # Klingon Diplomatic Greeting Drafting
 
-<div id="m-30000001-1701-4d00-8000-000000030001" data-msg-index="0" class="msg msg--anthropic">
+<div id="m-30000001-1701-4d00-8000-000000030001" data-section-uuid="30000001-1701-4d00-8000-000000030001" class="msg msg--anthropic">
 
 ## Human
 
 *2369-04-14T10:00:00.000000+00:00*
 
-<a id="b-30000001-1701-4d00-8000-000000030001-0"></a>Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
+Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
 
 </div>
 
-<div id="m-30000002-1701-4d00-8000-000000030002" data-msg-index="1" class="msg msg--anthropic">
+<div id="m-30000002-1701-4d00-8000-000000030002" data-section-uuid="30000002-1701-4d00-8000-000000030002" class="msg msg--anthropic">
 
 ## Assistant
 
 *2369-04-14T10:01:00.000000+00:00*
 
-<a id="b-30000002-1701-4d00-8000-000000030002-0"></a><details><summary>Thinking</summary>
+<div id="th-30000002-1701-4d00-8000-000000030002-0" data-section-uuid="th-30000002-1701-4d00-8000-000000030002-0" class="msg msg--block msg--thinking">
+
+<details><summary>Thinking</summary>
 
 > "nuqneH" literally means "what do you want" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.
 
 </details>
 
-<a id="b-30000002-1701-4d00-8000-000000030002-1"></a><a id="tu-toolu_FAKE0001ngfedcba9876543210"></a><details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
+</div>
+
+<div id="tu-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tu-toolu_FAKE0001ngfedcba9876543210" class="msg msg--block msg--tool-use">
+
+<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>
 
 ```json
 {
@@ -48,7 +54,11 @@ summary: Drafting an opening for a Klingon diplomatic exchange.
 ```
 </details>
 
-<a id="b-30000002-1701-4d00-8000-000000030002-2"></a><a id="tr-toolu_FAKE0001ngfedcba9876543210"></a><details><summary>Tool result: web_fetch</summary>
+</div>
+
+<div id="tr-toolu_FAKE0001ngfedcba9876543210" data-section-uuid="tr-toolu_FAKE0001ngfedcba9876543210" class="msg msg--block msg--tool-result">
+
+<details><summary>Tool result: web_fetch</summary>
 
 ```json
 {
@@ -65,17 +75,19 @@ summary: Drafting an opening for a Klingon diplomatic exchange.
 
 </details>
 
-<a id="b-30000002-1701-4d00-8000-000000030002-3"></a>For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
+</div>
+
+For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
 
 </div>
 
-<div id="m-30000003-1701-4d00-8000-000000030003" data-msg-index="2" class="msg msg--anthropic">
+<div id="m-30000003-1701-4d00-8000-000000030003" data-section-uuid="30000003-1701-4d00-8000-000000030003" class="msg msg--anthropic">
 
 ## Human
 
 *2369-04-14T10:02:00.000000+00:00*
 
-<a id="b-30000003-1701-4d00-8000-000000030003-0"></a>Perfect. Make it so.
+Perfect. Make it so.
 
 </div>
 
@@ -93,23 +105,25 @@ summary: Looking up a Borg adaptive-shield signature; first lookup errors out, r
 
 # Borg Encryption Signature Lookup
 
-<div id="m-50000001-1701-4d00-8000-000000050001" data-msg-index="0" class="msg msg--anthropic">
+<div id="m-50000001-1701-4d00-8000-000000050001" data-section-uuid="50000001-1701-4d00-8000-000000050001" class="msg msg--anthropic">
 
 ## Human
 
 *2369-04-16T09:00:00.000000+00:00*
 
-<a id="b-50000001-1701-4d00-8000-000000050001-0"></a>Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
+Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
 
 </div>
 
-<div id="m-50000002-1701-4d00-8000-000000050002" data-msg-index="1" class="msg msg--anthropic">
+<div id="m-50000002-1701-4d00-8000-000000050002" data-section-uuid="50000002-1701-4d00-8000-000000050002" class="msg msg--anthropic">
 
 ## Assistant
 
 *2369-04-16T09:01:30.000000+00:00*
 
-<a id="b-50000002-1701-4d00-8000-000000050002-0"></a><a id="tu-toolu_FAKE0002borgsigfirstattempt0"></a><details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
+<div id="tu-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tu-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--block msg--tool-use">
+
+<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>
 
 ```json
 {
@@ -119,14 +133,22 @@ summary: Looking up a Borg adaptive-shield signature; first lookup errors out, r
 ```
 </details>
 
-<a id="b-50000002-1701-4d00-8000-000000050002-1"></a><a id="tr-toolu_FAKE0002borgsigfirstattempt0"></a><details><summary>Tool result: starfleet_db_query (error)</summary>
+</div>
+
+<div id="tr-toolu_FAKE0002borgsigfirstattempt0" data-section-uuid="tr-toolu_FAKE0002borgsigfirstattempt0" class="msg msg--block msg--tool-result">
+
+<details><summary>Tool result: starfleet_db_query (error)</summary>
 
 ```
 ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 ```
 </details>
 
-<a id="b-50000002-1701-4d00-8000-000000050002-2"></a><a id="tu-toolu_FAKE0003borgsigsecondtry00"></a><details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
+</div>
+
+<div id="tu-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tu-toolu_FAKE0003borgsigsecondtry00" class="msg msg--block msg--tool-use">
+
+<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>
 
 ```json
 {
@@ -137,13 +159,19 @@ ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
 ```
 </details>
 
-<a id="b-50000002-1701-4d00-8000-000000050002-3"></a><a id="tr-toolu_FAKE0003borgsigsecondtry00"></a><details><summary>Tool result: starfleet_db_query</summary>
+</div>
+
+<div id="tr-toolu_FAKE0003borgsigsecondtry00" data-section-uuid="tr-toolu_FAKE0003borgsigsecondtry00" class="msg msg--block msg--tool-result">
+
+<details><summary>Tool result: starfleet_db_query</summary>
 
 Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
 
 </details>
 
-<a id="b-50000002-1701-4d00-8000-000000050002-4"></a>Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+</div>
+
+Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
 
 </div>
 
@@ -161,26 +189,26 @@ summary: Pasted a tricorder readout image; asked for interpretation.
 
 # Tricorder Image Diagnostic
 
-<div id="m-40000001-1701-4d00-8000-000000040001" data-msg-index="0" class="msg msg--anthropic">
+<div id="m-40000001-1701-4d00-8000-000000040001" data-section-uuid="40000001-1701-4d00-8000-000000040001" class="msg msg--anthropic">
 
 ## Human
 
 *2369-04-15T08:30:00.000000+00:00*
 
-<a id="b-40000001-1701-4d00-8000-000000040001-0"></a>What's wrong with this medical-tricorder readout?
+What's wrong with this medical-tricorder readout?
 
 **Attachments:**
 
-- ![tricorder-readout.png](../../../../raw/anthropic_api/media/f0000001-1701-4d00-8000-0000000f0001/tricorder-readout.png)
+- ![tricorder-readout.png](../../../../raw/anthropic_api/blobs/f0000001-1701-4d00-8000-0000000f0001/tricorder-readout.png)
 
 </div>
 
-<div id="m-40000002-1701-4d00-8000-000000040002" data-msg-index="1" class="msg msg--anthropic">
+<div id="m-40000002-1701-4d00-8000-000000040002" data-section-uuid="40000002-1701-4d00-8000-000000040002" class="msg msg--anthropic">
 
 ## Assistant
 
 *2369-04-15T08:30:45.000000+00:00*
 
-<a id="b-40000002-1701-4d00-8000-000000040002-0"></a>The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
+The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
 
 </div>

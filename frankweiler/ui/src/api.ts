@@ -37,9 +37,11 @@ export type SearchResponse = {
 };
 
 // QMDs are write-only output. The backend ships the body verbatim
-// (frontmatter stripped) and the UI runs markdown-it on it. Per-message
-// scrolling/highlighting uses the `<div id="m-{uuid}" data-msg-index="…">`
-// wrappers the renderer already emits in the body.
+// (frontmatter stripped) and the UI runs markdown-it on it. Per-section
+// scrolling/highlighting uses the `<div data-section-uuid="…">`
+// wrappers the renderer emits (one per message, plus nested ones for
+// tool_use / tool_result / thinking blocks). The attribute value is
+// the same as the grid row's `uuid` column.
 export type ChatResponse = {
   conversation_uuid: string;
   name: string | null;

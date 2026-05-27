@@ -21,6 +21,7 @@ test("row click selects the right message in the preview pane", async ({
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
     rows: {
+      uuid: string;
       conversation_uuid: string;
       kind: string;
       message_index: number | null;
@@ -34,31 +35,33 @@ test("row click selects the right message in the preview pane", async ({
     list.push(r);
     byConv.set(r.conversation_uuid, list);
   }
-  // Want two rows with distinct, non-null message_index values.
+  // Want two rows with distinct row uuids belonging to the same
+  // conversation — uuid is what the UI now uses to key the selected
+  // section.
   let chosen:
     | {
-        uuid: string;
-        idxA: number;
-        idxB: number;
+        convUuid: string;
+        uuidA: string;
+        uuidB: string;
       }
     | null = null;
-  for (const [uuid, list] of byConv) {
+  for (const [convUuid, list] of byConv) {
     const distinct = list.filter((r) => r.message_index != null);
     distinct.sort((a, b) => a.message_index! - b.message_index!);
     const first = distinct[0];
     const last = distinct[distinct.length - 1];
-    if (first && last && first.message_index !== last.message_index) {
+    if (first && last && first.uuid !== last.uuid) {
       chosen = {
-        uuid,
-        idxA: first.message_index!,
-        idxB: last.message_index!,
+        convUuid,
+        uuidA: first.uuid,
+        uuidB: last.uuid,
       };
       break;
     }
   }
   expect(
     chosen,
-    "fixture must contain a conversation with at least two messages of distinct message_index",
+    "fixture must contain a conversation with at least two distinct message rows",
   ).not.toBeNull();
 
   await page.goto("/");
@@ -71,16 +74,12 @@ test("row click selects the right message in the preview pane", async ({
   // AG Grid virtualizes rows: only those near the viewport exist in
   // the DOM. Use the grid api (exposed on window) to scroll the
   // target node into view before clicking.
-  async function scrollToAndClick(idx: number) {
+  async function scrollToAndClick(rowUuid: string) {
     const rowIndex = await page.evaluate(
-      ({ uuid, msgIdx }) => {
+      ({ uuid }) => {
         type Node = {
           rowIndex: number | null;
-          data?: {
-            conversation_uuid: string;
-            kind: string;
-            message_index: number | null;
-          };
+          data?: { uuid: string };
         };
         const w = window as unknown as {
           __fwGridApi?: {
@@ -91,21 +90,16 @@ test("row click selects the right message in the preview pane", async ({
         const api = w.__fwGridApi!;
         let foundIdx: number | null = null;
         api.forEachNode((node) => {
-          if (
-            node.data &&
-            node.data.conversation_uuid === uuid &&
-            node.data.kind !== "Chat" &&
-            node.data.message_index === msgIdx
-          ) {
+          if (node.data && node.data.uuid === uuid) {
             api.ensureNodeVisible(node, "middle");
             foundIdx = node.rowIndex;
           }
         });
         return foundIdx;
       },
-      { uuid: chosen!.uuid, msgIdx: idx },
+      { uuid: rowUuid },
     );
-    expect(rowIndex, `node for msg_idx=${idx} found in grid`).not.toBeNull();
+    expect(rowIndex, `node for uuid=${rowUuid} found in grid`).not.toBeNull();
     const row = page.locator(
       `.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`,
     );
@@ -113,17 +107,17 @@ test("row click selects the right message in the preview pane", async ({
     await row.click();
   }
 
-  await scrollToAndClick(chosen!.idxA);
+  await scrollToAndClick(chosen!.uuidA);
   const preview = page.locator(".chat-preview");
   await expect(
-    preview.locator(`[data-msg-index="${chosen!.idxA}"].selected`),
+    preview.locator(`[data-section-uuid="${chosen!.uuidA}"].selected`),
   ).toBeVisible({ timeout: 10_000 });
 
-  await scrollToAndClick(chosen!.idxB);
+  await scrollToAndClick(chosen!.uuidB);
   await expect(
-    preview.locator(`[data-msg-index="${chosen!.idxB}"].selected`),
+    preview.locator(`[data-section-uuid="${chosen!.uuidB}"].selected`),
   ).toBeVisible({ timeout: 10_000 });
   await expect(
-    preview.locator(`[data-msg-index="${chosen!.idxA}"].selected`),
+    preview.locator(`[data-section-uuid="${chosen!.uuidA}"].selected`),
   ).toHaveCount(0);
 });

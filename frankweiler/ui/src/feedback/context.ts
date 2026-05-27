@@ -164,13 +164,18 @@ export function capturePreviewSelection(): SelectionCapture | null {
   };
 }
 
-/** Look for the closest `<div id="m-{uuid}" data-msg-index="…">` ancestor —
- *  the wrappers ChatBody.vue emits around each message — and return its
- *  UUID portion (the `m-` prefix is stripped). */
+/** Look for the closest per-message wrapper the renderer emits around
+ *  each message and return its message UUID.
+ *
+ *  Walks past per-block sections (tool_use / tool_result / thinking,
+ *  whose `data-section-uuid` is prefixed `tu-`/`tr-`/`th-`) until we
+ *  hit a message-level wrapper, i.e. one with `id="m-{uuid}"`. The
+ *  feedback payload tracks the parent message, not the block — by
+ *  design, since selections can span blocks. */
 export function messageAncestor(el: Element | null | undefined): string | null {
   let cur: Element | null = el ?? null;
   while (cur) {
-    if (cur.id && cur.id.startsWith("m-") && cur.hasAttribute("data-msg-index")) {
+    if (cur.id && cur.id.startsWith("m-") && cur.hasAttribute("data-section-uuid")) {
       return cur.id.slice(2);
     }
     cur = cur.parentElement;

@@ -1,13 +1,14 @@
 ---
 source: etl/providers/chatgpt/tests/chatgpt_render.rs
+assertion_line: 68
 expression: sbundle
 ---
 === rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001.grid_rows.json ===
 {
   "header": {
     "document_uuid": "68fa0001-fake-7000-8000-positronic0001",
-    "source_fingerprint": "d6b0442bb522aa5b",
-    "render_version": 1
+    "source_fingerprint": "b1b9cf8a31e3ce49",
+    "render_version": 2
   },
   "rows": [
     {
@@ -136,8 +137,8 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "68fa0002-fake-7000-8000-positronic0002",
-    "source_fingerprint": "9e486e0adb8094c9",
-    "render_version": 1
+    "source_fingerprint": "f0a6b05543a7f39d",
+    "render_version": 2
   },
   "rows": [
     {
@@ -242,8 +243,8 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "68fa0003-fake-7000-8000-positronic0003",
-    "source_fingerprint": "1471511a200e1b32",
-    "render_version": 1
+    "source_fingerprint": "d5742aae81fcdb59",
+    "render_version": 2
   },
   "rows": [
     {

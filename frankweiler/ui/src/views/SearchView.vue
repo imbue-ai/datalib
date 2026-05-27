@@ -657,16 +657,12 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     // Soft-wrap to a two-line clamp. autoHeight is intentionally OFF —
     // it forces per-row layout measurement and was the dominant render
     // cost on large result sets. Row height is fixed to fit two lines;
-    // anything longer is ellipsised by the CSS line-clamp.
+    // anything longer is ellipsised by the CSS line-clamp. The clamp
+    // styles live in CSS on .ag-cell-value (the inner span AG Grid wraps
+    // text in) because -webkit-line-clamp must be on the direct text
+    // container — putting it on the outer .ag-cell does nothing.
     wrapText: true,
-    cellStyle: {
-      "white-space": "normal",
-      "line-height": "1.25",
-      display: "-webkit-box",
-      "-webkit-box-orient": "vertical",
-      "-webkit-line-clamp": "2",
-      overflow: "hidden",
-    } as Record<string, string>,
+    cellClass: "fw-clamp-2",
   },
   {
     field: "author",
@@ -880,7 +876,11 @@ const gridOptions: GridOptions<SearchRow> = {
       <Pane size="45" min-size="20" class="right-pane">
         <ChatPreviewPane
           :conversation-uuid="selectedRow?.conversation_uuid ?? null"
-          :message-index="selectedRow?.message_index ?? null"
+          :selected-section-uuid="
+            selectedRow != null && selectedRow.kind !== 'Chat'
+              ? selectedRow.uuid
+              : null
+          "
         />
       </Pane>
     </Splitpanes>
@@ -1100,5 +1100,23 @@ const gridOptions: GridOptions<SearchRow> = {
   height: 20px;
   vertical-align: middle;
   display: inline-block;
+}
+.ag-cell.fw-clamp-2 {
+  /* Let the inner span span the full cell width and align to the top
+     so the clamped two lines start at the top of the row instead of
+     being vertically centered. */
+  align-items: flex-start;
+  padding-top: 6px;
+}
+.ag-cell.fw-clamp-2 .ag-cell-value {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  line-height: 1.25;
+  word-break: break-word;
+  width: 100%;
 }
 </style>

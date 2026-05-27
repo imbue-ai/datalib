@@ -1,13 +1,14 @@
 ---
 source: etl/providers/anthropic/tests/anthropic_render.rs
+assertion_line: 67
 expression: sbundle
 ---
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.grid_rows.json ===
 {
   "header": {
     "document_uuid": "c0000003-1701-4d00-8000-00000000c003",
-    "source_fingerprint": "a3cbf234c33055e9",
-    "render_version": 1
+    "source_fingerprint": "465b752692d358e4",
+    "render_version": 2
   },
   "rows": [
     {
@@ -83,7 +84,7 @@ expression: sbundle
       "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
-      "uuid": "30000002-1701-4d00-8000-000000030002:0",
+      "uuid": "th-30000002-1701-4d00-8000-000000030002-0",
       "provider": "anthropic",
       "kind": "LLM Thinking",
       "source_label": "Claude",
@@ -107,7 +108,7 @@ expression: sbundle
       "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
-      "uuid": "30000002-1701-4d00-8000-000000030002:1",
+      "uuid": "tu-toolu_FAKE0001ngfedcba9876543210",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -131,7 +132,7 @@ expression: sbundle
       "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
-      "uuid": "30000002-1701-4d00-8000-000000030002:2",
+      "uuid": "tr-toolu_FAKE0001ngfedcba9876543210",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -184,8 +185,8 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "c0000005-1701-4d00-8000-00000000c005",
-    "source_fingerprint": "3d459c7610bff1df",
-    "render_version": 1
+    "source_fingerprint": "9f22de32118f1140",
+    "render_version": 2
   },
   "rows": [
     {
@@ -261,7 +262,7 @@ expression: sbundle
       "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
-      "uuid": "50000002-1701-4d00-8000-000000050002:0",
+      "uuid": "tu-toolu_FAKE0002borgsigfirstattempt0",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -285,7 +286,7 @@ expression: sbundle
       "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
-      "uuid": "50000002-1701-4d00-8000-000000050002:1",
+      "uuid": "tr-toolu_FAKE0002borgsigfirstattempt0",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -309,7 +310,7 @@ expression: sbundle
       "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
-      "uuid": "50000002-1701-4d00-8000-000000050002:2",
+      "uuid": "tu-toolu_FAKE0003borgsigsecondtry00",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -333,7 +334,7 @@ expression: sbundle
       "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
-      "uuid": "50000002-1701-4d00-8000-000000050002:3",
+      "uuid": "tr-toolu_FAKE0003borgsigsecondtry00",
       "provider": "anthropic",
       "kind": "Tool Call",
       "source_label": "Claude",
@@ -362,8 +363,8 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "c0000004-1701-4d00-8000-00000000c004",
-    "source_fingerprint": "6486954cd582ccde",
-    "render_version": 1
+    "source_fingerprint": "7609894785b582f7",
+    "render_version": 2
   },
   "rows": [
     {

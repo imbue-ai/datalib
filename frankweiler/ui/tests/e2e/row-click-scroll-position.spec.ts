@@ -5,10 +5,10 @@ import { test, expect } from "@playwright/test";
 // scroll the preview pane so the selected message lands at the top
 // (and is therefore visible to the user). The existing
 // `row-click-scroll.spec.ts` only verifies that the `.selected` class
-// moves to the right `[data-msg-index]` element — but `toBeVisible()`
-// is satisfied even when that element is far below the scrollport, so
-// it cannot catch a regression in which `scrollIntoView` stops firing
-// after the initial conversation load.
+// moves to the right `[data-section-uuid]` element — but
+// `toBeVisible()` is satisfied even when that element is far below
+// the scrollport, so it cannot catch a regression in which
+// `scrollIntoView` stops firing after the initial conversation load.
 //
 // What we pin here:
 //   1. After clicking row A, the selected message sits near the top
@@ -22,6 +22,7 @@ import { test, expect } from "@playwright/test";
 // clicking around inside a single Slack thread.
 
 type Row = {
+  uuid: string;
   conversation_uuid: string;
   kind: string;
   message_index: number | null;
@@ -53,25 +54,30 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
     list.push(r);
     byConv.set(r.conversation_uuid, list);
   }
-  // Pick the conversation with the most distinct message indices, then
-  // use its first and last messages. We need the preview to actually
-  // be scrollable (scrollHeight > clientHeight) — checked at runtime
-  // below — for the scrollTop assertion to be meaningful.
-  let chosen: { uuid: string; idxA: number; idxB: number } | null = null;
+  // Pick the conversation with the most distinct message rows, then
+  // use its first and last messages (by message_index sort order). We
+  // need the preview to actually be scrollable
+  // (scrollHeight > clientHeight) — checked at runtime below — for the
+  // scrollTop assertion to be meaningful.
+  let chosen: {
+    convUuid: string;
+    uuidA: string;
+    uuidB: string;
+  } | null = null;
   let best = 0;
-  for (const [uuid, list] of byConv) {
+  for (const [convUuid, list] of byConv) {
     list.sort((a, b) => a.message_index! - b.message_index!);
-    const first = list[0].message_index!;
-    const last = list[list.length - 1].message_index!;
-    if (first === last) continue;
+    const first = list[0];
+    const last = list[list.length - 1];
+    if (first.uuid === last.uuid) continue;
     if (list.length > best) {
       best = list.length;
-      chosen = { uuid, idxA: first, idxB: last };
+      chosen = { convUuid, uuidA: first.uuid, uuidB: last.uuid };
     }
   }
   expect(
     chosen,
-    "fixture must contain a conversation with at least two messages of distinct message_index",
+    "fixture must contain a conversation with at least two distinct message rows",
   ).not.toBeNull();
 
   await page.goto("/");
@@ -80,16 +86,12 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
     .first()
     .waitFor({ timeout: 10_000 });
 
-  async function scrollToAndClick(idx: number) {
+  async function scrollToAndClick(rowUuid: string) {
     const rowIndex = await page.evaluate(
-      ({ uuid, msgIdx }) => {
+      ({ uuid }) => {
         type Node = {
           rowIndex: number | null;
-          data?: {
-            conversation_uuid: string;
-            kind: string;
-            message_index: number | null;
-          };
+          data?: { uuid: string };
         };
         const w = window as unknown as {
           __fwGridApi?: {
@@ -100,21 +102,16 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
         const api = w.__fwGridApi!;
         let foundIdx: number | null = null;
         api.forEachNode((node) => {
-          if (
-            node.data &&
-            node.data.conversation_uuid === uuid &&
-            node.data.kind !== "Chat" &&
-            node.data.message_index === msgIdx
-          ) {
+          if (node.data && node.data.uuid === uuid) {
             api.ensureNodeVisible(node, "middle");
             foundIdx = node.rowIndex;
           }
         });
         return foundIdx;
       },
-      { uuid: chosen!.uuid, msgIdx: idx },
+      { uuid: rowUuid },
     );
-    expect(rowIndex, `node for msg_idx=${idx} found in grid`).not.toBeNull();
+    expect(rowIndex, `node for uuid=${rowUuid} found in grid`).not.toBeNull();
     const row = page.locator(
       `.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`,
     );
@@ -122,14 +119,14 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
     await row.click();
   }
 
-  // Returns: pane scrollTop, pane viewport top, and the target msg's
-  // bounding-rect top. `target.top - pane.top` is how far below the
-  // top edge of the scrollport the message is sitting.
-  async function geom(msgIdx: number) {
-    return await page.evaluate((idx) => {
+  // Returns: pane scrollTop, pane viewport top, and the target
+  // section's bounding-rect top. `target.top - pane.top` is how far
+  // below the top edge of the scrollport the section is sitting.
+  async function geom(sectionUuid: string) {
+    return await page.evaluate((uuid) => {
       const pane = document.querySelector(".chat-preview") as HTMLElement | null;
       const target = document.querySelector(
-        `[data-msg-index="${idx}"]`,
+        `[data-section-uuid="${uuid}"]`,
       ) as HTMLElement | null;
       if (!pane || !target) return null;
       const pr = pane.getBoundingClientRect();
@@ -142,18 +139,18 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
         targetTop: tr.top,
         offsetFromPaneTop: tr.top - pr.top,
       };
-    }, msgIdx);
+    }, sectionUuid);
   }
 
-  await scrollToAndClick(chosen!.idxA);
+  await scrollToAndClick(chosen!.uuidA);
   // Wait for the chat body to render and selection to apply.
   await expect(
-    page.locator(`.chat-preview [data-msg-index="${chosen!.idxA}"].selected`),
+    page.locator(`.chat-preview [data-section-uuid="${chosen!.uuidA}"].selected`),
   ).toBeVisible({ timeout: 10_000 });
   // Allow scrollIntoView to settle.
   await page.waitForTimeout(150);
 
-  const gA = await geom(chosen!.idxA);
+  const gA = await geom(chosen!.uuidA);
   expect(gA, "geometry for first selection").not.toBeNull();
   // The pane must actually be scrollable for the rest of the test to
   // be meaningful. If the entire conversation fits without scrolling
@@ -165,24 +162,24 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
       `clientHeight=${gA!.clientHeight}); pick a taller fixture or ` +
       `shorter viewport`,
   );
-  // First-selection sanity: idxA is the *first* message in the
+  // First-selection sanity: uuidA is the *first* message in the
   // conversation, so applySelection should put it at the very top of
   // the pane (scroll-margin-top adds ~16px). Generous slack for
   // header/padding.
   expect(
     gA!.offsetFromPaneTop,
-    `first-click should put msg ${chosen!.idxA} near the top of .chat-preview, ` +
+    `first-click should put msg ${chosen!.uuidA} near the top of .chat-preview, ` +
       `but it was offset by ${gA!.offsetFromPaneTop}px`,
   ).toBeLessThan(120);
 
   // Now click the second row (same conversation, much later message).
-  await scrollToAndClick(chosen!.idxB);
+  await scrollToAndClick(chosen!.uuidB);
   await expect(
-    page.locator(`.chat-preview [data-msg-index="${chosen!.idxB}"].selected`),
+    page.locator(`.chat-preview [data-section-uuid="${chosen!.uuidB}"].selected`),
   ).toBeVisible({ timeout: 10_000 });
   await page.waitForTimeout(150);
 
-  const gB = await geom(chosen!.idxB);
+  const gB = await geom(chosen!.uuidB);
   expect(gB, "geometry for second selection").not.toBeNull();
 
   // The scrollTop *must* have changed — otherwise the user sees the
@@ -190,7 +187,7 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
   // bug: same-conversation prop changes left scrollTop untouched.)
   expect(
     gB!.scrollTop,
-    `clicking msg ${chosen!.idxB} (after msg ${chosen!.idxA}) should change ` +
+    `clicking msg ${chosen!.uuidB} (after msg ${chosen!.uuidA}) should change ` +
       `.chat-preview scrollTop, but it stayed at ${gA!.scrollTop}`,
   ).not.toBe(gA!.scrollTop);
 
@@ -202,7 +199,7 @@ test("clicking same-thread rows scrolls the preview to the new message", async (
   const tBPos = gB!.offsetFromPaneTop;
   expect(
     tBPos >= 0 && tBPos < gB!.clientHeight,
-    `msg ${chosen!.idxB} should be inside the pane viewport ` +
+    `msg ${chosen!.uuidB} should be inside the pane viewport ` +
       `(0..${gB!.clientHeight}), but offsetFromPaneTop=${tBPos}`,
   ).toBeTruthy();
 });

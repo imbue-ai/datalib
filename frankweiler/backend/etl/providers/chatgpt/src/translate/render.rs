@@ -48,9 +48,9 @@ fn bump_iso(ts: &str) -> String {
     out
 }
 
-fn msg_div_open(msg_uuid: &str, msg_index: usize, provider: &str) -> String {
+fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
     format!(
-        "<div id=\"m-{msg_uuid}\" data-msg-index=\"{msg_index}\" class=\"msg msg--{provider}\">"
+        "<div id=\"m-{msg_uuid}\" data-section-uuid=\"{msg_uuid}\" class=\"msg msg--{provider}\">"
     )
 }
 
@@ -208,7 +208,6 @@ pub fn render_one(
     out.push(String::new());
 
     let mut last_ts: Option<String> = conv.create_time.clone();
-    let mut msg_index = 0usize;
     for m in &path {
         if m.role.as_deref() == Some("system")
             || m.content_type.as_deref() == Some("model_editable_context")
@@ -225,10 +224,9 @@ pub fn render_one(
             last_ts = Some(ts.clone());
         }
         let heading = capitalize(m.role.as_deref().unwrap_or("unknown"));
-        out.push(msg_div_open(&m.message_id, msg_index, "openai"));
+        out.push(msg_div_open(&m.message_id, "openai"));
         out.push(String::new());
         out.push(format!("## {heading}"));
-        msg_index += 1;
 
         let mut meta_bits: Vec<String> = Vec::new();
         if let Some(ts) = &msg_created {

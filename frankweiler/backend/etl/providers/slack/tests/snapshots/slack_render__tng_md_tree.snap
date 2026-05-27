@@ -13,13 +13,13 @@ channel_name: bridge
 root_ts: 12604000800.000800
 root_ts_iso: "2369-05-28T15:20:00.000800+00:00"
 slack_link: "https://slack.com/archives/C_BRIDGE/p12604000800000800?team=T_NCC1701D"
-source_fingerprint: ffc1e34493adbf2e
-render_version: 1
+source_fingerprint: 9c54d0ea26eaf0e0
+render_version: 2
 ---
 
 # #bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 
 
-<div class="msg" data-msg-uuid="91592264-62dc-5233-8341-07623d028b40" data-msg-index="0" data-provider="slack">
+<div id="m-91592264-62dc-5233-8341-07623d028b40" data-section-uuid="91592264-62dc-5233-8341-07623d028b40" class="msg msg--slack">
 
 ## Lt. Cmdr. Data
 
@@ -39,13 +39,13 @@ channel_name: bridge
 root_ts: 12604000100.000100
 root_ts_iso: "2369-05-28T15:08:20.000100+00:00"
 slack_link: "https://slack.com/archives/C_BRIDGE/p12604000100000100?team=T_NCC1701D"
-source_fingerprint: 7a860893c8120038
-render_version: 1
+source_fingerprint: 52ae743cbfa65f6d
+render_version: 2
 ---
 
 # #bridge: Mr. Data, status report.
 
-<div class="msg" data-msg-uuid="a7776276-03f9-5da0-b278-6316e642aabb" data-msg-index="0" data-provider="slack">
+<div id="m-a7776276-03f9-5da0-b278-6316e642aabb" data-section-uuid="a7776276-03f9-5da0-b278-6316e642aabb" class="msg msg--slack">
 
 ## Jean-Luc Picard
 
@@ -55,7 +55,7 @@ Mr. Data, status report.
 
 </div>
 
-<div class="msg" data-msg-uuid="70c76bbb-e431-5ab9-9118-61407fbccf09" data-msg-index="1" data-provider="slack">
+<div id="m-70c76bbb-e431-5ab9-9118-61407fbccf09" data-section-uuid="70c76bbb-e431-5ab9-9118-61407fbccf09" class="msg msg--slack">
 
 ## Lt. Cmdr. Data
 
@@ -67,7 +67,7 @@ All systems nominal, Captain. Long-range sensors detect a Class M planet bearing
 
 </div>
 
-<div class="msg" data-msg-uuid="16c110a7-360d-5923-a931-652fc7823657" data-msg-index="2" data-provider="slack">
+<div id="m-16c110a7-360d-5923-a931-652fc7823657" data-section-uuid="16c110a7-360d-5923-a931-652fc7823657" class="msg msg--slack">
 
 ## William T. Riker
 
@@ -87,13 +87,13 @@ channel_name: bridge
 root_ts: 12604000400.000400
 root_ts_iso: "2369-05-28T15:13:20.000400+00:00"
 slack_link: "https://slack.com/archives/C_BRIDGE/p12604000400000400?team=T_NCC1701D"
-source_fingerprint: a1cb22a37c2ff728
-render_version: 1
+source_fingerprint: 3a8b34644fd72c5c
+render_version: 2
 ---
 
 # #bridge: I recommend raising shields, Captain.
 
-<div class="msg" data-msg-uuid="78ad2e40-fc0b-58d0-a6a6-2acb4300003b" data-msg-index="0" data-provider="slack">
+<div id="m-78ad2e40-fc0b-58d0-a6a6-2acb4300003b" data-section-uuid="78ad2e40-fc0b-58d0-a6a6-2acb4300003b" class="msg msg--slack">
 
 ## Worf
 
@@ -113,13 +113,13 @@ channel_name: bridge
 root_ts: 12604000700.000700
 root_ts_iso: "2369-05-28T15:18:20.000700+00:00"
 slack_link: "https://slack.com/archives/C_BRIDGE/p12604000700000700?team=T_NCC1701D"
-source_fingerprint: 187617e936d22090
-render_version: 1
+source_fingerprint: 76aa4cfd02084d2a
+render_version: 2
 ---
 
 # #bridge: New combadge prototypes — thoughts?
 
-<div class="msg" data-msg-uuid="b528443b-a4b8-5651-9c48-ef6ee9a630cc" data-msg-index="0" data-provider="slack">
+<div id="m-b528443b-a4b8-5651-9c48-ef6ee9a630cc" data-section-uuid="b528443b-a4b8-5651-9c48-ef6ee9a630cc" class="msg msg--slack">
 
 ## Jean-Luc Picard
 
@@ -127,7 +127,7 @@ render_version: 1
 
 New combadge prototypes — thoughts?
 
-![Delta shield prototype](../../../../../raw/slack_api/media/F_DELTA_SHIELD/delta_shield.png)
+![Delta shield prototype](../../../../../raw/slack_api/blobs/F_DELTA_SHIELD/delta_shield.png)
 
 </div>
 
@@ -141,13 +141,13 @@ channel_name: engineering
 root_ts: 12604000500.000500
 root_ts_iso: "2369-05-28T15:15:00.000500+00:00"
 slack_link: "https://slack.com/archives/C_ENG/p12604000500000500?team=T_NCC1701D"
-source_fingerprint: 412434951238ae96
-render_version: 1
+source_fingerprint: 60f018793507c342
+render_version: 2
 ---
 
 # #engineering: Warp core efficiency at 99.7%.
 
-<div class="msg" data-msg-uuid="069e5516-8c53-5c55-bb1c-8741e7f833d9" data-msg-index="0" data-provider="slack">
+<div id="m-069e5516-8c53-5c55-bb1c-8741e7f833d9" data-section-uuid="069e5516-8c53-5c55-bb1c-8741e7f833d9" class="msg msg--slack">
 
 ## Lt. Cmdr. Data
 
@@ -167,13 +167,13 @@ channel_name: ten-forward
 root_ts: 12604000600.000600
 root_ts_iso: "2369-05-28T15:16:40.000600+00:00"
 slack_link: "https://slack.com/archives/C_TENFWD/p12604000600000600?team=T_NCC1701D"
-source_fingerprint: 9f9a313508e7847b
-render_version: 1
+source_fingerprint: 63d58eefe26bb7b1
+render_version: 2
 ---
 
 # #ten-forward: Anyone up for poker tonight?
 
-<div class="msg" data-msg-uuid="712dd3b9-7df4-59b6-ab50-ce709b0ab747" data-msg-index="0" data-provider="slack">
+<div id="m-712dd3b9-7df4-59b6-ab50-ce709b0ab747" data-section-uuid="712dd3b9-7df4-59b6-ab50-ce709b0ab747" class="msg msg--slack">
 
 ## William T. Riker
 
@@ -183,7 +183,7 @@ Anyone up for poker tonight?
 
 </div>
 
-<div class="msg" data-msg-uuid="c26c0b71-66a5-535c-9b46-e64351034dc6" data-msg-index="1" data-provider="slack">
+<div id="m-c26c0b71-66a5-535c-9b46-e64351034dc6" data-section-uuid="c26c0b71-66a5-535c-9b46-e64351034dc6" class="msg msg--slack">
 
 ## Worf
 

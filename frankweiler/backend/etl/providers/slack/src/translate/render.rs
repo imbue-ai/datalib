@@ -36,7 +36,11 @@ use super::{slack_link, Message, TranslatedSlack};
 /// Bump when the on-disk render layout changes in a way that must
 /// invalidate stale `.md` files even though their `source_fingerprint`
 /// would otherwise still match.
-pub const RENDER_VERSION: u32 = 1;
+// Bumped from 1 to 2 when the per-message wrapper switched to
+// `id="m-{uuid}" data-section-uuid="{uuid}"` (dropping
+// `data-msg-uuid` / `data-msg-index` / `data-provider`), matching the
+// Anthropic / ChatGPT convention.
+pub const RENDER_VERSION: u32 = 2;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -259,17 +263,23 @@ fn render_thread_md(
     p.push(format!("# #{channel_name}: {title}"));
     p.push(String::new());
 
-    for (idx, m) in msgs.iter().enumerate() {
+    for m in msgs.iter() {
         let author = m
             .user_id
             .as_deref()
             .and_then(|u| user_labels.get(u).cloned())
             .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
         let link = slack_link(team_id, channel_id, &m.ts, Some(&root.ts));
+        // Same per-section wrapper shape as the Anthropic / ChatGPT
+        // renderers: `id="m-{uuid}"` for in-page anchors, and
+        // `data-section-uuid` as the single key the UI uses to find /
+        // highlight a section. The old `data-msg-uuid` /
+        // `data-msg-index` / `data-provider` attributes were redundant
+        // with the id + the class — dropping them keeps the wire
+        // format consistent across providers.
         p.push(format!(
-            r#"<div class="msg" data-msg-uuid="{}" data-msg-index="{}" data-provider="slack">"#,
+            r#"<div id="m-{0}" data-section-uuid="{0}" class="msg msg--slack">"#,
             m.uuid(),
-            idx
         ));
         p.push(String::new());
         p.push(format!("## {author}"));

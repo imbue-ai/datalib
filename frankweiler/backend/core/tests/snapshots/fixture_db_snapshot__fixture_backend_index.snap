@@ -1,5 +1,6 @@
 ---
 source: core/tests/fixture_db_snapshot.rs
+assertion_line: 227
 expression: snapshot
 ---
 {
@@ -12,7 +13,7 @@ expression: snapshot
       "provider": "openai",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "4691cb7b943656914e36811f1e208e1a6c010cfee15bf72ec89f7643af8ae33c",
+      "row_set_hash": "ee07008d921a9e8f222293d9775e490c36dd17940ba5aa780a5f7419b00cce05",
       "source_name": "openai",
       "title": "Sonnet on a Cat Named Spot",
       "updated_at": "2370-10-24T08:05:00.000000+00:00"
@@ -1119,31 +1120,6 @@ expression: snapshot
     },
     {
       "account": "user-FAKE0DATAANDROID0POSITRONIC1",
-      "author": "system",
-      "channel": null,
-      "conversation_name": "Sonnet on a Cat Named Spot",
-      "conversation_uuid": "68fa0001-fake-7000-8000-positronic0001",
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001",
-      "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
-      "external_id": null,
-      "git_sha": null,
-      "kind": "Tool Call",
-      "message_index": 0,
-      "notion_block_uuid": null,
-      "notion_page_uuid": null,
-      "project": null,
-      "provider": "openai",
-      "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001.md",
-      "slack_link": null,
-      "source_label": "ChatGPT",
-      "source_url": null,
-      "text_len": 78,
-      "text_sha": "sha256:336e816d82555dac1131f4d5ccf9a7d7a835798dfec231da0e7a49fda0e30af2",
-      "uuid": "msg-fake-spot-0000",
-      "when_ts": "2370-10-24T08:00:00.000001+00:00"
-    },
-    {
-      "account": "user-FAKE0DATAANDROID0POSITRONIC1",
       "author": "user-FAKE0DATAANDROID0POSITRONIC1",
       "channel": null,
       "conversation_name": "Sonnet on a Cat Named Spot",
@@ -1153,7 +1129,7 @@ expression: snapshot
       "external_id": null,
       "git_sha": null,
       "kind": "User Input",
-      "message_index": 1,
+      "message_index": 0,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "project": null,
@@ -1178,7 +1154,7 @@ expression: snapshot
       "external_id": null,
       "git_sha": null,
       "kind": "LLM Response",
-      "message_index": 2,
+      "message_index": 1,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "project": null,
@@ -1203,7 +1179,7 @@ expression: snapshot
       "external_id": null,
       "git_sha": null,
       "kind": "User Input",
-      "message_index": 3,
+      "message_index": 2,
       "notion_block_uuid": null,
       "notion_page_uuid": null,
       "project": null,
@@ -1271,6 +1247,6 @@ expression: snapshot
   "summary": {
     "documents_count": 11,
     "documents_loaded_count": 11,
-    "grid_rows_count": 42
+    "grid_rows_count": 41
   }
 }

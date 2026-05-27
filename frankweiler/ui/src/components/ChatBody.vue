@@ -1,10 +1,15 @@
 <script setup lang="ts">
 // Renders a chat conversation. The backend serves the QMD body verbatim
-// (CommonMark + per-message `<div id="m-{uuid}" data-msg-index="…">`
-// wrappers emitted by the ingest renderer); we run markdown-it once.
+// (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
+// wrappers emitted by the ingest renderer — one wrapper per message,
+// plus nested ones for tool_use / tool_result / thinking blocks); we
+// run markdown-it once.
 //
-// `selectedMessageIndex` (or `selectedMessageUuid`) selects which message
-// to scroll to and visually highlight via the `.msg.selected` CSS rule.
+// `selectedSectionUuid` picks which section to scroll to and visually
+// highlight via the `.msg.selected` CSS rule. The value must match the
+// grid row's `uuid` exactly — for messages that's the message UUID;
+// for block rows it's the prefixed form (`tu-…`/`tr-…`/`th-…`) the
+// renderer emits.
 
 import { ref, computed, watch, nextTick, onMounted } from "vue";
 import MarkdownIt from "markdown-it";
@@ -13,8 +18,7 @@ import "highlight.js/styles/github-dark.css";
 
 const props = defineProps<{
   body: string;
-  selectedMessageIndex?: number | null;
-  selectedMessageUuid?: string | null;
+  selectedSectionUuid?: string | null;
 }>();
 
 function highlight(code: string, lang: string): string {
@@ -43,14 +47,21 @@ const root = ref<HTMLElement | null>(null);
 
 function injectCopyUuidButtons() {
   if (!root.value) return;
-  for (const el of root.value.querySelectorAll<HTMLElement>(".msg[id^='m-']")) {
-    if (el.querySelector(":scope > .msg-meta .copy-uuid, :scope > p .copy-uuid"))
+  // Scan every section the renderer marks with `data-section-uuid`:
+  // top-level message wrappers AND the nested block sections we emit
+  // for tool_use / tool_result / thinking. The uuid the button copies
+  // is the attribute value as-is (prefixed `tu-`/`tr-`/`th-` for
+  // blocks, bare for messages) — that's the form the grid row carries
+  // and the deeplink consumes, so "copy section ID" round-trips.
+  for (const el of root.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
+    if (el.querySelector(":scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid"))
       continue;
-    const uuid = el.id.slice(2);
+    const uuid = el.getAttribute("data-section-uuid") ?? "";
     if (!uuid) continue;
     // Prefer the explicit `.msg-meta` div (slack). Otherwise use the first
     // <p><em>…</em></p> emitted as the markdown italic meta line
-    // (github/gitlab/anthropic/openai).
+    // (github/gitlab/anthropic/openai). Block sections rarely have
+    // either — they fall through to a header-position button.
     let host: HTMLElement | null = el.querySelector(":scope > .msg-meta");
     if (!host) {
       for (const p of el.querySelectorAll<HTMLElement>(":scope > p")) {
@@ -105,16 +116,15 @@ function applySelection() {
   for (const el of root.value.querySelectorAll(".msg.selected")) {
     el.classList.remove("selected");
   }
-  let target: HTMLElement | null = null;
-  if (props.selectedMessageUuid) {
-    target = root.value.querySelector(
-      `#m-${CSS.escape(props.selectedMessageUuid)}`,
-    );
-  } else if (props.selectedMessageIndex != null) {
-    target = root.value.querySelector(
-      `[data-msg-index="${props.selectedMessageIndex}"]`,
-    );
-  }
+  if (!props.selectedSectionUuid) return;
+  // Attribute-selector lookup avoids the CSS-id escaping minefield —
+  // tool_use block ids look like `tu-toolu_01ABC…`, which is a valid
+  // HTML id but not a valid bare CSS selector (the digit-prefixed
+  // chunks need escaping). `[data-section-uuid="…"]` keeps the
+  // matching pure string equality.
+  const target = root.value.querySelector<HTMLElement>(
+    `[data-section-uuid="${props.selectedSectionUuid.replace(/"/g, '\\"')}"]`,
+  );
   if (!target) return;
   target.classList.add("selected");
   // Set scrollTop on the known scrollport directly instead of calling
@@ -135,11 +145,11 @@ watch(html, async () => {
   applySelection();
 });
 watch(
-  () => [props.selectedMessageIndex, props.selectedMessageUuid],
+  () => props.selectedSectionUuid,
   async () => {
-    // nextTick guards against a parent setting messageIndex in the same
-    // tick that it loads a new conversation: we want the html v-html
-    // patch to land before we look for `[data-msg-index]`.
+    // nextTick guards against a parent setting the prop in the same
+    // tick that it loads a new conversation: we want the v-html patch
+    // to land before we look for `[data-section-uuid]`.
     await nextTick();
     applySelection();
   },
@@ -176,6 +186,24 @@ onMounted(() => {
 }
 .chat-body .msg--slack {
   border-left-color: #4a154b;
+}
+/* Per-block sections (tool_use / tool_result / thinking). Nested
+   inside their parent message wrapper, so we keep them visually
+   subordinate: thinner left border, lighter accent. The selection
+   outline below picks the same accent so the highlight still pops. */
+.chat-body .msg--block {
+  border-left-width: 2px;
+  margin: 0.35rem 0;
+  padding: 0.35rem 0.6rem;
+}
+.chat-body .msg--tool-use {
+  border-left-color: #a78bfa;
+}
+.chat-body .msg--tool-result {
+  border-left-color: #c4b5fd;
+}
+.chat-body .msg--thinking {
+  border-left-color: #94a3b8;
 }
 .chat-body .msg.selected {
   background: var(--fw-card-bg, #1f2937);

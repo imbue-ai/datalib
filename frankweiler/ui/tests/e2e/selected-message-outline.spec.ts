@@ -15,6 +15,7 @@ test("selected message has a visible accent-colored outline", async ({
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
     rows: {
+      uuid: string;
       conversation_uuid: string;
       kind: string;
       message_index: number | null;
@@ -70,8 +71,11 @@ test("selected message has a visible accent-colored outline", async ({
     .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
     .click();
 
+  // Renderer keys sections by `data-section-uuid`; for a message row
+  // the row's `uuid` is exactly the value we expect on the highlighted
+  // section.
   const selected = page.locator(
-    `.chat-preview [data-msg-index="${pick!.message_index}"].selected`,
+    `.chat-preview [data-section-uuid="${pick!.uuid}"].selected`,
   );
   await expect(selected).toBeVisible({ timeout: 10_000 });
 
@@ -96,10 +100,9 @@ test("selected message has a visible accent-colored outline", async ({
   // transparent. Any solid color is fine.
   expect(outline.color).not.toMatch(/rgba?\([^)]*,\s*0\s*\)$/);
 
-  // And: a sibling un-selected message must NOT have the outline.
-  const otherIdx = pick!.message_index! === 0 ? 1 : pick!.message_index! - 1;
+  // And: a sibling un-selected section must NOT have the outline.
   const other = page.locator(
-    `.chat-preview [data-msg-index="${otherIdx}"]:not(.selected)`,
+    `.chat-preview [data-section-uuid]:not(.selected)`,
   );
   if ((await other.count()) > 0) {
     // Browsers report a default `outline-width: medium` (≈3px) even

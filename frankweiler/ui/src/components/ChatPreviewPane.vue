@@ -15,7 +15,12 @@ import {
 
 const props = defineProps<{
   conversationUuid: string | null;
-  messageIndex: number | null;
+  // The clicked grid row's uuid (= the message UUID for message rows,
+  // the prefixed `tu-…`/`tr-…`/`th-…` for block rows, null for
+  // conversation-level rows). The renderer emits each section with a
+  // matching `data-section-uuid` attribute, so the UI just needs to
+  // forward this prop and ChatBody does an exact-string lookup.
+  selectedSectionUuid: string | null;
 }>();
 
 const chat = ref<ChatResponse | null>(null);
@@ -77,15 +82,17 @@ function onPaneContextMenu(ev: MouseEvent) {
   } else {
     const msgUuid = messageAncestor(target);
     if (msgUuid) {
-      const msgEl = target?.closest("[data-msg-index]");
-      const idxAttr = msgEl?.getAttribute("data-msg-index") ?? "0";
-      const parsed = Number.parseInt(idxAttr, 10);
+      // The feedback schema's preview_message payload still has a
+      // required `message_index` (see schemas/feedback.schema.json).
+      // The renderer no longer emits `data-msg-index` — `message_uuid`
+      // is the load-bearing field now. Pass 0 until the feedback
+      // schema follow-up drops the index.
       pending = {
         kind: "message",
         anchor: target,
         conv,
         msgUuid,
-        msgIndex: Number.isFinite(parsed) ? parsed : 0,
+        msgIndex: 0,
       };
     } else {
       pending = { kind: "conversation", anchor: target, conv };
@@ -245,7 +252,7 @@ watch(
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
-      <ChatBody :body="chat.body" :selected-message-index="messageIndex" />
+      <ChatBody :body="chat.body" :selected-section-uuid="selectedSectionUuid" />
     </template>
     <FeedbackModal
       :open="feedbackOpen"

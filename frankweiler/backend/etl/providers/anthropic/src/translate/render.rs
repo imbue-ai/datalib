@@ -60,9 +60,24 @@ pub(crate) fn bump_iso(ts: &str) -> String {
     out
 }
 
-pub(crate) fn msg_div_open(msg_uuid: &str, msg_index: usize, provider: &str) -> String {
+/// Open tag for a per-message section. The UI keys selection /
+/// scroll-to / copy-uuid off `data-section-uuid` — that's the single
+/// source of truth shared with the grid row's `uuid` column, so it
+/// can't drift the way the old `data-msg-index` did.
+pub(crate) fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
     format!(
-        "<div id=\"m-{msg_uuid}\" data-msg-index=\"{msg_index}\" class=\"msg msg--{provider}\">"
+        "<div id=\"m-{msg_uuid}\" data-section-uuid=\"{msg_uuid}\" class=\"msg msg--{provider}\">"
+    )
+}
+
+/// Open tag for a per-block section nested inside a message
+/// (`tool_use`, `tool_result`, `thinking`). The section's id and
+/// `data-section-uuid` always match the grid row uuid the translator
+/// emits — see `grid_rows::rows_for_conversation` and the
+/// `tu-`/`tr-`/`th-` prefix convention there.
+pub(crate) fn block_div_open(section_uuid: &str, block_kind: &str) -> String {
+    format!(
+        "<div id=\"{section_uuid}\" data-section-uuid=\"{section_uuid}\" class=\"msg msg--block msg--{block_kind}\">"
     )
 }
 
@@ -93,6 +108,35 @@ fn canonicalize(v: &Value) -> Value {
     }
 }
 
+/// The grid-row `uuid` (and matching section-div `id` /
+/// `data-section-uuid`) for a content block. Returns `None` for blocks
+/// that don't get their own row/section (e.g. plain `text`, which is
+/// inline in the parent message).
+///
+/// Prefix convention: `tu-` for `tool_use` (Anthropic's
+/// `tool_use_id` is the natural id), `tr-` for the matching
+/// `tool_result`, `th-` for `thinking` (no upstream id —
+/// `{msg_uuid}-{block_index}` is the unavoidable synthesis).
+pub(crate) fn section_uuid_for_block(
+    msg_uuid: &str,
+    block_index: usize,
+    btype: Option<&str>,
+    raw_obj: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    match btype {
+        Some("tool_use") => raw_obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|id| format!("tu-{id}")),
+        Some("tool_result") => raw_obj
+            .get("tool_use_id")
+            .and_then(Value::as_str)
+            .map(|id| format!("tr-{id}")),
+        Some("thinking") => Some(format!("th-{msg_uuid}-{block_index}")),
+        _ => None,
+    }
+}
+
 fn render_anthropic_block(
     msg_uuid: &str,
     block_index: usize,
@@ -118,22 +162,34 @@ fn render_anthropic_block(
         _ => &EMPTY_MAP,
     };
 
-    let mut anchors = vec![format!("<a id=\"b-{msg_uuid}-{block_index}\"></a>")];
-    if btype == Some("tool_use") {
-        if let Some(id) = raw_obj.get("id").and_then(Value::as_str) {
-            anchors.push(format!("<a id=\"tu-{id}\"></a>"));
+    // Blocks that get their own section get wrapped in a div whose id
+    // matches the grid row's uuid (see grid_rows::rows_for_conversation
+    // — that's the contract the UI relies on to highlight the right
+    // block when its row is clicked). Plain `text` blocks stay inline.
+    let section = section_uuid_for_block(msg_uuid, block_index, btype, raw_obj);
+    let (section_open, section_close) = match (&section, btype) {
+        (Some(sid), Some("tool_use")) => {
+            (Some(block_div_open(sid, "tool-use")), Some(MSG_DIV_CLOSE))
         }
-    } else if btype == Some("tool_result") {
-        if let Some(id) = raw_obj.get("tool_use_id").and_then(Value::as_str) {
-            anchors.push(format!("<a id=\"tr-{id}\"></a>"));
+        (Some(sid), Some("tool_result")) => (
+            Some(block_div_open(sid, "tool-result")),
+            Some(MSG_DIV_CLOSE),
+        ),
+        (Some(sid), Some("thinking")) => {
+            (Some(block_div_open(sid, "thinking")), Some(MSG_DIV_CLOSE))
         }
-    }
-    let head = anchors.join("");
+        _ => (None, None),
+    };
 
-    match btype {
+    let body: Vec<String> = match btype {
         Some("text") => {
             if let Some(text) = btext {
-                return vec![format!("{head}{}", text.trim_end()), String::new()];
+                vec![text.trim_end().into(), String::new()]
+            } else {
+                vec![
+                    format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
+                    String::new(),
+                ]
             }
         }
         Some("thinking") => {
@@ -143,17 +199,18 @@ fn render_anthropic_block(
                 .or(btext)
                 .unwrap_or("");
             if thought.is_empty() {
-                return vec![format!("{head}<!-- thinking (no text) -->"), String::new()];
+                vec!["<!-- thinking (no text) -->".into(), String::new()]
+            } else {
+                let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
+                vec![
+                    "<details><summary>Thinking</summary>".into(),
+                    String::new(),
+                    quoted,
+                    String::new(),
+                    "</details>".into(),
+                    String::new(),
+                ]
             }
-            let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
-            return vec![
-                format!("{head}<details><summary>Thinking</summary>"),
-                String::new(),
-                quoted,
-                String::new(),
-                "</details>".into(),
-                String::new(),
-            ];
         }
         Some("tool_use") => {
             let name = raw_obj
@@ -166,7 +223,7 @@ fn render_anthropic_block(
                 None => format!("Tool use: {name}"),
             };
             let mut out = vec![
-                format!("{head}<details><summary>{summary}</summary>"),
+                format!("<details><summary>{summary}</summary>"),
                 String::new(),
             ];
             if let Some(tool_input) = raw_obj.get("input") {
@@ -190,7 +247,7 @@ fn render_anthropic_block(
             }
             out.push("</details>".into());
             out.push(String::new());
-            return out;
+            out
         }
         Some("tool_result") => {
             let name = raw_obj
@@ -208,7 +265,7 @@ fn render_anthropic_block(
                 format!("Tool result: {name}")
             };
             let mut out = vec![
-                format!("{head}<details><summary>{summary}</summary>"),
+                format!("<details><summary>{summary}</summary>"),
                 String::new(),
             ];
             match content {
@@ -261,27 +318,40 @@ fn render_anthropic_block(
             }
             out.push("</details>".into());
             out.push(String::new());
-            return out;
+            out
         }
-        _ => {}
-    }
+        _ => {
+            if let Some(text) = btext {
+                if !text.is_empty() {
+                    let fence = format!("```{}", btype.unwrap_or("")).trim_end().to_string();
+                    vec![fence, text.trim_end().into(), "```".into(), String::new()]
+                } else {
+                    vec![
+                        format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
+                        String::new(),
+                    ]
+                }
+            } else {
+                vec![
+                    format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
+                    String::new(),
+                ]
+            }
+        }
+    };
 
-    if let Some(text) = btext {
-        if !text.is_empty() {
-            let fence = format!("```{}", btype.unwrap_or("")).trim_end().to_string();
-            return vec![
-                head,
-                fence,
-                text.trim_end().into(),
-                "```".into(),
-                String::new(),
-            ];
+    match (section_open, section_close) {
+        (Some(open), Some(close)) => {
+            let mut out = Vec::with_capacity(body.len() + 3);
+            out.push(open);
+            out.push(String::new());
+            out.extend(body);
+            out.push(close.into());
+            out.push(String::new());
+            out
         }
+        _ => body,
     }
-    vec![
-        format!("{head}<!-- {} (no text) -->", btype.unwrap_or("block")),
-        String::new(),
-    ]
 }
 
 static EMPTY_MAP: Lazy<serde_json::Map<String, Value>> = Lazy::new(serde_json::Map::new);
@@ -407,7 +477,7 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
     parts.push(String::new());
 
     let mut last_ts: Option<String> = conv.created_at.clone();
-    for (msg_index, m) in msgs.iter().enumerate() {
+    for m in msgs.iter() {
         let mut msg_created = m.created_at.clone();
         if msg_created.is_none() {
             if let Some(prev) = &last_ts {
@@ -418,7 +488,7 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
             last_ts = Some(ts.clone());
         }
         let heading = capitalize(m.sender.as_deref().unwrap_or("unknown"));
-        parts.push(msg_div_open(&m.message_uuid, msg_index, "anthropic"));
+        parts.push(msg_div_open(&m.message_uuid, "anthropic"));
         parts.push(String::new());
         parts.push(format!("## {heading}"));
         if let Some(ts) = &msg_created {

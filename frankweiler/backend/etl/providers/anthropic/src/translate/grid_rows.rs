@@ -10,8 +10,13 @@ use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 use super::parse::{ContentBlockRow, ConversationRow, MessageRow, ParsedExport};
+use super::render::section_uuid_for_block;
 
-pub const RENDER_VERSION: u32 = 1;
+// Bumped from 1 to 2 when the section-uuid scheme replaced
+// `{msg_uuid}:{block_index}` for tool_use / tool_result / thinking
+// rows. Old sidecars need a rebake to pick up the new uuids; bumping
+// the version is the trigger for that.
+pub const RENDER_VERSION: u32 = 2;
 
 fn kind_for_sender(sender: &str) -> &'static str {
     match sender.to_ascii_lowercase().as_str() {
@@ -164,8 +169,15 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
             } else {
                 btype.to_string()
             };
+            let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
+            let row_uuid =
+                section_uuid_for_block(&m.message_uuid, b.block_index, Some(btype), &raw_obj)
+                    // section_uuid_for_block returns None only for `text`,
+                    // which the outer `matches!` above already excluded; the
+                    // synthetic fallback is purely defensive.
+                    .unwrap_or_else(|| format!("blk-{}-{}", m.message_uuid, b.block_index));
             rows.push(GridRow {
-                uuid: format!("{}:{}", m.message_uuid, b.block_index),
+                uuid: row_uuid,
                 provider: "anthropic".into(),
                 kind: kind_for_block(btype).into(),
                 source_label: "Claude".into(),
