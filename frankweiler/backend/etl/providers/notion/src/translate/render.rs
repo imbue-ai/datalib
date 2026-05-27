@@ -5,6 +5,13 @@
 //! Comment threads land under `<page-dir>/threads/<disc-id8>__<slug>.md`,
 //! deep-linked to the anchor block via `<a id="b-…">` markers emitted
 //! around each block.
+//!
+//! When debugging "what is this block type supposed to render as?", a
+//! useful cross-reference is the actively-maintained Node renderer at
+//! <https://github.com/souvikinator/notion-to-md>. We don't shell out
+//! to it (we need our own QMD-with-section-divs shape + grid_rows
+//! sidecar, both of which it doesn't produce), but its block handlers
+//! are a good "is our output reasonable?" oracle.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;

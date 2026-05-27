@@ -704,6 +704,25 @@ async fn run_extract_phase(
             outcomes.push(summary::outcome_from(&name, type_str, r));
         }
     }
+
+    // Parallel mode collects outcomes in completion order, which is
+    // nondeterministic — fast-finishing sources show up before slow
+    // ones. Sort by the source-declaration order from the config so
+    // the summary (and its snapshot) stays stable across runs.
+    // Sources not in the config (e.g. a `<unknown>` panic record)
+    // sort to the end in insertion order.
+    let cfg_order: std::collections::HashMap<&str, usize> = cfg
+        .enabled_sources()
+        .enumerate()
+        .map(|(i, s)| (s.name(), i))
+        .collect();
+    let fallback_pos = cfg_order.len();
+    outcomes.sort_by_key(|o| {
+        cfg_order
+            .get(o.name.as_str())
+            .copied()
+            .unwrap_or(fallback_pos)
+    });
     outcomes
 }
 

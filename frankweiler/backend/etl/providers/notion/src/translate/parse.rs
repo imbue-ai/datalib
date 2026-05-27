@@ -16,7 +16,7 @@
 //! - `notion_block` — for `prod-files-secure` media URLs and bookmark
 //!   titles that the official API leaves blank.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -39,7 +39,16 @@ pub struct ParsedNotionOfficial {
 }
 
 fn load_latest_raw(api_dir: &Path, entity: &str) -> Result<Vec<Value>> {
-    let mut latest: BTreeMap<String, Value> = BTreeMap::new();
+    // Preserve first-sighting order while keeping latest-value
+    // semantics. The downloader writes blocks in BFS page order
+    // (extract/mod.rs::walk_page_blocks), so first-sighting order
+    // == page order. The previous implementation used a BTreeMap
+    // keyed on block id (a UUID), which sorted by uuid lex order —
+    // essentially a random shuffle relative to page order. That's
+    // what made the rendered page come out with sections / toggle
+    // children in a scrambled sequence.
+    let mut order: Vec<String> = Vec::new();
+    let mut latest: HashMap<String, Value> = HashMap::new();
     for stream in ["created", "updated"] {
         let path = api_dir.join(entity).join(stream).join("events.jsonl");
         if !path.exists() {
@@ -61,10 +70,16 @@ fn load_latest_raw(api_dir: &Path, entity: &str) -> Result<Vec<Value>> {
                 .get("raw")
                 .cloned()
                 .unwrap_or_else(|| Value::Object(Default::default()));
+            if !latest.contains_key(id) {
+                order.push(id.to_string());
+            }
             latest.insert(id.to_string(), raw);
         }
     }
-    Ok(latest.into_values().collect())
+    Ok(order
+        .into_iter()
+        .filter_map(|id| latest.remove(&id))
+        .collect())
 }
 
 /// Pull `value.value.<inner>` out of an unofficial-API record payload.
