@@ -84,6 +84,18 @@ jobs:
       - name: Build dist bins
         run: bazel build //frankweiler/backend:dist -c opt
 
+      # Run the full test suite under the same `-c opt` mode as the
+      # build, so this step reuses the action cache the build just
+      # populated (and writes new entries main-branch runs will hit
+      # on the next tag push). Excludes tests tagged `requires-network`
+      # — `precommit_test` (uv/pnpm/cargo against the source tree) and
+      # `e2e_test` (Playwright browser fetch) — which need a richer
+      # host environment than the default `macos-14` runner ships.
+      # `manual`-tagged tests (the live API tests) are already excluded
+      # by Bazel default.
+      - name: Run test suite
+        run: bazel test //... -c opt --test_tag_filters=-requires-network
+
       - name: Stage tarball
         id: stage
         if: github.ref_type == 'tag'
