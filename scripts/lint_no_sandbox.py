@@ -76,12 +76,6 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "frankweiler/ui:e2e_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
-    # vite 8 + rolldown 1.0 silently produce zero files under the macOS
-    # darwin-sandbox (sandbox path-mapping layer collides with vite's
-    # path computation inside rolldown's html-emit plugin). Inputs are
-    # still tracked, pnpm-lock pins every transitive dep, so the build
-    # remains reproducible — we just lose filesystem isolation.
-    "frankweiler/ui:dist": ("vite+rolldown writes survive only outside darwin-sandbox"),
 }
 
 # Regex matching tag-list entries that include `no-sandbox`. The tag

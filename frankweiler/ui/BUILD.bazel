@@ -14,20 +14,12 @@ npm_link_all_packages(name = "node_modules")
 # which lists every executable declared in vite's package.json#bin.
 vite_bin.vite_binary(
     name = "vite",
-    # Show vite's stdout even on success so we can see "✓ N modules
-    # transformed" / output sizes. Default rules_js behavior suppresses
-    # action output on success.
-    #
-    # `patch_node_fs = False`: aspect_rules_js patches Node's fs API
-    # by default to constrain reads to declared srcs (good hermeticity
-    # signal) but also intercepts writes — vite 8 + rolldown 1.0 emits
-    # via paths that the patch mishandles, so the bundle "succeeds" but
-    # leaves the out_dirs empty. Disable the patch so vite's writes
-    # land where bazel expects to read them.
+    # Show vite's stdout on success so the "✓ N modules transformed"
+    # build summary surfaces in bazel logs. Default rules_js behavior
+    # suppresses action output on success.
     env = {
         "JS_BINARY__SILENT_ON_SUCCESS": "",
     },
-    patch_node_fs = False,
 )
 
 # Hermetic vite build. Inputs are the static UI sources + linked
@@ -71,18 +63,6 @@ js_run_binary(
     tool = ":vite",
     args = ["build"],
     visibility = ["//frankweiler:__subpackages__"],
-    # Sandbox + vite 8 + rolldown's directory-output writes don't get
-    # along: vite reports successful writes to the bazel-out dist/
-    # path, but inside the macOS darwin-sandbox they end up in a
-    # namespace that gets thrown away on action completion, leaving
-    # out_dirs empty. Local execution avoids the sandbox path-mapping
-    # layer entirely. We pay for it with weaker hermeticity (vite can
-    # see the host filesystem), but the inputs are still bazel-tracked
-    # and pnpm-lock pins every transitive npm dep, so determinism is
-    # essentially preserved.
-    #
-    # Allowlisted in scripts/lint_no_sandbox.py.
-    tags = ["no-sandbox"],
 )
 
 # Playwright e2e suite, exposed two ways from the same wrapper script:

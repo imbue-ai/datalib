@@ -1,0 +1,7 @@
+# pnpm 10+ no longer reads `pnpm.onlyBuiltDependencies` from
+# package.json; this file is its replacement. Mirror of the
+# same key in package.json#pnpm so both pnpm 11 (host) and
+# aspect_rules_js (which parses the v9 lockfile + package.json) see
+# the same allowlist.
+allowBuilds:
+  esbuild: true
