@@ -103,8 +103,19 @@ jobs:
       # host environment than the default `macos-14` runner ships.
       # `manual`-tagged tests (the live API tests) are already excluded
       # by Bazel default.
+      #
+      # `--build_tests_only` narrows what bazel builds to ONLY the
+      # tests that pass the filter and their deps. Without it,
+      # `bazel test //...` also builds the deps of filtered-out tests
+      # — which pulls in `//tests/fixtures:ingested_tng_qmd`, a
+      # data-dep of e2e_test. That genrule shells out to qmd to
+      # download ~2GB of GGUF embedding models from HuggingFace, and
+      # the host cache (~/.cache/qmd-models) doesn't persist across
+      # GitHub runners, so every CI run paid a multi-minute download
+      # for an artifact CI never actually uses. With this flag, we
+      # only build deps reachable from the 15 in-scope tests.
       - name: Run test suite
-        run: bazel test //... -c opt --test_tag_filters=-requires-network
+        run: bazel test //... -c opt --test_tag_filters=-requires-network --build_tests_only
 
       - name: Stage tarball
         id: stage
