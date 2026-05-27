@@ -29,18 +29,32 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-/// Locate `backend_index.doltlite_db`. Under Bazel, the test sees it at the path
-/// rules_rust resolves via `$(rootpath)` (passed via the `FW_FIXTURE_DB`
-/// env in BUILD.bazel). Under plain `cargo test`, fall back to the
-/// workspace's `bazel-bin/` convenience symlink — the developer has to
-/// have run `bazelisk build //tests/fixtures:ingested_tng` at least
-/// once. The fallback panics with a clear message if the file isn't
-/// there, instead of silently snapshotting an empty DB.
+/// Locate `backend_index.doltlite_db`. Two paths into this resolution:
+///
+/// 1. **Under bazel test**: the fixture is in the test's runfiles tree,
+///    declared as a `data` dep in BUILD.bazel. We resolve it via the
+///    `runfiles` crate's `rlocation()` lookup, which is portable across
+///    compilation modes (fastbuild/opt) and operating systems and
+///    doesn't depend on the test's CWD or workspace-relative
+///    `$(rootpath ...)` resolution against an inconsistent base. (An
+///    earlier version of this code used `FW_FIXTURE_DB=$(rootpath ...)`
+///    and worked locally under fastbuild but broke on CI under opt —
+///    the path was workspace-relative but the test's CWD wasn't the
+///    workspace root.)
+///
+/// 2. **Under plain `cargo test`**: no runfiles tree exists. Fall back
+///    to the workspace's `bazel-bin/` convenience symlink — the
+///    developer must have run `bazelisk build //tests/fixtures:ingested_tng`
+///    at least once. Panics with a clear message if the file isn't
+///    there, instead of silently snapshotting an empty DB.
 fn fixture_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("FW_FIXTURE_DB") {
-        let pb = PathBuf::from(p);
-        if pb.exists() {
-            return pb;
+    if let Ok(r) = runfiles::Runfiles::create() {
+        if let Some(candidate) =
+            r.rlocation("_main/tests/fixtures/ingested/backend_index.doltlite_db")
+        {
+            if candidate.exists() {
+                return candidate;
+            }
         }
     }
     let cargo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

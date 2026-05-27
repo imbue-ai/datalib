@@ -71,7 +71,6 @@ rust_test(
     ),
     edition = "2021",
     env = {
-        "FW_FIXTURE_DB": "$(rootpath //tests/fixtures:ingested/backend_index.doltlite_db)",
         # insta defaults to writing .new files next to the source file,
         # which it locates via CARGO_MANIFEST_DIR. Bazel doesn't surface
         # the source tree to the test, so point insta at the workspace
@@ -80,6 +79,7 @@ rust_test(
     },
     deps = [
         "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:runfiles",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sha2",
         "@frankweiler_crates//:sqlx",

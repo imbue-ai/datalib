@@ -796,6 +796,7 @@ dependencies = [
  "chrono",
  "frankweiler-schema",
  "insta",
+ "runfiles",
  "serde",
  "serde_json",
  "serde_yaml",
