@@ -4,9 +4,22 @@ exports_files(["Cargo.toml"])
 
 rust_library(
     name = "frankweiler_http",
-    srcs = ["src/lib.rs"],
+    srcs = [
+        "src/embed.rs",
+        "src/lib.rs",
+    ],
     crate_name = "frankweiler_http",
     edition = "2021",
+    # The rust-embed proc macro reads `../../ui/dist` relative to
+    # CARGO_MANIFEST_DIR at proc-macro expansion time. rules_rust
+    # doesn't set CARGO_MANIFEST_DIR for `rust_library` (only for
+    # cargo_build_script), so we set it explicitly to this crate's
+    # package path. compile_data materializes the source-tree dist
+    # files at the matching execroot path.
+    compile_data = ["//frankweiler/ui:dist_files"],
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "frankweiler/backend/http",
+    },
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
@@ -14,6 +27,8 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:mime_guess",
+        "@frankweiler_crates//:rust-embed",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",
@@ -62,6 +77,7 @@ rust_binary(
         "//frankweiler/backend/core:frankweiler_core",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
+        "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
     ],
 )

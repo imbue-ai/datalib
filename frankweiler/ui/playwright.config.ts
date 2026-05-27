@@ -108,16 +108,17 @@ export default defineConfig({
   ],
   webServer: [
     {
-      // Backend reads its data root + dolt port from the config.yaml
-      // emitted by prepare-fixture.cjs (pointed at via FRANKWEILER_CONFIG).
-      // We override only the HTTP bind here so each test run claims its
-      // own ephemeral port.
-      command: JSON.stringify(backendBin),
+      // Backend takes the data root as its only positional arg; bind
+      // address comes from FRANKWEILER_BIND so each test run claims its
+      // own ephemeral port. The fixture root produced by
+      // materialize_tng_root.sh IS the data root (see config.yaml inside
+      // it — that file is still used by frankweiler-sync, not the http
+      // binary, which now reads no config).
+      command: `${JSON.stringify(backendBin)} ${JSON.stringify(fixtureRoot)}`,
       url: `${BACKEND_URL}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
       env: {
-        FRANKWEILER_CONFIG: path.join(fixtureRoot, "config.yaml"),
         FRANKWEILER_BIND: `127.0.0.1:${BACKEND_PORT}`,
       },
     },

@@ -15,6 +15,14 @@ path = "src/main.rs"
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-schema = { path = "../schema" }
+clap = { version = "4.5", features = ["derive"] }
+mime_guess = "2"
+# `debug-embed` forces the proc macro to bake bytes into the binary
+# even in debug builds. Without it, debug builds resolve files from
+# disk at *runtime* using the compile-time absolute path — fine for
+# `cargo run` in-tree, broken for a Bazel-built binary that runs
+# outside the sandbox + for a shipped release tarball.
+rust-embed = { version = "8", features = ["debug-embed"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

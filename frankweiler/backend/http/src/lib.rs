@@ -31,6 +31,8 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+mod embed;
+
 #[derive(Clone)]
 pub struct AppState {
     /// Data root on disk — drives the static `/api/media/*` mount and
@@ -141,6 +143,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/sync/jobs/{id}/log", get(sync_job_log))
         .nest_service("/api/media", ServeDir::new(media_dir))
+        // SPA fallback — anything not matched above is served from the
+        // embedded Vite bundle. Client-side routing turns unknown paths
+        // into `index.html`.
+        .fallback(embed::serve_ui)
         .with_state(state)
         .layer(CorsLayer::permissive())
 }

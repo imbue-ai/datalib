@@ -5,12 +5,10 @@
 # Invoked via `bazelisk run //frankweiler:dev`.
 #
 # Configuration:
-#   $1 (positional)   data root (overrides FRANKWEILER_ROOT). Leading
-#                     tildes are expanded relative to $HOME.
+#   $1 (positional)   data root. Leading tildes expanded relative to
+#                     $HOME. Defaults to ~/Documents/mixed-up-files when
+#                     not given.
 #                     e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
-#   FRANKWEILER_ROOT  data root when no positional arg given. Falls back
-#                     to data_root: in ~/.config/frankweiler/config.yaml, else
-#                     ~/Documents/mixed-up-files.
 #   FRANKWEILER_PORT  Vite port (default: 5173)
 #
 # Bazel sets BUILD_WORKSPACE_DIRECTORY when invoked via `bazel run`; we use it
@@ -45,18 +43,19 @@ fi
 
 PORT="${FRANKWEILER_PORT:-5173}"
 
-# Optional positional data-root arg → exported as FRANKWEILER_ROOT for the
-# backend. Manual tilde expansion: shells handle ~ in unquoted args, but if
-# someone double-quotes the argument we still honor a leading ~/ or bare ~.
+# Positional data-root arg passed through to the backend binary. Manual
+# tilde expansion: shells handle ~ in unquoted args, but if someone
+# double-quotes the argument we still honor a leading ~/ or bare ~.
 if [[ $# -ge 1 && -n "$1" ]]; then
   ROOT_ARG="$1"
   case "$ROOT_ARG" in
     "~")     ROOT_ARG="$HOME" ;;
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
-  export FRANKWEILER_ROOT="$ROOT_ARG"
-  echo "data root: $FRANKWEILER_ROOT"
+else
+  ROOT_ARG="$HOME/Documents/mixed-up-files"
 fi
+echo "data root: $ROOT_ARG"
 
 # pnpm pinned via frankweiler/ui/package.json's `packageManager`;
 # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
@@ -79,7 +78,7 @@ if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # Start the backend.
-"$BIN" &
+"$BIN" "$ROOT_ARG" &
 BACKEND_PID=$!
 
 # Start Vite (foreground-stdio, but in the background process-wise).

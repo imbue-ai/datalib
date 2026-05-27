@@ -1,6 +1,27 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
+# Pre-built Vite output. Today this is a checked-out source-tree
+# `dist/` directory (run `pnpm build` in this dir to regenerate); a
+# follow-up will replace this filegroup with an `aspect_rules_js`
+# `vite_build` rule that produces it hermetically under Bazel. The
+# `frankweiler_http` rust_library consumes this via `compile_data`
+# so the rust-embed proc macro bakes the bytes into the binary at
+# compile time.
+#
+# `allow_empty = False`: refuse to build silently against an empty
+# dist/. A fresh checkout has no dist/ (it's `.gitignore`d), so this
+# fires "you forgot to `pnpm build`" instead of producing a binary
+# that 500s on every UI request.
+filegroup(
+    name = "dist_files",
+    srcs = glob(
+        ["dist/**"],
+        allow_empty = False,
+    ),
+    visibility = ["//frankweiler:__subpackages__"],
+)
+
 # Playwright e2e suite, exposed two ways from the same wrapper script:
 #   bazelisk run  //frankweiler/ui:e2e        — interactive
 #   bazelisk test //frankweiler/ui:e2e_test   — picked up by `bazel test //...`
