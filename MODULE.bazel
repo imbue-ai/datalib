@@ -134,11 +134,18 @@ crate.annotation(
         "SQLITE3_STATIC": "1",
         # bindgen (transitively required by sqlx-sqlite's `unbundled`
         # feature, which enables `libsqlite3-sys/buildtime_bindgen`)
-        # needs libclang to parse `sqlite3.h`. Point it at Homebrew's
-        # LLVM install which ships libclang.dylib. On Linux hosts
-        # override with `--action_env=LIBCLANG_PATH=...` pointing at
-        # /usr/lib/llvm-*/lib or wherever clang lives.
-        "LIBCLANG_PATH": "/opt/homebrew/opt/llvm/lib",
+        # needs libclang to parse `sqlite3.h`. Point it at Xcode
+        # Command Line Tools, which ship libclang.dylib at a fixed
+        # path that's present on every macOS host — including the
+        # standard GitHub Actions `macos-*` runners, where Homebrew
+        # LLVM is NOT preinstalled. (`xcode-select --install` populates
+        # /Library/Developer/CommandLineTools; bazel already requires
+        # CLT for the C toolchain used by `cc_library`.)
+        #
+        # Linux hosts: override with `--action_env=LIBCLANG_PATH=...`
+        # pointing at /usr/lib/llvm-*/lib (apt `libclang-dev`) or the
+        # equivalent.
+        "LIBCLANG_PATH": "/Library/Developer/CommandLineTools/usr/lib",
     },
 )
 
