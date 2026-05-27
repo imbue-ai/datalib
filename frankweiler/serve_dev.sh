@@ -17,7 +17,8 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-URL="${FRANKWEILER_URL:-http://127.0.0.1:8731/api/health}"
+BASE_URL="${FRANKWEILER_URL:-http://127.0.0.1:8731}"
+HEALTH_URL="$BASE_URL/api/health"
 
 # Positional data-root arg required by the binary; default to
 # ~/Documents/mixed-up-files if not supplied (legacy default).
@@ -39,14 +40,14 @@ BIN_PID=$!
 trap 'kill "$BIN_PID" 2>/dev/null || true' EXIT INT TERM
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -sf "$URL" >/dev/null 2>&1; then break; fi
+  if curl -sf "$HEALTH_URL" >/dev/null 2>&1; then break; fi
   sleep 0.2
 done
 
 case "$(uname -s)" in
-  Darwin) open "$URL" ;;
-  Linux)  xdg-open "$URL" >/dev/null 2>&1 || true ;;
-  *)      echo "open $URL in your browser" ;;
+  Darwin) open "$BASE_URL" ;;
+  Linux)  xdg-open "$BASE_URL" >/dev/null 2>&1 || true ;;
+  *)      echo "open $BASE_URL in your browser" ;;
 esac
 
 wait "$BIN_PID"
