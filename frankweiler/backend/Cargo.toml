@@ -4,6 +4,7 @@ members = [
     "schema",
     "core",
     "http",
+    "obs",
     "etl",
     "etl/providers/anthropic",
     "etl/providers/chatgpt",

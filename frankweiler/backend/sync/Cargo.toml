@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-etl = { path = "../etl" }
+frankweiler-obs = { path = "../obs" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 frankweiler-etl-anthropic = { path = "../etl/providers/anthropic" }
 frankweiler-etl-chatgpt = { path = "../etl/providers/chatgpt" }
@@ -26,7 +27,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "
 sqlx = { workspace = true }
 chrono = { workspace = true }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions"] }

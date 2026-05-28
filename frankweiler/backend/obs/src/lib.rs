@@ -1,20 +1,18 @@
-//! Observability wiring for provider CLIs.
+//! Observability wiring for every frankweiler Rust binary.
 //!
 //! One entry point — [`init`] — that builds a `tracing` subscriber with
 //! the rendering layer chosen by environment, plus an optional OTLP
-//! exporter. The intent is that every CLI in this crate writes the same
-//! structured events and lets the renderer be one of N consumers:
+//! exporter. The intent is that every CLI in the workspace writes the
+//! same structured events and lets the renderer be one of N consumers:
 //!
 //!   * TTY on stderr → [`tracing_indicatif`] progress bars (one per span
-//!     that opts in via `indicatif.pb_show`), plus pretty-printed events.
+//!     that opts in via `indicatif.pb_show`), plus pretty-printed events
+//!     routed through the same writer so log lines never stomp a bar.
 //!   * Non-TTY (pipes, CI, container logs) → newline-delimited JSON on
-//!     stderr. The pipeline orchestrator scrapes this stream.
+//!     stderr.
 //!   * `--otlp-endpoint <url>` (or `$OTLP_ENDPOINT`) → also export spans
 //!     to an OTLP/gRPC collector. Cheap to leave off; pays for itself
 //!     the first time you want a dashboard that isn't `grep`.
-//!
-//! See [`events`] for the shared event vocabulary — emit these via the
-//! provided helpers so the field set stays consistent across renderers.
 //!
 //! Drop-in usage from a CLI:
 //!
@@ -22,13 +20,13 @@
 //! #[derive(clap::Parser)]
 //! struct Args {
 //!     #[command(flatten)]
-//!     obs: frankweiler_etl::obs::ObsArgs,
+//!     obs: frankweiler_obs::ObsArgs,
 //! }
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
 //!     let args = <Args as clap::Parser>::parse();
-//!     let _guard = frankweiler_etl::obs::init(&args.obs, "slack-download")?;
+//!     let _guard = frankweiler_obs::init(&args.obs, "slack-download")?;
 //!     // ... work ...
 //!     Ok(())
 //! }
@@ -44,16 +42,16 @@ use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
 use tracing_indicatif::style::ProgressStyle;
 use tracing_indicatif::IndicatifLayer;
-
-/// Default template + a trailing `{msg}` slot so callers can publish a
-/// live-updating cumulative-counter line via
-/// `IndicatifSpanExt::pb_set_message`. tracing-indicatif 0.3 does not
-/// hook `on_record`, so the bar will not reflect post-creation
-/// `span.record` calls — `pb_set_message` is the supported path.
-const PROGRESS_TEMPLATE: &str = "{span_child_prefix}{spinner} {span_name}{{{span_fields}}} {msg}";
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+
+// Trailing `{msg}` slot so callers can publish a live-updating
+// cumulative-counter line via `IndicatifSpanExt::pb_set_message`.
+// tracing-indicatif 0.3 does not hook `on_record`, so the bar will not
+// reflect post-creation `span.record` calls — `pb_set_message` is the
+// supported path.
+const PROGRESS_TEMPLATE: &str = "{span_child_prefix}{spinner} {span_name}{{{span_fields}}} {msg}";
 
 /// `--log-format` selector. `Auto` (the default) emits pretty + progress
 /// bars on a TTY, JSON otherwise — exactly what you'd want from a CLI
@@ -77,7 +75,7 @@ pub struct ObsArgs {
 
     /// `tracing-subscriber` env filter directive. Same grammar as
     /// `$RUST_LOG`, which is also honored if this flag isn't set.
-    #[arg(long, env = "RUST_LOG", default_value = "info")]
+    #[arg(long, env = "RUST_LOG", default_value = "info,sqlx=warn,hyper=warn")]
     pub log_level: String,
 
     /// OTLP/gRPC endpoint (e.g. `http://localhost:4317`). When set,
@@ -87,10 +85,18 @@ pub struct ObsArgs {
     pub otlp_endpoint: Option<String>,
 }
 
+impl Default for ObsArgs {
+    fn default() -> Self {
+        Self {
+            log_format: LogFormat::default(),
+            log_level: "info,sqlx=warn,hyper=warn".into(),
+            otlp_endpoint: None,
+        }
+    }
+}
+
 /// Returned from [`init`]. Drop on shutdown so the OTLP batch exporter
-/// gets a chance to flush before the process exits. Doing this through
-/// a guard rather than asking callers to remember a `shutdown()` call
-/// is the convention `tracing-opentelemetry`'s docs recommend.
+/// gets a chance to flush before the process exits.
 pub struct TracingGuard {
     provider: Option<TracerProvider>,
 }
@@ -98,9 +104,6 @@ pub struct TracingGuard {
 impl Drop for TracingGuard {
     fn drop(&mut self) {
         if let Some(p) = self.provider.take() {
-            // shutdown() returns Result; we're in Drop so we can't
-            // propagate. Print on failure so a dropped span isn't
-            // silently lost.
             if let Err(e) = p.shutdown() {
                 eprintln!("otlp shutdown: {e}");
             }
@@ -144,8 +147,6 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
         None => (None, None),
     };
 
-    // Local renderer. `indicatif` only makes sense on a TTY — on JSON
-    // mode we just emit events, no bars.
     let registry = tracing_subscriber::registry().with(filter).with(otel_layer);
 
     if use_json {
@@ -153,11 +154,17 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
-                    .with_writer(std::io::stderr),
+                    .with_writer(std::io::stderr)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_target(true),
             )
             .try_init()
             .context("install tracing subscriber")?;
     } else {
+        // Route the fmt layer's writer through the IndicatifLayer so log
+        // lines render above the bars instead of through them.
         let indicatif = IndicatifLayer::new().with_progress_style(
             ProgressStyle::with_template(PROGRESS_TEMPLATE).expect("valid template"),
         );
@@ -166,7 +173,10 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_writer(writer)
-                    .with_target(false),
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_target(true),
             )
             .with(indicatif)
             .try_init()
@@ -174,32 +184,4 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     }
 
     Ok(TracingGuard { provider })
-}
-
-/// Event vocabulary shared across provider CLIs. Helpers emit
-/// `tracing::info!` with a stable field set so JSON consumers and OTLP
-/// dashboards see the same shape. Keep this list short — every event
-/// added here becomes a long-term commitment to downstream consumers.
-pub mod events {
-    /// One HTTP-ish call to the upstream provider completed. Emitted at
-    /// `debug` because progress bars carry the cumulative counters; the
-    /// per-call detail is only interesting when something looks wrong.
-    pub fn item_fetched(url: &str, bytes: u64, duration_ms: u64) {
-        tracing::debug!(
-            event = "item_fetched",
-            url = url,
-            bytes = bytes,
-            duration_ms = duration_ms,
-        );
-    }
-
-    /// A batch of records was diffed against prior state and persisted.
-    pub fn indexed_batch(entity: &str, count: usize, duration_ms: u64) {
-        tracing::info!(
-            event = "indexed_batch",
-            entity = entity,
-            count = count,
-            duration_ms = duration_ms,
-        );
-    }
 }

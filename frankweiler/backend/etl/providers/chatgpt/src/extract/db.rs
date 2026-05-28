@@ -414,7 +414,7 @@ mod tests {
     async fn pre_seed_and_skip_check() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("c.doltlite_db")).await.unwrap();
-        let listing = vec![json!({"id":"c1","title":"T","update_time":1.0})];
+        let listing = [json!({"id":"c1","title":"T","update_time":1.0})];
         let refs: Vec<&Value> = listing.iter().collect();
         db.pre_seed_conversations(&refs).await.unwrap();
         let states = db.conversation_states().await.unwrap();

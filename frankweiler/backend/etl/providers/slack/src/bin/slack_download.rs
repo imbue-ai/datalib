@@ -26,10 +26,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_slack::extract::{
     self as slack, FetchOptions, DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
 };
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
 #[derive(Parser, Debug)]

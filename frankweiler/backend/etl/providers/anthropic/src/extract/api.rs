@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde_json::Value;
 use tracing::instrument;
 
+use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
-use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://claude.ai/api";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);

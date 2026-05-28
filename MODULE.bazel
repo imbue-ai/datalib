@@ -180,6 +180,7 @@ crate.from_cargo(
         "//frankweiler/backend/schema:Cargo.toml",
         "//frankweiler/backend/core:Cargo.toml",
         "//frankweiler/backend/http:Cargo.toml",
+        "//frankweiler/backend/obs:Cargo.toml",
         "//frankweiler/backend/etl:Cargo.toml",
         "//frankweiler/backend/etl/providers/anthropic:Cargo.toml",
         "//frankweiler/backend/etl/providers/chatgpt:Cargo.toml",

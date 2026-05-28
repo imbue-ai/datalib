@@ -5,8 +5,10 @@
 //! - [`sidecar`] — the cross-provider Translate→Load contract.
 //! - [`load`] — the provider-agnostic Load step; ships as the
 //!   `grid-rows-load` binary.
-//! - [`obs`] — shared `ObsArgs` for clap flatten + tracing/OTLP
-//!   initialization so every stage emits a comparable event stream.
+//! - [`events`] — stable structured event vocabulary used by every
+//!   Extract/Translate step. Initialization of the tracing subscriber
+//!   that consumes these events lives in the shared `frankweiler_obs`
+//!   crate so non-ETL binaries can use it too.
 //! - [`raw_store`] — content-addressed page capture used by every
 //!   Extract step.
 //!
@@ -17,11 +19,11 @@
 pub mod blobs;
 pub mod doltlite_raw;
 pub mod event_store;
+pub mod events;
 pub mod http;
 pub mod ids;
 pub mod latchkey;
 pub mod load;
-pub mod obs;
 pub mod progress;
 pub mod raw_store;
 pub mod sidecar;

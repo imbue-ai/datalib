@@ -19,13 +19,11 @@ rust_library(
     data = [":latchkey_curl_shim"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:opentelemetry",
-        "@frankweiler_crates//:opentelemetry-otlp",
-        "@frankweiler_crates//:opentelemetry_sdk",
         "@frankweiler_crates//:runfiles",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
@@ -36,8 +34,6 @@ rust_library(
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:tracing-indicatif",
-        "@frankweiler_crates//:tracing-opentelemetry",
-        "@frankweiler_crates//:tracing-subscriber",
     ],
 )
 
@@ -74,6 +70,7 @@ rust_binary(
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         ":frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",

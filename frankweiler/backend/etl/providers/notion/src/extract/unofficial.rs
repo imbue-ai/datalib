@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
-use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://www.notion.so/api/v3";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);

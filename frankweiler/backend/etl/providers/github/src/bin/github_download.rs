@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_github::extract::{self as github, parse_pr_ref, FetchOptions, DEFAULT_SCOPES};
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
 #[derive(Parser, Debug)]

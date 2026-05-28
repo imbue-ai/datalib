@@ -22,6 +22,7 @@ path = "src/bin/latchkey_curl_shim.rs"
 
 [dependencies]
 frankweiler-core = { path = "../core" }
+frankweiler-obs = { path = "../obs" }
 frankweiler-schema = { path = "../schema" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }
@@ -38,17 +39,13 @@ tempfile = "3"
 # `bazel run` / `bazel test`. Falls through cleanly outside Bazel.
 runfiles = "0.2"
 
-# Observability stack — emitted as structured events, rendered as a
-# progress UI on a TTY, JSON on stderr otherwise, and optionally
-# exported to an OTLP collector when --otlp-endpoint is set.
+# Observability — the heavy stack (tracing-subscriber, indicatif,
+# OTLP) lives in `frankweiler-obs`. We keep `tracing` here for the
+# `events` module's `info!`/`debug!` calls, and `tracing-indicatif` +
+# `clap` for the `grid_rows_load` binary that uses them directly.
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 tracing-indicatif = "0.3"
-opentelemetry = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic", "trace"] }
-tracing-opentelemetry = "0.28"
 
 # Curl-compatible TLS-impersonating HTTP client. Used by
 # `latchkey-curl-shim`; gated by a feature in case downstream

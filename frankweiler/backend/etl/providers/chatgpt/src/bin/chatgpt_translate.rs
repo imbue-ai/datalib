@@ -9,9 +9,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
 use frankweiler_etl_chatgpt::translate::render::render_all;
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span};
 
 #[derive(Parser, Debug)]

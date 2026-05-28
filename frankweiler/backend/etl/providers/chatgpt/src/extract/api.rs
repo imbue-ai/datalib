@@ -16,8 +16,8 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{instrument, warn};
 
+use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
-use frankweiler_etl::obs::events;
 
 pub const BASE: &str = "https://chatgpt.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(120);

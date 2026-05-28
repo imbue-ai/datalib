@@ -118,22 +118,9 @@ struct Args {
     /// given a fixed `--now`.
     #[arg(long, default_value_t = true)]
     deterministic: bool,
-}
 
-/// Install a minimal stderr `tracing` subscriber so `warn!`/`error!`
-/// events from the provider crates (per-file media download failures,
-/// channel-level fetch errors, etc.) actually reach the user. Without
-/// this, every `tracing::warn!` in extract code is silently dropped and
-/// failures look like successes.
-fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,hyper=warn"));
-    let _ = fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .try_init();
+    #[command(flatten)]
+    obs: frankweiler_obs::ObsArgs,
 }
 
 #[tokio::main]
@@ -141,7 +128,17 @@ async fn main() {
     if std::env::var_os("RUST_BACKTRACE").is_none() {
         std::env::set_var("RUST_BACKTRACE", "full");
     }
-    init_tracing();
+    // Parse args first so --log-level / --otlp-endpoint take effect.
+    // Re-parsed inside `run`; clap is cheap and lets us keep the existing
+    // `run(&summary)` signature instead of threading Args through.
+    let early_args = <Args as clap::Parser>::parse();
+    let _obs_guard = match frankweiler_obs::init(&early_args.obs, "frankweiler-sync") {
+        Ok(g) => Some(g),
+        Err(e) => {
+            eprintln!("[frankweiler-sync] tracing init failed: {e}");
+            None
+        }
+    };
 
     let summary = Arc::new(Mutex::new(SyncSummary::new()));
     let start = Instant::now();

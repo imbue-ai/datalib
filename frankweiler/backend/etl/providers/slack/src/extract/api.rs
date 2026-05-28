@@ -13,9 +13,9 @@ use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
-use frankweiler_etl::obs::events;
 
 use super::db::RawDb;
 

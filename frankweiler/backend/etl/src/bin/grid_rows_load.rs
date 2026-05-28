@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_etl::load::{init_schema, load_all};
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use frankweiler_qmd_indexer::{run_index, IndexOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::{info, info_span};

@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_chatgpt::extract::{self as chatgpt, FetchOptions, SLEEP_BETWEEN};
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
 #[derive(Parser, Debug)]

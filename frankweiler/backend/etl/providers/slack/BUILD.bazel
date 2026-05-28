@@ -57,6 +57,7 @@ rust_binary(
     deps = [
         ":frankweiler_etl_slack",
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
@@ -79,6 +80,7 @@ rust_binary(
     deps = [
         ":frankweiler_etl_slack",
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",

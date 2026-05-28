@@ -857,11 +857,9 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-obs",
  "frankweiler-qmd-indexer",
  "frankweiler-schema",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
  "runfiles",
  "serde",
  "serde_json",
@@ -872,8 +870,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-indicatif",
- "tracing-opentelemetry",
- "tracing-subscriber",
  "wreq",
  "wreq-util",
 ]
@@ -886,6 +882,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -909,6 +906,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -932,6 +930,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -954,6 +953,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -976,6 +976,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -1000,6 +1001,7 @@ dependencies = [
  "clap",
  "emojis",
  "frankweiler-etl",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "once_cell",
@@ -1040,6 +1042,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-obs"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "clap",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "tracing",
+ "tracing-indicatif",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "frankweiler-qmd-indexer"
 version = "0.1.3"
 dependencies = [
@@ -1069,6 +1086,7 @@ dependencies = [
  "frankweiler-etl-gitlab",
  "frankweiler-etl-notion",
  "frankweiler-etl-slack",
+ "frankweiler-obs",
  "frankweiler-qmd-indexer",
  "indicatif",
  "insta",
@@ -1078,7 +1096,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "walkdir",
 ]
 

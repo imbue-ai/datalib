@@ -6,9 +6,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_notion::translate::parse_api_dir;
 use frankweiler_etl_notion::translate::render::render_notion_official;
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span};
 
 #[derive(Parser, Debug)]

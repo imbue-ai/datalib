@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl::obs::{init as init_obs, ObsArgs};
 use frankweiler_etl_notion::extract::{self as notion, FetchOptions};
+use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 
 #[derive(Parser, Debug)]
