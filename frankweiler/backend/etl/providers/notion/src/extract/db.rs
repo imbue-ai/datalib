@@ -16,17 +16,67 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-/// All object tables share these bookkeeping columns. A NULL `payload`
-/// means "we know this id exists upstream but we haven't fetched it yet"
-/// (either pre-seeded or a previous fetch failed). `attempt_count` is
-/// bumped on every fetch attempt; `last_error` is cleared on success.
-///
-/// Primary keys are the **upstream Notion UUIDs**, not surrogate
-/// integers. That's load-bearing for dolt: the same row needs to land
-/// at the same place on every re-fetch so `dolt diff` reflects actual
-/// content changes, not accidental row-id churn. Where ordering matters
-/// (`blocks` within a page), we carry an explicit ordering column.
+// ─────────────────────────────────────────────────────────────────────
+// Schema
+// ─────────────────────────────────────────────────────────────────────
+//
+// PRIMARY KEY POLICY — read this before adding a new table.
+//
+// Every row in this database represents a *thing that exists upstream*.
+// Each table's PK is the **upstream Notion identifier for that thing**,
+// stored as TEXT. NO SURROGATE AUTOINCREMENT INTEGERS, no
+// ROWID-as-PK tricks. The reason is load-bearing and non-obvious:
+//
+//   1. dolt diff stability. The raw store sits on top of doltlite;
+//      `dolt diff` compares rows by PK. If we keyed by a surrogate
+//      integer that gets assigned at INSERT time, re-fetching the
+//      same upstream row on a different day would land it at a
+//      different surrogate id — dolt would see "row deleted + row
+//      inserted" (or worse, "row at id N changed") for what is
+//      actually the same upstream object with a stable identity.
+//      Keying by upstream id means re-fetches land in the same row
+//      and the diff reflects content change only.
+//
+//   2. Idempotent upserts. ON CONFLICT(id) is meaningful only when
+//      id is the *upstream* id. A surrogate auto-id would force us
+//      to "find by upstream id then update or insert" — two queries
+//      per row instead of one — and would still be racy in the
+//      face of concurrent writers (which we don't have today, but
+//      relying on that property would be a footgun).
+//
+//   3. Pre-seeding. The design supports inserting (id, NULL payload)
+//      rows when we know upstream that an object exists but haven't
+//      fetched its body yet. The pre-seeded row and the eventual
+//      detail-fetched row must be the *same row* — that only works
+//      if both writers know the PK up front, i.e. the upstream id.
+//
+//   4. Cross-table references. blocks.parent_id, blocks.page_id,
+//      comments.parent_id all hold upstream ids. They'd be useless
+//      if they pointed at a surrogate value that local INSERT order
+//      happened to produce.
+//
+// In-table ordering (e.g. blocks within a page) is a SEPARATE
+// concern from identity. When it matters, we carry an explicit
+// integer column (see `blocks.page_order`). We do NOT borrow the
+// PK column for ordering.
+//
+// Exception: `sync_runs` (see below) is an append-only log of sync
+// invocations. There is no upstream identifier for a sync run — it's
+// a local event. That's why it's the one table here that uses an
+// autoincrement integer PK.
+//
+// ─────────────────────────────────────────────────────────────────────
+//
+// All object tables share these bookkeeping columns:
+//   payload         JSON NULL — NULL means "exists upstream, not yet
+//                   fetched" (pre-seeded or previous attempt failed).
+//   fetched_at      ISO-8601 stamp set when payload becomes non-null.
+//   attempt_count   bumped on every fetch attempt.
+//   last_attempt_at, last_error — last_error cleared on success.
 pub const DDL: &[&str] = &[
+    // pages — PK is the Notion page UUID (the `id` field on a /v1/pages
+    // response). Stable across re-fetches; this is the same id Notion
+    // returns in its URL fragment.
     "CREATE TABLE IF NOT EXISTS pages (
         id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
@@ -38,10 +88,14 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pages_last_edited ON pages(last_edited_time)",
-    // `page_order` is the block's index in BFS discovery order within
-    // its owning `page_id`. Render relies on it for section / toggle
-    // layout. NULL is tolerated (pre-seeded rows; never-fetched rows)
-    // and sorts last.
+    // blocks — PK is the Notion block UUID. `page_order` is the 0-based
+    // index of this block within its owning page's BFS walk; render
+    // uses it to lay out sections / toggles. We do NOT use page_order
+    // as part of the PK because (a) page_order is local-only ordering
+    // metadata, not upstream identity, and (b) the same block may
+    // legitimately end up with a different page_order if we recrawl a
+    // page whose children were rearranged upstream — we want the row
+    // to stay at the same PK, and the page_order column to update.
     "CREATE TABLE IF NOT EXISTS blocks (
         id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
@@ -55,6 +109,8 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS blocks_page ON blocks(page_id, page_order)",
+    // databases — PK is the Notion database UUID (the `id` field on a
+    // /v1/databases response). Same rationale as pages.
     "CREATE TABLE IF NOT EXISTS databases (
         id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
@@ -65,6 +121,9 @@ pub const DDL: &[&str] = &[
         last_attempt_at TEXT NULL,
         last_error TEXT NULL
     )",
+    // users — PK is the Notion user UUID (the `id` field on a
+    // /v1/users response or on a person reference inside another
+    // payload). One row per user the workspace has ever surfaced.
     "CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         payload TEXT NULL,
@@ -73,6 +132,9 @@ pub const DDL: &[&str] = &[
         last_attempt_at TEXT NULL,
         last_error TEXT NULL
     )",
+    // comments — PK is the Notion comment UUID (the hex32 fragment of
+    // the share URL on a comment, or the `id` field on a /v1/comments
+    // response item). Stable across re-fetches just like pages/blocks.
     "CREATE TABLE IF NOT EXISTS comments (
         id TEXT PRIMARY KEY,
         parent_id TEXT NOT NULL,
@@ -84,6 +146,19 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS comments_page ON comments(page_id)",
+    // blobs — PK is the upstream-stable identifier for the file:
+    //   * `file_upload_id` (from Notion's File Upload API) when the
+    //     block references an uploaded file — this is the canonical
+    //     upstream id Notion exposes for that file.
+    //   * Otherwise (external URLs, signed-S3 block files), the
+    //     synthetic key `{owning_block_id}:{slot}` — e.g.
+    //     `4f3a…:image`. Stable across re-fetches as long as the
+    //     owning block id is stable, which is the same guarantee
+    //     blocks.id gives us.
+    // We do NOT key blobs by sha256(content), because we need the PK
+    // to be known BEFORE we fetch (so an empty pre-seed row can hold
+    // the slot, and so error-recording on a failed fetch attaches to
+    // the right row).
     "CREATE TABLE IF NOT EXISTS blobs (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL CHECK(kind IN ('uploaded','external','notion_hosted')),
@@ -98,12 +173,24 @@ pub const DDL: &[&str] = &[
         last_attempt_at TEXT NULL,
         last_error TEXT NULL
     )",
+    // endpoint_shapes — PK is the endpoint identifier itself (e.g.
+    // `GET /v1/blocks/{id}/children`). One row per endpoint; we only
+    // keep the latest captured shape, so re-running stamps over the
+    // same row — exactly what an upsert on a natural key does.
     "CREATE TABLE IF NOT EXISTS endpoint_shapes (
         endpoint TEXT PRIMARY KEY,
         example_headers TEXT NULL,
         example_envelope_skeleton TEXT NULL,
         captured_at TEXT NOT NULL
     )",
+    // sync_runs — THE ONE EXCEPTION TO THE POLICY ABOVE.
+    //
+    // This table is an append-only LOG of every time the sync binary
+    // ran. A "sync run" is a purely local event — it has no upstream
+    // identity, nothing on Notion's side corresponds to it. We have
+    // nothing to key it by other than "the n-th run", so an
+    // autoincrement integer is correct here. We deliberately do not
+    // upsert into this table; every run inserts a fresh row.
     "CREATE TABLE IF NOT EXISTS sync_runs (
         run_id INTEGER PRIMARY KEY AUTOINCREMENT,
         started_at TEXT NOT NULL,
