@@ -123,10 +123,14 @@ sh_test(
     data = _E2E_DATA,
     deps = _E2E_DEPS,
     # Needs network (Playwright may fetch browser binary) and the host's
-    # pnpm / node / Playwright cache. Skipped in sandboxed CI runs that
-    # don't pass --test_tag_filters=-requires-network or similar.
+    # pnpm / node / Playwright cache, hence `no-sandbox` +
+    # `requires-network`. Do NOT re-add the `external` tag: this is a
+    # routine UI integration test that must run on the default
+    # `bazel test //...` path (and CI's
+    # `--test_tag_filters=-manual,-external`). `requires-network`
+    # already gates it out of hermetic / offline environments;
+    # `external` would over-exclude.
     tags = [
-        "external",
         "no-sandbox",
         "requires-network",
     ],
