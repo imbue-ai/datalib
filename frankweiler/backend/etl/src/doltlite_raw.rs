@@ -48,6 +48,26 @@
 //!
 //! Exception: [`SYNC_RUNS_DDL`] uses `AUTOINCREMENT INTEGER` because a
 //! sync invocation has no upstream identity — it's a local event.
+//!
+//! ─────────────────────────────────────────────────────────────────
+//!
+//! ## JSONB storage
+//!
+//! Per-row `payload` columns store JSON as SQLite **JSONB** (binary
+//! representation, added in SQLite 3.45 / doltlite 0.11.2+). INSERTs
+//! wrap the bound text payload in `jsonb(?)`; loads use
+//! `SELECT json(payload) AS payload` so the Rust side keeps getting
+//! text it can hand to `serde_json::from_str`.
+//!
+//! The on-wire JSON value is preserved (jsonb is a faithful binary
+//! encoding); `dolt diff` still shows row-level changes at the right
+//! granularity, since dolt diffs whole rows by PK rather than reaching
+//! inside the JSON document. `sqlite3` ad-hoc queries should select
+//! `json(payload)` rather than the raw column.
+//!
+//! `sync_runs.config` / `summary` and `endpoint_shapes.example_*`
+//! stay as plain TEXT — they're tiny single-row bookkeeping where
+//! debug-friendly `sqlite3` SELECT matters more than parse perf.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -320,7 +340,11 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
 /// deterministically ordered by `id`. Rows with NULL payload are
 /// skipped — they're pre-seeded entries that haven't been fetched yet.
 pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
-    let sql = format!("SELECT payload FROM {table} WHERE payload IS NOT NULL ORDER BY id");
+    // Wrap in `json(payload)` so we get text JSON back regardless of
+    // whether the column stores a JSONB blob or a JSON text literal.
+    // See "JSONB storage" in `doltlite_raw.rs` module docs.
+    let sql =
+        format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id");
     let rows = sqlx::query(&sql)
         .fetch_all(pool)
         .await

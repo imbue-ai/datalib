@@ -193,7 +193,7 @@ impl RawDb {
         for (id, parent_id, last_edited_time, payload) in rows {
             let sql = if payload.is_some() {
                 "INSERT INTO pages (id, parent_id, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, ?, ?, ?, NULL)
+                 VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = COALESCE(excluded.parent_id, pages.parent_id),
                     last_edited_time = excluded.last_edited_time,
@@ -242,7 +242,7 @@ impl RawDb {
         {
             sqlx::query(
                 "INSERT INTO blocks (id, parent_id, page_id, page_order, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                 VALUES (?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = COALESCE(excluded.parent_id, blocks.parent_id),
                     page_id = COALESCE(excluded.page_id, blocks.page_id),
@@ -282,7 +282,7 @@ impl RawDb {
         for (id, parent_id, page_id, payload) in rows {
             sqlx::query(
                 "INSERT INTO comments (id, parent_id, page_id, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, ?, ?, ?, NULL)
+                 VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     page_id = COALESCE(excluded.page_id, comments.page_id),
@@ -323,7 +323,7 @@ impl RawDb {
         // on this for section / toggle layout. `id` ties the tail so
         // results stay deterministic when page_order is NULL.
         let rows = sqlx::query(
-            "SELECT payload, page_id FROM blocks WHERE payload IS NOT NULL \
+            "SELECT json(payload) AS payload, page_id FROM blocks WHERE payload IS NOT NULL \
              ORDER BY page_id, page_order, id",
         )
         .fetch_all(&self.pool)
@@ -345,7 +345,7 @@ impl RawDb {
 
     pub async fn load_comments(&self) -> Result<Vec<(Value, Option<String>)>> {
         let rows = sqlx::query(
-            "SELECT payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id",
+            "SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -521,6 +521,32 @@ mod tests {
         .unwrap();
         let failed = db.failed_page_ids().await.unwrap();
         assert!(failed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn payload_is_stored_as_jsonb_blob() {
+        // After upserting via `jsonb(?)`, the stored payload column
+        // should be a BLOB (jsonb's binary representation), not TEXT.
+        // Guards against silently falling back to plain JSON text when
+        // someone unwraps the `jsonb()` call from an INSERT.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("j.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_pages(&[(
+            "p1".into(),
+            None,
+            Some("2026-01-01T00:00:00Z".into()),
+            Some(serde_json::to_string(&json!({"a": [1, 2, 3], "b": "hi"})).unwrap()),
+        )])
+        .await
+        .unwrap();
+        let row = sqlx::query("SELECT typeof(payload) AS t FROM pages WHERE id='p1'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let t: String = row.try_get("t").unwrap();
+        assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
     }
 
     #[test]

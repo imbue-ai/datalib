@@ -113,7 +113,7 @@ impl RawDb {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO me (id, email, name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, NULL)
+             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
              ON CONFLICT(id) DO UPDATE SET
                 email = COALESCE(excluded.email, me.email),
                 name = COALESCE(excluded.name, me.name),
@@ -136,7 +136,7 @@ impl RawDb {
 
     /// Returns the latest `/me` payload, if any.
     pub async fn load_me(&self) -> Result<Option<Value>> {
-        let row = sqlx::query("SELECT payload FROM me ORDER BY id LIMIT 1")
+        let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
             .fetch_optional(&self.pool)
             .await
             .context("select me")?;
@@ -226,7 +226,7 @@ impl RawDb {
             .map(|v| serde_json::to_string(v).unwrap_or_default());
         sqlx::query(
             "INSERT INTO conversations (id, title, update_time, last_listing_update_time, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
              ON CONFLICT(id) DO UPDATE SET
                 title = COALESCE(excluded.title, conversations.title),
                 update_time = COALESCE(excluded.update_time, conversations.update_time),
@@ -264,7 +264,7 @@ impl RawDb {
     /// keys back on if they want them.
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT id, payload, fetched_at, last_listing_update_time
+            "SELECT id, json(payload) AS payload, fetched_at, last_listing_update_time
              FROM conversations WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)

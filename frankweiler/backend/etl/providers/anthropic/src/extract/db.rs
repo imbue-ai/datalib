@@ -126,7 +126,7 @@ impl RawDb {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO users (id, email, full_name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, NULL)
+             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
              ON CONFLICT(id) DO UPDATE SET
                 email = COALESCE(excluded.email, users.email),
                 full_name = COALESCE(excluded.full_name, users.full_name),
@@ -181,7 +181,7 @@ impl RawDb {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO orgs (id, name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, NULL)
+             VALUES (?, ?, jsonb(?), ?, ?, NULL)
              ON CONFLICT(id) DO UPDATE SET
                 name = COALESCE(excluded.name, orgs.name),
                 payload = excluded.payload,
@@ -263,7 +263,7 @@ impl RawDb {
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO conversations (id, org_uuid, name, updated_at, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
              ON CONFLICT(id) DO UPDATE SET
                 org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
                 name = COALESCE(excluded.name, conversations.name),
@@ -296,7 +296,7 @@ impl RawDb {
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT id, org_uuid, payload FROM conversations WHERE payload IS NOT NULL ORDER BY id",
+            "SELECT id, org_uuid, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
