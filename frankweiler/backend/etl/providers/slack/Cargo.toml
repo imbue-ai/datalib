@@ -32,8 +32,9 @@ emojis = "0.6"
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-indicatif = "0.3"
+sqlx = { workspace = true }
+tempfile = "3"
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tempfile = "3"

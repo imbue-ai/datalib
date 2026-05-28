@@ -1,64 +1,27 @@
 //! Live Slack integration snapshot test.
 //!
 //! Hits real api.slack.com via `latchkey curl`, downloads the configured
-//! test channel, and snapshots each captured `raw_api/<method>` stream
-//! with redactions for volatile fields. Marked `#[ignore]` so
-//! `cargo test` skips it; run explicitly with:
+//! test channel into a doltlite DB, and snapshots the captured rows
+//! per-table with redactions for volatile fields. Marked `#[ignore]`
+//! so `cargo test` skips it; run explicitly with:
 //!
-//!     cargo test -p frankweiler-etl --test slack_live -- --ignored
+//!     cargo test -p frankweiler-etl-slack --test slack_live -- --ignored
 //!
-//! Snapshots live in `providers/tests/snapshots/`. Accept changes with
-//! `cargo insta review` after posting messages / attachments to the
-//! channel.
+//! Snapshots live in `tests/snapshots/`. Accept changes with
+//! `cargo insta review` (or the bazel `.update` target) after posting
+//! messages / attachments to the channel.
 //!
 //! Prereq: `latchkey` on PATH with creds for the `slack` service.
 
-use std::fs;
-use std::path::Path;
-
-use frankweiler_etl_slack::extract as slack;
+use frankweiler_etl_slack::extract::{self as slack, block_on_load_all, db_path_for};
 use insta::assert_json_snapshot;
 use serde_json::Value;
 
 const TEST_CHANNEL: &str = "thad-testing-channel";
 
-/// Fan-in every `*.jsonl` under a method directory. Run-stamped files
-/// sort lexically by timestamp prefix, so iteration order is run order.
-fn load_jsonl(method_dir: &Path) -> Vec<Value> {
-    let mut paths: Vec<_> = fs::read_dir(method_dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
-                .collect()
-        })
-        .unwrap_or_default();
-    paths.sort();
-    let mut out = Vec::new();
-    for p in paths {
-        let text = fs::read_to_string(&p).unwrap_or_default();
-        for line in text.lines().filter(|l| !l.trim().is_empty()) {
-            out.push(serde_json::from_str(line).expect("valid jsonl"));
-        }
-    }
-    out
-}
-
-/// Pull only the items inside each page envelope. Sorting keeps the
-/// snapshot stable across pagination/cursor reordering, and the page
-/// envelope metadata (`_recorded_at`, `params.cursor`) is volatile in
-/// ways that aren't worth redacting per-field.
-fn extract_items(rows: &[Value], array_field: &str, sort_keys: &[&str]) -> Vec<Value> {
-    let mut items: Vec<Value> = Vec::new();
-    for row in rows {
-        if let Some(arr) = row
-            .get("response")
-            .and_then(|r| r.get(array_field))
-            .and_then(|v| v.as_array())
-        {
-            items.extend(arr.iter().cloned());
-        }
-    }
+/// Sort a Vec of JSON payloads by a sequence of string keys, for
+/// snapshot stability across pagination/cursor reordering.
+fn sort_by_keys(mut items: Vec<Value>, sort_keys: &[&str]) -> Vec<Value> {
     items.sort_by_key(|v| {
         let mut k = String::new();
         for f in sort_keys {
@@ -82,26 +45,47 @@ async fn slack_live_download_snapshot() {
     eprintln!("[test] downloading to {}", tmp.display());
 
     let opts = slack::FetchOptions {
-        out_dir: tmp.clone(),
+        db_path: tmp.clone(),
         channels: Some(vec![TEST_CHANNEL.to_string()]),
         media: true,
         ..Default::default()
     };
     slack::fetch(opts).await.expect("slack fetch failed");
 
-    let raw = tmp.join("raw_api");
+    let db_path = db_path_for(&tmp);
+    let raw = block_on_load_all(&db_path).expect("load db");
 
-    // Trim conversations.list down to the test channel — workspace-wide
-    // churn isn't what we're testing.
-    let channels_rows = load_jsonl(&raw.join("conversations.list"));
-    let mut channels = extract_items(&channels_rows, "channels", &["id"]);
-    channels.retain(|c| c.get("name").and_then(|v| v.as_str()) == Some(TEST_CHANNEL));
+    // Trim conversations to the test channel — workspace-wide listings
+    // include every channel the token can see, and that churn isn't
+    // what we're snapshotting.
+    let mut channels: Vec<Value> = raw
+        .channels
+        .into_iter()
+        .filter(|c| c.get("name").and_then(|v| v.as_str()) == Some(TEST_CHANNEL))
+        .collect();
+    channels = sort_by_keys(channels, &["id"]);
 
-    // Messages + replies — full sets are tiny for the test channel.
-    let history_rows = load_jsonl(&raw.join("conversations.history"));
-    let messages = extract_items(&history_rows, "messages", &["ts"]);
-    let replies_rows = load_jsonl(&raw.join("conversations.replies"));
-    let replies = extract_items(&replies_rows, "messages", &["thread_ts", "ts"]);
+    // Messages: split into top-level vs thread replies the same way
+    // the old JSONL-tree assertions did. `is_thread_root && thread_ts
+    // == None` → channel-history-only; otherwise either a thread root
+    // re-served by replies, or a reply child.
+    let messages: Vec<Value> = raw
+        .messages
+        .iter()
+        .filter(|m| m.channel_id == channels[0].get("id").and_then(|v| v.as_str()).unwrap_or(""))
+        .filter(|m| m.thread_ts.is_none())
+        .map(|m| m.payload.clone())
+        .collect();
+    let messages = sort_by_keys(messages, &["ts"]);
+
+    let replies: Vec<Value> = raw
+        .messages
+        .iter()
+        .filter(|m| m.channel_id == channels[0].get("id").and_then(|v| v.as_str()).unwrap_or(""))
+        .filter(|m| m.thread_ts.is_some())
+        .map(|m| m.payload.clone())
+        .collect();
+    let replies = sort_by_keys(replies, &["thread_ts", "ts"]);
 
     // Users: trim to authors referenced by the test channel's traffic.
     let mut referenced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -110,14 +94,17 @@ async fn slack_live_download_snapshot() {
             referenced.insert(u.to_string());
         }
     }
-    let users_rows = load_jsonl(&raw.join("users.list"));
-    let mut users = extract_items(&users_rows, "members", &["id"]);
-    users.retain(|u| {
-        u.get("id")
-            .and_then(|v| v.as_str())
-            .map(|id| referenced.contains(id))
-            .unwrap_or(false)
-    });
+    let mut users: Vec<Value> = raw
+        .users
+        .into_iter()
+        .filter(|u| {
+            u.get("id")
+                .and_then(|v| v.as_str())
+                .map(|id| referenced.contains(id))
+                .unwrap_or(false)
+        })
+        .collect();
+    users = sort_by_keys(users, &["id"]);
 
     // Redact volatile fields: url_private*, permalink*, thumb_* are
     // signed Slack URLs regenerated each call.

@@ -856,7 +856,7 @@ impl ExtractPlan {
             }),
             ExtractKind::Slack { sync } => frankweiler_etl_slack::extract::fetch(
                 frankweiler_etl_slack::extract::FetchOptions {
-                    out_dir: self.out_dir.clone(),
+                    db_path: self.out_dir.clone(),
                     channels: sync.channels.clone(),
                     since: sync
                         .since

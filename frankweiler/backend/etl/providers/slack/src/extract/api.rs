@@ -5,7 +5,6 @@
 //! credential signs both API calls and file downloads.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -17,6 +16,8 @@ use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 use frankweiler_etl::obs::events;
+
+use super::db::RawDb;
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -176,7 +177,16 @@ pub async fn call_slack(
 // the `slack` service's baseApiUrls covers (latchkey ≥ 2.11.2).
 // ---------------------------------------------------------------------------
 
-pub async fn download_one_file(file_obj: &Value, blob_dir: &Path) -> Result<&'static str> {
+/// Download one file's bytes into the doltlite `blobs` table. The
+/// `owning_id` we record is the channel containing the message that
+/// references the file — Slack files can be shared across channels,
+/// but bytes-are-bytes and the first downloader wins (subsequent
+/// references no-op via `blob_exists`).
+pub async fn download_one_file(
+    db: &RawDb,
+    channel_id: &str,
+    file_obj: &Value,
+) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
         None => return Ok("tombstone"),
@@ -200,28 +210,29 @@ pub async fn download_one_file(file_obj: &Value, blob_dir: &Path) -> Result<&'st
         None => return Ok("external"),
     };
 
-    let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
-    let target_dir = blob_dir.join(file_id);
-    let target = target_dir.join(&name);
-    if let Ok(meta) = std::fs::metadata(&target) {
-        if meta.len() > 0 {
-            return Ok("skipped");
-        }
+    // Trust-our-copy refetch policy: signed URLs rotate but bytes don't.
+    if db.blob_exists(file_id).await.unwrap_or(false) {
+        return Ok("skipped");
     }
-    std::fs::create_dir_all(&target_dir)?;
 
-    // Goes through latchkey → in-tree curl shim. files.slack.com is
-    // in the `slack` service's baseApiUrls, so latchkey injects the
-    // same auth it would for slack.com/api/.
+    let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
+    let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
+
+    // Tempfile + `latchkey curl -o` matches the chatgpt/anthropic pattern.
+    // files.slack.com is covered by the `slack` service's baseApiUrls.
+    let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
     let mut cmd = latchkey_tokio_command();
-    cmd.arg("curl").arg("-fSL").arg("-o").arg(&target).arg(url);
+    cmd.arg("curl")
+        .arg("-fSL")
+        .arg("-o")
+        .arg(tmp.path())
+        .arg(url);
 
     let proc = tokio::time::timeout(LATCHKEY_FILE_TIMEOUT, cmd.output())
         .await
         .context("file curl timed out")?
         .context("file curl spawn failed")?;
     if !proc.status.success() {
-        let _ = std::fs::remove_file(&target);
         let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
         let tail: String = stderr_full
             .chars()
@@ -238,24 +249,32 @@ pub async fn download_one_file(file_obj: &Value, blob_dir: &Path) -> Result<&'st
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
+        let _ = db
+            .record_blob_error(file_id, channel_id, "file", tail.trim())
+            .await;
         return Ok("error");
     }
-    let bytes = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
-    events::item_fetched(url, bytes, 0);
+    let bytes =
+        std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
+    let len = bytes.len() as u64;
+    db.upsert_blob_bytes(file_id, "file", channel_id, "file", mime, &bytes, Some(url))
+        .await?;
+    events::item_fetched(url, len, 0);
     debug!(
         event = "slack_media_downloaded",
         file_id = file_id,
-        bytes = bytes
+        bytes = len
     );
     Ok("downloaded")
 }
 
-/// Walk message records for `files[]` and download each. `records` is
-/// the raw `messages` array from a `conversations.history` /
-/// `conversations.replies` response.
+/// Walk message records for `files[]` and download each into the
+/// doltlite blob store. `messages` is the raw array from a
+/// `conversations.history` or `conversations.replies` response.
 pub async fn download_files_for_messages(
+    db: &RawDb,
+    channel_id: &str,
     messages: &[Value],
-    blob_dir: &Path,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
@@ -270,7 +289,7 @@ pub async fn download_files_for_messages(
         }
     }
     for f in &targets {
-        let outcome = download_one_file(f, blob_dir).await?;
+        let outcome = download_one_file(db, channel_id, f).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(

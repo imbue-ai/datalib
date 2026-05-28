@@ -17,7 +17,7 @@
 //! changes alone do not invalidate prior outputs — bump the
 //! [`RENDER_VERSION`] constant when you need a forced rebake.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -27,7 +27,7 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use frankweiler_etl::blobs::{blob_relpath, relative_link, safe_filename};
+use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
@@ -118,27 +118,17 @@ pub fn render_all(
             &md_rel,
         );
 
-        if let Some(parent) = md_path.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-        }
-        // Clean up any earlier `<uuid>__*.md` from before the slug changed.
-        if let Some(dir) = md_path.parent() {
-            let prefix = format!("{thread_uuid}__");
-            if let Ok(rd) = fs::read_dir(dir) {
-                for entry in rd.flatten() {
-                    let p = entry.path();
-                    if p == md_path || p == json_path {
-                        continue;
-                    }
-                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name.starts_with(&prefix)
-                        && (name.ends_with(".md") || name.ends_with(".grid_rows.json"))
-                    {
-                        let _ = fs::remove_file(&p);
-                    }
-                }
-            }
-        }
+        let page_dir = md_path
+            .parent()
+            .expect("output_paths always produces <page_dir>/index.md");
+        fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+
+        // Write blob bytes into <page_dir>/blobs/<safe_filename>. The
+        // markdown links emitted by `file_link` use the same
+        // `safe_filename(name, file_id)` rule so the link target
+        // matches what lands on disk.
+        materialize_thread_blobs(t, &msgs, page_dir)
+            .with_context(|| format!("materialize blobs for {}", thread_uuid))?;
 
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
         let sidecar = Sidecar {
@@ -191,14 +181,20 @@ fn output_paths(
     channel_id: &str,
     thread_uuid: &str,
 ) -> (PathBuf, PathBuf) {
+    // Page-dir layout: each thread is `<thread_uuid>/index.md` so its
+    // blobs can live in a sibling `blobs/` subdir under the same dir.
+    // Matches the chatgpt / anthropic / notion convention so the
+    // rendered tree is internally consistent and one thread's
+    // directory is sharable in isolation.
     let dir = out_dir
         .join("rendered_md")
         .join("slack")
         .join(team_id)
         .join(channel_id)
-        .join("threads");
-    let md = dir.join(format!("{thread_uuid}.md"));
-    let json = dir.join(format!("{thread_uuid}.grid_rows.json"));
+        .join("threads")
+        .join(thread_uuid);
+    let md = dir.join("index.md");
+    let json = dir.join("index.grid_rows.json");
     (md, json)
 }
 
@@ -469,18 +465,75 @@ fn files(raw: &Value) -> Vec<FileRef> {
         .unwrap_or_default()
 }
 
-/// Compute the relative link from `md_rel_path` (relative to data_root)
-/// to the locally-staged copy of `f` (also relative to data_root). Files
-/// without an `id` or that the downloader skips (external / tombstone)
-/// return `None` so the caller can fall back to the `url_private` URL.
-fn file_link(source_name: &str, md_rel_path: &Path, f: &FileRef) -> Option<String> {
+/// Relative link from a thread's `index.md` to its locally-staged copy
+/// of `f`. The page-dir layout puts blobs at `<page_dir>/blobs/<file>`,
+/// so the link target is just `blobs/<safe_filename>`. Files without
+/// an `id` or that the downloader skips (external / tombstone) return
+/// `None` so the caller can fall back to the `url_private` URL.
+fn file_link(_source_name: &str, _md_rel_path: &Path, f: &FileRef) -> Option<String> {
     if f.external {
         return None;
     }
     let id = f.id.as_deref()?;
     let name = safe_filename(f.name.as_deref(), id);
-    let target = blob_relpath(source_name, id, &name);
-    Some(relative_link(md_rel_path, &target))
+    Some(format!("blobs/{name}"))
+}
+
+/// Write every blob this thread references into `<page_dir>/blobs/`.
+/// The filename matches what `file_link` puts in the markdown
+/// (`safe_filename(name, file_id)`), so the rendered link resolves.
+/// Blobs referenced only by other threads are skipped — they live
+/// next to *their* `index.md`.
+fn materialize_thread_blobs(
+    t: &super::TranslatedSlack,
+    msgs: &[&super::Message],
+    page_dir: &Path,
+) -> Result<()> {
+    if t.blobs_by_id.is_empty() {
+        return Ok(());
+    }
+    let mut wanted: HashSet<String> = HashSet::new();
+    for m in msgs {
+        for f in files(&m.raw_json) {
+            if let Some(id) = f.id {
+                wanted.insert(id);
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let blobs_dir = page_dir.join("blobs");
+    for (file_id, blob) in &t.blobs_by_id {
+        if !wanted.contains(file_id) {
+            continue;
+        }
+        // Pick the filename the same way `file_link` does — by reading
+        // the file's `name` out of the messages that reference it.
+        let name = name_for_blob(msgs, file_id);
+        let safe = safe_filename(name.as_deref(), file_id);
+        fs::create_dir_all(&blobs_dir)
+            .with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
+        fs::write(blobs_dir.join(&safe), &blob.bytes)
+            .with_context(|| format!("write blob {}/{}", blobs_dir.display(), safe))?;
+    }
+    Ok(())
+}
+
+/// First-found `files[].name` for `file_id` across the messages we're
+/// about to render. Returns `None` if no reference carries a name (then
+/// the blob is written under its `file_id` via `safe_filename`).
+fn name_for_blob(msgs: &[&super::Message], file_id: &str) -> Option<String> {
+    for m in msgs {
+        for f in files(&m.raw_json) {
+            if f.id.as_deref() == Some(file_id) {
+                if let Some(n) = f.name {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// `[(name, count), ...]` in source order, summing user lists.

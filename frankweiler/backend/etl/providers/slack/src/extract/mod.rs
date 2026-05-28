@@ -1,71 +1,37 @@
 //! Slack downloader entry point.
 //!
-//! Captures raw Slack API responses verbatim into
-//! `<out>/raw_api/<method>/events.jsonl`. Each page of each method gets
-//! one envelope record `{_recorded_at, method, params, duration_ms,
-//! response}`. Pages whose every item is a content-match for prior
-//! captures are skipped, so the on-disk size tracks unique-content
-//! growth rather than poll frequency.
+//! Captures Slack data into a single doltlite db at
+//! `<data_root>/raw/<name>.doltlite_db` — one row per workspace
+//! (`auth.test`), user, channel, message, and reply page, plus the
+//! shared `blobs` / `sync_runs` / `endpoint_shapes` tables. See `db.rs`
+//! for the table layout and the rationale for keying messages by
+//! `slack_message_uuid(team_id, channel_id, ts)`.
 //!
-//! Deriving "the latest set of users", "messages in channel X", etc.
-//! from this stream is the translator's job — this layer is concerned
-//! only with faithful capture + dedup.
-//!
-//! Resume cursor: derived at startup from the dedup index. For each
-//! channel we know the max `ts` we've ever recorded, and the next
-//! forward pass starts there. The trailing refresh window re-queries
-//! the last N days; the dedup layer collapses no-op refresh passes to
-//! zero writes.
+//! Resume cursor: derived at startup from the DB.
+//! `RawDb::latest_ts_by_channel` gives the per-channel `max(ts)` we've
+//! ever recorded, and the next forward pass starts there. The trailing
+//! refresh window re-queries the last N days; idempotent upserts
+//! collapse no-op refresh passes to zero writes.
 
 pub mod api;
+pub mod db;
 pub mod shapes;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
+pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedMessage, LoadedRaw, RawDb};
 use frankweiler_etl::obs::events;
-use frankweiler_etl::raw_store::{PageCapture, RawStore};
-use shapes::{
-    items_in_response, latest_reply_by_thread, latest_ts_by_channel, M_AUTH_TEST, M_CHANNELS,
-    M_HISTORY, M_REPLIES, M_USERS,
-};
+use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 pub const DEFAULT_SINCE: &str = "2024-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
-
-// ---------------------------------------------------------------------------
-// Page capture helper. Wraps `call_slack` + `RawStore::save_page` so each
-// API call site is one statement.
-// ---------------------------------------------------------------------------
-
-async fn call_and_save(
-    store: &mut RawStore,
-    method: &str,
-    params: &BTreeMap<String, String>,
-) -> Result<Value> {
-    let SlackCall {
-        response,
-        duration_ms,
-    } = call_slack(method, params)
-        .await
-        .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
-    let items = items_in_response(method, params, &response);
-    let cap = PageCapture {
-        method,
-        params,
-        duration_ms,
-        response: response.clone(),
-        items,
-    };
-    store.save_page(cap)?;
-    Ok(response)
-}
 
 // ---------------------------------------------------------------------------
 // Per-method drivers.
@@ -81,21 +47,34 @@ fn empty_params() -> BTreeMap<String, String> {
     BTreeMap::new()
 }
 
-#[instrument(skip_all)]
-async fn fetch_self(store: &mut RawStore) -> Result<()> {
-    call_and_save(store, M_AUTH_TEST, &empty_params()).await?;
-    Ok(())
+async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> {
+    let SlackCall { response, .. } = call_slack(method, params)
+        .await
+        .map_err(|e: SlackError| anyhow::anyhow!("{}", e))?;
+    Ok(response)
 }
 
-/// Fetch every channel page; `members_only`/`include_archived` filter
-/// what we *return* to the caller for fan-out, but we capture every page
-/// verbatim regardless.
-#[instrument(skip(store))]
+#[instrument(skip_all)]
+async fn fetch_self(db: &RawDb) -> Result<String> {
+    let resp = call(M_AUTH_TEST, &empty_params()).await?;
+    db.upsert_workspace(&resp).await?;
+    let team_id = resp
+        .get("team_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("auth.test response missing team_id"))?
+        .to_string();
+    Ok(team_id)
+}
+
+/// Fetch every channel listing page, upserting each channel into the
+/// DB along the way. Returns the set of channels visible to this run
+/// (after the `members_only`/`include_archived` filter).
+#[instrument(skip(db))]
 async fn fetch_channels(
-    store: &mut RawStore,
+    db: &RawDb,
     members_only: bool,
     include_archived: bool,
-) -> Result<Vec<Value>> {
+) -> Result<Vec<(String, Option<String>)>> {
     let mut params = BTreeMap::new();
     params.insert(
         "exclude_archived".to_string(),
@@ -107,34 +86,28 @@ async fn fetch_channels(
         "public_channel,private_channel".to_string(),
     );
 
-    let mut all: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
         let mut p = params.clone();
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call_and_save(store, M_CHANNELS, &p).await?;
+        let resp = call(M_CHANNELS, &p).await?;
         if let Some(arr) = resp.get("channels").and_then(|v| v.as_array()) {
-            all.extend(arr.iter().cloned());
+            for ch in arr {
+                db.upsert_channel(ch).await?;
+            }
         }
         cursor = next_cursor(&resp);
         if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
             break;
         }
     }
-    if members_only {
-        all.retain(|c| {
-            c.get("is_member")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-        });
-    }
-    Ok(all)
+    db.channels_for_fetch(members_only, include_archived).await
 }
 
 #[instrument(skip_all)]
-async fn fetch_users(store: &mut RawStore) -> Result<()> {
+async fn fetch_users(db: &RawDb) -> Result<usize> {
     let mut base = BTreeMap::new();
     base.insert("limit".to_string(), "200".to_string());
     let t0 = std::time::Instant::now();
@@ -145,8 +118,11 @@ async fn fetch_users(store: &mut RawStore) -> Result<()> {
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call_and_save(store, M_USERS, &p).await?;
+        let resp = call(M_USERS, &p).await?;
         if let Some(arr) = resp.get("members").and_then(|v| v.as_array()) {
+            for u in arr {
+                db.upsert_user(u).await?;
+            }
             count += arr.len();
         }
         cursor = next_cursor(&resp);
@@ -155,7 +131,7 @@ async fn fetch_users(store: &mut RawStore) -> Result<()> {
         }
     }
     events::indexed_batch("users", count, t0.elapsed().as_millis() as u64);
-    Ok(())
+    Ok(count)
 }
 
 fn next_cursor(resp: &Value) -> Option<String> {
@@ -172,14 +148,15 @@ fn next_cursor(resp: &Value) -> Option<String> {
 
 #[allow(clippy::too_many_arguments)]
 async fn export_channel(
-    store: &mut RawStore,
+    db: &RawDb,
+    team_id: &str,
     channel_id: &str,
     since_ts: &str,
     refresh_window_days: i64,
     channel_latest_ts: Option<&str>,
-    latest_reply_by_thread: &BTreeMap<(String, String), String>,
+    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
     now: &DateTime<Utc>,
-    blob_dir: Option<&Path>,
+    download_blobs: bool,
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
@@ -188,13 +165,14 @@ async fn export_channel(
         None => (since_ts.to_string(), true),
     };
     paginate_history(
-        store,
+        db,
+        team_id,
         channel_id,
         &forward_oldest,
         inclusive,
         None,
         latest_reply_by_thread,
-        blob_dir,
+        download_blobs,
         totals,
         progress,
     )
@@ -211,13 +189,14 @@ async fn export_channel(
                     since_ts.to_string()
                 };
                 paginate_history(
-                    store,
+                    db,
+                    team_id,
                     channel_id,
                     &effective,
                     true,
                     Some(latest_ts),
                     latest_reply_by_thread,
-                    blob_dir,
+                    download_blobs,
                     totals,
                     progress,
                 )
@@ -235,17 +214,19 @@ struct ChannelTotals {
     media: BTreeMap<String, usize>,
 }
 
-/// Walk `conversations.history` page-by-page, saving each page before
-/// requesting the next so a Ctrl-C loses at most one in-flight page.
+/// Walk `conversations.history` page-by-page, upserting each message
+/// before requesting the next page so a Ctrl-C loses at most one
+/// in-flight page.
 #[allow(clippy::too_many_arguments)]
 async fn paginate_history(
-    store: &mut RawStore,
+    db: &RawDb,
+    team_id: &str,
     channel_id: &str,
     oldest_ts: &str,
     inclusive: bool,
     latest_ts: Option<&str>,
-    latest_reply_by_thread: &BTreeMap<(String, String), String>,
-    blob_dir: Option<&Path>,
+    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
+    download_blobs: bool,
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
@@ -268,14 +249,17 @@ async fn paginate_history(
         if let Some(c) = &cursor {
             params.insert("cursor".to_string(), c.clone());
         }
-        let resp = call_and_save(store, M_HISTORY, &params).await?;
+        let resp = call(M_HISTORY, &params).await?;
         let messages: Vec<Value> = resp
             .get("messages")
             .and_then(|v| v.as_array())
             .map(|a| a.to_vec())
             .unwrap_or_default();
 
-        totals.messages += messages.len();
+        for m in &messages {
+            upsert_history_message(db, team_id, channel_id, m).await?;
+            totals.messages += 1;
+        }
 
         // Threads → conversations.replies. Skip threads whose latest
         // reply we already have on disk.
@@ -295,25 +279,19 @@ async fn paginate_history(
                     continue;
                 }
             }
-            paginate_replies(store, channel_id, ts, blob_dir, totals).await?;
+            paginate_replies(db, team_id, channel_id, ts, download_blobs, totals).await?;
         }
 
         // Media for this page (sequential — Slack hates concurrency on
-        // files.slack.com). Replies fetched above will trigger their own
-        // file downloads via the call_and_save → response path? No — we
-        // didn't keep the replies responses around here. Walk both
-        // messages and any replies we fetched: simpler to fold replies
-        // into media download from inside paginate_replies.
-        if let Some(md) = blob_dir {
-            let counts = api::download_files_for_messages(&messages, md).await?;
+        // files.slack.com). Replies fetched above download their files
+        // inline inside `paginate_replies`.
+        if download_blobs {
+            let counts = api::download_files_for_messages(db, channel_id, &messages).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
         }
 
-        // Push cumulative counters through the unified Progress sink.
-        // Both the indicatif bar and any structured (tracing) sink
-        // receive them from the same emission point.
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
         progress.set_message(&format!(
             "{channel_id} msgs={} replies={} media={}",
@@ -328,14 +306,16 @@ async fn paginate_history(
     Ok(())
 }
 
-/// Paginate `conversations.replies` for one thread, saving each page.
-/// Returns the count of reply messages seen this call. Media downloads
-/// happen inline so file uploads in threaded replies aren't missed.
+/// Paginate `conversations.replies` for one thread. Upserts every
+/// message in the response (including the parent re-served by Slack)
+/// and records a `replies_pages` row so the next sync can skip if no
+/// new replies have landed.
 async fn paginate_replies(
-    store: &mut RawStore,
+    db: &RawDb,
+    team_id: &str,
     channel_id: &str,
     thread_ts: &str,
-    blob_dir: Option<&Path>,
+    download_blobs: bool,
     totals: &mut ChannelTotals,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
@@ -344,20 +324,37 @@ async fn paginate_replies(
     base.insert("limit".to_string(), "200".to_string());
 
     let mut cursor: Option<String> = None;
+    let mut last_seen_reply: Option<String> = None;
     loop {
         let mut p = base.clone();
         if let Some(c) = &cursor {
             p.insert("cursor".to_string(), c.clone());
         }
-        let resp = call_and_save(store, M_REPLIES, &p).await?;
+        let resp = call(M_REPLIES, &p).await?;
         let msgs: Vec<Value> = resp
             .get("messages")
             .and_then(|v| v.as_array())
             .map(|a| a.to_vec())
             .unwrap_or_default();
-        totals.replies += msgs.len().saturating_sub(1); // exclude the parent
-        if let Some(md) = blob_dir {
-            let counts = api::download_files_for_messages(&msgs, md).await?;
+
+        for m in &msgs {
+            upsert_reply_message(db, team_id, channel_id, thread_ts, m).await?;
+            if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
+                if ts != thread_ts {
+                    // Track the max child ts we've seen so the
+                    // replies_pages bookmark advances monotonically.
+                    if last_seen_reply.as_deref().is_none_or(|prev| ts > prev) {
+                        last_seen_reply = Some(ts.to_string());
+                    }
+                }
+            }
+        }
+        // Total reply-children is messages minus the parent (one per
+        // page only carries the parent at most once).
+        totals.replies += msgs.len().saturating_sub(1);
+
+        if download_blobs {
+            let counts = api::download_files_for_messages(db, channel_id, &msgs).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
@@ -367,7 +364,69 @@ async fn paginate_replies(
             break;
         }
     }
+    db.upsert_replies_page(channel_id, thread_ts, last_seen_reply.as_deref())
+        .await?;
     Ok(())
+}
+
+async fn upsert_history_message(
+    db: &RawDb,
+    team_id: &str,
+    channel_id: &str,
+    m: &Value,
+) -> Result<()> {
+    let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    let thread_ts = m
+        .get("thread_ts")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let is_thread_root = match thread_ts.as_deref() {
+        None => true,
+        Some(tts) => tts == ts,
+    };
+    let row = db::MessageRow {
+        team_id: team_id.to_string(),
+        channel_id: channel_id.to_string(),
+        ts: ts.to_string(),
+        thread_ts,
+        is_thread_root,
+        user_id: m.get("user").and_then(|v| v.as_str()).map(String::from),
+        payload: m.clone(),
+    };
+    db.upsert_message(&row).await
+}
+
+async fn upsert_reply_message(
+    db: &RawDb,
+    team_id: &str,
+    channel_id: &str,
+    requested_thread_ts: &str,
+    m: &Value,
+) -> Result<()> {
+    let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    // Slack returns the parent inline with replies; treat ts == requested
+    // as the root regardless of which endpoint delivered it. Replies
+    // that omit `thread_ts` get it filled in from the request.
+    let thread_ts = m
+        .get("thread_ts")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| Some(requested_thread_ts.to_string()));
+    let is_thread_root = ts == requested_thread_ts;
+    let row = db::MessageRow {
+        team_id: team_id.to_string(),
+        channel_id: channel_id.to_string(),
+        ts: ts.to_string(),
+        thread_ts,
+        is_thread_root,
+        user_id: m.get("user").and_then(|v| v.as_str()).map(String::from),
+        payload: m.clone(),
+    };
+    db.upsert_message(&row).await
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +434,9 @@ async fn paginate_replies(
 // ---------------------------------------------------------------------------
 
 pub struct FetchOptions {
-    pub out_dir: PathBuf,
+    /// Path to the doltlite database file. If the caller passes a
+    /// legacy directory, it's rewritten to `<dir>.doltlite_db`.
+    pub db_path: PathBuf,
     pub channels: Option<Vec<String>>,
     pub since: String,
     pub refresh_window_days: i64,
@@ -387,7 +448,7 @@ pub struct FetchOptions {
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
-            out_dir: PathBuf::new(),
+            db_path: PathBuf::new(),
             channels: None,
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
@@ -404,111 +465,113 @@ pub struct FetchSummary {
     pub media: BTreeMap<String, usize>,
 }
 
+#[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    std::fs::create_dir_all(&opts.out_dir)
-        .with_context(|| format!("mkdir -p {}", opts.out_dir.display()))?;
+    let db_path = db_path_for(&opts.db_path);
+    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
+    let db = RawDb::open(&db_path)
+        .await
+        .with_context(|| format!("open raw db {}", db_path.display()))?;
 
     let since_dt =
         parse_iso_or_utc_date(&opts.since).with_context(|| format!("--since {:?}", opts.since))?;
     let since_ts = datetime_to_slack_ts(&since_dt);
     let now = Utc::now();
 
-    let mut store = RawStore::load(&opts.out_dir)?;
+    let run_config = json!({
+        "channels": opts.channels,
+        "since": opts.since,
+        "refresh_window_days": opts.refresh_window_days,
+        "members_only": opts.members_only,
+        "media": opts.media,
+    });
+    let run_id = db.start_run(&run_config).await?;
 
-    let channel_latest_ts = latest_ts_by_channel(store.keys_for(M_HISTORY));
-    let latest_reply_map = latest_reply_by_thread(store.keys_for(M_REPLIES));
-
-    info!(
-        event = "slack_state_loaded",
-        channels_indexed = store.seen_count(M_CHANNELS),
-        users_indexed = store.seen_count(M_USERS),
-        messages_indexed = store.seen_count(M_HISTORY),
-        replies_indexed = store.seen_count(M_REPLIES),
-    );
-
-    fetch_self(&mut store).await?;
-    let fresh_channels =
-        fetch_channels(&mut store, opts.members_only, opts.channels.is_some()).await?;
-
-    let mut name_to_id: BTreeMap<String, String> = BTreeMap::new();
-    for c in &fresh_channels {
-        if let (Some(n), Some(i)) = (
-            c.get("name").and_then(|v| v.as_str()),
-            c.get("id").and_then(|v| v.as_str()),
-        ) {
-            name_to_id.insert(n.to_string(), i.to_string());
-        }
-    }
-
-    fetch_users(&mut store).await?;
-
-    let targets: Vec<(String, String)> = match &opts.channels {
-        Some(names) => names
-            .iter()
-            .filter_map(|spec| {
-                let name = spec.trim_start_matches('#');
-                name_to_id
-                    .get(name)
-                    .map(|id| (id.clone(), name.to_string()))
-            })
-            .collect(),
-        None => fresh_channels
-            .iter()
-            .filter_map(|c| {
-                let n = c.get("name").and_then(|v| v.as_str())?;
-                let i = c.get("id").and_then(|v| v.as_str())?;
-                Some((i.to_string(), n.to_string()))
-            })
-            .collect(),
-    };
-
-    let blob_dir: Option<PathBuf> = if opts.media {
-        Some(opts.out_dir.join(frankweiler_etl::blobs::BLOBS_DIR))
-    } else {
-        None
-    };
-    info!(
-        event = "slack_export_planned",
-        channels = targets.len(),
-        media = opts.media,
-    );
+    let channel_latest_ts = db.latest_ts_by_channel().await?;
+    let latest_reply_map = db.latest_reply_by_thread().await?;
 
     let mut grand = FetchSummary {
         messages: 0,
         replies: 0,
         media: BTreeMap::new(),
     };
-    opts.progress.set_length(Some(targets.len() as u64));
-    for (cid, name) in &targets {
-        opts.progress.inc(1);
-        opts.progress.set_message(name);
-        let span = info_span!("channel", channel_name = %name, channel_id = %cid);
-        let mut totals = ChannelTotals::default();
-        let result = export_channel(
-            &mut store,
-            cid,
-            &since_ts,
-            opts.refresh_window_days,
-            channel_latest_ts.get(cid).map(|s| s.as_str()),
-            &latest_reply_map,
-            &now,
-            blob_dir.as_deref(),
-            &mut totals,
-            &opts.progress,
-        )
-        .instrument(span)
-        .await;
-        match result {
-            Ok(()) => {
-                grand.messages += totals.messages;
-                grand.replies += totals.replies;
-                for (k, v) in totals.media {
-                    *grand.media.entry(k).or_insert(0) += v;
-                }
+
+    let work = async {
+        let team_id = fetch_self(&db).await?;
+        let visible_channels =
+            fetch_channels(&db, opts.members_only, opts.channels.is_some()).await?;
+        fetch_users(&db).await?;
+
+        let targets: Vec<(String, String)> = match &opts.channels {
+            Some(names) => {
+                let by_name: BTreeMap<String, String> = visible_channels
+                    .iter()
+                    .filter_map(|(id, name)| name.as_ref().map(|n| (n.clone(), id.clone())))
+                    .collect();
+                names
+                    .iter()
+                    .filter_map(|spec| {
+                        let name = spec.trim_start_matches('#').to_string();
+                        by_name.get(&name).map(|id| (id.clone(), name))
+                    })
+                    .collect()
             }
-            Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
+            None => visible_channels
+                .iter()
+                .map(|(id, name)| (id.clone(), name.clone().unwrap_or_else(|| id.clone())))
+                .collect(),
+        };
+        info!(
+            event = "slack_export_planned",
+            channels = targets.len(),
+            media = opts.media,
+        );
+
+        opts.progress.set_length(Some(targets.len() as u64));
+        for (cid, name) in &targets {
+            opts.progress.inc(1);
+            opts.progress.set_message(name);
+            let span = info_span!("channel", channel_name = %name, channel_id = %cid);
+            let mut totals = ChannelTotals::default();
+            let result = export_channel(
+                &db,
+                &team_id,
+                cid,
+                &since_ts,
+                opts.refresh_window_days,
+                channel_latest_ts.get(cid).map(|s| s.as_str()),
+                &latest_reply_map,
+                &now,
+                opts.media,
+                &mut totals,
+                &opts.progress,
+            )
+            .instrument(span)
+            .await;
+            match result {
+                Ok(()) => {
+                    grand.messages += totals.messages;
+                    grand.replies += totals.replies;
+                    for (k, v) in totals.media {
+                        *grand.media.entry(k).or_insert(0) += v;
+                    }
+                }
+                Err(e) => warn!(event = "slack_channel_failed", channel = %name, error = %e),
+            }
         }
-    }
+        Ok::<(), anyhow::Error>(())
+    };
+
+    let result = work.await;
+    let summary_json = json!({
+        "messages": grand.messages,
+        "replies": grand.replies,
+        "media": grand.media,
+        "error": result.as_ref().err().map(|e| e.to_string()),
+    });
+    let status = if result.is_ok() { "ok" } else { "error" };
+    let _ = db.finish_run(run_id, status, &summary_json).await;
+    result?;
 
     info!(
         event = "slack_export_complete",

@@ -1,11 +1,17 @@
 //! Slack synth → playback → extract round-trip.
+//!
+//! Uses the in-tree synthesizer to turn JSONL envelope fixtures into
+//! HTTP playback bodies, then runs extract against the playback root.
+//! Asserts on the populated doltlite DB rather than on a JSONL
+//! disk tree — the doltlite store is the entire output of the
+//! download stage post-port.
 
 use std::fs;
 use std::path::Path;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_slack::extract::{fetch, FetchOptions};
+use frankweiler_etl_slack::extract::{block_on_load_all, db_path_for, fetch, FetchOptions};
 use frankweiler_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -17,7 +23,7 @@ fn write_envelope(path: &Path, line: &Value) {
     fs::write(path, s).unwrap();
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn slack_synth_playback_extract_roundtrip() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_raw");
@@ -29,7 +35,7 @@ async fn slack_synth_playback_extract_roundtrip() {
         &api.join("raw_api/auth.test/run-1.jsonl"),
         &json!({
             "method": "auth.test", "params": {},
-            "response": {"ok": true, "user_id": "U1", "team": "T1"},
+            "response": {"ok": true, "user_id": "U1", "team": "Enterprise", "team_id": "T1"},
         }),
     );
 
@@ -87,7 +93,7 @@ async fn slack_synth_playback_extract_roundtrip() {
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     let summary = fetch(FetchOptions {
-        out_dir: out.clone(),
+        db_path: out.clone(),
         channels: None,
         since: "2024-01-01".into(),
         refresh_window_days: 0,
@@ -99,40 +105,19 @@ async fn slack_synth_playback_extract_roundtrip() {
     .unwrap();
     assert_eq!(summary.messages, 1);
 
-    // The new raw_api tree should contain identical responses for every
-    // method, since playback hands extract back exactly what synth read.
-    for method in [
-        "auth.test",
-        "conversations.list",
-        "users.list",
-        "conversations.history",
-    ] {
-        let want = read_responses(&api, method);
-        let got = read_responses(&out, method);
-        assert_eq!(got, want, "{method} mismatch");
-    }
-}
-
-fn read_responses(root: &Path, method: &str) -> Vec<Value> {
-    let dir = root.join("raw_api").join(method);
-    let mut out = Vec::new();
-    if !dir.exists() {
-        return out;
-    }
-    let mut files: Vec<_> = fs::read_dir(&dir)
-        .unwrap()
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
-        .collect();
-    files.sort();
-    for f in files {
-        for line in fs::read_to_string(&f).unwrap().lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = serde_json::from_str(line).unwrap();
-            out.push(v.get("response").cloned().unwrap_or(Value::Null));
-        }
-    }
-    out
+    // Inspect the resulting doltlite DB: one workspace, one channel,
+    // one user, one message — sourced from the playback responses
+    // verbatim.
+    let db_path = db_path_for(&out);
+    assert!(db_path.exists(), "expected DB at {}", db_path.display());
+    let raw = block_on_load_all(&db_path).expect("load db");
+    let ws = raw.workspace.expect("workspace");
+    assert_eq!(ws["team_id"], "T1");
+    assert_eq!(raw.users.len(), 1);
+    assert_eq!(raw.channels.len(), 1);
+    assert_eq!(raw.messages.len(), 1);
+    let m = &raw.messages[0];
+    assert_eq!(m.channel_id, "C1");
+    assert_eq!(m.ts, "1735689600.000000");
+    assert_eq!(m.payload["text"], "hello");
 }

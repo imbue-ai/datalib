@@ -17,7 +17,7 @@
 pub mod mrkdwn;
 pub mod render;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 use frankweiler_schema::grid_rows::GridRow;
 
+use super::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedMessage, LoadedRaw};
 use super::extract::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 /// Shared namespace for v5-derived Slack UUIDs. Must match the Python
@@ -143,6 +144,10 @@ pub struct TranslatedSlack {
     pub channels: BTreeMap<String, Channel>,
     /// Keyed by `(channel_id, ts)` so cross-stream duplicates collapse.
     pub messages: BTreeMap<(String, String), Message>,
+    /// Blob bytes keyed by upstream `file_id`. Render materializes the
+    /// referenced ones next to each thread's `index.md` so the
+    /// `blobs/<filename>` markdown link resolves.
+    pub blobs_by_id: HashMap<String, BlobBytes>,
 }
 
 impl TranslatedSlack {
@@ -184,7 +189,94 @@ fn read_method_envelopes(raw_dir: &Path, method: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-pub fn translate_raw_dir(out_dir: &Path) -> Result<TranslatedSlack> {
+/// Read raw Slack data from `path` and flatten it into typed rows. If
+/// `path` resolves to (or points at the parent of) a doltlite DB, the
+/// db reader runs; otherwise we fall back to walking the legacy
+/// `raw_api/<method>/*.jsonl` tree (still used by the in-crate TNG
+/// render-test fixture).
+///
+/// The DB path requires a tokio runtime — `block_on_load_all` uses
+/// `block_in_place`; the bin entry point wraps `main` with
+/// `#[tokio::main(flavor = "multi_thread")]` for this reason.
+pub fn translate_raw_dir(path: &Path) -> Result<TranslatedSlack> {
+    let db_path = db_path_for(path);
+    if db_path.exists() {
+        let raw = block_on_load_all(&db_path)
+            .with_context(|| format!("load slack db {}", db_path.display()))?;
+        return Ok(translate_loaded(raw));
+    }
+    if path.is_dir() {
+        return translate_raw_json_dir(path);
+    }
+    anyhow::bail!(
+        "slack source not found at {} (no .doltlite_db, no JSONL tree)",
+        path.display()
+    )
+}
+
+/// Build a [`TranslatedSlack`] from a snapshot already loaded out of
+/// the doltlite DB. Mirrors the JSON-tree path's output exactly: same
+/// row keys, same field shape, just sourced from typed columns +
+/// payloads instead of streaming JSONL envelopes.
+pub fn translate_loaded(raw: LoadedRaw) -> TranslatedSlack {
+    let mut t = TranslatedSlack {
+        blobs_by_id: raw.blobs_by_id,
+        ..Default::default()
+    };
+
+    if let Some(ws) = raw.workspace.as_ref() {
+        let team_id = str_or(ws, "team_id");
+        if !team_id.is_empty() {
+            t.workspace = Some(Workspace {
+                team_id,
+                team_name: opt_str(ws, "team"),
+                team_url: opt_str(ws, "url"),
+                self_user_id: opt_str(ws, "user_id"),
+            });
+        }
+    }
+    let team_id = t.fallback_team_id().to_string();
+
+    for u in &raw.users {
+        ingest_user(u, &team_id, &mut t);
+    }
+    for c in &raw.channels {
+        ingest_channel(c, &mut t);
+    }
+
+    // Messages already carry team_id/channel_id/ts as typed columns and
+    // is_thread_root pre-decided at extract time. Replay them via the
+    // same shared `insert_message` so the JSON-dir reader and the DB
+    // reader land identical row shapes.
+    for LoadedMessage {
+        team_id: m_team_id,
+        channel_id,
+        ts,
+        thread_ts,
+        is_thread_root,
+        payload,
+        ..
+    } in raw.messages
+    {
+        let effective = thread_ts.clone().unwrap_or_else(|| ts.clone());
+        insert_message(
+            &mut t.messages,
+            &m_team_id,
+            &channel_id,
+            &ts,
+            thread_ts,
+            effective,
+            is_thread_root,
+            &payload,
+        );
+    }
+    t
+}
+
+/// Legacy JSON-tree reader: walks `<root>/raw_api/<method>/*.jsonl`.
+/// Kept so the in-crate TNG render fixture (which is JSON, not a
+/// `.doltlite_db`) continues to work.
+pub fn translate_raw_json_dir(out_dir: &Path) -> Result<TranslatedSlack> {
     let raw_dir = out_dir.join("raw_api");
     let mut t = TranslatedSlack::default();
 
@@ -208,22 +300,7 @@ pub fn translate_raw_dir(out_dir: &Path) -> Result<TranslatedSlack> {
     for env in read_method_envelopes(&raw_dir, M_USERS)? {
         let resp = env.get("response").cloned().unwrap_or(Value::Null);
         for u in array_field(&resp, "members") {
-            let id = str_or(u, "id");
-            if id.is_empty() {
-                continue;
-            }
-            let profile = u.get("profile");
-            t.users.insert(
-                id.clone(),
-                User {
-                    user_id: id,
-                    team_id: opt_str(u, "team_id").unwrap_or_else(|| team_id.clone()),
-                    name: opt_str(u, "name"),
-                    real_name: opt_str(u, "real_name")
-                        .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
-                    display_name: profile.and_then(|p| opt_str(p, "display_name")),
-                },
-            );
+            ingest_user(u, &team_id, &mut t);
         }
     }
 
@@ -231,17 +308,7 @@ pub fn translate_raw_dir(out_dir: &Path) -> Result<TranslatedSlack> {
     for env in read_method_envelopes(&raw_dir, M_CHANNELS)? {
         let resp = env.get("response").cloned().unwrap_or(Value::Null);
         for c in array_field(&resp, "channels") {
-            let id = str_or(c, "id");
-            if id.is_empty() {
-                continue;
-            }
-            t.channels.insert(
-                id.clone(),
-                Channel {
-                    channel_id: id,
-                    name: opt_str(c, "name"),
-                },
-            );
+            ingest_channel(c, &mut t);
         }
     }
 
@@ -323,6 +390,39 @@ pub fn translate_raw_dir(out_dir: &Path) -> Result<TranslatedSlack> {
     }
 
     Ok(t)
+}
+
+fn ingest_user(u: &Value, default_team_id: &str, t: &mut TranslatedSlack) {
+    let id = str_or(u, "id");
+    if id.is_empty() {
+        return;
+    }
+    let profile = u.get("profile");
+    t.users.insert(
+        id.clone(),
+        User {
+            user_id: id,
+            team_id: opt_str(u, "team_id").unwrap_or_else(|| default_team_id.to_string()),
+            name: opt_str(u, "name"),
+            real_name: opt_str(u, "real_name")
+                .or_else(|| profile.and_then(|p| opt_str(p, "real_name"))),
+            display_name: profile.and_then(|p| opt_str(p, "display_name")),
+        },
+    );
+}
+
+fn ingest_channel(c: &Value, t: &mut TranslatedSlack) {
+    let id = str_or(c, "id");
+    if id.is_empty() {
+        return;
+    }
+    t.channels.insert(
+        id.clone(),
+        Channel {
+            channel_id: id,
+            name: opt_str(c, "name"),
+        },
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -484,7 +584,7 @@ pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&
 }
 
 pub fn slack_qmd_path(team_id: &str, channel_id: &str, thread_uuid: &str) -> String {
-    format!("rendered_md/slack/{team_id}/{channel_id}/threads/{thread_uuid}.md")
+    format!("rendered_md/slack/{team_id}/{channel_id}/threads/{thread_uuid}/index.md")
 }
 
 // ---------------------------------------------------------------------------
@@ -505,4 +605,66 @@ fn array_field<'a>(v: &'a Value, key: &str) -> &'a [Value] {
         .and_then(|x| x.as_array())
         .map(|a| a.as_slice())
         .unwrap_or(&[])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extract::db::{MessageRow, RawDb};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn db_singleton_messages_get_distinct_thread_uuids() {
+        // Verifies that messages with no `thread_ts` (top-level non-thread
+        // messages) round-trip through the DB → translate path as
+        // distinct threads, one per message. The bug we're guarding
+        // against: thread_ts coming back as Some("") and collapsing them
+        // all to the same thread_uuid.
+        let d = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.upsert_workspace(&json!({
+            "team_id": "T1", "team": "x", "url": "https://x.slack.com/", "user_id": "U1"
+        }))
+        .await
+        .unwrap();
+        db.upsert_channel(&json!({"id": "C1", "name": "g", "is_member": true}))
+            .await
+            .unwrap();
+        for ts in ["100.0", "200.0", "300.0"] {
+            db.upsert_message(&MessageRow {
+                team_id: "T1".into(),
+                channel_id: "C1".into(),
+                ts: ts.into(),
+                thread_ts: None,
+                is_thread_root: true,
+                user_id: Some("U1".into()),
+                payload: json!({"ts": ts, "text": "x"}),
+            })
+            .await
+            .unwrap();
+        }
+        let raw = crate::extract::db::LoadedRaw {
+            workspace: db.load_workspace().await.unwrap(),
+            users: db.load_users().await.unwrap(),
+            channels: db.load_channels().await.unwrap(),
+            messages: db.load_messages().await.unwrap(),
+            blobs_by_id: db.load_blobs_by_id().await.unwrap(),
+        };
+        // Sanity: each loaded message's thread_ts is None.
+        for m in &raw.messages {
+            assert!(
+                m.thread_ts.is_none(),
+                "thread_ts must round-trip as None, got {:?}",
+                m.thread_ts
+            );
+        }
+        let t = translate_loaded(raw);
+        let uuids: std::collections::HashSet<String> =
+            t.messages.values().map(|m| m.thread_uuid()).collect();
+        assert_eq!(
+            uuids.len(),
+            3,
+            "expected 3 distinct thread uuids, got {uuids:?}"
+        );
+    }
 }

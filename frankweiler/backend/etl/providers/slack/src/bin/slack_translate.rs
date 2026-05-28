@@ -48,7 +48,13 @@ struct Args {
     obs: ObsArgs,
 }
 
-fn main() -> Result<()> {
+/// Multi-thread runtime because `translate_raw_dir`'s db path calls
+/// `tokio::task::block_in_place`, which requires a worker pool. Two
+/// threads is plenty — the translate stage is largely a single
+/// synchronous walk; the second thread just keeps `block_in_place`
+/// happy.
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "slack-translate")?;
 

@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
     };
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         channels,
         since: args.since.clone(),
         refresh_window_days: args.refresh_window_days,
