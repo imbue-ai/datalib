@@ -9,7 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
-use frankweiler_etl::blobs::{blob_relpath, relative_link, safe_filename};
+use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
@@ -368,11 +368,16 @@ pub struct Rendered {
 }
 
 impl Rendered {
+    /// Page-dir layout: `<conv_uuid>/index.md`. Blobs live in a
+    /// sibling `blobs/` subdir under the same dir so a conversation
+    /// is sharable in isolation. Mirrors Notion's `<page_dir>/index.md`
+    /// shape.
     pub fn relative_path(&self) -> std::path::PathBuf {
         std::path::PathBuf::from("rendered_md/anthropic")
             .join(&self.account_uuid)
             .join("llm_chats")
-            .join(format!("{}.md", self.conversation_uuid))
+            .join(&self.conversation_uuid)
+            .join("index.md")
     }
 }
 
@@ -381,11 +386,7 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
-    // Materialize any blob bytes the doltlite raw store carries to
-    // their canonical `<root>/raw/<source>/blobs/<id>/<name>` path so
-    // the markdown links produced by `attachment_md` resolve. See the
-    // chatgpt mirror for the same plumbing.
-    materialize_blobs(parsed, root, source_name)?;
+    let name_by_id = name_by_id(parsed);
 
     let mut written = Vec::new();
     for conv in &parsed.conversations {
@@ -394,9 +395,16 @@ pub fn render_all(
         };
         let rel = r.relative_path();
         let abs = root.join(&rel);
-        if let Some(dir) = abs.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
+        let page_dir = abs
+            .parent()
+            .expect("relative_path always has a parent (the page-dir)");
+        std::fs::create_dir_all(page_dir)?;
+
+        // Write blob bytes into `<page_dir>/blobs/<filename>`. The
+        // markdown links produced by `attachment_md` are relative
+        // `blobs/<filename>` paths and resolve against this dir.
+        materialize_conv_blobs(parsed, conv, &name_by_id, page_dir)?;
+
         std::fs::write(&abs, &r.body)?;
 
         let rows = rows_for_conversation(parsed, &conv.conversation_uuid);
@@ -408,6 +416,8 @@ pub fn render_all(
             },
             rows,
         };
+        // `abs` is `<page_dir>/index.md`, so `with_extension` yields
+        // `<page_dir>/index.grid_rows.json`.
         let sidecar_abs = abs.with_extension("grid_rows.json");
         let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
         std::fs::write(&sidecar_abs, sidecar_json)?;
@@ -417,7 +427,7 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> Option<Rendered> {
+pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, _source_name: &str) -> Option<Rendered> {
     let conv: &ConversationRow = parsed
         .conversations
         .iter()
@@ -524,14 +534,10 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
             .unwrap_or_default();
         atts.sort_by_key(|a| a.attachment_index);
         if !atts.is_empty() {
-            let md_rel = std::path::PathBuf::from("rendered_md/anthropic")
-                .join(&conv.account_uuid)
-                .join("llm_chats")
-                .join(format!("{conv_uuid}.md"));
             parts.push("**Attachments:**".into());
             parts.push(String::new());
             for at in atts {
-                parts.push(format!("- {}", attachment_md(source_name, &md_rel, at)));
+                parts.push(format!("- {}", attachment_md(at)));
             }
             parts.push(String::new());
         }
@@ -552,22 +558,11 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
     })
 }
 
-/// Write blob bytes from the parsed snapshot to
-/// `<root>/raw/<source>/blobs/<file_uuid>/<name>`. The filename uses
-/// the same `safe_filename(file_name, file_uuid)` rule
-/// [`attachment_md`] applies, so the link the markdown emits and the
-/// file we just wrote resolve to the same path.
-fn materialize_blobs(
-    parsed: &ParsedExport,
-    root: &std::path::Path,
-    source_name: &str,
-) -> std::io::Result<()> {
-    if parsed.blobs_by_id.is_empty() {
-        return Ok(());
-    }
-    // Build (file_uuid → file_name) from the attachment rows we
-    // parsed; falls back to the file_uuid when name is absent.
-    let mut name_by_id: std::collections::HashMap<&str, Option<&str>> =
+/// `file_uuid → file_name` lookup off the attachment rows we walked
+/// during parse, used by [`materialize_conv_blobs`] to pick the same
+/// filename `attachment_md` references in the markdown.
+fn name_by_id(parsed: &ParsedExport) -> std::collections::HashMap<String, Option<String>> {
+    let mut out: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     for at in &parsed.attachments {
         let Some(obj) = at.raw_json.as_object() else {
@@ -584,26 +579,74 @@ fn materialize_blobs(
         let name = obj
             .get("file_name")
             .or_else(|| obj.get("name"))
-            .and_then(Value::as_str);
-        name_by_id.entry(id).or_insert(name);
+            .and_then(Value::as_str)
+            .map(String::from);
+        out.entry(id.to_string()).or_insert(name);
     }
-    for (file_uuid, blob) in &parsed.blobs_by_id {
-        let name = name_by_id.get(file_uuid.as_str()).copied().flatten();
-        let safe = safe_filename(name, file_uuid);
-        let target = root.join(blob_relpath(source_name, file_uuid, &safe));
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+    out
+}
+
+/// Write every blob this conversation references into
+/// `<page_dir>/blobs/<filename>`. The markdown emitted by
+/// `attachment_md` uses the same `safe_filename(name, id)` rule so the
+/// link target matches what lands on disk. Blobs referenced by other
+/// conversations are skipped — they live next to *their* `index.md`.
+fn materialize_conv_blobs(
+    parsed: &ParsedExport,
+    conv: &ConversationRow,
+    name_by_id: &std::collections::HashMap<String, Option<String>>,
+    page_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    if parsed.blobs_by_id.is_empty() {
+        return Ok(());
+    }
+    let msg_uuids: std::collections::HashSet<&str> = parsed
+        .messages
+        .iter()
+        .filter(|m| m.conversation_uuid == conv.conversation_uuid)
+        .map(|m| m.message_uuid.as_str())
+        .collect();
+    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for at in &parsed.attachments {
+        if !msg_uuids.contains(at.message_uuid.as_str()) {
+            continue;
         }
-        std::fs::write(&target, &blob.bytes)?;
+        let Some(obj) = at.raw_json.as_object() else {
+            continue;
+        };
+        if let Some(id) = obj
+            .get("file_uuid")
+            .or_else(|| obj.get("id"))
+            .or_else(|| obj.get("uuid"))
+            .and_then(Value::as_str)
+        {
+            wanted.insert(id.to_string());
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let blobs_dir = page_dir.join("blobs");
+    for (file_uuid, blob) in &parsed.blobs_by_id {
+        if !wanted.contains(file_uuid) {
+            continue;
+        }
+        let name = name_by_id
+            .get(file_uuid)
+            .and_then(|n| n.as_deref());
+        let safe = safe_filename(name, file_uuid);
+        std::fs::create_dir_all(&blobs_dir)?;
+        std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;
     }
     Ok(())
 }
 
 /// Render one attachment as a markdown link into
-/// `raw/<source_name>/blobs/<id>/<name>` (the canonical staged path).
-/// Images get `![alt](link)`; everything else becomes `[\[file\] alt](link)`.
-/// Falls back to a plain label when the upstream record lacks an id.
-fn attachment_md(source_name: &str, md_rel: &std::path::Path, at: &AttachmentRow) -> String {
+/// `blobs/<filename>` (relative to the conversation's `index.md`).
+/// Images get `![alt](link)`; everything else becomes
+/// `[\[file\] alt](link)`. Falls back to a plain label when the
+/// upstream record lacks an id.
+fn attachment_md(at: &AttachmentRow) -> String {
     let raw_obj = at.raw_json.as_object();
     let label = raw_obj
         .and_then(|o| {
@@ -630,9 +673,8 @@ fn attachment_md(source_name: &str, md_rel: &std::path::Path, at: &AttachmentRow
     let Some(id) = id else {
         return format!("[{}] {}", at.kind, label);
     };
-    let name = safe_filename(Some(&label), &id);
-    let target = blob_relpath(source_name, &id, &name);
-    let link = relative_link(md_rel, &target);
+    let safe = safe_filename(Some(&label), &id);
+    let link = format!("blobs/{safe}");
     let alt = label.replace(']', "");
     if is_image {
         format!("![{alt}]({link})")

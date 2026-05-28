@@ -1,9 +1,8 @@
 ---
 source: etl/providers/chatgpt/tests/chatgpt_render.rs
-assertion_line: 57
 expression: bundle
 ---
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001/index.md ===
 ---
 provider: openai
 id: 68fa0001-fake-7000-8000-positronic0001
@@ -62,7 +61,7 @@ Thou art my muse, my console saboteur.
 
 </div>
 
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002/index.md ===
 ---
 provider: openai
 id: 68fa0002-fake-7000-8000-positronic0002
@@ -112,7 +111,7 @@ print(coeffs)
 
 </div>
 
-=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003.md ===
+=== rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003/index.md ===
 ---
 provider: openai
 id: 68fa0003-fake-7000-8000-positronic0003

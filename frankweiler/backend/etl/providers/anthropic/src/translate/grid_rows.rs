@@ -51,7 +51,9 @@ fn bump_micros(ts: &str, n: i64) -> String {
 }
 
 fn qmd_path(account_uuid: &str, conv_uuid: &str) -> String {
-    format!("rendered_md/anthropic/{account_uuid}/llm_chats/{conv_uuid}.md")
+    // Page-dir layout: `<conv_uuid>/index.md`. Matches
+    // `Rendered::relative_path` in `render.rs`.
+    format!("rendered_md/anthropic/{account_uuid}/llm_chats/{conv_uuid}/index.md")
 }
 
 pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<GridRow> {

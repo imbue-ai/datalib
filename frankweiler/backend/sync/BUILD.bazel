@@ -96,4 +96,16 @@ insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
     test_args = ["--ignored"],
+    # Mirrors the rust_test's data + env so the .update sh_binary
+    # resolves FRANKWEILER_SYNC_BIN / FRANKWEILER_TEST_CONFIG the same
+    # way `bazel test` would. The base macro doesn't see those because
+    # bazel doesn't propagate a rust_test's env to its sibling sh_binary.
+    extra_data = [
+        ":frankweiler_sync_bin",
+        "//configs:thad_tiny.yaml",
+    ],
+    extra_env = {
+        "FRANKWEILER_SYNC_BIN": "$(rootpath :frankweiler_sync_bin)",
+        "FRANKWEILER_TEST_CONFIG": "$(rootpath //configs:thad_tiny.yaml)",
+    },
 )

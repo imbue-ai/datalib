@@ -23,14 +23,28 @@ For a provider `<name>`, the raw store goes from this:
 to this:
 
 ```
-<data_root>/raw/<name>.doltlite_db    # single sqlite file
-<data_root>/raw/<name>/blobs/<id>/<file>   # materialized by translate
+<data_root>/raw/<name>.doltlite_db
 ```
 
-The doltlite db holds the raw upstream API responses (one row per
-upstream object). Blob bytes also live in the DB; the `translate`
-step writes them back out to the canonical disk path so the rendered
-markdown's links resolve unchanged.
+**That's it.** A single sqlite file is the entire output of the
+download. No `raw/<name>/` dir, no `raw/<name>/blobs/` dir. Object
+payloads, sync-run logs, endpoint shapes, AND blob bytes all live in
+tables inside that one `.doltlite_db`.
+
+Blob bytes get materialized to disk **next to the rendered markdown**
+at translate time, following Notion's page-dir layout:
+
+```
+rendered_md/<provider>/<acct>/<scope>/<entity_id>/
+  index.md
+  index.grid_rows.json
+  blobs/<filename>          # written by translate, byte-equal to the
+                            # `bytes` column in the doltlite blobs table
+```
+
+The markdown link is the relative `blobs/<filename>`. A single
+`<entity_id>/` directory is sharable in isolation — drop it on a USB
+stick and the markdown + every attachment travels with it.
 
 ---
 
@@ -253,11 +267,28 @@ plumbing delegated).
    Add a `blobs_by_id: HashMap<String, BlobBytes>` field to the
    `Parsed*` struct.
 
-5. **`src/translate/render.rs`** — add a `materialize_blobs()` step
-   at the top of `render_all()` that writes each blob's bytes to
-   `<root>/raw/<source>/blobs/<id>/<safe_name>`. The markdown stays
-   byte-identical because the link target path didn't change — only
-   the source of the bytes did. See `chatgpt/src/translate/render.rs`
+5. **`src/translate/render.rs`** — restructure to **page-dir layout**:
+
+   - `Rendered::relative_path()` returns `<entity_id>/index.md` (NOT
+     `<entity_id>.md`). One directory per renderable entity.
+   - Add a per-entity `materialize_conv_blobs()` helper that writes
+     each blob's bytes into `<page_dir>/blobs/<safe_filename>`.
+     Filter the blobs to just those this entity references — other
+     entities' blobs live next to their own `index.md`.
+   - `attachment_md()` emits a relative `blobs/<safe_filename>` link
+     (NOT a path through `raw/<src>/blobs/...`).
+   - Inside `render_all()`, the per-entity loop becomes:
+     `mkdir(page_dir)` → `materialize_conv_blobs(parsed, entity,
+     &name_by_id, page_dir)` → write `index.md` → write
+     `index.grid_rows.json` (use `abs.with_extension("grid_rows.json")`
+     on `<page_dir>/index.md`).
+
+   The rendered markdown's blob links change shape vs. the
+   pre-doltlite era (no more `../../../raw/<src>/blobs/...`); that's
+   intentional — it's part of "the only output of download is the
+   doltlite db". Re-record the rendered_md snapshots.
+
+   See `chatgpt/src/translate/render.rs` and `anthropic/src/translate/render.rs`
    for the canonical pattern.
 
 6. **`src/bin/<name>_translate.rs`** — switch to
@@ -416,14 +447,16 @@ A successful port produces:
 
 - All cargo tests green
 - All bazel tests green (`--test_tag_filters=-manual,-external`)
-- `manifest.snap` shows `raw/<name>/<files...>` → `raw/<name>.doltlite_db`
-- Zero `rendered_md/` snapshot drift (rendered markdown is byte-identical)
-- `fixture_db_snapshot__fixture_backend_index.snap`: only
-  `source_fingerprint` values for documents from this provider drift
-  (if you dropped synthetic keys from the payload)
-
-If `rendered_md/` snapshots drift, you've changed rendered output —
-back out and investigate before accepting.
+- `manifest.snap` collapses `raw/<name>/<files...>` to one
+  `raw/<name>.doltlite_db` row, plus blob rows shift from
+  `raw/<name>/blobs/...` to `rendered_md/.../<entity>/blobs/<file>`.
+- `rendered_md/` paths shift from `<entity>.md` to `<entity>/index.md`
+  (page-dir layout). The blob link target inside the .md changes
+  from `../../../raw/<src>/blobs/...` to `blobs/<filename>`. Re-record.
+- `fixture_db_snapshot__fixture_backend_index.snap`:
+  `qmd_path` columns shift to the page-dir form
+  (`<entity>/index.md`); `source_fingerprint` may drift too if you
+  dropped synthetic keys from the payload.
 
 ---
 

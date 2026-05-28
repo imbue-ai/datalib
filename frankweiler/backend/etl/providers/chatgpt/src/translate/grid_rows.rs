@@ -49,8 +49,10 @@ fn bump_micros(ts: &str, n: i64) -> String {
 }
 
 fn qmd_path(account_id: Option<&str>, conv_id: &str) -> String {
+    // Page-dir layout: `<conv_id>/index.md`. Matches
+    // `Rendered::relative_path` in `render.rs`.
     format!(
-        "rendered_md/openai/{}/llm_chats/{conv_id}.md",
+        "rendered_md/openai/{}/llm_chats/{conv_id}/index.md",
         account_id.unwrap_or("unknown"),
     )
 }

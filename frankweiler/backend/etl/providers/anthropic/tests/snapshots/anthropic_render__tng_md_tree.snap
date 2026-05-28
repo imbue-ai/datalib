@@ -1,9 +1,8 @@
 ---
 source: etl/providers/anthropic/tests/anthropic_render.rs
-assertion_line: 56
 expression: bundle
 ---
-=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md ===
+=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md ===
 ---
 provider: anthropic
 uuid: c0000003-1701-4d00-8000-00000000c003
@@ -91,7 +90,7 @@ Perfect. Make it so.
 
 </div>
 
-=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md ===
+=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md ===
 ---
 provider: anthropic
 uuid: c0000005-1701-4d00-8000-00000000c005
@@ -175,7 +174,7 @@ Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.
 
 </div>
 
-=== rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004.md ===
+=== rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.md ===
 ---
 provider: anthropic
 uuid: c0000004-1701-4d00-8000-00000000c004
@@ -199,7 +198,7 @@ What's wrong with this medical-tricorder readout?
 
 **Attachments:**
 
-- ![tricorder-readout.png](../../../../raw/anthropic_api/blobs/f0000001-1701-4d00-8000-0000000f0001/tricorder-readout.png)
+- ![tricorder-readout.png](blobs/tricorder-readout.png)
 
 </div>
 

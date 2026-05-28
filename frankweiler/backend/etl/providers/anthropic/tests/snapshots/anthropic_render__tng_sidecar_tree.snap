@@ -1,9 +1,8 @@
 ---
 source: etl/providers/anthropic/tests/anthropic_render.rs
-assertion_line: 67
 expression: sbundle
 ---
-=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.grid_rows.json ===
+=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.grid_rows.json ===
 {
   "header": {
     "document_uuid": "c0000003-1701-4d00-8000-00000000c003",
@@ -27,7 +26,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Drafting an opening for a Klingon diplomatic exchange.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -51,7 +50,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -75,7 +74,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -99,7 +98,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "\"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -123,7 +122,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "tool_use",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -147,7 +146,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "tool_result",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -171,7 +170,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Perfect. Make it so.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -181,7 +180,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.grid_rows.json ===
+=== rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.grid_rows.json ===
 {
   "header": {
     "document_uuid": "c0000005-1701-4d00-8000-00000000c005",
@@ -205,7 +204,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Looking up a Borg adaptive-shield signature; first lookup errors out, retry succeeds.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -229,7 +228,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -253,7 +252,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -277,7 +276,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "tool_use",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -301,7 +300,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "tool_result",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -325,7 +324,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "tool_use",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -349,7 +348,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "tool_result",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005.md",
+      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -359,7 +358,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004.grid_rows.json ===
+=== rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.grid_rows.json ===
 {
   "header": {
     "document_uuid": "c0000004-1701-4d00-8000-00000000c004",
@@ -383,7 +382,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "Pasted a tricorder readout image; asked for interpretation.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004.md",
+      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -407,7 +406,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "What's wrong with this medical-tricorder readout?",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004.md",
+      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -431,7 +430,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004.md",
+      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
