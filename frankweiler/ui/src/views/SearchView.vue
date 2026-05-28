@@ -654,15 +654,18 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     headerName: "Contents",
     flex: 1,
     minWidth: 200,
-    // Soft-wrap to a two-line clamp. autoHeight is intentionally OFF —
-    // it forces per-row layout measurement and was the dominant render
-    // cost on large result sets. Row height is fixed to fit two lines;
-    // anything longer is ellipsised by the CSS line-clamp. The clamp
-    // styles live in CSS on .ag-cell-value (the inner span AG Grid wraps
-    // text in) because -webkit-line-clamp must be on the direct text
-    // container — putting it on the outer .ag-cell does nothing.
-    wrapText: true,
-    cellClass: "fw-clamp-2",
+    // Two-line clamp via a custom cellRenderer. autoHeight is intentionally
+    // OFF (per-row measurement was the dominant render cost on large
+    // result sets), and the row height is fixed at 52px to fit two lines.
+    // We render our own <div> so the clamp styles land on the direct text
+    // container — AG Grid's default .ag-cell-value span sits inside a
+    // flex cell and won't clamp reliably.
+    cellRenderer: (p: { value: unknown }) => {
+      const div = document.createElement("div");
+      div.className = "fw-clamp-2";
+      div.textContent = p.value == null ? "" : String(p.value);
+      return div;
+    },
   },
   {
     field: "author",
@@ -1101,14 +1104,7 @@ const gridOptions: GridOptions<SearchRow> = {
   vertical-align: middle;
   display: inline-block;
 }
-.ag-cell.fw-clamp-2 {
-  /* Let the inner span span the full cell width and align to the top
-     so the clamped two lines start at the top of the row instead of
-     being vertically centered. */
-  align-items: flex-start;
-  padding-top: 6px;
-}
-.ag-cell.fw-clamp-2 .ag-cell-value {
+.fw-clamp-2 {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1116,7 +1112,10 @@ const gridOptions: GridOptions<SearchRow> = {
   overflow: hidden;
   white-space: normal;
   line-height: 1.25;
-  word-break: break-word;
   width: 100%;
+  /* break-all lets the ellipsis land mid-word when a long word would
+     otherwise wrap whole to a clipped third line, leaving line 2 short. */
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 </style>
