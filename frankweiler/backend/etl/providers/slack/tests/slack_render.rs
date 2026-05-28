@@ -13,6 +13,12 @@ use frankweiler_etl_slack::translate::translate_raw_dir;
 use insta::assert_snapshot;
 
 fn fixture_root() -> PathBuf {
+    // Bazel sets `SLACK_FIXTURE_DIR` to a runfiles-relative path and
+    // stages the fixture there via `data = [":tng_fixture"]`. Cargo
+    // falls back to the on-disk package source.
+    if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slack_api")
 }
 

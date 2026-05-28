@@ -64,8 +64,13 @@ rust_binary(
 
 # Translate step (Slack). Reads raw_api/ and emits per-thread .md +
 # grid_rows sidecars. Idempotent via the source_fingerprint frontmatter.
+#
+# Target named `slack_translate_bin` so the `slack_translate` label is
+# free for the rust_test below — insta's snapshot file naming uses the
+# test binary name, and the checked-in snap file is
+# `slack_translate__tng_grid_rows.snap`.
 rust_binary(
-    name = "slack_translate",
+    name = "slack_translate_bin",
     srcs = ["src/bin/slack_translate.rs"],
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
@@ -86,19 +91,22 @@ rust_test(
     edition = "2021",
 )
 
-# Translator + render golden tests. Now that the TNG fixture lives
-# inside this crate, the tests resolve it via CARGO_MANIFEST_DIR. The
-# fixture tree still isn't in the bazel sandbox runfiles by default,
-# so we tag them `manual`; run them via `cargo test
-# -p frankweiler-etl-slack` in the inner loop.
+# Translator + render golden tests. Bazel stages the TNG fixture via
+# `data = [":tng_fixture"]` and points `SLACK_FIXTURE_DIR` at the
+# runfiles-relative path (the test source reads that env var with
+# CARGO_MANIFEST_DIR as the cargo fallback). The render target name
+# matches the cargo binary name so insta's snapshot file lookup
+# (`slack_render__*.snap`) resolves in both runtimes.
 rust_test(
-    name = "slack_translate_test",
+    name = "slack_translate",
     srcs = ["tests/slack_translate.rs"],
     crate_root = "tests/slack_translate.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
     edition = "2021",
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    tags = ["manual"],
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "SLACK_FIXTURE_DIR": "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+    },
     deps = [
         ":frankweiler_etl_slack",
         "@frankweiler_crates//:insta",
@@ -107,18 +115,34 @@ rust_test(
 )
 
 rust_test(
-    name = "slack_render_test",
+    name = "slack_render",
     srcs = ["tests/slack_render.rs"],
     crate_root = "tests/slack_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
     edition = "2021",
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    tags = ["manual"],
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "SLACK_FIXTURE_DIR": "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+    },
     deps = [
         ":frankweiler_etl_slack",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "slack_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_slack",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
     ],
 )
 

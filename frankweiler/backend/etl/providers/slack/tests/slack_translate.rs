@@ -12,6 +12,9 @@ use insta::assert_json_snapshot;
 use serde_json::json;
 
 fn fixture_root() -> PathBuf {
+    if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slack_api")
 }
 
