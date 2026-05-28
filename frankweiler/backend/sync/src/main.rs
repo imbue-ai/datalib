@@ -92,9 +92,11 @@ struct Args {
 
     /// Fixed "now" timestamp threaded through downstream renderers and
     /// the dolt load. ISO-8601 / RFC-3339; required for deterministic
-    /// builds and for the Bazel genrule.
+    /// builds and for the Bazel genrule. If omitted, the local system
+    /// clock is sampled once at startup (with local TZ offset) and used
+    /// for the whole run.
     #[arg(long)]
-    now: String,
+    now: Option<String>,
 
     /// Run extract against this HTTP playback fixture tree instead of
     /// the network. Required for hermetic Bazel builds; outside of those
@@ -391,6 +393,14 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     let args = Args::parse();
     let _ = args.deterministic;
 
+    // Sample the system clock once if `--now` was omitted, so every
+    // phase sees the same timestamp for the duration of the run.
+    // Local TZ + offset (e.g. `2026-05-28T14:23:45-07:00`) so the
+    // timestamp is meaningful when a human reads it.
+    let now = args.now.unwrap_or_else(|| {
+        chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    });
+
     let cfg = load_config(args.config.as_deref()).context("load config")?;
     eprintln!(
         "[frankweiler-sync] config: data_root={}, {} source(s)",
@@ -418,7 +428,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         // build artifact keyed by run timestamp. `:` is legal on Unix
         // filesystems but trips up Windows; replace with `-` for
         // portability.
-        let safe_now = args.now.replace(':', "-");
+        let safe_now = now.replace(':', "-");
         s.output_path = Some(root.join(format!("sync_summary_{safe_now}.json")));
     }
 
@@ -448,7 +458,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
             None
         };
-        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &args.now).await;
+        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now).await;
         summary.lock().unwrap().extract.extend(outcomes);
     }
 
@@ -489,7 +499,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     }
 
     // ── Load ───────────────────────────────────────────────────────
-    let load_res = run_load_phase(&cfg, &root, &args.now).await;
+    let load_res = run_load_phase(&cfg, &root, &now).await;
     match load_res {
         Ok(load_summary) => {
             eprintln!(
