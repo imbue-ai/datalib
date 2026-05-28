@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     let _guard = init_obs(&args.obs, "chatgpt-download")?;
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         max_pages: args.max_pages,
         limit: args.limit,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),

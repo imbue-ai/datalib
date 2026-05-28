@@ -1,20 +1,23 @@
 //! End-to-end synth → playback → extract round-trip.
 //!
-//! Builds a fake on-disk ChatGPT snapshot, runs the HTTP fixture
-//! synthesizer over it, points `FRANKWEILER_HTTP_PLAYBACK` at the
-//! resulting fixture tree, then drives `extract::fetch` against a fresh
-//! output directory. Asserts the rehydrated snapshot matches the input
-//! (modulo the per-conv synthetic keys extract re-stamps each run).
+//! Builds a fake on-disk ChatGPT JSON snapshot (the format the
+//! synthesizer reads), runs the HTTP fixture synthesizer over it,
+//! points `FRANKWEILER_HTTP_PLAYBACK` at the resulting fixture tree,
+//! then drives `extract::fetch` against a fresh doltlite database.
+//! Asserts the rehydrated DB matches the input.
 //!
 //! Lives in its own integration-test file so the process-wide
 //! `FRANKWEILER_HTTP_PLAYBACK` env var can't race other tests.
 
+use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_chatgpt::extract::{fetch, FetchOptions};
+use frankweiler_etl_chatgpt::extract::{
+    db::block_on_load_all, db::db_path_for, fetch, FetchOptions,
+};
 use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -24,15 +27,13 @@ fn write_json(path: &std::path::Path, v: &Value) {
     fs::write(path, serde_json::to_vec_pretty(v).unwrap()).unwrap();
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_synth_playback_extract_roundtrip() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
     let playback = d.path().join("playback");
-    let out = d.path().join("out_snapshot");
+    let out_db = d.path().join("out_snapshot.doltlite_db");
 
-    // Seed: me + 2 conversations in the listing, one of them has a
-    // per-conv file on disk.
     write_json(
         &api.join("me.json"),
         &json!({"id": "u-1", "email": "x@y.test"}),
@@ -55,11 +56,10 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
     // me + 1 listing page + 1 terminator + 2 conv = 5
     assert_eq!(report.fixtures_written, 5);
 
-    // Process-wide; safe because this binary holds exactly one test.
     std::env::set_var(PLAYBACK_ENV, &playback);
 
     let summary = fetch(FetchOptions {
-        out_dir: out.clone(),
+        db_path: out_db.clone(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
@@ -72,37 +72,25 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
     assert_eq!(summary.errors, 0);
     assert_eq!(summary.listing, 2);
 
-    // me.json round-trips byte-for-byte content (modulo pretty-printing).
-    let me_in: Value = serde_json::from_slice(&fs::read(api.join("me.json")).unwrap()).unwrap();
-    let me_out: Value = serde_json::from_slice(&fs::read(out.join("me.json")).unwrap()).unwrap();
-    assert_eq!(me_in, me_out);
+    // Verify what landed in the DB matches the input snapshot.
+    let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
+    let me = raw.me.expect("me row present");
+    assert_eq!(me["id"], "u-1");
+    assert_eq!(me["email"], "x@y.test");
 
-    // conversations.json: extract writes the listing it walked, which
-    // should equal the synthesized page items (= our input listing).
-    let listing_out: Value =
-        serde_json::from_slice(&fs::read(out.join("conversations.json")).unwrap()).unwrap();
-    assert_eq!(listing_out, listing);
-
-    // Each per-conv file should match the input, ignoring extract's
-    // freshly-stamped synthetic keys.
+    let by_id: HashMap<String, Value> = raw
+        .conversations
+        .into_iter()
+        .map(|c| (c.id, c.payload))
+        .collect();
     for id in ["c-a", "c-b"] {
-        let mut got: Value = serde_json::from_slice(
-            &fs::read(out.join(format!("conversations/{id}.json"))).unwrap(),
-        )
-        .unwrap();
-        let obj = got.as_object_mut().unwrap();
-        assert!(
-            obj.remove("_fetched_at").is_some(),
-            "{id}: missing _fetched_at"
-        );
-        assert!(
-            obj.remove("_listing_update_time").is_some(),
-            "{id}: missing _listing_update_time"
-        );
         let want: Value = serde_json::from_slice(
             &fs::read(api.join(format!("conversations/{id}.json"))).unwrap(),
         )
         .unwrap();
-        assert_eq!(got, want, "{id} body mismatch");
+        // Payload is the raw upstream response — no `_fetched_at` or
+        // `_listing_update_time` polluting the body anymore.
+        let got = by_id.get(id).expect("conv in db");
+        assert_eq!(got, &want, "{id} body mismatch");
     }
 }

@@ -12,6 +12,12 @@ use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
 use frankweiler_etl_chatgpt::translate::render::render_all;
 
 fn fixture_dir() -> PathBuf {
+    // Bazel sets `CHATGPT_FIXTURE_DIR` to a runfiles-relative path
+    // and stages the fixture there via `data = [":tng_fixture"]`.
+    // Cargo's `CARGO_MANIFEST_DIR` is the package source on disk.
+    if let Ok(d) = std::env::var("CHATGPT_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chatgpt_api")
 }
 

@@ -69,6 +69,32 @@ rust_test(
 )
 
 rust_test(
+    name = "notion_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_notion",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "notion_blob_render",
+    srcs = ["tests/blob_render.rs"],
+    crate_root = "tests/blob_render.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_notion",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+rust_test(
     name = "notion_live",
     srcs = ["tests/notion_live.rs"],
     crate_root = "tests/notion_live.rs",

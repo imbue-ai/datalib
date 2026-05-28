@@ -1,74 +1,82 @@
 //! Notion synth → playback → extract round-trip.
+//!
+//! Seeds a JSONL fixture tree (the on-disk shape NotionSynth reads),
+//! synthesizes playback fixtures, then drives `extract::fetch` against
+//! a fresh doltlite db. Asserts the round-trip lands one page / block
+//! / comment per input record.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
+use frankweiler_etl::event_store::{diff_and_save, make_record};
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_notion::extract::db::BlockUpsert;
 use frankweiler_etl_notion::extract::{fetch, FetchOptions, RawDb};
 use frankweiler_etl_notion::synthesize::NotionSynth;
-use serde_json::json;
+use serde_json::{json, Map, Value};
 use tempfile::tempdir;
+
+fn write_event(api: &std::path::Path, entity: &str, key: Map<String, Value>, raw: Value) {
+    let rec = make_record(key, raw);
+    diff_and_save(api, entity, &[rec], &HashMap::new(), |r| r.to_string()).unwrap();
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn notion_synth_playback_extract_roundtrip() {
     let d = tempdir().unwrap();
-    let input_db = d.path().join("input.doltlite_db");
+    let api = d.path().join("jsonl_input");
     let playback = d.path().join("playback");
     let out_db = d.path().join("out.doltlite_db");
+    std::fs::create_dir_all(&api).unwrap();
 
-    // Dashed 32-hex UUIDs so format_uuid() in extract matches.
     let pid = "11111111-2222-3333-4444-555555555555";
     let bid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     let cid = "cccccccc-1111-2222-3333-444444444444";
 
-    let db = RawDb::open(&input_db).await.unwrap();
-    db.upsert_pages(&[(
-        pid.into(),
-        None,
-        Some("2025-01-01T00:00:00.000Z".into()),
-        Some(
-            serde_json::to_string(&json!({
-                "id": pid,
-                "object": "page",
-                "last_edited_time": "2025-01-01T00:00:00.000Z",
-                "parent": {"type": "workspace"},
-            }))
-            .unwrap(),
-        ),
-    )])
-    .await
-    .unwrap();
-    db.upsert_blocks(&[BlockUpsert {
-        id: bid.into(),
-        parent_id: Some(pid.into()),
-        page_id: Some(pid.into()),
-        page_order: Some(0),
-        last_edited_time: None,
-        payload: Some(
-            serde_json::to_string(&json!({
-                "id": bid,
-                "type": "paragraph",
-                "has_children": false,
-                "parent": {"type": "page_id", "page_id": pid},
-            }))
-            .unwrap(),
-        ),
-    }])
-    .await
-    .unwrap();
-    db.upsert_comments(&[(
-        cid.into(),
-        pid.into(),
-        Some(pid.into()),
-        serde_json::to_string(&json!({"id": cid, "object": "comment", "rich_text": []})).unwrap(),
-    )])
-    .await
-    .unwrap();
-    drop(db);
+    let mut k = Map::new();
+    k.insert("id".into(), Value::String(pid.into()));
+    write_event(
+        &api,
+        "notion_official_page",
+        k,
+        json!({
+            "id": pid,
+            "object": "page",
+            "last_edited_time": "2025-01-01T00:00:00.000Z",
+            "parent": {"type": "workspace"},
+        }),
+    );
+    let mut k = Map::new();
+    k.insert("id".into(), Value::String(bid.into()));
+    k.insert("page_id".into(), Value::String(pid.into()));
+    write_event(
+        &api,
+        "notion_official_block",
+        k,
+        json!({
+            "id": bid,
+            "type": "paragraph",
+            "has_children": false,
+            "parent": {"type": "page_id", "page_id": pid},
+        }),
+    );
+    let mut k = Map::new();
+    k.insert("id".into(), Value::String(cid.into()));
+    k.insert("page_id".into(), Value::String(pid.into()));
+    write_event(
+        &api,
+        "notion_official_comment",
+        k,
+        json!({
+            "id": cid,
+            "object": "comment",
+            "rich_text": [],
+            "parent": {"type": "page_id", "page_id": pid},
+        }),
+    );
 
-    let report = NotionSynth::new(&input_db).synthesize(&playback).unwrap();
-    // 1 page + 1 children + 1 comments = 3 (block has no children, no extra)
+    let report = NotionSynth::new(&api).synthesize(&playback).unwrap();
+    // 1 page + 1 children (page-level; block has no children) + 1 comments = 3
     assert_eq!(report.fixtures_written, 3);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
@@ -83,7 +91,6 @@ async fn notion_synth_playback_extract_roundtrip() {
     .unwrap();
     assert_eq!(summary.new_pages, 1);
 
-    // Round-trip: load the out db and confirm the same payloads landed.
     let out = RawDb::open(&out_db).await.unwrap();
     let pages = out.load_pages().await.unwrap();
     assert_eq!(pages.len(), 1);

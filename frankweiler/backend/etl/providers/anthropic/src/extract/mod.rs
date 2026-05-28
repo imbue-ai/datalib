@@ -1,53 +1,48 @@
-//! Anthropic downloader entry point. Port of
+//! Anthropic (claude.ai) downloader entry point. Port of
 //! `src/download/claude_web.py`.
 //!
-//! TODO(anthropic-incremental): unlike the Slack split (download →
-//! render → load with a `source_fingerprint` stamped on date-stamped
-//! outputs that skip re-write when unchanged), anthropic's extract
-//! still overwrites `conversations.json` and `users.json` wholesale on
-//! every run. The `/api/account` call is at least gated on
-//! users.json's existence, but the conversation index is a full merge +
-//! rewrite. Worth revisiting when we port anthropic to the same
-//! binary-split pattern.
-//!
-//! On-disk layout matches the Python downloader so the existing
-//! fixture / translator path is reused unchanged:
-//!
-//! ```text
-//! <out>/
-//!   conversations.json    # array of conversations in export shape
-//!   users.json            # copied from --export-dir if present
-//! ```
-//!
-//! Per-conversation JSON inside `conversations.json` is coerced into
-//! the export shape via [`normalize::normalize_to_export_shape`].
+//! Writes into a single doltlite database file
+//! (`<data_root>/raw/<name>.doltlite_db`). Conversations are stored as
+//! the **raw** `/api/...` payload — the export-shape normalization
+//! used to happen here at fetch time, but now lives in `translate`
+//! so the raw store stays as close to the wire as possible.
 
 pub mod api;
+pub mod db;
 pub mod normalize;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde_json::Value;
+use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::latchkey::latchkey_tokio_command;
+use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
-use api::{download_files_for_conversation, ClaudeClient, ClaudeError};
+pub use api::{ClaudeClient, ClaudeError};
+pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw, RawDb};
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
+const ATTACH_FILE_TIMEOUT: Duration = Duration::from_secs(600);
+const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
-    pub out_dir: PathBuf,
+    /// Path to the doltlite database file. Legacy directories are
+    /// rewritten to `<dir>.doltlite_db`.
+    pub db_path: PathBuf,
+    /// Path to a bulk-export directory (`users.json` and friends). If
+    /// set and the DB is missing users, we pre-seed them from here.
     pub export_dir: Option<PathBuf>,
     pub overlap: usize,
     pub sleep_between: Duration,
-    /// When non-empty, fetch only these conversation UUIDs and merge
-    /// them into the existing cache. The listing/priority walk is
-    /// skipped entirely.
+    /// When non-empty, fetch only these conversation UUIDs. The
+    /// listing walk is skipped entirely.
     pub conv_uuids: Vec<String>,
     pub progress: frankweiler_etl::progress::Progress,
 }
@@ -59,122 +54,83 @@ pub struct FetchSummary {
     pub forbidden_orgs: usize,
     pub errors: usize,
     pub total: usize,
+    pub new_blobs: usize,
+    pub skipped_blobs: usize,
+    pub failed_blobs: usize,
     pub requests: u64,
     pub network_seconds: f64,
 }
 
-#[instrument(skip_all, fields(out = %opts.out_dir.display()))]
+#[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let out_dir = opts.out_dir.clone();
-    std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
-    let out_conv_path = out_dir.join("conversations.json");
-    let out_users_path = out_dir.join("users.json");
-
-    let existing_export: HashMap<String, Value> = opts
-        .export_dir
-        .as_deref()
-        .map(|p| load_conv_index(&p.join("conversations.json")))
-        .transpose()?
-        .unwrap_or_default();
-    let existing_api: HashMap<String, Value> = load_conv_index(&out_conv_path)?;
-    info!(
-        event = "anthropic_existing",
-        export = existing_export.len(),
-        api = existing_api.len()
-    );
-
-    // Overlap: N most-recently-updated export conversations get refetched
-    // for cross-check vs. the live API.
-    let mut export_sorted: Vec<&Value> = existing_export.values().collect();
-    export_sorted.sort_by(|a, b| {
-        let ka = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        let kb = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        kb.cmp(ka)
-    });
-    let overlap_uuids: HashSet<String> = export_sorted
-        .iter()
-        .take(opts.overlap)
-        .filter_map(|c| c.get("uuid").and_then(|v| v.as_str()).map(String::from))
-        .collect();
-    info!(
-        event = "anthropic_overlap",
-        count = overlap_uuids.len(),
-        of = opts.overlap
-    );
-
-    // users.json: copy from export verbatim if it exists and we don't
-    // already have one. Preserves account_uuid for shape coercion.
-    if let Some(export_dir) = opts.export_dir.as_deref() {
-        let src = export_dir.join("users.json");
-        if src.exists() && !out_users_path.exists() {
-            std::fs::copy(&src, &out_users_path).with_context(|| {
-                format!("copy {} -> {}", src.display(), out_users_path.display())
-            })?;
-        }
-    }
-
-    let mut client = ClaudeClient::new();
-
-    // If we still don't have a users.json (no --export-dir, or its export
-    // didn't ship one), synthesize one from `GET /api/account`. The
-    // translator hard-requires users.json, and this is what claude.ai's
-    // own web app uses to identify the current user.
-    if !out_users_path.exists() {
-        match client.current_account().await {
-            Ok(acct) => {
-                let entry = pick_user_fields(&acct);
-                write_json(&out_users_path, &Value::Array(vec![entry]))?;
-                info!(event = "anthropic_users_json_synthesized");
-            }
-            Err(e) => {
-                warn!(
-                    event = "anthropic_current_account_failed",
-                    error = %e,
-                    note = "could not fetch /api/account — users.json will be absent"
-                );
-            }
-        }
-    }
-
-    let account_uuid = account_uuid_from_users(opts.export_dir.as_deref())
-        .or_else(|| account_uuid_from_users(Some(out_dir.as_path())));
-    if account_uuid.is_none() {
-        warn!(
-            event = "anthropic_no_account_uuid",
-            note = "users.json missing — conversation.account.uuid will be empty"
-        );
-    }
-    let orgs = client
-        .list_orgs()
+    let db_path = db_path_for(&opts.db_path);
+    let _ = frankweiler_etl::latchkey::ensure_curl_shim();
+    let db = RawDb::open(&db_path)
         .await
-        .map_err(|e| anyhow::anyhow!("list orgs: {e}"))?;
-    info!(event = "anthropic_orgs", count = orgs.len());
+        .with_context(|| format!("open raw db {}", db_path.display()))?;
 
-    let mut merged: HashMap<String, Value> = existing_api.clone();
+    let run_config = json!({
+        "overlap": opts.overlap,
+        "conv_uuids": opts.conv_uuids,
+    });
+    let run_id = db.start_run(&run_config).await?;
+    let mut client = ClaudeClient::new();
     let mut summary = FetchSummary::default();
 
-    if !opts.conv_uuids.is_empty() {
-        opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
-        for raw in &opts.conv_uuids {
-            opts.progress.inc(1);
-            opts.progress.set_message(raw);
-            // Accept either a bare UUID or a `https://claude.ai/chat/<uuid>`
-            // URL. Normalize as late as possible so the user's original
-            // input survives in logs and progress messages.
-            let target = frankweiler_etl::ids::normalize_id_token(raw);
-            fetch_single(
-                &mut client,
-                &orgs,
-                &target,
-                account_uuid.as_deref(),
-                &out_dir.join(frankweiler_etl::blobs::BLOBS_DIR),
-                &mut merged,
-                &mut summary,
-            )
-            .await?;
+    let work = async {
+        // users.json from the bulk export carries the account.uuid we
+        // need on every conversation. If the DB doesn't have any user
+        // yet, try to pull it from the export dir before falling back
+        // to `/api/account`.
+        if !db.has_any_user().await.unwrap_or(false) {
+            if let Some(export_dir) = opts.export_dir.as_deref() {
+                ingest_export_users(&db, export_dir)
+                    .await
+                    .unwrap_or_else(|e| {
+                        warn!(event = "anthropic_export_users_failed", error = %e);
+                    });
+            }
         }
-    } else {
-        opts.progress.set_message("listing orgs");
+        if !db.has_any_user().await.unwrap_or(false) {
+            match client.current_account().await {
+                Ok(acct) => {
+                    let entry = pick_user_fields(&acct);
+                    if let Err(e) = db.upsert_user(&entry).await {
+                        warn!(event = "anthropic_synthesize_user_failed", error = %e);
+                    } else {
+                        info!(event = "anthropic_users_synthesized");
+                    }
+                }
+                Err(e) => warn!(
+                    event = "anthropic_current_account_failed",
+                    error = %e,
+                    note = "users will be empty"
+                ),
+            }
+        }
+
+        let orgs = client
+            .list_orgs()
+            .await
+            .map_err(|e| anyhow::anyhow!("list orgs: {e}"))?;
+        info!(event = "anthropic_orgs", count = orgs.len());
+        for org in &orgs {
+            let _ = db.upsert_org(org).await;
+        }
+
+        if !opts.conv_uuids.is_empty() {
+            opts.progress.set_length(Some(opts.conv_uuids.len() as u64));
+            for raw in &opts.conv_uuids {
+                opts.progress.inc(1);
+                opts.progress.set_message(raw);
+                let target = frankweiler_etl::ids::normalize_id_token(raw);
+                fetch_single(&mut client, &db, &orgs, &target, &mut summary).await?;
+            }
+            return Ok::<(), anyhow::Error>(());
+        }
+
+        // Walk each org's listing, pre-seed conversations, prioritize
+        // missing-then-stale, fetch detail.
         for org in &orgs {
             let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
                 continue;
@@ -184,7 +140,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .and_then(|v| v.as_str())
                 .unwrap_or(&org_uuid[..org_uuid.len().min(8)])
                 .to_string();
-
             let listing = match client
                 .list_conversations(org_uuid)
                 .instrument(info_span!("anthropic_org_listing", org = %org_name))
@@ -209,9 +164,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             );
             sleep(SLEEP_BETWEEN).await;
 
-            // Plan: classify each listing item, sort so genuinely-new
-            // conversations come first.
-            let mut plan: Vec<(u8, &Value)> = Vec::new();
+            let listing_refs: Vec<(&str, &Value)> = listing.iter().map(|c| (org_uuid, c)).collect();
+            db.pre_seed_conversations(&listing_refs).await?;
+
+            // Plan: classify each listing item against current DB state.
+            let states = db.conversation_states().await?;
+            let mut missing: Vec<&Value> = Vec::new();
+            let mut stale: Vec<&Value> = Vec::new();
+            // Apply overlap by re-fetching the top-N most-recently-updated.
+            let mut overlap_force: HashSet<String> = HashSet::new();
+            {
+                let mut sorted: Vec<&Value> = listing.iter().collect();
+                sorted.sort_by(|a, b| {
+                    let ka = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+                    let kb = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
+                    kb.cmp(ka)
+                });
+                for c in sorted.iter().take(opts.overlap) {
+                    if let Some(u) = c.get("uuid").and_then(|v| v.as_str()) {
+                        overlap_force.insert(u.into());
+                    }
+                }
+            }
+            let mut up_to_date: usize = 0;
             for item in &listing {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
@@ -220,46 +195,28 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     .get("updated_at")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let in_export = existing_export.get(uuid);
-                let in_api = existing_api.get(uuid);
-                let priority: Option<u8> = if in_export.is_none() && in_api.is_none() {
-                    Some(0) // new
-                } else if overlap_uuids.contains(uuid) {
-                    Some(1) // overlap
-                } else if let Some(api_prev) = in_api {
-                    if api_prev
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        != api_updated
-                    {
-                        Some(2) // updated
-                    } else {
-                        None
+                match states.get(uuid) {
+                    Some(s) if s.has_payload && !overlap_force.contains(uuid) => {
+                        if s.updated_at.as_deref().unwrap_or("") == api_updated {
+                            up_to_date += 1;
+                        } else {
+                            stale.push(item);
+                        }
                     }
-                } else if let Some(exp_prev) = in_export {
-                    if exp_prev
-                        .get("updated_at")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        != api_updated
-                    {
-                        Some(3) // export-stale
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                match priority {
-                    Some(p) => plan.push((p, item)),
-                    None => summary.skipped += 1,
+                    _ => missing.push(item),
                 }
             }
-            plan.sort_by_key(|(p, _)| *p);
+            info!(
+                event = "anthropic_priority_split",
+                missing = missing.len(),
+                stale = stale.len(),
+                up_to_date = up_to_date,
+            );
+            summary.skipped += up_to_date;
 
-            opts.progress.set_length(Some(plan.len() as u64));
-            for (_why, item) in plan {
+            let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
+            opts.progress.set_length(Some(ordered.len() as u64));
+            for item in ordered {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
@@ -267,48 +224,51 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
-                        let blob_dir = out_dir.join(frankweiler_etl::blobs::BLOBS_DIR);
-                        let _ = download_files_for_conversation(&full, &blob_dir).await;
-                        let normalized = normalize::normalize_to_export_shape(
-                            full,
-                            account_uuid.as_deref(),
-                            org_uuid,
-                        );
-                        merged.insert(uuid.to_string(), normalized);
+                        save_conversation(&db, org_uuid, uuid, &full).await?;
                         summary.fetched += 1;
+                        fetch_files_for(&db, &full, uuid, &mut summary).await;
                         if opts.sleep_between > Duration::ZERO {
                             sleep(opts.sleep_between).await;
                         }
                     }
                     Err(e) => {
                         warn!(event = "anthropic_fetch_error", uuid = uuid, error = %e);
+                        let _ = db.record_conversation_error(uuid, &e.to_string()).await;
                         summary.errors += 1;
                     }
                 }
             }
         }
-    }
+        Ok(())
+    };
 
-    let mut sorted: Vec<Value> = merged.into_values().collect();
-    sorted.sort_by(|a, b| {
-        let ka = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        let kb = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
-        kb.cmp(ka)
-    });
-    summary.total = sorted.len();
-    write_json(&out_conv_path, &Value::Array(sorted))?;
+    let result = work.await;
+    summary.total = summary.fetched + summary.skipped;
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
+    let summary_json = json!({
+        "fetched": summary.fetched,
+        "skipped": summary.skipped,
+        "forbidden_orgs": summary.forbidden_orgs,
+        "errors": summary.errors,
+        "total": summary.total,
+        "new_blobs": summary.new_blobs,
+        "skipped_blobs": summary.skipped_blobs,
+        "failed_blobs": summary.failed_blobs,
+        "requests": summary.requests,
+        "error": result.as_ref().err().map(|e| e.to_string()),
+    });
+    let status = if result.is_ok() { "ok" } else { "error" };
+    let _ = db.finish_run(run_id, status, &summary_json).await;
+    result?;
     Ok(summary)
 }
 
 async fn fetch_single(
     client: &mut ClaudeClient,
+    db: &RawDb,
     orgs: &[Value],
     conv_uuid: &str,
-    account_uuid: Option<&str>,
-    blob_dir: &Path,
-    merged: &mut HashMap<String, Value>,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     for org in orgs {
@@ -322,15 +282,14 @@ async fn fetch_single(
             .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
-                let _ = download_files_for_conversation(&full, blob_dir).await;
-                let normalized = normalize::normalize_to_export_shape(full, account_uuid, org_uuid);
-                merged.insert(conv_uuid.to_string(), normalized);
+                save_conversation(db, org_uuid, conv_uuid, &full).await?;
                 summary.fetched += 1;
                 info!(
                     event = "anthropic_fetch_single_ok",
                     uuid = conv_uuid,
                     org = %org_name
                 );
+                fetch_files_for(db, &full, conv_uuid, summary).await;
                 return Ok(());
             }
             Err(ClaudeError::Forbidden(_)) => {
@@ -351,6 +310,9 @@ async fn fetch_single(
             }
             Err(e) => {
                 warn!(event = "anthropic_fetch_error", uuid = conv_uuid, error = %e);
+                let _ = db
+                    .record_conversation_error(conv_uuid, &e.to_string())
+                    .await;
                 summary.errors += 1;
                 return Err(anyhow::anyhow!("fetch {conv_uuid}: {e}"));
             }
@@ -362,27 +324,43 @@ async fn fetch_single(
     ))
 }
 
-fn load_conv_index(path: &Path) -> Result<HashMap<String, Value>> {
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let v: Value =
-        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
-    let arr = v.as_array().cloned().unwrap_or_default();
-    let mut out = HashMap::new();
-    for c in arr {
-        if let Some(uuid) = c.get("uuid").and_then(|v| v.as_str()) {
-            out.insert(uuid.to_string(), c);
-        }
-    }
-    Ok(out)
+async fn save_conversation(db: &RawDb, org_uuid: &str, uuid: &str, full: &Value) -> Result<()> {
+    let payload = serde_json::to_string(full).context("serialize conversation")?;
+    let name = full.get("name").and_then(|v| v.as_str()).map(String::from);
+    let updated_at = full
+        .get("updated_at")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    db.upsert_conversation_detail(&db::ConversationDetail {
+        id: uuid.to_string(),
+        org_uuid: org_uuid.to_string(),
+        name,
+        updated_at,
+        payload,
+    })
+    .await
 }
 
-/// Pull just the fields the translator (and our parse step) reads off a
-/// user record: `uuid`, `email_address`, `full_name`. `/api/account` also
-/// returns memberships + settings, which we drop — they're orthogonal to
-/// the accounts table and would bloat users.json.
+/// Pull `users.json` entries from an existing bulk-export directory
+/// into the DB. Best-effort: missing file is fine.
+async fn ingest_export_users(db: &RawDb, export_dir: &Path) -> Result<()> {
+    let path = export_dir.join("users.json");
+    if !path.exists() {
+        return Ok(());
+    }
+    let txt = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let v: Value =
+        serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))?;
+    if let Some(arr) = v.as_array() {
+        for u in arr {
+            if let Err(e) = db.upsert_user(u).await {
+                warn!(event = "anthropic_user_upsert_failed", error = %e);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn pick_user_fields(acct: &Value) -> Value {
     let mut obj = serde_json::Map::new();
     for key in ["uuid", "email_address", "full_name"] {
@@ -393,26 +371,131 @@ fn pick_user_fields(acct: &Value) -> Value {
     Value::Object(obj)
 }
 
-fn account_uuid_from_users(dir: Option<&Path>) -> Option<String> {
-    let dir = dir?;
-    let p = dir.join("users.json");
-    if !p.exists() {
-        return None;
+/// Walk a conversation tree's `chat_messages[*].files[]` and
+/// download every unique attachment into the doltlite `blobs` table.
+/// Skips files we already have bytes for.
+async fn fetch_files_for(db: &RawDb, conv: &Value, conv_uuid: &str, summary: &mut FetchSummary) {
+    let messages = match conv.get("chat_messages").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return,
+    };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut targets: Vec<Value> = Vec::new();
+    for msg in messages {
+        if let Some(files) = msg.get("files").and_then(|v| v.as_array()) {
+            for f in files {
+                if let Some(id) = f.get("file_uuid").and_then(|v| v.as_str()) {
+                    if seen.insert(id.to_string()) {
+                        targets.push(f.clone());
+                    }
+                }
+            }
+        }
     }
-    let text = std::fs::read_to_string(&p).ok()?;
-    let v: Value = serde_json::from_str(&text).ok()?;
-    let arr = v.as_array()?;
-    arr.first()?
-        .get("uuid")
-        .and_then(|v| v.as_str())
-        .map(String::from)
+    for f in &targets {
+        let Some(file_uuid) = f.get("file_uuid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if db.blob_exists(file_uuid).await.unwrap_or(false) {
+            summary.skipped_blobs += 1;
+            continue;
+        }
+        match download_one_file(db, f, conv_uuid).await {
+            Ok(true) => summary.new_blobs += 1,
+            Ok(false) => summary.failed_blobs += 1,
+            Err(e) => {
+                warn!(event = "anthropic_media_unexpected_err", file_uuid = %file_uuid, error = %e);
+                let _ = db
+                    .record_blob_error(file_uuid, conv_uuid, "file", &e.to_string())
+                    .await;
+                summary.failed_blobs += 1;
+            }
+        }
+    }
 }
 
-fn write_json(path: &Path, value: &Value) -> Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Result<bool> {
+    let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
+        return Ok(false);
+    };
+    let preview_path = file_obj
+        .get("preview_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            file_obj
+                .get("document_asset")
+                .and_then(|d| d.get("url"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        });
+    let preview_path = match preview_path {
+        Some(p) => p,
+        None => {
+            warn!(
+                event = "anthropic_media_no_preview_url",
+                file_uuid = file_uuid
+            );
+            let _ = db
+                .record_blob_error(file_uuid, conv_uuid, "file", "no preview_url")
+                .await;
+            return Ok(false);
+        }
+    };
+    let url = if preview_path.starts_with("http") {
+        preview_path.to_string()
+    } else {
+        format!("{CLAUDE_ORIGIN}{preview_path}")
+    };
+    let name = file_obj.get("file_name").and_then(|v| v.as_str());
+    let _safe = safe_filename(name, file_uuid); // sanity-check the input shape
+    let mime = file_obj
+        .get("file_kind")
+        .and_then(|v| v.as_str())
+        .or_else(|| file_obj.get("mime_type").and_then(|v| v.as_str()));
+
+    let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
+    let mut cmd = latchkey_tokio_command();
+    cmd.arg("curl")
+        .arg("-fSL")
+        .arg("-o")
+        .arg(tmp.path())
+        .arg(&url);
+    let proc = tokio::time::timeout(ATTACH_FILE_TIMEOUT, cmd.output())
+        .await
+        .context("file curl timed out")?
+        .context("file curl spawn failed")?;
+    if !proc.status.success() {
+        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
+        let tail: String = stderr_full
+            .chars()
+            .rev()
+            .take(200)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        warn!(
+            event = "anthropic_media_failed",
+            file_uuid = file_uuid,
+            exit = proc.status.code().unwrap_or(-1),
+            stderr = %tail.trim(),
+        );
+        let _ = db
+            .record_blob_error(file_uuid, conv_uuid, "file", tail.trim())
+            .await;
+        return Ok(false);
     }
-    let text = serde_json::to_string_pretty(value)
-        .with_context(|| format!("serialize {}", path.display()))?;
-    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
+    let bytes = fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_uuid}"))?;
+    db.upsert_blob_bytes(
+        file_uuid,
+        "file",
+        conv_uuid,
+        "file",
+        mime,
+        &bytes,
+        Some(&url),
+    )
+    .await?;
+    Ok(true)
 }

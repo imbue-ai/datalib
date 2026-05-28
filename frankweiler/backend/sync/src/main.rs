@@ -816,7 +816,7 @@ impl ExtractPlan {
             ExtractKind::Anthropic { sync } => {
                 frankweiler_etl_anthropic::extract::fetch(
                     frankweiler_etl_anthropic::extract::FetchOptions {
-                        out_dir: self.out_dir.clone(),
+                        db_path: self.out_dir.clone(),
                         // Auto-resolve: users.json (from the bulk export)
                         // is expected to live alongside the source's
                         // input_path. In playback mode the genrule
@@ -838,7 +838,7 @@ impl ExtractPlan {
             }
             ExtractKind::Chatgpt { sync } => frankweiler_etl_chatgpt::extract::fetch(
                 frankweiler_etl_chatgpt::extract::FetchOptions {
-                    out_dir: self.out_dir.clone(),
+                    db_path: self.out_dir.clone(),
                     max_pages: sync.max_pages.map(|v| v as usize),
                     limit: sync.limit.map(|v| v as usize),
                     sleep_between: Duration::ZERO,

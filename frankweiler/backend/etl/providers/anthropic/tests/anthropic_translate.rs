@@ -8,6 +8,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("ANTHROPIC_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anthropic_api")
 }
 

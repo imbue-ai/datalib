@@ -18,10 +18,11 @@
 //! claude.ai account; if its title/content changes, accept the new
 //! snapshot via `cargo insta review`.
 
-use std::fs;
 use std::time::Duration;
 
-use frankweiler_etl_anthropic::extract as anthropic;
+use frankweiler_etl_anthropic::extract::{
+    self as anthropic, db::block_on_load_all, db::db_path_for,
+};
 use insta::assert_json_snapshot;
 use serde_json::{json, Value};
 
@@ -36,7 +37,7 @@ async fn anthropic_live_single_conv_snapshot() {
     eprintln!("[test] downloading to {}", tmp.display());
 
     let opts = anthropic::FetchOptions {
-        out_dir: tmp.clone(),
+        db_path: tmp.clone(),
         export_dir: None,
         overlap: 0,
         sleep_between: Duration::ZERO,
@@ -47,12 +48,15 @@ async fn anthropic_live_single_conv_snapshot() {
         .await
         .expect("anthropic fetch failed");
 
-    let convs: Vec<Value> = serde_json::from_str(
-        &fs::read_to_string(tmp.join("conversations.json")).expect("conversations.json present"),
-    )
-    .expect("conversations.json is valid JSON");
-    assert_eq!(convs.len(), 1, "expected exactly one conversation");
-    let conv = &convs[0];
+    let raw = block_on_load_all(&db_path_for(&tmp)).expect("load db");
+    let conv = raw
+        .conversations
+        .iter()
+        .find(|c| c.id == TARGET_UUID)
+        .expect("target conversation present in db")
+        .payload
+        .clone();
+    let conv = &conv;
 
     let messages: Vec<Value> = conv
         .get("chat_messages")

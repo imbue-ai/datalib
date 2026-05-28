@@ -16,10 +16,9 @@
 //! The target conversation is tied to the test author's chatgpt.com
 //! account; accept any title/content changes via `cargo insta review`.
 
-use std::fs;
 use std::time::Duration;
 
-use frankweiler_etl_chatgpt::extract as chatgpt;
+use frankweiler_etl_chatgpt::extract::{self as chatgpt, db::block_on_load_all, db::db_path_for};
 use insta::assert_json_snapshot;
 use serde_json::{json, Value};
 
@@ -34,7 +33,7 @@ async fn chatgpt_live_single_conv_snapshot() {
     eprintln!("[test] downloading to {}", tmp.display());
 
     let opts = chatgpt::FetchOptions {
-        out_dir: tmp.clone(),
+        db_path: tmp.clone(),
         max_pages: None,
         limit: None,
         sleep_between: Duration::ZERO,
@@ -43,9 +42,14 @@ async fn chatgpt_live_single_conv_snapshot() {
     };
     chatgpt::fetch(opts).await.expect("chatgpt fetch failed");
 
-    let path = tmp.join(format!("conversations/{TARGET_ID}.json"));
-    let conv: Value = serde_json::from_str(&fs::read_to_string(&path).expect("conv file present"))
-        .expect("conv json valid");
+    let db_path = db_path_for(&tmp);
+    let raw = block_on_load_all(&db_path).expect("load db");
+    let conv: Value = raw
+        .conversations
+        .into_iter()
+        .find(|c| c.id == TARGET_ID)
+        .expect("conv present in db")
+        .payload;
 
     // Walk the mapping in create_time order so the snapshot doesn't
     // depend on hashmap iteration order. Skip nodes with no message

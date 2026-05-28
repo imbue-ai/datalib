@@ -94,6 +94,15 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
+    // Materialize any blob bytes the raw-store DB knew about to the
+    // canonical `<root>/raw/<source>/blobs/<file_id>/<name>` path. The
+    // rendered markdown links to those paths via `blob_relpath` below;
+    // historically `extract` wrote the bytes to disk and the renderer
+    // just emitted the link, but with the doltlite port the bytes live
+    // in the `blobs` table instead. Doing this here keeps the rendered
+    // markdown byte-identical.
+    materialize_blobs(parsed, root, source_name)?;
+
     let mut written = Vec::new();
     for conv in &parsed.conversations {
         let Some(r) = render_one(parsed, &conv.conversation_id, source_name) else {
@@ -323,10 +332,46 @@ pub fn render_one(
     })
 }
 
+/// Write blob bytes the parsed snapshot carries to the canonical
+/// `<root>/raw/<source>/blobs/<file_id>/<name>` location. Markdown
+/// links produced by [`attachment_md`] target that path, so the link
+/// resolves whether the bytes came from the legacy on-disk staging or
+/// the doltlite blobs table.
+fn materialize_blobs(
+    parsed: &ParsedChatGPTApi,
+    root: &std::path::Path,
+    source_name: &str,
+) -> std::io::Result<()> {
+    if parsed.blobs_by_id.is_empty() {
+        return Ok(());
+    }
+    // For the filename we need a (file_id → name) lookup off the
+    // attachments we walked during parse. Otherwise we fall back to
+    // the blob's `slot` or the file_id itself.
+    let mut name_by_id: HashMap<&str, Option<&str>> = HashMap::new();
+    for m in &parsed.messages {
+        for a in &m.attachments {
+            name_by_id
+                .entry(a.file_id.as_str())
+                .or_insert(a.name.as_deref());
+        }
+    }
+    for (file_id, blob) in &parsed.blobs_by_id {
+        let name = name_by_id.get(file_id.as_str()).copied().flatten();
+        let safe = safe_filename(name, file_id);
+        let target = root.join(blob_relpath(source_name, file_id, &safe));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &blob.bytes)?;
+    }
+    Ok(())
+}
+
 /// Markdown line for one attachment: `![alt](rel-link)` for images,
 /// `[\[file\] name](rel-link)` for everything else. Always emits the
 /// canonical relative path into `raw/<source_name>/blobs/<id>/<name>`;
-/// the downloader is responsible for actually staging the file there.
+/// the bytes are materialized to that path by [`materialize_blobs`].
 fn attachment_md(source_name: &str, md_rel: &std::path::Path, a: &OAAttachmentRef) -> String {
     let name = safe_filename(a.name.as_deref(), &a.file_id);
     let alt = a

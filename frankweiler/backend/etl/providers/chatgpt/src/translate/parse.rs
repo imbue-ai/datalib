@@ -1,18 +1,24 @@
-//! Port of `src/ingest/providers/openai/parse.py`. Reads a directory
-//! laid out as `me.json`, `conversations.json`, `conversations/<id>.json`
-//! (the wire shape that `chatgpt.com/backend-api` returns and that
-//! `chatgpt_web.py` writes verbatim) and flattens it into typed rows.
+//! Port of `src/ingest/providers/openai/parse.py`. Reads the doltlite
+//! database written by [`crate::extract`] (or, when no DB is present,
+//! the legacy JSON tree under
+//! `me.json` + `conversations.json` + `conversations/<id>.json`) and
+//! flattens it into typed rows.
 //!
-//! `raw_json` fields carry the JSON minus whatever has been exploded into
-//! sibling row types — e.g. conversations drop `mapping`, messages drop
-//! `content` — so the row payload stays bounded.
+//! `raw_json` fields carry the JSON minus whatever has been exploded
+//! into sibling row types — e.g. conversations drop `mapping`,
+//! messages drop `content` — so the row payload stays bounded.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
+
+use crate::extract::db::{
+    block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw,
+};
 
 #[derive(Debug, Clone)]
 pub struct OAAccountRow {
@@ -61,9 +67,6 @@ pub struct OAMessageRow {
     pub attachments: Vec<OAAttachmentRef>,
 }
 
-/// One surfaced ChatGPT attachment: either a `metadata.attachments[]`
-/// entry (the usual "user uploaded a file" path) or an
-/// `image_asset_pointer` content part (the inline-image path).
 #[derive(Debug, Clone)]
 pub struct OAAttachmentRef {
     pub file_id: String,
@@ -88,6 +91,10 @@ pub struct ParsedChatGPTApi {
     pub conversations: Vec<OAConversationRow>,
     pub messages: Vec<OAMessageRow>,
     pub content_parts: Vec<OAContentPartRow>,
+    /// Blob bytes keyed by upstream `file_id`. Render materializes
+    /// these onto disk at `raw/<source>/blobs/<file_id>/<name>` so the
+    /// (unchanged) markdown link resolves.
+    pub blobs_by_id: HashMap<String, BlobBytes>,
 }
 
 /// Normalize a ChatGPT timestamp to an ISO-8601 string. Strings pass through
@@ -102,8 +109,6 @@ fn epoch_to_iso(v: &Value) -> Option<String> {
             let secs = n.as_f64()?;
             let micros = (secs * 1_000_000.0).round() as i64;
             let dt: DateTime<Utc> = DateTime::from_timestamp_micros(micros)?;
-            // chrono's `%.6f` emits "+00:00" rather than "Z" — matches the
-            // Python `isoformat(timespec="microseconds")` output exactly.
             Some(dt.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string())
         }
         _ => None,
@@ -169,10 +174,6 @@ fn synthesize_text(content: Option<&Value>) -> String {
     }
 }
 
-/// Walk a message's `metadata.attachments[]` plus any
-/// `image_asset_pointer` parts inside `content` (multimodal_text). The
-/// `sediment://file_xxx` form on `asset_pointer` is normalized to the
-/// bare `file_xxx` id.
 fn collect_attachments(m: &Map<String, Value>) -> Vec<OAAttachmentRef> {
     let mut out: Vec<OAAttachmentRef> = Vec::new();
     if let Some(arr) = m
@@ -392,7 +393,75 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
     rows
 }
 
-pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
+/// Read raw payloads out of the doltlite DB. If `path` doesn't resolve
+/// to an existing `.doltlite_db`, falls back to walking a legacy JSON
+/// tree under `path/` — that's the shape the in-tree TNG render-test
+/// fixture still uses.
+///
+/// The DB path requires a tokio runtime (uses
+/// [`crate::extract::db::block_on_load_all`]); the bin entry point
+/// wraps `main` with `#[tokio::main]` for this reason.
+pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
+    let db_path = db_path_for(path);
+    if db_path.exists() {
+        let raw = block_on_load_all(&db_path)
+            .with_context(|| format!("load chatgpt db {}", db_path.display()))?;
+        return Ok(parse_loaded(raw));
+    }
+    if path.is_dir() {
+        return parse_api_json_dir(path);
+    }
+    // Neither a DB nor a JSON tree — caller's path is wrong; surface a
+    // clear error instead of silently returning empty rows.
+    anyhow::bail!(
+        "chatgpt source not found at {} (no .doltlite_db, no JSON tree)",
+        path.display()
+    )
+}
+
+/// Build a [`ParsedChatGPTApi`] from a snapshot already loaded out of
+/// the doltlite DB.
+pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
+    let mut out = ParsedChatGPTApi {
+        blobs_by_id: raw.blobs_by_id,
+        ..Default::default()
+    };
+    let account_id = if let Some(me) = raw.me.as_ref() {
+        let id_opt = me.get("id").and_then(Value::as_str).map(String::from);
+        if let Some(id) = id_opt.clone() {
+            out.accounts.push(OAAccountRow {
+                account_id: id,
+                email: me.get("email").and_then(Value::as_str).map(String::from),
+                name: me.get("name").and_then(Value::as_str).map(String::from),
+                raw_json: me.clone(),
+            });
+        }
+        id_opt
+    } else {
+        None
+    };
+    for LoadedConversation {
+        id: _,
+        payload,
+        last_listing_update_time,
+        ..
+    } in raw.conversations
+    {
+        ingest_conversation(
+            &payload,
+            last_listing_update_time.as_ref(),
+            &account_id,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Legacy fallback: walk a `me.json` / `conversations.json` /
+/// `conversations/<id>.json` tree. Kept for the in-crate TNG fixture
+/// used by the render golden test, which we'd rather not regenerate as
+/// a binary doltlite_db every time the source data changes.
+pub fn parse_api_json_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
     let mut out = ParsedChatGPTApi::default();
 
     let me_path = api_dir.join("me.json");
@@ -412,8 +481,7 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
     }
 
     let listing_path = api_dir.join("conversations.json");
-    let mut listing_by_id: std::collections::HashMap<String, Value> =
-        std::collections::HashMap::new();
+    let mut listing_by_id: HashMap<String, Value> = HashMap::new();
     if listing_path.exists() {
         let v: Value = serde_json::from_str(&fs::read_to_string(&listing_path)?)
             .with_context(|| format!("parsing {}", listing_path.display()))?;
@@ -455,114 +523,142 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
                     .unwrap_or("")
                     .to_string()
             });
-
-        let empty = Value::Object(Map::new());
-        let listing_row = listing_by_id.get(&cid).unwrap_or(&empty);
-
-        let create_time = epoch_to_iso(d_obj.get("create_time").unwrap_or(&Value::Null))
-            .or_else(|| epoch_to_iso(listing_row.get("create_time").unwrap_or(&Value::Null)));
-        let update_time = epoch_to_iso(d_obj.get("update_time").unwrap_or(&Value::Null))
-            .or_else(|| epoch_to_iso(listing_row.get("update_time").unwrap_or(&Value::Null)));
-
-        let title = d_obj
-            .get("title")
-            .and_then(Value::as_str)
-            .or_else(|| listing_row.get("title").and_then(Value::as_str))
-            .map(String::from);
-
-        let mut conv_raw = d_obj.clone();
-        conv_raw.remove("mapping");
-
-        out.conversations.push(OAConversationRow {
-            account_id: account_id.clone(),
-            conversation_id: cid.clone(),
-            title,
-            create_time,
-            update_time,
-            current_node: d_obj
-                .get("current_node")
-                .and_then(Value::as_str)
-                .map(String::from),
-            default_model_slug: d_obj
-                .get("default_model_slug")
-                .and_then(Value::as_str)
-                .map(String::from),
-            gizmo_id: d_obj
-                .get("gizmo_id")
-                .and_then(Value::as_str)
-                .map(String::from),
-            gizmo_type: d_obj
-                .get("gizmo_type")
-                .and_then(Value::as_str)
-                .map(String::from),
-            is_archived: d_obj.get("is_archived").and_then(Value::as_bool),
-            is_starred: d_obj.get("is_starred").and_then(Value::as_bool),
-            raw_json: Value::Object(conv_raw),
-        });
-
-        let Some(mapping) = d_obj.get("mapping").and_then(Value::as_object) else {
-            continue;
-        };
-        for (node_id, node) in mapping {
-            let Some(node_obj) = node.as_object() else {
-                continue;
-            };
-            let Some(m) = node_obj.get("message").and_then(Value::as_object) else {
-                continue;
-            };
-            let mid = m
-                .get("id")
-                .and_then(Value::as_str)
-                .map(String::from)
-                .unwrap_or_else(|| node_id.clone());
-            let content = m.get("content");
-            let author = m.get("author").and_then(Value::as_object);
-            let meta = m.get("metadata").and_then(Value::as_object);
-
-            let content_type = content
-                .and_then(Value::as_object)
-                .and_then(|c| c.get("content_type"))
-                .and_then(Value::as_str)
-                .map(String::from);
-
-            let text = synthesize_text(content);
-
-            let mut msg_raw = m.clone();
-            msg_raw.remove("content");
-
-            let attachments = collect_attachments(m);
-
-            out.messages.push(OAMessageRow {
-                conversation_id: cid.clone(),
-                message_id: mid.clone(),
-                parent_id: node_obj
-                    .get("parent")
-                    .and_then(Value::as_str)
-                    .map(String::from),
-                role: author
-                    .and_then(|a| a.get("role"))
-                    .and_then(Value::as_str)
-                    .map(String::from),
-                recipient: m.get("recipient").and_then(Value::as_str).map(String::from),
-                channel: m.get("channel").and_then(Value::as_str).map(String::from),
-                content_type,
-                text,
-                status: m.get("status").and_then(Value::as_str).map(String::from),
-                end_turn: m.get("end_turn").and_then(Value::as_bool),
-                weight: m.get("weight").and_then(Value::as_f64),
-                model_slug: meta
-                    .and_then(|x| x.get("model_slug"))
-                    .and_then(Value::as_str)
-                    .map(String::from),
-                create_time: epoch_to_iso(m.get("create_time").unwrap_or(&Value::Null)),
-                update_time: epoch_to_iso(m.get("update_time").unwrap_or(&Value::Null)),
-                raw_json: Value::Object(msg_raw),
-                attachments,
-            });
-
-            out.content_parts.extend(content_parts(&mid, content));
+        let listing_row = listing_by_id.get(&cid).cloned();
+        ingest_conversation(&d, listing_row.as_ref(), &account_id, &mut out);
+        // The legacy reader keyed off the file name when the JSON
+        // didn't carry an `id`/`conversation_id`; preserve that shape
+        // by patching the cid back into the row we just pushed.
+        if let Some(last) = out.conversations.last_mut() {
+            if last.conversation_id.is_empty() {
+                last.conversation_id = cid;
+            }
         }
     }
 
     Ok(out)
+}
+
+/// Push rows for one conversation payload into `out`. Shared between
+/// the DB-driven and the JSON-tree-driven readers so they produce
+/// byte-identical `ParsedChatGPTApi` shape.
+fn ingest_conversation(
+    d: &Value,
+    listing_row: Option<&Value>,
+    account_id: &Option<String>,
+    out: &mut ParsedChatGPTApi,
+) {
+    let Some(d_obj) = d.as_object() else { return };
+    let cid = d_obj
+        .get("conversation_id")
+        .and_then(Value::as_str)
+        .or_else(|| d_obj.get("id").and_then(Value::as_str))
+        .map(String::from)
+        .unwrap_or_default();
+
+    let empty = Value::Object(Map::new());
+    let listing = listing_row.unwrap_or(&empty);
+
+    let create_time = epoch_to_iso(d_obj.get("create_time").unwrap_or(&Value::Null))
+        .or_else(|| epoch_to_iso(listing.get("create_time").unwrap_or(&Value::Null)));
+    let update_time = epoch_to_iso(d_obj.get("update_time").unwrap_or(&Value::Null))
+        .or_else(|| epoch_to_iso(listing.get("update_time").unwrap_or(&Value::Null)));
+
+    let title = d_obj
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| listing.get("title").and_then(Value::as_str))
+        .map(String::from);
+
+    let mut conv_raw = d_obj.clone();
+    conv_raw.remove("mapping");
+
+    out.conversations.push(OAConversationRow {
+        account_id: account_id.clone(),
+        conversation_id: cid.clone(),
+        title,
+        create_time,
+        update_time,
+        current_node: d_obj
+            .get("current_node")
+            .and_then(Value::as_str)
+            .map(String::from),
+        default_model_slug: d_obj
+            .get("default_model_slug")
+            .and_then(Value::as_str)
+            .map(String::from),
+        gizmo_id: d_obj
+            .get("gizmo_id")
+            .and_then(Value::as_str)
+            .map(String::from),
+        gizmo_type: d_obj
+            .get("gizmo_type")
+            .and_then(Value::as_str)
+            .map(String::from),
+        is_archived: d_obj.get("is_archived").and_then(Value::as_bool),
+        is_starred: d_obj.get("is_starred").and_then(Value::as_bool),
+        raw_json: Value::Object(conv_raw),
+    });
+
+    let Some(mapping) = d_obj.get("mapping").and_then(Value::as_object) else {
+        return;
+    };
+    for (node_id, node) in mapping {
+        let Some(node_obj) = node.as_object() else {
+            continue;
+        };
+        let Some(m) = node_obj.get("message").and_then(Value::as_object) else {
+            continue;
+        };
+        let mid = m
+            .get("id")
+            .and_then(Value::as_str)
+            .map(String::from)
+            .unwrap_or_else(|| node_id.clone());
+        let content = m.get("content");
+        let author = m.get("author").and_then(Value::as_object);
+        let meta = m.get("metadata").and_then(Value::as_object);
+
+        let content_type = content
+            .and_then(Value::as_object)
+            .and_then(|c| c.get("content_type"))
+            .and_then(Value::as_str)
+            .map(String::from);
+
+        let text = synthesize_text(content);
+
+        let mut msg_raw = m.clone();
+        msg_raw.remove("content");
+
+        let attachments = collect_attachments(m);
+
+        out.messages.push(OAMessageRow {
+            conversation_id: cid.clone(),
+            message_id: mid.clone(),
+            parent_id: node_obj
+                .get("parent")
+                .and_then(Value::as_str)
+                .map(String::from),
+            role: author
+                .and_then(|a| a.get("role"))
+                .and_then(Value::as_str)
+                .map(String::from),
+            recipient: m.get("recipient").and_then(Value::as_str).map(String::from),
+            channel: m.get("channel").and_then(Value::as_str).map(String::from),
+            content_type,
+            text,
+            status: m.get("status").and_then(Value::as_str).map(String::from),
+            end_turn: m.get("end_turn").and_then(Value::as_bool),
+            weight: m.get("weight").and_then(Value::as_f64),
+            model_slug: meta
+                .and_then(|x| x.get("model_slug"))
+                .and_then(Value::as_str)
+                .map(String::from),
+            create_time: epoch_to_iso(m.get("create_time").unwrap_or(&Value::Null)),
+            update_time: epoch_to_iso(m.get("update_time").unwrap_or(&Value::Null)),
+            raw_json: Value::Object(msg_raw),
+            attachments,
+        });
+
+        out.content_parts.extend(content_parts(&mid, content));
+    }
 }

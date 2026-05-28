@@ -24,6 +24,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+sqlx = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"

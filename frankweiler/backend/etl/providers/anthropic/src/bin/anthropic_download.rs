@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     let _guard = init_obs(&args.obs, "anthropic-download")?;
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         export_dir: args.export_dir.clone(),
         overlap: args.overlap,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),

@@ -1,4 +1,11 @@
 //! Anthropic synth → playback → extract round-trip.
+//!
+//! Builds a JSON snapshot, synthesizes playback fixtures, runs
+//! `extract::fetch` against a fresh doltlite db, and asserts the
+//! rehydrated conversations match the input. With the doltlite port
+//! we store the **raw** API payload in `conversations.payload`, so
+//! comparisons happen against the raw response shape rather than the
+//! normalized export shape.
 
 use std::collections::HashMap;
 use std::fs;
@@ -6,21 +13,24 @@ use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_anthropic::extract::{fetch, FetchOptions};
+use frankweiler_etl_anthropic::extract::{
+    db::block_on_load_all, db::db_path_for, fetch, FetchOptions,
+};
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn anthropic_synth_playback_extract_roundtrip() {
     let d = tempdir().unwrap();
     let api = d.path().join("input_snapshot");
     let playback = d.path().join("playback");
-    let out = d.path().join("out_snapshot");
+    let out_db = d.path().join("out_snapshot.doltlite_db");
     fs::create_dir_all(&api).unwrap();
 
     // Pre-normalized conversation: account set, _source set, no chat_messages
-    // so normalize is a no-op.
+    // so normalize is a no-op. The synth serves these back directly, so
+    // when extract refetches them via playback, we get the same body.
     let convs = json!([
         {
             "uuid": "c1",
@@ -53,23 +63,15 @@ async fn anthropic_synth_playback_extract_roundtrip() {
     .unwrap();
 
     let report = AnthropicSynth::new(&api).synthesize(&playback).unwrap();
-    // /organizations + 2 listings + 2 details = 5
     assert_eq!(report.fixtures_written, 5);
 
     std::env::set_var(PLAYBACK_ENV, &playback);
 
-    // Pre-seed users.json in out_dir so account_uuid is found without
-    // depending on export_dir.
-    fs::create_dir_all(&out).unwrap();
-    fs::write(
-        out.join("users.json"),
-        serde_json::to_vec_pretty(&json!([{"uuid": "acct-1"}])).unwrap(),
-    )
-    .unwrap();
-
     let summary = fetch(FetchOptions {
-        out_dir: out.clone(),
-        export_dir: None,
+        db_path: out_db.clone(),
+        // Point export_dir at our input snapshot so users.json gets
+        // ingested before the listing pass needs account_uuid.
+        export_dir: Some(api.clone()),
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
@@ -80,21 +82,20 @@ async fn anthropic_synth_playback_extract_roundtrip() {
     assert_eq!(summary.fetched, 2);
     assert_eq!(summary.total, 2);
 
-    let want: Vec<Value> = convs.as_array().cloned().unwrap();
-    let got: Value =
-        serde_json::from_slice(&fs::read(out.join("conversations.json")).unwrap()).unwrap();
-    let got_arr: Vec<Value> = got.as_array().cloned().unwrap();
-    assert_eq!(got_arr.len(), want.len());
-
-    // Compare by uuid (extract sorts by updated_at desc; we don't rely
-    // on that ordering — just on per-conv equality).
-    let by_uuid_want: HashMap<String, &Value> = want
+    let raw = block_on_load_all(&db_path_for(&out_db)).expect("load db");
+    let by_id: HashMap<String, Value> = raw
+        .conversations
+        .into_iter()
+        .map(|c| (c.id, c.payload))
+        .collect();
+    let want_arr: Vec<Value> = convs.as_array().cloned().unwrap();
+    let by_uuid_want: HashMap<String, &Value> = want_arr
         .iter()
         .map(|c| (c["uuid"].as_str().unwrap().to_string(), c))
         .collect();
-    for g in &got_arr {
-        let uuid = g["uuid"].as_str().unwrap();
+    assert_eq!(by_id.len(), by_uuid_want.len());
+    for (uuid, got) in &by_id {
         let w = by_uuid_want.get(uuid).expect("uuid missing from input");
-        assert_eq!(&g, w, "{uuid} mismatch");
+        assert_eq!(got, *w, "{uuid} mismatch");
     }
 }

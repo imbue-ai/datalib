@@ -381,6 +381,12 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
+    // Materialize any blob bytes the doltlite raw store carries to
+    // their canonical `<root>/raw/<source>/blobs/<id>/<name>` path so
+    // the markdown links produced by `attachment_md` resolve. See the
+    // chatgpt mirror for the same plumbing.
+    materialize_blobs(parsed, root, source_name)?;
+
     let mut written = Vec::new();
     for conv in &parsed.conversations {
         let Some(r) = render_one(parsed, &conv.conversation_uuid, source_name) else {
@@ -544,6 +550,53 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, source_name: &str) -> 
         account_uuid: conv.account_uuid.clone(),
         body,
     })
+}
+
+/// Write blob bytes from the parsed snapshot to
+/// `<root>/raw/<source>/blobs/<file_uuid>/<name>`. The filename uses
+/// the same `safe_filename(file_name, file_uuid)` rule
+/// [`attachment_md`] applies, so the link the markdown emits and the
+/// file we just wrote resolve to the same path.
+fn materialize_blobs(
+    parsed: &ParsedExport,
+    root: &std::path::Path,
+    source_name: &str,
+) -> std::io::Result<()> {
+    if parsed.blobs_by_id.is_empty() {
+        return Ok(());
+    }
+    // Build (file_uuid → file_name) from the attachment rows we
+    // parsed; falls back to the file_uuid when name is absent.
+    let mut name_by_id: std::collections::HashMap<&str, Option<&str>> =
+        std::collections::HashMap::new();
+    for at in &parsed.attachments {
+        let Some(obj) = at.raw_json.as_object() else {
+            continue;
+        };
+        let Some(id) = obj
+            .get("file_uuid")
+            .or_else(|| obj.get("id"))
+            .or_else(|| obj.get("uuid"))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let name = obj
+            .get("file_name")
+            .or_else(|| obj.get("name"))
+            .and_then(Value::as_str);
+        name_by_id.entry(id).or_insert(name);
+    }
+    for (file_uuid, blob) in &parsed.blobs_by_id {
+        let name = name_by_id.get(file_uuid.as_str()).copied().flatten();
+        let safe = safe_filename(name, file_uuid);
+        let target = root.join(blob_relpath(source_name, file_uuid, &safe));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&target, &blob.bytes)?;
+    }
+    Ok(())
 }
 
 /// Render one attachment as a markdown link into

@@ -47,6 +47,7 @@ fn image_blob_lands_next_to_markdown() {
         bid.to_string(),
         BlobBytes {
             id: format!("{bid}:image"),
+            owning_id: bid.to_string(),
             slot: "image".into(),
             content_type: Some("image/png".into()),
             bytes: bytes.clone(),

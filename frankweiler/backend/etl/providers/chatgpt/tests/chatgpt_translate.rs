@@ -7,6 +7,9 @@ use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("CHATGPT_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chatgpt_api")
 }
 

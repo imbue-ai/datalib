@@ -30,6 +30,7 @@ rust_library(
         "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
@@ -64,7 +65,22 @@ rust_binary(
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "anthropic_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
     ],
 )
 
@@ -75,15 +91,19 @@ rust_test(
     edition = "2021",
 )
 
-# Translate smoke test against the in-crate TNG fixture. Resolves the
-# fixture via CARGO_MANIFEST_DIR, which Bazel doesn't surface in the
-# sandbox — tag manual; run via `cargo test -p frankweiler-etl-anthropic`.
+# Translate smoke test against the in-crate TNG fixture. Bazel stages
+# the fixture via `data` and points `ANTHROPIC_FIXTURE_DIR` at the
+# runfiles-relative path (the test reads it with CARGO_MANIFEST_DIR
+# as the cargo fallback).
 rust_test(
     name = "anthropic_translate_test",
     srcs = ["tests/anthropic_translate.rs"],
     crate_root = "tests/anthropic_translate.rs",
+    data = [":tng_fixture"],
     edition = "2021",
-    tags = ["manual"],
+    env = {
+        "ANTHROPIC_FIXTURE_DIR": "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+    },
     deps = [
         ":frankweiler_etl_anthropic",
     ],
@@ -112,13 +132,15 @@ rust_test(
 )
 
 rust_test(
-    name = "anthropic_render_test",
+    name = "anthropic_render",
     srcs = ["tests/anthropic_render.rs"],
     crate_root = "tests/anthropic_render.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":tng_fixture"],
     edition = "2021",
-    env = {"INSTA_WORKSPACE_ROOT": "."},
-    tags = ["manual"],
+    env = {
+        "ANTHROPIC_FIXTURE_DIR": "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
     deps = [
         ":frankweiler_etl_anthropic",
         "@frankweiler_crates//:insta",

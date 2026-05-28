@@ -15,6 +15,7 @@
 //! `documents_loaded` and skips unchanged inputs on subsequent runs.
 
 pub mod blobs;
+pub mod doltlite_raw;
 pub mod event_store;
 pub mod http;
 pub mod ids;

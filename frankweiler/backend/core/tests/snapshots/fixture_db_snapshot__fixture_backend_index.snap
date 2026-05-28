@@ -1,6 +1,5 @@
 ---
 source: core/tests/fixture_db_snapshot.rs
-assertion_line: 227
 expression: snapshot
 ---
 {
@@ -202,19 +201,19 @@ expression: snapshot
       "document_uuid": "68fa0001-fake-7000-8000-positronic0001",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001.md",
-      "source_fingerprint": "08b6f3af4448e2bb"
+      "source_fingerprint": "b1b9cf8a31e3ce49"
     },
     {
       "document_uuid": "68fa0002-fake-7000-8000-positronic0002",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002.md",
-      "source_fingerprint": "a02947327989d07a"
+      "source_fingerprint": "f0a6b05543a7f39d"
     },
     {
       "document_uuid": "68fa0003-fake-7000-8000-positronic0003",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003.md",
-      "source_fingerprint": "e1ee78a1adbb45e9"
+      "source_fingerprint": "d5742aae81fcdb59"
     }
   ],
   "grid_rows": [

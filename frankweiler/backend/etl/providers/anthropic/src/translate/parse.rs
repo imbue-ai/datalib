@@ -1,14 +1,23 @@
-//! Port of `src/ingest/providers/anthropic/parse.py`. Reads a directory
-//! laid out as `users.json` + `conversations.json` (+ optional
-//! `projects/*.json`), matching what the live-API downloader writes
-//! after `_normalize_to_export_shape()`. Flattens into typed rows;
-//! `raw_json` carries the JSON minus any sibling rows we've exploded out.
+//! Port of `src/ingest/providers/anthropic/parse.py`.
+//!
+//! Reads either the doltlite raw store written by [`crate::extract`]
+//! (the production path), normalizing each conversation into export
+//! shape at read time, or the legacy JSON tree (`users.json` +
+//! `conversations.json` [+ optional `projects/*.json`]) used by the
+//! in-crate render fixture test.
+//!
+//! `raw_json` carries the JSON minus any sibling rows we've exploded
+//! out.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
+
+use crate::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation};
+use crate::extract::normalize::normalize_to_export_shape;
 
 #[derive(Debug, Clone)]
 pub struct AccountRow {
@@ -82,13 +91,74 @@ pub struct ParsedExport {
     pub messages: Vec<MessageRow>,
     pub content_blocks: Vec<ContentBlockRow>,
     pub attachments: Vec<AttachmentRow>,
+    /// Blob bytes keyed by upstream `file_uuid`. Render materializes
+    /// these onto disk at `raw/<source>/blobs/<file_uuid>/<name>` so
+    /// the markdown link resolves.
+    pub blobs_by_id: HashMap<String, BlobBytes>,
 }
 
 fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-pub fn parse_export(export_dir: &Path) -> Result<ParsedExport> {
+/// Read raw payloads. If `path` resolves to an existing
+/// `.doltlite_db`, read from the DB (and normalize each conversation
+/// at read time). Otherwise fall back to the legacy JSON tree shape.
+pub fn parse_export(path: &Path) -> Result<ParsedExport> {
+    let db_path = db_path_for(path);
+    if db_path.exists() {
+        let raw = block_on_load_all(&db_path)
+            .with_context(|| format!("load anthropic db {}", db_path.display()))?;
+        return Ok(parse_loaded(raw));
+    }
+    if path.is_dir() {
+        return parse_export_json_dir(path);
+    }
+    Err(anyhow!(
+        "anthropic source not found at {} (no .doltlite_db, no JSON tree)",
+        path.display()
+    ))
+}
+
+/// Build a [`ParsedExport`] from a snapshot already loaded out of the
+/// doltlite DB. Each conversation is normalized into export shape (the
+/// same step that used to happen at fetch time) before being walked.
+pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
+    let mut out = ParsedExport {
+        blobs_by_id: raw.blobs_by_id,
+        ..Default::default()
+    };
+    for u in &raw.users {
+        let Some(obj) = u.as_object() else { continue };
+        let Some(uuid) = str_field(obj, "uuid") else {
+            continue;
+        };
+        out.accounts.push(AccountRow {
+            account_uuid: uuid,
+            email: str_field(obj, "email_address"),
+            full_name: str_field(obj, "full_name"),
+            raw_json: u.clone(),
+        });
+    }
+    let account_uuid = raw.first_user_uuid.as_deref();
+    for LoadedConversation {
+        id: _,
+        org_uuid,
+        payload,
+    } in raw.conversations
+    {
+        let normalized = normalize_to_export_shape(payload, account_uuid, &org_uuid);
+        if let Err(e) = walk_conversation(&normalized, &mut out) {
+            tracing::warn!(event = "anthropic_walk_conv_failed", error = %e);
+        }
+    }
+    out
+}
+
+/// Legacy fallback: walk a `users.json` / `conversations.json` /
+/// `projects/*.json` tree. Kept around for the in-crate fixture used
+/// by `tests/anthropic_render.rs`.
+pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
     let mut out = ParsedExport::default();
 
     let users_path = export_dir.join("users.json");
@@ -156,96 +226,102 @@ pub fn parse_export(export_dir: &Path) -> Result<ParsedExport> {
         return Err(anyhow!("conversations.json must be a list"));
     };
     for c in convs_arr {
-        let Some(c_obj) = c.as_object() else { continue };
-        let account_uuid = c_obj
-            .get("account")
-            .and_then(Value::as_object)
-            .and_then(|a| a.get("uuid"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let conv_uuid =
-            str_field(c_obj, "uuid").ok_or_else(|| anyhow!("conversation missing uuid"))?;
-        let project_uuid = c_obj
-            .get("project")
-            .and_then(Value::as_object)
-            .and_then(|p| p.get("uuid"))
-            .and_then(Value::as_str)
-            .map(String::from);
+        walk_conversation(&c, &mut out)?;
+    }
+    Ok(out)
+}
 
-        let mut conv_raw = c_obj.clone();
-        conv_raw.remove("chat_messages");
-        out.conversations.push(ConversationRow {
-            account_uuid,
+/// Walk one fully-normalized conversation into the row buckets.
+fn walk_conversation(c: &Value, out: &mut ParsedExport) -> Result<()> {
+    let Some(c_obj) = c.as_object() else {
+        return Ok(());
+    };
+    let account_uuid = c_obj
+        .get("account")
+        .and_then(Value::as_object)
+        .and_then(|a| a.get("uuid"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let conv_uuid = str_field(c_obj, "uuid").ok_or_else(|| anyhow!("conversation missing uuid"))?;
+    let project_uuid = c_obj
+        .get("project")
+        .and_then(Value::as_object)
+        .and_then(|p| p.get("uuid"))
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    let mut conv_raw = c_obj.clone();
+    conv_raw.remove("chat_messages");
+    out.conversations.push(ConversationRow {
+        account_uuid,
+        conversation_uuid: conv_uuid.clone(),
+        project_uuid,
+        name: str_field(c_obj, "name"),
+        summary: str_field(c_obj, "summary"),
+        created_at: str_field(c_obj, "created_at"),
+        updated_at: str_field(c_obj, "updated_at"),
+        raw_json: Value::Object(conv_raw),
+    });
+
+    let Some(msgs) = c_obj.get("chat_messages").and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for m in msgs {
+        let Some(m_obj) = m.as_object() else { continue };
+        let mid = str_field(m_obj, "uuid").ok_or_else(|| anyhow!("message missing uuid"))?;
+        let mut msg_raw = m_obj.clone();
+        msg_raw.remove("content");
+        msg_raw.remove("attachments");
+        msg_raw.remove("files");
+        out.messages.push(MessageRow {
             conversation_uuid: conv_uuid.clone(),
-            project_uuid,
-            name: str_field(c_obj, "name"),
-            summary: str_field(c_obj, "summary"),
-            created_at: str_field(c_obj, "created_at"),
-            updated_at: str_field(c_obj, "updated_at"),
-            raw_json: Value::Object(conv_raw),
+            message_uuid: mid.clone(),
+            parent_message_uuid: str_field(m_obj, "parent_message_uuid"),
+            sender: str_field(m_obj, "sender"),
+            text: str_field(m_obj, "text"),
+            created_at: str_field(m_obj, "created_at"),
+            updated_at: str_field(m_obj, "updated_at"),
+            raw_json: Value::Object(msg_raw),
         });
 
-        let Some(msgs) = c_obj.get("chat_messages").and_then(Value::as_array) else {
-            continue;
-        };
-        for m in msgs {
-            let Some(m_obj) = m.as_object() else { continue };
-            let mid = str_field(m_obj, "uuid").ok_or_else(|| anyhow!("message missing uuid"))?;
-            let mut msg_raw = m_obj.clone();
-            msg_raw.remove("content");
-            msg_raw.remove("attachments");
-            msg_raw.remove("files");
-            out.messages.push(MessageRow {
-                conversation_uuid: conv_uuid.clone(),
-                message_uuid: mid.clone(),
-                parent_message_uuid: str_field(m_obj, "parent_message_uuid"),
-                sender: str_field(m_obj, "sender"),
-                text: str_field(m_obj, "text"),
-                created_at: str_field(m_obj, "created_at"),
-                updated_at: str_field(m_obj, "updated_at"),
-                raw_json: Value::Object(msg_raw),
-            });
-
-            if let Some(content) = m_obj.get("content").and_then(Value::as_array) {
-                for (i, blk) in content.iter().enumerate() {
-                    let blk_obj = blk.as_object();
-                    out.content_blocks.push(ContentBlockRow {
-                        message_uuid: mid.clone(),
-                        block_index: i,
-                        r#type: blk_obj.and_then(|o| str_field(o, "type")),
-                        text: blk_obj.and_then(|o| str_field(o, "text")),
-                        start_timestamp: blk_obj.and_then(|o| str_field(o, "start_timestamp")),
-                        stop_timestamp: blk_obj.and_then(|o| str_field(o, "stop_timestamp")),
-                        raw_json: blk.clone(),
-                    });
-                }
+        if let Some(content) = m_obj.get("content").and_then(Value::as_array) {
+            for (i, blk) in content.iter().enumerate() {
+                let blk_obj = blk.as_object();
+                out.content_blocks.push(ContentBlockRow {
+                    message_uuid: mid.clone(),
+                    block_index: i,
+                    r#type: blk_obj.and_then(|o| str_field(o, "type")),
+                    text: blk_obj.and_then(|o| str_field(o, "text")),
+                    start_timestamp: blk_obj.and_then(|o| str_field(o, "start_timestamp")),
+                    stop_timestamp: blk_obj.and_then(|o| str_field(o, "stop_timestamp")),
+                    raw_json: blk.clone(),
+                });
             }
-            let mut atch_idx = 0usize;
-            if let Some(atch) = m_obj.get("attachments").and_then(Value::as_array) {
-                for a in atch {
-                    out.attachments.push(AttachmentRow {
-                        message_uuid: mid.clone(),
-                        attachment_index: atch_idx,
-                        kind: "attachment".into(),
-                        raw_json: a.clone(),
-                    });
-                    atch_idx += 1;
-                }
+        }
+        let mut atch_idx = 0usize;
+        if let Some(atch) = m_obj.get("attachments").and_then(Value::as_array) {
+            for a in atch {
+                out.attachments.push(AttachmentRow {
+                    message_uuid: mid.clone(),
+                    attachment_index: atch_idx,
+                    kind: "attachment".into(),
+                    raw_json: a.clone(),
+                });
+                atch_idx += 1;
             }
-            if let Some(files) = m_obj.get("files").and_then(Value::as_array) {
-                for f in files {
-                    out.attachments.push(AttachmentRow {
-                        message_uuid: mid.clone(),
-                        attachment_index: atch_idx,
-                        kind: "file".into(),
-                        raw_json: f.clone(),
-                    });
-                    atch_idx += 1;
-                }
+        }
+        if let Some(files) = m_obj.get("files").and_then(Value::as_array) {
+            for f in files {
+                out.attachments.push(AttachmentRow {
+                    message_uuid: mid.clone(),
+                    attachment_index: atch_idx,
+                    kind: "file".into(),
+                    raw_json: f.clone(),
+                });
+                atch_idx += 1;
             }
         }
     }
-
-    Ok(out)
+    Ok(())
 }

@@ -36,7 +36,10 @@ struct Args {
     obs: ObsArgs,
 }
 
-fn main() -> Result<()> {
+// Multi-thread runtime: `parse_api_dir` -> `block_on_load_all` uses
+// `tokio::task::block_in_place`, which requires a multi-thread flavor.
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "chatgpt-translate")?;
 
