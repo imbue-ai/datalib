@@ -131,6 +131,7 @@ rust_test(
     },
     deps = [
         ":frankweiler_etl_slack",
+        "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",

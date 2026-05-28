@@ -56,7 +56,12 @@ async fn main() -> Result<()> {
         attachments = parsed.attachments.len(),
     );
 
-    let written = render_all(&parsed, &args.out, &args.source_name)?;
+    let written = render_all(
+        &parsed,
+        &args.out,
+        &args.source_name,
+        &frankweiler_etl::progress::Progress::noop(),
+    )?;
     info!(
         event = "anthropic_translate_complete",
         documents = written.len()

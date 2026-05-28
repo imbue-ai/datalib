@@ -58,7 +58,12 @@ async fn main() -> Result<()> {
         content_parts = parsed.content_parts.len(),
     );
 
-    let written = render_all(&parsed, &args.out, &args.source_name)?;
+    let written = render_all(
+        &parsed,
+        &args.out,
+        &args.source_name,
+        &frankweiler_etl::progress::Progress::noop(),
+    )?;
     info!(
         event = "chatgpt_translate_complete",
         documents = written.len()

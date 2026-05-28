@@ -47,7 +47,12 @@ async fn gitlab_live_single_mr_snapshot() {
     let mr = &parsed.merge_requests[0];
 
     let render_root = tmp.clone();
-    render_gitlab(&parsed, &render_root).expect("render_gitlab failed");
+    render_gitlab(
+        &parsed,
+        &render_root,
+        &frankweiler_etl::progress::Progress::noop(),
+    )
+    .expect("render_gitlab failed");
 
     let qmd_rel = frankweiler_etl_gitlab::translate::render::mr_qmd_path_rel(
         &mr.project_full_path,

@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -1137,7 +1138,11 @@ pub fn thread_qmd_path_rel(
         .into_owned()
 }
 
-pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Result<RenderSummary> {
+pub fn render_notion_official(
+    parsed: &ParsedNotionOfficial,
+    root: &Path,
+    progress: &Progress,
+) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let pages_root = root.join(pages_subdir());
     fs::create_dir_all(&pages_root)?;
@@ -1158,6 +1163,7 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
         .collect();
     let block_owning_page = block_to_page_id(&parsed.blocks);
 
+    progress.set_length(Some(parsed.pages.len() as u64));
     let mut page_paths: HashMap<String, PathBuf> = HashMap::new();
     for page in &parsed.pages {
         let target = render_one_page(
@@ -1174,6 +1180,7 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
             page_paths.insert(pid.to_string(), target);
         }
         summary.rendered += 1;
+        progress.inc(1);
     }
 
     let mut thread_paths: HashMap<String, PathBuf> = HashMap::new();

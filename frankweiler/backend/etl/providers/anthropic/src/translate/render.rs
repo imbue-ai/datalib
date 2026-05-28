@@ -10,6 +10,7 @@ use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
@@ -385,12 +386,15 @@ pub fn render_all(
     parsed: &ParsedExport,
     root: &std::path::Path,
     source_name: &str,
+    progress: &Progress,
 ) -> std::io::Result<Vec<std::path::PathBuf>> {
     let name_by_id = name_by_id(parsed);
 
+    progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
     for conv in &parsed.conversations {
         let Some(r) = render_one(parsed, &conv.conversation_uuid, source_name) else {
+            progress.inc(1);
             continue;
         };
         let rel = r.relative_path();
@@ -423,6 +427,7 @@ pub fn render_all(
         std::fs::write(&sidecar_abs, sidecar_json)?;
 
         written.push(rel);
+        progress.inc(1);
     }
     Ok(written)
 }

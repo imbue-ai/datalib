@@ -45,7 +45,11 @@ fn main() -> Result<()> {
     );
 
     let render_root = args.render_root.clone().unwrap_or_else(|| args.out.clone());
-    let summary = render_gitlab(&parsed, &render_root)?;
+    let summary = render_gitlab(
+        &parsed,
+        &render_root,
+        &frankweiler_etl::progress::Progress::noop(),
+    )?;
     info!(
         event = "gitlab_translate_complete",
         rendered = summary.rendered,

@@ -16,15 +16,14 @@
 //! ```
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use clap::Parser;
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl_slack::translate::render::render_all;
 use frankweiler_etl_slack::translate::translate_raw_dir;
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -76,12 +75,7 @@ async fn main() -> Result<()> {
         messages = t.messages.len(),
     );
 
-    // Indicatif progress bar driven by a closure passed into `render_all`.
-    let done = AtomicUsize::new(0);
-    let summary = render_all(&t, &args.out, &args.source_name, |msg| {
-        let _ = done.fetch_add(1, Ordering::Relaxed);
-        tracing::Span::current().pb_set_message(msg);
-    })?;
+    let summary = render_all(&t, &args.out, &args.source_name, &Progress::noop())?;
 
     info!(
         event = "slack_translate_complete",

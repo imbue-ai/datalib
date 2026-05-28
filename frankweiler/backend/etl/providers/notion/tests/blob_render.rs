@@ -65,7 +65,9 @@ fn image_blob_lands_next_to_markdown() {
         blobs_by_owner,
     };
 
-    let summary = render_notion_official(&parsed, root).expect("render ok");
+    let summary =
+        render_notion_official(&parsed, root, &frankweiler_etl::progress::Progress::noop())
+            .expect("render ok");
     assert_eq!(summary.rendered, 1);
 
     // Page dir is `pages/<page_id>/` per render's page_dir_segment.
@@ -123,7 +125,8 @@ fn missing_blob_falls_back_to_upstream_url() {
         blobs_by_owner: HashMap::new(),
     };
 
-    render_notion_official(&parsed, root).expect("render ok");
+    render_notion_official(&parsed, root, &frankweiler_etl::progress::Progress::noop())
+        .expect("render ok");
     let md = fs::read_to_string(
         root.join("rendered_md")
             .join("notion")

@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -267,7 +268,11 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     Ok(md_path)
 }
 
-pub fn render_gitlab(parsed: &ParsedGitlabApi, root: &Path) -> Result<RenderSummary> {
+pub fn render_gitlab(
+    parsed: &ParsedGitlabApi,
+    root: &Path,
+    progress: &Progress,
+) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let mut by_mr: std::collections::HashMap<(String, u32), Vec<NoteRow>> = Default::default();
     for n in &parsed.notes {
@@ -276,11 +281,13 @@ pub fn render_gitlab(parsed: &ParsedGitlabApi, root: &Path) -> Result<RenderSumm
             .or_default()
             .push(n.clone());
     }
+    progress.set_length(Some(parsed.merge_requests.len() as u64));
     for mr in &parsed.merge_requests {
         let key = (mr.project_full_path.clone(), mr.mr_iid);
         let notes = by_mr.remove(&key).unwrap_or_default();
         render_one_mr(mr, &notes, root)?;
         summary.rendered += 1;
+        progress.inc(1);
     }
     Ok(summary)
 }

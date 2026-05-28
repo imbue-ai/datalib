@@ -22,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -316,7 +317,11 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
     Ok(md_path)
 }
 
-pub fn render_github(parsed: &ParsedGithubApi, root: &Path) -> Result<RenderSummary> {
+pub fn render_github(
+    parsed: &ParsedGithubApi,
+    root: &Path,
+    progress: &Progress,
+) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     // Group comments by PR.
     let mut by_pr: std::collections::HashMap<(String, u32), Vec<CommentRow>> = Default::default();
@@ -326,11 +331,13 @@ pub fn render_github(parsed: &ParsedGithubApi, root: &Path) -> Result<RenderSumm
             .or_default()
             .push(c.clone());
     }
+    progress.set_length(Some(parsed.pull_requests.len() as u64));
     for pr in &parsed.pull_requests {
         let key = (pr.repo_full_name.clone(), pr.pr_number);
         let comments = by_pr.remove(&key).unwrap_or_default();
         render_one_pr(pr, &comments, root)?;
         summary.rendered += 1;
+        progress.inc(1);
     }
     Ok(summary)
 }

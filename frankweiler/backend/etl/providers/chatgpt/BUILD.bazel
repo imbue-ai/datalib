@@ -150,6 +150,7 @@ rust_test(
     },
     deps = [
         ":frankweiler_etl_chatgpt",
+        "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:tempfile",
     ],

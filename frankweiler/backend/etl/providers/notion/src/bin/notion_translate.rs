@@ -52,7 +52,11 @@ async fn main() -> Result<()> {
         .render_root
         .clone()
         .unwrap_or_else(|| args.out.join("rendered_md"));
-    let summary = render_notion_official(&parsed, &render_root)?;
+    let summary = render_notion_official(
+        &parsed,
+        &render_root,
+        &frankweiler_etl::progress::Progress::noop(),
+    )?;
     info!(
         event = "notion_translate_complete",
         rendered = summary.rendered,

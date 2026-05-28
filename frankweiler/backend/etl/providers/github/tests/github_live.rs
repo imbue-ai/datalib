@@ -47,7 +47,12 @@ async fn github_live_single_pr_snapshot() {
     let pr = &parsed.pull_requests[0];
 
     let render_root = tmp.clone();
-    render_github(&parsed, &render_root).expect("render_github failed");
+    render_github(
+        &parsed,
+        &render_root,
+        &frankweiler_etl::progress::Progress::noop(),
+    )
+    .expect("render_github failed");
 
     // The rendered doc must exist.
     let qmd_rel = frankweiler_etl_github::translate::render::pr_qmd_path_rel(

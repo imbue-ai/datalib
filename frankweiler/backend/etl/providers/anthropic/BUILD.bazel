@@ -147,6 +147,7 @@ rust_test(
     },
     deps = [
         ":frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:tempfile",
     ],

@@ -43,13 +43,25 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 fn renders_tng_fixture_and_is_idempotent() {
     let t = translate_raw_dir(&fixture_root()).expect("translate");
     let tmp = tempfile::tempdir().expect("tmp");
-    let summary = render_all(&t, tmp.path(), "slack_api", |_| {}).expect("render");
+    let summary = render_all(
+        &t,
+        tmp.path(),
+        "slack_api",
+        &frankweiler_etl::progress::Progress::noop(),
+    )
+    .expect("render");
     assert_eq!(summary.threads_total, 6);
     assert_eq!(summary.threads_rendered, 6);
     assert_eq!(summary.threads_skipped, 0);
 
     // Idempotent re-render: every thread's fingerprint matches.
-    let summary2 = render_all(&t, tmp.path(), "slack_api", |_| {}).expect("re-render");
+    let summary2 = render_all(
+        &t,
+        tmp.path(),
+        "slack_api",
+        &frankweiler_etl::progress::Progress::noop(),
+    )
+    .expect("re-render");
     assert_eq!(summary2.threads_rendered, 0);
     assert_eq!(summary2.threads_skipped, 6);
 

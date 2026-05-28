@@ -92,6 +92,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":frankweiler_etl_notion",
+        "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
     ],

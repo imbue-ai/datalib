@@ -476,6 +476,10 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         .filter(|o| o.status == Status::Error)
         .map(|o| o.name.clone())
         .collect();
+    // One MultiProgress for the whole translate phase; one bar per
+    // source as it runs. Translate is sequential, so bars activate and
+    // finish in turn rather than animating in parallel like extract.
+    let translate_multi = make_multi();
     for src in cfg.enabled_sources() {
         let name = src.name().to_string();
         let type_str = src.type_str().to_string();
@@ -490,7 +494,14 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             });
             continue;
         }
-        let res = translate_source(src, &cfg, &root).map(|_| "ok".to_string());
+        let bar = make_bar(&translate_multi, name.clone());
+        let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
+            std::sync::Arc::new(IndicatifSink::new(bar, translate_multi.clone())),
+            std::sync::Arc::new(TracingSink::new(name.clone())),
+        ];
+        let progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
+        let res = translate_source(src, &cfg, &root, &progress).map(|_| "ok".to_string());
+        progress.finish("done");
         summary
             .lock()
             .unwrap()
@@ -1037,7 +1048,12 @@ fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
 /// Translate one source's `input_path` into the workspace's
 /// `rendered_md/` + sidecar tree. ClaudeExport shares the anthropic
 /// translator since the on-disk shape is the same.
-fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()> {
+fn translate_source(
+    src: &SourceConfig,
+    cfg: &Config,
+    root: &Path,
+    progress: &Progress,
+) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();
     eprintln!(
@@ -1050,7 +1066,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
             let parsed = parse_export(&fixture)
                 .with_context(|| format!("anthropic parse {}", fixture.display()))?;
-            render_all(&parsed, root, name)
+            render_all(&parsed, root, name, progress)
                 .context("anthropic render_all")
                 .map(|_| ())
         }
@@ -1058,7 +1074,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(&parsed, root, name)
+            render_all(&parsed, root, name, progress)
                 .context("chatgpt render_all")
                 .map(|_| ())
         }
@@ -1066,7 +1082,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
             let t = translate_raw_dir(&fixture)
                 .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-            render_all(&t, root, name, |_| {})
+            render_all(&t, root, name, progress)
                 .context("slack render_all")
                 .map(|_| ())
         }
@@ -1074,7 +1090,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("github parse {}", fixture.display()))?;
-            render_github(&parsed, root)
+            render_github(&parsed, root, progress)
                 .context("render_github")
                 .map(|_| ())
         }
@@ -1082,7 +1098,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("gitlab parse {}", fixture.display()))?;
-            render_gitlab(&parsed, root)
+            render_gitlab(&parsed, root, progress)
                 .context("render_gitlab")
                 .map(|_| ())
         }
@@ -1092,7 +1108,7 @@ fn translate_source(src: &SourceConfig, cfg: &Config, root: &Path) -> Result<()>
             };
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("notion parse {}", fixture.display()))?;
-            render_notion_official(&parsed, root)
+            render_notion_official(&parsed, root, progress)
                 .context("render_notion_official")
                 .map(|_| ())
         }

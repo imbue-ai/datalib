@@ -28,6 +28,7 @@ use serde_json::Value;
 use frankweiler_schema::grid_rows::GridRow;
 
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
@@ -60,7 +61,7 @@ pub fn render_all(
     t: &TranslatedSlack,
     out_dir: &Path,
     source_name: &str,
-    progress: impl Fn(&str),
+    progress: &Progress,
 ) -> Result<RenderSummary> {
     let user_labels: BTreeMap<String, String> = t
         .users
@@ -78,6 +79,7 @@ pub fn render_all(
         threads_total: by_thread.len(),
         ..Default::default()
     };
+    progress.set_length(Some(summary.threads_total as u64));
 
     for (thread_uuid, mut msgs) in by_thread {
         msgs.sort_by(|a, b| {
@@ -99,6 +101,7 @@ pub fn render_all(
 
         if existing_fingerprint(&md_path).as_deref() == Some(fingerprint.as_str()) {
             summary.threads_skipped += 1;
+            progress.inc(1);
             continue;
         }
 
@@ -143,11 +146,7 @@ pub fn render_all(
         fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
 
         summary.threads_rendered += 1;
-        progress(&format!(
-            "rendered {}/{}",
-            summary.threads_rendered + summary.threads_skipped,
-            summary.threads_total
-        ));
+        progress.inc(1);
     }
     Ok(summary)
 }
