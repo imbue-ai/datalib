@@ -262,10 +262,12 @@ impl RawDb {
             .await
             .context("open sqlite pool")?;
         for stmt in DDL {
-            sqlx::query(stmt)
-                .execute(&pool)
-                .await
-                .with_context(|| format!("apply DDL: {}", stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)))?;
+            sqlx::query(stmt).execute(&pool).await.with_context(|| {
+                format!(
+                    "apply DDL: {}",
+                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+                )
+            })?;
         }
         Ok(Self { pool })
     }
@@ -290,12 +292,7 @@ impl RawDb {
         Ok(id)
     }
 
-    pub async fn finish_run(
-        &self,
-        run_id: i64,
-        status: &str,
-        summary: &Value,
-    ) -> Result<()> {
+    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let s = serde_json::to_string(summary).context("serialize run summary")?;
         sqlx::query(
@@ -315,11 +312,12 @@ impl RawDb {
     /// Used at the start of a sync to decide which detail fetches we can
     /// skip.
     pub async fn page_states(&self) -> Result<std::collections::HashMap<String, PageState>> {
-        let rows =
-            sqlx::query("SELECT id, last_edited_time, payload IS NOT NULL AS has_payload FROM pages")
-                .fetch_all(&self.pool)
-                .await
-                .context("select page_states")?;
+        let rows = sqlx::query(
+            "SELECT id, last_edited_time, payload IS NOT NULL AS has_payload FROM pages",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select page_states")?;
         let mut out = std::collections::HashMap::with_capacity(rows.len());
         for r in rows {
             let id: String = r.try_get("id").unwrap_or_default();
@@ -390,11 +388,16 @@ impl RawDb {
                     parent_id = COALESCE(excluded.parent_id, pages.parent_id),
                     last_edited_time = COALESCE(excluded.last_edited_time, pages.last_edited_time)"
             };
-            let mut q = sqlx::query(sql).bind(id).bind(parent_id).bind(last_edited_time);
+            let mut q = sqlx::query(sql)
+                .bind(id)
+                .bind(parent_id)
+                .bind(last_edited_time);
             if payload.is_some() {
                 q = q.bind(payload).bind(&now).bind(&now);
             }
-            q.execute(&mut *tx).await.with_context(|| format!("upsert page {id}"))?;
+            q.execute(&mut *tx)
+                .await
+                .with_context(|| format!("upsert page {id}"))?;
         }
         tx.commit().await.context("commit pages tx")?;
         Ok(())
@@ -811,7 +814,9 @@ mod tests {
     #[tokio::test]
     async fn upsert_page_then_load_round_trips() {
         let dir = tempfile::tempdir().unwrap();
-        let db = RawDb::open(&dir.path().join("x.doltlite_db")).await.unwrap();
+        let db = RawDb::open(&dir.path().join("x.doltlite_db"))
+            .await
+            .unwrap();
         db.upsert_pages(&[(
             "p1".into(),
             Some("root".into()),
@@ -830,7 +835,9 @@ mod tests {
     #[tokio::test]
     async fn record_page_error_bumps_attempt_count() {
         let dir = tempfile::tempdir().unwrap();
-        let db = RawDb::open(&dir.path().join("y.doltlite_db")).await.unwrap();
+        let db = RawDb::open(&dir.path().join("y.doltlite_db"))
+            .await
+            .unwrap();
         db.record_page_error("p1", "boom").await.unwrap();
         db.record_page_error("p1", "boom2").await.unwrap();
         let failed = db.failed_page_ids().await.unwrap();
@@ -840,7 +847,9 @@ mod tests {
     #[tokio::test]
     async fn successful_upsert_clears_last_error() {
         let dir = tempfile::tempdir().unwrap();
-        let db = RawDb::open(&dir.path().join("z.doltlite_db")).await.unwrap();
+        let db = RawDb::open(&dir.path().join("z.doltlite_db"))
+            .await
+            .unwrap();
         db.record_page_error("p1", "fail").await.unwrap();
         db.upsert_pages(&[(
             "p1".into(),

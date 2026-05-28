@@ -12,9 +12,9 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::Value;
 
-use crate::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedRaw};
 #[cfg(test)]
 use crate::extract::db::BlockUpsert;
+use crate::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedRaw};
 
 pub const ENTITY_PAGE: &str = "notion_official_page";
 pub const ENTITY_BLOCK: &str = "notion_official_block";
@@ -111,7 +111,9 @@ mod tests {
             page_id: Some("p1".into()),
             page_order: Some(0),
             last_edited_time: None,
-            payload: Some(serde_json::to_string(&json!({"id": "b1", "type": "paragraph"})).unwrap()),
+            payload: Some(
+                serde_json::to_string(&json!({"id": "b1", "type": "paragraph"})).unwrap(),
+            ),
         }])
         .await
         .unwrap();

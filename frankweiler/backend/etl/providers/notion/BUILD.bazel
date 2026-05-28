@@ -21,6 +21,7 @@ rust_library(
         "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
@@ -55,6 +56,7 @@ rust_binary(
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
     ],
 )

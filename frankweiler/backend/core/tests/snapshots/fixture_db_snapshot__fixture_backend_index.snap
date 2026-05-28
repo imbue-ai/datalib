@@ -184,19 +184,19 @@ expression: snapshot
       "document_uuid": "b1d6e000-1701-4d00-8000-000000000001",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
-      "source_fingerprint": "f79a0322f7b97af3"
+      "source_fingerprint": "10f3dd3a657b1160"
     },
     {
       "document_uuid": "b1d6e000-1701-4d00-8000-000000000002",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
-      "source_fingerprint": "5c9ad381f1af2f20"
+      "source_fingerprint": "c498e2ab4ccbb786"
     },
     {
       "document_uuid": "b1d6e000-1701-4d00-8000-000000000003",
       "loaded_at": "2369-04-15T00:00:00+00:00",
       "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
-      "source_fingerprint": "c33ffee5d8b559b6"
+      "source_fingerprint": "b78236ccbd2b8cfe"
     },
     {
       "document_uuid": "68fa0001-fake-7000-8000-positronic0001",

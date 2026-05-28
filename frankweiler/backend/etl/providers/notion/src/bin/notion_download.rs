@@ -72,11 +72,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "notion-download")?;
 
-    if !args.retry_failed
-        && args.subtree_page.is_empty()
-        && !args.inbox
-        && args.page.is_none()
-    {
+    if !args.retry_failed && args.subtree_page.is_empty() && !args.inbox && args.page.is_none() {
         anyhow::bail!("must specify --inbox, --subtree-page, --page, or --retry-failed");
     }
 

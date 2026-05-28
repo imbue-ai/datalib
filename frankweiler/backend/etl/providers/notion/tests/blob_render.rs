@@ -68,7 +68,11 @@ fn image_blob_lands_next_to_markdown() {
     assert_eq!(summary.rendered, 1);
 
     // Page dir is `pages/<page_id>/` per render's page_dir_segment.
-    let page_dir = root.join("rendered_md").join("notion").join("pages").join(pid);
+    let page_dir = root
+        .join("rendered_md")
+        .join("notion")
+        .join("pages")
+        .join(pid);
     let md = fs::read_to_string(page_dir.join("index.md")).expect("md exists");
     assert!(
         md.contains("![look at this](blobs/"),
@@ -119,13 +123,26 @@ fn missing_blob_falls_back_to_upstream_url() {
     };
 
     render_notion_official(&parsed, root).expect("render ok");
-    let md = fs::read_to_string(root.join("rendered_md").join("notion").join("pages").join(pid).join("index.md")).unwrap();
+    let md = fs::read_to_string(
+        root.join("rendered_md")
+            .join("notion")
+            .join("pages")
+            .join(pid)
+            .join("index.md"),
+    )
+    .unwrap();
     assert!(
         md.contains("https://example.com/foo.png"),
         "expected fallback to upstream URL, got:\n{md}"
     );
     // And: no blobs dir was created (nothing to write).
-    assert!(!root.join("rendered_md").join("notion").join("pages").join(pid).join("blobs").exists());
+    assert!(!root
+        .join("rendered_md")
+        .join("notion")
+        .join("pages")
+        .join(pid)
+        .join("blobs")
+        .exists());
     // Suppress unused-import warnings if any.
     let _ = Value::Null;
 }

@@ -112,11 +112,7 @@ fn image_url_and_kind(block: &Value) -> Option<(String, &'static str)> {
 /// Errors are recorded against the blob row and don't fail the sync —
 /// the page mirror has already landed and a later `--retry-failed` can
 /// pick the broken blob up.
-async fn fetch_image_blobs(
-    db: &RawDb,
-    blocks: &[Value],
-    summary: &mut FetchSummary,
-) -> Result<()> {
+async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSummary) -> Result<()> {
     for block in blocks {
         if block.get("type").and_then(|v| v.as_str()) != Some("image") {
             continue;
@@ -416,24 +412,16 @@ async fn mirror_page(
         }
     };
     let page_ms = page_t.elapsed().as_millis() as u64;
-    let was_present = page_states
-        .get(pid)
-        .map(|s| s.has_payload)
-        .unwrap_or(false);
+    let was_present = page_states.get(pid).map(|s| s.has_payload).unwrap_or(false);
     let last_edited = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .map(String::from);
     let parent_id = parent_of(&page);
     let payload = serde_json::to_string(&page).ok();
-    db.upsert_pages(&[(
-        pid.to_string(),
-        parent_id,
-        last_edited.clone(),
-        payload,
-    )])
-    .await
-    .with_context(|| format!("upsert page {pid}"))?;
+    db.upsert_pages(&[(pid.to_string(), parent_id, last_edited.clone(), payload)])
+        .await
+        .with_context(|| format!("upsert page {pid}"))?;
     page_states.insert(
         pid.into(),
         PageState {
