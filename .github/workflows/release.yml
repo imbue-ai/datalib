@@ -22,6 +22,17 @@ on:
 permissions:
   contents: write  # needed to create the GitHub Release
 
+# Serialize main-branch runs so the bazel disk-cache save at the end of
+# one run finishes before the next run starts. Without this, two pushes
+# in quick succession race on the same actions/cache key; the loser
+# logs "Unable to reserve cache with key ... another job may be creating
+# this cache" and skips its save, so a clean cache never replaces a
+# stale/corrupt one. Don't cancel in progress — tag runs publish a
+# release and must complete.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   macos-arm64:
     runs-on: macos-14  # Apple Silicon

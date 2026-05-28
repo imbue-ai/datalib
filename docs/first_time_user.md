@@ -61,45 +61,43 @@ need to set `LATCHKEY_CURL` yourself.
    latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
-3. Open [claude.ai](https://claude.ai) in a logged-in browser tab. The
-   `sessionKey` cookie is `HttpOnly`, so it's not visible to
-   `document.cookie` — you have to read it from DevTools directly:
-
-   - Open DevTools → **Application** tab → **Storage** → **Cookies** →
-     `https://claude.ai`.
-   - Find the row named `sessionKey` and copy its **Value**.
-
-4. Register it with latchkey. Use `pbpaste` rather than pasting the
-   cookie value literally — zsh/bash record the pre-expansion command in
-   history, so the file ends up storing the harmless `$(pbpaste)` text
-   instead of your live session token:
+3. Paste the registration command into your terminal **but don't run it
+   yet** — the next step puts the cookie on your clipboard, so you want
+   this command staged first. `pbpaste` is used (instead of pasting the
+   cookie value literally) because zsh/bash record the pre-expansion
+   command in history, so history ends up storing the harmless
+   `$(pbpaste)` text instead of your live session token:
 
    ```sh
    latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
    ```
 
+4. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
+   copy your `sessionKey` cookie. It's `HttpOnly`, so it's not visible
+   to `document.cookie` — you have to read it from DevTools directly:
+
+   - Open DevTools → **Application** tab → **Storage** → **Cookies** →
+     `https://claude.ai`.
+   - Find the row named `sessionKey` and copy its **Value**.
+
+   Now switch back to your terminal and press Enter to run the staged
+   command — `$(pbpaste)` will expand to the cookie you just copied.
+
 
 ## 3. Sample configuration
 
-Drop the following at `~/.config/frankweiler/config.yaml` (or anywhere
-and point `FRANKWEILER_CONFIG` at it). This config only enables the
-Claude API source, so it's the minimum needed to mirror all your
-conversations:
+Download [**sample_config.yaml**](https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/docs/sample_config.yaml)
+and drop it at `~/.config/frankweiler/config.yaml` (or anywhere and
+point `FRANKWEILER_CONFIG` at it). One-liner:
 
-```yaml
-# ~/.config/frankweiler/config.yaml -- or anywhere you look.
-data_root: ~/mixed_up_files  # Where the downloaded data gets written.
-
-dolt:
-  port: 3306
-
-sources:
-  - name: anthropic-api
-    type: claude_api
-    sync: {}
-      # overlap: 50              # re-fetch the N most-recently-updated
-      # refresh_window_days: 7   # treat anything older than this as cold
+```sh
+mkdir -p ~/.config/frankweiler && \
+    curl -fsSL https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/docs/sample_config.yaml \
+    -o ~/.config/frankweiler/config.yaml
 ```
+
+This config only enables the Claude API source, so it's the minimum
+needed to mirror all your conversations.
 
 Credentials are not in the config — every downloader uses `latchkey` at runtime.
 
@@ -149,11 +147,21 @@ First run does the slow work; subsequent runs are mostly cache hits.
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 
-To browse the result, launch the UI from a source checkout:
+## 6. Browse the result
+
+`frankweiler-http` is the single-binary search backend with the web UI
+embedded — point it at your data root and it serves everything:
 
 ```sh
-bazelisk run //frankweiler:dev -- ~/mixed_up_files
+frankweiler-http ~/mixed_up_files
 ```
+
+It binds to `http://127.0.0.1:8731` by default and opens that URL in
+your default browser. Pass `--no-open` if you'd rather click in
+yourself, and set `FRANKWEILER_BIND=127.0.0.1:<port>` to override the
+listen address.
+
+## 7. Re-syncing
 
 Re-run `frankweiler-sync` whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
