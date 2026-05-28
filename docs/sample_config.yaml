@@ -1,0 +1,12 @@
+# ~/.config/frankweiler/config.yaml -- or anywhere you look.
+data_root: ~/mixed_up_files  # Where the downloaded data gets written.
+
+dolt:
+  port: 3306
+
+sources:
+  - name: anthropic-api
+    type: claude_api
+    sync: {}
+      # overlap: 50              # re-fetch the N most-recently-updated
+      # refresh_window_days: 7   # treat anything older than this as cold
