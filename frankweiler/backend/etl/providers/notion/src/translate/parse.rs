@@ -13,6 +13,8 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedRaw};
+#[cfg(test)]
+use crate::extract::db::BlockUpsert;
 
 pub const ENTITY_PAGE: &str = "notion_official_page";
 pub const ENTITY_BLOCK: &str = "notion_official_block";
@@ -103,13 +105,14 @@ mod tests {
         )])
         .await
         .unwrap();
-        db.upsert_blocks(&[(
-            "b1".into(),
-            Some("p1".into()),
-            Some("p1".into()),
-            None,
-            Some(serde_json::to_string(&json!({"id": "b1", "type": "paragraph"})).unwrap()),
-        )])
+        db.upsert_blocks(&[BlockUpsert {
+            id: "b1".into(),
+            parent_id: Some("p1".into()),
+            page_id: Some("p1".into()),
+            page_order: Some(0),
+            last_edited_time: None,
+            payload: Some(serde_json::to_string(&json!({"id": "b1", "type": "paragraph"})).unwrap()),
+        }])
         .await
         .unwrap();
         drop(db);
@@ -122,24 +125,28 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn block_load_preserves_insertion_order() {
-        // Upstream merge fix: when the JSONL reader used a BTreeMap
-        // keyed on uuid, blocks came back in lex-of-uuid order and
-        // sections rendered scrambled. The DB load path must return
-        // blocks in insertion order (= BFS discovery order) so the
-        // render keeps page layout intact.
+    async fn block_load_preserves_page_order() {
+        // BFS discovery order has to survive a round-trip even when
+        // block ids sort differently. The old JSONL implementation
+        // keyed by uuid in a BTreeMap and lost order — render came
+        // out scrambled. We now persist `page_order` and `ORDER BY
+        // (page_id, page_order)` in load_blocks.
         let dir = tempfile::tempdir().unwrap();
         let db_file = dir.path().join("notion-api.doltlite_db");
         let db = RawDb::open(&db_file).await.unwrap();
-        let ids = ["zzzz-1", "aaaa-2", "mmmm-3"];
-        for id in &ids {
-            db.upsert_blocks(&[(
-                id.to_string(),
-                None,
-                Some("p1".into()),
-                None,
-                Some(serde_json::to_string(&json!({"id": id})).unwrap()),
-            )])
+        // ids whose lex order is "aaaa-2" < "mmmm-3" < "zzzz-1" but
+        // whose discovery order is the reverse — proves page_order
+        // wins over lex(id).
+        let inputs = [("zzzz-1", 0_i64), ("aaaa-2", 1), ("mmmm-3", 2)];
+        for (id, order) in &inputs {
+            db.upsert_blocks(&[BlockUpsert {
+                id: (*id).into(),
+                parent_id: None,
+                page_id: Some("p1".into()),
+                page_order: Some(*order),
+                last_edited_time: None,
+                payload: Some(serde_json::to_string(&json!({"id": id})).unwrap()),
+            }])
             .await
             .unwrap();
         }

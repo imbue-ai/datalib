@@ -21,16 +21,14 @@ use sqlx::Row;
 /// (either pre-seeded or a previous fetch failed). `attempt_count` is
 /// bumped on every fetch attempt; `last_error` is cleared on success.
 ///
-/// Each table also carries an explicit `seq INTEGER PRIMARY KEY
-/// AUTOINCREMENT` column. We don't rely on sqlite's implicit `rowid`
-/// because doltlite — which is what gets statically linked in production
-/// — exposes `WITHOUT ROWID`-flavored tables that hide it, breaking
-/// `ORDER BY seq`. `seq` is our explicit, portable insertion-order
-/// counter, used by translate/render to preserve BFS discovery order.
+/// Primary keys are the **upstream Notion UUIDs**, not surrogate
+/// integers. That's load-bearing for dolt: the same row needs to land
+/// at the same place on every re-fetch so `dolt diff` reflects actual
+/// content changes, not accidental row-id churn. Where ordering matters
+/// (`blocks` within a page), we carry an explicit ordering column.
 pub const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS pages (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
         last_edited_time TEXT NULL,
         payload TEXT NULL,
@@ -40,11 +38,15 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pages_last_edited ON pages(last_edited_time)",
+    // `page_order` is the block's index in BFS discovery order within
+    // its owning `page_id`. Render relies on it for section / toggle
+    // layout. NULL is tolerated (pre-seeded rows; never-fetched rows)
+    // and sorts last.
     "CREATE TABLE IF NOT EXISTS blocks (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
         page_id TEXT NULL,
+        page_order INTEGER NULL,
         last_edited_time TEXT NULL,
         payload TEXT NULL,
         fetched_at TEXT NULL,
@@ -52,10 +54,9 @@ pub const DDL: &[&str] = &[
         last_attempt_at TEXT NULL,
         last_error TEXT NULL
     )",
-    "CREATE INDEX IF NOT EXISTS blocks_page ON blocks(page_id)",
+    "CREATE INDEX IF NOT EXISTS blocks_page ON blocks(page_id, page_order)",
     "CREATE TABLE IF NOT EXISTS databases (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
         last_edited_time TEXT NULL,
         payload TEXT NULL,
@@ -65,8 +66,7 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS users (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         payload TEXT NULL,
         fetched_at TEXT NULL,
         attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -74,8 +74,7 @@ pub const DDL: &[&str] = &[
         last_error TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS comments (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         parent_id TEXT NOT NULL,
         page_id TEXT NULL,
         payload TEXT NULL,
@@ -86,8 +85,7 @@ pub const DDL: &[&str] = &[
     )",
     "CREATE INDEX IF NOT EXISTS comments_page ON comments(page_id)",
     "CREATE TABLE IF NOT EXISTS blobs (
-        seq INTEGER PRIMARY KEY AUTOINCREMENT,
-        id TEXT NOT NULL UNIQUE,
+        id TEXT PRIMARY KEY,
         kind TEXT NOT NULL CHECK(kind IN ('uploaded','external','notion_hosted')),
         owning_id TEXT NOT NULL,
         slot TEXT NOT NULL,
@@ -142,6 +140,18 @@ pub struct PageState {
     pub has_payload: bool,
 }
 
+/// One row of input to [`RawDb::upsert_blocks`]. `page_order` is the
+/// 0-based index of this block within its owning page's BFS walk.
+#[derive(Debug, Clone)]
+pub struct BlockUpsert {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub page_id: Option<String>,
+    pub page_order: Option<i64>,
+    pub last_edited_time: Option<String>,
+    pub payload: Option<String>,
+}
+
 impl RawDb {
     /// Open (or create) the file at `db_path`, apply DDL idempotently.
     pub async fn open(db_path: &Path) -> Result<Self> {
@@ -152,7 +162,12 @@ impl RawDb {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
             .with_context(|| format!("sqlite uri for {}", db_path.display()))?
             .create_if_missing(true)
-            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            // The raw store has a single writer (the extract pass) and
+            // a single reader (translate/synth, well after extract has
+            // exited). No concurrent access → no need for WAL, and we
+            // get deterministic on-disk layout: no `-wal` / `-shm`
+            // sidecars to make golden snapshots flaky.
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(4)
@@ -300,22 +315,30 @@ impl RawDb {
 
     /// Batch upsert blocks. Detail-only — list+detail in one shot since
     /// Notion's `/blocks/{id}/children` returns full block bodies.
-    pub async fn upsert_blocks(
-        &self,
-        rows: &[(String, Option<String>, Option<String>, Option<String>, Option<String>)],
-    ) -> Result<()> {
+    /// `page_order` is the block's index in BFS discovery order within
+    /// its owning page; render uses it to lay out sections/toggles.
+    pub async fn upsert_blocks(&self, rows: &[BlockUpsert]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
         let now = Utc::now().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin blocks tx")?;
-        for (id, parent_id, page_id, last_edited_time, payload) in rows {
+        for BlockUpsert {
+            id,
+            parent_id,
+            page_id,
+            page_order,
+            last_edited_time,
+            payload,
+        } in rows
+        {
             sqlx::query(
-                "INSERT INTO blocks (id, parent_id, page_id, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                "INSERT INTO blocks (id, parent_id, page_id, page_order, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = COALESCE(excluded.parent_id, blocks.parent_id),
                     page_id = COALESCE(excluded.page_id, blocks.page_id),
+                    page_order = COALESCE(excluded.page_order, blocks.page_order),
                     last_edited_time = excluded.last_edited_time,
                     payload = excluded.payload,
                     fetched_at = excluded.fetched_at,
@@ -325,6 +348,7 @@ impl RawDb {
             .bind(id)
             .bind(parent_id)
             .bind(page_id)
+            .bind(page_order)
             .bind(last_edited_time)
             .bind(payload)
             .bind(&now)
@@ -418,11 +442,14 @@ impl RawDb {
     }
 
     pub async fn load_blocks(&self) -> Result<Vec<(Value, Option<String>)>> {
-        // ORDER BY seq preserves insertion order (= BFS discovery
-        // order from extract/mod.rs::walk_page_blocks). Render relies
-        // on this to lay out sections / toggles correctly.
+        // ORDER BY (page_id, page_order) reproduces BFS discovery
+        // order from extract/mod.rs::walk_page_blocks; render relies
+        // on this for section / toggle layout. `id` ties the tail so
+        // results stay deterministic when page_order is NULL (pre-
+        // seeded rows or legacy data fetched before the column existed).
         let rows = sqlx::query(
-            "SELECT payload, page_id FROM blocks WHERE payload IS NOT NULL ORDER BY seq",
+            "SELECT payload, page_id FROM blocks WHERE payload IS NOT NULL \
+             ORDER BY page_id, page_order, id",
         )
         .fetch_all(&self.pool)
         .await
@@ -443,7 +470,9 @@ impl RawDb {
 
     pub async fn load_comments(&self) -> Result<Vec<(Value, Option<String>)>> {
         let rows = sqlx::query(
-            "SELECT payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY seq",
+            // Comments don't have a within-page index — render sorts
+            // them by created_time anyway — so just deterministic by id.
+            "SELECT payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -544,7 +573,7 @@ impl RawDb {
     ) -> Result<std::collections::HashMap<String, BlobBytes>> {
         let rows = sqlx::query(
             "SELECT id, owning_id, slot, content_type, bytes, source_url \
-             FROM blobs WHERE bytes IS NOT NULL ORDER BY seq",
+             FROM blobs WHERE bytes IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -609,7 +638,10 @@ impl RawDb {
 }
 
 async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
-    let sql = format!("SELECT payload FROM {table} WHERE payload IS NOT NULL ORDER BY seq");
+    // Deterministic by id is fine for pages: render doesn't depend on
+    // page-order, and dolt diff stability comes from the PK identity,
+    // not the read order.
+    let sql = format!("SELECT payload FROM {table} WHERE payload IS NOT NULL ORDER BY id");
     let rows = sqlx::query(&sql)
         .fetch_all(pool)
         .await

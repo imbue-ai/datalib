@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
 use serde_json::{json, Value};
 
-pub use db::{db_path_for, BlobBytes, LoadedRaw, PageState, RawDb};
+pub use db::{db_path_for, BlobBytes, BlockUpsert, LoadedRaw, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
@@ -456,14 +456,12 @@ async fn mirror_page(
         }
     };
     let blocks_ms = blocks_t.elapsed().as_millis() as u64;
-    let mut block_rows: Vec<(
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = Vec::with_capacity(blocks.len());
-    for b in &blocks {
+    let mut block_rows: Vec<db::BlockUpsert> = Vec::with_capacity(blocks.len());
+    // `idx` is the block's index within this page's BFS walk — its
+    // stable position for layout. Persisted as `blocks.page_order` so
+    // render reproduces the page top-to-bottom regardless of the dolt
+    // primary-key ordering of UUIDs.
+    for (idx, b) in blocks.iter().enumerate() {
         let Some(id) = b.get("id").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -473,7 +471,14 @@ async fn mirror_page(
             .and_then(|v| v.as_str())
             .map(String::from);
         let payload = serde_json::to_string(b).ok();
-        block_rows.push((id.into(), parent, Some(pid.into()), last, payload));
+        block_rows.push(db::BlockUpsert {
+            id: id.into(),
+            parent_id: parent,
+            page_id: Some(pid.into()),
+            page_order: Some(idx as i64),
+            last_edited_time: last,
+            payload,
+        });
     }
     summary.upd_blocks += block_rows.len(); // we don't distinguish new vs upd for blocks anymore
     db.upsert_blocks(&block_rows)

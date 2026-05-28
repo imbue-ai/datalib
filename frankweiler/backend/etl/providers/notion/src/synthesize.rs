@@ -154,6 +154,7 @@ impl Synthesizer for NotionSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::db::BlockUpsert;
     use crate::extract::RawDb;
     use frankweiler_etl::http::{fixture_key, HttpResponse};
     use std::fs;
@@ -180,32 +181,34 @@ mod tests {
         .await
         .unwrap();
         db.upsert_blocks(&[
-            (
-                "b1".into(),
-                Some(pid.into()),
-                Some(pid.into()),
-                None,
-                Some(
+            BlockUpsert {
+                id: "b1".into(),
+                parent_id: Some(pid.into()),
+                page_id: Some(pid.into()),
+                page_order: Some(0),
+                last_edited_time: None,
+                payload: Some(
                     serde_json::to_string(&json!({
                         "id": "b1", "type": "paragraph", "has_children": false,
                         "parent": {"type": "page_id", "page_id": pid},
                     }))
                     .unwrap(),
                 ),
-            ),
-            (
-                "b2".into(),
-                Some("b1".into()),
-                Some(pid.into()),
-                None,
-                Some(
+            },
+            BlockUpsert {
+                id: "b2".into(),
+                parent_id: Some("b1".into()),
+                page_id: Some(pid.into()),
+                page_order: Some(1),
+                last_edited_time: None,
+                payload: Some(
                     serde_json::to_string(&json!({
                         "id": "b2", "type": "paragraph", "has_children": false,
                         "parent": {"type": "block_id", "block_id": "b1"},
                     }))
                     .unwrap(),
                 ),
-            ),
+            },
         ])
         .await
         .unwrap();

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
+use frankweiler_etl_notion::extract::db::BlockUpsert;
 use frankweiler_etl_notion::extract::{fetch, FetchOptions, RawDb};
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use serde_json::json;
@@ -38,12 +39,13 @@ async fn notion_synth_playback_extract_roundtrip() {
     )])
     .await
     .unwrap();
-    db.upsert_blocks(&[(
-        bid.into(),
-        Some(pid.into()),
-        Some(pid.into()),
-        None,
-        Some(
+    db.upsert_blocks(&[BlockUpsert {
+        id: bid.into(),
+        parent_id: Some(pid.into()),
+        page_id: Some(pid.into()),
+        page_order: Some(0),
+        last_edited_time: None,
+        payload: Some(
             serde_json::to_string(&json!({
                 "id": bid,
                 "type": "paragraph",
@@ -52,7 +54,7 @@ async fn notion_synth_playback_extract_roundtrip() {
             }))
             .unwrap(),
         ),
-    )])
+    }])
     .await
     .unwrap();
     db.upsert_comments(&[(
