@@ -425,6 +425,37 @@ pub async fn blob_exists(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(row.is_some())
 }
 
+/// Pre-seed a blob row before its bytes have been fetched. Lets the
+/// caller record "we know this file exists" as soon as the listing
+/// reveals it, so a Ctrl-C / network failure leaves behind enough
+/// state to count "known but undownloaded" in tooling. INSERT OR
+/// IGNORE so we never clobber a row that already has bytes (or an
+/// error history).
+pub async fn pre_seed_blob_stub(
+    pool: &SqlitePool,
+    id: &str,
+    kind: &str,
+    owning_id: &str,
+    slot: &str,
+    content_type: Option<&str>,
+    source_url: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot, content_type, source_url)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(kind)
+    .bind(owning_id)
+    .bind(slot)
+    .bind(content_type)
+    .bind(source_url)
+    .execute(pool)
+    .await
+    .with_context(|| format!("pre_seed_blob_stub {id}"))?;
+    Ok(())
+}
+
 /// Insert (or refresh) a blob row with its bytes.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_blob_bytes(

@@ -25,6 +25,17 @@ pub trait ProgressSink: Send + Sync {
     fn set_message(&self, _msg: &str) {}
     /// Mark the work finished. The sink may render a final summary line.
     fn finish(&self, _msg: &str) {}
+    /// Like [`finish`], but the sink should remove its visual element
+    /// when possible (so hundreds of done-bars don't accumulate). For
+    /// indicatif this is `finish_and_clear`; sinks that have nothing
+    /// to clear can treat it as `finish`.
+    fn finish_and_clear(&self) {}
+    /// Spawn a nested progress sink (e.g. a per-channel inner bar
+    /// underneath the per-source outer bar). Default returns a noop so
+    /// existing sinks remain backward-compatible.
+    fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
+        Arc::new(NoopSink)
+    }
 }
 
 /// Cheap-to-clone progress handle. Calls forward to the inner
@@ -55,6 +66,15 @@ impl Progress {
     }
     pub fn finish(&self, msg: &str) {
         self.sink.finish(msg);
+    }
+    pub fn finish_and_clear(&self) {
+        self.sink.finish_and_clear();
+    }
+    /// Spawn a child `Progress` (e.g. an inner per-unit bar nested
+    /// inside this one). Wraps `ProgressSink::child`; returns a noop
+    /// handle if the underlying sink doesn't support nesting.
+    pub fn child(&self, prefix: &str) -> Progress {
+        Progress::new(self.sink.child(prefix))
     }
 }
 
@@ -119,6 +139,9 @@ impl ProgressSink for TracingSink {
             msg = msg,
         );
     }
+    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
+        Arc::new(TracingSink::new(format!("{}/{}", self.source, prefix)))
+    }
 }
 
 /// Fan a single `Progress` call out to several sinks. Used by sync to
@@ -154,5 +177,10 @@ impl ProgressSink for FanOut {
         for s in &self.sinks {
             s.finish(msg);
         }
+    }
+    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
+        Arc::new(FanOut {
+            sinks: self.sinks.iter().map(|s| s.child(prefix)).collect(),
+        })
     }
 }

@@ -657,7 +657,7 @@ async fn run_extract_phase(
     for plan in &mut plans {
         let bar = make_bar(&multi, plan.name.clone());
         let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
-            std::sync::Arc::new(IndicatifSink::new(bar)),
+            std::sync::Arc::new(IndicatifSink::new(bar, multi.clone())),
             std::sync::Arc::new(TracingSink::new(plan.name.clone())),
         ];
         plan.progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));

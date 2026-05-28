@@ -288,6 +288,34 @@ pub async fn download_files_for_messages(
             }
         }
     }
+    // Pre-seed a blob stub (id + url, no bytes) for every fetchable
+    // file before we start downloading. Lets tooling count
+    // "known-but-undownloaded" mid-run / after a Ctrl-C; the
+    // subsequent upsert_blob_bytes overwrites the stub on success.
+    // Skip tombstones and externals (we won't try to fetch those).
+    for f in &targets {
+        let Some(id) = f.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if f.get("mode").and_then(|v| v.as_str()) == Some("tombstone") {
+            continue;
+        }
+        if f.get("is_external")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let url = f
+            .get("url_private_download")
+            .and_then(|v| v.as_str())
+            .or_else(|| f.get("url_private").and_then(|v| v.as_str()));
+        if url.is_none() {
+            continue;
+        }
+        let mime = f.get("mimetype").and_then(|v| v.as_str());
+        let _ = db.pre_seed_blob_stub(id, channel_id, mime, url).await;
+    }
     for f in &targets {
         let outcome = download_one_file(db, channel_id, f).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;

@@ -160,21 +160,28 @@ async fn export_channel(
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
+    // Pass A: list every history page, upsert top-level messages, and
+    // download per-page media (preserves the existing commit-as-we-go
+    // semantics for Ctrl-C safety). Thread replies are deferred so
+    // we can announce a known total to the inner bar before starting
+    // the long-tail fetch.
+    let mut collected: Vec<Value> = Vec::new();
+
     let (forward_oldest, inclusive) = match channel_latest_ts {
         Some(ts) => (ts.to_string(), false),
         None => (since_ts.to_string(), true),
     };
-    paginate_history(
+    list_history(
         db,
         team_id,
         channel_id,
         &forward_oldest,
         inclusive,
         None,
-        latest_reply_by_thread,
         download_blobs,
         totals,
         progress,
+        &mut collected,
     )
     .await?;
 
@@ -188,22 +195,73 @@ async fn export_channel(
                 } else {
                     since_ts.to_string()
                 };
-                paginate_history(
+                list_history(
                     db,
                     team_id,
                     channel_id,
                     &effective,
                     true,
                     Some(latest_ts),
-                    latest_reply_by_thread,
                     download_blobs,
                     totals,
                     progress,
+                    &mut collected,
                 )
                 .await?;
             }
         }
     }
+
+    // Pass B: walk the collected top-level messages, fetching replies
+    // for any thread whose latest_reply has advanced (or that we've
+    // never seen). Now that we know how many replies are coming, the
+    // inner bar can transition from spinner to determinate.
+    let replies_to_fetch: u64 = collected
+        .iter()
+        .filter_map(|m| {
+            let ts = m.get("ts").and_then(|v| v.as_str())?;
+            let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            if reply_count <= 0 {
+                return None;
+            }
+            let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
+            let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
+            if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
+                if stored >= api {
+                    return None;
+                }
+            }
+            Some(reply_count as u64)
+        })
+        .sum();
+    progress.set_length(Some(totals.messages as u64 + replies_to_fetch));
+
+    for m in &collected {
+        let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
+        if reply_count <= 0 {
+            continue;
+        }
+        let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
+        let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
+        if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
+            if stored >= api {
+                continue;
+            }
+        }
+        let before = totals.replies;
+        paginate_replies(db, team_id, channel_id, ts, download_blobs, totals).await?;
+        let fetched = totals.replies.saturating_sub(before) as u64;
+        progress.inc(fetched);
+        let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
+        progress.set_message(&format!(
+            "msgs={} replies={} media={}",
+            totals.messages, totals.replies, media_downloaded
+        ));
+    }
+
     Ok(())
 }
 
@@ -214,21 +272,25 @@ struct ChannelTotals {
     media: BTreeMap<String, usize>,
 }
 
-/// Walk `conversations.history` page-by-page, upserting each message
-/// before requesting the next page so a Ctrl-C loses at most one
-/// in-flight page.
+/// Pass A of the per-channel export: walk `conversations.history`
+/// page-by-page, upserting each top-level message and (per page)
+/// downloading any media those messages reference. Threads are NOT
+/// fetched here — the caller defers those to pass B so the inner
+/// progress bar can announce a meaningful total before the long-tail
+/// thread fetches begin. Every collected top-level message is appended
+/// to `collected` for the caller to iterate in pass B.
 #[allow(clippy::too_many_arguments)]
-async fn paginate_history(
+async fn list_history(
     db: &RawDb,
     team_id: &str,
     channel_id: &str,
     oldest_ts: &str,
     inclusive: bool,
     latest_ts: Option<&str>,
-    latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
     download_blobs: bool,
     totals: &mut ChannelTotals,
     progress: &frankweiler_etl::progress::Progress,
+    collected: &mut Vec<Value>,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -259,32 +321,12 @@ async fn paginate_history(
         for m in &messages {
             upsert_history_message(db, team_id, channel_id, m).await?;
             totals.messages += 1;
+            progress.inc(1);
         }
 
-        // Threads → conversations.replies. Skip threads whose latest
-        // reply we already have on disk.
-        for m in &messages {
-            let ts = match m.get("ts").and_then(|v| v.as_str()) {
-                Some(s) => s,
-                None => continue,
-            };
-            let reply_count = m.get("reply_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            if reply_count == 0 {
-                continue;
-            }
-            let api_latest = m.get("latest_reply").and_then(|v| v.as_str());
-            let stored = latest_reply_by_thread.get(&(channel_id.to_string(), ts.to_string()));
-            if let (Some(api), Some(stored)) = (api_latest, stored.map(String::as_str)) {
-                if stored >= api {
-                    continue;
-                }
-            }
-            paginate_replies(db, team_id, channel_id, ts, download_blobs, totals).await?;
-        }
-
-        // Media for this page (sequential — Slack hates concurrency on
-        // files.slack.com). Replies fetched above download their files
-        // inline inside `paginate_replies`.
+        // Per-page media. Sequential — Slack hates concurrency on
+        // files.slack.com. Threads (in pass B) download their replies'
+        // files inline inside `paginate_replies`.
         if download_blobs {
             let counts = api::download_files_for_messages(db, channel_id, &messages).await?;
             for (k, v) in counts {
@@ -294,9 +336,11 @@ async fn paginate_history(
 
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
         progress.set_message(&format!(
-            "{channel_id} msgs={} replies={} media={}",
-            totals.messages, totals.replies, media_downloaded
+            "listing  msgs={} media={}",
+            totals.messages, media_downloaded
         ));
+
+        collected.extend(messages);
 
         cursor = next_cursor(&resp);
         if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
@@ -529,10 +573,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
         opts.progress.set_length(Some(targets.len() as u64));
         for (cid, name) in &targets {
-            opts.progress.inc(1);
             opts.progress.set_message(name);
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
+            // Per-channel inner bar: starts as a spinner during the
+            // list pass (total unknown) and switches to a determinate
+            // bar in pass B once `export_channel` calls `set_length`.
+            let inner = opts.progress.child(name);
+            inner.set_message("listing");
             let result = export_channel(
                 &db,
                 &team_id,
@@ -544,10 +592,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &now,
                 opts.media,
                 &mut totals,
-                &opts.progress,
+                &inner,
             )
             .instrument(span)
             .await;
+            inner.finish(&format!(
+                "done msgs={} replies={} media={}",
+                totals.messages,
+                totals.replies,
+                totals.media.get("downloaded").copied().unwrap_or(0),
+            ));
+            opts.progress.inc(1);
             match result {
                 Ok(()) => {
                     grand.messages += totals.messages;

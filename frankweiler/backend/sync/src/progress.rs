@@ -6,6 +6,11 @@
 //! `frankweiler_etl::progress::TracingSink` under a `FanOut`, every
 //! emission point drives both the terminal UI and the structured event
 //! stream.
+//!
+//! Inner bars (e.g. per-channel progress within a Slack source) are
+//! created on demand via `Progress::child(prefix)`, which routes to
+//! [`IndicatifSink::child`] and attaches a fresh child bar to the same
+//! MultiProgress so it renders nested under its parent.
 
 use std::sync::Arc;
 
@@ -14,11 +19,14 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 pub struct IndicatifSink {
     bar: ProgressBar,
+    // Held so child bars can attach to the same MultiProgress. Cheap
+    // to clone (it's an `Arc` internally).
+    multi: Arc<MultiProgress>,
 }
 
 impl IndicatifSink {
-    pub fn new(bar: ProgressBar) -> Self {
-        Self { bar }
+    pub fn new(bar: ProgressBar, multi: Arc<MultiProgress>) -> Self {
+        Self { bar, multi }
     }
 }
 
@@ -37,6 +45,13 @@ impl ProgressSink for IndicatifSink {
     }
     fn finish(&self, msg: &str) {
         self.bar.finish_with_message(msg.to_string());
+    }
+    fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
+        let child_bar = make_bar(&self.multi, prefix.to_string());
+        Arc::new(IndicatifSink {
+            bar: child_bar,
+            multi: self.multi.clone(),
+        })
     }
 }
 

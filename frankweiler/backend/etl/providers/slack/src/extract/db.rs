@@ -498,6 +498,25 @@ impl RawDb {
         dr::blob_exists(&self.pool, id).await
     }
 
+    pub async fn pre_seed_blob_stub(
+        &self,
+        id: &str,
+        owning_id: &str,
+        content_type: Option<&str>,
+        source_url: Option<&str>,
+    ) -> Result<()> {
+        dr::pre_seed_blob_stub(
+            &self.pool,
+            id,
+            "file",
+            owning_id,
+            "file",
+            content_type,
+            source_url,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_blob_bytes(
         &self,
