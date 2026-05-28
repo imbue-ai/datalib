@@ -384,9 +384,7 @@ fn materialize_conv_blobs(
         if !wanted.contains(file_id.as_str()) {
             continue;
         }
-        let name = name_by_id
-            .get(file_id.as_str())
-            .and_then(|n| n.as_deref());
+        let name = name_by_id.get(file_id.as_str()).and_then(|n| n.as_deref());
         let safe = safe_filename(name, file_id);
         std::fs::create_dir_all(&blobs_dir)?;
         std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;

@@ -41,10 +41,15 @@ sh_test(
     # Pyright + clippy + vue-tsc together can take a couple of minutes
     # on a cold cache.
     timeout = "long",
-    # Needs host uv/pnpm/cargo + network for first-time tool fetches.
-    # Skipped in sandboxed CI runs via --test_tag_filters=-requires-network.
+    # Needs host uv / pnpm / cargo + network for first-time tool fetches,
+    # hence `no-sandbox` + `requires-network`. Do NOT re-add the
+    # `external` tag: this is the canonical lint/fmt/typecheck gate and
+    # must run on the default `bazel test //...` path (and CI's
+    # `--test_tag_filters=-manual,-external`). `requires-network`
+    # already gates it out of hermetic / offline environments; `external`
+    # would over-exclude and silently let fmt regressions through, which
+    # has happened before.
     tags = [
-        "external",
         "no-sandbox",
         "requires-network",
     ],

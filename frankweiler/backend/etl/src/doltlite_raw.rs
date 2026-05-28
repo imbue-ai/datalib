@@ -343,8 +343,9 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     // Wrap in `json(payload)` so we get text JSON back regardless of
     // whether the column stores a JSONB blob or a JSON text literal.
     // See "JSONB storage" in `doltlite_raw.rs` module docs.
-    let sql =
-        format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id");
+    let sql = format!(
+        "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
+    );
     let rows = sqlx::query(&sql)
         .fetch_all(pool)
         .await
