@@ -147,11 +147,21 @@ First run does the slow work; subsequent runs are mostly cache hits.
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 
-To browse the result, launch the UI from a source checkout:
+## 6. Browse the result
+
+`frankweiler-http` is the single-binary search backend with the web UI
+embedded — point it at your data root and it serves everything:
 
 ```sh
-bazelisk run //frankweiler:dev -- ~/mixed_up_files
+frankweiler-http ~/mixed_up_files
 ```
+
+It binds to `http://127.0.0.1:8731` by default and opens that URL in
+your default browser. Pass `--no-open` if you'd rather click in
+yourself, and set `FRANKWEILER_BIND=127.0.0.1:<port>` to override the
+listen address.
+
+## 7. Re-syncing
 
 Re-run `frankweiler-sync` whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
