@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
@@ -85,4 +86,9 @@ rust_test(
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tokio",
     ],
+)
+
+insta_update(
+    name = "fixture_db_snapshot_test.update",
+    test = ":fixture_db_snapshot_test",
 )

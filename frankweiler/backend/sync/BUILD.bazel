@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files([
     "BUILD.bazel",  # read by //frankweiler/backend:version_consistency_test
@@ -85,4 +86,14 @@ rust_test(
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:walkdir",
     ],
+)
+
+# `bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update`
+# re-runs the live test with INSTA_UPDATE=always and writes the new
+# snapshots into the source tree (not the sandbox). Set LATCHKEY_CURL
+# on the host before invoking — same prereq as `cargo test`.
+insta_update(
+    name = "manual_e2e_live_sync_golden.update",
+    test = ":manual_e2e_live_sync_golden",
+    test_args = ["--ignored"],
 )

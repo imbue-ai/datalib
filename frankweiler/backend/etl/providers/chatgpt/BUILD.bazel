@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
@@ -130,6 +131,7 @@ rust_test(
         ":frankweiler_etl_chatgpt",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],
 )
@@ -149,4 +151,17 @@ rust_test(
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:tempfile",
     ],
+)
+
+# `bazel run //...:foo.update` siblings that re-run the insta-using
+# test with INSTA_UPDATE=always and write back into the source tree.
+insta_update(
+    name = "chatgpt_render.update",
+    test = ":chatgpt_render",
+)
+
+insta_update(
+    name = "chatgpt_live.update",
+    test = ":chatgpt_live",
+    test_args = ["--ignored"],
 )

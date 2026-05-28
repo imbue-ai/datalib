@@ -1,4 +1,5 @@
 exports_files([
     "check_version_consistency.sh",
+    "insta_update.sh",
     "workspace_status.sh",
 ])

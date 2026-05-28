@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
@@ -127,6 +128,7 @@ rust_test(
         ":frankweiler_etl_anthropic",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],
 )
@@ -146,4 +148,15 @@ rust_test(
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:tempfile",
     ],
+)
+
+insta_update(
+    name = "anthropic_render.update",
+    test = ":anthropic_render",
+)
+
+insta_update(
+    name = "anthropic_live.update",
+    test = ":anthropic_live",
+    test_args = ["--ignored"],
 )

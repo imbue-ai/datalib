@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
@@ -170,6 +171,23 @@ rust_test(
         ":frankweiler_etl_slack",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],
+)
+
+insta_update(
+    name = "slack_render.update",
+    test = ":slack_render",
+)
+
+insta_update(
+    name = "slack_translate.update",
+    test = ":slack_translate",
+)
+
+insta_update(
+    name = "slack_live.update",
+    test = ":slack_live",
+    test_args = ["--ignored"],
 )

@@ -186,6 +186,49 @@ Always run snapshot tests via `bazelisk test //tests:test_snapshots` (or
 `//...`); Bazel rebuilds `//tests/fixtures:ingested_tng` first. Same
 caveat applies to anything else that consumes a cached Bazel output.
 
+### Updating insta snapshots (`.update` targets)
+
+`bazel test` runs each action in a sandbox, so plain
+`--test_env=INSTA_UPDATE=always` lands new `*.snap` files inside the
+sandbox where they can't be reviewed. The standard fix is to invoke
+the update via `bazel run` against a sibling `.update` target. Every
+insta-using `rust_test` in this tree has one declared via the
+`insta_update` macro in `//tools:insta.bzl`:
+
+```bash
+# Hermetic snapshot tests — no host prereqs.
+bazel run //frankweiler/backend/core:fixture_db_snapshot_test.update
+bazel run //frankweiler/backend/etl/providers/chatgpt:chatgpt_render.update
+bazel run //frankweiler/backend/etl/providers/slack:slack_translate.update
+
+# Live tests — need LATCHKEY_CURL on the host (same as cargo). Builds
+# the shim once:
+bazel build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
+bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
+bazel run //frankweiler/backend/etl/providers/anthropic:anthropic_live.update
+```
+
+The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
+which only exists under `bazel run` and resolves to the source tree
+(not the sandbox), so insta writes — including brand-new `.snap`
+files — land where `git status` will show them. Always review the
+diff before committing.
+
+When adding a new insta-using test, declare a sibling `.update`:
+
+```python
+load("//tools:insta.bzl", "insta_update")
+
+rust_test(name = "my_render_test", ...)
+
+insta_update(
+    name = "my_render_test.update",
+    test = ":my_render_test",
+    test_args = ["--ignored"],  # only if the test is #[ignore]'d
+)
+```
+
 ## Common commands
 
 ```bash
