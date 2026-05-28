@@ -177,6 +177,16 @@ iterating costs only what you actually touched. Reach for `cargo test`
 / `pnpm test` only for tight inner-loop iteration on a single language,
 and confirm with `bazelisk test //...` before declaring done.
 
+**Do not add `--test_tag_filters=-manual,-external` to this invocation.**
+The canonical line is the bare `bazelisk test //...`. Filtering on
+`-external` silently drops `//:precommit_test` (cargo fmt / clippy /
+ruff / pyright / vue-tsc) and `//frankweiler/ui:e2e_test` (Playwright),
+which lets fmt and UI regressions through. If a test is host- or
+network-dependent it's tagged `requires-network` and/or `no-sandbox`,
+which Bazel respects on its own — `external` is reserved for tests
+that hit third-party services you don't want CI talking to. Prefer
+`bazelisk` over `bazel` so the workspace's pinned Bazel version wins.
+
 **Beware running snapshot tests outside Bazel**: those tests load
 `bazel-bin/tests/fixtures/ingested/{dump.sql,qmd.tar}`, which is a Bazel
 genrule output. Tools outside Bazel don't know how to rebuild it, so if

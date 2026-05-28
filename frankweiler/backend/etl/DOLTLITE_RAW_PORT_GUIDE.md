@@ -477,18 +477,26 @@ cargo test -p frankweiler-etl-<name>
 cargo test -p frankweiler-etl-<name> --test playback_roundtrip
 
 # 3. Live golden (needs LATCHKEY_CURL set):
-bazel build //frankweiler/backend/etl:latchkey_curl_shim
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
 export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
-bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
+bazelisk run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
 
-# 4. Full bazel verify:
-bazel test //... --test_tag_filters=-manual,-external
+# 4. Full bazel verify — CANONICAL invocation, matches AGENTS.md:
+bazelisk test //...
 ```
+
+Do NOT substitute `bazelisk test //... --test_tag_filters=-manual,-external`
+here. That filter exists in some legacy notes but it silently excludes
+`//:precommit_test` (cargo fmt / clippy / ruff / pyright / vue-tsc) and
+`//frankweiler/ui:e2e_test` (Playwright UI suite), letting fmt drift and
+UI regressions through. The canonical answer to "are tests green?" is
+the bare `bazelisk test //...` line — see the "Running tests" section
+of `AGENTS.md` at the repo root.
 
 A successful port produces:
 
 - All cargo tests green
-- All bazel tests green (`--test_tag_filters=-manual,-external`)
+- `bazelisk test //...` green (no filter)
 - `manifest.snap` collapses `raw/<name>/<files...>` to one
   `raw/<name>.doltlite_db` row, plus blob rows shift from
   `raw/<name>/blobs/...` to `rendered_md/.../<entity>/blobs/<file>`.
