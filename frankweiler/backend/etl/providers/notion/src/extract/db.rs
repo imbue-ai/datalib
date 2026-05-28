@@ -219,6 +219,11 @@ pub struct RawDb {
     pool: SqlitePool,
 }
 
+/// `(id, parent_id, last_edited_time, payload_json)` — one row for
+/// [`RawDb::upsert_pages`]. `payload_json` is `None` for discovery
+/// upserts that must not clobber a previously-fetched body.
+pub type PageUpsertRow = (String, Option<String>, Option<String>, Option<String>);
+
 /// What the extract loop wants to know about a page before it decides
 /// whether to issue a detail fetch.
 #[derive(Debug, Clone)]
@@ -352,16 +357,12 @@ impl RawDb {
         Ok(())
     }
 
-    /// Batch upsert pages. `rows` is `(id, parent_id, last_edited_time,
-    /// payload_json)`. We compare-on-upsert: if the stored
+    /// Batch upsert pages. We compare-on-upsert: if the stored
     /// `last_edited_time` already matches, we leave payload alone (the
     /// list pass shouldn't clobber a freshly-fetched detail body with a
     /// truncated list-only payload). When the incoming
     /// `last_edited_time` differs, payload is overwritten verbatim.
-    pub async fn upsert_pages(
-        &self,
-        rows: &[(String, Option<String>, Option<String>, Option<String>)],
-    ) -> Result<()> {
+    pub async fn upsert_pages(&self, rows: &[PageUpsertRow]) -> Result<()> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -597,6 +598,7 @@ impl RawDb {
     /// key the caller chose (today: `{block_id}:{slot}` for inline
     /// references). Errors during fetch should call
     /// [`Self::record_blob_error`] instead.
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_blob_bytes(
         &self,
         id: &str,
@@ -826,7 +828,7 @@ mod tests {
         .await
         .unwrap();
         let states = db.page_states().await.unwrap();
-        assert_eq!(states.get("p1").unwrap().has_payload, true);
+        assert!(states.get("p1").unwrap().has_payload);
         let pages = db.load_pages().await.unwrap();
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0]["title"], "hi");

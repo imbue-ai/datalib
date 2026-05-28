@@ -188,7 +188,7 @@ fn parent_of(page: &Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .or_else(|| p.get("block_id").and_then(|v| v.as_str()))
         .or_else(|| p.get("database_id").and_then(|v| v.as_str()))
-        .or_else(|| p.get("workspace").and_then(|_| Some("workspace")))
+        .or_else(|| p.get("workspace").map(|_| "workspace"))
         .map(String::from)
 }
 

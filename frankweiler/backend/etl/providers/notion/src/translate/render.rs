@@ -885,6 +885,7 @@ fn blob_filename(block_id: &str, source_url: Option<&str>, content_type: Option<
     format!("{block_id}.{ext}")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_one_page(
     page: &Value,
     children_by_parent: &HashMap<String, Vec<Value>>,
