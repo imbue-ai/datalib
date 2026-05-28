@@ -1,5 +1,8 @@
 # mixed-up-files
 
+> Codenames in this project (`frankweiler`, etc.) are inspired by
+> [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
+
 Two coupled projects that mirror personal data into a queryable local store:
 
 - **`frankweiler/backend/`** — Rust workspace that downloads + ingests
