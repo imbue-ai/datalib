@@ -69,20 +69,43 @@ js_run_binary(
 #   bazelisk run  //frankweiler/ui:e2e        — interactive
 #   bazelisk test //frankweiler/ui:e2e_test   — picked up by `bazel test //...`
 #
-# The wrapper does NOT manage node / pnpm / Playwright browsers itself —
-# it shells out to the host pnpm and reuses the source-tree node_modules
-# + ~/Library/Caches/ms-playwright. That's deliberately non-hermetic:
-# the goal here is "bazel test //... actually exercises the e2e suite",
-# not full Bazel ownership of the JS toolchain.
+# In `test` mode the wrapper runs Playwright from the runfiles tree,
+# using the bazel-linked `:node_modules` (materialized by rules_js from
+# pnpm-lock.yaml). That makes the test independent of the source-tree
+# `node_modules` — so a wedged host `pnpm install` (e.g. pnpm's
+# auto-purge refusing without a TTY) can't break `bazel test //...`.
 #
-# In `run` mode the wrapper uses BUILD_WORKSPACE_DIRECTORY; in `test`
-# mode it resolves the source UI dir by following the runfiles symlink
-# of frankweiler/ui/package.json back to its origin.
+# Still NOT fully hermetic on two axes:
+#   * Chromium binary: comes from ~/Library/Caches/ms-playwright via
+#     env_inherit=HOME. Putting the browser into Bazel is its own
+#     project; see option (3) in the design discussion.
+#   * `bazel run` mode: keeps using BUILD_WORKSPACE_DIRECTORY + the
+#     source-tree node_modules so devs can edit specs and re-run
+#     interactively. The hermetic node_modules is `test`-mode only.
+
+# Materialize the e2e source set into bazel-out so the runfiles
+# `tests/e2e/*.spec.ts` are real files, not symlinks back to the source
+# tree. Playwright's spec-file discovery doesn't follow symlinks (Node's
+# `fs.readdir(..., withFileTypes:true)` reports symlinks as
+# `!isFile()`, so the walker skips them), which would leave us with
+# "Error: No tests found" despite the symlinks resolving fine for
+# `node` itself.
+copy_to_bin(
+    name = "e2e_inputs",
+    srcs = [
+        "package.json",
+        "playwright.config.ts",
+        "tsconfig.json",
+    ] + glob(["tests/e2e/**/*"], allow_empty = False),
+)
 
 _E2E_DATA = [
     "//frankweiler/backend/http:frankweiler_http_bin",
     "//tests/fixtures:materialize_tng_root",
-    "package.json",
+    # rules_js-linked node_modules built from pnpm-lock.yaml; replaces
+    # the host `pnpm install` for the `bazel test` path.
+    ":node_modules",
+    ":e2e_inputs",
 ]
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
