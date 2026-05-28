@@ -48,3 +48,10 @@ build --action_env=HOME
 # lives in frankweiler_core::version::git_hash() (cargo builds use build.rs).
 build --workspace_status_command=tools/workspace_status.sh
 build --stamp
+
+# Shared content-addressed cache across checkouts. Bazel's action cache lives
+# in the per-workspace output base (`_bazel_<user>/<md5-of-workspace-path>/`),
+# so two checkouts at different paths (e.g. Dropbox tree vs Sculptor clone)
+# don't share hits. The disk cache is keyed by action hash and shared.
+build --disk_cache=~/Library/Caches/bazel-disk-cache
+test  --disk_cache=~/Library/Caches/bazel-disk-cache
