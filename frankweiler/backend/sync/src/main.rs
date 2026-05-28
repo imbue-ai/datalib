@@ -952,7 +952,7 @@ impl ExtractPlan {
                 seeds.dedup();
                 frankweiler_etl_notion::extract::fetch(
                     frankweiler_etl_notion::extract::FetchOptions {
-                        out_dir: self.out_dir.clone(),
+                        db_path: self.out_dir.clone(),
                         subtree_pages: seeds,
                         inbox: sync.inbox.as_ref().is_some_and(|i| i.enabled),
                         inbox_mirror_referenced: sync

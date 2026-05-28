@@ -328,6 +328,10 @@ struct RenderCtx<'a> {
     sub_pages_dir: &'a HashMap<String, String>,
     media_urls: &'a HashMap<String, String>,
     bookmark_titles: &'a HashMap<String, String>,
+    /// Per-block markdown-relative paths (e.g. `blobs/foo.png`) for
+    /// image blobs we wrote to disk next to the page's `index.md`.
+    /// Wins over the upstream `media_url` when present.
+    local_blob_paths: &'a HashMap<String, String>,
 }
 
 fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String> {
@@ -438,7 +442,15 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
             lines.push(String::new());
         }
         "image" => {
-            let mut url = media_url(payload);
+            // Prefer the locally-cached blob (written next to the page's
+            // index.md by render_one_page) so the markdown stays
+            // displayable even after Notion's signed URLs expire. Fall
+            // back to the upstream URL when we don't have the bytes.
+            let local = ctx.local_blob_paths.get(block_id).cloned();
+            let mut url = local.unwrap_or_default();
+            if url.is_empty() {
+                url = media_url(payload);
+            }
             if url.is_empty() {
                 url = ctx.media_urls.get(block_id).cloned().unwrap_or_default();
             }
@@ -839,6 +851,40 @@ fn write_text_trim(path: &Path, parts: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Derive an on-disk filename for a blob in a page's `blobs/` dir.
+/// Strips query strings from signed URLs and falls back to a
+/// content-type guess (and finally `.bin`) when there's no usable
+/// extension on the URL.
+fn blob_filename(block_id: &str, source_url: Option<&str>, content_type: Option<&str>) -> String {
+    fn ext_from_url(u: &str) -> Option<String> {
+        let no_query = u.split('?').next().unwrap_or(u);
+        let last_seg = no_query.rsplit('/').next().unwrap_or("");
+        let dot = last_seg.rfind('.')?;
+        let ext = &last_seg[dot + 1..];
+        if ext.is_empty() || ext.len() > 8 || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return None;
+        }
+        Some(ext.to_lowercase())
+    }
+    fn ext_from_ct(ct: &str) -> Option<&'static str> {
+        match ct.split(';').next().unwrap_or("").trim() {
+            "image/png" => Some("png"),
+            "image/jpeg" | "image/jpg" => Some("jpg"),
+            "image/gif" => Some("gif"),
+            "image/webp" => Some("webp"),
+            "image/svg+xml" => Some("svg"),
+            "image/bmp" => Some("bmp"),
+            _ => None,
+        }
+    }
+    let ext = source_url
+        .and_then(ext_from_url)
+        .or_else(|| content_type.and_then(ext_from_ct).map(String::from))
+        .unwrap_or_else(|| "bin".into());
+    // block_id is a Notion UUID, safe as a filename without escaping.
+    format!("{block_id}.{ext}")
+}
+
 fn render_one_page(
     page: &Value,
     children_by_parent: &HashMap<String, Vec<Value>>,
@@ -846,6 +892,7 @@ fn render_one_page(
     page_titles: &HashMap<String, String>,
     media_urls: &HashMap<String, String>,
     bookmark_titles: &HashMap<String, String>,
+    blobs_by_owner: &HashMap<String, crate::extract::db::BlobBytes>,
     pages_root: &Path,
 ) -> Result<PathBuf> {
     let pid = page.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -890,6 +937,40 @@ fn render_one_page(
     parts.push(format!("[View on Notion ↗]({})", notion_url(pid)));
     parts.push(String::new());
 
+    // Materialize every blob that hangs off a block on this page.
+    // Files land in `<page_dir>/blobs/<block_id>.<ext>`; the relative
+    // path `blobs/<file>` is the one we splice into the markdown.
+    let mut local_blob_paths: HashMap<String, String> = HashMap::new();
+    if let Some(blocks) = children_by_parent.get(pid) {
+        let mut owner_ids: Vec<String> = Vec::new();
+        collect_block_ids(blocks, children_by_parent, &mut owner_ids);
+        let blobs_dir = page_dir.join("blobs");
+        let mut created_dir = false;
+        for owner in owner_ids {
+            let Some(b) = blobs_by_owner.get(&owner) else {
+                continue;
+            };
+            if !created_dir {
+                fs::create_dir_all(&blobs_dir)?;
+                created_dir = true;
+            }
+            let filename =
+                blob_filename(&owner, b.source_url.as_deref(), b.content_type.as_deref());
+            let target = blobs_dir.join(&filename);
+            // Trust our copy: write only if the file isn't already
+            // present with the same length. Lets `notion-translate`
+            // re-runs stay cheap.
+            let needs_write = match fs::metadata(&target) {
+                Ok(m) => m.len() as usize != b.bytes.len(),
+                Err(_) => true,
+            };
+            if needs_write {
+                fs::write(&target, &b.bytes)?;
+            }
+            local_blob_paths.insert(owner, format!("blobs/{filename}"));
+        }
+    }
+
     let ctx = RenderCtx {
         children_by_parent,
         user_names,
@@ -897,6 +978,7 @@ fn render_one_page(
         sub_pages_dir: &sub_pages_dir,
         media_urls,
         bookmark_titles,
+        local_blob_paths: &local_blob_paths,
     };
     if let Some(children) = children_by_parent.get(pid) {
         for ch in children {
@@ -907,6 +989,23 @@ fn render_one_page(
     let target = page_dir.join("index.md");
     write_text_trim(&target, &parts)?;
     Ok(target)
+}
+
+/// Walk every block reachable from `roots` via `children_by_parent`,
+/// collecting block ids. Used to find candidates in `blobs_by_owner`.
+fn collect_block_ids(
+    roots: &[Value],
+    children_by_parent: &HashMap<String, Vec<Value>>,
+    out: &mut Vec<String>,
+) {
+    for b in roots {
+        if let Some(id) = b.get("id").and_then(|v| v.as_str()) {
+            out.push(id.to_string());
+            if let Some(kids) = children_by_parent.get(id) {
+                collect_block_ids(kids, children_by_parent, out);
+            }
+        }
+    }
 }
 
 pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
@@ -1067,6 +1166,7 @@ pub fn render_notion_official(parsed: &ParsedNotionOfficial, root: &Path) -> Res
             &page_titles,
             &parsed.media_urls,
             &parsed.bookmark_titles,
+            &parsed.blobs_by_owner,
             &pages_root,
         )?;
         if let Some(pid) = page.get("id").and_then(|v| v.as_str()) {

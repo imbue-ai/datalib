@@ -1,13 +1,10 @@
-//! `notion-download` — mirror Notion pages via the official API, with
-//! optional inbox discovery via the unofficial `getNotificationLog`.
+//! `notion-download` — mirror Notion pages via the official API into a
+//! single doltlite database file.
 //!
 //! Requires `latchkey` with two services registered:
 //!   - `notion` (Bearer token for `api.notion.com`)
 //!   - `notion_unofficial` (cookie session for `www.notion.so/api/v3`),
 //!     needed only when `--inbox` is used.
-//!
-//! A Cloudflare-clearing curl impersonator on `LATCHKEY_CURL` is required
-//! for the unofficial API. See `EXTRACT.md` in this crate.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,10 +18,11 @@ use tracing::{info, info_span, Instrument};
 #[derive(Parser, Debug)]
 #[command(
     name = "notion-download",
-    about = "Mirror Notion pages via the official API."
+    about = "Mirror Notion pages via the official API into a doltlite DB."
 )]
 struct Args {
-    /// Output directory. Created if missing.
+    /// Path to the doltlite database file. If a directory or extensionless
+    /// path is passed, `.doltlite_db` is appended automatically.
     #[arg(long, env = "NOTION_OUT")]
     out: PathBuf,
 
@@ -40,20 +38,15 @@ struct Args {
     #[arg(long)]
     space: Option<String>,
 
-    /// `getNotificationLog` page size.
     #[arg(long, default_value_t = 40)]
     notification_page_size: u32,
 
-    /// Safety bound on inbox pagination per space per type.
     #[arg(long, default_value_t = 50)]
     max_notification_pages: u32,
 
-    /// Notification feed types to walk (repeatable). Common values:
-    /// `unread_and_read`, `archived`.
     #[arg(long = "inbox-type", default_values_t = vec!["unread_and_read".to_string()])]
     inbox_type: Vec<String>,
 
-    /// Safety bound on BFS page count.
     #[arg(long, default_value_t = 5000)]
     max_pages: usize,
 
@@ -61,7 +54,12 @@ struct Args {
     #[arg(long, value_name = "UUID")]
     page: Option<String>,
 
-    /// Seconds between successful page fetches.
+    /// Re-fetch every page in the DB whose last attempt failed (or which
+    /// has a NULL payload after at least one attempt). Ignores subtree /
+    /// inbox / page.
+    #[arg(long)]
+    retry_failed: bool,
+
     #[arg(long, default_value_t = 0.0)]
     sleep_between: f64,
 
@@ -74,12 +72,16 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "notion-download")?;
 
-    if args.subtree_page.is_empty() && !args.inbox && args.page.is_none() {
-        anyhow::bail!("must specify --inbox, one or more --subtree-page <id>, or --page <id>");
+    if !args.retry_failed
+        && args.subtree_page.is_empty()
+        && !args.inbox
+        && args.page.is_none()
+    {
+        anyhow::bail!("must specify --inbox, --subtree-page, --page, or --retry-failed");
     }
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         subtree_pages: args.subtree_page.clone(),
         inbox: args.inbox,
         space: args.space.clone(),
@@ -88,11 +90,12 @@ async fn main() -> Result<()> {
         inbox_types: args.inbox_type.clone(),
         max_pages: args.max_pages,
         page: args.page.clone(),
+        retry_failed: args.retry_failed,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         ..Default::default()
     };
 
-    let span = info_span!("notion_download", out = %args.out.display());
+    let span = info_span!("notion_download", db = %args.out.display());
     let summary = notion::fetch(opts).instrument(span).await?;
     info!(
         event = "notion_download_complete",
@@ -102,6 +105,10 @@ async fn main() -> Result<()> {
         upd_blocks = summary.upd_blocks,
         new_comments = summary.new_comments,
         upd_comments = summary.upd_comments,
+        skipped_pages = summary.skipped_pages,
+        new_blobs = summary.new_blobs,
+        skipped_blobs = summary.skipped_blobs,
+        failed_blobs = summary.failed_blobs,
         official_requests = summary.official_requests,
         unofficial_requests = summary.unofficial_requests,
     );

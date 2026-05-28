@@ -1,31 +1,33 @@
 //! Notion downloader: BFS-mirror pages via the official API, with
 //! optional inbox discovery via the unofficial `getNotificationLog`.
 //!
-//! Port of `src/download/notion_official.py`. Writes to an event-store
-//! JSONL layout under `<out_dir>/notion_official_<entity>/{created,updated}/events.jsonl`,
-//! consumed by [`crate::translate::parse`].
+//! Writes into a single doltlite database file
+//! (`<data_root>/raw/<name>.doltlite_db`) — one row per page / block /
+//! comment, full payload in a JSON column. See `DOLTLITE_RAW.md` for the
+//! schema and rationale. The downstream `translate::parse` and
+//! `synthesize` stages consume the DB directly.
 
+pub mod db;
 pub mod official;
 pub mod unofficial;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::event_store::{diff_and_save, load_latest_by_key, make_record};
-use serde_json::{json, Map, Value};
+use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use serde_json::{json, Value};
 
+pub use db::{db_path_for, BlobBytes, LoadedRaw, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
-pub const ENTITY_PAGE: &str = "notion_official_page";
-pub const ENTITY_BLOCK: &str = "notion_official_block";
-pub const ENTITY_COMMENT: &str = "notion_official_comment";
-
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    pub out_dir: PathBuf,
+    /// Path to the doltlite database file. If the caller passes a
+    /// directory (legacy), it's rewritten to `<dir>.doltlite_db`.
+    pub db_path: PathBuf,
     /// Page IDs (dashed or undashed) to seed the BFS queue.
     pub subtree_pages: Vec<String>,
     /// If set, also discover pages via the unofficial getNotificationLog.
@@ -41,6 +43,9 @@ pub struct FetchOptions {
     pub max_pages: usize,
     /// Single-page mode — short-circuit. Fetch only this page.
     pub page: Option<String>,
+    /// When true, ignore subtree / inbox / page and re-fetch every row
+    /// the DB currently has marked as failed or empty-with-attempts.
+    pub retry_failed: bool,
     pub sleep_between: Duration,
     pub progress: frankweiler_etl::progress::Progress,
 }
@@ -48,7 +53,7 @@ pub struct FetchOptions {
 impl Default for FetchOptions {
     fn default() -> Self {
         FetchOptions {
-            out_dir: PathBuf::new(),
+            db_path: PathBuf::new(),
             subtree_pages: Vec::new(),
             inbox: false,
             inbox_mirror_referenced: true,
@@ -58,6 +63,7 @@ impl Default for FetchOptions {
             inbox_types: vec!["unread_and_read".into()],
             max_pages: 5000,
             page: None,
+            retry_failed: false,
             sleep_between: Duration::ZERO,
             progress: frankweiler_etl::progress::Progress::noop(),
         }
@@ -72,8 +78,97 @@ pub struct FetchSummary {
     pub upd_blocks: usize,
     pub new_comments: usize,
     pub upd_comments: usize,
+    pub skipped_pages: usize,
+    pub new_blobs: usize,
+    pub skipped_blobs: usize,
+    pub failed_blobs: usize,
     pub official_requests: u64,
     pub unofficial_requests: u64,
+}
+
+/// Extract the URL of an image block's underlying file. Notion stores
+/// uploads under `image.file.url` (signed S3, rotates) and externally
+/// hosted images under `image.external.url`.
+fn image_url_and_kind(block: &Value) -> Option<(String, &'static str)> {
+    let img = block.get("image")?;
+    if let Some(u) = img
+        .get("external")
+        .and_then(|v| v.get("url"))
+        .and_then(|v| v.as_str())
+    {
+        return Some((u.to_string(), "external"));
+    }
+    if let Some(u) = img
+        .get("file")
+        .and_then(|v| v.get("url"))
+        .and_then(|v| v.as_str())
+    {
+        return Some((u.to_string(), "notion_hosted"));
+    }
+    None
+}
+
+/// Fetch every image block's bytes that we don't already have on file.
+/// Errors are recorded against the blob row and don't fail the sync —
+/// the page mirror has already landed and a later `--retry-failed` can
+/// pick the broken blob up.
+async fn fetch_image_blobs(
+    db: &RawDb,
+    blocks: &[Value],
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    for block in blocks {
+        if block.get("type").and_then(|v| v.as_str()) != Some("image") {
+            continue;
+        }
+        let Some(block_id) = block.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some((url, kind)) = image_url_and_kind(block) else {
+            continue;
+        };
+        let blob_id = format!("{block_id}:image");
+        if db.blob_exists(&blob_id).await.unwrap_or(false) {
+            summary.skipped_blobs += 1;
+            continue;
+        }
+        let req = HttpRequest::get("notion", &url);
+        match latchkey_curl(&req).await {
+            Ok(resp) if resp.status >= 200 && resp.status < 300 => {
+                let content_type = resp.header("content-type").map(String::from);
+                if let Err(e) = db
+                    .upsert_blob_bytes(
+                        &blob_id,
+                        kind,
+                        block_id,
+                        "image",
+                        content_type.as_deref(),
+                        &resp.body,
+                        Some(&url),
+                    )
+                    .await
+                {
+                    tracing::warn!(blob = %blob_id, error = %e, "blob upsert failed");
+                    summary.failed_blobs += 1;
+                } else {
+                    summary.new_blobs += 1;
+                }
+            }
+            Ok(resp) => {
+                let msg = format!("HTTP {}", resp.status);
+                tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch non-2xx");
+                let _ = db.record_blob_error(&blob_id, &msg).await;
+                summary.failed_blobs += 1;
+            }
+            Err(e) => {
+                let msg = format!("{e}");
+                tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch failed");
+                let _ = db.record_blob_error(&blob_id, &msg).await;
+                summary.failed_blobs += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn format_uuid(s: &str) -> String {
@@ -91,80 +186,30 @@ fn format_uuid(s: &str) -> String {
     )
 }
 
-fn key_id(rec: &Value) -> String {
-    rec.get("id")
+fn parent_of(page: &Value) -> Option<String> {
+    let p = page.get("parent")?;
+    p.get("page_id")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
+        .or_else(|| p.get("block_id").and_then(|v| v.as_str()))
+        .or_else(|| p.get("database_id").and_then(|v| v.as_str()))
+        .or_else(|| p.get("workspace").and_then(|_| Some("workspace")))
+        .map(String::from)
 }
 
-fn page_record(page: &Value) -> Value {
-    let mut k = Map::new();
-    if let Some(v) = page.get("id").cloned() {
-        k.insert("id".into(), v);
-    }
-    k.insert(
-        "last_edited_time".into(),
-        page.get("last_edited_time").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "parent".into(),
-        page.get("parent").cloned().unwrap_or(Value::Null),
-    );
-    make_record(k, page.clone())
+fn block_parent(block: &Value) -> Option<String> {
+    let p = block.get("parent")?;
+    p.get("block_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| p.get("page_id").and_then(|v| v.as_str()))
+        .map(String::from)
 }
 
-fn block_record(block: &Value, page_id: &str) -> Value {
-    let mut k = Map::new();
-    if let Some(v) = block.get("id").cloned() {
-        k.insert("id".into(), v);
-    }
-    k.insert("page_id".into(), Value::String(page_id.into()));
-    k.insert(
-        "type".into(),
-        block.get("type").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "last_edited_time".into(),
-        block
-            .get("last_edited_time")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    make_record(k, block.clone())
-}
-
-fn comment_record(comment: &Value, page_id: &str) -> Value {
-    let parent = comment.get("parent").cloned().unwrap_or(Value::Null);
-    let mut k = Map::new();
-    if let Some(v) = comment.get("id").cloned() {
-        k.insert("id".into(), v);
-    }
-    k.insert("page_id".into(), Value::String(page_id.into()));
-    k.insert(
-        "discussion_id".into(),
-        comment.get("discussion_id").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "parent_block_id".into(),
-        parent.get("block_id").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "parent_page_id".into(),
-        parent.get("page_id").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "created_time".into(),
-        comment.get("created_time").cloned().unwrap_or(Value::Null),
-    );
-    k.insert(
-        "last_edited_time".into(),
-        comment
-            .get("last_edited_time")
-            .cloned()
-            .unwrap_or(Value::Null),
-    );
-    make_record(k, comment.clone())
+fn comment_parent(c: &Value) -> Option<String> {
+    let p = c.get("parent")?;
+    p.get("block_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| p.get("page_id").and_then(|v| v.as_str()))
+        .map(String::from)
 }
 
 #[tracing::instrument(skip(client), fields(parent_id, pages, children))]
@@ -280,7 +325,6 @@ fn extract_inbox_pages(rm: &Value) -> Vec<String> {
         return seen;
     };
     for payload in activity.values() {
-        // payload.value (or .value.value) carries activity record
         let value = payload
             .get("value")
             .and_then(|v| v.get("value").or(Some(v)))
@@ -333,41 +377,75 @@ async fn walk_inbox(
     Ok(seen)
 }
 
-#[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, blocks, comments, page_ms, blocks_ms, comments_ms))]
+/// Per-page work. Returns the page's blocks so the BFS driver can find
+/// `child_page` descendants. Records errors against the DB rather than
+/// short-circuiting the whole sync.
+#[tracing::instrument(skip_all, fields(page_id = %pid, origin = %origin, blocks, comments, page_ms, blocks_ms, comments_ms, skipped))]
 #[allow(clippy::too_many_arguments)]
 async fn mirror_page(
     client: &NotionOfficialClient,
-    out_dir: &Path,
+    db: &RawDb,
     pid: &str,
     origin: &'static str,
-    existing_pages: &mut HashMap<String, Value>,
-    existing_blocks: &mut HashMap<String, Value>,
-    existing_comments: &mut HashMap<String, Value>,
+    page_states: &mut HashMap<String, PageState>,
     summary: &mut FetchSummary,
+    seen_last_edited_from_list: Option<&str>,
 ) -> Result<Vec<Value>> {
-    // Per-page timing is emitted at `info` so it shows up in the default
-    // log stream — that's the only way to see *which* page is dragging
-    // without enabling debug.
+    // Skip detail fetch when we already have this page's full payload
+    // and the upstream `last_edited_time` hasn't moved. Discovery
+    // (list/search) gives us the (id, last_edited_time) pair; we trust it.
+    if let (Some(state), Some(incoming)) = (page_states.get(pid), seen_last_edited_from_list) {
+        if state.has_payload && state.last_edited_time.as_deref() == Some(incoming) {
+            tracing::Span::current().record("skipped", true);
+            summary.skipped_pages += 1;
+            // We still need the page's blocks to discover child_pages
+            // for BFS; but if our local copy is current we already have
+            // them — caller will rely on its own existing-blocks view.
+            return Ok(Vec::new());
+        }
+    }
+
     let page_t = std::time::Instant::now();
     let page = match client.get_page(pid).await {
         Ok(p) => p,
         Err(e) => {
-            tracing::warn!(page = pid, error = %e, "page fetch failed; skipping");
+            let msg = format!("{e}");
+            tracing::warn!(page = pid, error = %msg, "page fetch failed; recording");
+            let _ = db.record_page_error(pid, &msg).await;
             return Ok(Vec::new());
         }
     };
     let page_ms = page_t.elapsed().as_millis() as u64;
-    let prec = page_record(&page);
-    let counts = diff_and_save(
-        out_dir,
-        ENTITY_PAGE,
-        std::slice::from_ref(&prec),
-        existing_pages,
-        key_id,
-    )?;
-    summary.new_pages += counts.new;
-    summary.upd_pages += counts.updated;
-    existing_pages.insert(pid.into(), prec);
+    let was_present = page_states
+        .get(pid)
+        .map(|s| s.has_payload)
+        .unwrap_or(false);
+    let last_edited = page
+        .get("last_edited_time")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let parent_id = parent_of(&page);
+    let payload = serde_json::to_string(&page).ok();
+    db.upsert_pages(&[(
+        pid.to_string(),
+        parent_id,
+        last_edited.clone(),
+        payload,
+    )])
+    .await
+    .with_context(|| format!("upsert page {pid}"))?;
+    page_states.insert(
+        pid.into(),
+        PageState {
+            last_edited_time: last_edited,
+            has_payload: true,
+        },
+    );
+    if was_present {
+        summary.upd_pages += 1;
+    } else {
+        summary.new_pages += 1;
+    }
 
     let blocks_t = std::time::Instant::now();
     let blocks = match walk_page_blocks(client, pid).await {
@@ -378,35 +456,58 @@ async fn mirror_page(
         }
     };
     let blocks_ms = blocks_t.elapsed().as_millis() as u64;
-    let block_records: Vec<Value> = blocks.iter().map(|b| block_record(b, pid)).collect();
-    let counts = diff_and_save(
-        out_dir,
-        ENTITY_BLOCK,
-        &block_records,
-        existing_blocks,
-        key_id,
-    )?;
-    summary.new_blocks += counts.new;
-    summary.upd_blocks += counts.updated;
-    for br in &block_records {
-        if let Some(id) = br.get("id").and_then(|v| v.as_str()) {
-            existing_blocks.insert(id.into(), br.clone());
-        }
+    let mut block_rows: Vec<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    )> = Vec::with_capacity(blocks.len());
+    for b in &blocks {
+        let Some(id) = b.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let parent = block_parent(b);
+        let last = b
+            .get("last_edited_time")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let payload = serde_json::to_string(b).ok();
+        block_rows.push((id.into(), parent, Some(pid.into()), last, payload));
+    }
+    summary.upd_blocks += block_rows.len(); // we don't distinguish new vs upd for blocks anymore
+    db.upsert_blocks(&block_rows)
+        .await
+        .with_context(|| format!("upsert blocks for {pid}"))?;
+
+    // Fetch image blobs inline — the per-block GET is small and lets a
+    // single sync run produce a self-contained DB. Per the design doc
+    // we skip refetch when we already have bytes (signed URLs rotate,
+    // bytes don't).
+    if let Err(e) = fetch_image_blobs(db, &blocks, summary).await {
+        tracing::warn!(page = pid, error = %e, "blob pass failed; continuing");
     }
 
     let comments_t = std::time::Instant::now();
     let comments = fetch_all_comments(client, pid).await.unwrap_or_default();
     let comments_ms = comments_t.elapsed().as_millis() as u64;
     if !comments.is_empty() {
-        let crecs: Vec<Value> = comments.iter().map(|c| comment_record(c, pid)).collect();
-        let counts = diff_and_save(out_dir, ENTITY_COMMENT, &crecs, existing_comments, key_id)?;
-        summary.new_comments += counts.new;
-        summary.upd_comments += counts.updated;
-        for cr in &crecs {
-            if let Some(id) = cr.get("id").and_then(|v| v.as_str()) {
-                existing_comments.insert(id.into(), cr.clone());
-            }
+        let mut comment_rows: Vec<(String, String, Option<String>, String)> =
+            Vec::with_capacity(comments.len());
+        for c in &comments {
+            let Some(id) = c.get("id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // Comments must hang off something — fall back to the page
+            // we were fetching for when parent is missing.
+            let parent = comment_parent(c).unwrap_or_else(|| pid.to_string());
+            let payload = serde_json::to_string(c).unwrap_or_else(|_| "null".into());
+            comment_rows.push((id.into(), parent, Some(pid.into()), payload));
         }
+        summary.upd_comments += comment_rows.len();
+        db.upsert_comments(&comment_rows)
+            .await
+            .with_context(|| format!("upsert comments for {pid}"))?;
     }
 
     let span = tracing::Span::current();
@@ -428,21 +529,16 @@ async fn mirror_page(
     Ok(blocks)
 }
 
-/// Drain a BFS queue, mirroring each page and (unless `single_page`)
-/// queueing its `child_page` descendants. `origin` tags every emitted
-/// `mirror_page` span so log readers can tell subtree-driven work
-/// apart from inbox-driven work.
 #[allow(clippy::too_many_arguments)]
 async fn bfs_drain(
     client: &NotionOfficialClient,
+    db: &RawDb,
     opts: &FetchOptions,
     origin: &'static str,
     mut queue: VecDeque<String>,
     queued: &mut HashSet<String>,
     visited: &mut HashSet<String>,
-    existing_pages: &mut HashMap<String, Value>,
-    existing_blocks: &mut HashMap<String, Value>,
-    existing_comments: &mut HashMap<String, Value>,
+    page_states: &mut HashMap<String, PageState>,
     summary: &mut FetchSummary,
     single_page: bool,
 ) -> Result<()> {
@@ -457,17 +553,12 @@ async fn bfs_drain(
             .set_length(Some((visited.len() + queue.len()) as u64));
         opts.progress.inc(1);
         opts.progress.set_message(&pid);
-        let blocks = mirror_page(
-            client,
-            &opts.out_dir,
-            &pid,
-            origin,
-            existing_pages,
-            existing_blocks,
-            existing_comments,
-            summary,
-        )
-        .await?;
+        // No incoming `last_edited_time` from a list pass here yet —
+        // Notion's official API has no global list endpoint, so we
+        // can't know the upstream value without fetching the page.
+        // Skip-on-unchanged for those will land when we add cursored
+        // search; for now every queued page is fetched.
+        let blocks = mirror_page(client, db, &pid, origin, page_states, summary, None).await?;
         if !single_page {
             for cid in child_page_ids(&blocks) {
                 if queued.insert(cid.clone()) {
@@ -483,53 +574,89 @@ async fn bfs_drain(
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    std::fs::create_dir_all(&opts.out_dir)
-        .with_context(|| format!("create {}", opts.out_dir.display()))?;
+    let db_path = db_path_for(&opts.db_path);
     let _ = frankweiler_etl::latchkey::ensure_curl_shim();
 
+    let db = RawDb::open(&db_path)
+        .await
+        .with_context(|| format!("open raw db {}", db_path.display()))?;
+    let run_config = json!({
+        "subtree_pages": opts.subtree_pages,
+        "inbox": opts.inbox,
+        "inbox_mirror_referenced": opts.inbox_mirror_referenced,
+        "space": opts.space,
+        "notification_page_size": opts.notification_page_size,
+        "max_notification_pages": opts.max_notification_pages,
+        "inbox_types": opts.inbox_types,
+        "max_pages": opts.max_pages,
+        "page": opts.page,
+        "retry_failed": opts.retry_failed,
+    });
+    let run_id = db.start_run(&run_config).await?;
+
     let official = NotionOfficialClient::new();
-
-    let mut existing_pages = load_latest_by_key(&opts.out_dir, ENTITY_PAGE, key_id)?;
-    let mut existing_blocks = load_latest_by_key(&opts.out_dir, ENTITY_BLOCK, key_id)?;
-    let mut existing_comments = load_latest_by_key(&opts.out_dir, ENTITY_COMMENT, key_id)?;
-
     let mut summary = FetchSummary::default();
     let mut visited: HashSet<String> = HashSet::new();
     let mut queued: HashSet<String> = HashSet::new();
+    let mut page_states = db.page_states().await?;
 
-    if let Some(single) = opts.page.as_deref() {
-        let id = format_uuid(single);
-        queued.insert(id.clone());
-        let mut q = VecDeque::new();
-        q.push_back(id);
-        bfs_drain(
-            &official,
-            &opts,
-            "single",
-            q,
-            &mut queued,
-            &mut visited,
-            &mut existing_pages,
-            &mut existing_blocks,
-            &mut existing_comments,
-            &mut summary,
-            true,
-        )
-        .await?;
-    } else {
-        // Pass 1: subtree pages — drained to completion (including all
-        // child_page descendants) before the inbox pass starts, so
-        // pages reachable from the configured subtrees don't get
-        // re-discovered + re-mirrored under "inbox".
+    // Run the actual work. We capture the result so we can always stamp
+    // the sync_runs row with finish status — even on error.
+    let work = async {
+        if opts.retry_failed {
+            let span = tracing::info_span!("notion_retry_pass");
+            let _enter = span.enter();
+            let failed = db.failed_page_ids().await?;
+            tracing::info!(count = failed.len(), "retrying failed pages");
+            let mut q: VecDeque<String> = VecDeque::new();
+            for id in failed {
+                if queued.insert(id.clone()) {
+                    q.push_back(id);
+                }
+            }
+            bfs_drain(
+                &official,
+                &db,
+                &opts,
+                "retry",
+                q,
+                &mut queued,
+                &mut visited,
+                &mut page_states,
+                &mut summary,
+                true,
+            )
+            .await?;
+            return Ok::<(), anyhow::Error>(());
+        }
+
+        if let Some(single) = opts.page.as_deref() {
+            let id = format_uuid(single);
+            queued.insert(id.clone());
+            let mut q = VecDeque::new();
+            q.push_back(id);
+            bfs_drain(
+                &official,
+                &db,
+                &opts,
+                "single",
+                q,
+                &mut queued,
+                &mut visited,
+                &mut page_states,
+                &mut summary,
+                true,
+            )
+            .await?;
+            return Ok(());
+        }
+
+        // Pass 1: subtree seeds.
         {
             let span = tracing::info_span!("notion_subtree_pass", pages = opts.subtree_pages.len());
             let _enter = span.enter();
             let mut subtree_queue: VecDeque<String> = VecDeque::new();
             for raw in &opts.subtree_pages {
-                // Accept either a bare page id (dashed or undashed) or a
-                // paste-able `https://www.notion.so/.../<title>-<hex32>`
-                // URL. Normalize at the latest possible moment so `raw`
-                // survives in logs.
                 let stripped = frankweiler_etl::ids::normalize_id_token(raw);
                 let id = format_uuid(&stripped);
                 if queued.insert(id.clone()) {
@@ -538,14 +665,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             bfs_drain(
                 &official,
+                &db,
                 &opts,
                 "subtree",
                 subtree_queue,
                 &mut queued,
                 &mut visited,
-                &mut existing_pages,
-                &mut existing_blocks,
-                &mut existing_comments,
+                &mut page_states,
                 &mut summary,
                 false,
             )
@@ -553,9 +679,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             tracing::info!(visited = visited.len(), "subtree pass done");
         }
 
-        // Pass 2: inbox-discovered pages. Skipped entirely if inbox is
-        // disabled. Pages already visited by the subtree pass are
-        // filtered out so the inbox pass only mirrors the leftovers.
+        // Pass 2: inbox.
         if opts.inbox {
             let span = tracing::info_span!("notion_inbox_pass");
             let _enter = span.enter();
@@ -621,26 +745,51 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 );
                 bfs_drain(
                     &official,
+                    &db,
                     &opts,
                     "inbox",
                     inbox_queue,
                     &mut queued,
                     &mut visited,
-                    &mut existing_pages,
-                    &mut existing_blocks,
-                    &mut existing_comments,
+                    &mut page_states,
                     &mut summary,
                     false,
                 )
                 .await?;
             }
         }
-    }
+        Ok(())
+    };
 
+    let result = work.await;
     summary.official_requests = official.request_count();
-    let _ = json!(summary.official_requests); // silence unused-import warning
+    let summary_json = json!({
+        "new_pages": summary.new_pages,
+        "upd_pages": summary.upd_pages,
+        "new_blocks": summary.new_blocks,
+        "upd_blocks": summary.upd_blocks,
+        "new_comments": summary.new_comments,
+        "upd_comments": summary.upd_comments,
+        "skipped_pages": summary.skipped_pages,
+        "new_blobs": summary.new_blobs,
+        "skipped_blobs": summary.skipped_blobs,
+        "failed_blobs": summary.failed_blobs,
+        "official_requests": summary.official_requests,
+        "unofficial_requests": summary.unofficial_requests,
+        "error": result.as_ref().err().map(|e| e.to_string()),
+    });
+    let status = if result.is_ok() { "ok" } else { "error" };
+    let _ = db.finish_run(run_id, status, &summary_json).await;
+    result?;
     Ok(summary)
 }
+
+/// Public re-export: the legacy entity name constants are still
+/// referenced in a few places. They no longer correspond to on-disk
+/// paths but stay around as logical identifiers.
+pub const ENTITY_PAGE: &str = "notion_official_page";
+pub const ENTITY_BLOCK: &str = "notion_official_block";
+pub const ENTITY_COMMENT: &str = "notion_official_comment";
 
 #[cfg(test)]
 mod tests {

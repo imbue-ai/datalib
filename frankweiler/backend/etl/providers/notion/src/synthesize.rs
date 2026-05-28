@@ -22,13 +22,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use frankweiler_etl::event_store::load_latest_by_key;
 use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
+use crate::extract::db::{block_on_load_all, db_path_for, LoadedRaw};
 use crate::extract::official::{BASE, PAGE_SIZE};
-use crate::extract::{ENTITY_BLOCK, ENTITY_COMMENT, ENTITY_PAGE};
 
 pub struct NotionSynth {
     pub api_dir: PathBuf,
@@ -44,13 +43,6 @@ impl NotionSynth {
 
 fn req_get(url: &str) -> HttpRequest {
     HttpRequest::get("notion", url).header("Accept", "application/json")
-}
-
-fn key_id(r: &Value) -> String {
-    r.get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string()
 }
 
 fn parent_id_of(block_raw: &Value, fallback_page_id: &str) -> String {
@@ -72,27 +64,29 @@ impl Synthesizer for NotionSynth {
     }
 
     fn synthesize(&self, out_root: &Path) -> Result<SynthesizeReport> {
-        if !self.api_dir.is_dir() {
+        let db_path = db_path_for(&self.api_dir);
+        if !db_path.exists() {
             return Ok(SynthesizeReport::default());
         }
+        let LoadedRaw {
+            pages,
+            blocks,
+            comments,
+            ..
+        } = block_on_load_all(&db_path)?;
         let mut count = 0usize;
-
-        let pages = load_latest_by_key(&self.api_dir, ENTITY_PAGE, key_id)?;
-        let blocks = load_latest_by_key(&self.api_dir, ENTITY_BLOCK, key_id)?;
-        let comments = load_latest_by_key(&self.api_dir, ENTITY_COMMENT, key_id)?;
 
         // /pages/{id}
         let mut page_ids: Vec<String> = Vec::new();
-        for (id, rec) in &pages {
-            if id.is_empty() {
+        for raw in &pages {
+            let Some(id) = raw.get("id").and_then(|v| v.as_str()) else {
                 continue;
-            }
-            page_ids.push(id.clone());
-            let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
+            };
+            page_ids.push(id.to_string());
             write_fixture(
                 out_root,
                 &req_get(&format!("{BASE}/pages/{id}")),
-                &json_response(&raw),
+                &json_response(raw),
             )?;
             count += 1;
         }
@@ -104,14 +98,13 @@ impl Synthesizer for NotionSynth {
         for pid in &page_ids {
             children_by_parent.entry(pid.clone()).or_default();
         }
-        for rec in blocks.values() {
-            let raw = match rec.get("raw") {
-                Some(r) => r.clone(),
-                None => continue,
-            };
-            let page_id = rec.get("page_id").and_then(|v| v.as_str()).unwrap_or("");
-            let parent = parent_id_of(&raw, page_id);
-            children_by_parent.entry(parent).or_default().push(raw);
+        for (raw, page_id_opt) in &blocks {
+            let page_id = page_id_opt.as_deref().unwrap_or("");
+            let parent = parent_id_of(raw, page_id);
+            children_by_parent
+                .entry(parent)
+                .or_default()
+                .push(raw.clone());
         }
 
         for (parent, children) in &children_by_parent {
@@ -131,16 +124,14 @@ impl Synthesizer for NotionSynth {
         for pid in &page_ids {
             comments_by_page.entry(pid.clone()).or_default();
         }
-        for rec in comments.values() {
-            let Some(page_id) = rec.get("page_id").and_then(|v| v.as_str()) else {
+        for (raw, page_id_opt) in &comments {
+            let Some(page_id) = page_id_opt.as_deref() else {
                 continue;
             };
-            if let Some(raw) = rec.get("raw").cloned() {
-                comments_by_page
-                    .entry(page_id.to_string())
-                    .or_default()
-                    .push(raw);
-            }
+            comments_by_page
+                .entry(page_id.to_string())
+                .or_default()
+                .push(raw.clone());
         }
         for (pid, items) in &comments_by_page {
             let url = format!("{BASE}/comments?block_id={pid}&page_size={PAGE_SIZE}");
@@ -163,74 +154,73 @@ impl Synthesizer for NotionSynth {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use frankweiler_etl::event_store::{diff_and_save, make_record};
+    use crate::extract::RawDb;
     use frankweiler_etl::http::{fixture_key, HttpResponse};
-    use serde_json::Map;
-    use std::collections::HashMap;
     use std::fs;
     use tempfile::tempdir;
 
-    fn write_event(api: &Path, entity: &str, key: Map<String, Value>, raw: Value) {
-        let rec = make_record(key, raw);
-        diff_and_save(api, entity, &[rec], &HashMap::new(), |r| r.to_string()).unwrap();
-    }
-
-    #[test]
-    fn emits_pages_blocks_and_comments() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn emits_pages_blocks_and_comments() {
         let d = tempdir().unwrap();
-        let api = d.path().join("notion_api");
-        fs::create_dir_all(&api).unwrap();
+        let db_file = d.path().join("notion-api.doltlite_db");
 
+        let db = RawDb::open(&db_file).await.unwrap();
         let pid = "p1";
-        let mut k = Map::new();
-        k.insert("id".into(), json!(pid));
-        write_event(
-            &api,
-            ENTITY_PAGE,
-            k,
-            json!({"id": pid, "object": "page", "parent": {"type": "workspace"}}),
-        );
-
-        // one direct child block of the page
-        let mut k = Map::new();
-        k.insert("id".into(), json!("b1"));
-        k.insert("page_id".into(), json!(pid));
-        write_event(
-            &api,
-            ENTITY_BLOCK,
-            k,
-            json!({
-                "id": "b1", "type": "paragraph", "has_children": false,
-                "parent": {"type": "page_id", "page_id": pid},
-            }),
-        );
-        // one nested block under b1
-        let mut k = Map::new();
-        k.insert("id".into(), json!("b2"));
-        k.insert("page_id".into(), json!(pid));
-        write_event(
-            &api,
-            ENTITY_BLOCK,
-            k,
-            json!({
-                "id": "b2", "type": "paragraph", "has_children": false,
-                "parent": {"type": "block_id", "block_id": "b1"},
-            }),
-        );
-
-        // one comment on the page
-        let mut k = Map::new();
-        k.insert("id".into(), json!("c1"));
-        k.insert("page_id".into(), json!(pid));
-        write_event(
-            &api,
-            ENTITY_COMMENT,
-            k,
-            json!({"id": "c1", "rich_text": []}),
-        );
+        db.upsert_pages(&[(
+            pid.into(),
+            None,
+            None,
+            Some(
+                serde_json::to_string(
+                    &json!({"id": pid, "object": "page", "parent": {"type": "workspace"}}),
+                )
+                .unwrap(),
+            ),
+        )])
+        .await
+        .unwrap();
+        db.upsert_blocks(&[
+            (
+                "b1".into(),
+                Some(pid.into()),
+                Some(pid.into()),
+                None,
+                Some(
+                    serde_json::to_string(&json!({
+                        "id": "b1", "type": "paragraph", "has_children": false,
+                        "parent": {"type": "page_id", "page_id": pid},
+                    }))
+                    .unwrap(),
+                ),
+            ),
+            (
+                "b2".into(),
+                Some("b1".into()),
+                Some(pid.into()),
+                None,
+                Some(
+                    serde_json::to_string(&json!({
+                        "id": "b2", "type": "paragraph", "has_children": false,
+                        "parent": {"type": "block_id", "block_id": "b1"},
+                    }))
+                    .unwrap(),
+                ),
+            ),
+        ])
+        .await
+        .unwrap();
+        db.upsert_comments(&[(
+            "c1".into(),
+            pid.into(),
+            Some(pid.into()),
+            serde_json::to_string(&json!({"id": "c1", "rich_text": []})).unwrap(),
+        )])
+        .await
+        .unwrap();
+        drop(db);
 
         let out = d.path().join("playback");
-        let report = NotionSynth::new(&api).synthesize(&out).unwrap();
+        let report = NotionSynth::new(&db_file).synthesize(&out).unwrap();
         // 1 page + (children for p1 and b1 = 2) + 1 comments = 4
         assert_eq!(report.fixtures_written, 4);
 

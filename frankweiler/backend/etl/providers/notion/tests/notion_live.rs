@@ -39,7 +39,7 @@ async fn notion_live_single_page_snapshot() {
     eprintln!("[test] downloading {page} -> {}", tmp.display());
 
     let opts = FetchOptions {
-        out_dir: tmp.clone(),
+        db_path: tmp.clone(),
         page: Some(page.clone()),
         ..Default::default()
     };
