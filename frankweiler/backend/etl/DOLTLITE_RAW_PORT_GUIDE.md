@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS <entity> (
     id TEXT PRIMARY KEY,                -- upstream id
     parent_id TEXT NULL,                -- if relevant
     -- ... provider-specific columns ...
-    payload TEXT NULL,                  -- raw JSON wire payload
+    payload TEXT NULL,                  -- raw JSON wire payload (stored as JSONB; see below)
     fetched_at TEXT NULL,               -- set when payload becomes non-null
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_attempt_at TEXT NULL,
@@ -143,6 +143,46 @@ CREATE TABLE IF NOT EXISTS <entity> (
 `payload IS NULL` means "exists upstream, not yet fetched."
 `--retry-failed` re-fetches rows with
 `last_error IS NOT NULL OR (payload IS NULL AND attempt_count > 0)`.
+
+### 6a. JSONB storage for payloads
+
+Doltlite v0.11.2+ inherits SQLite 3.45's binary JSON. Every
+`payload` column stores JSONB (a BLOB at the SQLite level), produced
+by wrapping the bind in `jsonb(?)` on INSERT and unwrapping with
+`json(payload) AS payload` on SELECT. The Rust side still binds a
+text JSON string and still reads a text JSON string — only the
+on-disk representation changed.
+
+```sql
+-- INSERT
+INSERT INTO conversations (id, ..., payload, ...) VALUES (?, ..., jsonb(?), ...)
+ON CONFLICT(id) DO UPDATE SET ..., payload = excluded.payload, ...
+--                                                ^ excluded.payload carries the JSONB
+--                                                  through the upsert; don't re-wrap
+
+-- SELECT
+SELECT id, json(payload) AS payload, ... FROM conversations WHERE payload IS NOT NULL
+```
+
+Add a typeof() probe test in your provider's `db.rs::tests`:
+
+```rust
+let row = sqlx::query("SELECT typeof(payload) AS t FROM <table> WHERE id='...'")
+    .fetch_one(db.pool()).await.unwrap();
+let t: String = row.try_get("t").unwrap();
+assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
+```
+
+This guards against an accidental `jsonb()` removal that would
+silently fall back to text storage with no other visible difference.
+
+**Don't wrap** `sync_runs.config|summary` or
+`endpoint_shapes.example_*` — those are tiny single-row bookkeeping
+where ad-hoc `sqlite3 ... SELECT ...` ergonomics matter more than
+binary-format parse perf.
+
+Reads via `dr::load_payloads()` already unwrap with `json(...)`; if
+you write a custom SELECT that returns `payload`, wrap it manually.
 
 ### 7. Blobs
 
@@ -217,6 +257,8 @@ plumbing delegated).
            Ok(Self { pool: dr::open(p, DDL).await? })
        }
        // Provider-specific upserts + state-check methods.
+       // - Wrap payload binds in `jsonb(?)` (see §6a).
+       // - Wrap payload SELECTs in `json(payload) AS payload`.
        // Blob / sync_runs methods delegate to `dr::*`.
    }
 
@@ -457,6 +499,11 @@ A successful port produces:
   `qmd_path` columns shift to the page-dir form
   (`<entity>/index.md`); `source_fingerprint` may drift too if you
   dropped synthetic keys from the payload.
+- `raw/<name>.doltlite_db.snap`: just a `<binary N bytes>` marker;
+  the byte count will change as you populate the new tables. Expect
+  small drifts on subsequent edits (JSONB encoding, schema changes,
+  page-alignment quirks) — review the size delta as a sanity check
+  but don't try to make it byte-stable across encoding changes.
 
 ---
 
