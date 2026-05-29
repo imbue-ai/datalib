@@ -163,3 +163,97 @@ fn missing_blob_falls_back_to_upstream_url() {
     // Suppress unused-import warnings if any.
     let _ = Value::Null;
 }
+
+/// Regression test for the live-Notion page
+/// `364a550f-af95-80de-829f-c5fccb3021fd` (Project Data Liberation
+/// test page), where an image block rendered as the `*(image: image)*`
+/// fallback instead of a real markdown image link.
+///
+/// The reproducer is a `file_upload`-typed image block — same shape
+/// the Notion API returns for images that users upload through the
+/// browser UI. That payload carries no `external.url` and no
+/// `file.url`; without those, our render's `media_url` helper returns
+/// empty, and (in the buggy state) we fall through to the
+/// `*(image: …)*` placeholder.
+///
+/// This test FAILS today: it asserts the rendered md contains a real
+/// `![…](…)` image link and not the placeholder. The fix likely lives
+/// in the notion extractor (handle `file_upload`-typed image blocks
+/// by fetching their bytes the same way `external`/`file` blocks are
+/// already handled), at which point this assertion starts passing.
+///
+/// Marked `#[ignore]` so the rest of the suite stays green; run with
+/// `cargo test -- --ignored` (or `bazelisk test
+/// //frankweiler/backend/etl/providers/notion:notion_blob_render
+/// --test_arg=--ignored`) to see the actual failure.
+#[test]
+#[ignore = "BUG: image renders as *(image: image)* fallback for file_upload-typed blocks"]
+fn file_upload_image_renders_as_real_image_not_fallback() {
+    let d = tempdir().unwrap();
+    let root = d.path();
+
+    let pid = "33333333-4444-5555-6666-777777777777";
+    let bid = "cccccccc-dddd-eeee-ffff-000000000000";
+
+    let page = json!({
+        "id": pid,
+        "object": "page",
+        "parent": {"type": "workspace"},
+        "properties": {"title": {"title": [{"plain_text": "uploaded image page"}]}},
+        "created_time": "2026-05-27T00:00:00.000Z",
+        "last_edited_time": "2026-05-27T00:00:00.000Z",
+    });
+    // file_upload shape: no `file.url` / no `external.url` — same as
+    // the live capture for the buggy page. The image is identified by
+    // a server-side `file_upload.id`, and Notion expects clients to
+    // resolve that to a URL out-of-band.
+    let image_block = json!({
+        "id": bid,
+        "type": "image",
+        "has_children": false,
+        "parent": {"type": "page_id", "page_id": pid},
+        "image": {
+            "type": "file_upload",
+            "file_upload": {"id": "55555555-6666-7777-8888-999999999999"},
+            "caption": []
+        }
+    });
+
+    let parsed = ParsedNotionOfficial {
+        pages: vec![page],
+        blocks: vec![image_block],
+        comments: vec![],
+        user_names: HashMap::new(),
+        media_urls: HashMap::new(),
+        bookmark_titles: HashMap::new(),
+        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+    };
+
+    render_notion_official(
+        &parsed,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
+    )
+    .expect("render ok");
+
+    let md = fs::read_to_string(
+        root.join("rendered_md")
+            .join("notion")
+            .join("pages")
+            .join(pid)
+            .join("index.md"),
+    )
+    .expect("md exists");
+
+    assert!(
+        !md.contains("*(image:"),
+        "image block rendered as the *(image: …)* placeholder; \
+         expected a real ![…](…) link. Page md:\n{md}",
+    );
+    assert!(
+        md.contains("!["),
+        "expected an image markdown link in the rendered page; got:\n{md}",
+    );
+}
