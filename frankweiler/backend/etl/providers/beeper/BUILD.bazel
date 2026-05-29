@@ -1,0 +1,70 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_etl_beeper",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_beeper",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:tracing-indicatif",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+# Extract step (Beeper). CLI driver. Shells out to host `latchkey` at
+# runtime for the matrix.beeper.com access token.
+rust_binary(
+    name = "beeper_download",
+    srcs = ["src/bin/beeper_download.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_beeper",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+    ],
+)
+
+# Translate step (Beeper). Milestone A placeholder; expands as
+# per-bridge translators (iMessage, Signal, …) come online.
+rust_binary(
+    name = "beeper_translate_bin",
+    srcs = ["src/bin/beeper_translate.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_beeper",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+    ],
+)
+
+rust_test(
+    name = "beeper_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_beeper",
+    edition = "2021",
+)
