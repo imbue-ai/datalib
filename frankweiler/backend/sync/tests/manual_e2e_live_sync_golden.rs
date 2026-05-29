@@ -73,6 +73,10 @@ const VOLATILE_KEYS: &[&str] = &[
     // items fetched; on a live API they jitter with whatever new
     // activity has happened. Snapshot the structure, not the values.
     "stats",
+    // qmd's `status` text embeds the index file path, byte sizes, and
+    // a relative "updated N seconds ago" — none of which reproduce
+    // across runs. Snapshot presence, not contents.
+    "qmd_status",
     // Renderer-derived hash. Stable inputs produce a stable value, but
     // any volatile field upstream (which we redact above) would flip it,
     // so redact here too — a real algorithm change will surface as

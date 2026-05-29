@@ -7,9 +7,34 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
+    {
+      homeModules.default = { config, lib, pkgs, ... }:
+        with lib;
+        let
+          cfg = config.programs.qmd;
+        in
+        {
+          options.programs.qmd = {
+            enable = mkEnableOption "QMD - on-device search engine for markdown notes";
+
+            package = mkOption {
+              type = types.package;
+              default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+              defaultText = literalExpression "inputs.qmd.packages.\${pkgs.stdenv.hostPlatform.system}.default";
+              description = "The qmd package to use.";
+            };
+          };
+
+          config = mkIf cfg.enable {
+            home.packages = [ cfg.package ];
+          };
+        };
+    } //
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+        version = packageJson.version;
 
         # SQLite with loadable extension support for sqlite-vec
         sqliteWithExtensions = pkgs.sqlite.overrideAttrs (old: {
@@ -19,8 +44,8 @@
         });
 
         nodeModulesHashes = {
-          x86_64-linux = "sha256-D0ezO4vqq4iswcAMU2DCql9ZAQvh3me6N9aDB5roq4w=";
-          aarch64-darwin = "sha256-qU+9KdR/nTocelyANS09I/4yaQ+7s1LvJNqB27IOK/c=";
+          x86_64-linux = "sha256-sVXoNWIcx1RYRtRWB4F2j7x8/cabFBKq+plFhPU7tBc=";
+          aarch64-darwin = "sha256-gDyJ5boyH44SeXlKo+W4G36GSUejyXP5PFvW+dFS1Mk=";
 
           # Populate these on first build for additional hosts if/when needed.
           aarch64-linux = pkgs.lib.fakeHash;
@@ -29,7 +54,7 @@
 
         nodeModules = pkgs.stdenvNoCC.mkDerivation {
           pname = "qmd-node-modules";
-          version = "1.0.0";
+          inherit version;
 
           src = ./.;
 
@@ -69,7 +94,7 @@
 
         qmd = pkgs.stdenv.mkDerivation {
           pname = "qmd";
-          version = "1.0.0";
+          inherit version;
 
           src = ./.;
 
@@ -141,4 +166,5 @@
         };
       }
     );
+
 }

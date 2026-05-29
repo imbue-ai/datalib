@@ -601,16 +601,15 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     // ── QMD index ──────────────────────────────────────────────────
     if !cfg.qmd.skip {
         match build_qmd_index(&root, cfg.qmd.models_dir.as_deref()) {
-            Ok(()) => {
-                eprintln!(
-                    "[frankweiler-sync] wrote {}",
-                    root.join("qmd/index.sqlite").display()
-                );
-                summary.lock().unwrap().qmd_index = Some(PhaseOutcome::ok(
+            Ok(outcome) => {
+                eprintln!("[frankweiler-sync] wrote {}", outcome.index_path.display());
+                let mut s = summary.lock().unwrap();
+                s.qmd_index = Some(PhaseOutcome::ok(
                     "qmd",
                     "qmd",
-                    root.join("qmd/index.sqlite").display().to_string(),
+                    outcome.index_path.display().to_string(),
                 ));
+                s.qmd_status = outcome.status_output;
             }
             Err(e) => {
                 eprintln!("[frankweiler-sync] qmd index FAILED: {e:#}");
@@ -707,16 +706,18 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
+            let mp = multi.clone();
             set.spawn(async move {
-                eprintln!("[extract] start {name} ({type_str})");
+                mp.println(format!("[extract] start {name} ({type_str})"))
+                    .ok();
                 let r = plan
                     .run()
                     .await
                     .with_context(|| format!("extract {name} (type={type_str})"));
                 match &r {
-                    Ok(s) => eprintln!("[extract] done  {name}: {s}"),
-                    Err(e) => eprintln!("[extract] FAIL  {name}: {e:#}"),
-                }
+                    Ok(s) => mp.println(format!("[extract] done  {name}: {s}")).ok(),
+                    Err(e) => mp.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+                };
                 (name, type_str, r)
             });
         }
@@ -738,15 +739,15 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
-            eprintln!("[extract] {name} ({type_str})");
+            multi.println(format!("[extract] {name} ({type_str})")).ok();
             let r = plan
                 .run()
                 .await
                 .with_context(|| format!("extract {name} (type={type_str})"));
             match &r {
-                Ok(s) => eprintln!("[extract] done  {name}: {s}"),
-                Err(e) => eprintln!("[extract] FAIL  {name}: {e:#}"),
-            }
+                Ok(s) => multi.println(format!("[extract] done  {name}: {s}")).ok(),
+                Err(e) => multi.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+            };
             outcomes.push(summary::outcome_from(&name, type_str, r));
         }
     }
@@ -1206,11 +1207,13 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-fn build_qmd_index(root: &Path, models_dir: Option<&Path>) -> Result<()> {
+fn build_qmd_index(
+    root: &Path,
+    models_dir: Option<&Path>,
+) -> Result<frankweiler_qmd_indexer::IndexOutcome> {
     let mut opts = frankweiler_qmd_indexer::IndexOptions::new(root);
     if let Some(d) = models_dir {
         opts.models_dir = d.to_path_buf();
     }
-    frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")?;
-    Ok(())
+    frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")
 }

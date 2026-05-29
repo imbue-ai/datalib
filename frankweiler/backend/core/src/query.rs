@@ -179,7 +179,16 @@ pub fn parse_query(s: &str) -> ParsedQuery {
                     } else {
                         FreeTextMode::Hybrid
                     };
-                    free_terms.push(v);
+                    // Re-quote multi-word values so the runner can route
+                    // them as a single lex phrase. `qmd:"earl grey"` and
+                    // `qmd:earl` both work; quotes survive into free_text
+                    // only when the user actually typed a phrase.
+                    let term = if v.contains(char::is_whitespace) {
+                        format!("\"{v}\"")
+                    } else {
+                        v
+                    };
+                    free_terms.push(term);
                     continue;
                 }
                 let field = Field::from_key(k);
@@ -194,16 +203,12 @@ pub fn parse_query(s: &str) -> ParsedQuery {
                 continue;
             }
         }
-        // Bare term: strip surrounding quotes so `"hello world"` lands as
-        // `hello world` in free_text. Negation prefix without `field:`
-        // falls back to free text including the leading `-` (we don't yet
-        // do full-text NOT).
-        let unquoted = unquote(&body);
-        let raw = if negate {
-            format!("-{}", unquoted)
-        } else {
-            unquoted
-        };
+        // Bare term: preserve any surrounding quotes and leading `-`
+        // verbatim so the runner can forward lex-meaningful syntax to
+        // qmd. `"earl grey"` → qmd exact-phrase match; `-foo` → qmd
+        // term exclusion; `-"earl grey"` → qmd phrase exclusion. See
+        // `qmd::runner::build_qmd_query`. Plain words pass through too.
+        let raw = if negate { format!("-{}", body) } else { body };
         free_terms.push(raw);
     }
     let free_text = free_terms.join(" ");
@@ -353,10 +358,24 @@ mod tests {
     }
 
     #[test]
-    fn quoted_free_text() {
+    fn quoted_free_text_preserves_quotes() {
+        // Quotes survive into free_text so the runner can build a
+        // qmd `lex: "..."` line for exact-phrase matching.
         let q = parse_query("\"hello world\" author:thad");
-        assert_eq!(q.free_text, "hello world");
+        assert_eq!(q.free_text, "\"hello world\"");
         assert_eq!(q.filters[&Field::Author], vec!["thad".to_string()]);
+    }
+
+    #[test]
+    fn negated_quoted_free_text_preserves_quotes_and_dash() {
+        let q = parse_query("-\"earl grey\"");
+        assert_eq!(q.free_text, "-\"earl grey\"");
+    }
+
+    #[test]
+    fn phrase_plus_word_concatenated_in_order() {
+        let q = parse_query("\"earl grey\" tea");
+        assert_eq!(q.free_text, "\"earl grey\" tea");
     }
 
     #[test]
@@ -444,7 +463,9 @@ mod tests {
     #[test]
     fn qmd_predicate_recognized_as_hybrid() {
         let q = parse_query("qmd:\"earl grey\"");
-        assert_eq!(q.free_text, "earl grey");
+        // Multi-word qmd: value is re-quoted so the runner can route
+        // it as a single lex phrase.
+        assert_eq!(q.free_text, "\"earl grey\"");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);
         // qmd: is NOT a Field — it doesn't show up as a structured filter.
         assert!(q.filters.is_empty());
@@ -454,12 +475,13 @@ mod tests {
     #[test]
     fn qmd_vsearch_predicate_switches_mode() {
         let q = parse_query("qmd_vsearch:\"hello world\"");
-        assert_eq!(q.free_text, "hello world");
+        assert_eq!(q.free_text, "\"hello world\"");
         assert_eq!(q.free_text_mode, FreeTextMode::Vsearch);
     }
 
     #[test]
-    fn qmd_predicate_coexists_with_filters() {
+    fn qmd_predicate_single_word_unquoted() {
+        // Single-word qmd: value doesn't need re-quoting.
         let q = parse_query("qmd:\"foo\" source:Slack");
         assert_eq!(q.free_text, "foo");
         assert_eq!(q.free_text_mode, FreeTextMode::Hybrid);

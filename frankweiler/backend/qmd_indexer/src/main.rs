@@ -81,6 +81,10 @@ fn print_help() {
 
 fn main() -> Result<()> {
     let opts = parse_args()?;
-    run_index(&opts)?;
+    let outcome = run_index(&opts)?;
+    if let Some(status) = outcome.status_output {
+        eprintln!("---- qmd status ----");
+        eprint!("{status}");
+    }
     Ok(())
 }

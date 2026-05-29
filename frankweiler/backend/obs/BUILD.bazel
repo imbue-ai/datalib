@@ -3,10 +3,11 @@ load("@rules_rust//rust:defs.bzl", "rust_library")
 exports_files(["Cargo.toml"])
 
 # Shared observability init for every frankweiler Rust binary: stderr
-# fmt layer (pretty or JSON), tracing-indicatif progress bars routed
-# through the same writer (so logs don't stomp the bars), optional OTLP
-# exporter, EnvFilter wired to `RUST_LOG` / `--log-level`. Provider
-# binaries flatten `ObsArgs` into their clap parser and call `init`.
+# fmt layer (pretty or JSON), an `IndicatifWriter` that coordinates
+# log emission with a shared `MultiProgress` (exposed via
+# `shared_multi()`), optional OTLP exporter, and EnvFilter wired to
+# `RUST_LOG` / `--log-level`. Provider binaries flatten `ObsArgs` into
+# their clap parser and call `init`.
 rust_library(
     name = "frankweiler_obs",
     srcs = glob(["src/**/*.rs"]),
@@ -16,6 +17,7 @@ rust_library(
     deps = [
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:indicatif",
         "@frankweiler_crates//:opentelemetry",
         "@frankweiler_crates//:opentelemetry-otlp",
         "@frankweiler_crates//:opentelemetry_sdk",

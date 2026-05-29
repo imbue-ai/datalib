@@ -40,15 +40,13 @@ rust_library(
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
         "@frankweiler_crates//:uuid",
     ],
 )
 
 # Extract step (Slack). CLI driver. Emits structured tracing events:
-# pretty + tracing-indicatif progress bars on a TTY, NDJSON on stderr
-# otherwise, plus optional OTLP export via --otlp-endpoint. Shells out
-# to host `latchkey` at runtime.
+# pretty on a TTY, NDJSON on stderr otherwise, plus optional OTLP
+# export via --otlp-endpoint. Shells out to host `latchkey` at runtime.
 rust_binary(
     name = "slack_download",
     srcs = ["src/bin/slack_download.rs"],
@@ -85,7 +83,6 @@ rust_binary(
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
     ],
 )
 

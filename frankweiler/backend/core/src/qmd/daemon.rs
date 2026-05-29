@@ -16,7 +16,9 @@
 //! the tokio runtime is never blocked.
 
 use crate::qmd::mapping::{QmdHit, QueryMode};
-use crate::qmd::runner::{strip_uri, DEFAULT_COLLECTION, DEFAULT_QMD_VERSION};
+use crate::qmd::runner::{
+    has_lex_syntax, strip_lex_syntax, strip_uri, DEFAULT_COLLECTION, DEFAULT_QMD_VERSION,
+};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
@@ -114,15 +116,15 @@ impl QmdDaemon {
         // for Vsearch we send vec only. First sub-query gets 2× weight,
         // so lex goes first when present (better behavior on exact terms
         // like UUIDs, channel names, usernames).
-        let searches = match mode {
-            QueryMode::Hybrid => serde_json::json!([
-                {"type": "lex", "query": q},
-                {"type": "vec", "query": q},
-            ]),
-            QueryMode::Vsearch => serde_json::json!([
-                {"type": "vec", "query": q},
-            ]),
-        };
+        //
+        // The user may type qmd lex syntax (`"phrase"`, `-word`,
+        // `-"phrase"`) in the search bar. The `lex:` sub-query takes
+        // it verbatim — qmd's FTS5 layer interprets the syntax. The
+        // `vec:` sub-query gets a stripped version: quotes removed,
+        // exclusions dropped, since vector search has no notion of
+        // either. When every token is an exclusion the vec sub-query
+        // would be empty, so we omit it entirely.
+        let searches = build_daemon_searches(mode, q);
         let mut guard = self
             .state
             .lock()
@@ -152,6 +154,32 @@ impl QmdDaemon {
             teardown(&mut guard);
         }
         res
+    }
+}
+
+/// Build the MCP `searches` JSON array for a given user query and mode.
+/// Extracted so the lex/vec routing is unit-testable without spawning
+/// the daemon. See [`crate::qmd::runner::has_lex_syntax`] /
+/// [`crate::qmd::runner::strip_lex_syntax`] for the shared rules used
+/// by the CLI fallback path.
+fn build_daemon_searches(mode: QueryMode, q: &str) -> serde_json::Value {
+    let lex_has_syntax = has_lex_syntax(q);
+    let vec_text = if lex_has_syntax {
+        strip_lex_syntax(q)
+    } else {
+        q.to_string()
+    };
+    match mode {
+        QueryMode::Hybrid => {
+            let mut subs = vec![serde_json::json!({"type": "lex", "query": q})];
+            if !vec_text.is_empty() {
+                subs.push(serde_json::json!({"type": "vec", "query": vec_text}));
+            }
+            serde_json::Value::Array(subs)
+        }
+        QueryMode::Vsearch => serde_json::json!([
+            {"type": "vec", "query": if vec_text.is_empty() { q } else { vec_text.as_str() }},
+        ]),
     }
 }
 
@@ -403,5 +431,75 @@ mod tests {
         // Path that doesn't start with the configured collection is left
         // untouched (defensive — shouldn't happen in practice).
         assert_eq!(hits[1].path, "other/foo.qmd");
+    }
+
+    #[test]
+    fn hybrid_plain_text_sends_lex_and_vec_with_same_query() {
+        // No lex syntax → vec gets the same untouched text as lex.
+        let s = build_daemon_searches(QueryMode::Hybrid, "earl grey");
+        assert_eq!(
+            s,
+            serde_json::json!([
+                {"type": "lex", "query": "earl grey"},
+                {"type": "vec", "query": "earl grey"},
+            ])
+        );
+    }
+
+    #[test]
+    fn hybrid_quoted_phrase_strips_quotes_from_vec() {
+        let s = build_daemon_searches(QueryMode::Hybrid, "\"earl grey\"");
+        assert_eq!(
+            s,
+            serde_json::json!([
+                {"type": "lex", "query": "\"earl grey\""},
+                {"type": "vec", "query": "earl grey"},
+            ])
+        );
+    }
+
+    #[test]
+    fn hybrid_exclusion_only_omits_vec_subquery() {
+        // -foo: nothing positive to embed, so we'd be sending an empty
+        // vec query. Skip it instead.
+        let s = build_daemon_searches(QueryMode::Hybrid, "-spam");
+        assert_eq!(
+            s,
+            serde_json::json!([
+                {"type": "lex", "query": "-spam"},
+            ])
+        );
+    }
+
+    #[test]
+    fn hybrid_mixed_inclusion_exclusion() {
+        let s = build_daemon_searches(QueryMode::Hybrid, "tea -coffee");
+        assert_eq!(
+            s,
+            serde_json::json!([
+                {"type": "lex", "query": "tea -coffee"},
+                {"type": "vec", "query": "tea"},
+            ])
+        );
+    }
+
+    #[test]
+    fn vsearch_strips_lex_syntax_for_vector_query() {
+        // Quoted phrase: drop the quotes for vec.
+        let s = build_daemon_searches(QueryMode::Vsearch, "\"earl grey\"");
+        assert_eq!(
+            s,
+            serde_json::json!([{"type": "vec", "query": "earl grey"}])
+        );
+    }
+
+    #[test]
+    fn vsearch_exclusion_only_falls_back_to_raw_query() {
+        // A pure-exclusion vsearch would strip to empty; rather than
+        // send an empty vec query, fall back to the raw text so qmd at
+        // least sees *something* to embed. Vector search has no
+        // exclusion semantics so this is best-effort.
+        let s = build_daemon_searches(QueryMode::Vsearch, "-spam");
+        assert_eq!(s, serde_json::json!([{"type": "vec", "query": "-spam"}]));
     }
 }

@@ -33,7 +33,6 @@ rust_library(
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
     ],
 )
 
@@ -77,7 +76,6 @@ rust_binary(
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
     ],
 )
 

@@ -1,18 +1,23 @@
 //! Observability wiring for every frankweiler Rust binary.
 //!
-//! One entry point — [`init`] — that builds a `tracing` subscriber with
-//! the rendering layer chosen by environment, plus an optional OTLP
-//! exporter. The intent is that every CLI in the workspace writes the
-//! same structured events and lets the renderer be one of N consumers:
+//! One entry point — [`init`] — that builds a `tracing` subscriber, plus
+//! an optional OTLP exporter and a shared `MultiProgress` for progress
+//! bars. The fmt layer writes through an [`IndicatifWriter`] tied to
+//! that `MultiProgress`, so every log emission suspends bar draws before
+//! writing. Callers attach their bars to the same `MultiProgress`
+//! (via [`shared_multi`] or [`TracingGuard::multi`]) so logs never stomp
+//! a bar.
 //!
-//!   * TTY on stderr → [`tracing_indicatif`] progress bars (one per span
-//!     that opts in via `indicatif.pb_show`), plus pretty-printed events
-//!     routed through the same writer so log lines never stomp a bar.
-//!   * Non-TTY (pipes, CI, container logs) → newline-delimited JSON on
-//!     stderr.
-//!   * `--otlp-endpoint <url>` (or `$OTLP_ENDPOINT`) → also export spans
-//!     to an OTLP/gRPC collector. Cheap to leave off; pays for itself
-//!     the first time you want a dashboard that isn't `grep`.
+//! Two log formats:
+//!   * `pretty` — human-readable, one line per event. Default on TTY.
+//!   * `json` — newline-delimited JSON on stderr. Default off-TTY.
+//!
+//! And optional OTLP export: `--otlp-endpoint <url>` (or `$OTLP_ENDPOINT`)
+//! ships spans to an OTLP/gRPC collector in addition to local rendering.
+//!
+//! There are no automatic per-span progress bars. Bars are created
+//! explicitly by callers (e.g. `frankweiler-sync` builds per-source bars
+//! attached to [`shared_multi`]).
 //!
 //! Drop-in usage from a CLI:
 //!
@@ -33,29 +38,23 @@
 //! ```
 
 use std::io::IsTerminal;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
+use indicatif::MultiProgress;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::TracerProvider;
 use opentelemetry_sdk::Resource;
-use tracing_indicatif::style::ProgressStyle;
-use tracing_indicatif::IndicatifLayer;
+use tracing_indicatif::writer::IndicatifWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
-// Trailing `{msg}` slot so callers can publish a live-updating
-// cumulative-counter line via `IndicatifSpanExt::pb_set_message`.
-// tracing-indicatif 0.3 does not hook `on_record`, so the bar will not
-// reflect post-creation `span.record` calls — `pb_set_message` is the
-// supported path.
-const PROGRESS_TEMPLATE: &str = "{span_child_prefix}{spinner} {span_name}{{{span_fields}}} {msg}";
-
-/// `--log-format` selector. `Auto` (the default) emits pretty + progress
-/// bars on a TTY, JSON otherwise — exactly what you'd want from a CLI
-/// that doubles as a pipeline step.
+/// `--log-format` selector. `Auto` (the default) emits pretty on a TTY,
+/// JSON otherwise — exactly what you'd want from a CLI that doubles as
+/// a pipeline step.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum LogFormat {
     #[default]
@@ -68,8 +67,8 @@ pub enum LogFormat {
 /// `#[command(flatten)]`.
 #[derive(Debug, Clone, clap::Args)]
 pub struct ObsArgs {
-    /// Renderer for the local stderr stream. `auto` picks pretty +
-    /// `tracing_indicatif` progress bars on a TTY, JSON otherwise.
+    /// Renderer for the local stderr stream. `auto` picks pretty on a
+    /// TTY, JSON otherwise.
     #[arg(long, value_enum, default_value_t = LogFormat::Auto, env = "FW_LOG_FORMAT")]
     pub log_format: LogFormat,
 
@@ -97,8 +96,23 @@ impl Default for ObsArgs {
 
 /// Returned from [`init`]. Drop on shutdown so the OTLP batch exporter
 /// gets a chance to flush before the process exits.
+///
+/// Holds a clone of the shared `MultiProgress`. Callers that want
+/// progress bars coordinated with the tracing writer should pull
+/// [`multi`](Self::multi) and attach their bars to it (and route any
+/// status `eprintln!`-style output through `multi.println(...)`).
 pub struct TracingGuard {
     provider: Option<TracerProvider>,
+    multi: Arc<MultiProgress>,
+}
+
+impl TracingGuard {
+    /// The shared `MultiProgress` whose draws are suspended by every
+    /// tracing log emission. Attach all interactive progress bars here
+    /// so they don't fight with log lines.
+    pub fn multi(&self) -> &Arc<MultiProgress> {
+        &self.multi
+    }
 }
 
 impl Drop for TracingGuard {
@@ -147,14 +161,33 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
         None => (None, None),
     };
 
-    let registry = tracing_subscriber::registry().with(filter).with(otel_layer);
+    // Single `MultiProgress` shared between tracing's writer and any
+    // caller-attached bars. The tracing fmt layer writes through an
+    // `IndicatifWriter` that suspends this MP before each line, so log
+    // emissions can't stomp on bars in either format.
+    //
+    // `IndicatifWriter::new` takes a `MultiProgress` by value, but the
+    // type is internally a cheap `Arc`-cloneable handle. Cloning here
+    // gives the writer its own handle while we keep an outer `Arc` so
+    // callers can attach bars via [`shared_multi`] / [`TracingGuard::multi`].
+    // The one legitimate construction in the workspace. Everywhere
+    // else pulls this same MP via `shared_multi()`; the clippy
+    // `disallowed-methods` entry in `clippy.toml` enforces that.
+    #[allow(clippy::disallowed_methods)]
+    let multi = Arc::new(MultiProgress::new());
+    let writer: IndicatifWriter<tracing_indicatif::writer::Stderr> =
+        IndicatifWriter::new((*multi).clone());
 
+    // Pretty vs JSON differ only in the `.json()` toggle. Each branch
+    // builds its own fmt layer because the two builder chains end in
+    // different concrete types that can't share a variable.
+    let registry = tracing_subscriber::registry().with(filter).with(otel_layer);
     if use_json {
         registry
             .with(
                 tracing_subscriber::fmt::layer()
                     .json()
-                    .with_writer(std::io::stderr)
+                    .with_writer(writer)
                     .with_file(true)
                     .with_line_number(true)
                     .with_thread_ids(true)
@@ -163,12 +196,6 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
             .try_init()
             .context("install tracing subscriber")?;
     } else {
-        // Route the fmt layer's writer through the IndicatifLayer so log
-        // lines render above the bars instead of through them.
-        let indicatif = IndicatifLayer::new().with_progress_style(
-            ProgressStyle::with_template(PROGRESS_TEMPLATE).expect("valid template"),
-        );
-        let writer = indicatif.get_stderr_writer();
         registry
             .with(
                 tracing_subscriber::fmt::layer()
@@ -178,10 +205,26 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
                     .with_thread_ids(true)
                     .with_target(true),
             )
-            .with(indicatif)
             .try_init()
             .context("install tracing subscriber")?;
     }
 
-    Ok(TracingGuard { provider })
+    // Publish the shared MultiProgress so call sites in other crates
+    // can grab it via `frankweiler_obs::shared_multi()` without
+    // threading the `TracingGuard` through their call chain. Second
+    // and later inits are no-ops (the first wins) — relevant only
+    // in tests that exercise `init` more than once per process.
+    let _ = SHARED_MULTI.set(multi.clone());
+
+    Ok(TracingGuard { provider, multi })
+}
+
+static SHARED_MULTI: OnceLock<Arc<MultiProgress>> = OnceLock::new();
+
+/// The process-wide [`MultiProgress`] published by [`init`]. Returns
+/// `None` before `init` runs (e.g. in unit tests that don't initialize
+/// observability) — callers should fall back to a local `MultiProgress`
+/// or simply skip rendering bars in that case.
+pub fn shared_multi() -> Option<Arc<MultiProgress>> {
+    SHARED_MULTI.get().cloned()
 }

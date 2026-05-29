@@ -147,6 +147,11 @@ pub struct SyncSummary {
     pub translate: Vec<PhaseOutcome>,
     pub load: Option<LoadOutcome>,
     pub qmd_index: Option<PhaseOutcome>,
+    /// Raw stdout of `qmd status` captured at the end of the qmd-index
+    /// phase. `None` if the phase was skipped or the capture failed.
+    /// qmd has no `--json` mode for `status`, so this is human-readable
+    /// text.
+    pub qmd_status: Option<String>,
 }
 
 impl SyncSummary {
@@ -163,6 +168,7 @@ impl SyncSummary {
             translate: Vec::new(),
             load: None,
             qmd_index: None,
+            qmd_status: None,
         }
     }
 
@@ -209,6 +215,7 @@ impl SyncSummary {
             "translate": self.translate.iter().map(PhaseOutcome::to_json).collect::<Vec<_>>(),
             "load": load,
             "qmd_index": self.qmd_index.as_ref().map(PhaseOutcome::to_json),
+            "qmd_status": self.qmd_status,
         })
     }
 

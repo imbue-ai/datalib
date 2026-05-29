@@ -41,11 +41,10 @@ runfiles = "0.2"
 
 # Observability — the heavy stack (tracing-subscriber, indicatif,
 # OTLP) lives in `frankweiler-obs`. We keep `tracing` here for the
-# `events` module's `info!`/`debug!` calls, and `tracing-indicatif` +
-# `clap` for the `grid_rows_load` binary that uses them directly.
+# `events` module's `info!`/`debug!` calls and `clap` for the
+# `grid_rows_load` binary.
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
-tracing-indicatif = "0.3"
 
 # Curl-compatible TLS-impersonating HTTP client. Used by
 # `latchkey-curl-shim`; gated by a feature in case downstream

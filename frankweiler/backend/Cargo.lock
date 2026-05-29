@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -869,14 +869,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-indicatif",
  "wreq",
  "wreq-util",
 ]
 
 [[package]]
 name = "frankweiler-etl-anthropic"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -894,13 +893,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-indicatif",
  "uuid",
 ]
 
 [[package]]
 name = "frankweiler-etl-chatgpt"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -918,13 +916,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-indicatif",
  "uuid",
 ]
 
 [[package]]
 name = "frankweiler-etl-github"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -947,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-gitlab"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -970,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-notion"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -988,13 +985,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-indicatif",
  "uuid",
 ]
 
 [[package]]
 name = "frankweiler-etl-slack"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1013,13 +1009,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "tracing-indicatif",
  "uuid",
 ]
 
 [[package]]
 name = "frankweiler-http"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -1043,10 +1038,11 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-obs"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "clap",
+ "indicatif",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1058,14 +1054,14 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-qmd-indexer"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
 ]
 
 [[package]]
 name = "frankweiler-schema"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -1073,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-sync"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1101,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",

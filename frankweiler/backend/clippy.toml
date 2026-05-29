@@ -1,0 +1,19 @@
+# Clippy config for the frankweiler Rust workspace.
+#
+# Anything here that fires becomes a hard error in pre-commit, which
+# runs `cargo clippy --all-targets --all-features -- -D warnings`.
+
+# Keep progress-bar rendering coordinated with the tracing writer.
+#
+# `frankweiler_obs::init` constructs the single process-wide
+# `MultiProgress` and wires it into an `IndicatifWriter` that the
+# tracing fmt layer uses, so every log emission suspends bar draws
+# before writing. A second `MultiProgress` somewhere else in the
+# workspace would race for stderr and reintroduce the flicker we
+# already debugged out of existence.
+#
+# If a new caller needs progress bars, pull the shared MP via
+# `frankweiler_obs::shared_multi()` and attach bars there.
+disallowed-methods = [
+    { path = "indicatif::MultiProgress::new", reason = "Use `frankweiler_obs::shared_multi()` to get the process-wide MultiProgress that's coordinated with the tracing writer. A second MultiProgress races for stderr and flickers." },
+]

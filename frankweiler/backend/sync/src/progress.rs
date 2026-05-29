@@ -55,10 +55,14 @@ impl ProgressSink for IndicatifSink {
     }
 }
 
-/// Create a `MultiProgress` configured for `stderr`. Returns the
-/// MultiProgress + a constructor closure for per-source bars.
+/// The process-wide `MultiProgress` owned by `frankweiler_obs`, whose
+/// draws are suspended by every tracing log emission. Constructing a
+/// separate `MultiProgress` is forbidden by `clippy.toml` —
+/// `obs::init` is the single source of truth, and the sync binary
+/// always calls it before reaching this code path.
 pub fn make_multi() -> Arc<MultiProgress> {
-    Arc::new(MultiProgress::new())
+    frankweiler_obs::shared_multi()
+        .expect("frankweiler_obs::init must run before sync::progress::make_multi")
 }
 
 /// Build a fresh per-source bar attached to the given MultiProgress.

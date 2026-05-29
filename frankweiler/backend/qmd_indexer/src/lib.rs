@@ -62,10 +62,20 @@ pub fn default_models_dir() -> PathBuf {
     home.join(".cache").join("qmd-models")
 }
 
+/// Result of a `run_index` pass. `status_output` is the raw stdout of
+/// `qmd status` (qmd has no `--json` flag, so this is the human-readable
+/// text) and is `None` if the status capture failed for any reason —
+/// indexing success doesn't depend on it.
+#[derive(Debug, Clone)]
+pub struct IndexOutcome {
+    pub index_path: PathBuf,
+    pub status_output: Option<String>,
+}
+
 /// Run an incremental qmd index pass over `<root>/rendered_md/*.md` (and
 /// every other `.md` under root). Creates the collection lazily on first
 /// run; subsequent runs only `update` + optional `embed`.
-pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
+pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let root = opts
         .root
         .canonicalize()
@@ -117,6 +127,21 @@ pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
         run_qmd(&cache_home, &qmd_pkg, &["embed"])?;
     }
 
+    // Eagerly pull the query-expansion and reranker models so the first
+    // user query (via the UI or `qmd query` directly) doesn't pay the
+    // multi-hundred-MB download cost on the interactive path. The embed
+    // step above already pulled the embedding model; `qmd pull` is
+    // idempotent so re-pulling it is free (cache-checked).
+    //
+    // Best-effort: a failure here doesn't fail the index build — the
+    // index is on disk and queries still work, just with the first one
+    // paying the download cost. Most likely failure mode is a network
+    // hiccup pulling from huggingface; we don't want that to mark an
+    // otherwise-fine sync as errored.
+    if let Err(e) = run_qmd(&cache_home, &qmd_pkg, &["pull"]) {
+        eprintln!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
+    }
+
     if !index_path.exists() {
         bail!(
             "qmd reported success but index.sqlite is missing at {}",
@@ -124,7 +149,22 @@ pub fn run_index(opts: &IndexOptions) -> Result<PathBuf> {
         );
     }
     eprintln!("[qmd-indexer] wrote {}", index_path.display());
-    Ok(index_path)
+
+    // Capture `qmd status` for the run summary. Best-effort: a failure
+    // here doesn't fail the index build — the index is already on disk
+    // and usable.
+    let status_output = match capture_qmd_status(&cache_home, &qmd_pkg) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("[qmd-indexer] qmd status capture failed (non-fatal): {e:#}");
+            None
+        }
+    };
+
+    Ok(IndexOutcome {
+        index_path,
+        status_output,
+    })
 }
 
 fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
@@ -146,6 +186,30 @@ fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
         )
     })?;
     Ok(())
+}
+
+fn capture_qmd_status(cache_home: &Path, qmd_pkg: &str) -> Result<String> {
+    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
+    let mut cmd = Command::new(&npx);
+    cmd.arg("-y").arg(qmd_pkg).arg("status");
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
+    // Make sure ANSI color codes stay out of the captured text — qmd
+    // disables color when stdout isn't a TTY (which it isn't here), but
+    // belt-and-braces.
+    cmd.env("NO_COLOR", "1");
+    eprintln!("[qmd-indexer] $ npx -y {qmd_pkg} status");
+    let out = cmd
+        .output()
+        .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+    if !out.status.success() {
+        bail!(
+            "qmd status failed: {}: stderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {

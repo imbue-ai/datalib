@@ -36,7 +36,6 @@ rust_library(
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
         "@frankweiler_crates//:uuid",
     ],
 )

@@ -57,6 +57,10 @@ const rows = ref<SearchRow[]>([]);
 const total = ref(0);
 const loading = ref(false);
 const error = ref<string | null>(null);
+// qmd-routed search failed at runtime; backend served LIKE-based
+// fallback rows. Surface as a banner so users notice the degradation
+// instead of silently getting worse results.
+const qmdError = ref<string | null>(null);
 const health = ref<Health | null>(null);
 const accounts = ref<AccountsMap>({});
 const selectedRow = ref<SearchRow | null>(null);
@@ -416,7 +420,7 @@ const SEARCH_CACHE_MAX = 16;
 // rows for the user. Memory/render cost is fine at this size thanks to
 // AG Grid's row virtualization.
 const SEARCH_LIMIT = 100_000;
-type SearchCacheEntry = { rows: SearchRow[]; total: number };
+type SearchCacheEntry = { rows: SearchRow[]; total: number; qmdError: string | null };
 const searchCache = new Map<string, SearchCacheEntry>();
 
 function cacheGet(key: string): SearchCacheEntry | undefined {
@@ -446,16 +450,21 @@ async function runSearch(q: string) {
     total.value = cached.total;
     loading.value = false;
     error.value = null;
+    qmdError.value = cached.qmdError;
     return;
   }
   inflight = new AbortController();
   loading.value = true;
   error.value = null;
+  qmdError.value = null;
   try {
     const r = await fetchSearch(q, SEARCH_LIMIT, inflight.signal);
     rows.value = r.rows;
     total.value = r.total_estimated;
-    cachePut(q, { rows: r.rows, total: r.total_estimated });
+    const qe =
+      typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
+    qmdError.value = qe;
+    cachePut(q, { rows: r.rows, total: r.total_estimated, qmdError: qe });
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     error.value = (e as Error).message;
@@ -867,6 +876,11 @@ const gridOptions: GridOptions<SearchRow> = {
       <span v-if="!health.root_exists" class="warn"> (root does not exist)</span>
     </div>
 
+    <p v-if="qmdError" class="qmd-error" role="alert">
+      qmd search failed — results below are from a degraded SQL-LIKE
+      fallback: {{ qmdError }}
+    </p>
+
     <p v-if="error" class="error">error: {{ error }}</p>
 
     <Splitpanes class="split" :dbl-click-splitter="false">
@@ -1025,6 +1039,14 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 .error {
   color: #e35d6a;
+}
+.qmd-error {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d18a3a;
+  border-radius: 4px;
+  background: rgba(209, 138, 58, 0.1);
+  color: #d18a3a;
+  font-size: 0.9rem;
 }
 .split {
   flex: 1 1 auto;

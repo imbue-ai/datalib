@@ -62,7 +62,6 @@ async fn main() -> Result<()> {
         out = %args.out.display(),
         threads_done = tracing::field::Empty,
         threads_total = tracing::field::Empty,
-        indicatif.pb_show = tracing::field::Empty,
     );
     let _enter = span.enter();
 

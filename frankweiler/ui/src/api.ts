@@ -29,8 +29,19 @@ export type SearchRow = {
   score?: number;
 };
 
+// Subset of `query_echo` the UI inspects. The backend ships additional
+// keys (free_text, filters, resolved_type, …) that we ignore; typing
+// only what we consume keeps the contract narrow.
+export type QueryEcho = {
+  // Set when the qmd-routed search failed and the backend fell back to
+  // the SQL LIKE path. The UI surfaces this as a banner so users see
+  // degraded search rather than silently get worse results.
+  qmd_error?: string | null;
+  [key: string]: unknown;
+};
+
 export type SearchResponse = {
-  query_echo: unknown;
+  query_echo: QueryEcho;
   rows: SearchRow[];
   columns: { field: string; header: string; default_visible: boolean }[];
   total_estimated: number;

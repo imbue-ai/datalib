@@ -22,8 +22,7 @@ use frankweiler_etl::load::{init_schema, load_all};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use frankweiler_qmd_indexer::{run_index, IndexOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use tracing::{info, info_span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing::{debug, info, info_span};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -92,7 +91,6 @@ async fn main() -> Result<()> {
         documents_total = tracing::field::Empty,
         documents_loaded = tracing::field::Empty,
         documents_skipped = tracing::field::Empty,
-        indicatif.pb_show = tracing::field::Empty,
     );
     let _enter = span.enter();
 
@@ -101,8 +99,8 @@ async fn main() -> Result<()> {
         &pool,
         &args.out,
         |msg| {
-            let _ = done.fetch_add(1, Ordering::Relaxed);
-            tracing::Span::current().pb_set_message(msg);
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            debug!(event = "grid_rows_load_progress", count = n, message = msg);
         },
         None,
     )
@@ -122,11 +120,11 @@ async fn main() -> Result<()> {
         let mut opts = IndexOptions::new(args.out.clone());
         opts.embed = !args.qmd_no_embed;
         info!(event = "qmd_index_start", root = %args.out.display(), embed = opts.embed);
-        let index_path = tokio::task::spawn_blocking(move || run_index(&opts))
+        let outcome = tokio::task::spawn_blocking(move || run_index(&opts))
             .await
             .context("qmd-indexer task panicked")?
             .context("qmd-indexer failed")?;
-        info!(event = "qmd_index_complete", index = %index_path.display());
+        info!(event = "qmd_index_complete", index = %outcome.index_path.display());
     }
     Ok(())
 }

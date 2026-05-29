@@ -75,7 +75,8 @@ impl QmdRunner {
     }
 
     pub fn query(&self, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
-        self.run("query", q, limit, &["--no-rerank"])
+        let rewritten = build_qmd_query(q);
+        self.run("query", &rewritten, limit, &["--no-rerank"])
     }
 
     pub fn vsearch(&self, q: &str, limit: usize) -> Result<Vec<QmdHit>> {
@@ -188,6 +189,116 @@ pub fn cache_home_for(root: &Path) -> PathBuf {
     qmd_cache_home(root)
 }
 
+/// Rewrite a free-text search bar query into a qmd query string that
+/// honors phrase + negation syntax.
+///
+/// qmd treats a single-line untyped query as an *expand query* and
+/// rewrites it via the local LLM — the model sees `"earl grey"` as text
+/// and may discard or reorder the phrase, so quoted exact-matching does
+/// not survive. By contrast, qmd's `lex:` typed lines support FTS5
+/// syntax directly: `"phrase"` is an exact phrase, `-word` excludes a
+/// term, `-"phrase"` excludes a phrase.
+///
+/// Strategy: if the input contains lex-meaningful syntax (any `"` or
+/// any `-`-prefixed token), emit a query document:
+///
+/// ```text
+/// lex: <input verbatim>
+/// vec: <input with quotes stripped and `-`-prefixed tokens removed>
+/// ```
+///
+/// The `lex:` line enforces phrase + exclusion semantics; the `vec:`
+/// line (when non-empty) gives the vector/RRF half something
+/// natural-language to embed.
+///
+/// Plain free-text with no lex syntax passes through unchanged — qmd's
+/// default expand path stays the recommended hot path.
+pub fn build_qmd_query(free_text: &str) -> String {
+    if !has_lex_syntax(free_text) {
+        return free_text.to_string();
+    }
+    let mut doc = String::from("lex: ");
+    doc.push_str(free_text.trim());
+    let plain = strip_lex_syntax(free_text);
+    if !plain.is_empty() {
+        doc.push_str("\nvec: ");
+        doc.push_str(&plain);
+    }
+    doc
+}
+
+/// True when `s` contains qmd lex-meaningful syntax — any quoted token
+/// or any `-`-prefixed token. Plain words/phrases without these markers
+/// return `false`.
+pub fn has_lex_syntax(s: &str) -> bool {
+    tokenize_query(s)
+        .iter()
+        .any(|t| t.starts_with('"') || t.starts_with('-'))
+}
+
+/// Strip qmd lex syntax from `s`: drop `-`-prefixed tokens entirely
+/// (exclusions are meaningless to vector search), strip surrounding
+/// quotes from phrases, and rejoin with single spaces. Returns an empty
+/// string if every token is an exclusion.
+///
+/// Used to derive the `vec:` companion line in [`build_qmd_query`] and
+/// by the daemon when feeding the same user text into MCP's typed
+/// `vec` sub-query.
+pub fn strip_lex_syntax(s: &str) -> String {
+    tokenize_query(s)
+        .into_iter()
+        .filter(|t| !t.starts_with('-'))
+        .map(|t| strip_outer_quotes(&t).to_string())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_outer_quotes(s: &str) -> &str {
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+/// Whitespace tokenizer that respects `"..."` spans (with `\\` and `\"`
+/// escapes). Mirrors `query::tokenize` — kept private here so the qmd
+/// runner doesn't depend on the query parser's internals.
+fn tokenize_query(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quote = false;
+    let mut escape = false;
+    for ch in s.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_quote => {
+                cur.push('\\');
+                escape = true;
+            }
+            '"' => {
+                cur.push('"');
+                in_quote = !in_quote;
+            }
+            c if c.is_whitespace() && !in_quote => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +337,52 @@ mod tests {
     fn parse_stdout_returns_empty_when_no_json() {
         let hits = parse_stdout("nothing here\n").unwrap();
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn build_qmd_query_plain_text_passes_through() {
+        // No lex-meaningful syntax → qmd's expand-query path stays hot.
+        assert_eq!(build_qmd_query("earl grey"), "earl grey");
+        assert_eq!(build_qmd_query(""), "");
+    }
+
+    #[test]
+    fn build_qmd_query_quoted_phrase_emits_query_document() {
+        assert_eq!(
+            build_qmd_query("\"earl grey\""),
+            "lex: \"earl grey\"\nvec: earl grey"
+        );
+    }
+
+    #[test]
+    fn build_qmd_query_phrase_plus_word() {
+        assert_eq!(
+            build_qmd_query("\"earl grey\" tea"),
+            "lex: \"earl grey\" tea\nvec: earl grey tea"
+        );
+    }
+
+    #[test]
+    fn build_qmd_query_negated_word_only_has_no_vec_line() {
+        // All tokens are exclusions → vec line would be empty, skip it.
+        assert_eq!(build_qmd_query("-spam"), "lex: -spam");
+    }
+
+    #[test]
+    fn build_qmd_query_negated_phrase_only_has_no_vec_line() {
+        assert_eq!(build_qmd_query("-\"earl grey\""), "lex: -\"earl grey\"");
+    }
+
+    #[test]
+    fn build_qmd_query_mixed_inclusion_and_exclusion() {
+        assert_eq!(build_qmd_query("tea -coffee"), "lex: tea -coffee\nvec: tea");
+    }
+
+    #[test]
+    fn build_qmd_query_phrase_with_exclusion() {
+        assert_eq!(
+            build_qmd_query("\"earl grey\" -\"chai latte\""),
+            "lex: \"earl grey\" -\"chai latte\"\nvec: earl grey"
+        );
     }
 }
