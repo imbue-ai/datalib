@@ -25,14 +25,16 @@ Also make sure you're authenticated with GitHub for the `gh` download:
 gh auth login
 ```
 
-## 1. Install the CLI
+## 1. Make a playground and install the CLI
 
 Make a working directory, pull the latest release tarball from GitHub,
 and extract it in place. All subsequent commands run from this
 directory:
 
 ```sh
+# Our playground
 mkdir -p ~/mixed_up_files && cd ~/mixed_up_files
+
 gh release download --repo imbue-ai/mixed_up_files --clobber --pattern '*.tar.gz' -D /tmp \
     && tar -xzf /tmp/frankweiler-aarch64-apple-darwin.tar.gz --strip-components=1
 ```
@@ -58,13 +60,22 @@ You don't need to install `latchkey` — the commands below invoke it via
 `npx`, which fetches it on demand (the `node` install from step 0 ships
 with `npx`).
 
-1. Register the `claude-ai` service with latchkey (one-time):
+a. Register Slack via latchkey's browser flow (the sample config in the
+   next step includes a Slack source, so this is needed for the sync to
+   succeed):
+
+   ```sh
+   npx -y latchkey auth browser slack
+   ```
+
+
+b. Register the `claude-ai` service with latchkey (one-time):
 
    ```sh
    npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
-2. Paste the registration command into your terminal **but don't run it
+c. Paste the registration command into your terminal **but don't run it
    yet** — the next step puts the cookie on your clipboard, so you want
    this command staged first. `pbpaste` is used (instead of pasting the
    cookie value literally) because zsh/bash record the pre-expansion
@@ -75,7 +86,7 @@ with `npx`).
    npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
    ```
 
-3. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
+d. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
    copy your `sessionKey` cookie. It's `HttpOnly`, so it's not visible
    to `document.cookie` — you have to read it from DevTools directly:
 
@@ -85,14 +96,6 @@ with `npx`).
 
    Now switch back to your terminal and press Enter to run the staged
    command — `$(pbpaste)` will expand to the cookie you just copied.
-
-4. Register Slack via latchkey's browser flow (the sample config in the
-   next step includes a Slack source, so this is needed for the sync to
-   succeed):
-
-   ```sh
-   npx -y latchkey auth browser slack
-   ```
 
 
 ## 3. Sample configuration
@@ -106,7 +109,7 @@ curl "https://raw.githubusercontent.com/imbue-ai/mixed_up_files/refs/heads/main/
     -o sample_config.yaml
 ```
 
-This config only enables the Claude API source, so it's the minimum
+This config only enables the Slack and the Claude API source, so it's the minimum
 needed to mirror all your conversations.
 
 Credentials are not in the config — every downloader uses `latchkey` at runtime.
@@ -114,13 +117,8 @@ Credentials are not in the config — every downloader uses `latchkey` at runtim
 ## 4. Run the sync
 
 ```sh
-./frankweiler-sync \
-    --config ./sample_config.yaml \
-    --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+./frankweiler-sync ./sample_config.yaml
 ```
-
-`--now` is the timestamp threaded through renderers and the Dolt load so
-re-runs are deterministic.
 
 ## 5. What to expect
 
@@ -163,7 +161,7 @@ skipped / errors). Exit code is non-zero if any source errored.
 embedded — point it at your data root and it serves everything:
 
 ```sh
-./frankweiler-http ~/mixed_up_files
+./frankweiler-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
