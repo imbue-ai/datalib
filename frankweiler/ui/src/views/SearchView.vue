@@ -839,14 +839,27 @@ const gridOptions: GridOptions<SearchRow> = {
 
 <template>
   <section class="search-view">
-    <input
-      v-model="query"
-      placeholder="search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)"
-      class="search-input"
-      data-testid="search-input"
-      autofocus
-      @contextmenu="openFeedbackForSearchBar"
-    />
+    <div class="search-input-wrap">
+      <input
+        v-model="query"
+        placeholder="search messages…  (try: source:Slack, -channel:announce, before:2025-01-01)"
+        class="search-input"
+        data-testid="search-input"
+        autofocus
+        @contextmenu="openFeedbackForSearchBar"
+      />
+      <button
+        v-if="query.length > 0"
+        type="button"
+        class="search-clear"
+        aria-label="Clear search"
+        title="Clear search"
+        data-testid="search-clear"
+        @click="query = ''"
+      >
+        ×
+      </button>
+    </div>
 
     <div v-if="health" class="health">
       backend ok · {{ total }} conversations indexed under
@@ -956,15 +969,42 @@ const gridOptions: GridOptions<SearchRow> = {
   height: calc(100vh - 6rem);
   gap: 0.5rem;
 }
+.search-input-wrap {
+  position: relative;
+  width: 100%;
+}
 .search-input {
   width: 100%;
-  padding: 0.5rem 0.75rem;
+  padding: 0.5rem 2rem 0.5rem 0.75rem;
   font-size: 1rem;
   box-sizing: border-box;
   background: var(--fw-input-bg);
   color: var(--fw-fg);
   border: 1px solid var(--fw-border);
   border-radius: 4px;
+}
+.search-clear {
+  position: absolute;
+  top: 50%;
+  right: 0.4rem;
+  transform: translateY(-50%);
+  width: 1.4rem;
+  height: 1.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--fw-muted);
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.search-clear:hover {
+  color: var(--fw-fg);
+  background: var(--fw-border);
 }
 .health {
   font-size: 0.85rem;
