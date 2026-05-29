@@ -174,3 +174,17 @@ listen address.
 Re-run `frankweiler-sync` whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
 re-runs against an unchanged corpus are no-ops.
+
+## 8. Querying the index directly with qmd
+
+You can also query the search index directly from the command line by
+pointing `qmd` at the sqlite file under your data root via the
+`INDEX_PATH` env var:
+
+```sh
+INDEX_PATH=~/mixed_up_files/qmd/index.sqlite \
+    npx -y @tobilu/qmd query "hello"
+```
+
+Use `qmd status` against the same `INDEX_PATH` to confirm collections
+and document counts.
