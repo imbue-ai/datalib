@@ -897,6 +897,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-beeper"
+version = "0.2.3"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-etl",
+ "frankweiler-obs",
+ "frankweiler-schema",
+ "insta",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-indicatif",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-chatgpt"
 version = "0.2.3"
 dependencies = [
@@ -934,6 +956,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -957,6 +980,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -1077,6 +1101,7 @@ dependencies = [
  "frankweiler-core",
  "frankweiler-etl",
  "frankweiler-etl-anthropic",
+ "frankweiler-etl-beeper",
  "frankweiler-etl-chatgpt",
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",

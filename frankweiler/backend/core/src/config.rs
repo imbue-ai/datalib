@@ -114,6 +114,13 @@ pub struct GithubApiSync {
     pub refresh_window_days: Option<i64>,
     #[serde(default)]
     pub max_prs: Option<i64>,
+    /// Explicit PR refs to fetch. Each entry is a paste-able reference
+    /// — either `owner/repo#NUM`, `owner/repo/pull/NUM`, or a full
+    /// github.com PR URL. When non-empty, discovery is skipped and only
+    /// these PRs are fetched; mirrors the `conv_uuids` shape used by
+    /// the other providers so URLs paste straight in from the browser.
+    #[serde(default)]
+    pub pull_requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -123,6 +130,11 @@ pub struct GitlabApiSync {
     pub refresh_window_days: Option<i64>,
     #[serde(default)]
     pub max_mrs: Option<i64>,
+    /// Explicit MR refs to fetch. Each entry is a paste-able reference
+    /// — either `namespace/project!IID` or a gitlab.com MR URL. When
+    /// non-empty, discovery is skipped and only these MRs are fetched.
+    #[serde(default)]
+    pub merge_requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +170,25 @@ pub struct NotionSubtrees {
     pub pages: Vec<String>,
     #[serde(default)]
     pub max_pages: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BeeperApiSync {
+    #[serde(default)]
+    pub refresh_window_days: Option<i64>,
+    /// Restrict to these bridge networks (e.g. `["imessage", "signal"]`).
+    /// Empty = all networks Beeper exposes to the account.
+    #[serde(default)]
+    pub networks: Vec<String>,
+    /// Specific Matrix room IDs to mirror. Accepts a bare
+    /// `!abc:beeper.com`, a `matrix.to/#/!abc:beeper.com` URL, or the
+    /// percent-encoded form `https://matrix.to/#/!abc%3Abeeper.com`.
+    /// When non-empty, `networks` is ignored.
+    #[serde(default)]
+    pub rooms: Vec<String>,
+    #[serde(default = "default_true")]
+    pub media: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -217,6 +248,12 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<NotionApiSync>,
     },
+    BeeperApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<BeeperApiSync>,
+    },
 }
 
 impl SourceConfig {
@@ -228,7 +265,8 @@ impl SourceConfig {
             | SourceConfig::SlackApi { common, .. }
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
-            | SourceConfig::NotionApi { common, .. } => common,
+            | SourceConfig::NotionApi { common, .. }
+            | SourceConfig::BeeperApi { common, .. } => common,
         }
     }
 
@@ -251,6 +289,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { .. } => "github_api",
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
+            SourceConfig::BeeperApi { .. } => "beeper_api",
         }
     }
 
@@ -265,6 +304,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
+            SourceConfig::BeeperApi { sync, .. } => sync.is_some(),
         }
     }
 

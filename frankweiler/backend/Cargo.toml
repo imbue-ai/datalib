@@ -7,6 +7,7 @@ members = [
     "obs",
     "etl",
     "etl/providers/anthropic",
+    "etl/providers/beeper",
     "etl/providers/chatgpt",
     "etl/providers/github",
     "etl/providers/gitlab",
