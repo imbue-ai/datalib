@@ -47,6 +47,21 @@ Verify:
 
 ## 2. Set up `latchkey`
 
+> 🛑 **RED WARNING — READ BEFORE PROCEEDING** 🛑
+>
+> The commands in this section store live session cookies for `claude.ai`
+> and Slack on your machine via `latchkey`. **Any process, script, or AI
+> agent that can run CLI programs as your user account can invoke
+> `latchkey` (or read its store) and thereby ACT AS YOU on these
+> services** — read every conversation, send messages, change settings,
+> impersonate you to coworkers, etc. There is no additional password
+> prompt, MFA challenge, or confirmation gate between a shell command
+> and your identity on these services.
+>
+> Only run these steps on a machine you trust, and be aware that *every*
+> local agent (including this one) inherits this authority for as long
+> as the cookies remain valid.
+
 `frankweiler-sync` does not handle `claude.ai` cookies itself. It shells
 out to [`latchkey curl`](https://www.npmjs.com/package/latchkey), which
 injects the cookies registered under the `claude-ai` service. `claude.ai`
