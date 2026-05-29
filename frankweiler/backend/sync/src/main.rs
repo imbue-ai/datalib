@@ -28,12 +28,9 @@
 //!     source). Useful for iterating on translate/load without re-hitting
 //!     the network, and as an escape hatch when one source's fetch is
 //!     broken or unreasonably slow — you still get whatever data is
-//!     already on disk correctly rendered and indexed.
-//!
-//!     TODO: translate currently re-renders every source from scratch on
-//!     each run; we don't yet track a `source_fingerprint` on rendered
-//!     outputs to skip unchanged inputs. Once that's wired up, this flag
-//!     becomes much cheaper to run repeatedly.
+//!     already on disk correctly rendered and indexed. Incremental: docs
+//!     whose `source_fingerprint` matches `documents.source_fingerprint`
+//!     are skipped without re-rendering.
 //!   * default: extract live from every managed source's provider API,
 //!     translate, load into a scratch Dolt repo, emit `dolt_repo/` +
 //!     the configured Dolt repo at `<data_root>/dolt_db/`, write the
@@ -117,11 +114,9 @@ struct Args {
     /// Useful when iterating on translate/load without re-hitting the
     /// network, and as an escape hatch when one source's fetch is broken
     /// or taking too long — you still get whatever data is already on
-    /// disk correctly rendered and indexed.
-    ///
-    /// TODO: translate is currently full-rebuild every run; once we
-    /// stamp a `source_fingerprint` on rendered outputs and skip
-    /// unchanged inputs, repeated runs with this flag become near-free.
+    /// disk correctly rendered and indexed. Translate is incremental:
+    /// docs whose `source_fingerprint` matches the indexer's record are
+    /// left untouched, so repeated runs with this flag are near-free.
     #[arg(long)]
     skip_extract: bool,
 
