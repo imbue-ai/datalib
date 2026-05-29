@@ -36,8 +36,8 @@ async fn github_live_single_pr_snapshot() {
     eprintln!("[test] downloading {repo}#{num} -> {}", tmp.display());
 
     let opts = FetchOptions {
-        out_dir: tmp.clone(),
-        single_pr: Some((repo.clone(), num)),
+        db_path: tmp.clone(),
+        targets: vec![(repo.clone(), num)],
         ..Default::default()
     };
     github::fetch(opts).await.expect("github fetch failed");

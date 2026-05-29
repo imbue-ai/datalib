@@ -22,6 +22,7 @@ rust_library(
         "@frankweiler_crates//:regex",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
@@ -58,6 +59,7 @@ rust_binary(
         "//frankweiler/backend/obs:frankweiler_obs",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
     ],
 )
@@ -67,6 +69,20 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl_github",
     edition = "2021",
+)
+
+rust_test(
+    name = "github_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_github",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
 )
 
 rust_test(

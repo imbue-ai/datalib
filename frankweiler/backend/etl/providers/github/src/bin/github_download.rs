@@ -35,9 +35,11 @@ struct Args {
     #[arg(long)]
     max_prs: Option<usize>,
 
-    /// Fetch a single PR (owner/repo#NUM or github.com URL); skips discovery.
+    /// Fetch specific PRs only; repeatable. Accepts `owner/repo#NUM`,
+    /// `owner/repo/pull/NUM`, or a github.com PR URL. When supplied,
+    /// discovery is skipped and only the listed PRs are fetched.
     #[arg(long = "pull-request", value_name = "REF")]
-    pull_request: Option<String>,
+    pull_request: Vec<String>,
 
     /// Ignore sync_state.json and walk the full refresh window.
     #[arg(long)]
@@ -61,17 +63,18 @@ async fn main() -> Result<()> {
     } else {
         args.scope.clone()
     };
-    let single_pr = match args.pull_request.as_deref() {
-        Some(s) => Some(parse_pr_ref(s)?),
-        None => None,
-    };
+    let targets: Vec<(String, u32)> = args
+        .pull_request
+        .iter()
+        .map(|s| parse_pr_ref(s))
+        .collect::<Result<Vec<_>>>()?;
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         scopes,
         refresh_window_days: args.refresh_window_days,
         max_prs: args.max_prs,
-        single_pr,
+        targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         ..Default::default()
@@ -82,13 +85,9 @@ async fn main() -> Result<()> {
     info!(
         event = "github_download_complete",
         new_prs = summary.new_prs,
-        upd_prs = summary.upd_prs,
         new_issue_comments = summary.new_issue_comments,
-        upd_issue_comments = summary.upd_issue_comments,
         new_reviews = summary.new_reviews,
-        upd_reviews = summary.upd_reviews,
         new_review_comments = summary.new_review_comments,
-        upd_review_comments = summary.upd_review_comments,
         requests = summary.requests,
     );
     Ok(())

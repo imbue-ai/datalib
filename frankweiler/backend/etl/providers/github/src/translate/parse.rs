@@ -1,20 +1,17 @@
-//! Parse the GitHub event-store JSONL into in-memory rows for the
-//! renderer + grid_rows pass. Port of
-//! `src/ingest/providers/github/parse.py`, adapted to the
-//! single-document-per-PR model: each PR's `issue_comments`,
-//! `pr_reviews`, and `pr_review_comments` collapse into one
-//! `CommentRow` stream sorted (per render) by section, then by file/line,
-//! then chronologically within a thread.
+//! Parse the GitHub doltlite database written by [`crate::extract`] into
+//! in-memory rows for the renderer + grid_rows pass. Each PR's
+//! `issue_comments`, `pr_reviews`, and `pr_review_comments` collapse
+//! into one `CommentRow` stream sorted (per render) by section, then by
+//! file/line, then chronologically within a thread.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::extract::db::{block_on_load_all, db_path_for, LoadedChild, LoadedRaw};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_PR: &str = "pull_request";
@@ -123,381 +120,219 @@ pub struct ParsedGithubApi {
     pub comments: Vec<CommentRow>,
 }
 
-fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
-    if !path.exists() {
-        return Ok(Vec::new());
+/// Read raw payloads out of the doltlite DB. `path` may be either a
+/// `.doltlite_db` file or the legacy directory shape — both resolve to
+/// the same sqlite file via [`db_path_for`].
+pub fn parse_api_dir(path: &Path) -> Result<ParsedGithubApi> {
+    let db_path = db_path_for(path);
+    if !db_path.exists() {
+        anyhow::bail!("github source not found at {}", db_path.display());
     }
-    let mut out = Vec::new();
-    let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    for (i, line) in BufReader::new(f).lines().enumerate() {
-        let line = line.with_context(|| format!("read {}:{}", path.display(), i + 1))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: Value = serde_json::from_str(&line)
-            .with_context(|| format!("parse {}:{}", path.display(), i + 1))?;
-        out.push(v);
-    }
-    Ok(out)
+    let raw = block_on_load_all(&db_path)
+        .with_context(|| format!("load github db {}", db_path.display()))?;
+    Ok(parse_loaded(raw))
 }
 
-/// Load the latest record per key across `created/` then `updated/` (the
-/// `updated/` stream shadows by re-insertion).
-fn load_latest_by(
-    api_dir: &Path,
-    entity: &str,
-    key_of: impl Fn(&Value) -> String,
-) -> Result<Vec<Value>> {
-    let mut latest: HashMap<String, Value> = HashMap::new();
-    for stream in ["created", "updated"] {
-        let p = api_dir.join(entity).join(stream).join("events.jsonl");
-        for rec in read_jsonl(&p)? {
-            let k = key_of(&rec);
-            if !k.is_empty() {
-                latest.insert(k, rec);
-            }
-        }
-    }
-    Ok(latest.into_values().collect())
-}
-
-fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
-    v.get(k).and_then(|x| x.as_str())
-}
-fn str_or_raw<'a>(rec: &'a Value, k: &str) -> Option<&'a str> {
-    str_of(rec, k).or_else(|| {
-        rec.get("raw")
-            .and_then(|r| r.get(k))
-            .and_then(|v| v.as_str())
-    })
-}
-
-pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGithubApi> {
+/// Build a [`ParsedGithubApi`] from a snapshot already loaded out of the
+/// doltlite DB. Public so callers that already hold a [`LoadedRaw`] (e.g.
+/// in-process pipelines) can skip the open + load round-trip.
+pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
     let mut out = ParsedGithubApi::default();
 
-    // self_identity
-    let selves = load_latest_by(api_dir, ENTITY_SELF, |rec| {
-        rec.get("user_id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .unwrap_or_default()
-    })?;
-    if let Some(rec) = selves.into_iter().next() {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
+    if let Some(s) = raw.self_identity {
         out.self_identity = Some(GithubSelfIdentity {
-            user_id: rec
-                .get("user_id")
-                .and_then(|v| v.as_i64())
-                .or_else(|| raw.get("id").and_then(|v| v.as_i64())),
-            login: rec
-                .get("login")
-                .and_then(|v| v.as_str())
-                .or_else(|| raw.get("login").and_then(|v| v.as_str()))
-                .map(String::from),
-            html_url: rec
+            user_id: s.get("id").and_then(|v| v.as_i64()),
+            login: s.get("login").and_then(|v| v.as_str()).map(String::from),
+            html_url: s
                 .get("html_url")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("html_url").and_then(|v| v.as_str()))
                 .map(String::from),
-            raw,
+            raw: s,
         });
     }
 
-    // Pull requests
-    for rec in load_latest_by(api_dir, ENTITY_PR, |rec| {
-        format!(
-            "{}#{}",
-            rec.get("repo_full_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("pr_number").and_then(|v| v.as_i64()).unwrap_or(0)
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec
-            .get("repo_full_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let num = rec
-            .get("pr_number")
-            .and_then(|v| v.as_u64())
-            .or_else(|| raw.get("number").and_then(|v| v.as_u64()))
-            .unwrap_or(0) as u32;
+    for pr in raw.pull_requests {
+        let repo = pr.repo_full_name;
+        let num = pr.pr_number;
         if repo.is_empty() || num == 0 {
             continue;
         }
+        let p = &pr.payload;
         out.pull_requests.push(PullRequestRow {
             uuid: github_pr_uuid(&repo, num),
             repo_full_name: repo,
             pr_number: num,
-            title: raw
-                .get("title")
+            title: p.get("title").and_then(|v| v.as_str()).unwrap_or("").into(),
+            body: p.get("body").and_then(|v| v.as_str()).unwrap_or("").into(),
+            state: p.get("state").and_then(|v| v.as_str()).map(String::from),
+            html_url: p.get("html_url").and_then(|v| v.as_str()).map(String::from),
+            head_sha: p
+                .get("head")
+                .and_then(|h| h.get("sha"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            body: raw
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            state: str_or_raw(&rec, "state").map(String::from),
-            html_url: str_or_raw(&rec, "html_url").map(String::from),
-            head_sha: rec
-                .get("head_sha")
-                .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("head")
-                        .and_then(|h| h.get("sha"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            base_sha: rec
-                .get("base_sha")
+            base_sha: p
+                .get("base")
+                .and_then(|b| b.get("sha"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("base")
-                        .and_then(|h| h.get("sha"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            head_ref: rec
-                .get("head_ref")
+            head_ref: p
+                .get("head")
+                .and_then(|h| h.get("ref"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("head")
-                        .and_then(|h| h.get("ref"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            base_ref: rec
-                .get("base_ref")
+            base_ref: p
+                .get("base")
+                .and_then(|b| b.get("ref"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("base")
-                        .and_then(|h| h.get("ref"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            user_login: raw
+            user_login: p
                 .get("user")
                 .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: raw
+            created_at: p
                 .get("created_at")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            updated_at: rec
+            updated_at: p
                 .get("updated_at")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("updated_at").and_then(|v| v.as_str()))
                 .map(String::from),
-            merged_at: str_or_raw(&rec, "merged_at").map(String::from),
+            merged_at: p
+                .get("merged_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         });
     }
 
-    // Issue comments → General section
-    for rec in load_latest_by(api_dir, ENTITY_ISSUE_COMMENT, |rec| {
-        format!(
-            "{}#{}",
-            rec.get("repo_full_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("comment_id").and_then(|v| v.as_i64()).unwrap_or(0)
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec
-            .get("repo_full_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let id = rec
-            .get("comment_id")
-            .and_then(|v| v.as_i64())
-            .or_else(|| raw.get("id").and_then(|v| v.as_i64()))
-            .unwrap_or(0);
-        if repo.is_empty() || num == 0 || id == 0 {
+    push_issue_comments(&mut out.comments, raw.issue_comments);
+    push_reviews(&mut out.comments, raw.pr_reviews);
+    push_review_comments(&mut out.comments, raw.pr_review_comments);
+
+    out
+}
+
+fn push_issue_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+    for c in rows {
+        let id = c.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if c.repo_full_name.is_empty() || c.pr_number == 0 || id == 0 {
             continue;
         }
-        out.comments.push(CommentRow {
-            uuid: github_issue_comment_uuid(&repo, id),
-            repo_full_name: repo,
-            pr_number: num,
+        let p = &c.payload;
+        out.push(CommentRow {
+            uuid: github_issue_comment_uuid(&c.repo_full_name, id),
+            repo_full_name: c.repo_full_name,
+            pr_number: c.pr_number,
             kind: "GitHub PR Comment",
             section: CommentSection::General,
             external_id: id,
             in_reply_to_id: None,
-            user_login: rec
-                .get("user_login")
+            user_login: p
+                .get("user")
+                .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("user")
-                        .and_then(|u| u.get("login"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            body: raw
-                .get("body")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            html_url: str_or_raw(&rec, "html_url").map(String::from),
+            body: p.get("body").and_then(|v| v.as_str()).unwrap_or("").into(),
+            html_url: p.get("html_url").and_then(|v| v.as_str()).map(String::from),
             path: None,
             line: None,
             commit_id: None,
-            created_at: str_or_raw(&rec, "created_at").unwrap_or("").to_string(),
-            updated_at: str_or_raw(&rec, "updated_at").map(String::from),
+            created_at: p
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .into(),
+            updated_at: p
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             state: None,
         });
     }
+}
 
-    // PR reviews → Review section
-    for rec in load_latest_by(api_dir, ENTITY_PR_REVIEW, |rec| {
-        format!(
-            "{}#{}",
-            rec.get("repo_full_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("review_id").and_then(|v| v.as_i64()).unwrap_or(0)
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec
-            .get("repo_full_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let id = rec
-            .get("review_id")
-            .and_then(|v| v.as_i64())
-            .or_else(|| raw.get("id").and_then(|v| v.as_i64()))
-            .unwrap_or(0);
-        if repo.is_empty() || num == 0 || id == 0 {
+fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+    for r in rows {
+        let id = r.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if r.repo_full_name.is_empty() || r.pr_number == 0 || id == 0 {
             continue;
         }
-        let body = raw
-            .get("body")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let state = rec
-            .get("state")
-            .and_then(|v| v.as_str())
-            .or_else(|| raw.get("state").and_then(|v| v.as_str()))
-            .map(String::from);
-        out.comments.push(CommentRow {
-            uuid: github_review_uuid(&repo, id),
-            repo_full_name: repo,
-            pr_number: num,
+        let p = &r.payload;
+        out.push(CommentRow {
+            uuid: github_review_uuid(&r.repo_full_name, id),
+            repo_full_name: r.repo_full_name,
+            pr_number: r.pr_number,
             kind: "GitHub Review",
             section: CommentSection::Review,
             external_id: id,
             in_reply_to_id: None,
-            user_login: rec
-                .get("user_login")
+            user_login: p
+                .get("user")
+                .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("user")
-                        .and_then(|u| u.get("login"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            body,
-            html_url: str_or_raw(&rec, "html_url").map(String::from),
+            body: p.get("body").and_then(|v| v.as_str()).unwrap_or("").into(),
+            html_url: p.get("html_url").and_then(|v| v.as_str()).map(String::from),
             path: None,
             line: None,
-            commit_id: rec
-                .get("commit_id")
-                .and_then(|v| v.as_str())
-                .or_else(|| raw.get("commit_id").and_then(|v| v.as_str()))
-                .map(String::from),
-            created_at: rec
+            commit_id: p.get("commit_id").and_then(|v| v.as_str()).map(String::from),
+            created_at: p
                 .get("submitted_at")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("submitted_at").and_then(|v| v.as_str()))
                 .unwrap_or("")
-                .to_string(),
+                .into(),
             updated_at: None,
-            state,
+            state: p.get("state").and_then(|v| v.as_str()).map(String::from),
         });
     }
+}
 
-    // PR review comments → Inline section
-    for rec in load_latest_by(api_dir, ENTITY_PR_REVIEW_COMMENT, |rec| {
-        format!(
-            "{}#{}",
-            rec.get("repo_full_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("comment_id").and_then(|v| v.as_i64()).unwrap_or(0)
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let repo = rec
-            .get("repo_full_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let num = rec.get("pr_number").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let id = rec
-            .get("comment_id")
-            .and_then(|v| v.as_i64())
-            .or_else(|| raw.get("id").and_then(|v| v.as_i64()))
-            .unwrap_or(0);
-        if repo.is_empty() || num == 0 || id == 0 {
+fn push_review_comments(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
+    for c in rows {
+        let id = c.payload.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        if c.repo_full_name.is_empty() || c.pr_number == 0 || id == 0 {
             continue;
         }
-        let in_reply_to = rec
-            .get("in_reply_to_id")
+        let p = &c.payload;
+        let in_reply_to = p.get("in_reply_to_id").and_then(|v| v.as_i64());
+        let line = p
+            .get("line")
             .and_then(|v| v.as_i64())
-            .or_else(|| raw.get("in_reply_to_id").and_then(|v| v.as_i64()));
-        out.comments.push(CommentRow {
-            uuid: github_review_comment_uuid(&repo, id),
-            repo_full_name: repo,
-            pr_number: num,
+            .or_else(|| p.get("original_line").and_then(|v| v.as_i64()));
+        let commit_id = p
+            .get("commit_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| p.get("original_commit_id").and_then(|v| v.as_str()))
+            .map(String::from);
+        out.push(CommentRow {
+            uuid: github_review_comment_uuid(&c.repo_full_name, id),
+            repo_full_name: c.repo_full_name,
+            pr_number: c.pr_number,
             kind: "GitHub Review Comment",
             section: CommentSection::Inline,
             external_id: id,
             in_reply_to_id: in_reply_to,
-            user_login: rec
-                .get("user_login")
+            user_login: p
+                .get("user")
+                .and_then(|u| u.get("login"))
                 .and_then(|v| v.as_str())
-                .or_else(|| {
-                    raw.get("user")
-                        .and_then(|u| u.get("login"))
-                        .and_then(|v| v.as_str())
-                })
                 .map(String::from),
-            body: raw
-                .get("body")
+            body: p.get("body").and_then(|v| v.as_str()).unwrap_or("").into(),
+            html_url: p.get("html_url").and_then(|v| v.as_str()).map(String::from),
+            path: p.get("path").and_then(|v| v.as_str()).map(String::from),
+            line,
+            commit_id,
+            created_at: p
+                .get("created_at")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .to_string(),
-            html_url: str_or_raw(&rec, "html_url").map(String::from),
-            path: rec
-                .get("path")
+                .into(),
+            updated_at: p
+                .get("updated_at")
                 .and_then(|v| v.as_str())
-                .or_else(|| raw.get("path").and_then(|v| v.as_str()))
                 .map(String::from),
-            line: rec
-                .get("line")
-                .and_then(|v| v.as_i64())
-                .or_else(|| rec.get("original_line").and_then(|v| v.as_i64()))
-                .or_else(|| raw.get("line").and_then(|v| v.as_i64())),
-            commit_id: rec
-                .get("commit_id")
-                .and_then(|v| v.as_str())
-                .or_else(|| rec.get("original_commit_id").and_then(|v| v.as_str()))
-                .map(String::from),
-            created_at: str_or_raw(&rec, "created_at").unwrap_or("").to_string(),
-            updated_at: str_or_raw(&rec, "updated_at").map(String::from),
             state: None,
         });
     }
-
-    Ok(out)
 }
