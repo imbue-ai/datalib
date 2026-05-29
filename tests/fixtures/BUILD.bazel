@@ -97,7 +97,7 @@ genrule(
 #     ~2GB embedding models). Tagged accordingly.
 #   * SQLite output is NOT byte-stable across runs (timestamps, packing).
 #     This rule is correctness-only, not determinism-cacheable.
-QMD_VERSION = "2.1.0"
+QMD_VERSION = "2.5.3"
 
 genrule(
     name = "ingested_tng_qmd",

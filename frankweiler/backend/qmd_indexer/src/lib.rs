@@ -26,7 +26,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-pub const DEFAULT_QMD_VERSION: &str = "2.1.0";
+pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
 pub const DEFAULT_MASK: &str = "**/*.md";
 
