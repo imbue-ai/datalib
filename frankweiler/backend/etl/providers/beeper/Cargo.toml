@@ -13,10 +13,6 @@ name = "beeper-download"
 path = "src/bin/beeper_download.rs"
 
 [[bin]]
-name = "beeper-translate"
-path = "src/bin/beeper_translate.rs"
-
-[[bin]]
 name = "beeper-dump"
 path = "src/bin/beeper_dump.rs"
 
@@ -33,7 +29,6 @@ tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-
 uuid = { workspace = true, features = ["v5"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
-tracing-indicatif = "0.3"
 sqlx = { workspace = true }
 
 [dev-dependencies]

@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "github-download"
 path = "src/bin/github_download.rs"
 
-[[bin]]
-name = "github-translate"
-path = "src/bin/github_translate.rs"
-
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }

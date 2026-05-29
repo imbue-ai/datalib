@@ -56,22 +56,6 @@ rust_binary(
     ],
 )
 
-rust_binary(
-    name = "chatgpt_translate",
-    srcs = ["src/bin/chatgpt_translate.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl_chatgpt",
-        "//frankweiler/backend/etl:frankweiler_etl",
-        "//frankweiler/backend/obs:frankweiler_obs",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:tokio",
-        "@frankweiler_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "chatgpt_playback_roundtrip",
     srcs = ["tests/playback_roundtrip.rs"],

@@ -8,18 +8,28 @@ uniformly.
 ```
 ┌────────────┐    ┌──────────────┐    ┌─────────────────┐
 │  Extract   │───▶│   Translate  │───▶│      Load       │
-│ raw_api/   │    │ rendered_md/ │    │  grid_rows in   │
+│ raw store  │    │ rendered_md/ │    │  grid_rows in   │
 │ (per prov) │    │ + sidecars   │    │     Dolt        │
 └────────────┘    └──────────────┘    └─────────────────┘
 ```
 
 ## Stages
 
-| Stage     | Binary                      | Inputs               | Outputs                                    |
-|-----------|-----------------------------|----------------------|--------------------------------------------|
-| Extract   | `<provider>-download`       | upstream API         | `<out>/raw_api/<method>/events.jsonl`      |
-| Translate | `<provider>-translate`      | `<out>/raw_api/`     | `<out>/rendered_md/<provider>/...`         |
-| Load      | `grid-rows-load` (generic)  | `<out>/rendered_md/` | rows in Dolt + `documents_loaded` bookkeeping |
+| Stage     | Binary                      | Inputs                                  | Outputs                                    |
+|-----------|-----------------------------|-----------------------------------------|--------------------------------------------|
+| Extract   | `<provider>-download`       | upstream API                            | `<out>/raw/<name>.doltlite_db`             |
+| Translate | called in-process by sync   | `<out>/raw/<name>.doltlite_db`          | `<out>/rendered_md/<provider>/...`         |
+| Load      | `grid-rows-load` (generic)  | `<out>/rendered_md/`                    | rows in Dolt + `documents_loaded` bookkeeping |
+
+Every provider's Extract step writes to a single sqlite file at
+`<out>/raw/<name>.doltlite_db`. Object payloads, sync-run bookkeeping,
+endpoint shapes, and blob bytes all live in tables there. See
+[`DOLTLITE_RAW_PORT_GUIDE.md`](DOLTLITE_RAW_PORT_GUIDE.md) for the
+shape and [`src/doltlite_raw.rs`](src/doltlite_raw.rs) for the shared
+helpers.
+
+Translate runs in-process inside `frankweiler-sync` — no per-provider
+translate binaries.
 
 Each provider is its own crate at
 [`providers/<name>/`](providers/), named `frankweiler-etl-<name>`. The
@@ -77,19 +87,23 @@ to force a rebake even when payloads are unchanged.
 
 ## Observability
 
-All three binaries flatten [`obs::ObsArgs`](src/obs.rs) into their
+Every binary flattens [`obs::ObsArgs`](../obs/src/lib.rs) into its
 clap parser, so every stage takes the same flags:
 
-  * On a TTY, `tracing-indicatif` renders progress bars.
-  * Otherwise, NDJSON events go to stderr.
+  * On a TTY, pretty log lines on stderr.
+  * Otherwise, NDJSON events on stderr.
+  * Either way, log emissions are routed through an `IndicatifWriter`
+    that coordinates with the shared `MultiProgress` exposed by
+    `frankweiler_obs::shared_multi()`, so progress bars attached by
+    callers (e.g. sync's per-source bars) don't get stomped by log
+    lines.
   * `--otlp-endpoint http://host:4317` exports spans + events via
     OTLP, so a single Tempo/Jaeger collector can ingest every stage.
 
 Each stage emits a `*_start`, `*_complete`, and per-document progress
-events with a stable prefix (`slack_download_*`, `slack_translate_*`,
-`grid_rows_load_*`). The `*Summary` structs are `Serialize`, so a web
-UI can consume the final stats line without knowing which provider
-produced it.
+events with a stable prefix (`slack_download_*`, `grid_rows_load_*`,
+etc.). The `*Summary` structs are `Serialize`, so a web UI can consume
+the final stats line without knowing which provider produced it.
 
 ## Adding a new provider
 
@@ -103,9 +117,10 @@ crate as a template:
 3. Add `etl/providers/<name>` to the workspace `members =` list in
    `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
    manifest list in `MODULE.bazel`.
-4. Implement `<name>-download` (Extract) and `<name>-translate`
-   (Translate) bins. Translate must emit `*.grid_rows.json` sidecars
-   matching [`Sidecar`](src/sidecar.rs).
+4. Implement `<name>-download` (Extract) as a standalone bin and
+   `<name>::translate` as a library function called from sync. The
+   translate side must emit `*.grid_rows.json` sidecars matching
+   [`Sidecar`](src/sidecar.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    and write integration tests next to it.
 6. The Load step needs no per-provider changes — `grid-rows-load` will

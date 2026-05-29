@@ -158,12 +158,7 @@ impl RawDb {
 
     // ── merge_requests ──────────────────────────────────────────────
 
-    pub async fn upsert_merge_request(
-        &self,
-        proj: &str,
-        iid: u32,
-        payload: &Value,
-    ) -> Result<()> {
+    pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let id = mr_pk(proj, iid);
         let state = payload.get("state").and_then(|v| v.as_str());
         let web_url = payload.get("web_url").and_then(|v| v.as_str());
@@ -397,9 +392,11 @@ mod tests {
     async fn self_identity_round_trips() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("g.doltlite_db")).await.unwrap();
-        db.upsert_self_identity(&json!({"id": 7, "username": "tt", "web_url": "https://gitlab.com/tt"}))
-            .await
-            .unwrap();
+        db.upsert_self_identity(
+            &json!({"id": 7, "username": "tt", "web_url": "https://gitlab.com/tt"}),
+        )
+        .await
+        .unwrap();
         let me = db.load_self_identity().await.unwrap().expect("self");
         assert_eq!(me["id"], 7);
         assert_eq!(me["username"], "tt");
@@ -444,12 +441,11 @@ mod tests {
         db.upsert_merge_request("ns/proj", 12, &json!({"iid": 12, "state": "opened"}))
             .await
             .unwrap();
-        let row = sqlx::query(
-            "SELECT typeof(payload) AS t FROM merge_requests WHERE id='ns/proj!12'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row =
+            sqlx::query("SELECT typeof(payload) AS t FROM merge_requests WHERE id='ns/proj!12'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         let t: String = row.try_get("t").unwrap();
         assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
     }

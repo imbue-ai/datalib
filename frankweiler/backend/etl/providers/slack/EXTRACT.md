@@ -1,8 +1,11 @@
 # Slack Extract
 
-`slack-download` mirrors a Slack workspace into
-`<out>/raw_api/<method>/events.jsonl`. Each Slack API page becomes one
-envelope record `{_recorded_at, method, params, duration_ms, response}`.
+`slack-download` mirrors a Slack workspace into a single doltlite db
+at `<out>/raw/<name>.doltlite_db`. Each Slack API response becomes a
+row keyed by the endpoint shape; payloads are stored as JSON blobs
+inside the db alongside per-run bookkeeping and file/blob bytes. The
+old `<out>/raw_api/<method>/events.jsonl` tree was retired with the
+doltlite port — see [`../../DOLTLITE_RAW_PORT_GUIDE.md`](../../DOLTLITE_RAW_PORT_GUIDE.md).
 
 ## Auth
 

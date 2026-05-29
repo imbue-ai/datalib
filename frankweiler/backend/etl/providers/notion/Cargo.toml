@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "notion-download"
 path = "src/bin/notion_download.rs"
 
-[[bin]]
-name = "notion-translate"
-path = "src/bin/notion_translate.rs"
-
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }

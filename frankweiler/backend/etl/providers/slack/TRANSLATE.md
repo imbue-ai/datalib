@@ -1,7 +1,9 @@
 # Slack Translate
 
-`slack-translate` reads `<out>/raw_api/` (written by `slack-download`)
-and emits, per Slack thread, a `.md` plus a `.grid_rows.json` sidecar
+The slack translate step is an in-process library (called from
+`frankweiler-sync`, no standalone bin) that reads the doltlite db at
+`<out>/raw/<name>.doltlite_db` (written by `slack-download`) and
+emits, per Slack thread, a `.md` plus a `.grid_rows.json` sidecar
 under `<out>/rendered_md/slack/<team>/<channel>/threads/`.
 
 ## What is a "document"?

@@ -21,7 +21,9 @@ use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 pub use client::{GitLabClient, GitLabError, BASE, PER_PAGE};
-pub use db::{block_on_load_all, db_path_for, LoadedDiscussion, LoadedMergeRequest, LoadedRaw, RawDb};
+pub use db::{
+    block_on_load_all, db_path_for, LoadedDiscussion, LoadedMergeRequest, LoadedRaw, RawDb,
+};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";

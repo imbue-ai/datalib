@@ -23,7 +23,6 @@ rust_library(
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-        "@frankweiler_crates//:tracing-indicatif",
         "@frankweiler_crates//:uuid",
     ],
 )
@@ -43,22 +42,6 @@ rust_binary(
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
-    ],
-)
-
-# Translate step (Beeper). Milestone A placeholder; expands as
-# per-bridge translators (iMessage, Signal, …) come online.
-rust_binary(
-    name = "beeper_translate_bin",
-    srcs = ["src/bin/beeper_translate.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl_beeper",
-        "//frankweiler/backend/etl:frankweiler_etl",
-        "//frankweiler/backend/obs:frankweiler_obs",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
     ],
 )
 

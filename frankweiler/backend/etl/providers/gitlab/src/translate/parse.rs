@@ -163,9 +163,18 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
                 .and_then(|a| a.get("username"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: p.get("created_at").and_then(|v| v.as_str()).map(String::from),
-            updated_at: p.get("updated_at").and_then(|v| v.as_str()).map(String::from),
-            merged_at: p.get("merged_at").and_then(|v| v.as_str()).map(String::from),
+            created_at: p
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            updated_at: p
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            merged_at: p
+                .get("merged_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         });
     }
 

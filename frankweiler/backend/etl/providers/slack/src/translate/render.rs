@@ -57,9 +57,10 @@ pub struct RenderSummary {
 /// whose fingerprint already matches the on-disk `.md` are left alone.
 ///
 /// `source_name` is the config-level identifier for this Slack source
-/// (e.g. `tiny-slack`). It's needed for relative-path links into
-/// `raw/<source_name>/blobs/...`, which is where the downloader stages
-/// `files[]` attachments.
+/// (e.g. `tiny-slack`). Blob bytes are pulled from the source's
+/// doltlite db and materialized to a sibling `blobs/` directory next
+/// to each rendered `.md`; the markdown links them with relative
+/// `blobs/<file_name>` paths.
 pub fn render_all(
     t: &TranslatedSlack,
     out_dir: &Path,
@@ -293,13 +294,13 @@ fn render_thread_md(
         p.push(to_commonmark(m.text.trim_end(), user_labels));
         p.push(String::new());
 
-        // Files: link to the local copy the downloader staged at
-        // `raw/<source>/blobs/<id>/<file>`. Image-typed files render as
-        // an inline image; everything else (PDFs, docs, etc.) as a plain
-        // text link with a `[file]` tag. The `url_private` URL is kept
-        // as a title-only fallback for files that the downloader
-        // skipped (external / tombstoned / errored), so the rendered
-        // markdown still surfaces *something* clickable.
+        // Files: link to the local copy materialized next to the
+        // rendered markdown at `blobs/<safe_filename>`. Image-typed
+        // files render as an inline image; everything else (PDFs, docs,
+        // etc.) as a plain text link with a `[file]` tag. The
+        // `url_private` URL is kept as a title-only fallback for files
+        // that the downloader skipped (external / tombstoned / errored),
+        // so the rendered markdown still surfaces *something* clickable.
         for f in files(&m.raw_json) {
             let alt = f
                 .title

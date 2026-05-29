@@ -90,9 +90,9 @@ pub struct ParsedChatGPTApi {
     pub messages: Vec<OAMessageRow>,
     pub content_parts: Vec<OAContentPartRow>,
     /// Streaming handle to blob bytes; rendered keyed by upstream
-    /// `file_id`. Render materializes these onto disk at
-    /// `raw/<source>/blobs/<file_id>/<name>` so the markdown link
-    /// resolves.
+    /// `file_id`. Render materializes these onto disk in a `blobs/`
+    /// directory next to each rendered `.md` so the sibling-relative
+    /// link resolves.
     pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
 }
 

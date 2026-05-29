@@ -508,8 +508,7 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
                             .ok()
                             .map(|s| {
                                 if JSON_TEXT_COLUMNS.contains(&name) {
-                                    serde_json::from_str::<Value>(&s)
-                                        .unwrap_or(Value::String(s))
+                                    serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
                                 } else {
                                     Value::String(s)
                                 }

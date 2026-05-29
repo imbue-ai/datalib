@@ -143,10 +143,7 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedGithubApi {
         out.self_identity = Some(GithubSelfIdentity {
             user_id: s.get("id").and_then(|v| v.as_i64()),
             login: s.get("login").and_then(|v| v.as_str()).map(String::from),
-            html_url: s
-                .get("html_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            html_url: s.get("html_url").and_then(|v| v.as_str()).map(String::from),
             raw: s,
         });
     }
@@ -276,7 +273,10 @@ fn push_reviews(out: &mut Vec<CommentRow>, rows: Vec<LoadedChild>) {
             html_url: p.get("html_url").and_then(|v| v.as_str()).map(String::from),
             path: None,
             line: None,
-            commit_id: p.get("commit_id").and_then(|v| v.as_str()).map(String::from),
+            commit_id: p
+                .get("commit_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             created_at: p
                 .get("submitted_at")
                 .and_then(|v| v.as_str())

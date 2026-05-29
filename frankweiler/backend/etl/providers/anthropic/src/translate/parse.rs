@@ -91,8 +91,8 @@ pub struct ParsedExport {
     pub content_blocks: Vec<ContentBlockRow>,
     pub attachments: Vec<AttachmentRow>,
     /// Streaming handle to blob bytes, keyed by upstream `file_uuid`.
-    /// Render materializes these onto disk at
-    /// `raw/<source>/blobs/<file_uuid>/<name>` so the markdown link
+    /// Render materializes these onto disk in a `blobs/` directory
+    /// next to each rendered `.md` so the sibling-relative link
     /// resolves.
     pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
 }

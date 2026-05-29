@@ -1,10 +1,15 @@
 # Porting a provider's raw store to doltlite
 
-Reference for porting any remaining file-based provider (e.g. Slack) to
-the same pattern Notion / ChatGPT / Anthropic now use. Distilled from
-the three completed ports: commits `5d5676d` (notion), `d0a07af`
-(chatgpt + anthropic + shared utils), `815f290` (slack/bazel cleanup),
-`79c3b4a` (live golden refresh), `24f1769` (bazel `.update` flow).
+Reference for the pattern every provider now follows: a single
+`.doltlite_db` file per source as the raw store. Distilled from the
+ports: commits `5d5676d` (notion), `d0a07af` (chatgpt + anthropic +
+shared utils), `815f290` (slack/bazel cleanup), `79c3b4a` (live
+golden refresh), `24f1769` (bazel `.update` flow), and the
+github/gitlab ports that closed out the file-tree backed providers.
+
+All in-tree providers (anthropic, chatgpt, notion, slack, github,
+gitlab, beeper) use this pattern — no more JSONL-tree raw stores.
+Kept as a reference for new providers added later.
 
 ---
 

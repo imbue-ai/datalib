@@ -179,8 +179,7 @@ impl RawDb {
         let Some(event_id) = event.get("event_id").and_then(|v| v.as_str()) else {
             return Ok(());
         };
-        let id =
-            crate::translate::beeper_event_uuid(matrix_room_id, event_id);
+        let id = crate::translate::beeper_event_uuid(matrix_room_id, event_id);
         let room_uuid = crate::translate::beeper_room_uuid(matrix_room_id);
         let sender_mxid = event
             .get("sender")
@@ -190,10 +189,7 @@ impl RawDb {
             .as_deref()
             .map(crate::translate::beeper_user_uuid);
         let origin_ts = event.get("origin_server_ts").and_then(|v| v.as_i64());
-        let event_type = event
-            .get("type")
-            .and_then(|v| v.as_str())
-            .map(String::from);
+        let event_type = event.get("type").and_then(|v| v.as_str()).map(String::from);
         let msgtype = event
             .pointer("/content/msgtype")
             .and_then(|v| v.as_str())
@@ -280,13 +276,12 @@ impl RawDb {
     /// Read the global `next_batch` cursor from the previous successful
     /// sync, if any. Stored in the shared `sync_scope_state` table.
     pub async fn read_next_batch(&self) -> Result<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT last_seen_at FROM sync_scope_state WHERE scope = ?",
-        )
-        .bind(SYNC_SCOPE_NEXT_BATCH)
-        .fetch_optional(&self.pool)
-        .await
-        .context("read sync_scope_state")?;
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+                .bind(SYNC_SCOPE_NEXT_BATCH)
+                .fetch_optional(&self.pool)
+                .await
+                .context("read sync_scope_state")?;
         Ok(row.map(|(v,)| v))
     }
 

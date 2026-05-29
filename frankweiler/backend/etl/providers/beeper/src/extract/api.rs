@@ -131,7 +131,10 @@ mod tests {
     #[test]
     fn build_url_no_params() {
         let u = build_url("/_matrix/client/v3/joined_rooms", &BTreeMap::new());
-        assert_eq!(u, "https://matrix.beeper.com/_matrix/client/v3/joined_rooms");
+        assert_eq!(
+            u,
+            "https://matrix.beeper.com/_matrix/client/v3/joined_rooms"
+        );
     }
 
     #[test]

@@ -169,8 +169,7 @@ async fn drive(db: &RawDb, opts: &FetchOptions, summary: &mut FetchSummary) -> R
     let mut params = BTreeMap::new();
     params.insert(
         "filter".to_string(),
-        r#"{"room":{"timeline":{"limit":50},"state":{"lazy_load_members":false}}}"#
-            .to_string(),
+        r#"{"room":{"timeline":{"limit":50},"state":{"lazy_load_members":false}}}"#.to_string(),
     );
     params.insert("timeout".to_string(), "0".to_string());
     if let Some(since) = prior_next_batch.as_deref() {
@@ -183,14 +182,10 @@ async fn drive(db: &RawDb, opts: &FetchOptions, summary: &mut FetchSummary) -> R
     }
     let opts_progress = opts.progress.clone();
     opts_progress.set_message("syncing");
-    let sync = matrix_get_with_timeout(
-        "/_matrix/client/v3/sync",
-        &params,
-        LATCHKEY_SYNC_TIMEOUT,
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("{}", e))
-    .context("sync")?;
+    let sync = matrix_get_with_timeout("/_matrix/client/v3/sync", &params, LATCHKEY_SYNC_TIMEOUT)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}", e))
+        .context("sync")?;
     summary.requests += 1;
 
     // Optional explicit-rooms filter (paste-able matrix.to URLs are
@@ -217,7 +212,10 @@ async fn drive(db: &RawDb, opts: &FetchOptions, summary: &mut FetchSummary) -> R
         // `state.events` (full-state snapshot or delta) with any
         // state events from the timeline (membership changes etc.).
         let mut all_state: Vec<Value> = Vec::new();
-        if let Some(arr) = room_value.pointer("/state/events").and_then(|v| v.as_array()) {
+        if let Some(arr) = room_value
+            .pointer("/state/events")
+            .and_then(|v| v.as_array())
+        {
             all_state.extend(arr.iter().cloned());
         }
         // Timeline can carry state events too (state_key present); we
@@ -350,17 +348,13 @@ fn extract_room_info(matrix_room_id: &str, state: &Value) -> RoomInfo {
                 // (MSC2346 style). The protocol id sits at
                 // content.protocol.id; on Beeper this is the network
                 // tag we want.
-                if let Some(proto) =
-                    ev.pointer("/content/protocol/id").and_then(|v| v.as_str())
-                {
+                if let Some(proto) = ev.pointer("/content/protocol/id").and_then(|v| v.as_str()) {
                     bridge_protocol = Some(proto.to_string());
                     bridge_network = Some(proto.to_string());
                 }
             }
             Some("m.room.member") => {
-                if ev.pointer("/content/membership").and_then(|v| v.as_str())
-                    == Some("join")
-                {
+                if ev.pointer("/content/membership").and_then(|v| v.as_str()) == Some("join") {
                     member_count += 1;
                 }
                 // Fallback network detection: bridge bots have a

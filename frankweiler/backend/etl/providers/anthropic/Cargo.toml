@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "anthropic-download"
 path = "src/bin/anthropic_download.rs"
 
-[[bin]]
-name = "anthropic-translate"
-path = "src/bin/anthropic_translate.rs"
-
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }

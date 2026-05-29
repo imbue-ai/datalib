@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "slack-download"
 path = "src/bin/slack_download.rs"
 
-[[bin]]
-name = "slack-translate"
-path = "src/bin/slack_translate.rs"
-
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }

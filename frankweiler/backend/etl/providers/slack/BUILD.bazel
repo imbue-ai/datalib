@@ -63,29 +63,6 @@ rust_binary(
     ],
 )
 
-# Translate step (Slack). Reads raw_api/ and emits per-thread .md +
-# grid_rows sidecars. Idempotent via the source_fingerprint frontmatter.
-#
-# Target named `slack_translate_bin` so the `slack_translate` label is
-# free for the rust_test below — insta's snapshot file naming uses the
-# test binary name, and the checked-in snap file is
-# `slack_translate__tng_grid_rows.snap`.
-rust_binary(
-    name = "slack_translate_bin",
-    srcs = ["src/bin/slack_translate.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl_slack",
-        "//frankweiler/backend/etl:frankweiler_etl",
-        "//frankweiler/backend/obs:frankweiler_obs",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:tokio",
-        "@frankweiler_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "slack_unittests",
     size = "small",

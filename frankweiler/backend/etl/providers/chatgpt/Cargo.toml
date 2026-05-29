@@ -12,10 +12,6 @@ path = "src/lib.rs"
 name = "chatgpt-download"
 path = "src/bin/chatgpt_download.rs"
 
-[[bin]]
-name = "chatgpt-translate"
-path = "src/bin/chatgpt_translate.rs"
-
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }

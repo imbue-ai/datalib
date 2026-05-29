@@ -696,18 +696,15 @@ async fn run_extract_phase(
         }
     }
 
-    // Pre-create out_dirs; an mkdir failure becomes a source-level
-    // outcome rather than a phase-wide abort.
-    plans.retain_mut(|p| {
-        if let Err(e) = fs::create_dir_all(&p.out_dir) {
-            let err = anyhow::Error::new(e).context(format!("create {}", p.out_dir.display()));
-            outcomes.push(PhaseOutcome::err(&p.name, p.type_str, &err));
-            false
-        } else {
-            true
-        }
-    });
-
+    // Each provider creates whatever on-disk layout it needs:
+    //   - doltlite-backed (anthropic, chatgpt, notion, slack) write to
+    //     `<data_root>/raw/<name>.doltlite_db`; `doltlite_raw::open`
+    //     creates the file's parent (`raw/`) automatically.
+    //   - file-tree-backed (github, gitlab) call `create_dir_all` on
+    //     their out_dir as their first extract step.
+    // We used to pre-create `<data_root>/raw/<name>/` here for everyone,
+    // which left empty leftover dirs for the doltlite-backed providers.
+    //
     // One MultiProgress for the whole extract phase; one bar per plan
     // fanned out to a TracingSink so structured consumers see the same
     // stream.
@@ -949,10 +946,7 @@ impl ExtractPlan {
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
                     .join(" ");
-                format!(
-                    "msgs={} replies={} media[{}]",
-                    s.messages, s.replies, media
-                )
+                format!("msgs={} replies={} media[{}]", s.messages, s.replies, media)
             }),
             ExtractKind::Github { sync } => {
                 let targets = sync
@@ -1019,9 +1013,9 @@ impl ExtractPlan {
                     db_path: self.out_dir.clone(),
                     networks: sync.networks.clone(),
                     rooms: sync.rooms.clone(),
-                    refresh_window_days: sync.refresh_window_days.unwrap_or(
-                        frankweiler_etl_beeper::extract::DEFAULT_REFRESH_WINDOW_DAYS,
-                    ),
+                    refresh_window_days: sync
+                        .refresh_window_days
+                        .unwrap_or(frankweiler_etl_beeper::extract::DEFAULT_REFRESH_WINDOW_DAYS),
                     media: sync.media,
                     progress: progress.clone(),
                 },

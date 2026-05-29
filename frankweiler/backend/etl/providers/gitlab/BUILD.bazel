@@ -48,22 +48,6 @@ rust_binary(
     ],
 )
 
-rust_binary(
-    name = "gitlab_translate",
-    srcs = ["src/bin/gitlab_translate.rs"],
-    edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
-    deps = [
-        ":frankweiler_etl_gitlab",
-        "//frankweiler/backend/etl:frankweiler_etl",
-        "//frankweiler/backend/obs:frankweiler_obs",
-        "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:tokio",
-        "@frankweiler_crates//:tracing",
-    ],
-)
-
 rust_test(
     name = "gitlab_unittests",
     size = "small",

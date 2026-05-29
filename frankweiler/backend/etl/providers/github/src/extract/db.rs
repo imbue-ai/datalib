@@ -371,8 +371,7 @@ impl RawDb {
         let original_commit_id = payload.get("original_commit_id").and_then(|v| v.as_str());
         let created_at = payload.get("created_at").and_then(|v| v.as_str());
         let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
-        let payload_str =
-            serde_json::to_string(payload).context("serialize pr_review_comment")?;
+        let payload_str = serde_json::to_string(payload).context("serialize pr_review_comment")?;
         let now = Utc::now().to_rfc3339();
         sqlx::query(
             "INSERT INTO pr_review_comments
@@ -623,6 +622,9 @@ mod tests {
             .await
             .unwrap();
         let m = db.load_scope_state().await.unwrap();
-        assert_eq!(m.get("author:@me").map(String::as_str), Some("2026-05-21T00:00:00Z"));
+        assert_eq!(
+            m.get("author:@me").map(String::as_str),
+            Some("2026-05-21T00:00:00Z")
+        );
     }
 }

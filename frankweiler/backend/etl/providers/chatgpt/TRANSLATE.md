@@ -1,8 +1,10 @@
 # ChatGPT Translate
 
-`chatgpt-translate` reads `<out>/raw_api/` (written by
-`chatgpt-download`) and emits, per ChatGPT conversation, a `.md` plus
-a co-located `.grid_rows.json` sidecar under
+The chatgpt translate step is an in-process library (called from
+`frankweiler-sync`, no standalone bin) that reads the doltlite db at
+`<out>/raw/<name>.doltlite_db` (written by `chatgpt-download`) and
+emits, per ChatGPT conversation, a `.md` plus a co-located
+`.grid_rows.json` sidecar under
 `<out>/rendered_md/openai/<account>/llm_chats/<conv>__<slug>.md`.
 
 The Load step is provider-agnostic and lives in `frankweiler_etl::load`.

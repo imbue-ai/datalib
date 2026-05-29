@@ -77,10 +77,7 @@ async fn main() -> Result<()> {
                 interesting = arr.iter().take(8).collect();
             }
             for ev in interesting {
-                println!(
-                    "{}",
-                    serde_json::to_string(ev).unwrap_or_default()
-                );
+                println!("{}", serde_json::to_string(ev).unwrap_or_default());
             }
         }
     }
