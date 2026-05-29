@@ -35,9 +35,11 @@ struct Args {
     #[arg(long)]
     max_mrs: Option<usize>,
 
-    /// Fetch a single MR (`namespace/project!IID` or full URL); skips discovery.
+    /// Fetch specific MRs only; repeatable. Accepts
+    /// `namespace/project!IID` or a gitlab.com MR URL. When supplied,
+    /// discovery is skipped and only the listed MRs are fetched.
     #[arg(long = "merge-request", value_name = "REF")]
-    merge_request: Option<String>,
+    merge_request: Vec<String>,
 
     /// Ignore sync_state.json and walk the full refresh window.
     #[arg(long)]
@@ -61,17 +63,18 @@ async fn main() -> Result<()> {
     } else {
         args.scope.clone()
     };
-    let single_mr = match args.merge_request.as_deref() {
-        Some(s) => Some(parse_mr_ref(s)?),
-        None => None,
-    };
+    let targets: Vec<(String, u32)> = args
+        .merge_request
+        .iter()
+        .map(|s| parse_mr_ref(s))
+        .collect::<Result<Vec<_>>>()?;
 
     let opts = FetchOptions {
-        out_dir: args.out.clone(),
+        db_path: args.out.clone(),
         scopes,
         refresh_window_days: args.refresh_window_days,
         max_mrs: args.max_mrs,
-        single_mr,
+        targets,
         full_sync: args.full,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
         ..Default::default()
@@ -82,9 +85,7 @@ async fn main() -> Result<()> {
     info!(
         event = "gitlab_download_complete",
         new_mrs = summary.new_mrs,
-        upd_mrs = summary.upd_mrs,
         new_discussions = summary.new_discussions,
-        upd_discussions = summary.upd_discussions,
         requests = summary.requests,
     );
     Ok(())

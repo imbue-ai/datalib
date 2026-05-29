@@ -1,18 +1,18 @@
-//! Parse the GitLab event-store JSONL into in-memory rows. Each
-//! discussion (a natively threaded conversation) gets unrolled into one
-//! `NoteRow` per note. Notes with `position.new_path` populate the inline
-//! section; everything else (including `individual_note: true`) becomes
-//! general discussion.
+//! Parse the GitLab doltlite database written by [`crate::extract`] into
+//! in-memory rows for the renderer + grid_rows pass. Each discussion
+//! (a natively threaded conversation) gets unrolled into one `NoteRow`
+//! per note. Notes with `position.new_path` populate the inline section;
+//! everything else (including `individual_note: true`) becomes general
+//! discussion.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::extract::db::{block_on_load_all, db_path_for, LoadedRaw};
 
 pub const ENTITY_SELF: &str = "self_identity";
 pub const ENTITY_MR: &str = "merge_request";
@@ -100,180 +100,86 @@ pub struct ParsedGitlabApi {
     pub notes: Vec<NoteRow>,
 }
 
-fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
-    if !path.exists() {
-        return Ok(Vec::new());
+pub fn parse_api_dir(path: &Path) -> Result<ParsedGitlabApi> {
+    let db_path = db_path_for(path);
+    if !db_path.exists() {
+        anyhow::bail!("gitlab source not found at {}", db_path.display());
     }
-    let mut out = Vec::new();
-    let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    for (i, line) in BufReader::new(f).lines().enumerate() {
-        let line = line.with_context(|| format!("read {}:{}", path.display(), i + 1))?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let v: Value = serde_json::from_str(&line)
-            .with_context(|| format!("parse {}:{}", path.display(), i + 1))?;
-        out.push(v);
-    }
-    Ok(out)
+    let raw = block_on_load_all(&db_path)
+        .with_context(|| format!("load gitlab db {}", db_path.display()))?;
+    Ok(parse_loaded(raw))
 }
 
-fn load_latest_by(
-    api_dir: &Path,
-    entity: &str,
-    key_of: impl Fn(&Value) -> String,
-) -> Result<Vec<Value>> {
-    let mut latest: HashMap<String, Value> = HashMap::new();
-    for stream in ["created", "updated"] {
-        let p = api_dir.join(entity).join(stream).join("events.jsonl");
-        for rec in read_jsonl(&p)? {
-            let k = key_of(&rec);
-            if !k.is_empty() {
-                latest.insert(k, rec);
-            }
-        }
-    }
-    Ok(latest.into_values().collect())
-}
-
-pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
+pub fn parse_loaded(raw: LoadedRaw) -> ParsedGitlabApi {
     let mut out = ParsedGitlabApi::default();
 
-    // self_identity
-    let selves = load_latest_by(api_dir, ENTITY_SELF, |rec| {
-        rec.get("user_id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .unwrap_or_default()
-    })?;
-    if let Some(rec) = selves.into_iter().next() {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
+    if let Some(s) = raw.self_identity {
         out.self_identity = Some(GitlabSelfIdentity {
-            user_id: rec
-                .get("user_id")
-                .and_then(|v| v.as_i64())
-                .or_else(|| raw.get("id").and_then(|v| v.as_i64())),
-            username: rec
-                .get("username")
-                .and_then(|v| v.as_str())
-                .or_else(|| raw.get("username").and_then(|v| v.as_str()))
-                .map(String::from),
-            web_url: rec
-                .get("web_url")
-                .and_then(|v| v.as_str())
-                .or_else(|| raw.get("web_url").and_then(|v| v.as_str()))
-                .map(String::from),
-            raw,
+            user_id: s.get("id").and_then(|v| v.as_i64()),
+            username: s.get("username").and_then(|v| v.as_str()).map(String::from),
+            web_url: s.get("web_url").and_then(|v| v.as_str()).map(String::from),
+            raw: s,
         });
     }
 
-    // Merge requests
-    for rec in load_latest_by(api_dir, ENTITY_MR, |rec| {
-        format!(
-            "{}!{}",
-            rec.get("project_full_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0)
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let proj = rec
-            .get("project_full_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let iid = rec.get("mr_iid").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    for mr in raw.merge_requests {
+        let proj = mr.project_full_path;
+        let iid = mr.mr_iid;
         if proj.is_empty() || iid == 0 {
             continue;
         }
-        let diff_refs = raw.get("diff_refs").cloned().unwrap_or(Value::Null);
+        let p = &mr.payload;
+        let diff_refs = p.get("diff_refs");
         out.merge_requests.push(MergeRequestRow {
             uuid: gitlab_mr_uuid(&proj, iid),
             project_full_path: proj,
             mr_iid: iid,
-            title: raw
-                .get("title")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            body: raw
+            title: p.get("title").and_then(|v| v.as_str()).unwrap_or("").into(),
+            body: p
                 .get("description")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
-                .to_string(),
-            state: raw.get("state").and_then(|v| v.as_str()).map(String::from),
-            web_url: raw
-                .get("web_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+                .into(),
+            state: p.get("state").and_then(|v| v.as_str()).map(String::from),
+            web_url: p.get("web_url").and_then(|v| v.as_str()).map(String::from),
             head_sha: diff_refs
-                .get("head_sha")
+                .and_then(|d| d.get("head_sha"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
             base_sha: diff_refs
-                .get("base_sha")
+                .and_then(|d| d.get("base_sha"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            source_branch: raw
+            source_branch: p
                 .get("source_branch")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            target_branch: raw
+            target_branch: p
                 .get("target_branch")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            author_username: raw
+            author_username: p
                 .get("author")
                 .and_then(|a| a.get("username"))
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            created_at: raw
-                .get("created_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            updated_at: raw
-                .get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            merged_at: raw
-                .get("merged_at")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            created_at: p.get("created_at").and_then(|v| v.as_str()).map(String::from),
+            updated_at: p.get("updated_at").and_then(|v| v.as_str()).map(String::from),
+            merged_at: p.get("merged_at").and_then(|v| v.as_str()).map(String::from),
         });
     }
 
-    // Discussions → flatten to NoteRows
-    for rec in load_latest_by(api_dir, ENTITY_DISCUSSION, |rec| {
-        format!(
-            "{}!{}#{}",
-            rec.get("project_full_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-            rec.get("mr_iid").and_then(|v| v.as_i64()).unwrap_or(0),
-            rec.get("discussion_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-        )
-    })? {
-        let raw = rec.get("raw").cloned().unwrap_or(Value::Null);
-        let proj = rec
-            .get("project_full_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let iid = rec.get("mr_iid").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-        let discussion_id = raw
-            .get("id")
-            .and_then(|v| v.as_str())
-            .or_else(|| rec.get("discussion_id").and_then(|v| v.as_str()))
-            .unwrap_or("")
-            .to_string();
-        let individual = raw
+    // Discussions → flatten to NoteRows.
+    for d in raw.discussions {
+        let proj = d.project_full_path;
+        let iid = d.mr_iid;
+        let payload = d.payload;
+        let discussion_id = d.discussion_id;
+        let individual = payload
             .get("individual_note")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let notes = raw
+        let notes = payload
             .get("notes")
             .and_then(|v| v.as_array())
             .cloned()
@@ -282,7 +188,6 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
             continue;
         }
 
-        // Figure out the parent (first non-system note id) for threading.
         let parent_id = notes
             .iter()
             .find(|n| !n.get("system").and_then(|v| v.as_bool()).unwrap_or(false))
@@ -295,7 +200,6 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
             }
             let system = n.get("system").and_then(|v| v.as_bool()).unwrap_or(false);
             if system {
-                // Skip "added/removed label", "marked WIP" etc. system notes.
                 continue;
             }
             let position = n.get("position").cloned().unwrap_or(Value::Null);
@@ -341,11 +245,7 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
                     .and_then(|a| a.get("username"))
                     .and_then(|v| v.as_str())
                     .map(String::from),
-                body: n
-                    .get("body")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                body: n.get("body").and_then(|v| v.as_str()).unwrap_or("").into(),
                 web_url,
                 path,
                 line,
@@ -358,7 +258,7 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
                     .get("created_at")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
-                    .to_string(),
+                    .into(),
                 updated_at: n
                     .get("updated_at")
                     .and_then(|v| v.as_str())
@@ -367,5 +267,5 @@ pub fn parse_api_dir(api_dir: &Path) -> Result<ParsedGitlabApi> {
         }
     }
 
-    Ok(out)
+    out
 }

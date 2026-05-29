@@ -36,8 +36,8 @@ async fn gitlab_live_single_mr_snapshot() {
     eprintln!("[test] downloading {proj}!{iid} -> {}", tmp.display());
 
     let opts = FetchOptions {
-        out_dir: tmp.clone(),
-        single_mr: Some((proj.clone(), iid)),
+        db_path: tmp.clone(),
+        targets: vec![(proj.clone(), iid)],
         ..Default::default()
     };
     gitlab::fetch(opts).await.expect("gitlab fetch failed");

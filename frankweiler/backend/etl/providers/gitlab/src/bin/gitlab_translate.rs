@@ -28,7 +28,8 @@ struct Args {
     obs: ObsArgs,
 }
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let _guard = init_obs(&args.obs, "gitlab-translate")?;
 
