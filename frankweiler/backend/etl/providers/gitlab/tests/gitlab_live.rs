@@ -51,6 +51,8 @@ async fn gitlab_live_single_mr_snapshot() {
         &parsed,
         &render_root,
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
     )
     .expect("render_gitlab failed");
 

@@ -432,28 +432,40 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
             let pages = db.load_pages().await?;
             let blocks = db.load_blocks().await?;
             let comments = db.load_comments().await?;
-            let blobs_by_owner = db.load_blobs_by_owner().await?;
+            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
+                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                    db.pool().clone(),
+                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 pages,
                 blocks,
                 comments,
-                blobs_by_owner,
+                blobs,
             })
         })
     })
 }
 
-/// Bag of payload arrays returned by [`block_on_load_all`]; mirrors what
-/// the old JSONL `parse_api_dir` produced from the latest-by-id walk.
-#[derive(Debug, Default, Clone)]
+/// Bag of payload arrays returned by [`block_on_load_all`]. Blob bytes
+/// come through `blobs` as a streaming handle (one-at-a-time fetch),
+/// not as a bulk HashMap.
+#[derive(Clone)]
 pub struct LoadedRaw {
     pub pages: Vec<Value>,
     pub blocks: Vec<(Value, Option<String>)>,
     pub comments: Vec<(Value, Option<String>)>,
-    /// Keyed by `owning_id` (= the block id that references the file).
-    /// Today only image blocks populate this; other media kinds can
-    /// follow the same shape.
-    pub blobs_by_owner: std::collections::HashMap<String, BlobBytes>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for LoadedRaw {
+    fn default() -> Self {
+        Self {
+            pages: Vec::new(),
+            blocks: Vec::new(),
+            comments: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 #[cfg(test)]

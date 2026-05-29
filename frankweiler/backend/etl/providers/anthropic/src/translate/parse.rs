@@ -9,14 +9,13 @@
 //! `raw_json` carries the JSON minus any sibling rows we've exploded
 //! out.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{Map, Value};
 
-use crate::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation};
+use crate::extract::db::{block_on_load_all, db_path_for, LoadedConversation};
 use crate::extract::normalize::normalize_to_export_shape;
 
 #[derive(Debug, Clone)]
@@ -83,7 +82,7 @@ pub struct AttachmentRow {
     pub raw_json: Value,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
     pub projects: Vec<ProjectRow>,
@@ -91,10 +90,25 @@ pub struct ParsedExport {
     pub messages: Vec<MessageRow>,
     pub content_blocks: Vec<ContentBlockRow>,
     pub attachments: Vec<AttachmentRow>,
-    /// Blob bytes keyed by upstream `file_uuid`. Render materializes
-    /// these onto disk at `raw/<source>/blobs/<file_uuid>/<name>` so
-    /// the markdown link resolves.
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    /// Streaming handle to blob bytes, keyed by upstream `file_uuid`.
+    /// Render materializes these onto disk at
+    /// `raw/<source>/blobs/<file_uuid>/<name>` so the markdown link
+    /// resolves.
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for ParsedExport {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            projects: Vec::new(),
+            conversations: Vec::new(),
+            messages: Vec::new(),
+            content_blocks: Vec::new(),
+            attachments: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
@@ -125,7 +139,7 @@ pub fn parse_export(path: &Path) -> Result<ParsedExport> {
 /// same step that used to happen at fetch time) before being walked.
 pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
     let mut out = ParsedExport {
-        blobs_by_id: raw.blobs_by_id,
+        blobs: raw.blobs,
         ..Default::default()
     };
     for u in &raw.users {

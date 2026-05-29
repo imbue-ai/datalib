@@ -49,6 +49,8 @@ fn main() -> Result<()> {
         &parsed,
         &render_root,
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
     )?;
     info!(
         event = "github_translate_complete",

@@ -22,6 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
@@ -321,6 +322,8 @@ pub fn render_github(
     parsed: &ParsedGithubApi,
     root: &Path,
     progress: &Progress,
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     // Group comments by PR.
@@ -335,7 +338,28 @@ pub fn render_github(
     for pr in &parsed.pull_requests {
         let key = (pr.repo_full_name.clone(), pr.pr_number);
         let comments = by_pr.remove(&key).unwrap_or_default();
+        let fingerprint = fingerprint_for_pr(pr, &comments);
+        let md_rel = pr_qmd_path_rel(&pr.repo_full_name, pr.pr_number);
+        let md_path = root.join(&md_rel);
+
+        if prior_fingerprints.get(&pr.uuid).map(String::as_str) == Some(fingerprint.as_str())
+            && md_path.exists()
+        {
+            summary.skipped += 1;
+            progress.inc(1);
+            continue;
+        }
+
         render_one_pr(pr, &comments, root)?;
+        let rows = rows_for_pr(pr, &comments);
+        on_doc_complete(RenderedDoc {
+            document_uuid: pr.uuid.clone(),
+            source_name: String::new(),
+            source_fingerprint: fingerprint,
+            md_path: md_path.clone(),
+            render_version: RENDER_VERSION,
+            rows,
+        })?;
         summary.rendered += 1;
         progress.inc(1);
     }

@@ -16,9 +16,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use crate::extract::db::{
-    block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw,
-};
+use crate::extract::db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw};
 
 #[derive(Debug, Clone)]
 pub struct OAAccountRow {
@@ -85,16 +83,29 @@ pub struct OAContentPartRow {
     pub raw_json: Value,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct ParsedChatGPTApi {
     pub accounts: Vec<OAAccountRow>,
     pub conversations: Vec<OAConversationRow>,
     pub messages: Vec<OAMessageRow>,
     pub content_parts: Vec<OAContentPartRow>,
-    /// Blob bytes keyed by upstream `file_id`. Render materializes
-    /// these onto disk at `raw/<source>/blobs/<file_id>/<name>` so the
-    /// (unchanged) markdown link resolves.
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    /// Streaming handle to blob bytes; rendered keyed by upstream
+    /// `file_id`. Render materializes these onto disk at
+    /// `raw/<source>/blobs/<file_id>/<name>` so the markdown link
+    /// resolves.
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for ParsedChatGPTApi {
+    fn default() -> Self {
+        Self {
+            accounts: Vec::new(),
+            conversations: Vec::new(),
+            messages: Vec::new(),
+            content_parts: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 /// Normalize a ChatGPT timestamp to an ISO-8601 string. Strings pass through
@@ -423,7 +434,7 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
 /// the doltlite DB.
 pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
     let mut out = ParsedChatGPTApi {
-        blobs_by_id: raw.blobs_by_id,
+        blobs: raw.blobs,
         ..Default::default()
     };
     let account_id = if let Some(me) = raw.me.as_ref() {

@@ -1081,17 +1081,31 @@ fn translate_source(
             use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
             let parsed = parse_export(&fixture)
                 .with_context(|| format!("anthropic parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress)
-                .context("anthropic render_all")
-                .map(|_| ())
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("anthropic render_all")
+            .map(|_| ())
         }
         SourceConfig::ChatgptApi { .. } => {
             use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress)
-                .context("chatgpt render_all")
-                .map(|_| ())
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("chatgpt render_all")
+            .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
             use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
@@ -1116,17 +1130,29 @@ fn translate_source(
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("github parse {}", fixture.display()))?;
-            render_github(&parsed, root, progress)
-                .context("render_github")
-                .map(|_| ())
+            render_github(
+                &parsed,
+                root,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("render_github")
+            .map(|_| ())
         }
         SourceConfig::GitlabApi { .. } => {
             use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("gitlab parse {}", fixture.display()))?;
-            render_gitlab(&parsed, root, progress)
-                .context("render_gitlab")
-                .map(|_| ())
+            render_gitlab(
+                &parsed,
+                root,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("render_gitlab")
+            .map(|_| ())
         }
         SourceConfig::NotionApi { .. } => {
             use frankweiler_etl_notion::translate::{
@@ -1134,9 +1160,15 @@ fn translate_source(
             };
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("notion parse {}", fixture.display()))?;
-            render_notion_official(&parsed, root, progress)
-                .context("render_notion_official")
-                .map(|_| ())
+            render_notion_official(
+                &parsed,
+                root,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("render_notion_official")
+            .map(|_| ())
         }
     }
 }

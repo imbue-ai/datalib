@@ -62,12 +62,19 @@ fn image_blob_lands_next_to_markdown() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs_by_owner,
+        blobs: std::sync::Arc::new(
+            frankweiler_etl::blob_store::InMemoryBlobStore::from_owner_map(blobs_by_owner),
+        ),
     };
 
-    let summary =
-        render_notion_official(&parsed, root, &frankweiler_etl::progress::Progress::noop())
-            .expect("render ok");
+    let summary = render_notion_official(
+        &parsed,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
+    )
+    .expect("render ok");
     assert_eq!(summary.rendered, 1);
 
     // Page dir is `pages/<page_id>/` per render's page_dir_segment.
@@ -122,11 +129,17 @@ fn missing_blob_falls_back_to_upstream_url() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs_by_owner: HashMap::new(),
+        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
     };
 
-    render_notion_official(&parsed, root, &frankweiler_etl::progress::Progress::noop())
-        .expect("render ok");
+    render_notion_official(
+        &parsed,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
+    )
+    .expect("render ok");
     let md = fs::read_to_string(
         root.join("rendered_md")
             .join("notion")

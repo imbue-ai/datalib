@@ -10,6 +10,7 @@ use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
@@ -387,26 +388,40 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
     progress: &Progress,
-) -> std::io::Result<Vec<std::path::PathBuf>> {
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> anyhow::Result<()>,
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
     let name_by_id = name_by_id(parsed);
 
     progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
     for conv in &parsed.conversations {
+        let fingerprint = fingerprint_for_conversation(parsed, &conv.conversation_uuid);
         let Some(r) = render_one(parsed, &conv.conversation_uuid, source_name) else {
             progress.inc(1);
             continue;
         };
         let rel = r.relative_path();
         let abs = root.join(&rel);
+
+        if prior_fingerprints
+            .get(&conv.conversation_uuid)
+            .map(String::as_str)
+            == Some(fingerprint.as_str())
+            && abs.exists()
+        {
+            written.push(rel);
+            progress.inc(1);
+            continue;
+        }
+
         let page_dir = abs
             .parent()
             .expect("relative_path always has a parent (the page-dir)");
         std::fs::create_dir_all(page_dir)?;
 
-        // Write blob bytes into `<page_dir>/blobs/<filename>`. The
-        // markdown links produced by `attachment_md` are relative
-        // `blobs/<filename>` paths and resolve against this dir.
+        // Order: blobs → md → sidecar → callback. Callback firing last
+        // is the commit point.
         materialize_conv_blobs(parsed, conv, &name_by_id, page_dir)?;
 
         std::fs::write(&abs, &r.body)?;
@@ -415,16 +430,23 @@ pub fn render_all(
         let sidecar = Sidecar {
             header: SidecarHeader {
                 document_uuid: conv.conversation_uuid.clone(),
-                source_fingerprint: fingerprint_for_conversation(parsed, &conv.conversation_uuid),
+                source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
-            rows,
+            rows: rows.clone(),
         };
-        // `abs` is `<page_dir>/index.md`, so `with_extension` yields
-        // `<page_dir>/index.grid_rows.json`.
         let sidecar_abs = abs.with_extension("grid_rows.json");
         let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
         std::fs::write(&sidecar_abs, sidecar_json)?;
+
+        on_doc_complete(RenderedDoc {
+            document_uuid: conv.conversation_uuid.clone(),
+            source_name: source_name.to_string(),
+            source_fingerprint: fingerprint,
+            md_path: abs.clone(),
+            render_version: RENDER_VERSION,
+            rows,
+        })?;
 
         written.push(rel);
         progress.inc(1);
@@ -602,9 +624,6 @@ fn materialize_conv_blobs(
     name_by_id: &std::collections::HashMap<String, Option<String>>,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    if parsed.blobs_by_id.is_empty() {
-        return Ok(());
-    }
     let msg_uuids: std::collections::HashSet<&str> = parsed
         .messages
         .iter()
@@ -632,10 +651,12 @@ fn materialize_conv_blobs(
         return Ok(());
     }
     let blobs_dir = page_dir.join("blobs");
-    for (file_uuid, blob) in &parsed.blobs_by_id {
-        if !wanted.contains(file_uuid) {
-            continue;
-        }
+    for file_uuid in &wanted {
+        let blob = match parsed.blobs.read_by_id(file_uuid) {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => return Err(std::io::Error::other(e)),
+        };
         let name = name_by_id.get(file_uuid).and_then(|n| n.as_deref());
         let safe = safe_filename(name, file_uuid);
         std::fs::create_dir_all(&blobs_dir)?;

@@ -375,12 +375,23 @@ pub struct LoadedConversation {
     pub payload: Value,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct LoadedRaw {
     pub users: Vec<Value>,
     pub first_user_uuid: Option<String>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for LoadedRaw {
+    fn default() -> Self {
+        Self {
+            users: Vec::new(),
+            first_user_uuid: None,
+            conversations: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
@@ -388,11 +399,15 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
+            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
+                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                    db.pool().clone(),
+                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 users: db.load_users().await?,
                 first_user_uuid: db.first_user_uuid().await?,
                 conversations: db.load_conversations().await?,
-                blobs_by_id: db.load_blobs_by_id().await?,
+                blobs,
             })
         })
     })

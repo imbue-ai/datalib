@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
@@ -272,6 +273,8 @@ pub fn render_gitlab(
     parsed: &ParsedGitlabApi,
     root: &Path,
     progress: &Progress,
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let mut by_mr: std::collections::HashMap<(String, u32), Vec<NoteRow>> = Default::default();
@@ -285,7 +288,28 @@ pub fn render_gitlab(
     for mr in &parsed.merge_requests {
         let key = (mr.project_full_path.clone(), mr.mr_iid);
         let notes = by_mr.remove(&key).unwrap_or_default();
+        let fingerprint = fingerprint_for_mr(mr, &notes);
+        let md_rel = mr_qmd_path_rel(&mr.project_full_path, mr.mr_iid);
+        let md_path = root.join(&md_rel);
+
+        if prior_fingerprints.get(&mr.uuid).map(String::as_str) == Some(fingerprint.as_str())
+            && md_path.exists()
+        {
+            summary.skipped += 1;
+            progress.inc(1);
+            continue;
+        }
+
         render_one_mr(mr, &notes, root)?;
+        let rows = rows_for_mr(mr, &notes);
+        on_doc_complete(RenderedDoc {
+            document_uuid: mr.uuid.clone(),
+            source_name: String::new(),
+            source_fingerprint: fingerprint,
+            md_path: md_path.clone(),
+            render_version: RENDER_VERSION,
+            rows,
+        })?;
         summary.rendered += 1;
         progress.inc(1);
     }

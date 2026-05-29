@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, FixedOffset};
 
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
@@ -101,7 +102,9 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
     progress: &Progress,
-) -> std::io::Result<Vec<std::path::PathBuf>> {
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> anyhow::Result<()>,
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
     // Build (file_id → file_name) once so per-conversation blob writes
     // pick the same filename `attachment_md` puts in the markdown link.
     let name_by_id = name_by_id(parsed);
@@ -109,20 +112,36 @@ pub fn render_all(
     progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
     for conv in &parsed.conversations {
+        let fingerprint = fingerprint_for_conversation(parsed, &conv.conversation_id);
         let Some(r) = render_one(parsed, &conv.conversation_id, source_name) else {
             progress.inc(1);
             continue;
         };
         let rel = r.relative_path();
         let abs = root.join(&rel);
+
+        // Skip when the indexer has the same fingerprint AND the md
+        // file is still on disk (defends against `rm -rf rendered_md/`
+        // by hand).
+        if prior_fingerprints
+            .get(&conv.conversation_id)
+            .map(String::as_str)
+            == Some(fingerprint.as_str())
+            && abs.exists()
+        {
+            written.push(rel);
+            progress.inc(1);
+            continue;
+        }
+
         let page_dir = abs
             .parent()
             .expect("relative_path always has a parent (the page-dir)");
         std::fs::create_dir_all(page_dir)?;
 
-        // Write blob bytes into <page_dir>/blobs/<filename>. The
-        // markdown links emitted by `attachment_md` are relative
-        // `blobs/<filename>` paths and resolve against this dir.
+        // Order: blobs → md → sidecar → callback. The callback is the
+        // commit point: an interrupted run leaves the indexer
+        // un-notified so next run re-tries.
         materialize_conv_blobs(parsed, conv, &name_by_id, page_dir)?;
 
         std::fs::write(&abs, &r.body)?;
@@ -131,16 +150,23 @@ pub fn render_all(
         let sidecar = Sidecar {
             header: SidecarHeader {
                 document_uuid: conv.conversation_id.clone(),
-                source_fingerprint: fingerprint_for_conversation(parsed, &conv.conversation_id),
+                source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
-            rows,
+            rows: rows.clone(),
         };
-        // `abs` is `<page_dir>/index.md`, so with_extension yields
-        // `<page_dir>/index.grid_rows.json`.
         let sidecar_abs = abs.with_extension("grid_rows.json");
         let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
         std::fs::write(&sidecar_abs, sidecar_json)?;
+
+        on_doc_complete(RenderedDoc {
+            document_uuid: conv.conversation_id.clone(),
+            source_name: source_name.to_string(),
+            source_fingerprint: fingerprint,
+            md_path: abs.clone(),
+            render_version: RENDER_VERSION,
+            rows,
+        })?;
 
         written.push(rel);
         progress.inc(1);
@@ -369,26 +395,25 @@ fn materialize_conv_blobs(
     name_by_id: &HashMap<String, Option<String>>,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    if parsed.blobs_by_id.is_empty() {
-        return Ok(());
-    }
-    let mut wanted: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for m in &parsed.messages {
         if m.conversation_id != conv.conversation_id {
             continue;
         }
         for a in &m.attachments {
-            wanted.insert(a.file_id.as_str());
+            wanted.insert(a.file_id.clone());
         }
     }
     if wanted.is_empty() {
         return Ok(());
     }
     let blobs_dir = page_dir.join("blobs");
-    for (file_id, blob) in &parsed.blobs_by_id {
-        if !wanted.contains(file_id.as_str()) {
-            continue;
-        }
+    for file_id in &wanted {
+        let blob = match parsed.blobs.read_by_id(file_id) {
+            Ok(Some(b)) => b,
+            Ok(None) => continue,
+            Err(e) => return Err(std::io::Error::other(e)),
+        };
         let name = name_by_id.get(file_id.as_str()).and_then(|n| n.as_deref());
         let safe = safe_filename(name, file_id);
         std::fs::create_dir_all(&blobs_dir)?;

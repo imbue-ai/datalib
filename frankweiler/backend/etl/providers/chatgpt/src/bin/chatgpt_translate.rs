@@ -63,6 +63,8 @@ async fn main() -> Result<()> {
         &args.out,
         &args.source_name,
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
     )?;
     info!(
         event = "chatgpt_translate_complete",

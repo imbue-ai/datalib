@@ -18,13 +18,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_store::BlobStore;
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-use super::grid_rows::gather_documents;
+use super::grid_rows::{gather_documents, PageDocument, ThreadDocument};
 use super::parse::ParsedNotionOfficial;
 
 pub const RENDER_VERSION: u32 = 1;
@@ -894,7 +896,7 @@ fn render_one_page(
     page_titles: &HashMap<String, String>,
     media_urls: &HashMap<String, String>,
     bookmark_titles: &HashMap<String, String>,
-    blobs_by_owner: &HashMap<String, crate::extract::db::BlobBytes>,
+    blobs: &dyn BlobStore,
     pages_root: &Path,
 ) -> Result<PathBuf> {
     let pid = page.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -942,6 +944,10 @@ fn render_one_page(
     // Materialize every blob that hangs off a block on this page.
     // Files land in `<page_dir>/blobs/<block_id>.<ext>`; the relative
     // path `blobs/<file>` is the one we splice into the markdown.
+    //
+    // Streams from the [`BlobStore`] one block at a time — peak RSS
+    // stays at a single attachment instead of holding the whole
+    // page's blob set in memory.
     let mut local_blob_paths: HashMap<String, String> = HashMap::new();
     if let Some(blocks) = children_by_parent.get(pid) {
         let mut owner_ids: Vec<String> = Vec::new();
@@ -949,7 +955,7 @@ fn render_one_page(
         let blobs_dir = page_dir.join("blobs");
         let mut created_dir = false;
         for owner in owner_ids {
-            let Some(b) = blobs_by_owner.get(&owner) else {
+            let Some(b) = blobs.read_by_owner(&owner)? else {
                 continue;
             };
             if !created_dir {
@@ -1142,6 +1148,8 @@ pub fn render_notion_official(
     parsed: &ParsedNotionOfficial,
     root: &Path,
     progress: &Progress,
+    prior_fingerprints: &HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let pages_root = root.join(pages_subdir());
@@ -1163,9 +1171,52 @@ pub fn render_notion_official(
         .collect();
     let block_owning_page = block_to_page_id(&parsed.blocks);
 
-    progress.set_length(Some(parsed.pages.len() as u64));
+    // Pre-compute every document's row set + fingerprint up front so
+    // the per-doc loop can decide skip/render against priors before
+    // doing any IO.
+    let docs = gather_documents(parsed);
+    let page_doc_by_uuid: HashMap<String, &PageDocument> = docs
+        .pages
+        .iter()
+        .map(|d| (d.page_uuid.clone(), d))
+        .collect();
+    let thread_doc_by_uuid: HashMap<String, &ThreadDocument> = docs
+        .threads
+        .iter()
+        .map(|d| (d.discussion_uuid.clone(), d))
+        .collect();
+
+    progress.set_length(Some((docs.pages.len() + docs.threads.len()) as u64));
+
+    // ── Pages ────────────────────────────────────────────────────────
+    // Compute every page's md_path even if we end up skipping it, so
+    // threads-under-the-page can resolve their parent dir.
     let mut page_paths: HashMap<String, PathBuf> = HashMap::new();
     for page in &parsed.pages {
+        let Some(pid) = page.get("id").and_then(|v| v.as_str()).map(String::from) else {
+            continue;
+        };
+        let title = page_titles
+            .get(&pid)
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "(untitled)".into());
+        let page_dir = pages_root.join(page_dir_segment(&pid, &title));
+        let md_path = page_dir.join("index.md");
+
+        let fingerprint = page_doc_by_uuid
+            .get(&pid)
+            .map(|d| d.source_fingerprint.clone());
+
+        if let Some(fp) = fingerprint.as_ref() {
+            if prior_fingerprints.get(&pid) == Some(fp) && md_path.exists() {
+                summary.skipped += 1;
+                page_paths.insert(pid, md_path);
+                progress.inc(1);
+                continue;
+            }
+        }
+
         let target = render_one_page(
             page,
             &children_by_parent,
@@ -1173,17 +1224,41 @@ pub fn render_notion_official(
             &page_titles,
             &parsed.media_urls,
             &parsed.bookmark_titles,
-            &parsed.blobs_by_owner,
+            parsed.blobs.as_ref(),
             &pages_root,
         )?;
-        if let Some(pid) = page.get("id").and_then(|v| v.as_str()) {
-            page_paths.insert(pid.to_string(), target);
+
+        // Sidecar + callback only fire if gather_documents knew about
+        // this page (it should, for any page that produced rows).
+        if let Some(pd) = page_doc_by_uuid.get(&pid) {
+            let sidecar = Sidecar {
+                header: SidecarHeader {
+                    document_uuid: pd.page_uuid.clone(),
+                    source_fingerprint: pd.source_fingerprint.clone(),
+                    render_version: RENDER_VERSION,
+                },
+                rows: pd.rows.clone(),
+            };
+            let sidecar_path = target.with_extension("grid_rows.json");
+            let json = serde_json::to_string_pretty(&sidecar)?;
+            fs::write(&sidecar_path, json)?;
+
+            on_doc_complete(RenderedDoc {
+                document_uuid: pd.page_uuid.clone(),
+                source_name: String::new(),
+                source_fingerprint: pd.source_fingerprint.clone(),
+                md_path: target.clone(),
+                render_version: RENDER_VERSION,
+                rows: pd.rows.clone(),
+            })?;
         }
+
+        page_paths.insert(pid, target);
         summary.rendered += 1;
         progress.inc(1);
     }
 
-    let mut thread_paths: HashMap<String, PathBuf> = HashMap::new();
+    // ── Comment threads ──────────────────────────────────────────────
     let mut by_disc: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for c in &parsed.comments {
         let did = c
@@ -1224,7 +1299,28 @@ pub fn render_notion_official(
             None
         };
         let page_dir = pages_root.join(page_dir_segment(&page_id, &title));
-        if let Some(p) = render_thread(
+
+        let fingerprint = thread_doc_by_uuid
+            .get(&disc_id)
+            .map(|d| d.source_fingerprint.clone());
+
+        // We need the rendered thread's md_path to do the on-disk
+        // skip check. render_thread is deterministic and
+        // thread_filename ignores the snippet (PK is discussion_id),
+        // so we can call thread_qmd_path_rel with an empty snippet
+        // and still get the right path.
+        let thread_md_rel = thread_qmd_path_rel(&page_id, &title, &disc_id, "");
+        let thread_md_path = root.join(&thread_md_rel);
+
+        if let Some(fp) = fingerprint.as_ref() {
+            if prior_fingerprints.get(&disc_id) == Some(fp) && thread_md_path.exists() {
+                summary.skipped += 1;
+                progress.inc(1);
+                continue;
+            }
+        }
+
+        let Some(p) = render_thread(
             &disc_id,
             &page_id,
             &title,
@@ -1233,44 +1329,37 @@ pub fn render_notion_official(
             &parsed.user_names,
             &page_titles,
             &page_dir,
-        )? {
-            thread_paths.insert(disc_id.clone(), p);
-            summary.rendered += 1;
+        )?
+        else {
+            continue;
+        };
+
+        if let Some(td) = thread_doc_by_uuid.get(&disc_id) {
+            let sidecar = Sidecar {
+                header: SidecarHeader {
+                    document_uuid: td.discussion_uuid.clone(),
+                    source_fingerprint: td.source_fingerprint.clone(),
+                    render_version: RENDER_VERSION,
+                },
+                rows: td.rows.clone(),
+            };
+            let sidecar_path = p.with_extension("grid_rows.json");
+            let json = serde_json::to_string_pretty(&sidecar)?;
+            fs::write(&sidecar_path, json)?;
+
+            on_doc_complete(RenderedDoc {
+                document_uuid: td.discussion_uuid.clone(),
+                source_name: String::new(),
+                source_fingerprint: td.source_fingerprint.clone(),
+                md_path: p.clone(),
+                render_version: RENDER_VERSION,
+                rows: td.rows.clone(),
+            })?;
         }
+
+        summary.rendered += 1;
+        progress.inc(1);
     }
 
-    let docs = gather_documents(parsed);
-    for pd in &docs.pages {
-        let Some(md_path) = page_paths.get(&pd.page_uuid) else {
-            continue;
-        };
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                document_uuid: pd.page_uuid.clone(),
-                source_fingerprint: pd.source_fingerprint.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: pd.rows.clone(),
-        };
-        let sidecar_path = md_path.with_extension("grid_rows.json");
-        let json = serde_json::to_string_pretty(&sidecar)?;
-        fs::write(&sidecar_path, json)?;
-    }
-    for td in &docs.threads {
-        let Some(md_path) = thread_paths.get(&td.discussion_uuid) else {
-            continue;
-        };
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                document_uuid: td.discussion_uuid.clone(),
-                source_fingerprint: td.source_fingerprint.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: td.rows.clone(),
-        };
-        let sidecar_path = md_path.with_extension("grid_rows.json");
-        let json = serde_json::to_string_pretty(&sidecar)?;
-        fs::write(&sidecar_path, json)?;
-    }
     Ok(summary)
 }

@@ -61,6 +61,8 @@ async fn main() -> Result<()> {
         &args.out,
         &args.source_name,
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
     )?;
     info!(
         event = "anthropic_translate_complete",

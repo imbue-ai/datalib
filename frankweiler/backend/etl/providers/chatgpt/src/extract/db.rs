@@ -349,12 +349,24 @@ pub struct LoadedConversation {
     pub last_listing_update_time: Option<Value>,
 }
 
-/// Bag returned to the synchronous translate / synthesize path.
-#[derive(Debug, Default, Clone)]
+/// Bag returned to the synchronous translate / synthesize path. `blobs`
+/// is a streaming handle so render can fetch one attachment at a time
+/// rather than bulk-loading the whole table into memory.
+#[derive(Clone)]
 pub struct LoadedRaw {
     pub me: Option<Value>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for LoadedRaw {
+    fn default() -> Self {
+        Self {
+            me: None,
+            conversations: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 /// Synchronous helper for non-async callers (translate, synthesize)
@@ -365,10 +377,14 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
+            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
+                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                    db.pool().clone(),
+                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 me: db.load_me().await?,
                 conversations: db.load_conversations().await?,
-                blobs_by_id: db.load_blobs_by_id().await?,
+                blobs,
             })
         })
     })
