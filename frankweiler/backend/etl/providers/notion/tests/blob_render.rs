@@ -257,3 +257,176 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
         "expected an image markdown link in the rendered page; got:\n{md}",
     );
 }
+
+/// Incrementality canary for notion: two pages, render once to seed
+/// the prior_fingerprints map, then mutate page B (add a paragraph
+/// block) and render again. Only page B should re-render.
+///
+/// Mirrors the slack canary
+/// (`renders_only_changed_and_new_threads_on_resync`) but for
+/// notion's distinct doc shape — page-with-blocks rather than
+/// thread-of-messages.
+#[test]
+fn incremental_renders_only_changed_page() {
+    let d = tempdir().unwrap();
+    let root = d.path();
+
+    let page_a = "a0000000-1111-2222-3333-444444444444";
+    let page_b = "b0000000-1111-2222-3333-444444444444";
+
+    let make_paragraph = |id: &str, parent_page: &str, text: &str| {
+        json!({
+            "id": id,
+            "type": "paragraph",
+            "has_children": false,
+            "parent": {"type": "page_id", "page_id": parent_page},
+            "paragraph": {
+                "rich_text": [{"type": "text", "text": {"content": text}, "plain_text": text}]
+            }
+        })
+    };
+    let make_page = |id: &str, title: &str| {
+        json!({
+            "id": id,
+            "object": "page",
+            "parent": {"type": "workspace"},
+            "properties": {"title": {"title": [{"plain_text": title}]}},
+            "created_time": "2026-05-01T00:00:00.000Z",
+            "last_edited_time": "2026-05-01T00:00:00.000Z",
+        })
+    };
+
+    // ── pass 1: two pages, one block each. Render with empty priors. ─
+    let parsed_v1 = ParsedNotionOfficial {
+        pages: vec![make_page(page_a, "page A"), make_page(page_b, "page B")],
+        blocks: vec![
+            make_paragraph(
+                "10000000-aaaa-bbbb-cccc-dddddddddddd",
+                page_a,
+                "page A original body",
+            ),
+            make_paragraph(
+                "20000000-aaaa-bbbb-cccc-dddddddddddd",
+                page_b,
+                "page B original body",
+            ),
+        ],
+        comments: vec![],
+        user_names: HashMap::new(),
+        media_urls: HashMap::new(),
+        bookmark_titles: HashMap::new(),
+        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+    };
+
+    let mut priors: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let summary1 = render_notion_official(
+        &parsed_v1,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
+            priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+            Ok(())
+        },
+    )
+    .expect("render v1");
+    assert_eq!(summary1.rendered, 2);
+    assert_eq!(summary1.skipped, 0);
+    assert!(priors.contains_key(page_a));
+    assert!(priors.contains_key(page_b));
+    let fp_a_v1 = priors.get(page_a).cloned().unwrap();
+
+    // ── mutate: extend page B with a second paragraph; page A
+    //           untouched. ─────────────────────────────────────────────
+    let parsed_v2 = ParsedNotionOfficial {
+        pages: vec![make_page(page_a, "page A"), make_page(page_b, "page B")],
+        blocks: vec![
+            make_paragraph(
+                "10000000-aaaa-bbbb-cccc-dddddddddddd",
+                page_a,
+                "page A original body",
+            ),
+            make_paragraph(
+                "20000000-aaaa-bbbb-cccc-dddddddddddd",
+                page_b,
+                "page B original body",
+            ),
+            make_paragraph(
+                "30000000-aaaa-bbbb-cccc-dddddddddddd",
+                page_b,
+                "page B newly added second paragraph",
+            ),
+        ],
+        comments: vec![],
+        user_names: HashMap::new(),
+        media_urls: HashMap::new(),
+        bookmark_titles: HashMap::new(),
+        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+    };
+
+    // ── pass 2: render with v1 priors; only page B should fire. ─────
+    let mut rendered_uuids: Vec<String> = Vec::new();
+    let mut captured_fp: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let summary2 = render_notion_official(
+        &parsed_v2,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &priors,
+        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
+            rendered_uuids.push(doc.document_uuid.clone());
+            captured_fp.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+            Ok(())
+        },
+    )
+    .expect("render v2");
+    assert_eq!(
+        rendered_uuids,
+        vec![page_b.to_string()],
+        "expected only page B to re-render; got {rendered_uuids:?}",
+    );
+    assert_eq!(summary2.rendered, 1);
+    assert_eq!(summary2.skipped, 1);
+
+    // Page A's fingerprint must be unchanged (the indexer relied on
+    // that to skip it); page B's must differ.
+    assert_eq!(
+        priors.get(page_a),
+        Some(&fp_a_v1),
+        "page A's fingerprint must not have drifted",
+    );
+    let fp_b_v2 = captured_fp.get(page_b).expect("page B in capture");
+    assert_ne!(
+        priors.get(page_b).unwrap(),
+        fp_b_v2,
+        "page B's fingerprint should change when its blocks change",
+    );
+
+    // ── disk: page B's md now contains the new paragraph text. ──────
+    let page_b_md = fs::read_to_string(
+        root.join("rendered_md")
+            .join("notion")
+            .join("pages")
+            .join(page_b)
+            .join("index.md"),
+    )
+    .expect("page B md exists");
+    assert!(
+        page_b_md.contains("page B newly added second paragraph"),
+        "page B's md should include the appended paragraph; got:\n{page_b_md}",
+    );
+
+    // ── pass 3: feed v2's priors back; nothing should re-render. ────
+    let mut priors_v2 = priors.clone();
+    priors_v2.extend(captured_fp);
+    let summary3 = render_notion_official(
+        &parsed_v2,
+        root,
+        &frankweiler_etl::progress::Progress::noop(),
+        &priors_v2,
+        &mut |_doc| panic!("steady state should skip every doc"),
+    )
+    .expect("render v3");
+    assert_eq!(summary3.rendered, 0);
+    assert_eq!(summary3.skipped, 2);
+}

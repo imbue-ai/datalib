@@ -93,6 +93,7 @@ rust_test(
     deps = [
         ":frankweiler_etl_notion",
         "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
     ],
