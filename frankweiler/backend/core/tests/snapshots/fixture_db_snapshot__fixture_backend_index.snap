@@ -13,6 +13,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "f67d6b7e36720ea80cdf491c9f74a39a0268059c4f740b8a263bdbdaa296be65",
+      "source_fingerprint": "9c54d0ea26eaf0e0",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00.000800+00:00"
@@ -26,6 +27,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "4691cb7b943656914e36811f1e208e1a6c010cfee15bf72ec89f7643af8ae33c",
+      "source_fingerprint": "b1b9cf8a31e3ce49",
       "source_name": "openai",
       "title": "Sonnet on a Cat Named Spot",
       "updated_at": "2370-10-24T08:05:00.000000+00:00"
@@ -39,6 +41,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "8b38f12a2139c0687beca37a1bbf878f3a3e86de09293b2cf20878b2c0c18427",
+      "source_fingerprint": "f0a6b05543a7f39d",
       "source_name": "openai",
       "title": "Polynomial Fit for Sensor Calibration",
       "updated_at": "2370-10-25T08:05:20.000000+00:00"
@@ -52,6 +55,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "4ce0bed4f86d62a0cd2be20961d258c43930f0ca6fabb80ff43a86a3b282ffa9",
+      "source_fingerprint": "d5742aae81fcdb59",
       "source_name": "openai",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "updated_at": "2370-10-26T08:05:00.000000+00:00"
@@ -65,6 +69,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
       "row_set_hash": "e277e3cbfeecc511c1f3ccd2a809a9a8d14bf35aa48047557e3a8be5b02edfab",
+      "source_fingerprint": "fb64f72be17d7715",
       "source_name": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot",
       "updated_at": "2369-04-15T11:30:00Z"
@@ -78,6 +83,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "708e77e247cca533c414ecbd1926ae1531e0237483ecfa403baa128de9912ea7",
+      "source_fingerprint": "52ae743cbfa65f6d",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:11:40.000300+00:00"
@@ -91,6 +97,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
       "row_set_hash": "443112cb388cf7d24a7f7551816210a0806b961c3dced1efc3f9e56f9ed32b6a",
+      "source_fingerprint": "a97dcff41126d108",
       "source_name": "github",
       "title": "Add holodeck safety interlock for live phaser fire",
       "updated_at": "2369-04-15T14:30:00Z"
@@ -104,6 +111,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "7f3b94f4c8834ac32fa4b956029f5f386b47ddc45dc69bdaf30ecb4fc84d7974",
+      "source_fingerprint": "63d58eefe26bb7b1",
       "source_name": "slack",
       "title": "#ten-forward",
       "updated_at": "2369-05-28T15:18:20.000700+00:00"
@@ -117,6 +125,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
       "row_set_hash": "df99a69c2fa4efb1d4c438f9dbba1bcc8189bbb01e640ab030deec6362fbd6b8",
+      "source_fingerprint": "10f3dd3a657b1160",
       "source_name": "notion",
       "title": "Bridge Operations Handbook",
       "updated_at": "2369-04-15T00:02:00.000Z"
@@ -130,6 +139,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
       "row_set_hash": "6f39dde1b9dbbeaa97c64d90617ed2272cdcd8c8ee1840c03636bb2abe09db3b",
+      "source_fingerprint": "c498e2ab4ccbb786",
       "source_name": "notion",
       "title": "Shift Roster",
       "updated_at": "2369-04-15T00:02:00.000Z"
@@ -143,6 +153,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
       "row_set_hash": "ff96119f4cd6b9dda682a20a6e3f2e8bbd5687ed53a92db7cae3df3140686986",
+      "source_fingerprint": "b78236ccbd2b8cfe",
       "source_name": "notion",
       "title": "Incident Log: Stardate 47988.1",
       "updated_at": "2369-04-15T00:02:00.000Z"
@@ -156,6 +167,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "40314ca5c657dac29fc4c511ed9b7927e91780524da896db3253a9f53cd6f05d",
+      "source_fingerprint": "60f018793507c342",
       "source_name": "slack",
       "title": "#engineering",
       "updated_at": "2369-05-28T15:15:00.000500+00:00"
@@ -169,6 +181,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "06e886764cc5909e696abf625d8d8d29704102cc4d64ce5b2f2f29bd17b2c8ff",
+      "source_fingerprint": "3a8b34644fd72c5c",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:13:20.000400+00:00"
@@ -182,6 +195,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "a096953cf8b1d7f050c172d86a990b0db695766b01e311fe791425e3da7068f8",
+      "source_fingerprint": "76aa4cfd02084d2a",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:18:20.000700+00:00"
@@ -195,6 +209,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "47a0cc58152ec41743420e51b21bf84cd7f2a6a97cb2f75004f086421eea766c",
+      "source_fingerprint": "f40cffee2b3c6858",
       "source_name": "anthropic",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00.000000+00:00"
@@ -208,6 +223,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "bf1f74567ee19392fa8c543870b01dcf2ac82b6ce6e1bb07445f88cd658d7148",
+      "source_fingerprint": "e58bfb80d59c56dd",
       "source_name": "anthropic",
       "title": "Tricorder Image Diagnostic",
       "updated_at": "2369-04-15T08:30:45.000000+00:00"
@@ -221,113 +237,10 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "60e6f52898e32974b156756fd810f289ea47360a5dc79046e99237420d2283a2",
+      "source_fingerprint": "4823db11c6e15aff",
       "source_name": "anthropic",
       "title": "Borg Encryption Signature Lookup",
       "updated_at": "2369-04-16T09:01:30.000004+00:00"
-    }
-  ],
-  "documents_loaded": [
-    {
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md",
-      "source_fingerprint": "f40cffee2b3c6858"
-    },
-    {
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.md",
-      "source_fingerprint": "4823db11c6e15aff"
-    },
-    {
-      "document_uuid": "c0000004-1701-4d00-8000-00000000c004",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.md",
-      "source_fingerprint": "e58bfb80d59c56dd"
-    },
-    {
-      "document_uuid": "6a0d7000-3fa1-5479-9d32-6ba74d546fa8",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/github/enterprise-d/replicator-firmware/pr-42/index.md",
-      "source_fingerprint": "fb64f72be17d7715"
-    },
-    {
-      "document_uuid": "8365cf2d-2561-5cc5-bba0-657a8b9f35a2",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/github/enterprise-d/replicator-firmware/pr-43/index.md",
-      "source_fingerprint": "a97dcff41126d108"
-    },
-    {
-      "document_uuid": "b1d6e000-1701-4d00-8000-000000000001",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000001/index.md",
-      "source_fingerprint": "10f3dd3a657b1160"
-    },
-    {
-      "document_uuid": "b1d6e000-1701-4d00-8000-000000000002",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000002/index.md",
-      "source_fingerprint": "c498e2ab4ccbb786"
-    },
-    {
-      "document_uuid": "b1d6e000-1701-4d00-8000-000000000003",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/notion/pages/b1d6e000-1701-4d00-8000-000000000003/index.md",
-      "source_fingerprint": "b78236ccbd2b8cfe"
-    },
-    {
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001/index.md",
-      "source_fingerprint": "b1b9cf8a31e3ce49"
-    },
-    {
-      "document_uuid": "68fa0002-fake-7000-8000-positronic0002",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002/index.md",
-      "source_fingerprint": "f0a6b05543a7f39d"
-    },
-    {
-      "document_uuid": "68fa0003-fake-7000-8000-positronic0003",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003/index.md",
-      "source_fingerprint": "d5742aae81fcdb59"
-    },
-    {
-      "document_uuid": "18661749-ed35-5c92-aa13-7cb73be53387",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/18661749-ed35-5c92-aa13-7cb73be53387/index.md",
-      "source_fingerprint": "9c54d0ea26eaf0e0"
-    },
-    {
-      "document_uuid": "8074b3b0-3bd4-5232-843f-c8278649d1a2",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/8074b3b0-3bd4-5232-843f-c8278649d1a2/index.md",
-      "source_fingerprint": "52ae743cbfa65f6d"
-    },
-    {
-      "document_uuid": "b5ff7879-d563-59d6-8e89-906b6975dca1",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/b5ff7879-d563-59d6-8e89-906b6975dca1/index.md",
-      "source_fingerprint": "3a8b34644fd72c5c"
-    },
-    {
-      "document_uuid": "be617fe9-49d3-5fe1-b75d-0e210465c5bb",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/be617fe9-49d3-5fe1-b75d-0e210465c5bb/index.md",
-      "source_fingerprint": "76aa4cfd02084d2a"
-    },
-    {
-      "document_uuid": "b220c513-3e7b-5301-8b0d-13f9b8cf63fc",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_ENG/threads/b220c513-3e7b-5301-8b0d-13f9b8cf63fc/index.md",
-      "source_fingerprint": "60f018793507c342"
-    },
-    {
-      "document_uuid": "a93e15fa-68d5-5d53-aa9a-590e01b83275",
-      "loaded_at": "2369-04-15T00:00:00+00:00",
-      "qmd_path": "rendered_md/slack/T_NCC1701D/C_TENFWD/threads/a93e15fa-68d5-5d53-aa9a-590e01b83275/index.md",
-      "source_fingerprint": "63d58eefe26bb7b1"
     }
   ],
   "grid_rows": [
@@ -1759,7 +1672,6 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 17,
-    "documents_loaded_count": 17,
     "grid_rows_count": 57
   }
 }

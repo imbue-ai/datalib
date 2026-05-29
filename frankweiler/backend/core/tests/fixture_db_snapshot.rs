@@ -164,10 +164,12 @@ async fn snapshot_grid_rows_and_documents() {
         .collect();
 
     // ── documents ────────────────────────────────────────────────
+    // Includes source_fingerprint (render's input-hash) since the
+    // documents_loaded table merged into documents.
     let drows = sqlx::query(
         "SELECT document_uuid, source_name, provider, kind, title, \
-                created_at, updated_at, md_path, row_set_hash, \
-                renderer_version, rendered_at \
+                created_at, updated_at, md_path, source_fingerprint, \
+                row_set_hash, renderer_version, rendered_at \
          FROM documents ORDER BY document_uuid",
     )
     .fetch_all(&pool)
@@ -186,30 +188,10 @@ async fn snapshot_grid_rows_and_documents() {
                 "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
                 "updated_at": r.try_get::<Option<String>, _>("updated_at").ok().flatten(),
                 "md_path": r.try_get::<Option<String>, _>("md_path").ok().flatten(),
-                "row_set_hash": r.try_get::<String, _>("row_set_hash").ok(),
-                "renderer_version": r.try_get::<String, _>("renderer_version").ok(),
+                "source_fingerprint": r.try_get::<Option<String>, _>("source_fingerprint").ok().flatten(),
+                "row_set_hash": r.try_get::<Option<String>, _>("row_set_hash").ok().flatten(),
+                "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
                 "rendered_at": r.try_get::<Option<String>, _>("rendered_at").ok().flatten(),
-            })
-        })
-        .collect();
-
-    // ── documents_loaded ─────────────────────────────────────────
-    let lrows = sqlx::query(
-        "SELECT qmd_path, document_uuid, source_fingerprint, loaded_at \
-         FROM documents_loaded ORDER BY qmd_path",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("read documents_loaded");
-
-    let documents_loaded: Vec<serde_json::Value> = lrows
-        .iter()
-        .map(|r| {
-            json!({
-                "qmd_path": r.try_get::<String, _>("qmd_path").ok(),
-                "document_uuid": r.try_get::<String, _>("document_uuid").ok(),
-                "source_fingerprint": r.try_get::<String, _>("source_fingerprint").ok(),
-                "loaded_at": r.try_get::<String, _>("loaded_at").ok(),
             })
         })
         .collect();
@@ -218,11 +200,9 @@ async fn snapshot_grid_rows_and_documents() {
         "summary": {
             "grid_rows_count": grid_rows.len(),
             "documents_count": documents.len(),
-            "documents_loaded_count": documents_loaded.len(),
         },
         "grid_rows": grid_rows,
         "documents": documents,
-        "documents_loaded": documents_loaded,
     });
 
     // Pretty-printed JSON is the most diff-friendly representation —

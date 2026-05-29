@@ -1,8 +1,16 @@
 //! Generic Load step: walk a `rendered_md/` tree of `.grid_rows.json`
 //! sidecars and upsert their rows into Dolt.
 //!
-//! The sidecar format is the cross-provider contract between Translate
-//! and Load:
+//! Two entry points:
+//!
+//!   * [`apply_one`] writes a single rendered document into `grid_rows`
+//!     and stamps the `documents` row. Called per-doc by sync's render
+//!     callback so render+index commit atomically.
+//!   * [`load_all`] walks a `rendered_md/` tree and calls `apply_one`
+//!     for each sidecar. Used as a rebuild-from-disk tool; not on the
+//!     hot path now that sync renders+loads per doc.
+//!
+//! The sidecar format is the cross-provider contract:
 //!
 //! ```jsonc
 //! {
@@ -15,14 +23,14 @@
 //! }
 //! ```
 //!
-//! Per document we DELETE existing rows by `document_uuid` and INSERT
-//! the fresh set, then UPSERT a row into the `documents_loaded` table
-//! so the next run can skip unchanged files. Same delete-then-insert
-//! pattern as the Python `populate_grid_rows`
-//! (`src/ingest/grid_rows.py:824,839-841`), generalized so any
-//! provider's Translate step can produce a sidecar tree that this
-//! loader consumes verbatim.
+//! Skip logic: before applying we look up `documents.source_fingerprint`
+//! by `document_uuid`; if it matches the sidecar header we treat the
+//! document as up-to-date and leave `grid_rows` alone. Same delete-then-
+//! insert pattern as the Python `populate_grid_rows`, generalized so
+//! any provider's Translate step can produce a sidecar tree this loader
+//! consumes verbatim.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,19 +43,11 @@ use sqlx::Row;
 
 use crate::sidecar::Sidecar;
 
-/// `CREATE TABLE` for the loader's own bookkeeping table. DDL is
-/// auto-committed even under Dolt's `--no-auto-commit`, so this is
-/// idempotent across runs.
-pub const DOCUMENTS_LOADED_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents_loaded (
-    qmd_path VARCHAR(512) NOT NULL,
-    document_uuid VARCHAR(96) NOT NULL,
-    source_fingerprint VARCHAR(64) NOT NULL,
-    loaded_at VARCHAR(40) NOT NULL,
-    PRIMARY KEY (qmd_path)
-)"#;
-
 /// Document-level metadata projection, one row per renderable document.
-/// Mirrors the Python `documents` schema (see `schemas/documents.schema.json`).
+/// `source_fingerprint` is the renderer's input-hash, set when the doc's
+/// markdown + blobs land on disk; subsequent runs compare against it to
+/// decide whether to re-render. `row_set_hash` is the load-side hash over
+/// the canonical grid_rows, used by tools that walk a stale tree.
 pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
     document_uuid VARCHAR(96) NOT NULL,
     source_name VARCHAR(64) NOT NULL,
@@ -57,8 +57,9 @@ pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
     created_at VARCHAR(40),
     updated_at VARCHAR(40),
     md_path VARCHAR(1024),
-    row_set_hash CHAR(64) NOT NULL,
-    renderer_version VARCHAR(32) NOT NULL,
+    source_fingerprint VARCHAR(64),
+    row_set_hash CHAR(64),
+    renderer_version VARCHAR(32),
     rendered_at VARCHAR(40),
     PRIMARY KEY (document_uuid)
 )"#;
@@ -73,7 +74,14 @@ pub struct LoadSummary {
     pub rows_inserted: usize,
 }
 
-/// Apply DDL for `grid_rows` and `documents_loaded`. Idempotent.
+/// Apply DDL for `grid_rows` and `documents`, plus the migration that
+/// upgrades pre-`source_fingerprint` databases.
+///
+/// Idempotent. Existing dev DBs have a `documents` table without
+/// `source_fingerprint` (and possibly a vestigial `documents_loaded`
+/// table from the previous load contract). The migration helper adds
+/// the column when missing and drops the dead table; both operations
+/// are no-ops on a fresh DB.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for (_table, ddl) in GRID_ROWS_DDL {
         sqlx::query(ddl)
@@ -81,14 +89,37 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .await
             .context("create grid_rows")?;
     }
-    sqlx::query(DOCUMENTS_LOADED_DDL)
-        .execute(pool)
-        .await
-        .context("create documents_loaded")?;
     sqlx::query(DOCUMENTS_DDL)
         .execute(pool)
         .await
         .context("create documents")?;
+    migrate_documents(pool)
+        .await
+        .context("migrate documents schema")?;
+    Ok(())
+}
+
+/// Upgrade an existing `documents` table written by an older revision
+/// of this crate: add `source_fingerprint` if absent; drop the now-
+/// retired `documents_loaded` table. SQLite has no `ADD COLUMN IF NOT
+/// EXISTS`, so we probe `pragma_table_info`.
+async fn migrate_documents(pool: &SqlitePool) -> Result<()> {
+    let has_fp: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM pragma_table_info('documents') WHERE name = 'source_fingerprint'",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("probe documents.source_fingerprint")?;
+    if has_fp.is_none() {
+        sqlx::query("ALTER TABLE documents ADD COLUMN source_fingerprint VARCHAR(64)")
+            .execute(pool)
+            .await
+            .context("add documents.source_fingerprint")?;
+    }
+    sqlx::query("DROP TABLE IF EXISTS documents_loaded")
+        .execute(pool)
+        .await
+        .context("drop legacy documents_loaded")?;
     Ok(())
 }
 
@@ -168,10 +199,51 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     s
 }
 
-/// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar (any
-/// provider) and load each into Dolt. `out_dir` is also the prefix
-/// stripped from the sidecar's `.md` path to derive the
-/// `documents_loaded.qmd_path` key.
+/// One document's payload as handed from render to the indexer. The
+/// render-side callback constructs this once md + blobs are durably on
+/// disk; [`apply_one`] writes the corresponding `grid_rows` + `documents`
+/// rows so render+index commit per-doc atomically.
+#[derive(Debug, Clone)]
+pub struct RenderedDoc {
+    pub document_uuid: String,
+    /// User-facing config name (e.g. `tiny-slack`); falls back to the
+    /// provider string when sync doesn't have one wired in.
+    pub source_name: String,
+    pub source_fingerprint: String,
+    /// Absolute path to the rendered `.md`. Used to derive the
+    /// `qmd_path` we stamp into `documents.md_path` by stripping the
+    /// out-dir prefix.
+    pub md_path: PathBuf,
+    pub render_version: u32,
+    pub rows: Vec<GridRow>,
+}
+
+/// Write one rendered document into Dolt unconditionally.
+///
+/// Skip semantics live in the *render* side now (`prior_fingerprints`
+/// gate before each per-doc loop) — by the time we're called here the
+/// caller has already decided the doc needs to land. `out_dir` is the
+/// prefix stripped off `md_path` to produce a portable `qmd_path`.
+pub async fn apply_one(
+    pool: &SqlitePool,
+    out_dir: &Path,
+    doc: &RenderedDoc,
+    now_override: Option<&str>,
+) -> Result<usize> {
+    let qmd_rel = doc
+        .md_path
+        .strip_prefix(out_dir)
+        .unwrap_or(&doc.md_path)
+        .to_string_lossy()
+        .to_string();
+    apply_document(pool, doc, &qmd_rel, now_override).await
+}
+
+/// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar and
+/// rebuild the index by calling [`apply_one`] for each. Off the hot
+/// path now — sync's translate step writes through `apply_one` per doc
+/// directly — but useful as a disaster-recovery / "reindex from disk"
+/// tool.
 pub async fn load_all(
     pool: &SqlitePool,
     out_dir: &Path,
@@ -198,31 +270,34 @@ pub async fn load_all(
 
         let md_path = derive_md_path(sidecar_path)
             .with_context(|| format!("derive .md path from {}", sidecar_path.display()))?;
-        let qmd_rel = md_path
-            .strip_prefix(out_dir)
-            .unwrap_or(&md_path)
-            .to_string_lossy()
-            .to_string();
 
         let document_uuid = sidecar.header.document_uuid.clone();
         let fingerprint = sidecar.header.source_fingerprint.clone();
 
-        if existing_fingerprint(pool, &qmd_rel).await? == Some(fingerprint.clone()) {
+        if existing_fingerprint(pool, &document_uuid).await? == Some(fingerprint.clone()) {
             summary.documents_skipped += 1;
             continue;
         }
 
-        let inserted = apply_document(
-            pool,
-            &document_uuid,
-            &qmd_rel,
-            &fingerprint,
-            sidecar.header.render_version,
-            &sidecar.rows,
-            now_override,
-        )
-        .await
-        .with_context(|| format!("load {}", sidecar_path.display()))?;
+        // load_all has no access to the config-level source name, so we
+        // fall back to the canonical row's provider (same default as the
+        // pre-callback code path).
+        let source_name = sidecar
+            .rows
+            .first()
+            .map(|r| r.provider.clone())
+            .unwrap_or_default();
+        let doc = RenderedDoc {
+            document_uuid,
+            source_name,
+            source_fingerprint: fingerprint,
+            md_path,
+            render_version: sidecar.header.render_version,
+            rows: sidecar.rows,
+        };
+        let inserted = apply_one(pool, out_dir, &doc, now_override)
+            .await
+            .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
         summary.documents_loaded += 1;
         progress(&format!(
@@ -269,63 +344,67 @@ async fn has_dolt_extensions(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>
     matches!(res, Ok(n) if n > 0)
 }
 
-async fn existing_fingerprint(pool: &SqlitePool, qmd_path: &str) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT source_fingerprint FROM documents_loaded WHERE qmd_path = ?")
-        .bind(qmd_path)
+/// Look up the on-disk render's fingerprint for one document. Caller
+/// uses this to decide whether to skip work (sync builds a bulk
+/// `HashMap<uuid, fingerprint>` once per source via [`load_fingerprints`]
+/// rather than calling this in a loop).
+pub async fn existing_fingerprint(
+    pool: &SqlitePool,
+    document_uuid: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT source_fingerprint FROM documents WHERE document_uuid = ?")
+        .bind(document_uuid)
         .fetch_optional(pool)
         .await?;
     Ok(row.and_then(|r| r.try_get::<String, _>("source_fingerprint").ok()))
 }
 
+/// Bulk fingerprint snapshot. Used once per sync to populate the
+/// `prior_fingerprints` map every renderer consults at per-doc skip
+/// time. Rows whose `source_fingerprint` is NULL (pre-migration data,
+/// or docs render hasn't touched yet) are omitted so the caller treats
+/// them as "not rendered".
+pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows = sqlx::query(
+        "SELECT document_uuid, source_fingerprint \
+         FROM documents WHERE source_fingerprint IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_fingerprints")?;
+    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let uuid: String = r.try_get("document_uuid")?;
+        let fp: String = r.try_get("source_fingerprint")?;
+        out.insert(uuid, fp);
+    }
+    Ok(out)
+}
+
 async fn apply_document(
     pool: &SqlitePool,
-    document_uuid: &str,
+    doc: &RenderedDoc,
     qmd_path: &str,
-    fingerprint: &str,
-    render_version: u32,
-    rows: &[GridRow],
     now_override: Option<&str>,
 ) -> Result<usize> {
     let mut conn = pool.acquire().await.context("acquire conn")?;
 
     sqlx::query("DELETE FROM grid_rows WHERE document_uuid = ?")
-        .bind(document_uuid)
+        .bind(&doc.document_uuid)
         .execute(&mut *conn)
         .await
         .context("delete prior rows")?;
 
-    for row in rows {
+    for row in &doc.rows {
         insert_grid_row(&mut conn, row).await?;
     }
 
-    let loaded_at = now_override
+    let rendered_at = now_override
         .map(str::to_string)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    sqlx::query(
-        "INSERT INTO documents_loaded (qmd_path, document_uuid, source_fingerprint, loaded_at) \
-         VALUES (?, ?, ?, ?) \
-         ON CONFLICT(qmd_path) DO UPDATE SET document_uuid = excluded.document_uuid, \
-                                             source_fingerprint = excluded.source_fingerprint, \
-                                             loaded_at = excluded.loaded_at",
-    )
-    .bind(qmd_path)
-    .bind(document_uuid)
-    .bind(fingerprint)
-    .bind(&loaded_at)
-    .execute(&mut *conn)
-    .await
-    .context("upsert documents_loaded")?;
-
-    upsert_document(
-        &mut conn,
-        document_uuid,
-        qmd_path,
-        render_version,
-        &loaded_at,
-        rows,
-    )
-    .await
-    .context("upsert documents")?;
+    upsert_document(&mut conn, doc, qmd_path, &rendered_at)
+        .await
+        .context("upsert documents")?;
 
     // Stamp the document as its own dolt_log entry so re-ingests are
     // human-auditable. doltlite exposes `dolt_commit` as a SQLite
@@ -334,7 +413,10 @@ async fn apply_document(
     // the function isn't registered, so we skip the call silently;
     // production runs against doltlite will populate dolt_log normally.
     if has_dolt_extensions(&mut conn).await {
-        let msg = format!("grid-rows-load: {document_uuid} {fingerprint}");
+        let msg = format!(
+            "grid-rows-load: {} {}",
+            doc.document_uuid, doc.source_fingerprint
+        );
         sqlx::query("SELECT dolt_commit('-Am', ?)")
             .bind(&msg)
             .execute(&mut *conn)
@@ -342,7 +424,7 @@ async fn apply_document(
             .context("dolt_commit")?;
     }
 
-    Ok(rows.len())
+    Ok(doc.rows.len())
 }
 
 /// Pick the canonical row for a document — the row whose `uuid` matches
@@ -357,43 +439,45 @@ fn pick_canonical<'a>(rows: &'a [GridRow], document_uuid: &str) -> Option<&'a Gr
 
 async fn upsert_document(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    document_uuid: &str,
+    doc: &RenderedDoc,
     qmd_path: &str,
-    render_version: u32,
     rendered_at: &str,
-    rows: &[GridRow],
 ) -> Result<()> {
-    let Some(canonical) = pick_canonical(rows, document_uuid) else {
+    let Some(canonical) = pick_canonical(&doc.rows, &doc.document_uuid) else {
         return Ok(());
     };
     let kind = doc_kind_for(&canonical.kind);
-    let timestamps: Vec<&str> = rows
+    let timestamps: Vec<&str> = doc
+        .rows
         .iter()
         .map(|r| r.when_ts.as_str())
         .filter(|s| !s.is_empty())
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
-    let row_set_hash = compute_row_set_hash(rows);
-    let version_str = format!("{RENDERER_VERSION}.{render_version}");
-    // source_name is the human-friendly name from config.sources[].name in
-    // the Python loader. We don't have that wiring yet on the Rust side,
-    // so we default to the provider — callers can refine when sources
-    // config lands in frankweiler-core::config.
-    let source_name = canonical.provider.clone();
+    let row_set_hash = compute_row_set_hash(&doc.rows);
+    let version_str = format!("{RENDERER_VERSION}.{}", doc.render_version);
+    // Prefer the user-facing source_name the renderer was invoked with
+    // (config.sources[].name in sync). Fall back to the canonical row's
+    // provider when load_all rebuilds from disk without that context.
+    let source_name = if doc.source_name.is_empty() {
+        canonical.provider.clone()
+    } else {
+        doc.source_name.clone()
+    };
 
     sqlx::query("DELETE FROM documents WHERE document_uuid = ?")
-        .bind(document_uuid)
+        .bind(&doc.document_uuid)
         .execute(&mut **conn)
         .await
         .context("delete prior documents row")?;
     sqlx::query(
         "INSERT INTO documents \
          (document_uuid, source_name, provider, kind, title, created_at, updated_at, \
-          md_path, row_set_hash, renderer_version, rendered_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, source_fingerprint, row_set_hash, renderer_version, rendered_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(document_uuid)
+    .bind(&doc.document_uuid)
     .bind(&source_name)
     .bind(&canonical.provider)
     .bind(kind)
@@ -401,6 +485,7 @@ async fn upsert_document(
     .bind(created_at)
     .bind(updated_at)
     .bind(qmd_path)
+    .bind(&doc.source_fingerprint)
     .bind(&row_set_hash)
     .bind(&version_str)
     .bind(rendered_at)
