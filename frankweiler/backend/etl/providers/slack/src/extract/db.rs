@@ -571,14 +571,29 @@ pub struct LoadedMessage {
     pub payload: Value,
 }
 
-/// Bag returned to the synchronous translate path.
-#[derive(Debug, Default, Clone)]
+/// Bag returned to the synchronous translate path. `blobs` is a
+/// streaming handle (not a bulk-loaded map): render fetches one blob's
+/// bytes at a time, so peak RSS stays low even for sources with
+/// hundreds of multi-MB attachments.
+#[derive(Clone)]
 pub struct LoadedRaw {
     pub workspace: Option<Value>,
     pub users: Vec<Value>,
     pub channels: Vec<Value>,
     pub messages: Vec<LoadedMessage>,
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for LoadedRaw {
+    fn default() -> Self {
+        Self {
+            workspace: None,
+            users: Vec::new(),
+            channels: Vec::new(),
+            messages: Vec::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 /// Synchronous helper for non-async callers (translate, synthesize)
@@ -589,12 +604,16 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
+            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
+                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                    db.pool().clone(),
+                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 workspace: db.load_workspace().await?,
                 users: db.load_users().await?,
                 channels: db.load_channels().await?,
                 messages: db.load_messages().await?,
-                blobs_by_id: db.load_blobs_by_id().await?,
+                blobs,
             })
         })
     })

@@ -75,7 +75,14 @@ async fn main() -> Result<()> {
         messages = t.messages.len(),
     );
 
-    let summary = render_all(&t, &args.out, &args.source_name, &Progress::noop())?;
+    let summary = render_all(
+        &t,
+        &args.out,
+        &args.source_name,
+        &Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |_doc| Ok(()),
+    )?;
 
     info!(
         event = "slack_translate_complete",

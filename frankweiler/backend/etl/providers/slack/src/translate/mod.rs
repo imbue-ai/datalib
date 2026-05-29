@@ -17,7 +17,7 @@
 pub mod mrkdwn;
 pub mod render;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use frankweiler_schema::grid_rows::GridRow;
 
-use super::extract::db::{block_on_load_all, db_path_for, BlobBytes, LoadedMessage, LoadedRaw};
+use super::extract::db::{block_on_load_all, db_path_for, LoadedMessage, LoadedRaw};
 use super::extract::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
 /// Shared namespace for v5-derived Slack UUIDs. Must match the Python
@@ -137,17 +137,28 @@ impl Message {
     }
 }
 
-#[derive(Debug, Default)]
 pub struct TranslatedSlack {
     pub workspace: Option<Workspace>,
     pub users: BTreeMap<String, User>,
     pub channels: BTreeMap<String, Channel>,
     /// Keyed by `(channel_id, ts)` so cross-stream duplicates collapse.
     pub messages: BTreeMap<(String, String), Message>,
-    /// Blob bytes keyed by upstream `file_id`. Render materializes the
-    /// referenced ones next to each thread's `index.md` so the
-    /// `blobs/<filename>` markdown link resolves.
-    pub blobs_by_id: HashMap<String, BlobBytes>,
+    /// Streaming handle: render fetches one blob's bytes on demand by
+    /// `file_id` (Slack's upstream id). Materialized next to each
+    /// thread's `index.md` so the `blobs/<filename>` link resolves.
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+}
+
+impl Default for TranslatedSlack {
+    fn default() -> Self {
+        Self {
+            workspace: None,
+            users: BTreeMap::new(),
+            channels: BTreeMap::new(),
+            messages: BTreeMap::new(),
+            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        }
+    }
 }
 
 impl TranslatedSlack {
@@ -220,7 +231,7 @@ pub fn translate_raw_dir(path: &Path) -> Result<TranslatedSlack> {
 /// payloads instead of streaming JSONL envelopes.
 pub fn translate_loaded(raw: LoadedRaw) -> TranslatedSlack {
     let mut t = TranslatedSlack {
-        blobs_by_id: raw.blobs_by_id,
+        blobs: raw.blobs,
         ..Default::default()
     };
 
@@ -648,7 +659,9 @@ mod tests {
             users: db.load_users().await.unwrap(),
             channels: db.load_channels().await.unwrap(),
             messages: db.load_messages().await.unwrap(),
-            blobs_by_id: db.load_blobs_by_id().await.unwrap(),
+            blobs: std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                db.pool().clone(),
+            )),
         };
         // Sanity: each loaded message's thread_ts is None.
         for m in &raw.messages {

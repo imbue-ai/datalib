@@ -1097,9 +1097,20 @@ fn translate_source(
             use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
             let t = translate_raw_dir(&fixture)
                 .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-            render_all(&t, root, name, progress)
-                .context("slack render_all")
-                .map(|_| ())
+            // TODO: thread prior_fingerprints + on_doc_complete from sync's
+            // run() once every provider has the new render signature.
+            // Empty map + no-op callback preserve today's full-rebuild
+            // behavior while the rollout is mid-flight.
+            render_all(
+                &t,
+                root,
+                name,
+                progress,
+                &std::collections::HashMap::new(),
+                &mut |_doc| Ok(()),
+            )
+            .context("slack render_all")
+            .map(|_| ())
         }
         SourceConfig::GithubApi { .. } => {
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};

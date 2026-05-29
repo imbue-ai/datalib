@@ -43,23 +43,36 @@ fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
 fn renders_tng_fixture_and_is_idempotent() {
     let t = translate_raw_dir(&fixture_root()).expect("translate");
     let tmp = tempfile::tempdir().expect("tmp");
+    // First pass: empty prior-fingerprints → renders every thread; we
+    // capture each (uuid → fingerprint) from the callback so we can
+    // feed them back in on the re-render pass.
+    let mut priors: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let summary = render_all(
         &t,
         tmp.path(),
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
+        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
+            priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+            Ok(())
+        },
     )
     .expect("render");
     assert_eq!(summary.threads_total, 6);
     assert_eq!(summary.threads_rendered, 6);
     assert_eq!(summary.threads_skipped, 0);
+    assert_eq!(priors.len(), 6);
 
-    // Idempotent re-render: every thread's fingerprint matches.
+    // Idempotent re-render: same fingerprints → every thread skipped,
+    // callback never fired.
     let summary2 = render_all(
         &t,
         tmp.path(),
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
+        &priors,
+        &mut |_doc| panic!("callback fired despite fingerprint match"),
     )
     .expect("re-render");
     assert_eq!(summary2.threads_rendered, 0);

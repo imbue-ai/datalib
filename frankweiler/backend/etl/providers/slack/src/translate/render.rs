@@ -27,7 +27,10 @@ use serde_json::Value;
 
 use frankweiler_schema::grid_rows::GridRow;
 
+use std::collections::HashMap;
+
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
@@ -62,6 +65,8 @@ pub fn render_all(
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
+    prior_fingerprints: &HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<RenderSummary> {
     let user_labels: BTreeMap<String, String> = t
         .users
@@ -99,7 +104,13 @@ pub fn render_all(
         let (md_path, json_path) =
             output_paths(out_dir, &root.team_id, &root.channel_id, &thread_uuid);
 
-        if existing_fingerprint(&md_path).as_deref() == Some(fingerprint.as_str()) {
+        // Skip when the indexer already saw this exact fingerprint
+        // AND the md file still exists. The on-disk check guards
+        // against someone deleting `rendered_md/` by hand: the index
+        // would still say "fingerprint X" and we'd skip forever.
+        if prior_fingerprints.get(&thread_uuid).map(String::as_str) == Some(fingerprint.as_str())
+            && md_path.exists()
+        {
             summary.threads_skipped += 1;
             progress.inc(1);
             continue;
@@ -126,10 +137,10 @@ pub fn render_all(
             .expect("output_paths always produces <page_dir>/index.md");
         fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
-        // Write blob bytes into <page_dir>/blobs/<safe_filename>. The
-        // markdown links emitted by `file_link` use the same
-        // `safe_filename(name, file_id)` rule so the link target
-        // matches what lands on disk.
+        // Order: blobs first (per-file streamed from doltlite), then
+        // the md body, then the sidecar. The callback is invoked last,
+        // so if any earlier step fails the indexer never sees the new
+        // fingerprint — next run re-tries the whole doc.
         materialize_thread_blobs(t, &msgs, page_dir)
             .with_context(|| format!("materialize blobs for {}", thread_uuid))?;
 
@@ -140,10 +151,20 @@ pub fn render_all(
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
-            rows,
+            rows: rows.clone(),
         };
         let sj = serde_json::to_string_pretty(&sidecar)?;
         fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
+
+        on_doc_complete(RenderedDoc {
+            document_uuid: thread_uuid.clone(),
+            source_name: source_name.to_string(),
+            source_fingerprint: fingerprint,
+            md_path: md_path.clone(),
+            render_version: RENDER_VERSION,
+            rows,
+        })
+        .with_context(|| format!("on_doc_complete {thread_uuid}"))?;
 
         summary.threads_rendered += 1;
         progress.inc(1);
@@ -206,21 +227,6 @@ fn thread_title(root_text: &str, user_labels: &BTreeMap<String, String>) -> Stri
         .unwrap_or("(empty thread)")
         .to_string();
     first.chars().take(80).collect()
-}
-
-fn existing_fingerprint(md_path: &Path) -> Option<String> {
-    let text = fs::read_to_string(md_path).ok()?;
-    for line in text.lines().take(40) {
-        if let Some(rest) = line.strip_prefix("source_fingerprint:") {
-            let v = rest.trim().trim_matches('"').to_string();
-            return Some(v);
-        }
-        if line == "---" && !text.starts_with(line) {
-            // End of frontmatter.
-            return None;
-        }
-    }
-    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -483,14 +489,14 @@ fn file_link(_source_name: &str, _md_rel_path: &Path, f: &FileRef) -> Option<Str
 /// (`safe_filename(name, file_id)`), so the rendered link resolves.
 /// Blobs referenced only by other threads are skipped — they live
 /// next to *their* `index.md`.
+///
+/// Streams the bytes one blob at a time via [`BlobStore`] so peak RSS
+/// stays at a single attachment regardless of how many the source has.
 fn materialize_thread_blobs(
     t: &super::TranslatedSlack,
     msgs: &[&super::Message],
     page_dir: &Path,
 ) -> Result<()> {
-    if t.blobs_by_id.is_empty() {
-        return Ok(());
-    }
     let mut wanted: HashSet<String> = HashSet::new();
     for m in msgs {
         for f in files(&m.raw_json) {
@@ -503,12 +509,14 @@ fn materialize_thread_blobs(
         return Ok(());
     }
     let blobs_dir = page_dir.join("blobs");
-    for (file_id, blob) in &t.blobs_by_id {
-        if !wanted.contains(file_id) {
+    for file_id in &wanted {
+        let Some(blob) = t
+            .blobs
+            .read_by_id(file_id)
+            .with_context(|| format!("read blob {file_id}"))?
+        else {
             continue;
-        }
-        // Pick the filename the same way `file_link` does — by reading
-        // the file's `name` out of the messages that reference it.
+        };
         let name = name_for_blob(msgs, file_id);
         let safe = safe_filename(name.as_deref(), file_id);
         fs::create_dir_all(&blobs_dir)

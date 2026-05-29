@@ -13,9 +13,11 @@
 //!   Extract step.
 //!
 //! Incrementality is driven end-to-end by a `source_fingerprint`
-//! stamped into each sidecar; the loader stores it in
-//! `documents_loaded` and skips unchanged inputs on subsequent runs.
+//! stamped into each sidecar; the loader stores it on
+//! `documents.source_fingerprint` and skips unchanged inputs on
+//! subsequent runs.
 
+pub mod blob_store;
 pub mod blobs;
 pub mod doltlite_raw;
 pub mod event_store;
