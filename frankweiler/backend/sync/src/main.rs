@@ -59,7 +59,7 @@ use frankweiler_core::config::{
     NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
-use frankweiler_etl::load::{init_schema, load_all};
+use frankweiler_etl::load::{apply_one, init_schema, load_fingerprints, RenderedDoc};
 use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
@@ -477,7 +477,23 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         summary.lock().unwrap().extract.extend(outcomes);
     }
 
-    // ── Translate ──────────────────────────────────────────────────
+    // ── Open index pool + load prior fingerprints ─────────────────
+    // The pool is opened *before* translate now: render's commit
+    // callback writes into it per doc, so render+index land
+    // atomically. A previous version of this file opened the pool
+    // only at load time, but with render+load merged we need it
+    // here.
+    let index_pool = open_index_pool(&cfg).await?;
+    init_schema(&index_pool).await?;
+    let prior_fingerprints = load_fingerprints(&index_pool)
+        .await
+        .context("load prior fingerprints")?;
+    eprintln!(
+        "[frankweiler-sync] prior fingerprints: {} docs",
+        prior_fingerprints.len()
+    );
+
+    // ── Translate (= render + per-doc load) ────────────────────────
     // Translate only runs against sources whose extract succeeded (or
     // was skipped via --skip-extract). A source whose extract errored
     // out probably has missing/partial fixtures on disk, so attempting
@@ -495,6 +511,12 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     // source as it runs. Translate is sequential, so bars activate and
     // finish in turn rather than animating in parallel like extract.
     let translate_multi = make_multi();
+    let mut load_totals = summary::LoadOutcome {
+        documents_loaded: 0,
+        documents_total: 0,
+        rows_inserted: 0,
+        error: None,
+    };
     for src in cfg.enabled_sources() {
         let name = src.name().to_string();
         let type_str = src.type_str().to_string();
@@ -515,7 +537,44 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             std::sync::Arc::new(TracingSink::new(name.clone())),
         ];
         let progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
-        let res = translate_source(src, &cfg, &root, &progress).map(|_| "ok".to_string());
+
+        // Per-doc commit callback: render hands us a `RenderedDoc`
+        // once md + blobs + sidecar are all on disk, and we apply it
+        // straight into the index DB. Sync's translate loop is sync
+        // Rust; sqlx is async, so we bridge through
+        // `block_in_place` + `Handle::current().block_on(...)` (same
+        // pattern `SqliteBlobStore` uses internally for the
+        // streaming blob fetch).
+        let mut on_doc_complete = |mut doc: RenderedDoc| -> Result<()> {
+            // Render doesn't always have the user-facing config name
+            // (notion/github/gitlab pass empty); fill it in here so
+            // documents.source_name is consistent.
+            if doc.source_name.is_empty() {
+                doc.source_name = name.clone();
+            }
+            let rows_inserted = doc.rows.len();
+            let pool = &index_pool;
+            let root_path = root.as_path();
+            let now_str = now.as_str();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(async move { apply_one(pool, root_path, &doc, Some(now_str)).await })
+            })?;
+            load_totals.documents_loaded += 1;
+            load_totals.documents_total += 1;
+            load_totals.rows_inserted += rows_inserted;
+            Ok(())
+        };
+
+        let res = translate_source(
+            src,
+            &cfg,
+            &root,
+            &progress,
+            &prior_fingerprints,
+            &mut on_doc_complete,
+        )
+        .map(|_| "ok".to_string());
         progress.finish("done");
         summary
             .lock()
@@ -523,40 +582,22 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             .translate
             .push(summary::outcome_from(&name, &type_str, res));
     }
+    summary.lock().unwrap().load = Some(load_totals);
 
-    // ── Load ───────────────────────────────────────────────────────
-    let load_res = run_load_phase(&cfg, &root, &now).await;
-    match load_res {
-        Ok(load_summary) => {
-            eprintln!(
-                "[frankweiler-sync] loaded documents={}/{} rows={}",
-                load_summary.documents_loaded,
-                load_summary.documents_total,
-                load_summary.rows_inserted
-            );
-            summary.lock().unwrap().load = Some(summary::LoadOutcome {
-                documents_loaded: load_summary.documents_loaded,
-                documents_total: load_summary.documents_total,
-                rows_inserted: load_summary.rows_inserted,
-                error: None,
-            });
-        }
-        Err(e) => {
-            eprintln!("[frankweiler-sync] load FAILED: {e:#}");
-            summary.lock().unwrap().load = Some(summary::LoadOutcome {
-                documents_loaded: 0,
-                documents_total: 0,
-                rows_inserted: 0,
-                error: Some(
-                    e.chain()
-                        .map(|c| c.to_string())
-                        .collect::<Vec<_>>()
-                        .join(": "),
-                ),
-            });
-        }
-    }
-
+    // Force-checkpoint the WAL into the main DB before closing the
+    // pool. Under WAL mode, all writes go to `<db>.db-wal` and only
+    // get merged into the main `.db` file on a checkpoint. sqlx's
+    // default close path runs only a PASSIVE checkpoint, which copies
+    // bytes but leaves the WAL file populated — so a downstream
+    // process that copies just `backend_index.doltlite_db` ends up
+    // with an empty file. TRUNCATE checkpoints + zeros the WAL so the
+    // `.db` file is self-contained.
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&index_pool)
+        .await
+        .context("wal_checkpoint at end of translate")?;
+    drop(index_pool);
+    eprintln!("[frankweiler-sync] wrote {}", cfg.dolt_db_path().display());
     eprintln!(
         "[frankweiler-sync] wrote {}/",
         root.join("rendered_md").display()
@@ -587,14 +628,13 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     Ok(())
 }
 
-/// Open the doltlite file at `<data_root>/<dolt.db_filename>`, init
-/// schema, run `load_all`. Pulled out of `run()` so the orchestrator can
-/// catch failures here without short-circuiting the summary write.
-async fn run_load_phase(
-    cfg: &Config,
-    root: &Path,
-    now: &str,
-) -> Result<frankweiler_etl::load::LoadSummary> {
+/// Open the index doltlite at `<data_root>/<dolt.db_filename>`. Created
+/// if missing. WAL mode so `apply_one` from the translate-side
+/// per-doc callback can write concurrently with reads; the caller is
+/// responsible for the closing TRUNCATE checkpoint so the on-disk
+/// `.db` is self-contained (downstream genrules copy only the .db,
+/// not the -wal sidecar).
+async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
     let db_path = cfg.dolt_db_path();
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
@@ -604,33 +644,11 @@ async fn run_load_phase(
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
-    let pool = SqlitePoolOptions::new()
+    SqlitePoolOptions::new()
         .max_connections(2)
         .connect_with(opts)
         .await
-        .with_context(|| format!("open doltlite at {}", db_path.display()))?;
-    init_schema(&pool).await?;
-    let summary = load_all(&pool, root, |_| {}, Some(now))
-        .await
-        .context("load_all")?;
-    // Force-checkpoint the WAL into the main DB before closing the
-    // pool. Under WAL mode, all writes go to `<db>.db-wal` and only
-    // get merged into the main `.db` file on a checkpoint. sqlx's
-    // default close path runs only a PASSIVE checkpoint, which copies
-    // bytes but leaves the WAL file populated — so a downstream
-    // process that copies just `backend_index.doltlite_db` ends up
-    // with an empty file. The genrule that ships
-    // `tests/fixtures/ingested/backend_index.doltlite_db`
-    // hit exactly this: 4KB-empty `.db`, all data in `.db-wal`,
-    // every e2e test asserts zero rows. TRUNCATE checkpoints + zeros
-    // the WAL so the `.db` file is self-contained.
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&pool)
-        .await
-        .context("wal_checkpoint at end of load")?;
-    drop(pool);
-    eprintln!("[frankweiler-sync] wrote {}", db_path.display());
-    Ok(summary)
+        .with_context(|| format!("open doltlite at {}", db_path.display()))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1068,6 +1086,8 @@ fn translate_source(
     cfg: &Config,
     root: &Path,
     progress: &Progress,
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();
@@ -1086,8 +1106,8 @@ fn translate_source(
                 root,
                 name,
                 progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
+                prior_fingerprints,
+                on_doc_complete,
             )
             .context("anthropic render_all")
             .map(|_| ())
@@ -1101,8 +1121,8 @@ fn translate_source(
                 root,
                 name,
                 progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
+                prior_fingerprints,
+                on_doc_complete,
             )
             .context("chatgpt render_all")
             .map(|_| ())
@@ -1111,17 +1131,13 @@ fn translate_source(
             use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
             let t = translate_raw_dir(&fixture)
                 .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-            // TODO: thread prior_fingerprints + on_doc_complete from sync's
-            // run() once every provider has the new render signature.
-            // Empty map + no-op callback preserve today's full-rebuild
-            // behavior while the rollout is mid-flight.
             render_all(
                 &t,
                 root,
                 name,
                 progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
+                prior_fingerprints,
+                on_doc_complete,
             )
             .context("slack render_all")
             .map(|_| ())
@@ -1130,29 +1146,17 @@ fn translate_source(
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("github parse {}", fixture.display()))?;
-            render_github(
-                &parsed,
-                root,
-                progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
-            )
-            .context("render_github")
-            .map(|_| ())
+            render_github(&parsed, root, progress, prior_fingerprints, on_doc_complete)
+                .context("render_github")
+                .map(|_| ())
         }
         SourceConfig::GitlabApi { .. } => {
             use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("gitlab parse {}", fixture.display()))?;
-            render_gitlab(
-                &parsed,
-                root,
-                progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
-            )
-            .context("render_gitlab")
-            .map(|_| ())
+            render_gitlab(&parsed, root, progress, prior_fingerprints, on_doc_complete)
+                .context("render_gitlab")
+                .map(|_| ())
         }
         SourceConfig::NotionApi { .. } => {
             use frankweiler_etl_notion::translate::{
@@ -1160,15 +1164,9 @@ fn translate_source(
             };
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("notion parse {}", fixture.display()))?;
-            render_notion_official(
-                &parsed,
-                root,
-                progress,
-                &std::collections::HashMap::new(),
-                &mut |_doc| Ok(()),
-            )
-            .context("render_notion_official")
-            .map(|_| ())
+            render_notion_official(&parsed, root, progress, prior_fingerprints, on_doc_complete)
+                .context("render_notion_official")
+                .map(|_| ())
         }
     }
 }

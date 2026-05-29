@@ -28,7 +28,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "4691cb7b943656914e36811f1e208e1a6c010cfee15bf72ec89f7643af8ae33c",
       "source_fingerprint": "b1b9cf8a31e3ce49",
-      "source_name": "openai",
+      "source_name": "chatgpt-api",
       "title": "Sonnet on a Cat Named Spot",
       "updated_at": "2370-10-24T08:05:00.000000+00:00"
     },
@@ -42,7 +42,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "8b38f12a2139c0687beca37a1bbf878f3a3e86de09293b2cf20878b2c0c18427",
       "source_fingerprint": "f0a6b05543a7f39d",
-      "source_name": "openai",
+      "source_name": "chatgpt-api",
       "title": "Polynomial Fit for Sensor Calibration",
       "updated_at": "2370-10-25T08:05:20.000000+00:00"
     },
@@ -56,7 +56,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "4ce0bed4f86d62a0cd2be20961d258c43930f0ca6fabb80ff43a86a3b282ffa9",
       "source_fingerprint": "d5742aae81fcdb59",
-      "source_name": "openai",
+      "source_name": "chatgpt-api",
       "title": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "updated_at": "2370-10-26T08:05:00.000000+00:00"
     },
@@ -210,7 +210,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "47a0cc58152ec41743420e51b21bf84cd7f2a6a97cb2f75004f086421eea766c",
       "source_fingerprint": "f40cffee2b3c6858",
-      "source_name": "anthropic",
+      "source_name": "anthropic-api",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00.000000+00:00"
     },
@@ -224,7 +224,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "bf1f74567ee19392fa8c543870b01dcf2ac82b6ce6e1bb07445f88cd658d7148",
       "source_fingerprint": "e58bfb80d59c56dd",
-      "source_name": "anthropic",
+      "source_name": "anthropic-api",
       "title": "Tricorder Image Diagnostic",
       "updated_at": "2369-04-15T08:30:45.000000+00:00"
     },
@@ -238,7 +238,7 @@ expression: snapshot
       "renderer_version": "rust-v1.2",
       "row_set_hash": "60e6f52898e32974b156756fd810f289ea47360a5dc79046e99237420d2283a2",
       "source_fingerprint": "4823db11c6e15aff",
-      "source_name": "anthropic",
+      "source_name": "anthropic-api",
       "title": "Borg Encryption Signature Lookup",
       "updated_at": "2369-04-16T09:01:30.000004+00:00"
     }
