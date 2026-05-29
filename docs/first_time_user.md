@@ -43,7 +43,7 @@ Verify:
 ./frankweiler-sync --version
 ```
 
-## 2. Set up `latchkey` for Claude
+## 2. Set up `latchkey`
 
 `frankweiler-sync` does not handle `claude.ai` cookies itself. It shells
 out to [`latchkey curl`](https://www.npmjs.com/package/latchkey), which
@@ -86,19 +86,24 @@ with `npx`).
    Now switch back to your terminal and press Enter to run the staged
    command — `$(pbpaste)` will expand to the cookie you just copied.
 
+4. Register Slack via latchkey's browser flow (the sample config in the
+   next step includes a Slack source, so this is needed for the sync to
+   succeed):
+
+   ```sh
+   npx -y latchkey auth browser slack
+   ```
+
 
 ## 3. Sample configuration
 
 Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config.yaml)
-and drop it at `~/.config/frankweiler/config.yaml` (or anywhere and
-point `FRANKWEILER_CONFIG` at it). The repo is private, so use `gh` (it
-re-uses the auth from step 0) rather than a raw URL:
+into your working dir (the `?token=...` query param is a short-lived
+GitHub raw access token — the repo is private):
 
 ```sh
-mkdir -p ~/.config/frankweiler && \
-    gh api -H "Accept: application/vnd.github.raw" \
-    /repos/imbue-ai/mixed_up_files/contents/docs/sample_config.yaml \
-    > ~/.config/frankweiler/config.yaml
+curl "https://raw.githubusercontent.com/imbue-ai/mixed_up_files/refs/heads/main/docs/sample_config.yaml?token=GHSAT0AAAAAADGT6DOKTRDYTP635AE7B3WA2QZ23WA" \
+    -o sample_config.yaml
 ```
 
 This config only enables the Claude API source, so it's the minimum
@@ -110,7 +115,7 @@ Credentials are not in the config — every downloader uses `latchkey` at runtim
 
 ```sh
 ./frankweiler-sync \
-    --config ~/.config/frankweiler/config.yaml \
+    --config ./sample_config.yaml \
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
