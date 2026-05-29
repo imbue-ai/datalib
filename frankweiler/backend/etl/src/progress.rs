@@ -111,29 +111,36 @@ impl TracingSink {
 }
 
 impl ProgressSink for TracingSink {
+    // All events fire at TRACE level. They're high-frequency
+    // observability for structured-log consumers; INFO would
+    // interleave each tick with indicatif's terminal control
+    // sequences and visibly corrupt the progress bars on stderr.
+    // Opt back in with `--log-level=trace` (or
+    // `RUST_LOG=frankweiler_etl::progress=trace`) when actually
+    // consuming the event stream.
     fn set_length(&self, total: Option<u64>) {
-        tracing::info!(
+        tracing::trace!(
             event = "progress.length",
             source = %self.source,
             total = total.map(|t| t as i64).unwrap_or(-1),
         );
     }
     fn inc(&self, delta: u64) {
-        tracing::info!(
+        tracing::trace!(
             event = "progress.inc",
             source = %self.source,
             delta = delta,
         );
     }
     fn set_message(&self, msg: &str) {
-        tracing::info!(
+        tracing::trace!(
             event = "progress.message",
             source = %self.source,
             msg = msg,
         );
     }
     fn finish(&self, msg: &str) {
-        tracing::info!(
+        tracing::trace!(
             event = "progress.finish",
             source = %self.source,
             msg = msg,
