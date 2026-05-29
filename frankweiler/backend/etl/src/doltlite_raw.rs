@@ -166,9 +166,26 @@ pub const BLOBS_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs (
     last_error TEXT NULL
 )";
 
+/// Per-scope incremental-sync cursor table. Used by providers (github,
+/// gitlab) whose discovery is keyed by a search scope ("author:@me",
+/// "assigned_to_me", …) and which want to narrow each subsequent run
+/// via `updated:>=since` / `updated_after`. PK is the scope string; the
+/// `last_seen_at` value is a free-form provider-chosen timestamp (RFC
+/// 3339 in practice) that gets compared back to the configured refresh
+/// window when the next run picks a `since` floor.
+pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_state (
+    scope TEXT PRIMARY KEY,
+    last_seen_at TEXT NOT NULL
+)";
+
 /// DDL every provider gets for free. Concatenated after the
 /// provider-specific table list inside [`open`].
-pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, ENDPOINT_SHAPES_DDL, BLOBS_DDL];
+pub const SHARED_DDL: &[&str] = &[
+    SYNC_RUNS_DDL,
+    ENDPOINT_SHAPES_DDL,
+    BLOBS_DDL,
+    SYNC_SCOPE_STATE_DDL,
+];
 
 // ─────────────────────────────────────────────────────────────────────
 // Path helper
@@ -361,6 +378,43 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
         }
     }
     Ok(out)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// sync_scope_state
+// ─────────────────────────────────────────────────────────────────────
+
+/// Snapshot every scope's last-seen timestamp. Returns an empty map if
+/// the table has no rows (i.e. first run).
+pub async fn load_scope_state(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows = sqlx::query("SELECT scope, last_seen_at FROM sync_scope_state")
+        .fetch_all(pool)
+        .await
+        .context("select sync_scope_state")?;
+    let mut out = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let scope: String = r.try_get("scope").unwrap_or_default();
+        let ts: String = r.try_get("last_seen_at").unwrap_or_default();
+        if !scope.is_empty() && !ts.is_empty() {
+            out.insert(scope, ts);
+        }
+    }
+    Ok(out)
+}
+
+/// Upsert one scope's `last_seen_at` cursor. The value is a free-form
+/// timestamp string — callers typically pass RFC 3339.
+pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &str) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?)
+         ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+    )
+    .bind(scope)
+    .bind(last_seen_at)
+    .execute(pool)
+    .await
+    .with_context(|| format!("upsert sync_scope_state {scope}"))?;
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
