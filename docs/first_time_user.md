@@ -117,7 +117,7 @@ Credentials are not in the config — every downloader uses `latchkey` at runtim
 ## 4. Run the sync
 
 ```sh
-./frankweiler-sync ./sample_config.yaml
+./frankweiler-sync --config ./sample_config.yaml
 ```
 
 ## 5. What to expect
