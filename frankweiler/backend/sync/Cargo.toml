@@ -14,6 +14,7 @@ frankweiler-etl = { path = "../etl" }
 frankweiler-obs = { path = "../obs" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 frankweiler-etl-anthropic = { path = "../etl/providers/anthropic" }
+frankweiler-etl-beeper = { path = "../etl/providers/beeper" }
 frankweiler-etl-chatgpt = { path = "../etl/providers/chatgpt" }
 frankweiler-etl-slack = { path = "../etl/providers/slack" }
 frankweiler-etl-github = { path = "../etl/providers/github" }
@@ -33,3 +34,5 @@ insta = { version = "1.41", features = ["json", "redactions"] }
 tempfile = "3"
 serde_yaml = { workspace = true }
 walkdir = "2"
+tokio = { workspace = true, features = ["rt", "macros"] }
+sqlx = { workspace = true }

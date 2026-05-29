@@ -82,6 +82,11 @@ const VOLATILE_KEYS: &[&str] = &[
     // so redact here too — a real algorithm change will surface as
     // every sidecar/markdown header churning at once.
     "source_fingerprint",
+    // Per-row bookkeeping in the doltlite raw stores. Stamped to
+    // "now" on every fetch attempt, so they churn on every run even
+    // when the upstream payload is byte-identical.
+    "last_attempt_at",
+    "captured_at",
 ];
 
 const REDACTED: &str = "[redacted]";
@@ -239,9 +244,17 @@ enum SnapValue {
 
 /// File → snapshot payload. JSONL is parsed line-by-line, sorted, and
 /// stripped of volatile fields. JSON likewise. Markdown is text with
-/// frontmatter redactions. Anything else (media) becomes a size marker.
+/// frontmatter redactions. `.doltlite_db` files are opened and dumped
+/// as `{table_name: [rows]}` JSON so the goldens carry the actual raw
+/// payload contents (lets the TNG fixture pipeline reuse the captured
+/// rows as seed data). Anything else (media) becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name.ends_with(".doltlite_db") {
+        let mut v = dump_doltlite_db(path);
+        strip_volatile(&mut v);
+        return SnapValue::Json(v);
+    }
     if name.ends_with(".jsonl") {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         let mut lines: Vec<Value> = text
@@ -367,6 +380,166 @@ fn redact_markdown(text: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// Open a `.doltlite_db` sqlite file and dump every user table as a
+/// JSON object of the shape `{table_name: [{col: value, ...}, ...]}`.
+///
+/// - `payload` columns are unwrapped via `json(payload)` so JSONB blobs
+///   come back as text JSON, then re-parsed to a [`Value`] so the
+///   snapshot diff stays at JSON granularity rather than embedded
+///   string granularity. Other JSON-bearing text columns (`config`,
+///   `summary`, `example_headers`, `example_envelope_skeleton`) get the
+///   same parse treatment.
+/// - `BLOB` columns (e.g. `blobs.bytes`) collapse to `<bytes N>` markers
+///   — we don't want literal binary in goldens, but a row's *presence*
+///   and approximate size are signal worth keeping.
+/// - Rows are ordered by the table's natural primary key (`id`,
+///   `run_id`, `scope`, or `endpoint` depending on the table) so the
+///   snapshot is deterministic.
+fn dump_doltlite_db(path: &Path) -> Value {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for doltlite dump");
+    rt.block_on(dump_doltlite_db_async(path))
+}
+
+async fn dump_doltlite_db_async(path: &Path) -> Value {
+    use std::str::FromStr;
+
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use sqlx::{Column, Row, TypeInfo, ValueRef};
+
+    // JSON-bearing TEXT columns: parse to Value rather than leaving as
+    // an embedded string. Everything else passes through verbatim.
+    const JSON_TEXT_COLUMNS: &[&str] = &[
+        "payload",
+        "config",
+        "summary",
+        "example_headers",
+        "example_envelope_skeleton",
+    ];
+
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+        .expect("sqlite uri")
+        .create_if_missing(false)
+        .read_only(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("open doltlite db");
+
+    // Tables to walk, in alphabetical order so the snapshot is stable.
+    let table_rows = sqlx::query(
+        "SELECT name FROM sqlite_master \
+         WHERE type='table' AND name NOT LIKE 'sqlite_%' \
+         ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list tables");
+    let tables: Vec<String> = table_rows
+        .iter()
+        .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
+        .collect();
+
+    let mut out = serde_json::Map::new();
+    for t in tables {
+        // Pull column names so we know whether to wrap `payload` in
+        // `json(...)` and which column to ORDER BY.
+        let info = sqlx::query(&format!("PRAGMA table_info(\"{t}\")"))
+            .fetch_all(&pool)
+            .await
+            .expect("table_info");
+        let columns: Vec<String> = info
+            .iter()
+            .map(|r| r.try_get::<String, _>("name").unwrap_or_default())
+            .collect();
+
+        let select_list = columns
+            .iter()
+            .map(|c| {
+                if c == "payload" {
+                    "json(payload) AS payload".to_string()
+                } else {
+                    format!("\"{c}\"")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let order_by = if columns.iter().any(|c| c == "id") {
+            "ORDER BY id"
+        } else if columns.iter().any(|c| c == "run_id") {
+            "ORDER BY run_id"
+        } else if columns.iter().any(|c| c == "scope") {
+            "ORDER BY scope"
+        } else if columns.iter().any(|c| c == "endpoint") {
+            "ORDER BY endpoint"
+        } else {
+            ""
+        };
+        let q = format!("SELECT {select_list} FROM \"{t}\" {order_by}");
+        let rows = sqlx::query(&q)
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("select {t}: {e}"));
+
+        let mut row_vals = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let mut obj = serde_json::Map::new();
+            for col in row.columns() {
+                let name = col.name();
+                // Per-row dynamic type. We can't trust the *column*'s
+                // declared type because aliased function results (e.g.
+                // `json(payload) AS payload`) have no declared type and
+                // would fall through to NULL. ValueRef gives the actual
+                // SQLite storage class for *this* cell.
+                let raw = row.try_get_raw(name).expect("try_get_raw");
+                let value: Value = if raw.is_null() {
+                    Value::Null
+                } else {
+                    let type_info = raw.type_info().into_owned();
+                    let kind = type_info.name(); // TEXT/INTEGER/REAL/BLOB
+                    match kind {
+                        "TEXT" => row
+                            .try_get::<String, _>(name)
+                            .ok()
+                            .map(|s| {
+                                if JSON_TEXT_COLUMNS.contains(&name) {
+                                    serde_json::from_str::<Value>(&s)
+                                        .unwrap_or(Value::String(s))
+                                } else {
+                                    Value::String(s)
+                                }
+                            })
+                            .unwrap_or(Value::Null),
+                        "INTEGER" => row
+                            .try_get::<i64, _>(name)
+                            .ok()
+                            .map(Value::from)
+                            .unwrap_or(Value::Null),
+                        "REAL" => row
+                            .try_get::<f64, _>(name)
+                            .ok()
+                            .and_then(|n| serde_json::Number::from_f64(n).map(Value::Number))
+                            .unwrap_or(Value::Null),
+                        "BLOB" => row
+                            .try_get::<Vec<u8>, _>(name)
+                            .ok()
+                            .map(|b| Value::String(format!("<bytes {}>", b.len())))
+                            .unwrap_or(Value::Null),
+                        _ => Value::Null,
+                    }
+                };
+                obj.insert(name.to_string(), value);
+            }
+            row_vals.push(Value::Object(obj));
+        }
+        out.insert(t, Value::Array(row_vals));
+    }
+    Value::Object(out)
 }
 
 fn strip_volatile(v: &mut Value) {

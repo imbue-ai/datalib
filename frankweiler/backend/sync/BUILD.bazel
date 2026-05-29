@@ -35,6 +35,7 @@ rust_binary(
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl/providers/beeper:frankweiler_etl_beeper",
         "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
         "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
         "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",
@@ -83,7 +84,9 @@ rust_test(
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:walkdir",
     ],
 )

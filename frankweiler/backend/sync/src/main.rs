@@ -52,14 +52,15 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync, GitlabApiSync,
-    NotionApiSync, SlackApiSync, SourceConfig,
+    load_config, BeeperApiSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
+    GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{apply_one, init_schema, load_fingerprints, RenderedDoc};
 use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
+use frankweiler_etl_beeper::synthesize::BeeperSynth;
 use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;
 use frankweiler_etl_github::synthesize::GithubSynth;
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;
@@ -285,6 +286,7 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
         "type=github_api",
         "type=gitlab_api",
         "type=notion_api",
+        "type=beeper_api",
     ] {
         if s.contains(marker) {
             return Some(&marker["type=".len()..]);
@@ -394,6 +396,24 @@ notion integration token expired or missing.
          -d '{}' | head -c 200
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
+            .into(),
+        "beeper_api" => "\
+beeper access token expired or missing.
+
+  1. One-time: register the `beeper` service with latchkey so the
+     access token gets injected on requests to matrix.beeper.com:
+       latchkey services register beeper --base-api-url=\"https://matrix.beeper.com/\"
+  2. With the Beeper Texts desktop app signed in, grab the token out
+     of its on-disk SQLite (plaintext) onto the clipboard:
+       sqlite3 ~/Library/Application\\ Support/BeeperTexts/account.db \\
+           \"SELECT access_token FROM account;\" | pbcopy
+  3. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+       latchkey auth set beeper -H \"Authorization: Bearer $(pbpaste)\"
+  4. Smoke-test:
+       latchkey curl -s https://matrix.beeper.com/_matrix/client/v3/account/whoami | head -c 200
+     Expect a JSON `{\"user_id\":\"@you:beeper.com\",...}`.
+
+See frankweiler/backend/etl/providers/beeper/EXTRACT.md for details."
             .into(),
         _ => GENERIC_AUTH_HINT.into(),
     }
@@ -805,6 +825,9 @@ enum ExtractKind {
         sync: NotionApiSync,
         playback_root: Option<PathBuf>,
     },
+    Beeper {
+        sync: BeeperApiSync,
+    },
 }
 
 impl ExtractPlan {
@@ -840,6 +863,9 @@ impl ExtractPlan {
             SourceConfig::NotionApi { sync, .. } => ExtractKind::Notion {
                 sync: sync.clone().unwrap_or_default(),
                 playback_root: playback_root.map(|p| p.to_path_buf()),
+            },
+            SourceConfig::BeeperApi { sync, .. } => ExtractKind::Beeper {
+                sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
         };
@@ -928,53 +954,83 @@ impl ExtractPlan {
                     s.messages, s.replies, media
                 )
             }),
-            ExtractKind::Github { sync } => frankweiler_etl_github::extract::fetch(
-                frankweiler_etl_github::extract::FetchOptions {
-                    out_dir: self.out_dir.clone(),
-                    full_sync: true,
-                    refresh_window_days: sync
-                        .refresh_window_days
-                        .map(|v| v.max(0) as u32)
-                        .unwrap_or(0),
-                    max_prs: sync.max_prs.map(|v| v as usize),
-                    sleep_between: Duration::ZERO,
-                    progress: progress.clone(),
-                    ..Default::default()
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "prs(new={}/upd={}) issue_comments(new={}/upd={}) reviews(new={}/upd={}) review_comments(new={}/upd={})",
-                    s.new_prs,
-                    s.upd_prs,
-                    s.new_issue_comments,
-                    s.upd_issue_comments,
-                    s.new_reviews,
-                    s.upd_reviews,
-                    s.new_review_comments,
-                    s.upd_review_comments,
+            ExtractKind::Github { sync } => {
+                let targets = sync
+                    .pull_requests
+                    .iter()
+                    .map(|s| frankweiler_etl_github::extract::parse_pr_ref(s))
+                    .collect::<Result<Vec<_>>>()
+                    .context("parse github pull_requests refs")?;
+                frankweiler_etl_github::extract::fetch(
+                    frankweiler_etl_github::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        full_sync: true,
+                        refresh_window_days: sync
+                            .refresh_window_days
+                            .map(|v| v.max(0) as u32)
+                            .unwrap_or(0),
+                        max_prs: sync.max_prs.map(|v| v as usize),
+                        targets,
+                        sleep_between: Duration::ZERO,
+                        progress: progress.clone(),
+                        ..Default::default()
+                    },
                 )
-            }),
-            ExtractKind::Gitlab { sync } => frankweiler_etl_gitlab::extract::fetch(
-                frankweiler_etl_gitlab::extract::FetchOptions {
-                    out_dir: self.out_dir.clone(),
-                    full_sync: true,
-                    refresh_window_days: sync
-                        .refresh_window_days
-                        .map(|v| v.max(0) as u32)
-                        .unwrap_or(0),
-                    max_mrs: sync.max_mrs.map(|v| v as usize),
-                    sleep_between: Duration::ZERO,
+                .await
+                .map(|s| {
+                    format!(
+                        "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={})",
+                        s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments,
+                    )
+                })
+            }
+            ExtractKind::Gitlab { sync } => {
+                let targets = sync
+                    .merge_requests
+                    .iter()
+                    .map(|s| frankweiler_etl_gitlab::extract::parse_mr_ref(s))
+                    .collect::<Result<Vec<_>>>()
+                    .context("parse gitlab merge_requests refs")?;
+                frankweiler_etl_gitlab::extract::fetch(
+                    frankweiler_etl_gitlab::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        full_sync: true,
+                        refresh_window_days: sync
+                            .refresh_window_days
+                            .map(|v| v.max(0) as u32)
+                            .unwrap_or(0),
+                        max_mrs: sync.max_mrs.map(|v| v as usize),
+                        targets,
+                        sleep_between: Duration::ZERO,
+                        progress: progress.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "mrs(new={}) discussions(new={}) requests={}",
+                        s.new_mrs, s.new_discussions, s.requests,
+                    )
+                })
+            }
+            ExtractKind::Beeper { sync } => frankweiler_etl_beeper::extract::fetch(
+                frankweiler_etl_beeper::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    networks: sync.networks.clone(),
+                    rooms: sync.rooms.clone(),
+                    refresh_window_days: sync.refresh_window_days.unwrap_or(
+                        frankweiler_etl_beeper::extract::DEFAULT_REFRESH_WINDOW_DAYS,
+                    ),
+                    media: sync.media,
                     progress: progress.clone(),
-                    ..Default::default()
                 },
             )
             .await
             .map(|s| {
                 format!(
-                    "mrs(new={}/upd={}) discussions(new={}/upd={}) requests={}",
-                    s.new_mrs, s.upd_mrs, s.new_discussions, s.upd_discussions, s.requests,
+                    "rooms={} users={} events={} requests={}",
+                    s.rooms, s.users, s.events, s.requests,
                 )
             }),
             ExtractKind::Notion {
@@ -1164,6 +1220,17 @@ fn translate_source(
                 .context("render_notion_official")
                 .map(|_| ())
         }
+        SourceConfig::BeeperApi { .. } => {
+            // Milestone A: raw store lands but no translators are
+            // wired up yet, so we parse the raw doltlite and emit
+            // zero rendered docs. This keeps sync happy and lets the
+            // golden test capture the raw side independent of any
+            // translate output.
+            let _parsed = frankweiler_etl_beeper::translate::parse_raw_dir(&fixture)
+                .with_context(|| format!("beeper parse {}", fixture.display()))?;
+            let _ = on_doc_complete;
+            Ok(())
+        }
     }
 }
 
@@ -1188,6 +1255,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
             SourceConfig::GithubApi { .. } => Box::new(GithubSynth::new(input.clone())),
             SourceConfig::GitlabApi { .. } => Box::new(GitlabSynth::new(input.clone())),
             SourceConfig::NotionApi { .. } => Box::new(NotionSynth::new(input.clone())),
+            SourceConfig::BeeperApi { .. } => Box::new(BeeperSynth::new(input.clone())),
         };
         let report = synth
             .synthesize(out)
