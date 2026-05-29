@@ -10,3 +10,10 @@ sources:
     sync: {}
       # overlap: 50              # re-fetch the N most-recently-updated
       # refresh_window_days: 7   # treat anything older than this as cold
+
+  - name: slack
+    type: slack_api
+    sync:
+      media: true
+      channels:
+        - "project-data-liberation"

@@ -27,25 +27,26 @@ gh auth login
 
 ## 1. Install the CLI
 
-Pull the latest release tarball from GitHub and drop the binaries into
-`~/.local/bin`:
+Make a working directory, pull the latest release tarball from GitHub,
+and extract it in place. All subsequent commands run from this
+directory:
 
 ```sh
-mkdir -p ~/.local/bin
+mkdir -p ~/mixed_up_files && cd ~/mixed_up_files
 gh release download --repo imbue-ai/mixed_up_files --clobber --pattern '*.tar.gz' -D /tmp \
-    && tar -xzf /tmp/frankweiler-aarch64-apple-darwin.tar.gz -C ~/.local/bin --strip-components=1
+    && tar -xzf /tmp/frankweiler-aarch64-apple-darwin.tar.gz --strip-components=1
 ```
 
-Make sure `~/.local/bin` is on your `PATH`. Verify:
+Verify:
 
 ```sh
-frankweiler-sync --version
+./frankweiler-sync --version
 ```
 
 ## 2. Set up `latchkey` for Claude
 
 `frankweiler-sync` does not handle `claude.ai` cookies itself. It shells
-out to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
+out to [`latchkey curl`](https://www.npmjs.com/package/latchkey), which
 injects the cookies registered under the `claude-ai` service. `claude.ai`
 is fronted by Cloudflare's managed-challenge system, so the underlying
 `curl` has to impersonate Chrome's TLS fingerprint — `frankweiler-sync`
@@ -53,15 +54,17 @@ takes care of that internally by pointing latchkey at the bundled
 `latchkey-curl-shim` (`wreq`-backed, Chrome 131 handshake). You don't
 need to set `LATCHKEY_CURL` yourself.
 
-1. Install `latchkey` (see its repo for instructions) and make sure it's
-   on your `PATH`.
-2. Register the `claude-ai` service with latchkey (one-time):
+You don't need to install `latchkey` — the commands below invoke it via
+`npx`, which fetches it on demand (the `node` install from step 0 ships
+with `npx`).
+
+1. Register the `claude-ai` service with latchkey (one-time):
 
    ```sh
-   latchkey services register claude-ai --base-api-url="https://claude.ai/"
+   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
    ```
 
-3. Paste the registration command into your terminal **but don't run it
+2. Paste the registration command into your terminal **but don't run it
    yet** — the next step puts the cookie on your clipboard, so you want
    this command staged first. `pbpaste` is used (instead of pasting the
    cookie value literally) because zsh/bash record the pre-expansion
@@ -69,10 +72,10 @@ need to set `LATCHKEY_CURL` yourself.
    `$(pbpaste)` text instead of your live session token:
 
    ```sh
-   latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
    ```
 
-4. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
+3. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
    copy your `sessionKey` cookie. It's `HttpOnly`, so it's not visible
    to `document.cookie` — you have to read it from DevTools directly:
 
@@ -86,14 +89,16 @@ need to set `LATCHKEY_CURL` yourself.
 
 ## 3. Sample configuration
 
-Download [**sample_config.yaml**](https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/docs/sample_config.yaml)
+Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config.yaml)
 and drop it at `~/.config/frankweiler/config.yaml` (or anywhere and
-point `FRANKWEILER_CONFIG` at it). One-liner:
+point `FRANKWEILER_CONFIG` at it). The repo is private, so use `gh` (it
+re-uses the auth from step 0) rather than a raw URL:
 
 ```sh
 mkdir -p ~/.config/frankweiler && \
-    curl -fsSL https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/docs/sample_config.yaml \
-    -o ~/.config/frankweiler/config.yaml
+    gh api -H "Accept: application/vnd.github.raw" \
+    /repos/imbue-ai/mixed_up_files/contents/docs/sample_config.yaml \
+    > ~/.config/frankweiler/config.yaml
 ```
 
 This config only enables the Claude API source, so it's the minimum
@@ -104,7 +109,7 @@ Credentials are not in the config — every downloader uses `latchkey` at runtim
 ## 4. Run the sync
 
 ```sh
-frankweiler-sync \
+./frankweiler-sync \
     --config ~/.config/frankweiler/config.yaml \
     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
@@ -153,7 +158,7 @@ skipped / errors). Exit code is non-zero if any source errored.
 embedded — point it at your data root and it serves everything:
 
 ```sh
-frankweiler-http ~/mixed_up_files
+./frankweiler-http ~/mixed_up_files
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
