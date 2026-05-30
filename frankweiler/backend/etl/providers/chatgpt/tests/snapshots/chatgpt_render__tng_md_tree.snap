@@ -1,5 +1,6 @@
 ---
 source: etl/providers/chatgpt/tests/chatgpt_render.rs
+assertion_line: 71
 expression: bundle
 ---
 === rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001/index.md ===
@@ -14,6 +15,17 @@ default_model_slug: gpt-5
 ---
 
 # Sonnet on a Cat Named Spot
+
+<div id="m-msg-fake-spot-0000" data-section-uuid="msg-fake-spot-0000" class="msg msg--openai">
+
+## System
+
+*2370-10-24T08:00:00.000001+00:00*
+
+<a id="b-msg-fake-spot-0000-0"></a><!-- model_editable_context -->
+User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.
+
+</div>
 
 <div id="m-msg-fake-spot-0001" data-section-uuid="msg-fake-spot-0001" class="msg msg--openai">
 

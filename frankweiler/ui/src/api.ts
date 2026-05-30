@@ -103,8 +103,20 @@ export function fetchSearch(
   return getJson<SearchResponse>(`/api/search?${params.toString()}`, signal);
 }
 
-export function fetchChat(uuid: string, signal?: AbortSignal): Promise<ChatResponse> {
-  return getJson<ChatResponse>(`/api/chat/${encodeURIComponent(uuid)}`, signal);
+export function fetchChat(
+  uuid: string,
+  rowUuid?: string,
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
+  // `rowUuid` disambiguates which file to load when a single
+  // conversation_uuid maps to multiple rendered files (beeper renders
+  // one file per period). The backend prefers the row lookup when
+  // present and falls back to picking a file by conversation_uuid.
+  const q = rowUuid ? `?row=${encodeURIComponent(rowUuid)}` : "";
+  return getJson<ChatResponse>(
+    `/api/chat/${encodeURIComponent(uuid)}${q}`,
+    signal,
+  );
 }
 
 // --- Sync API --------------------------------------------------------------

@@ -292,20 +292,52 @@ async fn columns() -> Json<Vec<ColumnSpec>> {
     Json(default_columns())
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct ChatQuery {
+    /// Optional row uuid hint. Some providers (beeper) shard a
+    /// conversation across multiple rendered files (one per period),
+    /// so picking "a file for this conversation_uuid" can land on the
+    /// wrong period when the clicked row points at a specific message.
+    /// When provided, the handler resolves the qmd file by row uuid
+    /// instead — guaranteeing the loaded body actually contains the
+    /// clicked row's `data-section-uuid`.
+    pub row: Option<String>,
+}
+
 async fn chat(
     State(s): State<AppState>,
     Path(conversation_uuid): Path<String>,
+    Query(q): Query<ChatQuery>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     // QMDs are write-only output. We read the file just to ship its body
     // to the UI as-is; structured metadata comes from grid_rows. Per-message
-    // anchors in the body (<div id="m-{uuid}" data-msg-index="…">) let the
+    // anchors in the body (<div id="m-{uuid}" data-section-uuid="…">) let the
     // UI scroll-and-highlight without a structured chat schema.
-    let path = s
-        .repo
-        .qmd_path_for_conversation(&conversation_uuid)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let path = if let Some(row_uuid) = q.row.as_deref() {
+        match s
+            .repo
+            .qmd_path_for_row(row_uuid)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        {
+            Some(p) => p,
+            // Row uuid not found in grid_rows (stale link?) — fall back
+            // to the by-conversation lookup so the user still gets a
+            // body to look at rather than a 404.
+            None => s
+                .repo
+                .qmd_path_for_conversation(&conversation_uuid)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+                .ok_or(StatusCode::NOT_FOUND)?,
+        }
+    } else {
+        s.repo
+            .qmd_path_for_conversation(&conversation_uuid)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    };
     let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let body = strip_frontmatter(&raw).to_string();
     let meta = s

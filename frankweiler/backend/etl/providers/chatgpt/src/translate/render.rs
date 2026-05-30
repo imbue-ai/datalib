@@ -258,11 +258,16 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
 
     let mut last_ts: Option<String> = conv.create_time.clone();
     for m in &path {
-        if m.role.as_deref() == Some("system")
-            || m.content_type.as_deref() == Some("model_editable_context")
-        {
-            continue;
-        }
+        // Render every message in the path, including `system` /
+        // `model_editable_context` rows. The grid_rows sidecar emits
+        // one row per message (so search and the grid index can
+        // surface them), so the renderer has to keep them in sync —
+        // otherwise the grid links to a section that doesn't exist
+        // in the preview pane, looking like data loss. If we ever
+        // want to hide them, do it visually (collapsible block /
+        // de-emphasized styling), not by dropping them on the floor
+        // here. Same goes for `rows_for_conversation` in
+        // grid_rows.rs: keep both sides emitting the same set.
         let mut msg_created = m.create_time.clone();
         if msg_created.is_none() {
             if let Some(prev) = &last_ts {

@@ -190,8 +190,13 @@ function onFeedback() {
 }
 
 watch(
-  () => props.conversationUuid,
-  async (uuid) => {
+  // Refetch when either the conversation OR the clicked row changes:
+  // providers like beeper render one file per period inside a single
+  // conversation, so the row uuid is what disambiguates *which* file
+  // to load. Without this, clicking a different period's message
+  // would leave the wrong file in the preview.
+  () => [props.conversationUuid, props.selectedSectionUuid] as const,
+  async ([uuid, rowUuid]) => {
     if (!uuid) {
       chat.value = null;
       return;
@@ -199,7 +204,7 @@ watch(
     loading.value = true;
     error.value = null;
     try {
-      chat.value = await fetchChat(uuid);
+      chat.value = await fetchChat(uuid, rowUuid ?? undefined);
     } catch (e) {
       error.value = (e as Error).message;
     } finally {

@@ -269,6 +269,17 @@ fn render_markdown(
     ));
 
     for m in &doc.messages {
+        // Every grid row this provider emits for an event must have a
+        // matching `data-section-uuid="<event_uuid>"` node in the
+        // rendered markdown — otherwise the chat-preview pane can't
+        // highlight (or even scroll to) the message a clicked row
+        // points at, and the row looks like data loss. The grid row
+        // uuid is `m.event_uuid` (see `rows_for_doc`); same here.
+        out.push_str(&format!(
+            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--beeper\">\n\n",
+            uuid = m.event_uuid,
+        ));
+
         // HIDDEN events are surfaced as a single italic line — the
         // desktop app suppresses them, but they're real history
         // (membership changes, encryption setup, transcript-
@@ -281,6 +292,7 @@ fn render_markdown(
                 display_ts(m.timestamp_ms),
                 hidden_summary(m)
             ));
+            out.push_str("</div>\n\n");
             continue;
         }
         out.push_str("## ");
@@ -321,7 +333,10 @@ fn render_markdown(
             }
         }
 
-        // Reactions attached to this message
+        // Reactions attached to this message. We wrap each one in its
+        // own `data-section-uuid` span so clicking a reaction grid row
+        // (whose uuid is the reaction's own `event_uuid`) highlights
+        // exactly that bullet rather than the target message wholesale.
         if let Some(rs) = doc.reactions_by_target.get(&m.native_event_id) {
             let mut by_emoji: HashMap<&str, Vec<&Event>> = HashMap::new();
             for r in rs {
@@ -332,14 +347,16 @@ fn render_markdown(
             groups.sort_by_key(|(emoji, _)| *emoji);
             out.push('\n');
             for (emoji, reactors) in groups {
-                let names: Vec<&str> = reactors
-                    .iter()
-                    .map(|r| r.sender_label.as_deref().unwrap_or("?"))
-                    .collect();
-                out.push_str(&format!("- {emoji} {}\n", names.join(", ")));
+                for r in reactors {
+                    let who = r.sender_label.as_deref().unwrap_or("?");
+                    out.push_str(&format!(
+                        "- <span data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
+                        uuid = r.event_uuid,
+                    ));
+                }
             }
         }
-        out.push('\n');
+        out.push_str("\n</div>\n\n");
     }
 
     // Reactions whose target wasn't in this doc's messages (DM

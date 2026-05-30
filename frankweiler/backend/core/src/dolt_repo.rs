@@ -501,6 +501,19 @@ impl MirrorRepo for DoltRepo {
         let rel: Option<String> = r.try_get("qmd_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
     }
+
+    async fn qmd_path_for_row(&self, row_uuid: &str) -> Result<Option<PathBuf>, RepoError> {
+        let row = sqlx::query(
+            "SELECT qmd_path FROM grid_rows WHERE uuid = ? AND qmd_path IS NOT NULL LIMIT 1",
+        )
+        .bind(row_uuid)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let Some(r) = row else { return Ok(None) };
+        let rel: Option<String> = r.try_get("qmd_path").ok();
+        Ok(rel.map(|p| self.root.as_ref().join(p)))
+    }
 }
 
 /// Ask the linked libsqlite3 whether `dolt_commit` is a registered

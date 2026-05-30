@@ -32,15 +32,17 @@ test("selected message has a visible accent-colored outline", async ({
     .first()
     .waitFor({ timeout: 10_000 });
 
+  // Match on row uuid, not (conversation_uuid, message_index). Some
+  // providers shard a conversation into multiple rendered files
+  // (beeper renders one per period), so several rows can share
+  // (conversation_uuid, message_index=0) — one per period. Matching
+  // by uuid guarantees we click exactly the row whose uuid we then
+  // assert against.
   const rowIndex = await page.evaluate(
-    ({ uuid, msgIdx }) => {
+    ({ uuid }) => {
       type Node = {
         rowIndex: number | null;
-        data?: {
-          conversation_uuid: string;
-          kind: string;
-          message_index: number | null;
-        };
+        data?: { uuid: string };
       };
       const w = window as unknown as {
         __fwGridApi?: {
@@ -51,19 +53,14 @@ test("selected message has a visible accent-colored outline", async ({
       const api = w.__fwGridApi!;
       let found: number | null = null;
       api.forEachNode((node) => {
-        if (
-          node.data &&
-          node.data.conversation_uuid === uuid &&
-          node.data.kind !== "Chat" &&
-          node.data.message_index === msgIdx
-        ) {
+        if (node.data && node.data.uuid === uuid) {
           api.ensureNodeVisible(node, "middle");
           found = node.rowIndex;
         }
       });
       return found;
     },
-    { uuid: pick!.conversation_uuid, msgIdx: pick!.message_index! },
+    { uuid: pick!.uuid },
   );
   expect(rowIndex).not.toBeNull();
 

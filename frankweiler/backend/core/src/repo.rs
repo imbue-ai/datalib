@@ -43,6 +43,16 @@ pub trait MirrorRepo: Send + Sync {
         conversation_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
 
+    /// Resolve the on-disk QMD path for a single grid row by its
+    /// `uuid`. Some providers shard a conversation across multiple
+    /// rendered files (e.g. beeper renders one file per period —
+    /// month/day/year), so `qmd_path_for_conversation` returning
+    /// "some file for that conversation" can pick the wrong file
+    /// when the click points at a specific row. The UI sends the
+    /// clicked row's uuid in `/api/chat/{conv}?row=<uuid>` and the
+    /// chat handler prefers this lookup when present.
+    async fn qmd_path_for_row(&self, row_uuid: &str) -> Result<Option<PathBuf>, RepoError>;
+
     /// Fetch every row's `(uuid, kind, qmd_path, provider)` tuple. Used to
     /// build a `GridIndex` so qmd-routed search can map hits → grid rows.
     /// Returning an empty list is acceptable for an empty / missing store.
