@@ -116,13 +116,12 @@ once the tokens themselves stabilise.
 bazelisk test //...
 ```
 
-**This is the source of truth for "do the tests pass?" — always prefer it
-over per-language inner loops when you want a real answer.** Bazel's
-action cache makes re-runs cheap: untouched targets are served from cache,
-so the second invocation only re-executes what your changes actually
-affected. The per-language commands below are convenient for tight inner
-loops, but they don't see cross-language goldens, the deeplink fixture
-test, or the e2e suite — `bazelisk test //...` does.
+**Always run tests through Bazel.** It's the source of truth for "do the
+tests pass?", and the disk cache (`--disk_cache` in `.bazelrc`) is
+content-addressed and shared across every checkout on your machine —
+two clones of this repo at different paths get the same cache hits,
+and your second invocation only re-executes what your changes actually
+touched. Skipping Bazel skips that cache.
 
 Runs:
 - Rust unit tests (`//frankweiler/backend/{schema,core,etl,http,tauri-backend}:*_unittests`)
@@ -240,13 +239,8 @@ and require `latchkey` on PATH with creds set for the `slack` service.
   trimmed to those relevant to the test channel so the rest of the
   workspace doesn't churn the snapshot.
 
-  ```sh
-  cd frankweiler/backend
-  cargo test -p frankweiler-etl-slack --test slack_live -- --ignored
-  ```
-
-  Or via Bazel (tagged `manual` + `no-sandbox` because it shells out to
-  host `latchkey`):
+  Tagged `manual` + `no-sandbox` because it shells out to host
+  `latchkey`:
 
   ```sh
   bazelisk test //frankweiler/backend/etl/providers/slack:slack_live \
@@ -255,15 +249,6 @@ and require `latchkey` on PATH with creds set for the `slack` service.
 
   After posting new messages or attachments in the channel, the test
   will fail with a diff; accept the change with `cargo insta review`.
-
-### Inner loop (per language, faster)
-
-| Language       | Command (run in the package dir)                |
-|----------------|--------------------------------------------------|
-| Rust           | `cd frankweiler/backend && cargo test`           |
-| Vue / Vitest   | `cd frankweiler/ui && pnpm test`                 |
-| Vite dev UI    | `cd frankweiler/ui && pnpm dev`                  |
-| Playwright e2e | `bazelisk run //frankweiler/ui:e2e`              |
 
 ### Regenerating the cross-language types
 
