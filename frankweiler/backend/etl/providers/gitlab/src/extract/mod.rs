@@ -68,6 +68,11 @@ impl Default for FetchOptions {
 pub struct FetchSummary {
     pub new_mrs: usize,
     pub new_discussions: usize,
+    /// MRs whose listing `updated_at` matched the local copy — the
+    /// detail + discussions fetch was skipped. Counted separately so
+    /// the per-source one-liner can show how much work the watermark
+    /// + per-MR skip actually saved.
+    pub skipped_unchanged_mrs: usize,
     pub requests: u64,
 }
 
@@ -77,20 +82,26 @@ fn since_for_scope(
     refresh_window_days: u32,
     full: bool,
 ) -> Option<String> {
-    if full || refresh_window_days == 0 {
+    if full {
         return None;
     }
-    let window_floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
-    let from_state = state.get(scope).and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|d| d.with_timezone(&Utc))
-    });
-    let since = match from_state {
-        Some(s) if s < window_floor => s,
-        _ => window_floor,
-    };
-    Some(since.to_rfc3339_opts(SecondsFormat::Secs, true))
+    // `state[scope]` is the cursor: GitLab bumps an MR's `updated_at`
+    // on any change (notes, label edits, state transitions, etc.), so
+    // once a sync has succeeded, `updated_after=<state>` catches every
+    // edit since.
+    //
+    // `refresh_window_days` is a cold-start lookback floor only. Pre-fix
+    // it was structured so every sync re-pulled the full window even
+    // when state was current, which is why operators kept seeing the
+    // same big MR list each run.
+    if let Some(s) = state.get(scope) {
+        return Some(s.clone());
+    }
+    if refresh_window_days == 0 {
+        return None;
+    }
+    let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
+    Some(floor.to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
@@ -134,8 +145,11 @@ async fn discover_mrs(
     state: &HashMap<String, String>,
     refresh_window_days: u32,
     full: bool,
-) -> Result<(Vec<(String, u32)>, HashMap<String, String>)> {
-    let mut seen: std::collections::BTreeSet<(String, u32)> = Default::default();
+) -> Result<(Vec<DiscoveredMr>, HashMap<String, String>)> {
+    // Per-(proj, iid) we keep the *latest* `updated_at` we saw across
+    // scopes — search/scope/reviewer can each surface the same MR with
+    // (in principle) different freshness; take the newest.
+    let mut by_key: HashMap<(String, u32), String> = HashMap::new();
     let mut new_state: HashMap<String, String> = Default::default();
     for scope in scopes {
         let since = since_for_scope(state, scope, refresh_window_days, full);
@@ -156,8 +170,20 @@ async fn discover_mrs(
                 continue;
             };
             let iid = item.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
-            if iid > 0 {
-                seen.insert((proj, iid as u32));
+            if iid == 0 {
+                continue;
+            }
+            let updated_at = item
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .unwrap_or_default();
+            let key = (proj, iid as u32);
+            match by_key.get(&key) {
+                Some(existing) if existing.as_str() >= updated_at.as_str() => {}
+                _ => {
+                    by_key.insert(key, updated_at);
+                }
             }
         }
         new_state.insert(
@@ -166,7 +192,30 @@ async fn discover_mrs(
         );
         tracing::info!(scope, count = results.len(), "scope done");
     }
-    Ok((seen.into_iter().collect(), new_state))
+    let mut out: Vec<DiscoveredMr> = by_key
+        .into_iter()
+        .map(|((proj, iid), updated_at)| DiscoveredMr {
+            proj,
+            iid,
+            updated_at,
+        })
+        .collect();
+    // Stable order for deterministic logs / progress.
+    out.sort_by(|a, b| (a.proj.as_str(), a.iid).cmp(&(b.proj.as_str(), b.iid)));
+    Ok((out, new_state))
+}
+
+/// A (proj, iid) pair surfaced by `discover_mrs`, carrying the listing's
+/// `updated_at` so the per-MR loop can skip detail fetches when the
+/// local copy is already current.
+#[derive(Debug, Clone)]
+pub(crate) struct DiscoveredMr {
+    pub proj: String,
+    pub iid: u32,
+    /// `updated_at` from the listing response. Empty string if the
+    /// listing didn't include it (defensive — newest doesn't beat
+    /// nothing, so we'll always refetch in that edge case).
+    pub updated_at: String,
 }
 
 async fn fetch_one_mr(
@@ -223,8 +272,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         let user_id = fetch_self(&client, &db).await?;
 
         let had_mrs = db.any_merge_requests().await?;
-        let mr_keys: Vec<(String, u32)> = if !opts.targets.is_empty() {
-            opts.targets.clone()
+        let mr_keys: Vec<DiscoveredMr> = if !opts.targets.is_empty() {
+            // Explicit targets: no listing call, no `updated_at` to
+            // compare against — always fetch.
+            opts.targets
+                .iter()
+                .cloned()
+                .map(|(proj, iid)| DiscoveredMr {
+                    proj,
+                    iid,
+                    updated_at: String::new(),
+                })
+                .collect()
         } else {
             let state = db.load_scope_state().await?;
             let (keys, new_scope_state) = discover_mrs(
@@ -241,19 +300,45 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             keys
         };
-        let mr_keys: Vec<(String, u32)> = if let Some(cap) = opts.max_mrs {
+        let mr_keys: Vec<DiscoveredMr> = if let Some(cap) = opts.max_mrs {
             mr_keys.into_iter().take(cap).collect()
         } else {
             mr_keys
         };
         tracing::info!(count = mr_keys.len(), "MRs to fetch");
 
+        // Bulk-load every (proj, iid)→updated_at we already have a
+        // payload for. One scan, then per-MR comparison is O(1). This
+        // is what lets a Ctrl-C'd previous run resume cheaply: the
+        // listing still shows all 210, but we skip the N we already
+        // fully fetched.
+        let local_updated: HashMap<(String, u32), String> = if opts.full_sync {
+            HashMap::new()
+        } else {
+            db.merge_request_updated_ats().await?
+        };
+
         opts.progress.set_length(Some(mr_keys.len() as u64));
-        for (proj, iid) in &mr_keys {
+        for d in &mr_keys {
             opts.progress.inc(1);
-            opts.progress.set_message(&format!("{proj}!{iid}"));
-            if let Err(e) = fetch_one_mr(&client, &db, proj, *iid, &mut summary).await {
-                tracing::error!(proj, iid, error = %e, "MR fetch failed; skipping");
+            opts.progress.set_message(&format!("{}!{}", d.proj, d.iid));
+            // Skip if the local copy's `updated_at` matches the
+            // listing's. Empty `updated_at` from discovery (targets
+            // mode or a listing item missing the field) falls through
+            // to the unconditional fetch.
+            if !d.updated_at.is_empty() {
+                if let Some(local) = local_updated.get(&(d.proj.clone(), d.iid)) {
+                    if local.as_str() == d.updated_at.as_str() {
+                        summary.skipped_unchanged_mrs += 1;
+                        if opts.sleep_between > Duration::ZERO {
+                            tokio::time::sleep(opts.sleep_between).await;
+                        }
+                        continue;
+                    }
+                }
+            }
+            if let Err(e) = fetch_one_mr(&client, &db, &d.proj, d.iid, &mut summary).await {
+                tracing::error!(proj = %d.proj, iid = d.iid, error = %e, "MR fetch failed; skipping");
             }
             if opts.sleep_between > Duration::ZERO {
                 tokio::time::sleep(opts.sleep_between).await;
@@ -267,6 +352,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let summary_json = json!({
         "new_mrs": summary.new_mrs,
         "new_discussions": summary.new_discussions,
+        "skipped_unchanged_mrs": summary.skipped_unchanged_mrs,
         "requests": summary.requests,
         "error": result.as_ref().err().map(|e| e.to_string()),
     });
@@ -321,5 +407,70 @@ mod tests {
             ),
             Some("generally-intelligent/generally_intelligent".to_string())
         );
+    }
+
+    #[test]
+    fn since_full_sync_returns_none() {
+        let state = HashMap::new();
+        assert_eq!(since_for_scope(&state, "created_by_me", 7, true), None);
+    }
+
+    #[test]
+    fn since_no_state_no_window_returns_none() {
+        // Cold start with refresh_window_days=0 → no `updated_after`
+        // filter at all (matches the old behavior for the default config).
+        let state = HashMap::new();
+        assert_eq!(since_for_scope(&state, "created_by_me", 0, false), None);
+    }
+
+    #[test]
+    fn since_no_state_with_window_uses_window_floor() {
+        let state = HashMap::new();
+        let got = since_for_scope(&state, "created_by_me", 7, false)
+            .expect("expected a since on a cold start with a window");
+        // ~7 days ago; just check it parses and is in the past.
+        let parsed = chrono::DateTime::parse_from_rfc3339(&got).expect("rfc3339");
+        let ago = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
+        assert!(
+            ago >= ChronoDuration::days(6) && ago <= ChronoDuration::days(8),
+            "since={got} ago={ago:?}",
+        );
+    }
+
+    #[test]
+    fn since_uses_state_as_cursor_when_present() {
+        // The fix: a successful sync's timestamp narrows the lookback
+        // on the next run. Pre-fix this was ignored in favor of the
+        // window floor whenever state was within the window.
+        let recent =
+            (Utc::now() - ChronoDuration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let mut state = HashMap::new();
+        state.insert("created_by_me".to_string(), recent.clone());
+        let got = since_for_scope(&state, "created_by_me", 7, false).unwrap();
+        assert_eq!(got, recent);
+    }
+
+    #[test]
+    fn since_uses_state_even_when_window_is_zero() {
+        // refresh_window_days = 0 + state present → use state directly.
+        let recent =
+            (Utc::now() - ChronoDuration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let mut state = HashMap::new();
+        state.insert("created_by_me".to_string(), recent.clone());
+        let got = since_for_scope(&state, "created_by_me", 0, false).unwrap();
+        assert_eq!(got, recent);
+    }
+
+    #[test]
+    fn since_uses_stale_state_verbatim() {
+        // A months-old state still acts as the cursor — gitlab bumps
+        // `updated_at` on any MR change, so this catches edits since
+        // even if the operator went quiet for a while.
+        let stale =
+            (Utc::now() - ChronoDuration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true);
+        let mut state = HashMap::new();
+        state.insert("created_by_me".to_string(), stale.clone());
+        let got = since_for_scope(&state, "created_by_me", 7, false).unwrap();
+        assert_eq!(got, stale);
     }
 }

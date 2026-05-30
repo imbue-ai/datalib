@@ -1003,8 +1003,8 @@ impl ExtractPlan {
                 .await
                 .map(|s| {
                     format!(
-                        "mrs(new={}) discussions(new={}) requests={}",
-                        s.new_mrs, s.new_discussions, s.requests,
+                        "mrs(new={} skipped_unchanged={}) discussions(new={}) requests={}",
+                        s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.requests,
                     )
                 })
             }

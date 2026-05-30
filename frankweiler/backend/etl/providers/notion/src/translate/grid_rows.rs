@@ -396,6 +396,29 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
     // Group blocks by their owning page (for fingerprint stability — we
     // include every block whose tree roots at this page).
     let block_owning_page = block_to_page_id(&parsed.blocks);
+    // Build the block→parent-block index once; the previous version
+    // rebuilt this map inside the outer loop, making the whole pass
+    // O(N²) over `parsed.blocks` and pegging a core on real notion
+    // sources (~10K blocks).
+    let mut block_parent: HashMap<String, String> = HashMap::new();
+    for bb in &parsed.blocks {
+        let par = bb.get("parent");
+        if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
+            let id = bb
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let pp = par
+                .and_then(|v| v.get("block_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !id.is_empty() && !pp.is_empty() {
+                block_parent.insert(id, pp);
+            }
+        }
+    }
     let mut blocks_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
     for b in &parsed.blocks {
         // Walk up to find owning page.
@@ -404,28 +427,9 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut cur = Some(bid.clone());
+        let mut cur = Some(bid);
         let mut seen = std::collections::HashSet::new();
         let mut owner: Option<String> = None;
-        let mut block_parent: HashMap<String, String> = HashMap::new();
-        for bb in &parsed.blocks {
-            let par = bb.get("parent");
-            if par.and_then(|v| v.get("type")).and_then(|v| v.as_str()) == Some("block_id") {
-                let id = bb
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let pp = par
-                    .and_then(|v| v.get("block_id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if !id.is_empty() && !pp.is_empty() {
-                    block_parent.insert(id, pp);
-                }
-            }
-        }
         while let Some(c) = cur.clone() {
             if !seen.insert(c.clone()) {
                 break;
@@ -563,4 +567,68 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
 #[allow(dead_code)]
 fn _slugify_smoke(s: &str) -> String {
     slugify(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    // Regression test for a quadratic blow-up in `gather_documents`:
+    // a previous version rebuilt the `block_parent` map (an inner
+    // O(N) scan over `parsed.blocks`) inside the outer `for b in
+    // &parsed.blocks` loop, making it O(N²). On a real notion DB
+    // with tens of thousands of blocks the translate step would peg
+    // a core and never reach `progress.set_length`. 5_000 blocks is
+    // enough to make the quadratic version run for tens of seconds
+    // while the fixed version finishes in a few ms.
+    #[test]
+    fn gather_documents_is_linear_in_blocks() {
+        // Long block-id chain: every block except the first parents
+        // to the previous block, forcing the owner-walk to consult
+        // `block_parent`. The bug rebuilt `block_parent` from scratch
+        // on every outer iteration; at N=4_000 that buys ~3–4 s on a
+        // 2024-era laptop in release mode while the linear fix
+        // finishes in <100 ms — comfortable margin around the 2 s
+        // budget below, and short enough to stay tolerable in CI.
+        const N: usize = 4_000;
+        let page_id = "page-1";
+        let pages = vec![json!({"id": page_id, "object": "page"})];
+        let mut blocks = Vec::with_capacity(N);
+        // First block parents directly to the page; each subsequent
+        // block parents to the previous block. With the quadratic bug,
+        // the inner loop builds an N-entry HashMap N times.
+        blocks.push(json!({
+            "id": "block-000000",
+            "object": "block",
+            "type": "paragraph",
+            "parent": {"type": "page_id", "page_id": page_id},
+            "page_id": page_id,
+        }));
+        for i in 1..N {
+            blocks.push(json!({
+                "id": format!("block-{i:06}"),
+                "object": "block",
+                "type": "paragraph",
+                "parent": {"type": "block_id", "block_id": format!("block-{:06}", i - 1)},
+                "page_id": page_id,
+            }));
+        }
+        let parsed = ParsedNotionOfficial {
+            pages,
+            blocks,
+            ..ParsedNotionOfficial::default()
+        };
+
+        let start = Instant::now();
+        let docs = gather_documents(&parsed);
+        let elapsed = start.elapsed();
+
+        assert_eq!(docs.pages.len(), 1);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "gather_documents took {elapsed:?} for {N} blocks — likely quadratic",
+        );
+    }
 }

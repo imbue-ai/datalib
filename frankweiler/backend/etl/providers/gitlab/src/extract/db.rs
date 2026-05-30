@@ -343,6 +343,28 @@ impl RawDb {
             .context("any_merge_requests")?;
         Ok(row.is_some())
     }
+
+    /// Return `(proj, iid) → updated_at` for every MR we already have
+    /// the full payload for. Used by the extract loop to skip detail
+    /// fetches when the listing's `updated_at` matches what's on disk.
+    pub async fn merge_request_updated_ats(&self) -> Result<HashMap<(String, u32), String>> {
+        let rows = sqlx::query(
+            "SELECT project_full_path, mr_iid, updated_at
+             FROM merge_requests
+             WHERE payload IS NOT NULL AND updated_at IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("merge_request_updated_ats")?;
+        let mut out: HashMap<(String, u32), String> = HashMap::with_capacity(rows.len());
+        for r in rows {
+            let proj: String = r.get("project_full_path");
+            let iid_i64: i64 = r.get("mr_iid");
+            let updated_at: String = r.get("updated_at");
+            out.insert((proj, iid_i64 as u32), updated_at);
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Clone)]
