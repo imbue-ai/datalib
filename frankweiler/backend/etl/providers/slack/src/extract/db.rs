@@ -130,6 +130,11 @@ pub struct MessageRow {
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, DDL).await?;
+        // Backfill thread_root_uuid for rows written by older versions
+        // that left it NULL on standalone messages. Idempotent: once
+        // every row has a non-NULL thread_root_uuid, the SELECT below
+        // returns no rows and the loop exits without writing.
+        backfill_thread_root_uuid(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -337,10 +342,20 @@ impl RawDb {
 
     pub async fn upsert_message(&self, row: &MessageRow) -> Result<()> {
         let id = slack_message_uuid(&row.team_id, &row.channel_id, &row.ts);
-        let thread_root_uuid = row
-            .thread_ts
-            .as_ref()
-            .map(|tts| slack_thread_uuid(&row.team_id, &row.channel_id, tts));
+        // Every message belongs to some thread — either a real reply
+        // thread (thread_ts present) or a standalone "thread of one"
+        // whose effective_thread_ts is the message's own ts. We stamp
+        // thread_root_uuid for both so the `messages_by_thread` index
+        // covers every row, which lets the translate-side cheap probe
+        // (`GROUP BY thread_root_uuid`) and the per-thread filtered
+        // load (`WHERE thread_root_uuid IN (...)`) hit the index
+        // instead of scanning + sorting.
+        let effective_thread_ts = row.thread_ts.as_deref().unwrap_or(row.ts.as_str());
+        let thread_root_uuid = Some(slack_thread_uuid(
+            &row.team_id,
+            &row.channel_id,
+            effective_thread_ts,
+        ));
         let payload_str = serde_json::to_string(&row.payload).context("serialize message")?;
         let now = Utc::now().to_rfc3339();
         sqlx::query(
@@ -599,6 +614,173 @@ impl Default for LoadedRaw {
 /// Synchronous helper for non-async callers (translate, synthesize)
 /// that already run under `#[tokio::main]`. Uses `block_in_place` +
 /// the current Handle, so it must be invoked on a multi-thread runtime.
+/// Stamp `thread_root_uuid` for any pre-existing rows where it's NULL.
+/// Older versions only set it when `thread_ts` was non-null, leaving
+/// standalone messages outside the `messages_by_thread` index. After
+/// this runs once, every message is covered. Paged so memory stays
+/// bounded on large DBs.
+async fn backfill_thread_root_uuid(pool: &SqlitePool) -> Result<()> {
+    const PAGE: i64 = 10_000;
+    loop {
+        let rows = sqlx::query(
+            "SELECT id, team_id, channel_id, ts FROM messages
+             WHERE thread_root_uuid IS NULL LIMIT ?",
+        )
+        .bind(PAGE)
+        .fetch_all(pool)
+        .await
+        .context("scan messages with NULL thread_root_uuid")?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = pool.begin().await.context("begin backfill tx")?;
+        for r in &rows {
+            let id: String = r.try_get("id").context("backfill id")?;
+            let team_id: String = r.try_get("team_id").context("backfill team_id")?;
+            let channel_id: String = r.try_get("channel_id").context("backfill channel_id")?;
+            let ts: String = r.try_get("ts").context("backfill ts")?;
+            let uuid = slack_thread_uuid(&team_id, &channel_id, &ts);
+            sqlx::query("UPDATE messages SET thread_root_uuid = ? WHERE id = ?")
+                .bind(&uuid)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("backfill update {id}"))?;
+        }
+        tx.commit().await.context("commit backfill tx")?;
+    }
+}
+
+/// Cheap probe: `(thread_root_uuid → "<MAX(fetched_at)>|<COUNT(*)>")`
+/// for every thread in the DB, grouped via the `messages_by_thread`
+/// index. The orchestrator compares each entry against the cursor it
+/// stored on the prior render — threads whose cursor matches don't get
+/// their payloads loaded at all. Both fields move on any upsert (slack
+/// extract bumps `fetched_at` unconditionally) so the cursor is a
+/// conservative "did anything change in this thread" signal.
+pub async fn probe_thread_cursors(db_path: &Path) -> Result<HashMap<String, String>> {
+    let db = RawDb::open(db_path).await?;
+    let rows = sqlx::query(
+        "SELECT thread_root_uuid, MAX(fetched_at) AS max_fetched_at, COUNT(*) AS msg_count
+         FROM messages
+         WHERE payload IS NOT NULL AND thread_root_uuid IS NOT NULL
+         GROUP BY thread_root_uuid",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .context("probe_thread_cursors")?;
+    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let uuid: String = r.try_get("thread_root_uuid").unwrap_or_default();
+        if uuid.is_empty() {
+            continue;
+        }
+        let max_ts: String = r.try_get("max_fetched_at").unwrap_or_default();
+        let count: i64 = r.try_get("msg_count").unwrap_or(0);
+        out.insert(uuid, format!("{max_ts}|{count}"));
+    }
+    Ok(out)
+}
+
+/// Synchronous wrapper around [`probe_thread_cursors`] for translate /
+/// orchestrator callers that already sit under `#[tokio::main]`.
+pub fn block_on_probe_thread_cursors(db_path: &Path) -> Result<HashMap<String, String>> {
+    let path = db_path.to_path_buf();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move { probe_thread_cursors(&path).await })
+    })
+}
+
+/// Filtered load: only messages whose `thread_root_uuid` is in the
+/// provided set. Used by the cursor-aware translate path to skip
+/// loading payloads for threads that the cheap probe says haven't
+/// changed since the last render. Ordering is `thread_root_uuid, ts`
+/// so downstream consumers see each thread's messages contiguously.
+/// Param batching keeps each query under SQLite's bind limit.
+pub fn block_on_load_filtered(
+    db_path: &Path,
+    thread_uuids: &std::collections::HashSet<String>,
+) -> Result<LoadedRaw> {
+    let path = db_path.to_path_buf();
+    let uuids: Vec<String> = thread_uuids.iter().cloned().collect();
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let db = RawDb::open(&path).await?;
+            let workspace = db.load_workspace().await?;
+            let users = db.load_users().await?;
+            let channels = db.load_channels().await?;
+            let messages = load_messages_for_threads(&db.pool, &uuids).await?;
+            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
+                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+                    db.pool().clone(),
+                ));
+            Ok::<_, anyhow::Error>(LoadedRaw {
+                workspace,
+                users,
+                channels,
+                messages,
+                blobs,
+            })
+        })
+    })
+}
+
+async fn load_messages_for_threads(
+    pool: &SqlitePool,
+    thread_uuids: &[String],
+) -> Result<Vec<LoadedMessage>> {
+    if thread_uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // SQLite's default SQLITE_LIMIT_VARIABLE_NUMBER is 32766 on modern
+    // builds; stay well below it so we don't trip the limit on a
+    // re-tuned build. 500 also keeps each query's plan compact.
+    const CHUNK: usize = 500;
+    let mut out: Vec<LoadedMessage> = Vec::new();
+    for chunk in thread_uuids.chunks(CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
+                    json(payload) AS payload
+             FROM messages
+             WHERE payload IS NOT NULL AND thread_root_uuid IN ({placeholders})
+             ORDER BY thread_root_uuid, ts"
+        );
+        let mut q = sqlx::query(&sql);
+        for u in chunk {
+            q = q.bind(u);
+        }
+        let rows = q
+            .fetch_all(pool)
+            .await
+            .context("select messages for threads")?;
+        out.reserve(rows.len());
+        for r in rows {
+            let payload_str: String = match r.try_get("payload") {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+                continue;
+            };
+            let is_root_int: Option<i64> = r.try_get("is_thread_root").unwrap_or(None);
+            out.push(LoadedMessage {
+                id: r.try_get("id").unwrap_or_default(),
+                team_id: r.try_get("team_id").unwrap_or_default(),
+                channel_id: r.try_get("channel_id").unwrap_or_default(),
+                ts: r.try_get("ts").unwrap_or_default(),
+                thread_ts: r.try_get::<Option<String>, _>("thread_ts").unwrap_or(None),
+                is_thread_root: is_root_int.unwrap_or(0) != 0,
+                user_id: r.try_get::<Option<String>, _>("user_id").unwrap_or(None),
+                payload,
+            });
+        }
+    }
+    Ok(out)
+}
+
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

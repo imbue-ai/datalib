@@ -3,7 +3,7 @@
 //! via `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an
 //! integration test tagged `manual` and is run via `cargo test`.
 
-use frankweiler_etl_anthropic::translate::parse::parse_export;
+use frankweiler_etl_anthropic::translate::parse::{parse_export, shred};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -20,11 +20,16 @@ fn parses_tng_api_fixture() {
 
     assert!(!parsed.accounts.is_empty(), "expected accounts");
     assert!(!parsed.conversations.is_empty(), "expected conversations");
-    assert!(!parsed.messages.is_empty(), "expected messages");
 
-    let block_types: HashSet<_> = parsed
-        .content_blocks
+    let shredded: Vec<_> = parsed.conversations.iter().map(shred).collect();
+    assert!(
+        shredded.iter().any(|s| !s.messages.is_empty()),
+        "expected messages"
+    );
+
+    let block_types: HashSet<_> = shredded
         .iter()
+        .flat_map(|s| s.content_blocks.iter())
         .filter_map(|b| b.r#type.clone())
         .collect();
     for t in ["text", "thinking", "tool_use", "tool_result"] {
@@ -34,6 +39,10 @@ fn parses_tng_api_fixture() {
         );
     }
 
-    let kinds: HashSet<_> = parsed.attachments.iter().map(|a| a.kind.clone()).collect();
+    let kinds: HashSet<_> = shredded
+        .iter()
+        .flat_map(|s| s.attachments.iter())
+        .map(|a| a.kind.clone())
+        .collect();
     assert!(kinds.contains("file"), "expected a 'file' kind attachment");
 }

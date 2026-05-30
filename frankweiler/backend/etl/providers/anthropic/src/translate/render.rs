@@ -14,8 +14,12 @@ use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
+use frankweiler_etl::blob_store::BlobStore;
+
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
-use super::parse::{AttachmentRow, ContentBlockRow, ConversationRow, MessageRow, ParsedExport};
+use super::parse::{
+    shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ShreddedConversation,
+};
 
 /// YAML scalar emitter that matches the Python `_yaml_scalar` exactly.
 /// Strings containing structural chars (`:#\n"'`) or with surrounding
@@ -391,29 +395,31 @@ pub fn render_all(
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedDoc) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    let name_by_id = name_by_id(parsed);
-
     progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
-    for conv in &parsed.conversations {
-        let fingerprint = fingerprint_for_conversation(parsed, &conv.conversation_uuid);
-        let Some(r) = render_one(parsed, &conv.conversation_uuid, source_name) else {
-            progress.inc(1);
-            continue;
-        };
-        let rel = r.relative_path();
+    for c in &parsed.conversations {
+        let fingerprint = fingerprint_for_conversation(&c.upstream_payload);
+        let conv_uuid = c.conv.conversation_uuid.clone();
+        let rel = conv_relative_path(&c.conv.account_uuid, &conv_uuid);
         let abs = root.join(&rel);
 
-        if prior_fingerprints
-            .get(&conv.conversation_uuid)
-            .map(String::as_str)
-            == Some(fingerprint.as_str())
+        // Skip when the indexer has the same fingerprint AND the md
+        // file is still on disk. No shredding happens here — the
+        // upstream payload alone is enough to decide.
+        if prior_fingerprints.get(&conv_uuid).map(String::as_str) == Some(fingerprint.as_str())
             && abs.exists()
         {
             written.push(rel);
             progress.inc(1);
             continue;
         }
+
+        // Changed (or first-time): walk chat_messages into msgs/blocks/atts.
+        let shredded = shred(c);
+        let Some(r) = render_one(&shredded, source_name) else {
+            progress.inc(1);
+            continue;
+        };
 
         let page_dir = abs
             .parent()
@@ -422,14 +428,14 @@ pub fn render_all(
 
         // Order: blobs → md → sidecar → callback. Callback firing last
         // is the commit point.
-        materialize_conv_blobs(parsed, conv, &name_by_id, page_dir)?;
+        materialize_conv_blobs(&shredded, parsed.blobs.as_ref(), page_dir)?;
 
         std::fs::write(&abs, &r.body)?;
 
-        let rows = rows_for_conversation(parsed, &conv.conversation_uuid);
+        let rows = rows_for_conversation(&shredded);
         let sidecar = Sidecar {
             header: SidecarHeader {
-                document_uuid: conv.conversation_uuid.clone(),
+                document_uuid: conv_uuid.clone(),
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
@@ -440,9 +446,10 @@ pub fn render_all(
         std::fs::write(&sidecar_abs, sidecar_json)?;
 
         on_doc_complete(RenderedDoc {
-            document_uuid: conv.conversation_uuid.clone(),
+            document_uuid: conv_uuid.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
+            upstream_cursor: None,
             md_path: abs.clone(),
             render_version: RENDER_VERSION,
             rows,
@@ -454,25 +461,29 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, _source_name: &str) -> Option<Rendered> {
-    let conv: &ConversationRow = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_uuid == conv_uuid)?;
+/// Mirror of `Rendered::relative_path` for use *before* we've rendered
+/// (so we can fingerprint-skip without paying for a render first).
+fn conv_relative_path(account_uuid: &str, conv_uuid: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("rendered_md/anthropic")
+        .join(account_uuid)
+        .join("llm_chats")
+        .join(conv_uuid)
+        .join("index.md")
+}
+
+pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option<Rendered> {
+    let conv = &shredded.conv;
+    let conv_uuid = conv.conversation_uuid.as_str();
 
     let mut blocks_by_msg: HashMap<&str, Vec<&ContentBlockRow>> = HashMap::new();
-    for b in &parsed.content_blocks {
+    for b in &shredded.content_blocks {
         blocks_by_msg.entry(&b.message_uuid).or_default().push(b);
     }
     let mut atts_by_msg: HashMap<&str, Vec<&AttachmentRow>> = HashMap::new();
-    for a in &parsed.attachments {
+    for a in &shredded.attachments {
         atts_by_msg.entry(&a.message_uuid).or_default().push(a);
     }
-    let mut msgs: Vec<&MessageRow> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_uuid == conv_uuid)
-        .collect();
+    let mut msgs: Vec<&MessageRow> = shredded.messages.iter().collect();
     msgs.sort_by(|a, b| {
         let ka = (
             a.created_at.as_deref().unwrap_or(""),
@@ -585,13 +596,21 @@ pub fn render_one(parsed: &ParsedExport, conv_uuid: &str, _source_name: &str) ->
     })
 }
 
-/// `file_uuid → file_name` lookup off the attachment rows we walked
-/// during parse, used by [`materialize_conv_blobs`] to pick the same
-/// filename `attachment_md` references in the markdown.
-fn name_by_id(parsed: &ParsedExport) -> std::collections::HashMap<String, Option<String>> {
-    let mut out: std::collections::HashMap<String, Option<String>> =
-        std::collections::HashMap::new();
-    for at in &parsed.attachments {
+/// Write every blob this conversation references into
+/// `<page_dir>/blobs/<filename>`. The markdown emitted by
+/// `attachment_md` uses the same `safe_filename(name, id)` rule so the
+/// link target matches what lands on disk.
+fn materialize_conv_blobs(
+    shredded: &ShreddedConversation,
+    blobs: &dyn BlobStore,
+    page_dir: &std::path::Path,
+) -> std::io::Result<()> {
+    // file_uuid → first name we saw for it, walking only this
+    // conversation's attachments. Each conversation owns its blobs in
+    // a sibling `blobs/` dir, so there's no need to cross-reference
+    // other conversations.
+    let mut name_by_id: HashMap<String, Option<String>> = HashMap::new();
+    for at in &shredded.attachments {
         let Some(obj) = at.raw_json.as_object() else {
             continue;
         };
@@ -608,57 +627,19 @@ fn name_by_id(parsed: &ParsedExport) -> std::collections::HashMap<String, Option
             .or_else(|| obj.get("name"))
             .and_then(Value::as_str)
             .map(String::from);
-        out.entry(id.to_string()).or_insert(name);
+        name_by_id.entry(id.to_string()).or_insert(name);
     }
-    out
-}
-
-/// Write every blob this conversation references into
-/// `<page_dir>/blobs/<filename>`. The markdown emitted by
-/// `attachment_md` uses the same `safe_filename(name, id)` rule so the
-/// link target matches what lands on disk. Blobs referenced by other
-/// conversations are skipped — they live next to *their* `index.md`.
-fn materialize_conv_blobs(
-    parsed: &ParsedExport,
-    conv: &ConversationRow,
-    name_by_id: &std::collections::HashMap<String, Option<String>>,
-    page_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let msg_uuids: std::collections::HashSet<&str> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_uuid == conv.conversation_uuid)
-        .map(|m| m.message_uuid.as_str())
-        .collect();
-    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for at in &parsed.attachments {
-        if !msg_uuids.contains(at.message_uuid.as_str()) {
-            continue;
-        }
-        let Some(obj) = at.raw_json.as_object() else {
-            continue;
-        };
-        if let Some(id) = obj
-            .get("file_uuid")
-            .or_else(|| obj.get("id"))
-            .or_else(|| obj.get("uuid"))
-            .and_then(Value::as_str)
-        {
-            wanted.insert(id.to_string());
-        }
-    }
-    if wanted.is_empty() {
+    if name_by_id.is_empty() {
         return Ok(());
     }
     let blobs_dir = page_dir.join("blobs");
-    for file_uuid in &wanted {
-        let blob = match parsed.blobs.read_by_id(file_uuid) {
+    for (file_uuid, name) in &name_by_id {
+        let blob = match blobs.read_by_id(file_uuid) {
             Ok(Some(b)) => b,
             Ok(None) => continue,
             Err(e) => return Err(std::io::Error::other(e)),
         };
-        let name = name_by_id.get(file_uuid).and_then(|n| n.as_deref());
-        let safe = safe_filename(name, file_uuid);
+        let safe = safe_filename(name.as_deref(), file_uuid);
         std::fs::create_dir_all(&blobs_dir)?;
         std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;
     }

@@ -54,6 +54,7 @@ fn renders_tng_fixture_and_is_idempotent() {
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
         &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
             priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
@@ -73,6 +74,7 @@ fn renders_tng_fixture_and_is_idempotent() {
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
+        &std::collections::HashMap::new(),
         &mut |_doc| panic!("callback fired despite fingerprint match"),
     )
     .expect("re-render");
@@ -144,6 +146,7 @@ fn renders_only_changed_and_new_threads_on_resync() {
         tmp.path(),
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
+        &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
         &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
             priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
@@ -237,6 +240,7 @@ fn renders_only_changed_and_new_threads_on_resync() {
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
+        &std::collections::HashMap::new(),
         &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
             // Mutated thread must produce a different fingerprint.
             if doc.document_uuid == mutated_thread_uuid {
@@ -303,6 +307,7 @@ fn renders_only_changed_and_new_threads_on_resync() {
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
         &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
             capture.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
@@ -316,6 +321,7 @@ fn renders_only_changed_and_new_threads_on_resync() {
         "slack_api",
         &frankweiler_etl::progress::Progress::noop(),
         &priors2,
+        &std::collections::HashMap::new(),
         &mut |_doc| panic!("steady-state should skip every doc"),
     )
     .expect("render pass 3");

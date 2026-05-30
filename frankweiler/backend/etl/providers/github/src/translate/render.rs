@@ -356,6 +356,7 @@ pub fn render_github(
             document_uuid: pr.uuid.clone(),
             source_name: String::new(),
             source_fingerprint: fingerprint,
+            upstream_cursor: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,

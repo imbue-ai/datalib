@@ -67,6 +67,12 @@ pub fn render_all(
     source_name: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
+    // Per-thread cheap-probe value (`<MAX(fetched_at)>|<COUNT(*)>`)
+    // computed by the orchestrator before this call. Stamped into each
+    // [`RenderedDoc`] so the indexer records what the next run should
+    // compare against. Empty when callers don't have probe data —
+    // every render still works, just without the cheap-skip shortcut.
+    current_cursors: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<RenderSummary> {
     let user_labels: BTreeMap<String, String> = t
@@ -161,6 +167,7 @@ pub fn render_all(
             document_uuid: thread_uuid.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
+            upstream_cursor: current_cursors.get(&thread_uuid).cloned(),
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,

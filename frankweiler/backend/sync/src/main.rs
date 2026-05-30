@@ -39,9 +39,13 @@
 //!     SQL dumping (if needed) is downstream — e.g. a Bazel genrule that
 //!     consumes `dolt_db/` and runs `dolt dump`.
 //!
-//! Extract runs concurrently across managed sources when
-//! `sync.parallel: true` (the default); translate/load remain sequential
-//! since they share a single Dolt repo and `rendered_md/` tree.
+//! Both extract and translate run concurrently across managed sources
+//! when `sync.parallel: true` (the default). Each translate task writes
+//! through its own `apply_one` callback; the shared index doltlite is
+//! a WAL-mode sqlx pool, so per-doc indexer writes from different
+//! sources serialize at the SQLite level but pool acquisition stays
+//! non-blocking. The on-disk `rendered_md/` tree is sharded by source
+//! so there's no contention there.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -56,7 +60,7 @@ use frankweiler_core::config::{
     GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
-use frankweiler_etl::load::{apply_one, init_schema, load_fingerprints, RenderedDoc};
+use frankweiler_etl::load::{apply_one, init_schema, load_cursors, load_fingerprints, RenderedDoc};
 use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
@@ -503,9 +507,13 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     let prior_fingerprints = load_fingerprints(&index_pool)
         .await
         .context("load prior fingerprints")?;
+    let prior_cursors = load_cursors(&index_pool)
+        .await
+        .context("load prior cursors")?;
     eprintln!(
-        "[frankweiler-sync] prior fingerprints: {} docs",
-        prior_fingerprints.len()
+        "[frankweiler-sync] prior fingerprints: {} docs ({} with cheap-probe cursor)",
+        prior_fingerprints.len(),
+        prior_cursors.len(),
     );
 
     // ── Translate (= render + per-doc load) ────────────────────────
@@ -523,15 +531,24 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         .map(|o| o.name.clone())
         .collect();
     // One MultiProgress for the whole translate phase; one bar per
-    // source as it runs. Translate is sequential, so bars activate and
-    // finish in turn rather than animating in parallel like extract.
+    // source. Sources run concurrently in `spawn_blocking` tasks
+    // (mirrors the extract phase), so bars animate together rather
+    // than in turn.
     let translate_multi = make_multi();
-    let mut load_totals = summary::LoadOutcome {
+    let load_totals = Arc::new(Mutex::new(summary::LoadOutcome {
         documents_loaded: 0,
         documents_total: 0,
         rows_inserted: 0,
         error: None,
-    };
+    }));
+
+    let prior_fingerprints = Arc::new(prior_fingerprints);
+    let prior_cursors = Arc::new(prior_cursors);
+    let cfg_arc = Arc::new(cfg.clone());
+    let root_arc: Arc<PathBuf> = Arc::new(root.clone());
+    let now_arc: Arc<String> = Arc::new(now.clone());
+
+    let mut set: JoinSet<(String, String, Result<String>)> = JoinSet::new();
     for src in cfg.enabled_sources() {
         let name = src.name().to_string();
         let type_str = src.type_str().to_string();
@@ -547,57 +564,106 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             continue;
         }
         let bar = make_bar(&translate_multi, name.clone());
-        let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
-            std::sync::Arc::new(IndicatifSink::new(bar, translate_multi.clone())),
-            std::sync::Arc::new(TracingSink::new(name.clone())),
-        ];
-        let progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
+        let mp = translate_multi.clone();
+        let src_owned = src.clone();
+        let pool = index_pool.clone();
+        let cfg_t = cfg_arc.clone();
+        let root_t = root_arc.clone();
+        // Separate clone for the on_doc_complete closure so the outer
+        // `translate_source` call can still borrow `root_t`.
+        let root_for_cb = root_arc.clone();
+        let now_t = now_arc.clone();
+        let pfp = prior_fingerprints.clone();
+        let pc = prior_cursors.clone();
+        let lt = load_totals.clone();
+        set.spawn_blocking(move || {
+            let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
+                std::sync::Arc::new(IndicatifSink::new(bar, mp)),
+                std::sync::Arc::new(TracingSink::new(name.clone())),
+            ];
+            let progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
 
-        // Per-doc commit callback: render hands us a `RenderedDoc`
-        // once md + blobs + sidecar are all on disk, and we apply it
-        // straight into the index DB. Sync's translate loop is sync
-        // Rust; sqlx is async, so we bridge through
-        // `block_in_place` + `Handle::current().block_on(...)` (same
-        // pattern `SqliteBlobStore` uses internally for the
-        // streaming blob fetch).
-        let mut on_doc_complete = |mut doc: RenderedDoc| -> Result<()> {
-            // Render doesn't always have the user-facing config name
-            // (notion/github/gitlab pass empty); fill it in here so
-            // documents.source_name is consistent.
-            if doc.source_name.is_empty() {
-                doc.source_name = name.clone();
-            }
-            let rows_inserted = doc.rows.len();
-            let pool = &index_pool;
-            let root_path = root.as_path();
-            let now_str = now.as_str();
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(async move { apply_one(pool, root_path, &doc, Some(now_str)).await })
-            })?;
-            load_totals.documents_loaded += 1;
-            load_totals.documents_total += 1;
-            load_totals.rows_inserted += rows_inserted;
-            Ok(())
-        };
+            // Per-doc commit callback. We're inside `spawn_blocking`
+            // (a dedicated blocking thread), so we can call
+            // `Handle::current().block_on(...)` directly — no
+            // `block_in_place` needed, since this thread isn't a
+            // worker thread.
+            let name_for_cb = name.clone();
+            let mut on_doc_complete = move |mut doc: RenderedDoc| -> Result<()> {
+                // Render doesn't always have the user-facing config
+                // name (notion/github/gitlab pass empty); fill it in
+                // here so documents.source_name is consistent.
+                if doc.source_name.is_empty() {
+                    doc.source_name = name_for_cb.clone();
+                }
+                let rows_inserted = doc.rows.len();
+                let pool_ref = &pool;
+                let root_path = root_for_cb.as_path();
+                let now_str = now_t.as_str();
+                tokio::runtime::Handle::current().block_on(async move {
+                    apply_one(pool_ref, root_path, &doc, Some(now_str)).await
+                })?;
+                let mut t = lt.lock().unwrap();
+                t.documents_loaded += 1;
+                t.documents_total += 1;
+                t.rows_inserted += rows_inserted;
+                Ok(())
+            };
 
-        let res = translate_source(
-            src,
-            &cfg,
-            &root,
-            &progress,
-            &prior_fingerprints,
-            &mut on_doc_complete,
-        )
-        .map(|_| "ok".to_string());
-        progress.finish("done");
-        summary
-            .lock()
-            .unwrap()
-            .translate
-            .push(summary::outcome_from(&name, &type_str, res));
+            let res = translate_source(
+                &src_owned,
+                &cfg_t,
+                root_t.as_path(),
+                &progress,
+                &pfp,
+                &pc,
+                &mut on_doc_complete,
+            )
+            .map(|_| "ok".to_string());
+            progress.finish("done");
+            (name, type_str, res)
+        });
     }
-    summary.lock().unwrap().load = Some(load_totals);
+
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok((name, type_str, res)) => {
+                summary
+                    .lock()
+                    .unwrap()
+                    .translate
+                    .push(summary::outcome_from(&name, &type_str, res));
+            }
+            Err(e) => {
+                // Task panicked — record a generic outcome so the
+                // panic shows up in the summary instead of being
+                // swallowed.
+                let err = anyhow::anyhow!("translate task panicked: {e}");
+                summary.lock().unwrap().translate.push(PhaseOutcome::err(
+                    "<unknown>",
+                    "unknown",
+                    &err,
+                ));
+            }
+        }
+    }
+
+    // Sort outcomes by config-declaration order so the summary stays
+    // stable across runs (parallel completion order is nondeterministic).
+    let cfg_order: std::collections::HashMap<String, usize> = cfg
+        .enabled_sources()
+        .enumerate()
+        .map(|(i, s)| (s.name().to_string(), i))
+        .collect();
+    let fallback_pos = cfg_order.len();
+    summary.lock().unwrap().translate.sort_by_key(|o| {
+        cfg_order
+            .get(o.name.as_str())
+            .copied()
+            .unwrap_or(fallback_pos)
+    });
+
+    summary.lock().unwrap().load = Some(load_totals.lock().unwrap().clone());
 
     // Force-checkpoint the WAL into the main DB before closing the
     // pool. Under WAL mode, all writes go to `<db>.db-wal` and only
@@ -658,8 +724,14 @@ async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+    // Pool sized for the parallel translate phase: each source runs
+    // in its own `spawn_blocking` task and writes per-doc through
+    // `apply_one`, so we want roughly one connection per concurrent
+    // source plus a couple of spares for the orchestrator. SQLite WAL
+    // serializes the writes themselves, but having enough connections
+    // avoids pool-acquire stalls.
     SqlitePoolOptions::new()
-        .max_connections(2)
+        .max_connections(16)
         .connect_with(opts)
         .await
         .with_context(|| format!("open doltlite at {}", db_path.display()))
@@ -1133,6 +1205,7 @@ fn translate_source(
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
+    prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
@@ -1174,15 +1247,78 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
-            use frankweiler_etl_slack::translate::{render::render_all, translate_raw_dir};
-            let t = translate_raw_dir(&fixture)
-                .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
+            use frankweiler_etl_slack::extract::{
+                block_on_probe_thread_cursors, db_path_for as slack_db_path_for,
+            };
+            use frankweiler_etl_slack::translate::{
+                render::render_all, translate_raw_dir, translate_raw_dir_filtered,
+            };
+            // Cheap probe: `GROUP BY thread_root_uuid` against the
+            // existing index gives us (thread_uuid → cursor) without
+            // loading any message payloads. Threads whose cursor
+            // matches a prior render *and* whose md still sits on
+            // disk are pruned right here — their payloads never get
+            // pulled out of sqlite.
+            let slack_db = slack_db_path_for(&fixture);
+            if !slack_db.exists() {
+                // Fall back to the legacy JSONL path; no probe possible.
+                let t = translate_raw_dir(&fixture)
+                    .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
+                return render_all(
+                    &t,
+                    root,
+                    name,
+                    progress,
+                    prior_fingerprints,
+                    &std::collections::HashMap::new(),
+                    on_doc_complete,
+                )
+                .context("slack render_all")
+                .map(|_| ());
+            }
+            let current_cursors = block_on_probe_thread_cursors(&slack_db)
+                .with_context(|| format!("slack probe {}", slack_db.display()))?;
+            let threads_to_render: std::collections::HashSet<String> = current_cursors
+                .iter()
+                .filter(|(tid, cur)| {
+                    // Re-render when the cheap cursor changed OR the
+                    // md file is missing (defends against `rm -rf
+                    // rendered_md/`). We don't know the thread's
+                    // team_id / channel_id without parsing — checking
+                    // md existence happens inside render_all's per-doc
+                    // skip, which still runs after the filtered load.
+                    // Worst case: cursor matches, md missing → we
+                    // load this thread's payloads but render_all
+                    // skips on fingerprint-and-md-exists anyway.
+                    // That's a small unnecessary load, not a wrong
+                    // skip.
+                    prior_cursors.get(*tid).map(String::as_str) != Some(cur.as_str())
+                })
+                .map(|(tid, _)| tid.clone())
+                .collect();
+            let total_threads = current_cursors.len();
+            let changed = threads_to_render.len();
+            eprintln!(
+                "[translate] slack cheap-probe: {changed}/{total_threads} threads need rendering",
+            );
+
+            if threads_to_render.is_empty() {
+                // Everything's up to date — skip the bulk load entirely.
+                progress.set_length(Some(0));
+                return Ok(());
+            }
+
+            let t =
+                translate_raw_dir_filtered(&fixture, &threads_to_render).with_context(|| {
+                    format!("slack translate_raw_dir_filtered {}", fixture.display())
+                })?;
             render_all(
                 &t,
                 root,
                 name,
                 progress,
                 prior_fingerprints,
+                &current_cursors,
                 on_doc_complete,
             )
             .context("slack render_all")

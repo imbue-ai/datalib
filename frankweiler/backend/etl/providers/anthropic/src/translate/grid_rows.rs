@@ -9,7 +9,7 @@ use chrono::{DateTime, FixedOffset};
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
-use super::parse::{ContentBlockRow, ConversationRow, MessageRow, ParsedExport};
+use super::parse::{ContentBlockRow, ConversationRow, MessageRow, ShreddedConversation};
 use super::render::section_uuid_for_block;
 
 // Bumped from 1 to 2 when the section-uuid scheme replaced
@@ -56,14 +56,9 @@ fn qmd_path(account_uuid: &str, conv_uuid: &str) -> String {
     format!("rendered_md/anthropic/{account_uuid}/llm_chats/{conv_uuid}/index.md")
 }
 
-pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<GridRow> {
-    let Some(conv) = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_uuid == conv_uuid)
-    else {
-        return Vec::new();
-    };
+pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
+    let conv = &shredded.conv;
+    let conv_uuid = conv.conversation_uuid.as_str();
     let model = conv
         .raw_json
         .get("model")
@@ -74,11 +69,7 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
     let mut rows = Vec::new();
     rows.push(chat_row(conv));
 
-    let mut msgs: Vec<&MessageRow> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_uuid == conv_uuid)
-        .collect();
+    let mut msgs: Vec<&MessageRow> = shredded.messages.iter().collect();
     msgs.sort_by(|a, b| {
         let ka = (
             a.created_at.as_deref().unwrap_or(""),
@@ -91,6 +82,12 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
         ka.cmp(&kb)
     });
 
+    let mut blocks_by_msg: std::collections::HashMap<&str, Vec<&ContentBlockRow>> =
+        std::collections::HashMap::new();
+    for b in &shredded.content_blocks {
+        blocks_by_msg.entry(&b.message_uuid).or_default().push(b);
+    }
+
     for (msg_idx, m) in msgs.iter().enumerate() {
         let kind = kind_for_sender(m.sender.as_deref().unwrap_or(""));
         let author = match kind {
@@ -101,11 +98,10 @@ pub fn rows_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> Vec<Grid
             _ => m.sender.clone(),
         };
 
-        let mut blocks: Vec<&ContentBlockRow> = parsed
-            .content_blocks
-            .iter()
-            .filter(|b| b.message_uuid == m.message_uuid)
-            .collect();
+        let mut blocks: Vec<&ContentBlockRow> = blocks_by_msg
+            .get(m.message_uuid.as_str())
+            .cloned()
+            .unwrap_or_default();
         blocks.sort_by_key(|b| b.block_index);
 
         let text_parts: Vec<&str> = blocks
@@ -249,63 +245,18 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
     }
 }
 
-pub fn fingerprint_for_conversation(parsed: &ParsedExport, conv_uuid: &str) -> String {
-    let Some(conv) = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_uuid == conv_uuid)
-    else {
-        return "0000000000000000".into();
-    };
+/// Stable hash over the conversation's full upstream payload (the
+/// normalized-to-export-shape JSON, with `chat_messages` intact).
+/// Canonicalized (sorted keys) so cosmetic JSON reordering doesn't
+/// invalidate the fingerprint.
+///
+/// One conversation = one document = one fingerprint, computed without
+/// shredding `chat_messages`. Renderer skips against this before
+/// deciding whether to walk the messages at all.
+pub fn fingerprint_for_conversation(upstream_payload: &Value) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     RENDER_VERSION.hash(&mut h);
-    canonical_json(&conv.raw_json).hash(&mut h);
-
-    let mut msgs: Vec<&MessageRow> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_uuid == conv_uuid)
-        .collect();
-    msgs.sort_by(|a, b| a.message_uuid.cmp(&b.message_uuid));
-    let msg_ids: std::collections::HashSet<&str> =
-        msgs.iter().map(|m| m.message_uuid.as_str()).collect();
-    for m in &msgs {
-        m.message_uuid.hash(&mut h);
-        canonical_json(&m.raw_json).hash(&mut h);
-    }
-
-    let mut blocks: Vec<&ContentBlockRow> = parsed
-        .content_blocks
-        .iter()
-        .filter(|b| msg_ids.contains(b.message_uuid.as_str()))
-        .collect();
-    blocks.sort_by(|a, b| {
-        a.message_uuid
-            .cmp(&b.message_uuid)
-            .then(a.block_index.cmp(&b.block_index))
-    });
-    for b in blocks {
-        b.message_uuid.hash(&mut h);
-        b.block_index.hash(&mut h);
-        canonical_json(&b.raw_json).hash(&mut h);
-    }
-
-    let mut atts: Vec<&super::parse::AttachmentRow> = parsed
-        .attachments
-        .iter()
-        .filter(|a| msg_ids.contains(a.message_uuid.as_str()))
-        .collect();
-    atts.sort_by(|a, b| {
-        a.message_uuid
-            .cmp(&b.message_uuid)
-            .then(a.attachment_index.cmp(&b.attachment_index))
-    });
-    for a in atts {
-        a.message_uuid.hash(&mut h);
-        a.attachment_index.hash(&mut h);
-        canonical_json(&a.raw_json).hash(&mut h);
-    }
-
+    canonical_json(upstream_payload).hash(&mut h);
     format!("{:016x}", h.finish())
 }
 
@@ -326,5 +277,58 @@ fn canonicalize(v: &Value) -> Value {
         }
         Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    // Regression test for the quadratic fingerprint/render flow that
+    // used to walk all global messages + content_blocks + attachments
+    // for each conversation. The new flow fingerprints the upstream
+    // payload of one conversation at a time.
+    //
+    // At C=400 conversations × M=40 messages each, the old code burned
+    // a few hundred ms in release; the new code is ~10 ms. 500 ms
+    // gives comfortable headroom.
+    #[test]
+    fn fingerprint_loop_is_linear_in_conversations() {
+        const C: usize = 400;
+        const M: usize = 40;
+        let mut payloads: Vec<Value> = Vec::with_capacity(C);
+        for ci in 0..C {
+            let mut msgs = Vec::with_capacity(M);
+            for mi in 0..M {
+                msgs.push(json!({
+                    "uuid": format!("m-{ci:04}-{mi:04}"),
+                    "sender": if mi % 2 == 0 { "human" } else { "assistant" },
+                    "text": format!("hi {mi}"),
+                    "created_at": format!("2026-01-01T00:{mi:02}:00Z"),
+                    "content": [{"type": "text", "text": format!("body {mi}")}],
+                }));
+            }
+            payloads.push(json!({
+                "uuid": format!("c-{ci:04}"),
+                "name": format!("conv {ci}"),
+                "account": {"uuid": "acct-1"},
+                "chat_messages": msgs,
+            }));
+        }
+
+        let start = Instant::now();
+        let mut h: u64 = 0;
+        for p in &payloads {
+            let fp = fingerprint_for_conversation(p);
+            h ^= fp.bytes().next().unwrap_or(0) as u64;
+        }
+        let elapsed = start.elapsed();
+        assert!(h != u64::MAX);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "fingerprint loop took {elapsed:?} for {C} conversations × {M} msgs — likely regressed to O(N²)",
+        );
     }
 }

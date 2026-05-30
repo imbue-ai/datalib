@@ -3,7 +3,7 @@
 //! `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an integration
 //! test tagged `manual` and is run via `cargo test`.
 
-use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
+use frankweiler_etl_chatgpt::translate::parse::{parse_api_dir, shred};
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {
@@ -23,7 +23,7 @@ fn parses_tng_fixture() {
     let titles: std::collections::HashSet<_> = parsed
         .conversations
         .iter()
-        .filter_map(|c| c.title.clone())
+        .filter_map(|c| c.conv.title.clone())
         .collect();
     assert!(titles.contains("Sonnet on a Cat Named Spot"));
     assert!(titles.contains("Polynomial Fit for Sensor Calibration"));
@@ -34,15 +34,16 @@ fn parses_tng_fixture() {
         "expected long auto-title to be preserved"
     );
 
-    let has_meta = parsed
-        .messages
+    let shredded: Vec<_> = parsed.conversations.iter().map(shred).collect();
+    let has_meta = shredded
         .iter()
+        .flat_map(|s| s.messages.iter())
         .any(|m| m.content_type.as_deref() == Some("model_editable_context"));
     assert!(has_meta);
 
-    let has_python_code = parsed
-        .content_parts
+    let has_python_code = shredded
         .iter()
+        .flat_map(|s| s.content_parts.iter())
         .any(|p| p.kind == "code" && p.language.as_deref() == Some("python"));
     assert!(has_python_code);
 }

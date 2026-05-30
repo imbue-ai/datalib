@@ -82,14 +82,38 @@ pub struct AttachmentRow {
     pub raw_json: Value,
 }
 
+/// One conversation as it sits between extract and render: the upstream
+/// JSON payload (full, normalized to export shape — used for
+/// fingerprinting and for on-demand shredding into messages / content
+/// blocks / attachments) paired with the surfaced [`ConversationRow`]
+/// metadata.
+///
+/// Translate is per-conversation: render fingerprints the payload,
+/// skips it against the indexer's prior fingerprint, and only shreds
+/// the `chat_messages` array when it has to render. That keeps the
+/// steady-state translate near-free for unchanged conversations.
+#[derive(Debug, Clone)]
+pub struct AnthropicConversation {
+    pub conv: ConversationRow,
+    pub upstream_payload: Value,
+}
+
+/// Shredded form of one conversation. Built by [`shred`] only for
+/// conversations that have actually changed (or are being rendered for
+/// the first time).
+#[derive(Debug, Clone)]
+pub struct ShreddedConversation {
+    pub conv: ConversationRow,
+    pub messages: Vec<MessageRow>,
+    pub content_blocks: Vec<ContentBlockRow>,
+    pub attachments: Vec<AttachmentRow>,
+}
+
 #[derive(Clone)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
     pub projects: Vec<ProjectRow>,
-    pub conversations: Vec<ConversationRow>,
-    pub messages: Vec<MessageRow>,
-    pub content_blocks: Vec<ContentBlockRow>,
-    pub attachments: Vec<AttachmentRow>,
+    pub conversations: Vec<AnthropicConversation>,
     /// Streaming handle to blob bytes, keyed by upstream `file_uuid`.
     /// Render materializes these onto disk in a `blobs/` directory
     /// next to each rendered `.md` so the sibling-relative link
@@ -103,9 +127,6 @@ impl Default for ParsedExport {
             accounts: Vec::new(),
             projects: Vec::new(),
             conversations: Vec::new(),
-            messages: Vec::new(),
-            content_blocks: Vec::new(),
-            attachments: Vec::new(),
             blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
         }
     }
@@ -162,8 +183,15 @@ pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
     } in raw.conversations
     {
         let normalized = normalize_to_export_shape(payload, account_uuid, &org_uuid);
-        if let Err(e) = walk_conversation(&normalized, &mut out) {
-            tracing::warn!(event = "anthropic_walk_conv_failed", error = %e);
+        match build_conv_row(&normalized) {
+            Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
+                conv,
+                upstream_payload: normalized,
+            }),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(event = "anthropic_build_conv_failed", error = %e);
+            }
         }
     }
     out
@@ -240,15 +268,26 @@ pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
         return Err(anyhow!("conversations.json must be a list"));
     };
     for c in convs_arr {
-        walk_conversation(&c, &mut out)?;
+        match build_conv_row(&c) {
+            Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
+                conv,
+                upstream_payload: c,
+            }),
+            Ok(None) => {}
+            Err(e) => return Err(e),
+        }
     }
     Ok(out)
 }
 
-/// Walk one fully-normalized conversation into the row buckets.
-fn walk_conversation(c: &Value, out: &mut ParsedExport) -> Result<()> {
+/// Build the [`ConversationRow`] metadata for one fully-normalized
+/// conversation payload. Returns `Ok(None)` if `c` isn't a JSON object.
+/// The conversation's `chat_messages` (containing every message +
+/// content block + attachment) is *not* walked here — that work is
+/// deferred to [`shred`] so unchanged conversations never pay it.
+pub fn build_conv_row(c: &Value) -> Result<Option<ConversationRow>> {
     let Some(c_obj) = c.as_object() else {
-        return Ok(());
+        return Ok(None);
     };
     let account_uuid = c_obj
         .get("account")
@@ -267,75 +306,101 @@ fn walk_conversation(c: &Value, out: &mut ParsedExport) -> Result<()> {
 
     let mut conv_raw = c_obj.clone();
     conv_raw.remove("chat_messages");
-    out.conversations.push(ConversationRow {
+    Ok(Some(ConversationRow {
         account_uuid,
-        conversation_uuid: conv_uuid.clone(),
+        conversation_uuid: conv_uuid,
         project_uuid,
         name: str_field(c_obj, "name"),
         summary: str_field(c_obj, "summary"),
         created_at: str_field(c_obj, "created_at"),
         updated_at: str_field(c_obj, "updated_at"),
         raw_json: Value::Object(conv_raw),
-    });
+    }))
+}
 
-    let Some(msgs) = c_obj.get("chat_messages").and_then(Value::as_array) else {
-        return Ok(());
-    };
-    for m in msgs {
-        let Some(m_obj) = m.as_object() else { continue };
-        let mid = str_field(m_obj, "uuid").ok_or_else(|| anyhow!("message missing uuid"))?;
-        let mut msg_raw = m_obj.clone();
-        msg_raw.remove("content");
-        msg_raw.remove("attachments");
-        msg_raw.remove("files");
-        out.messages.push(MessageRow {
-            conversation_uuid: conv_uuid.clone(),
-            message_uuid: mid.clone(),
-            parent_message_uuid: str_field(m_obj, "parent_message_uuid"),
-            sender: str_field(m_obj, "sender"),
-            text: str_field(m_obj, "text"),
-            created_at: str_field(m_obj, "created_at"),
-            updated_at: str_field(m_obj, "updated_at"),
-            raw_json: Value::Object(msg_raw),
-        });
+/// Walk a conversation's `chat_messages` array and emit its messages,
+/// content blocks, and attachments. Only called for conversations the
+/// renderer is actually going to re-render — for unchanged
+/// conversations the fingerprint check short-circuits and we never
+/// visit the array at all.
+pub fn shred(c: &AnthropicConversation) -> ShreddedConversation {
+    let mut messages = Vec::new();
+    let mut content_blocks = Vec::new();
+    let mut attachments = Vec::new();
+    let cid = c.conv.conversation_uuid.as_str();
 
-        if let Some(content) = m_obj.get("content").and_then(Value::as_array) {
-            for (i, blk) in content.iter().enumerate() {
-                let blk_obj = blk.as_object();
-                out.content_blocks.push(ContentBlockRow {
-                    message_uuid: mid.clone(),
-                    block_index: i,
-                    r#type: blk_obj.and_then(|o| str_field(o, "type")),
-                    text: blk_obj.and_then(|o| str_field(o, "text")),
-                    start_timestamp: blk_obj.and_then(|o| str_field(o, "start_timestamp")),
-                    stop_timestamp: blk_obj.and_then(|o| str_field(o, "stop_timestamp")),
-                    raw_json: blk.clone(),
-                });
+    if let Some(msgs) = c
+        .upstream_payload
+        .as_object()
+        .and_then(|o| o.get("chat_messages"))
+        .and_then(Value::as_array)
+    {
+        for m in msgs {
+            let Some(m_obj) = m.as_object() else { continue };
+            let Some(mid) = str_field(m_obj, "uuid") else {
+                // Missing uuid — skip rather than panic; build_conv_row
+                // succeeded so the rest of the chat still renders.
+                continue;
+            };
+            let mut msg_raw = m_obj.clone();
+            msg_raw.remove("content");
+            msg_raw.remove("attachments");
+            msg_raw.remove("files");
+            messages.push(MessageRow {
+                conversation_uuid: cid.to_string(),
+                message_uuid: mid.clone(),
+                parent_message_uuid: str_field(m_obj, "parent_message_uuid"),
+                sender: str_field(m_obj, "sender"),
+                text: str_field(m_obj, "text"),
+                created_at: str_field(m_obj, "created_at"),
+                updated_at: str_field(m_obj, "updated_at"),
+                raw_json: Value::Object(msg_raw),
+            });
+
+            if let Some(content) = m_obj.get("content").and_then(Value::as_array) {
+                for (i, blk) in content.iter().enumerate() {
+                    let blk_obj = blk.as_object();
+                    content_blocks.push(ContentBlockRow {
+                        message_uuid: mid.clone(),
+                        block_index: i,
+                        r#type: blk_obj.and_then(|o| str_field(o, "type")),
+                        text: blk_obj.and_then(|o| str_field(o, "text")),
+                        start_timestamp: blk_obj.and_then(|o| str_field(o, "start_timestamp")),
+                        stop_timestamp: blk_obj.and_then(|o| str_field(o, "stop_timestamp")),
+                        raw_json: blk.clone(),
+                    });
+                }
             }
-        }
-        let mut atch_idx = 0usize;
-        if let Some(atch) = m_obj.get("attachments").and_then(Value::as_array) {
-            for a in atch {
-                out.attachments.push(AttachmentRow {
-                    message_uuid: mid.clone(),
-                    attachment_index: atch_idx,
-                    kind: "attachment".into(),
-                    raw_json: a.clone(),
-                });
-                atch_idx += 1;
+            let mut atch_idx = 0usize;
+            if let Some(atch) = m_obj.get("attachments").and_then(Value::as_array) {
+                for a in atch {
+                    attachments.push(AttachmentRow {
+                        message_uuid: mid.clone(),
+                        attachment_index: atch_idx,
+                        kind: "attachment".into(),
+                        raw_json: a.clone(),
+                    });
+                    atch_idx += 1;
+                }
             }
-        }
-        if let Some(files) = m_obj.get("files").and_then(Value::as_array) {
-            for f in files {
-                out.attachments.push(AttachmentRow {
-                    message_uuid: mid.clone(),
-                    attachment_index: atch_idx,
-                    kind: "file".into(),
-                    raw_json: f.clone(),
-                });
-                atch_idx += 1;
+            if let Some(files) = m_obj.get("files").and_then(Value::as_array) {
+                for f in files {
+                    attachments.push(AttachmentRow {
+                        message_uuid: mid.clone(),
+                        attachment_index: atch_idx,
+                        kind: "file".into(),
+                        raw_json: f.clone(),
+                    });
+                    atch_idx += 1;
+                }
             }
         }
     }
-    Ok(())
+
+    ShreddedConversation {
+        conv: c.conv.clone(),
+        messages,
+        content_blocks,
+        attachments,
+    }
 }

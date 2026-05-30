@@ -83,12 +83,35 @@ pub struct OAContentPartRow {
     pub raw_json: Value,
 }
 
+/// One conversation as it sits between extract and render: the upstream
+/// JSON payload (full, untouched — used for fingerprinting and for
+/// on-demand shredding into messages/parts) paired with the surfaced
+/// `OAConversationRow` metadata.
+///
+/// Translate is per-conversation: render fingerprints the payload,
+/// skips it against the indexer's prior fingerprint, and only shreds
+/// the mapping into messages+parts when it has to render. That keeps
+/// the steady-state translate near-free for unchanged conversations.
+#[derive(Debug, Clone)]
+pub struct ChatGPTConversation {
+    pub conv: OAConversationRow,
+    pub upstream_payload: Value,
+}
+
+/// Shredded form of one conversation. Built by [`shred`] only for
+/// conversations that have actually changed (or are being rendered for
+/// the first time).
+#[derive(Debug, Clone)]
+pub struct ShreddedConversation {
+    pub conv: OAConversationRow,
+    pub messages: Vec<OAMessageRow>,
+    pub content_parts: Vec<OAContentPartRow>,
+}
+
 #[derive(Clone)]
 pub struct ParsedChatGPTApi {
     pub accounts: Vec<OAAccountRow>,
-    pub conversations: Vec<OAConversationRow>,
-    pub messages: Vec<OAMessageRow>,
-    pub content_parts: Vec<OAContentPartRow>,
+    pub conversations: Vec<ChatGPTConversation>,
     /// Streaming handle to blob bytes; rendered keyed by upstream
     /// `file_id`. Render materializes these onto disk in a `blobs/`
     /// directory next to each rendered `.md` so the sibling-relative
@@ -101,8 +124,6 @@ impl Default for ParsedChatGPTApi {
         Self {
             accounts: Vec::new(),
             conversations: Vec::new(),
-            messages: Vec::new(),
-            content_parts: Vec::new(),
             blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
         }
     }
@@ -458,12 +479,14 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
         ..
     } in raw.conversations
     {
-        ingest_conversation(
-            &payload,
-            last_listing_update_time.as_ref(),
-            &account_id,
-            &mut out,
-        );
+        let Some(conv) = build_conv_row(&payload, last_listing_update_time.as_ref(), &account_id)
+        else {
+            continue;
+        };
+        out.conversations.push(ChatGPTConversation {
+            conv,
+            upstream_payload: payload,
+        });
     }
     out
 }
@@ -535,30 +558,34 @@ pub fn parse_api_json_dir(api_dir: &Path) -> Result<ParsedChatGPTApi> {
                     .to_string()
             });
         let listing_row = listing_by_id.get(&cid).cloned();
-        ingest_conversation(&d, listing_row.as_ref(), &account_id, &mut out);
-        // The legacy reader keyed off the file name when the JSON
-        // didn't carry an `id`/`conversation_id`; preserve that shape
-        // by patching the cid back into the row we just pushed.
-        if let Some(last) = out.conversations.last_mut() {
-            if last.conversation_id.is_empty() {
-                last.conversation_id = cid;
-            }
+        let Some(mut conv) = build_conv_row(&d, listing_row.as_ref(), &account_id) else {
+            continue;
+        };
+        // The legacy reader keys off the file name when the JSON
+        // didn't carry an `id`/`conversation_id` — preserve that shape.
+        if conv.conversation_id.is_empty() {
+            conv.conversation_id = cid;
         }
+        out.conversations.push(ChatGPTConversation {
+            conv,
+            upstream_payload: d,
+        });
     }
 
     Ok(out)
 }
 
-/// Push rows for one conversation payload into `out`. Shared between
-/// the DB-driven and the JSON-tree-driven readers so they produce
-/// byte-identical `ParsedChatGPTApi` shape.
-fn ingest_conversation(
-    d: &Value,
+/// Build the `OAConversationRow` metadata for one upstream payload.
+/// Returns `None` if `payload` isn't a JSON object. The conversation's
+/// `mapping` (containing every message + content part) is *not* walked
+/// here — that work is deferred to [`shred`] so unchanged conversations
+/// never pay it.
+pub fn build_conv_row(
+    payload: &Value,
     listing_row: Option<&Value>,
     account_id: &Option<String>,
-    out: &mut ParsedChatGPTApi,
-) {
-    let Some(d_obj) = d.as_object() else { return };
+) -> Option<OAConversationRow> {
+    let d_obj = payload.as_object()?;
     let cid = d_obj
         .get("conversation_id")
         .and_then(Value::as_str)
@@ -583,9 +610,9 @@ fn ingest_conversation(
     let mut conv_raw = d_obj.clone();
     conv_raw.remove("mapping");
 
-    out.conversations.push(OAConversationRow {
+    Some(OAConversationRow {
         account_id: account_id.clone(),
-        conversation_id: cid.clone(),
+        conversation_id: cid,
         title,
         create_time,
         update_time,
@@ -608,68 +635,88 @@ fn ingest_conversation(
         is_archived: d_obj.get("is_archived").and_then(Value::as_bool),
         is_starred: d_obj.get("is_starred").and_then(Value::as_bool),
         raw_json: Value::Object(conv_raw),
-    });
+    })
+}
 
-    let Some(mapping) = d_obj.get("mapping").and_then(Value::as_object) else {
-        return;
-    };
-    for (node_id, node) in mapping {
-        let Some(node_obj) = node.as_object() else {
-            continue;
-        };
-        let Some(m) = node_obj.get("message").and_then(Value::as_object) else {
-            continue;
-        };
-        let mid = m
-            .get("id")
-            .and_then(Value::as_str)
-            .map(String::from)
-            .unwrap_or_else(|| node_id.clone());
-        let content = m.get("content");
-        let author = m.get("author").and_then(Value::as_object);
-        let meta = m.get("metadata").and_then(Value::as_object);
+/// Walk a conversation's `mapping` and emit its messages and content
+/// parts. Only called for conversations the renderer is actually going
+/// to re-render — for unchanged conversations the fingerprint check
+/// short-circuits and we never visit the mapping at all.
+pub fn shred(c: &ChatGPTConversation) -> ShreddedConversation {
+    let mut messages = Vec::new();
+    let mut content_parts_out = Vec::new();
+    let cid = c.conv.conversation_id.as_str();
 
-        let content_type = content
-            .and_then(Value::as_object)
-            .and_then(|c| c.get("content_type"))
-            .and_then(Value::as_str)
-            .map(String::from);
-
-        let text = synthesize_text(content);
-
-        let mut msg_raw = m.clone();
-        msg_raw.remove("content");
-
-        let attachments = collect_attachments(m);
-
-        out.messages.push(OAMessageRow {
-            conversation_id: cid.clone(),
-            message_id: mid.clone(),
-            parent_id: node_obj
-                .get("parent")
+    if let Some(mapping) = c
+        .upstream_payload
+        .as_object()
+        .and_then(|o| o.get("mapping"))
+        .and_then(Value::as_object)
+    {
+        for (node_id, node) in mapping {
+            let Some(node_obj) = node.as_object() else {
+                continue;
+            };
+            let Some(m) = node_obj.get("message").and_then(Value::as_object) else {
+                continue;
+            };
+            let mid = m
+                .get("id")
                 .and_then(Value::as_str)
-                .map(String::from),
-            role: author
-                .and_then(|a| a.get("role"))
-                .and_then(Value::as_str)
-                .map(String::from),
-            recipient: m.get("recipient").and_then(Value::as_str).map(String::from),
-            channel: m.get("channel").and_then(Value::as_str).map(String::from),
-            content_type,
-            text,
-            status: m.get("status").and_then(Value::as_str).map(String::from),
-            end_turn: m.get("end_turn").and_then(Value::as_bool),
-            weight: m.get("weight").and_then(Value::as_f64),
-            model_slug: meta
-                .and_then(|x| x.get("model_slug"))
-                .and_then(Value::as_str)
-                .map(String::from),
-            create_time: epoch_to_iso(m.get("create_time").unwrap_or(&Value::Null)),
-            update_time: epoch_to_iso(m.get("update_time").unwrap_or(&Value::Null)),
-            raw_json: Value::Object(msg_raw),
-            attachments,
-        });
+                .map(String::from)
+                .unwrap_or_else(|| node_id.clone());
+            let content = m.get("content");
+            let author = m.get("author").and_then(Value::as_object);
+            let meta = m.get("metadata").and_then(Value::as_object);
 
-        out.content_parts.extend(content_parts(&mid, content));
+            let content_type = content
+                .and_then(Value::as_object)
+                .and_then(|c| c.get("content_type"))
+                .and_then(Value::as_str)
+                .map(String::from);
+
+            let text = synthesize_text(content);
+
+            let mut msg_raw = m.clone();
+            msg_raw.remove("content");
+
+            let attachments = collect_attachments(m);
+
+            messages.push(OAMessageRow {
+                conversation_id: cid.to_string(),
+                message_id: mid.clone(),
+                parent_id: node_obj
+                    .get("parent")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                role: author
+                    .and_then(|a| a.get("role"))
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                recipient: m.get("recipient").and_then(Value::as_str).map(String::from),
+                channel: m.get("channel").and_then(Value::as_str).map(String::from),
+                content_type,
+                text,
+                status: m.get("status").and_then(Value::as_str).map(String::from),
+                end_turn: m.get("end_turn").and_then(Value::as_bool),
+                weight: m.get("weight").and_then(Value::as_f64),
+                model_slug: meta
+                    .and_then(|x| x.get("model_slug"))
+                    .and_then(Value::as_str)
+                    .map(String::from),
+                create_time: epoch_to_iso(m.get("create_time").unwrap_or(&Value::Null)),
+                update_time: epoch_to_iso(m.get("update_time").unwrap_or(&Value::Null)),
+                raw_json: Value::Object(msg_raw),
+                attachments,
+            });
+
+            content_parts_out.extend(content_parts(&mid, content));
+        }
+    }
+
+    ShreddedConversation {
+        conv: c.conv.clone(),
+        messages,
+        content_parts: content_parts_out,
     }
 }

@@ -1,12 +1,13 @@
 ---
 source: etl/providers/anthropic/tests/anthropic_render.rs
+assertion_line: 78
 expression: sbundle
 ---
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.grid_rows.json ===
 {
   "header": {
     "document_uuid": "c0000003-1701-4d00-8000-00000000c003",
-    "source_fingerprint": "465b752692d358e4",
+    "source_fingerprint": "4bd6a5def8a9a0c9",
     "render_version": 2
   },
   "rows": [
@@ -184,7 +185,7 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "c0000005-1701-4d00-8000-00000000c005",
-    "source_fingerprint": "9f22de32118f1140",
+    "source_fingerprint": "b000b9b1b5e872e5",
     "render_version": 2
   },
   "rows": [
@@ -362,7 +363,7 @@ expression: sbundle
 {
   "header": {
     "document_uuid": "c0000004-1701-4d00-8000-00000000c004",
-    "source_fingerprint": "7609894785b582f7",
+    "source_fingerprint": "eeb3ca8884970488",
     "render_version": 2
   },
   "rows": [

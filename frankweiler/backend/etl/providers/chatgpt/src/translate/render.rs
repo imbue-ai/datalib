@@ -7,15 +7,14 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset};
 
+use frankweiler_etl::blob_store::BlobStore;
 use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::load::RenderedDoc;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
-use super::parse::{
-    OAAttachmentRef, OAContentPartRow, OAConversationRow, OAMessageRow, ParsedChatGPTApi,
-};
+use super::parse::{shred, OAAttachmentRef, OAMessageRow, ParsedChatGPTApi, ShreddedConversation};
 
 fn yaml_scalar(v: Option<&str>) -> String {
     let Some(s) = v else {
@@ -97,6 +96,12 @@ impl Rendered {
 /// list of paths written. Matches `render_openai` semantics minus the
 /// orphan cleanup (the Rust translator's idempotency story rides on
 /// `.grid_rows.json` sidecars added in Stage 4).
+///
+/// Per-conversation flow: fingerprint the upstream payload → if the
+/// indexer already has that fingerprint and the rendered md is still
+/// on disk, skip (and do *not* shred the mapping); otherwise shred,
+/// render, write blobs/md/sidecar, hand the `RenderedDoc` to the
+/// caller's commit callback.
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
     root: &std::path::Path,
@@ -105,34 +110,33 @@ pub fn render_all(
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedDoc) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    // Build (file_id → file_name) once so per-conversation blob writes
-    // pick the same filename `attachment_md` puts in the markdown link.
-    let name_by_id = name_by_id(parsed);
-
     progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
-    for conv in &parsed.conversations {
-        let fingerprint = fingerprint_for_conversation(parsed, &conv.conversation_id);
-        let Some(r) = render_one(parsed, &conv.conversation_id, source_name) else {
-            progress.inc(1);
-            continue;
-        };
-        let rel = r.relative_path();
+    for c in &parsed.conversations {
+        let fingerprint = fingerprint_for_conversation(&c.upstream_payload);
+        let conv_id = &c.conv.conversation_id;
+        let account_id = c.conv.account_id.as_deref().unwrap_or("unknown");
+        let rel = conv_relative_path(account_id, conv_id);
         let abs = root.join(&rel);
 
         // Skip when the indexer has the same fingerprint AND the md
         // file is still on disk (defends against `rm -rf rendered_md/`
-        // by hand).
-        if prior_fingerprints
-            .get(&conv.conversation_id)
-            .map(String::as_str)
-            == Some(fingerprint.as_str())
+        // by hand). No shredding happens here — the upstream payload
+        // alone is enough to decide.
+        if prior_fingerprints.get(conv_id).map(String::as_str) == Some(fingerprint.as_str())
             && abs.exists()
         {
             written.push(rel);
             progress.inc(1);
             continue;
         }
+
+        // Changed (or first-time): walk the mapping into messages/parts.
+        let shredded = shred(c);
+        let Some(r) = render_one(&shredded, source_name) else {
+            progress.inc(1);
+            continue;
+        };
 
         let page_dir = abs
             .parent()
@@ -142,14 +146,14 @@ pub fn render_all(
         // Order: blobs → md → sidecar → callback. The callback is the
         // commit point: an interrupted run leaves the indexer
         // un-notified so next run re-tries.
-        materialize_conv_blobs(parsed, conv, &name_by_id, page_dir)?;
+        materialize_conv_blobs(&shredded, parsed.blobs.as_ref(), page_dir)?;
 
         std::fs::write(&abs, &r.body)?;
 
-        let rows = rows_for_conversation(parsed, &conv.conversation_id);
+        let rows = rows_for_conversation(&shredded);
         let sidecar = Sidecar {
             header: SidecarHeader {
-                document_uuid: conv.conversation_id.clone(),
+                document_uuid: conv_id.clone(),
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
@@ -160,9 +164,10 @@ pub fn render_all(
         std::fs::write(&sidecar_abs, sidecar_json)?;
 
         on_doc_complete(RenderedDoc {
-            document_uuid: conv.conversation_id.clone(),
+            document_uuid: conv_id.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
+            upstream_cursor: None,
             md_path: abs.clone(),
             render_version: RENDER_VERSION,
             rows,
@@ -174,31 +179,25 @@ pub fn render_all(
     Ok(written)
 }
 
-pub fn render_one(
-    parsed: &ParsedChatGPTApi,
-    conversation_id: &str,
-    _source_name: &str,
-) -> Option<Rendered> {
-    let conv: &OAConversationRow = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_id == conversation_id)?;
+/// Mirror of `Rendered::relative_path` for use *before* we've rendered
+/// (so we can fingerprint-skip without paying for a render first).
+fn conv_relative_path(account_id: &str, conv_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from("rendered_md/openai")
+        .join(account_id)
+        .join("llm_chats")
+        .join(conv_id)
+        .join("index.md")
+}
 
-    let mut msgs_by_conv: HashMap<&str, Vec<&OAMessageRow>> = HashMap::new();
-    for m in &parsed.messages {
-        msgs_by_conv.entry(&m.conversation_id).or_default().push(m);
-    }
-    let mut parts_by_msg: HashMap<&str, Vec<&OAContentPartRow>> = HashMap::new();
-    for p in &parsed.content_parts {
-        parts_by_msg.entry(&p.message_id).or_default().push(p);
-    }
-
-    let msgs = msgs_by_conv
-        .get(conv.conversation_id.as_str())
-        .cloned()
-        .unwrap_or_default();
+pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option<Rendered> {
+    let conv = &shredded.conv;
+    let msgs: Vec<&OAMessageRow> = shredded.messages.iter().collect();
     let msg_by_id: HashMap<&str, &OAMessageRow> =
         msgs.iter().map(|m| (m.message_id.as_str(), *m)).collect();
+    let mut parts_by_msg: HashMap<&str, Vec<&super::parse::OAContentPartRow>> = HashMap::new();
+    for p in &shredded.content_parts {
+        parts_by_msg.entry(&p.message_id).or_default().push(p);
+    }
 
     // Walk current_node → root via parent_id; fall back to create_time sort.
     let mut path: Vec<&OAMessageRow> = Vec::new();
@@ -369,53 +368,38 @@ pub fn render_one(
     })
 }
 
-/// `file_id → file_name` lookup off the attachments we walked during
-/// parse, so blob writes pick the same filename `attachment_md`
-/// references in the markdown.
-fn name_by_id(parsed: &ParsedChatGPTApi) -> HashMap<String, Option<String>> {
-    let mut out: HashMap<String, Option<String>> = HashMap::new();
-    for m in &parsed.messages {
-        for a in &m.attachments {
-            out.entry(a.file_id.clone())
-                .or_insert_with(|| a.name.clone());
-        }
-    }
-    out
-}
-
 /// Write every blob this conversation references into
 /// `<page_dir>/blobs/<filename>`. The markdown emitted by
 /// `attachment_md` uses the same `safe_filename(name, file_id)` rule
-/// so the link target matches what lands on disk. Blobs referenced by
-/// other conversations are skipped — they live next to *their*
-/// `index.md`.
+/// so the link target matches what lands on disk.
 fn materialize_conv_blobs(
-    parsed: &ParsedChatGPTApi,
-    conv: &OAConversationRow,
-    name_by_id: &HashMap<String, Option<String>>,
+    shredded: &ShreddedConversation,
+    blobs: &dyn BlobStore,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for m in &parsed.messages {
-        if m.conversation_id != conv.conversation_id {
-            continue;
-        }
+    // file_id → first name we saw for it, walking only this
+    // conversation's attachments. Each conversation owns its blobs in
+    // a sibling `blobs/` dir, so there's no need to cross-reference
+    // other conversations.
+    let mut name_by_id: HashMap<&str, Option<&str>> = HashMap::new();
+    for m in &shredded.messages {
         for a in &m.attachments {
-            wanted.insert(a.file_id.clone());
+            name_by_id
+                .entry(a.file_id.as_str())
+                .or_insert(a.name.as_deref());
         }
     }
-    if wanted.is_empty() {
+    if name_by_id.is_empty() {
         return Ok(());
     }
     let blobs_dir = page_dir.join("blobs");
-    for file_id in &wanted {
-        let blob = match parsed.blobs.read_by_id(file_id) {
+    for (file_id, name) in &name_by_id {
+        let blob = match blobs.read_by_id(file_id) {
             Ok(Some(b)) => b,
             Ok(None) => continue,
             Err(e) => return Err(std::io::Error::other(e)),
         };
-        let name = name_by_id.get(file_id.as_str()).and_then(|n| n.as_deref());
-        let safe = safe_filename(name, file_id);
+        let safe = safe_filename(*name, file_id);
         std::fs::create_dir_all(&blobs_dir)?;
         std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;
     }

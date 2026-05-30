@@ -58,6 +58,7 @@ pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
     updated_at VARCHAR(40),
     md_path VARCHAR(1024),
     source_fingerprint VARCHAR(64),
+    upstream_cursor VARCHAR(64),
     row_set_hash CHAR(64),
     renderer_version VARCHAR(32),
     rendered_at VARCHAR(40),
@@ -115,6 +116,18 @@ async fn migrate_documents(pool: &SqlitePool) -> Result<()> {
             .execute(pool)
             .await
             .context("add documents.source_fingerprint")?;
+    }
+    let has_cursor: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM pragma_table_info('documents') WHERE name = 'upstream_cursor'",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("probe documents.upstream_cursor")?;
+    if has_cursor.is_none() {
+        sqlx::query("ALTER TABLE documents ADD COLUMN upstream_cursor VARCHAR(64)")
+            .execute(pool)
+            .await
+            .context("add documents.upstream_cursor")?;
     }
     sqlx::query("DROP TABLE IF EXISTS documents_loaded")
         .execute(pool)
@@ -210,6 +223,14 @@ pub struct RenderedDoc {
     /// provider string when sync doesn't have one wired in.
     pub source_name: String,
     pub source_fingerprint: String,
+    /// Optional provider-defined cheap-probe value the orchestrator can
+    /// use *before* loading payloads to decide whether a doc has
+    /// changed since last run. Examples: slack stamps each thread's
+    /// `MAX(fetched_at)` here, so the next run can `GROUP BY
+    /// thread_root_uuid` on the existing index and skip loading
+    /// untouched threads entirely. None when the provider has no
+    /// cheaper-than-fingerprint signal.
+    pub upstream_cursor: Option<String>,
     /// Absolute path to the rendered `.md`. Used to derive the
     /// `qmd_path` we stamp into `documents.md_path` by stripping the
     /// out-dir prefix.
@@ -291,6 +312,12 @@ pub async fn load_all(
             document_uuid,
             source_name,
             source_fingerprint: fingerprint,
+            // load_all rebuilds the index from sidecars on disk, which
+            // don't carry the cheap-probe cursor (it lives in the
+            // indexer only). Leaving it None forces the next live sync
+            // to fall back to the fingerprint check for these docs —
+            // safe, just not as fast as the cursor short-circuit.
+            upstream_cursor: None,
             md_path,
             render_version: sidecar.header.render_version,
             rows: sidecar.rows,
@@ -377,6 +404,27 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
         let uuid: String = r.try_get("document_uuid")?;
         let fp: String = r.try_get("source_fingerprint")?;
         out.insert(uuid, fp);
+    }
+    Ok(out)
+}
+
+/// Bulk upstream-cursor snapshot, used the same way as
+/// [`load_fingerprints`] but for the cheap-probe shortcut a few
+/// providers use. Today only slack writes a non-NULL cursor (each
+/// thread's `MAX(fetched_at)`); other providers' rows are omitted.
+pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows = sqlx::query(
+        "SELECT document_uuid, upstream_cursor \
+         FROM documents WHERE upstream_cursor IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_cursors")?;
+    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    for r in rows {
+        let uuid: String = r.try_get("document_uuid")?;
+        let cur: String = r.try_get("upstream_cursor")?;
+        out.insert(uuid, cur);
     }
     Ok(out)
 }
@@ -474,8 +522,8 @@ async fn upsert_document(
     sqlx::query(
         "INSERT INTO documents \
          (document_uuid, source_name, provider, kind, title, created_at, updated_at, \
-          md_path, source_fingerprint, row_set_hash, renderer_version, rendered_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, rendered_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&doc.document_uuid)
     .bind(&source_name)
@@ -486,6 +534,7 @@ async fn upsert_document(
     .bind(updated_at)
     .bind(qmd_path)
     .bind(&doc.source_fingerprint)
+    .bind(doc.upstream_cursor.as_deref())
     .bind(&row_set_hash)
     .bind(&version_str)
     .bind(rendered_at)

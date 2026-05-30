@@ -11,7 +11,7 @@ use chrono::{DateTime, FixedOffset};
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
-use super::parse::{OAConversationRow, OAMessageRow, ParsedChatGPTApi};
+use super::parse::{OAConversationRow, OAMessageRow, ShreddedConversation};
 
 /// Bumped on render-layout changes so a forced rebake is possible even
 /// when the upstream payload hasn't moved. Matches the constant on the
@@ -59,23 +59,12 @@ fn qmd_path(account_id: Option<&str>, conv_id: &str) -> String {
 
 /// Build all grid rows for a single conversation, in stable order
 /// (Chat row first, then messages by `(create_time, message_id)`).
-pub fn rows_for_conversation(parsed: &ParsedChatGPTApi, conversation_id: &str) -> Vec<GridRow> {
-    let Some(conv) = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_id == conversation_id)
-    else {
-        return Vec::new();
-    };
-
+pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
+    let conv = &shredded.conv;
     let mut rows = Vec::new();
     rows.push(chat_row(conv));
 
-    let mut msgs: Vec<&OAMessageRow> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_id == conversation_id)
-        .collect();
+    let mut msgs: Vec<&OAMessageRow> = shredded.messages.iter().collect();
     msgs.sort_by(|a, b| {
         let ka = (
             a.create_time.as_deref().unwrap_or(""),
@@ -169,50 +158,18 @@ fn message_row(conv: &OAConversationRow, m: &OAMessageRow, idx: usize, conv_time
     }
 }
 
-/// Stable hash over the raw upstream payload that drives this
-/// conversation's render: the conversation row, every message row, and
-/// every content part. Canonicalized (sorted keys) so cosmetic JSON
+/// Stable hash over the conversation's full upstream payload (the JSON
+/// returned by the ChatGPT backend, with its `mapping` of messages +
+/// content parts intact). Canonicalized (sorted keys) so cosmetic JSON
 /// reordering doesn't invalidate the fingerprint.
-pub fn fingerprint_for_conversation(parsed: &ParsedChatGPTApi, conversation_id: &str) -> String {
-    let Some(conv) = parsed
-        .conversations
-        .iter()
-        .find(|c| c.conversation_id == conversation_id)
-    else {
-        return "0000000000000000".into();
-    };
-
+///
+/// One conversation = one document = one fingerprint, computed without
+/// shredding the mapping. Renderer skips against this before deciding
+/// whether to walk the mapping at all.
+pub fn fingerprint_for_conversation(upstream_payload: &Value) -> String {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     RENDER_VERSION.hash(&mut h);
-    canonical_json(&conv.raw_json).hash(&mut h);
-
-    let mut msgs: Vec<&OAMessageRow> = parsed
-        .messages
-        .iter()
-        .filter(|m| m.conversation_id == conversation_id)
-        .collect();
-    msgs.sort_by(|a, b| a.message_id.cmp(&b.message_id));
-    for m in &msgs {
-        m.message_id.hash(&mut h);
-        canonical_json(&m.raw_json).hash(&mut h);
-    }
-
-    let mut parts: Vec<&super::parse::OAContentPartRow> = parsed
-        .content_parts
-        .iter()
-        .filter(|p| msgs.iter().any(|m| m.message_id == p.message_id))
-        .collect();
-    parts.sort_by(|a, b| {
-        a.message_id
-            .cmp(&b.message_id)
-            .then(a.part_index.cmp(&b.part_index))
-    });
-    for p in parts {
-        p.message_id.hash(&mut h);
-        p.part_index.hash(&mut h);
-        canonical_json(&p.raw_json).hash(&mut h);
-    }
-
+    canonical_json(upstream_payload).hash(&mut h);
     format!("{:016x}", h.finish())
 }
 
@@ -233,5 +190,67 @@ fn canonicalize(v: &Value) -> Value {
         }
         Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::{Duration, Instant};
+
+    // Regression test for the quadratic fingerprint/render flow that
+    // used to walk all global messages + content_parts for each
+    // conversation. The new flow fingerprints the upstream payload of
+    // one conversation at a time, so a loop over C conversations is
+    // O(total bytes), not O(C × (M + P)).
+    //
+    // At C=400 conversations × M=40 messages each, the old code's
+    // per-call O(C·M·m) inside `fingerprint_for_conversation` (called
+    // C times from the render loop) burns ~250 ms in release; the new
+    // code is ~10 ms. 500 ms gives comfortable headroom.
+    #[test]
+    fn fingerprint_loop_is_linear_in_conversations() {
+        const C: usize = 400;
+        const M: usize = 40;
+        let mut payloads: Vec<Value> = Vec::with_capacity(C);
+        for ci in 0..C {
+            let mut mapping = serde_json::Map::new();
+            for mi in 0..M {
+                let node_id = format!("n-{ci:04}-{mi:04}");
+                mapping.insert(
+                    node_id.clone(),
+                    json!({
+                        "id": node_id,
+                        "message": {
+                            "id": format!("m-{ci:04}-{mi:04}"),
+                            "author": {"role": "user"},
+                            "content": {"content_type": "text", "parts": [format!("hi {mi}")]},
+                            "create_time": 1_700_000_000.0 + mi as f64,
+                        },
+                        "parent": null,
+                    }),
+                );
+            }
+            payloads.push(json!({
+                "conversation_id": format!("c-{ci:04}"),
+                "title": format!("conv {ci}"),
+                "mapping": Value::Object(mapping),
+            }));
+        }
+
+        let start = Instant::now();
+        let mut h: u64 = 0;
+        for p in &payloads {
+            let fp = fingerprint_for_conversation(p);
+            // Touch the result so the optimizer can't drop the call.
+            h ^= fp.bytes().next().unwrap_or(0) as u64;
+        }
+        let elapsed = start.elapsed();
+        assert!(h != u64::MAX);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "fingerprint loop took {elapsed:?} for {C} conversations × {M} msgs — likely regressed to O(N²)",
+        );
     }
 }

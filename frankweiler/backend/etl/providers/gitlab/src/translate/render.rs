@@ -306,6 +306,7 @@ pub fn render_gitlab(
             document_uuid: mr.uuid.clone(),
             source_name: String::new(),
             source_fingerprint: fingerprint,
+            upstream_cursor: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,

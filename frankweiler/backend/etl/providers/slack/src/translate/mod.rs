@@ -225,6 +225,36 @@ pub fn translate_raw_dir(path: &Path) -> Result<TranslatedSlack> {
     )
 }
 
+/// Variant of [`translate_raw_dir`] that only loads message payloads
+/// for the supplied set of `thread_root_uuid`s. Workspace, users, and
+/// channels are still loaded (they're small and shared across threads).
+/// Used by the cursor-aware translate path so unchanged threads pay
+/// zero payload-load cost. The JSON-tree fallback isn't worth filtering
+/// — JSONL fixtures are only used by the in-crate render golden test —
+/// so this entry point is DB-only.
+pub fn translate_raw_dir_filtered(
+    path: &Path,
+    thread_uuids: &std::collections::HashSet<String>,
+) -> Result<TranslatedSlack> {
+    let db_path = db_path_for(path);
+    if !db_path.exists() {
+        anyhow::bail!(
+            "slack source not found at {} (no .doltlite_db); \
+             filtered translate requires the DB path",
+            db_path.display()
+        );
+    }
+    let raw =
+        crate::extract::block_on_load_filtered(&db_path, thread_uuids).with_context(|| {
+            format!(
+                "load filtered slack db {} ({} threads)",
+                db_path.display(),
+                thread_uuids.len()
+            )
+        })?;
+    Ok(translate_loaded(raw))
+}
+
 /// Build a [`TranslatedSlack`] from a snapshot already loaded out of
 /// the doltlite DB. Mirrors the JSON-tree path's output exactly: same
 /// row keys, same field shape, just sourced from typed columns +

@@ -24,8 +24,10 @@ pub struct Config {
 /// `dolt_db/`, `qmd/`), so there's no `out:` knob anymore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
-    /// Run extract for all enabled sources concurrently. Translate/Load
-    /// remain sequential since they write into a shared Dolt repo.
+    /// Run extract AND translate for all enabled sources concurrently.
+    /// The translate phase shares a WAL-mode sqlx pool against the
+    /// index doltlite, so per-doc writes serialize at the SQLite level
+    /// but task scheduling stays non-blocking.
     #[serde(default = "default_true")]
     pub parallel: bool,
 }
