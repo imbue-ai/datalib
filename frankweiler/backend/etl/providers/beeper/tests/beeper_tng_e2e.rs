@@ -20,11 +20,14 @@ use frankweiler_etl::progress::Progress;
 use frankweiler_etl_beeper::extract::{self, FetchOptions, FetchSummary};
 use frankweiler_etl_beeper::translate::{self, Period};
 
-/// Path to the fixture directory on disk, relative to this test
-/// file's manifest dir.
+/// Path to the fixture directory on disk. Bazel stages the fixture
+/// at a runfiles-relative path and exposes it via
+/// `BEEPER_FIXTURE_DIR`; cargo runs out of `CARGO_MANIFEST_DIR`.
 fn fixture_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/beeper_tng")
+    if let Ok(d) = std::env::var("BEEPER_FIXTURE_DIR") {
+        return PathBuf::from(d);
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/beeper_tng")
 }
 
 /// Build a Beeper Texts-shaped data dir at `target` from the
@@ -39,10 +42,7 @@ fn materialize_fixture(target: &Path) -> Result<()> {
     let sqlite3 = std::env::var("BEEPER_SQLITE3").unwrap_or_else(|_| "sqlite3".to_string());
 
     for (sql, db) in [
-        (
-            fixtures.join("index_db.sql"),
-            target.join("index.db"),
-        ),
+        (fixtures.join("index_db.sql"), target.join("index.db")),
         (
             fixtures.join("local_signal_megabridge.sql"),
             target.join("local-signal/megabridge.db"),
@@ -51,8 +51,7 @@ fn materialize_fixture(target: &Path) -> Result<()> {
         if db.exists() {
             std::fs::remove_file(&db).ok();
         }
-        let sql_bytes = std::fs::read(&sql)
-            .with_context(|| format!("read {}", sql.display()))?;
+        let sql_bytes = std::fs::read(&sql).with_context(|| format!("read {}", sql.display()))?;
         let mut cmd = Command::new(&sqlite3);
         cmd.arg(&db).stdin(std::process::Stdio::piped());
         let mut child = cmd.spawn().with_context(|| format!("spawn {sqlite3}"))?;
@@ -115,11 +114,7 @@ fn tng_fixture_extract_summary() -> Result<()> {
     materialize_fixture(&beeper_dir)?;
     let out_db = tmp.path().join("out.doltlite_db");
 
-    let summary = run_extract_sync(
-        out_db.clone(),
-        beeper_dir,
-        vec!["signal", "googlechat"],
-    )?;
+    let summary = run_extract_sync(out_db.clone(), beeper_dir, vec!["signal", "googlechat"])?;
 
     // 3 rooms (data, crusher, riker). $space is filtered.
     assert_eq!(summary.rooms, 3, "rooms");
@@ -363,8 +358,10 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     // Blob file actually got materialized into the page dir.
     let blob_dir = rendered
         .iter()
-        .find(|d| d.md_path.to_string_lossy().ends_with("signal/")
-            || d.md_path.to_string_lossy().contains("/signal/"))
+        .find(|d| {
+            d.md_path.to_string_lossy().ends_with("signal/")
+                || d.md_path.to_string_lossy().contains("/signal/")
+        })
         .map(|d| d.md_path.parent().unwrap().join("blobs"))
         .expect("signal blob dir");
     let entries: Vec<_> = std::fs::read_dir(&blob_dir)
@@ -372,7 +369,9 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
         .filter_map(|e| e.ok())
         .collect();
     assert!(
-        entries.iter().any(|e| e.file_name().to_string_lossy().ends_with(".png")),
+        entries
+            .iter()
+            .any(|e| e.file_name().to_string_lossy().ends_with(".png")),
         "expected a .png blob in {}",
         blob_dir.display()
     );

@@ -138,8 +138,8 @@ pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {
 }
 
 async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-        .read_only(true);
+    let opts =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(opts)
@@ -180,12 +180,10 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     // native_user_id. Stored separately rather than joined into
     // the event SELECT so a single user appearing in many events
     // only round-trips once.
-    let user_rows = sqlx::query(
-        "SELECT id, native_user_id, display_name, full_name FROM users",
-    )
-    .fetch_all(&pool)
-    .await
-    .context("read users")?;
+    let user_rows = sqlx::query("SELECT id, native_user_id, display_name, full_name FROM users")
+        .fetch_all(&pool)
+        .await
+        .context("read users")?;
     let mut user_label: HashMap<String, String> = HashMap::new();
     for r in &user_rows {
         let id: String = r.try_get("id")?;
@@ -300,10 +298,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     for r in &bucket_rows {
         let room_uuid: String = r.try_get("room_uuid")?;
         let period_key: String = r.try_get("period_key")?;
-        bucket_idx.insert(
-            (room_uuid.clone(), period_key.clone()),
-            docs.len(),
-        );
+        bucket_idx.insert((room_uuid.clone(), period_key.clone()), docs.len());
         docs.push(DocBucket {
             room_uuid,
             period_key,
@@ -334,10 +329,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
         let sender_label = sender_uuid
             .as_ref()
             .and_then(|u| user_label.get(u).cloned());
-        let blobs = blobs_by_owner
-            .get(&event_uuid)
-            .cloned()
-            .unwrap_or_default();
+        let blobs = blobs_by_owner.get(&event_uuid).cloned().unwrap_or_default();
 
         let ev = Event {
             event_uuid: event_uuid.clone(),
@@ -362,11 +354,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
             // shows up somewhere.
             let target = reaction_target_native_event_id
                 .as_ref()
-                .and_then(|t| {
-                    target_period
-                        .get(&(room_uuid.clone(), t.clone()))
-                        .cloned()
-                });
+                .and_then(|t| target_period.get(&(room_uuid.clone(), t.clone())).cloned());
             let dest_period = target.unwrap_or(own_period);
             // The (room, dest_period) bucket might not exist if
             // the target's period bucket was created without

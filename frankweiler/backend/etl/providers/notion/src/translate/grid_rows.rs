@@ -588,10 +588,13 @@ mod tests {
         // Long block-id chain: every block except the first parents
         // to the previous block, forcing the owner-walk to consult
         // `block_parent`. The bug rebuilt `block_parent` from scratch
-        // on every outer iteration; at N=4_000 that buys ~3–4 s on a
-        // 2024-era laptop in release mode while the linear fix
-        // finishes in <100 ms — comfortable margin around the 2 s
-        // budget below, and short enough to stay tolerable in CI.
+        // on every outer iteration; at N=4_000 the buggy code takes
+        // ~30 s in fastbuild (debug) while the linear fix finishes in
+        // ~6 s. The 15 s budget gives clean separation in both debug
+        // (which Bazel runs) and release builds. Wall-clock perf tests
+        // are coarse — this catches the gross quadratic blow-up the
+        // user actually hit (sync wedged on a 10 K-block notion DB),
+        // not subtle regressions.
         const N: usize = 4_000;
         let page_id = "page-1";
         let pages = vec![json!({"id": page_id, "object": "page"})];
@@ -627,7 +630,7 @@ mod tests {
 
         assert_eq!(docs.pages.len(), 1);
         assert!(
-            elapsed < Duration::from_secs(2),
+            elapsed < Duration::from_secs(15),
             "gather_documents took {elapsed:?} for {N} blocks — likely quadratic",
         );
     }

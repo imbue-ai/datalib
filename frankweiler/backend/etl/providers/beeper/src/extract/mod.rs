@@ -93,9 +93,7 @@ pub struct FetchSummary {
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.sources.is_empty() {
-        anyhow::bail!(
-            "no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`"
-        );
+        anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
     let db_path = db_path_for(&opts.db_path);
     let dst = RawDb::open(&db_path)

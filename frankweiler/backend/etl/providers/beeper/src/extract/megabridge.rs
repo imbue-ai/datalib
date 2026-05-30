@@ -141,7 +141,10 @@ pub async fn enrich(
         if !networks.iter().any(|n| n == network) {
             // The user didn't ask for this network — skip even
             // though the megabridge.db exists.
-            debug!(event = "beeper_megabridge_network_disabled", network = network);
+            debug!(
+                event = "beeper_megabridge_network_disabled",
+                network = network
+            );
             continue;
         }
         let mb_path: PathBuf = entry.path().join("megabridge.db");
@@ -176,11 +179,7 @@ pub async fn enrich(
     Ok(enrich)
 }
 
-async fn enrich_one(
-    mb_path: &Path,
-    dst: &RawDb,
-    network: &str,
-) -> Result<EnrichSummary> {
+async fn enrich_one(mb_path: &Path, dst: &RawDb, network: &str) -> Result<EnrichSummary> {
     let mut out = EnrichSummary::default();
 
     // ── messages ────────────────────────────────────────────────

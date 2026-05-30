@@ -107,15 +107,13 @@ fn render_one(
     let fingerprint = compute_fingerprint(doc);
     let (md_path, json_path, page_dir) = output_paths(out_dir, room, &doc.period_key);
 
-    if prior_fingerprints.get(&document_uuid).map(String::as_str)
-        == Some(fingerprint.as_str())
+    if prior_fingerprints.get(&document_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
         return Ok(RenderOutcome::Skipped);
     }
 
-    fs::create_dir_all(&page_dir)
-        .with_context(|| format!("mkdir -p {}", page_dir.display()))?;
+    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Blobs first — if a later step fails we never stamp the
     // fingerprint, so a re-run will redo the whole doc cleanly.
@@ -146,8 +144,7 @@ fn render_one(
         },
         rows: rows.clone(),
     };
-    let sj = serde_json::to_string_pretty(&sidecar)
-        .context("serialize beeper sidecar")?;
+    let sj = serde_json::to_string_pretty(&sidecar).context("serialize beeper sidecar")?;
     fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
 
     on_doc_complete(RenderedDoc {
@@ -243,7 +240,7 @@ fn render_markdown(
     out.push_str(&format!("document_uuid: {document_uuid}\n"));
     out.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     out.push_str(&format!("source_name: {source_name}\n"));
-    out.push_str(&format!("provider: beeper\n"));
+    out.push_str("provider: beeper\n");
     out.push_str(&format!("network: {}\n", room.network));
     out.push_str(&format!("room_uuid: {}\n", room.room_uuid));
     if let Some(ext) = &room.external_room_id {
@@ -261,10 +258,7 @@ fn render_markdown(
     out.push_str(&format!("period: {}\n", doc.period_key));
     out.push_str(&format!("is_dm: {}\n", room.is_dm));
     out.push_str(&format!("event_count: {}\n", doc.messages.len()));
-    out.push_str(&format!(
-        "first_ts: {}\n",
-        iso_from_ms(doc.first_ms)
-    ));
+    out.push_str(&format!("first_ts: {}\n", iso_from_ms(doc.first_ms)));
     out.push_str(&format!("last_ts: {}\n", iso_from_ms(doc.last_ms)));
     out.push_str("---\n\n");
 
@@ -369,7 +363,10 @@ fn render_markdown(
             for r in rs {
                 let emoji = r.reaction_emoji.as_deref().unwrap_or("?");
                 let who = r.sender_label.as_deref().unwrap_or("?");
-                out.push_str(&format!("  - {emoji} {who} ({})\n", display_ts(r.timestamp_ms)));
+                out.push_str(&format!(
+                    "  - {emoji} {who} ({})\n",
+                    display_ts(r.timestamp_ms)
+                ));
             }
         }
     }
@@ -384,7 +381,10 @@ fn render_attachment_body(out: &mut String, m: &Event) {
         out.push('\n');
     }
     if m.blobs.is_empty() {
-        out.push_str(&format!("\n*[{}: no blob ingested]*\n", m.event_type.to_lowercase()));
+        out.push_str(&format!(
+            "\n*[{}: no blob ingested]*\n",
+            m.event_type.to_lowercase()
+        ));
         return;
     }
     for b in &m.blobs {
@@ -405,10 +405,7 @@ fn render_attachment_body(out: &mut String, m: &Event) {
             // render it when bytes are on disk.
             out.push_str(&format!("![{}]({})\n", b.slot, rel));
         } else {
-            out.push_str(&format!(
-                "{kind_marker} [{}]({}) — {}\n",
-                b.slot, rel, size
-            ));
+            out.push_str(&format!("{kind_marker} [{}]({}) — {}\n", b.slot, rel, size));
         }
         if !b.has_bytes {
             out.push_str(&format!(
@@ -438,7 +435,9 @@ fn hidden_summary(m: &Event) -> String {
 fn yaml_safe(s: &str) -> String {
     // Quote when ambiguity-prone characters appear. Not a full
     // YAML escape, but covers the common chat-title cases.
-    if s.chars().any(|c| matches!(c, ':' | '#' | '@' | '"' | '\'' | '\n')) {
+    if s.chars()
+        .any(|c| matches!(c, ':' | '#' | '@' | '"' | '\'' | '\n'))
+    {
         format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
     } else {
         s.to_string()
@@ -486,7 +485,12 @@ fn display_ts(ms: i64) -> String {
 fn blob_relpath(blob_id: &str, content_type: Option<&str>, slot: &str) -> String {
     let ext = content_type
         .and_then(content_type_to_ext)
-        .or_else(|| slot.rsplit('.').next().filter(|s| !s.contains(' ')).map(str::to_string))
+        .or_else(|| {
+            slot.rsplit('.')
+                .next()
+                .filter(|s| !s.contains(' '))
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| "bin".to_string());
     let safe_blob = blob_id.replace(['/', ':'], "_");
     format!("blobs/{safe_blob}.{ext}")
@@ -532,46 +536,46 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
     if needed.is_empty() {
         return Ok(0);
     }
-    fs::create_dir_all(blobs_dir)
-        .with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
+    fs::create_dir_all(blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
 
     // Same rationale as parse_async: bridge sync-Rust into async
     // sqlx by borrowing the existing runtime rather than spawning
     // a new one (which would panic inside the sync orchestrator's
     // tokio context).
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", raw_db_path.display()))?
-            .read_only(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(opts)
-            .await
-            .with_context(|| format!("open doltlite for blobs at {}", raw_db_path.display()))?;
-        let mut written = 0usize;
-        for (id, slot) in &needed {
-            let row = sqlx::query(
-                "SELECT bytes, content_type FROM blobs WHERE id = ?",
-            )
-            .bind(id)
-            .fetch_optional(&pool)
-            .await?;
-            let Some(r) = row else { continue };
-            let bytes: Vec<u8> = match r.try_get::<Option<Vec<u8>>, _>("bytes")? {
-                Some(b) => b,
-                None => continue,
-            };
-            let ct: Option<String> = r.try_get("content_type")?;
-            let rel = blob_relpath(id, ct.as_deref(), slot);
-            // rel is "blobs/<safe>.<ext>" — write under page_dir's
-            // parent of blobs_dir. blobs_dir's parent is the page
-            // dir, and rel starts with "blobs/" so we strip that.
-            let filename = rel.strip_prefix("blobs/").unwrap_or(&rel);
-            let path = blobs_dir.join(filename);
-            fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
-            written += 1;
-        }
-        Ok::<usize, anyhow::Error>(written)
-    }))
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let opts =
+                SqliteConnectOptions::from_str(&format!("sqlite://{}", raw_db_path.display()))?
+                    .read_only(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(opts)
+                .await
+                .with_context(|| format!("open doltlite for blobs at {}", raw_db_path.display()))?;
+            let mut written = 0usize;
+            for (id, slot) in &needed {
+                let row = sqlx::query("SELECT bytes, content_type FROM blobs WHERE id = ?")
+                    .bind(id)
+                    .fetch_optional(&pool)
+                    .await?;
+                let Some(r) = row else { continue };
+                let bytes: Vec<u8> = match r.try_get::<Option<Vec<u8>>, _>("bytes")? {
+                    Some(b) => b,
+                    None => continue,
+                };
+                let ct: Option<String> = r.try_get("content_type")?;
+                let rel = blob_relpath(id, ct.as_deref(), slot);
+                // rel is "blobs/<safe>.<ext>" — write under page_dir's
+                // parent of blobs_dir. blobs_dir's parent is the page
+                // dir, and rel starts with "blobs/" so we strip that.
+                let filename = rel.strip_prefix("blobs/").unwrap_or(&rel);
+                let path = blobs_dir.join(filename);
+                fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
+                written += 1;
+            }
+            Ok::<usize, anyhow::Error>(written)
+        })
+    })
     .map_err(|e| anyhow::anyhow!("{e:#}"))
 }
 
@@ -655,10 +659,7 @@ fn build_grid_rows(
             text: m.text_content.clone().unwrap_or_default(),
             slack_link: None,
             qmd_path: qmd_path.clone(),
-            source_url: m
-                .blobs
-                .first()
-                .and_then(|b| b.source_url.clone()),
+            source_url: m.blobs.first().and_then(|b| b.source_url.clone()),
             git_sha: None,
             external_id: m.external_event_id.clone(),
             notion_page_uuid: None,

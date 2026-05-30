@@ -56,8 +56,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
+    load_config, BeeperSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync, GitlabApiSync,
+    NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{apply_one, init_schema, load_cursors, load_fingerprints, RenderedDoc};
@@ -1352,10 +1352,8 @@ fn translate_source(
         }
         SourceConfig::Beeper { sync, .. } => {
             use frankweiler_etl_beeper::translate::{render_all, Period};
-            let period = Period::from_config(
-                sync.as_ref().and_then(|s| s.period.as_deref()),
-            )
-            .context("parse beeper period")?;
+            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
+                .context("parse beeper period")?;
             let parsed = frankweiler_etl_beeper::translate::parse::parse(&fixture, period)
                 .with_context(|| format!("beeper parse {}", fixture.display()))?;
             let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(&fixture);

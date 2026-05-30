@@ -243,22 +243,19 @@ impl RawDb {
         let rooms = one(&self.pool, "rooms").await? as usize;
         let users = one(&self.pool, "users").await? as usize;
         let events = one(&self.pool, "events").await? as usize;
-        let blobs = sqlx::query(
-            "SELECT COUNT(*) AS n FROM blobs WHERE bytes IS NOT NULL",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .context("count blobs with bytes")?
-        .try_get::<i64, _>("n")
-        .unwrap_or(0) as usize;
-        let blob_errors = sqlx::query(
-            "SELECT COUNT(*) AS n FROM blobs WHERE last_error IS NOT NULL",
-        )
-        .fetch_one(&self.pool)
-        .await
-        .context("count blobs with errors")?
-        .try_get::<i64, _>("n")
-        .unwrap_or(0) as usize;
+        let blobs = sqlx::query("SELECT COUNT(*) AS n FROM blobs WHERE bytes IS NOT NULL")
+            .fetch_one(&self.pool)
+            .await
+            .context("count blobs with bytes")?
+            .try_get::<i64, _>("n")
+            .unwrap_or(0) as usize;
+        let blob_errors =
+            sqlx::query("SELECT COUNT(*) AS n FROM blobs WHERE last_error IS NOT NULL")
+                .fetch_one(&self.pool)
+                .await
+                .context("count blobs with errors")?
+                .try_get::<i64, _>("n")
+                .unwrap_or(0) as usize;
         Ok(RowCounts {
             rooms,
             users,

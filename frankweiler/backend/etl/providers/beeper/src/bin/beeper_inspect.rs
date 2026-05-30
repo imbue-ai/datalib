@@ -19,8 +19,8 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", args.db.display()))?
-        .read_only(true);
+    let opts =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", args.db.display()))?.read_only(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(opts)
@@ -106,28 +106,24 @@ async fn main() -> Result<()> {
     }
 
     println!("\n== blobs ==");
-    let rows = sqlx::query(
-        "SELECT kind, slot, content_type, length(bytes) AS sz, source_url FROM blobs",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT kind, slot, content_type, length(bytes) AS sz, source_url FROM blobs")
+            .fetch_all(&pool)
+            .await?;
     for r in &rows {
         let kind: String = r.try_get("kind")?;
         let slot: String = r.try_get("slot")?;
         let mime: Option<String> = r.try_get("content_type")?;
         let sz: Option<i64> = r.try_get("sz")?;
         let url: Option<String> = r.try_get("source_url")?;
-        println!(
-            "  [{kind}] slot={slot:?} mime={mime:?} sz={sz:?} url={url:?}"
-        );
+        println!("  [{kind}] slot={slot:?} mime={mime:?} sz={sz:?} url={url:?}");
     }
 
     println!("\n== users ==");
-    let rows = sqlx::query(
-        "SELECT source, network, native_user_id, full_name, display_name FROM users",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT source, network, native_user_id, full_name, display_name FROM users")
+            .fetch_all(&pool)
+            .await?;
     for r in &rows {
         let source: String = r.try_get("source")?;
         let network: Option<String> = r.try_get("network")?;

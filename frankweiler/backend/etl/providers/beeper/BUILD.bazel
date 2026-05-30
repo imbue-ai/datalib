@@ -85,6 +85,13 @@ rust_test(
     crate_root = "tests/beeper_tng_e2e.rs",
     data = [":tng_fixture"],
     edition = "2021",
+    # Bazel doesn't surface fixture dirs via CARGO_MANIFEST_DIR in the
+    # sandbox — the test reads BEEPER_FIXTURE_DIR with CARGO_MANIFEST_DIR
+    # as the cargo fallback. Mirrors the chatgpt / anthropic /
+    # notion translate-test wiring.
+    env = {
+        "BEEPER_FIXTURE_DIR": "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+    },
     deps = [
         ":frankweiler_etl_beeper",
         "//frankweiler/backend/etl:frankweiler_etl",

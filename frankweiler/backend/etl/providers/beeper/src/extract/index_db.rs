@@ -116,10 +116,7 @@ async fn query_json(db_path: &Path, sql: &str) -> Result<Vec<Value>> {
             .context("write SQL to sqlite3 stdin")?;
         // Explicit drop to close the pipe.
     }
-    let output = child
-        .wait_with_output()
-        .await
-        .context("wait sqlite3")?;
+    let output = child.wait_with_output().await.context("wait sqlite3")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
@@ -151,12 +148,9 @@ pub async fn ingest(
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
     // ── threads → rooms ──────────────────────────────────────────────
-    let thread_rows = query_json(
-        db_path,
-        "SELECT threadID, accountID, thread FROM threads;",
-    )
-    .await
-    .context("query threads")?;
+    let thread_rows = query_json(db_path, "SELECT threadID, accountID, thread FROM threads;")
+        .await
+        .context("query threads")?;
 
     let mut target_rooms: Vec<(String, String, Value)> = Vec::new();
     for row in &thread_rows {
@@ -206,8 +200,7 @@ pub async fn ingest(
         dst.upsert_room(&room_row).await?;
         summary.rooms += 1;
 
-        ingest_participants(db_path, dst, thread_id, network, &mut seen_users, summary)
-            .await?;
+        ingest_participants(db_path, dst, thread_id, network, &mut seen_users, summary).await?;
         ingest_messages(
             db_path,
             dst,
@@ -252,8 +245,7 @@ fn build_room_row(
         .and_then(|v| v.as_str())
         .map(String::from)
         .or(thread_type.clone());
-    let is_dm = room_type.as_deref() == Some("dm")
-        || thread_type.as_deref() == Some("single");
+    let is_dm = room_type.as_deref() == Some("dm") || thread_type.as_deref() == Some("single");
     let is_space = thread_json
         .pointer("/extra/roomType")
         .and_then(|v| v.as_str())
@@ -319,7 +311,10 @@ async fn ingest_participants(
         if user_id.is_empty() || !seen_users.insert(user_id.clone()) {
             continue;
         }
-        let full_name = r.get("full_name").and_then(|v| v.as_str()).map(String::from);
+        let full_name = r
+            .get("full_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
         let row = UserRow {
             source: SOURCE.to_string(),
@@ -368,10 +363,7 @@ async fn ingest_messages(
             .get("senderContactID")
             .and_then(|v| v.as_str())
             .map(String::from);
-        let timestamp_ms = r
-            .get("timestamp")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(0);
+        let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
         let event_type = r
             .get("type")
             .and_then(|v| v.as_str())
@@ -649,8 +641,7 @@ mod tests {
 
     #[test]
     fn parse_attachment_mxc() {
-        let (scheme, server, id, dir) =
-            parse_attachment_id("mxc://local.beeper.com/abc").unwrap();
+        let (scheme, server, id, dir) = parse_attachment_id("mxc://local.beeper.com/abc").unwrap();
         assert_eq!(scheme, "mxc");
         assert_eq!(server, "local.beeper.com");
         assert_eq!(id, "abc");
