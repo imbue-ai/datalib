@@ -1,15 +1,9 @@
-# Beeper-only dev config for early-iteration work on the Beeper
-# provider. Same shape as `thad_tiny.yaml`; only the `sources:` list
-# differs. Drop at ~/.config/frankweiler/config.yaml or point at it
-# explicitly:
+# Beeper-only dev config for iterating on the Beeper provider.
+# Reads the desktop app's on-disk SQLite directly; no network or auth.
 #
 #   bazelisk run //frankweiler/backend/sync:frankweiler_sync_bin -- \
 #     --config "$(pwd)/configs/thad_beeper.yaml" \
 #     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-#
-# Credentials: run `latchkey auth set beeper -H "Authorization: Bearer
-# $(pbpaste)"` first; see
-# frankweiler/backend/etl/providers/beeper/EXTRACT.md.
 
 data_root: ~/mixed_up_files.thad_beeper
 
@@ -18,10 +12,11 @@ dolt:
 
 sources:
   - name: beeper
-    type: beeper_api
+    type: beeper
     sync:
-      # Start narrow: only iMessage rooms get captured. Add "signal"
-      # in Milestone D once the Signal translator lands.
-      networks: ["imessage"]
-      refresh_window_days: 7
+      # Canonical chat-network names to ingest. Each maps to one or
+      # more accountID prefixes inside BeeperTexts/index.db.
+      sources: ["signal", "googlechat"]
+      # Copy cached media bytes (avatars, attachments) into the blobs
+      # table. Off = metadata + source URL only.
       media: true

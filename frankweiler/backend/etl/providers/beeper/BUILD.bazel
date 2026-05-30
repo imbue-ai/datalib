@@ -2,6 +2,25 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Checked-in ST:TNG-themed fixture, consumed by:
+#   * the per-crate `beeper_tng_e2e` integration test (data = below)
+#   * the unified //tests/fixtures:ingested_tng genrule that builds
+#     `backend_index.doltlite_db` against every provider's fixtures.
+#
+# The fixture is SQL + a couple of small media files; the consumer
+# `materialize`s a Beeper-Texts-shaped dir from those before running
+# `beeper-download`.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob([
+        "tests/fixtures/beeper_tng/*.sql",
+        "tests/fixtures/beeper_tng/media/**/*",
+    ]) + [
+        "tests/fixtures/beeper_tng/build_fixture.sh",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "frankweiler_etl_beeper",
     srcs = glob(
@@ -27,8 +46,8 @@ rust_library(
     ],
 )
 
-# Extract step (Beeper). CLI driver. Shells out to host `latchkey` at
-# runtime for the matrix.beeper.com access token.
+# Extract step (Beeper). CLI driver. Reads BeeperTexts' on-disk
+# SQLite stores (index.db, media/) directly — no network, no auth.
 rust_binary(
     name = "beeper_download",
     srcs = ["src/bin/beeper_download.rs"],
@@ -50,4 +69,28 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl_beeper",
     edition = "2021",
+)
+
+# End-to-end test against the checked-in TNG fixture: materializes a
+# BeeperTexts-shaped dir from `:tng_fixture` into a tempdir, runs the
+# extract + translate pipeline, asserts the resulting doltlite and
+# rendered markdown.
+#
+# `BEEPER_SQLITE3` can be set to an absolute sqlite3 path if the
+# sandbox doesn't put one on PATH; macOS sandboxes include
+# /usr/bin/sqlite3 by default.
+rust_test(
+    name = "beeper_tng_e2e",
+    srcs = ["tests/beeper_tng_e2e.rs"],
+    crate_root = "tests/beeper_tng_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_beeper",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
 )

@@ -36,6 +36,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/slack:tng_fixture",
         "//frankweiler/backend/etl/providers/chatgpt:tng_fixture",
         "//frankweiler/backend/etl/providers/anthropic:tng_fixture",
+        "//frankweiler/backend/etl/providers/beeper:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -71,6 +72,11 @@ genrule(
             "tests/fixtures/github_api",
             "tests/fixtures/gitlab_api",
             "tests/fixtures/notion_web",
+            # Beeper is different — the fixture is SQL + media, not
+            # an HTTP capture tree. run_sync_pipeline.py
+            # materializes a BeeperTexts-shaped dir from it on the
+            # fly.
+            "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",

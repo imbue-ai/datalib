@@ -56,7 +56,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperApiSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
+    load_config, BeeperSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
     GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
@@ -290,7 +290,7 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
         "type=github_api",
         "type=gitlab_api",
         "type=notion_api",
-        "type=beeper_api",
+        "type=beeper",
     ] {
         if s.contains(marker) {
             return Some(&marker["type=".len()..]);
@@ -401,21 +401,18 @@ notion integration token expired or missing.
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
             .into(),
-        "beeper_api" => "\
-beeper access token expired or missing.
+        "beeper" => "\
+beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
 
-  1. One-time: register the `beeper` service with latchkey so the
-     access token gets injected on requests to matrix.beeper.com:
-       latchkey services register beeper --base-api-url=\"https://matrix.beeper.com/\"
-  2. With the Beeper Texts desktop app signed in, grab the token out
-     of its on-disk SQLite (plaintext) onto the clipboard:
-       sqlite3 ~/Library/Application\\ Support/BeeperTexts/account.db \\
-           \"SELECT access_token FROM account;\" | pbcopy
-  3. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set beeper -H \"Authorization: Bearer $(pbpaste)\"
-  4. Smoke-test:
-       latchkey curl -s https://matrix.beeper.com/_matrix/client/v3/account/whoami | head -c 200
-     Expect a JSON `{\"user_id\":\"@you:beeper.com\",...}`.
+  1. Make sure Beeper Texts is installed and has run at least once
+     so its data dir exists. Default path:
+       ~/Library/Application Support/BeeperTexts/index.db
+     (Pass --beeper-data-dir or set `beeper_data_dir:` in the source's
+     sync block to override.)
+  2. Confirm read access (Application Support is NOT Full Disk Access
+     protected, so this should just work):
+       sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
+           \"SELECT COUNT(*) FROM threads;\"
 
 See frankweiler/backend/etl/providers/beeper/EXTRACT.md for details."
             .into(),
@@ -895,7 +892,7 @@ enum ExtractKind {
         playback_root: Option<PathBuf>,
     },
     Beeper {
-        sync: BeeperApiSync,
+        sync: BeeperSync,
     },
 }
 
@@ -933,7 +930,7 @@ impl ExtractPlan {
                 sync: sync.clone().unwrap_or_default(),
                 playback_root: playback_root.map(|p| p.to_path_buf()),
             },
-            SourceConfig::BeeperApi { sync, .. } => ExtractKind::Beeper {
+            SourceConfig::Beeper { sync, .. } => ExtractKind::Beeper {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
@@ -1083,11 +1080,8 @@ impl ExtractPlan {
             ExtractKind::Beeper { sync } => frankweiler_etl_beeper::extract::fetch(
                 frankweiler_etl_beeper::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
-                    networks: sync.networks.clone(),
-                    rooms: sync.rooms.clone(),
-                    refresh_window_days: sync
-                        .refresh_window_days
-                        .unwrap_or(frankweiler_etl_beeper::extract::DEFAULT_REFRESH_WINDOW_DAYS),
+                    sources: sync.sources.clone(),
+                    beeper_data_dir: sync.beeper_data_dir.clone(),
                     media: sync.media,
                     progress: progress.clone(),
                 },
@@ -1095,8 +1089,14 @@ impl ExtractPlan {
             .await
             .map(|s| {
                 format!(
-                    "rooms={} users={} events={} requests={}",
-                    s.rooms, s.users, s.events, s.requests,
+                    "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
+                    s.rooms,
+                    s.users,
+                    s.events,
+                    s.blobs,
+                    s.blob_errors,
+                    s.events_enriched,
+                    s.events_orphaned,
                 )
             }),
             ExtractKind::Notion {
@@ -1350,16 +1350,26 @@ fn translate_source(
                 .context("render_notion_official")
                 .map(|_| ())
         }
-        SourceConfig::BeeperApi { .. } => {
-            // Milestone A: raw store lands but no translators are
-            // wired up yet, so we parse the raw doltlite and emit
-            // zero rendered docs. This keeps sync happy and lets the
-            // golden test capture the raw side independent of any
-            // translate output.
-            let _parsed = frankweiler_etl_beeper::translate::parse_raw_dir(&fixture)
+        SourceConfig::Beeper { sync, .. } => {
+            use frankweiler_etl_beeper::translate::{render_all, Period};
+            let period = Period::from_config(
+                sync.as_ref().and_then(|s| s.period.as_deref()),
+            )
+            .context("parse beeper period")?;
+            let parsed = frankweiler_etl_beeper::translate::parse::parse(&fixture, period)
                 .with_context(|| format!("beeper parse {}", fixture.display()))?;
-            let _ = on_doc_complete;
-            Ok(())
+            let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(&fixture);
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+                &raw_db_path,
+            )
+            .context("beeper render_all")
+            .map(|_| ())
         }
     }
 }
@@ -1385,7 +1395,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
             SourceConfig::GithubApi { .. } => Box::new(GithubSynth::new(input.clone())),
             SourceConfig::GitlabApi { .. } => Box::new(GitlabSynth::new(input.clone())),
             SourceConfig::NotionApi { .. } => Box::new(NotionSynth::new(input.clone())),
-            SourceConfig::BeeperApi { .. } => Box::new(BeeperSynth::new(input.clone())),
+            SourceConfig::Beeper { .. } => Box::new(BeeperSynth::new(input.clone())),
         };
         let report = synth
             .synthesize(out)

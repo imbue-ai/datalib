@@ -176,21 +176,28 @@ pub struct NotionSubtrees {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct BeeperApiSync {
+pub struct BeeperSync {
+    /// Canonical chat network names to ingest (`"signal"`,
+    /// `"googlechat"`, future: `"slack"`, `"whatsapp"`, …). Empty
+    /// list is an error at fetch time — caller should pick at least
+    /// one explicitly.
     #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    /// Restrict to these bridge networks (e.g. `["imessage", "signal"]`).
-    /// Empty = all networks Beeper exposes to the account.
+    pub sources: Vec<String>,
+    /// Override for Beeper Texts' data dir. Defaults to
+    /// `~/Library/Application Support/BeeperTexts` on macOS.
     #[serde(default)]
-    pub networks: Vec<String>,
-    /// Specific Matrix room IDs to mirror. Accepts a bare
-    /// `!abc:beeper.com`, a `matrix.to/#/!abc:beeper.com` URL, or the
-    /// percent-encoded form `https://matrix.to/#/!abc%3Abeeper.com`.
-    /// When non-empty, `networks` is ignored.
-    #[serde(default)]
-    pub rooms: Vec<String>,
+    pub beeper_data_dir: Option<PathBuf>,
+    /// Copy cached media bytes into the `blobs` table. Off = metadata
+    /// + source URL only.
     #[serde(default = "default_true")]
     pub media: bool,
+    /// Period each rendered markdown document covers. One of
+    /// `"month"` (default), `"day"`, `"year"`, or `"all"` (single
+    /// file per conversation). Reactions render in the period of
+    /// the message they target, regardless of when the reaction
+    /// itself landed.
+    #[serde(default)]
+    pub period: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -250,11 +257,11 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<NotionApiSync>,
     },
-    BeeperApi {
+    Beeper {
         #[serde(flatten)]
         common: SourceCommon,
         #[serde(default)]
-        sync: Option<BeeperApiSync>,
+        sync: Option<BeeperSync>,
     },
 }
 
@@ -268,7 +275,7 @@ impl SourceConfig {
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
-            | SourceConfig::BeeperApi { common, .. } => common,
+            | SourceConfig::Beeper { common, .. } => common,
         }
     }
 
@@ -291,7 +298,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { .. } => "github_api",
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
-            SourceConfig::BeeperApi { .. } => "beeper_api",
+            SourceConfig::Beeper { .. } => "beeper",
         }
     }
 
@@ -306,7 +313,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
-            SourceConfig::BeeperApi { sync, .. } => sync.is_some(),
+            SourceConfig::Beeper { sync, .. } => sync.is_some(),
         }
     }
 

@@ -13,8 +13,8 @@ name = "beeper-download"
 path = "src/bin/beeper_download.rs"
 
 [[bin]]
-name = "beeper-dump"
-path = "src/bin/beeper_dump.rs"
+name = "beeper-inspect"
+path = "src/bin/beeper_inspect.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
