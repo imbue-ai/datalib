@@ -10,7 +10,7 @@
 //!   2. Probe — assert one cursor per thread, formatted
 //!      `"<MAX(fetched_at)>|<COUNT(*)>"`.
 //!   3. Render pass 1 with empty priors → every thread gets rendered
-//!      and stamps a non-NULL `upstream_cursor` on its `RenderedDoc`.
+//!      and stamps a non-NULL `upstream_cursor` on its `RenderedMarkdown`.
 //!   4. "Mutate" the DB: add one new reply to thread A, add one new
 //!      standalone message (a brand-new thread D), leave threads B
 //!      and C untouched.
@@ -22,7 +22,7 @@
 //!      TranslatedSlack whose messages cover only A's three messages
 //!      and D's one — B and C never get pulled out of sqlite.
 //!   8. Render pass 2 over the filtered TranslatedSlack → exactly
-//!      two RenderedDocs fire the callback, each stamped with the
+//!      two RenderedMarkdowns fire the callback, each stamped with the
 //!      probe's current cursor for its thread.
 
 use std::collections::{HashMap, HashSet};
@@ -146,8 +146,8 @@ async fn cheap_probe_skips_unchanged_threads_on_resync() {
         &frankweiler_etl::progress::Progress::noop(),
         &HashMap::new(),
         &cursors1,
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            rendered_p1.insert(doc.document_uuid.clone(), doc.upstream_cursor.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            rendered_p1.insert(doc.markdown_uuid.clone(), doc.upstream_cursor.clone());
             Ok(())
         },
     )
@@ -158,7 +158,7 @@ async fn cheap_probe_skips_unchanged_threads_on_resync() {
         assert_eq!(
             cur.as_deref(),
             Some(cursors1[tid].as_str()),
-            "RenderedDoc.upstream_cursor must match the probe for {tid}",
+            "RenderedMarkdown.upstream_cursor must match the probe for {tid}",
         );
     }
 
@@ -252,8 +252,8 @@ async fn cheap_probe_skips_unchanged_threads_on_resync() {
         &frankweiler_etl::progress::Progress::noop(),
         &HashMap::new(), // empty priors → both threads render
         &cursors2,
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            rendered_p2.insert(doc.document_uuid.clone(), doc.upstream_cursor.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            rendered_p2.insert(doc.markdown_uuid.clone(), doc.upstream_cursor.clone());
             Ok(())
         },
     )

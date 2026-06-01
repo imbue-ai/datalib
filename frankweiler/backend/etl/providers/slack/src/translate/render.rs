@@ -30,7 +30,7 @@ use frankweiler_schema::grid_rows::GridRow;
 use std::collections::HashMap;
 
 use frankweiler_etl::blobs::safe_filename;
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
@@ -69,11 +69,11 @@ pub fn render_all(
     prior_fingerprints: &HashMap<String, String>,
     // Per-thread cheap-probe value (`<MAX(fetched_at)>|<COUNT(*)>`)
     // computed by the orchestrator before this call. Stamped into each
-    // [`RenderedDoc`] so the indexer records what the next run should
+    // [`RenderedMarkdown`] so the indexer records what the next run should
     // compare against. Empty when callers don't have probe data —
     // every render still works, just without the cheap-skip shortcut.
     current_cursors: &HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let user_labels: BTreeMap<String, String> = t
         .users
@@ -154,7 +154,7 @@ pub fn render_all(
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
         let sidecar = Sidecar {
             header: SidecarHeader {
-                document_uuid: thread_uuid.clone(),
+                markdown_uuid: thread_uuid.clone(),
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
@@ -163,8 +163,8 @@ pub fn render_all(
         let sj = serde_json::to_string_pretty(&sidecar)?;
         fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
 
-        on_doc_complete(RenderedDoc {
-            document_uuid: thread_uuid.clone(),
+        on_doc_complete(RenderedMarkdown {
+            markdown_uuid: thread_uuid.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
             upstream_cursor: current_cursors.get(&thread_uuid).cloned(),
@@ -393,7 +393,7 @@ fn build_thread_rows(
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(thread_uuid.to_string()),
+        markdown_uuid: Some(thread_uuid.to_string()),
     });
     let _ = t; // future: thread-level project, etc.
     for (idx, m) in msgs.iter().enumerate() {
@@ -424,7 +424,7 @@ fn build_thread_rows(
             external_id: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(thread_uuid.to_string()),
+            markdown_uuid: Some(thread_uuid.to_string()),
         });
     }
     out

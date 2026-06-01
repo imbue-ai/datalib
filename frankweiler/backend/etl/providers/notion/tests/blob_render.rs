@@ -324,8 +324,8 @@ fn incremental_renders_only_changed_page() {
         root,
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            priors.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
     )
@@ -373,9 +373,9 @@ fn incremental_renders_only_changed_page() {
         root,
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            rendered_uuids.push(doc.document_uuid.clone());
-            captured_fp.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            rendered_uuids.push(doc.markdown_uuid.clone());
+            captured_fp.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
     )

@@ -15,7 +15,7 @@
     "name": "chat_with_msg",
     "deeplink": "frankweiler://chat/abc-123?msg=def-456",
     "hash": "chat/abc-123?msg=def-456",
-    "route": {"kind": "chat", "conversationUuid": "abc-123", "params": {"msg": "def-456"}}
+    "route": {"kind": "chat", "markdownUuid": "abc-123", "params": {"msg": "def-456"}}
   },
   {
     "name": "prefs",

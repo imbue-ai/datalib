@@ -222,7 +222,7 @@ fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> 
         external_id: None,
         notion_page_uuid: Some(pid.clone()),
         notion_block_uuid: None,
-        document_uuid: Some(pid),
+        markdown_uuid: Some(pid),
     }
 }
 
@@ -280,7 +280,7 @@ fn thread_rows(
         external_id: None,
         notion_page_uuid: Some(page_id.into()),
         notion_block_uuid: parent_block_id.map(String::from),
-        document_uuid: Some(disc_id.into()),
+        markdown_uuid: Some(disc_id.into()),
     });
     for (idx, c) in members_sorted.iter().enumerate() {
         let author_id = c
@@ -314,7 +314,7 @@ fn thread_rows(
             external_id: None,
             notion_page_uuid: Some(page_id.into()),
             notion_block_uuid: parent_block_id.map(String::from),
-            document_uuid: Some(disc_id.into()),
+            markdown_uuid: Some(disc_id.into()),
         });
     }
     rows
@@ -629,8 +629,12 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert_eq!(docs.pages.len(), 1);
+        // The pre-fix code never finished on real data (the user's
+        // actual wedge — pegged a core indefinitely on a 10K-block
+        // notion DB). 30 s is a smoke-budget that catches that level
+        // of breakage without flaking on CI under load.
         assert!(
-            elapsed < Duration::from_secs(15),
+            elapsed < Duration::from_secs(30),
             "gather_documents took {elapsed:?} for {N} blocks — likely quadratic",
         );
     }

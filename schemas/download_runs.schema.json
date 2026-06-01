@@ -56,10 +56,10 @@
           "x-sql-type": "VARCHAR(40)",
           "description": "When ingest finished consuming `raw_path` (ISO-8601 with explicit offset). NULL until then. Ingest's work queue is `SELECT ... WHERE finished_at IS NOT NULL AND ingested_at IS NULL`."
         },
-        "doc_uuids_touched": {
+        "markdown_uuids_touched": {
           "type": ["string", "null"],
           "x-sql-type": "JSON",
-          "description": "JSON array of `documents.document_uuid` values that this run produced changes for. Populated by ingest when it sets `ingested_at`. Useful for `which sync surfaced this thread?` provenance queries; not used by the hot path."
+          "description": "JSON array of `markdowns.markdown_uuid` values that this run produced changes for. Populated by ingest when it sets `ingested_at`. Useful for `which sync surfaced this thread?` provenance queries; not used by the hot path."
         }
       }
     }

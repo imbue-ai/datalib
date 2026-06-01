@@ -1,15 +1,16 @@
 //! Cross-provider Translate → Load contract.
 //!
 //! Every Translate step emits one `.grid_rows.json` sidecar per
-//! document. The shape is fixed: a small header (document uuid +
-//! fingerprint + render schema stamp) followed by the rows themselves.
-//! The Load step doesn't need to know which provider produced the
-//! sidecar — it only needs to read `Sidecar` and upsert `rows`.
+//! rendered markdown. The shape is fixed: a small header (markdown
+//! uuid + fingerprint + render schema stamp) followed by the rows
+//! themselves. The Load step doesn't need to know which provider
+//! produced the sidecar — it only needs to read `Sidecar` and upsert
+//! `rows`.
 //!
 //! ```jsonc
 //! {
 //!   "header": {
-//!     "document_uuid": "…",            // primary key for the document
+//!     "markdown_uuid": "…",            // primary key for the rendered .md
 //!     "source_fingerprint": "…",       // hash of upstream payload
 //!     "render_version": 1              // renderer-side schema stamp
 //!   },
@@ -22,11 +23,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SidecarHeader {
-    /// Stable id for the document this sidecar describes. The Slack
-    /// Translate step sets this to the thread uuid; other providers
-    /// (Notion page, GitHub issue, etc.) plug in their own
-    /// document-level uuid.
-    pub document_uuid: String,
+    /// Stable id for the rendered `.md` this sidecar describes. Slack
+    /// Translate sets this to the thread uuid; per-period providers
+    /// (beeper) set it to a `(room, period)` UUIDv5; whole-conversation
+    /// providers (notion page, github PR, …) reuse their native uuid.
+    pub markdown_uuid: String,
     pub source_fingerprint: String,
     pub render_version: u32,
 }

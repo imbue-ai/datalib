@@ -79,14 +79,15 @@ pub struct ColumnSpec {
     pub default_visible: bool,
 }
 
-/// Response shape for `/api/chat/{uuid}`. The body is the raw QMD content
-/// minus the YAML frontmatter — the UI runs markdown-it on it directly. We
-/// do **not** ship a structured `messages[]` array; per-message scrolling
-/// uses the `<div id="m-{uuid}" data-msg-index="…">` wrappers the renderer
+/// Response shape for `/api/chat/{markdown_uuid}`. The body is the raw
+/// QMD content minus the YAML frontmatter — the UI runs markdown-it on
+/// it directly. We do **not** ship a structured `messages[]` array;
+/// per-message scrolling uses the
+/// `<div id="m-{uuid}" data-section-uuid="…">` wrappers the renderer
 /// emits in the body.
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
-    pub conversation_uuid: String,
+    pub markdown_uuid: String,
     pub name: Option<String>,
     pub account: Option<String>,
     pub project: Option<String>,
@@ -134,7 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/search", get(search_handler))
         .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
-        .route("/api/chat/{conversation_uuid}", get(chat))
+        .route("/api/chat/{markdown_uuid}", get(chat))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
@@ -292,73 +293,44 @@ async fn columns() -> Json<Vec<ColumnSpec>> {
     Json(default_columns())
 }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct ChatQuery {
-    /// Optional row uuid hint. Some providers (beeper) shard a
-    /// conversation across multiple rendered files (one per period),
-    /// so picking "a file for this conversation_uuid" can land on the
-    /// wrong period when the clicked row points at a specific message.
-    /// When provided, the handler resolves the qmd file by row uuid
-    /// instead — guaranteeing the loaded body actually contains the
-    /// clicked row's `data-section-uuid`.
-    pub row: Option<String>,
-}
-
 async fn chat(
     State(s): State<AppState>,
-    Path(conversation_uuid): Path<String>,
-    Query(q): Query<ChatQuery>,
+    Path(markdown_uuid): Path<String>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
     // QMDs are write-only output. We read the file just to ship its body
-    // to the UI as-is; structured metadata comes from grid_rows. Per-message
-    // anchors in the body (<div id="m-{uuid}" data-section-uuid="…">) let the
-    // UI scroll-and-highlight without a structured chat schema.
-    let path = if let Some(row_uuid) = q.row.as_deref() {
-        match s
-            .repo
-            .qmd_path_for_row(row_uuid)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        {
-            Some(p) => p,
-            // Row uuid not found in grid_rows (stale link?) — fall back
-            // to the by-conversation lookup so the user still gets a
-            // body to look at rather than a 404.
-            None => s
-                .repo
-                .qmd_path_for_conversation(&conversation_uuid)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-                .ok_or(StatusCode::NOT_FOUND)?,
-        }
-    } else {
-        s.repo
-            .qmd_path_for_conversation(&conversation_uuid)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::NOT_FOUND)?
-    };
+    // to the UI as-is; structured metadata comes from grid_rows. Per-section
+    // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
+    // let the UI scroll-and-highlight without a structured chat schema.
+    // One UUID → one file: no enumeration, no fallbacks.
+    let path = s
+        .repo
+        .qmd_path_for_markdown(&markdown_uuid)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
     let raw = std::fs::read_to_string(&path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let body = strip_frontmatter(&raw).to_string();
     let meta = s
         .repo
-        .chat_meta(&conversation_uuid)
+        .chat_meta(&markdown_uuid)
         .await
         .ok()
         .flatten()
         .unwrap_or_default();
     // Synthesize page-level URLs for providers that don't carry one in
-    // `source_url`. Claude/ChatGPT use the conversation UUID directly in
-    // their public URL scheme.
+    // `source_url`. Claude/ChatGPT use the conversation UUID directly
+    // in their public URL scheme — and for those providers
+    // markdown_uuid == conversation_uuid (one rendered file per chat),
+    // so we can drop it straight in.
     let source_url = meta
         .source_url
         .or_else(|| match meta.source_label.as_deref() {
-            Some("Claude") => Some(format!("https://claude.ai/chat/{conversation_uuid}")),
-            Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{conversation_uuid}")),
+            Some("Claude") => Some(format!("https://claude.ai/chat/{markdown_uuid}")),
+            Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{markdown_uuid}")),
             _ => None,
         });
     Ok(Json(ChatResponse {
-        conversation_uuid,
+        markdown_uuid,
         name: meta.name,
         account: meta.account,
         project: meta.project,

@@ -125,8 +125,8 @@ impl PhaseOutcome {
 
 #[derive(Debug, Clone)]
 pub struct LoadOutcome {
-    pub documents_loaded: usize,
-    pub documents_total: usize,
+    pub markdowns_loaded: usize,
+    pub markdowns_total: usize,
     pub rows_inserted: usize,
     pub error: Option<String>,
 }
@@ -180,8 +180,8 @@ impl SyncSummary {
     pub fn to_json(&self) -> Value {
         let load = self.load.as_ref().map(|l| {
             json!({
-                "documents_loaded": l.documents_loaded,
-                "documents_total": l.documents_total,
+                "markdowns_loaded": l.markdowns_loaded,
+                "markdowns_total": l.markdowns_total,
                 "rows_inserted": l.rows_inserted,
                 "error": l.error,
             })

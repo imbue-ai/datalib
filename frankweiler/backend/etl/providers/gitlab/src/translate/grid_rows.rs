@@ -149,7 +149,7 @@ pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
         external_id: Some(mr.mr_iid.to_string()),
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(mr.uuid.clone()),
+        markdown_uuid: Some(mr.uuid.clone()),
     });
 
     for (idx, n) in ordered_notes(notes).into_iter().enumerate() {
@@ -175,7 +175,7 @@ pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
             external_id: Some(n.external_id.to_string()),
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(mr.uuid.clone()),
+            markdown_uuid: Some(mr.uuid.clone()),
         });
     }
     rows

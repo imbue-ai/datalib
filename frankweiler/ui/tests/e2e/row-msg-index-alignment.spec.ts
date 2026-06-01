@@ -21,6 +21,7 @@ import { test, expect } from "@playwright/test";
 type Row = {
   uuid: string;
   conversation_uuid: string;
+  markdown_uuid: string | null;
   kind: string;
   message_index: number | null;
 };
@@ -128,12 +129,12 @@ test("clicked grid row highlights the section with the matching uuid", async ({
       .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
       .click();
 
-    // Wait for the preview to switch to the clicked row's conversation.
+    // Wait for the preview to switch to the clicked row's markdown.
     // The preview pane is shared across clicks, so a stale selection
     // from the previous click can mask the new state if we don't gate
-    // on the conversation attribute first.
+    // on the markdown attribute first.
     await page
-      .locator(`.chat-preview[data-conversation-uuid="${pick.conversation_uuid}"]`)
+      .locator(`.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`)
       .waitFor({ timeout: 10_000 });
     // Allow applySelection's nextTick + scrollTop write to settle.
     // We can't gate on `.msg.selected` existing — a row whose section

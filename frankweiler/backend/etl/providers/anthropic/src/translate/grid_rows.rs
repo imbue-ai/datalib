@@ -138,7 +138,7 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
             external_id: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(conv_uuid.into()),
+            markdown_uuid: Some(conv_uuid.into()),
         });
 
         for b in blocks {
@@ -200,7 +200,7 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
                 external_id: None,
                 notion_page_uuid: None,
                 notion_block_uuid: None,
-                document_uuid: Some(conv_uuid.into()),
+                markdown_uuid: Some(conv_uuid.into()),
             });
         }
     }
@@ -241,7 +241,7 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(conv.conversation_uuid.clone()),
+        markdown_uuid: Some(conv.conversation_uuid.clone()),
     }
 }
 

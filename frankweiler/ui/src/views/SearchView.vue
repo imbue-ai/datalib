@@ -612,7 +612,7 @@ onMounted(async () => {
 function openRow(row: SearchRow) {
   const href = router.resolve({
     name: "chat",
-    params: { conversationUuid: row.conversation_uuid },
+    params: { markdownUuid: row.markdown_uuid ?? row.uuid },
     hash: row.message_index != null ? `#m${row.message_index}` : undefined,
   }).href;
   window.open(href, "_blank", "noopener");
@@ -905,7 +905,7 @@ const gridOptions: GridOptions<SearchRow> = {
       </Pane>
       <Pane size="45" min-size="20" class="right-pane">
         <ChatPreviewPane
-          :conversation-uuid="selectedRow?.conversation_uuid ?? null"
+          :markdown-uuid="selectedRow?.markdown_uuid ?? null"
           :selected-section-uuid="
             selectedRow != null && selectedRow.kind !== 'Chat'
               ? selectedRow.uuid

@@ -22,7 +22,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
@@ -305,7 +305,7 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
     let rows = rows_for_pr(pr, comments);
     let sidecar = Sidecar {
         header: SidecarHeader {
-            document_uuid: pr.uuid.clone(),
+            markdown_uuid: pr.uuid.clone(),
             source_fingerprint: fingerprint_for_pr(pr, comments),
             render_version: RENDER_VERSION,
         },
@@ -323,7 +323,7 @@ pub fn render_github(
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     // Group comments by PR.
@@ -352,8 +352,8 @@ pub fn render_github(
 
         render_one_pr(pr, &comments, root)?;
         let rows = rows_for_pr(pr, &comments);
-        on_doc_complete(RenderedDoc {
-            document_uuid: pr.uuid.clone(),
+        on_doc_complete(RenderedMarkdown {
+            markdown_uuid: pr.uuid.clone(),
             source_name: String::new(),
             source_fingerprint: fingerprint,
             upstream_cursor: None,

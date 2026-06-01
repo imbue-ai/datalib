@@ -15,7 +15,7 @@
 //! ```jsonc
 //! {
 //!   "header": {
-//!     "document_uuid": "…",            // primary key for the document
+//!     "markdown_uuid": "…",            // primary key for the document
 //!     "source_fingerprint": "…",       // hash of upstream payload
 //!     "render_version": 1              // renderer-side schema stamp
 //!   },
@@ -24,7 +24,7 @@
 //! ```
 //!
 //! Skip logic: before applying we look up `documents.source_fingerprint`
-//! by `document_uuid`; if it matches the sidecar header we treat the
+//! by `markdown_uuid`; if it matches the sidecar header we treat the
 //! document as up-to-date and leave `grid_rows` alone. Same delete-then-
 //! insert pattern as the Python `populate_grid_rows`, generalized so
 //! any provider's Translate step can produce a sidecar tree this loader
@@ -43,13 +43,21 @@ use sqlx::Row;
 
 use crate::sidecar::Sidecar;
 
-/// Document-level metadata projection, one row per renderable document.
-/// `source_fingerprint` is the renderer's input-hash, set when the doc's
-/// markdown + blobs land on disk; subsequent runs compare against it to
-/// decide whether to re-render. `row_set_hash` is the load-side hash over
-/// the canonical grid_rows, used by tools that walk a stale tree.
-pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
-    document_uuid VARCHAR(96) NOT NULL,
+/// Per-rendered-markdown metadata projection: one row per `.md` file
+/// in `<root>/rendered_md/`. `source_fingerprint` is the renderer's
+/// input-hash, set when the markdown + blobs land on disk; subsequent
+/// runs compare against it to decide whether to re-render.
+/// `row_set_hash` is the load-side hash over the canonical grid_rows,
+/// used by tools that walk a stale tree.
+///
+/// `markdown_uuid` is the canonical addressing primitive for rendered
+/// output: every grid_row carries a FK back here, and `/api/chat/{uuid}`
+/// dereferences it through `md_path`. Note that for sharded renders
+/// (beeper renders one file per period) a single upstream
+/// "conversation" maps to N rows here — `conversation_uuid` is not
+/// unique in the table.
+pub const MARKDOWNS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS markdowns (
+    markdown_uuid VARCHAR(96) NOT NULL,
     source_name VARCHAR(64) NOT NULL,
     provider VARCHAR(32) NOT NULL,
     kind VARCHAR(32) NOT NULL,
@@ -62,27 +70,23 @@ pub const DOCUMENTS_DDL: &str = r#"CREATE TABLE IF NOT EXISTS documents (
     row_set_hash CHAR(64),
     renderer_version VARCHAR(32),
     rendered_at VARCHAR(40),
-    PRIMARY KEY (document_uuid)
+    PRIMARY KEY (markdown_uuid)
 )"#;
 
 /// Stats emitted on every load run. Stable shape so a web UI can poll
 /// or stream it without per-provider branches.
 #[derive(Debug, Default, Serialize)]
 pub struct LoadSummary {
-    pub documents_total: usize,
-    pub documents_loaded: usize,
-    pub documents_skipped: usize,
+    pub markdowns_total: usize,
+    pub markdowns_loaded: usize,
+    pub markdowns_skipped: usize,
     pub rows_inserted: usize,
 }
 
-/// Apply DDL for `grid_rows` and `documents`, plus the migration that
-/// upgrades pre-`source_fingerprint` databases.
-///
-/// Idempotent. Existing dev DBs have a `documents` table without
-/// `source_fingerprint` (and possibly a vestigial `documents_loaded`
-/// table from the previous load contract). The migration helper adds
-/// the column when missing and drops the dead table; both operations
-/// are no-ops on a fresh DB.
+/// Apply DDL for `grid_rows` and `markdowns`. The schema is the truth
+/// for fresh DBs; no migration support is provided because we don't
+/// promise back-compat with pre-`markdowns` databases — wipe and
+/// re-ingest if you're upgrading from an older release.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for (_table, ddl) in GRID_ROWS_DDL {
         sqlx::query(ddl)
@@ -90,49 +94,10 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
             .await
             .context("create grid_rows")?;
     }
-    sqlx::query(DOCUMENTS_DDL)
+    sqlx::query(MARKDOWNS_DDL)
         .execute(pool)
         .await
-        .context("create documents")?;
-    migrate_documents(pool)
-        .await
-        .context("migrate documents schema")?;
-    Ok(())
-}
-
-/// Upgrade an existing `documents` table written by an older revision
-/// of this crate: add `source_fingerprint` if absent; drop the now-
-/// retired `documents_loaded` table. SQLite has no `ADD COLUMN IF NOT
-/// EXISTS`, so we probe `pragma_table_info`.
-async fn migrate_documents(pool: &SqlitePool) -> Result<()> {
-    let has_fp: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM pragma_table_info('documents') WHERE name = 'source_fingerprint'",
-    )
-    .fetch_optional(pool)
-    .await
-    .context("probe documents.source_fingerprint")?;
-    if has_fp.is_none() {
-        sqlx::query("ALTER TABLE documents ADD COLUMN source_fingerprint VARCHAR(64)")
-            .execute(pool)
-            .await
-            .context("add documents.source_fingerprint")?;
-    }
-    let has_cursor: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM pragma_table_info('documents') WHERE name = 'upstream_cursor'",
-    )
-    .fetch_optional(pool)
-    .await
-    .context("probe documents.upstream_cursor")?;
-    if has_cursor.is_none() {
-        sqlx::query("ALTER TABLE documents ADD COLUMN upstream_cursor VARCHAR(64)")
-            .execute(pool)
-            .await
-            .context("add documents.upstream_cursor")?;
-    }
-    sqlx::query("DROP TABLE IF EXISTS documents_loaded")
-        .execute(pool)
-        .await
-        .context("drop legacy documents_loaded")?;
+        .context("create markdowns")?;
     Ok(())
 }
 
@@ -212,19 +177,19 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     s
 }
 
-/// One document's payload as handed from render to the indexer. The
+/// One markdown's payload as handed from render to the indexer. The
 /// render-side callback constructs this once md + blobs are durably on
-/// disk; [`apply_one`] writes the corresponding `grid_rows` + `documents`
+/// disk; [`apply_one`] writes the corresponding `grid_rows` + `markdowns`
 /// rows so render+index commit per-doc atomically.
 #[derive(Debug, Clone)]
-pub struct RenderedDoc {
-    pub document_uuid: String,
+pub struct RenderedMarkdown {
+    pub markdown_uuid: String,
     /// User-facing config name (e.g. `tiny-slack`); falls back to the
     /// provider string when sync doesn't have one wired in.
     pub source_name: String,
     pub source_fingerprint: String,
     /// Optional provider-defined cheap-probe value the orchestrator can
-    /// use *before* loading payloads to decide whether a doc has
+    /// use *before* loading payloads to decide whether a markdown has
     /// changed since last run. Examples: slack stamps each thread's
     /// `MAX(fetched_at)` here, so the next run can `GROUP BY
     /// thread_root_uuid` on the existing index and skip loading
@@ -232,7 +197,7 @@ pub struct RenderedDoc {
     /// cheaper-than-fingerprint signal.
     pub upstream_cursor: Option<String>,
     /// Absolute path to the rendered `.md`. Used to derive the
-    /// `qmd_path` we stamp into `documents.md_path` by stripping the
+    /// `qmd_path` we stamp into `markdowns.md_path` by stripping the
     /// out-dir prefix.
     pub md_path: PathBuf,
     pub render_version: u32,
@@ -248,16 +213,16 @@ pub struct RenderedDoc {
 pub async fn apply_one(
     pool: &SqlitePool,
     out_dir: &Path,
-    doc: &RenderedDoc,
+    md: &RenderedMarkdown,
     now_override: Option<&str>,
 ) -> Result<usize> {
-    let qmd_rel = doc
+    let qmd_rel = md
         .md_path
         .strip_prefix(out_dir)
-        .unwrap_or(&doc.md_path)
+        .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_document(pool, doc, &qmd_rel, now_override).await
+    apply_markdown(pool, md, &qmd_rel, now_override).await
 }
 
 /// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar and
@@ -279,7 +244,7 @@ pub async fn load_all(
     sidecars.sort();
 
     let mut summary = LoadSummary {
-        documents_total: sidecars.len(),
+        markdowns_total: sidecars.len(),
         ..Default::default()
     };
 
@@ -292,11 +257,11 @@ pub async fn load_all(
         let md_path = derive_md_path(sidecar_path)
             .with_context(|| format!("derive .md path from {}", sidecar_path.display()))?;
 
-        let document_uuid = sidecar.header.document_uuid.clone();
+        let markdown_uuid = sidecar.header.markdown_uuid.clone();
         let fingerprint = sidecar.header.source_fingerprint.clone();
 
-        if existing_fingerprint(pool, &document_uuid).await? == Some(fingerprint.clone()) {
-            summary.documents_skipped += 1;
+        if existing_fingerprint(pool, &markdown_uuid).await? == Some(fingerprint.clone()) {
+            summary.markdowns_skipped += 1;
             continue;
         }
 
@@ -308,29 +273,29 @@ pub async fn load_all(
             .first()
             .map(|r| r.provider.clone())
             .unwrap_or_default();
-        let doc = RenderedDoc {
-            document_uuid,
+        let md = RenderedMarkdown {
+            markdown_uuid,
             source_name,
             source_fingerprint: fingerprint,
             // load_all rebuilds the index from sidecars on disk, which
             // don't carry the cheap-probe cursor (it lives in the
             // indexer only). Leaving it None forces the next live sync
-            // to fall back to the fingerprint check for these docs —
-            // safe, just not as fast as the cursor short-circuit.
+            // to fall back to the fingerprint check for these markdowns
+            // — safe, just not as fast as the cursor short-circuit.
             upstream_cursor: None,
             md_path,
             render_version: sidecar.header.render_version,
             rows: sidecar.rows,
         };
-        let inserted = apply_one(pool, out_dir, &doc, now_override)
+        let inserted = apply_one(pool, out_dir, &md, now_override)
             .await
             .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
-        summary.documents_loaded += 1;
+        summary.markdowns_loaded += 1;
         progress(&format!(
             "loaded {}/{}",
-            summary.documents_loaded + summary.documents_skipped,
-            summary.documents_total
+            summary.markdowns_loaded + summary.markdowns_skipped,
+            summary.markdowns_total
         ));
     }
     Ok(summary)
@@ -371,37 +336,36 @@ async fn has_dolt_extensions(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>
     matches!(res, Ok(n) if n > 0)
 }
 
-/// Look up the on-disk render's fingerprint for one document. Caller
+/// Look up the on-disk render's fingerprint for one markdown. Caller
 /// uses this to decide whether to skip work (sync builds a bulk
 /// `HashMap<uuid, fingerprint>` once per source via [`load_fingerprints`]
 /// rather than calling this in a loop).
 pub async fn existing_fingerprint(
     pool: &SqlitePool,
-    document_uuid: &str,
+    markdown_uuid: &str,
 ) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT source_fingerprint FROM documents WHERE document_uuid = ?")
-        .bind(document_uuid)
+    let row = sqlx::query("SELECT source_fingerprint FROM markdowns WHERE markdown_uuid = ?")
+        .bind(markdown_uuid)
         .fetch_optional(pool)
         .await?;
     Ok(row.and_then(|r| r.try_get::<String, _>("source_fingerprint").ok()))
 }
 
 /// Bulk fingerprint snapshot. Used once per sync to populate the
-/// `prior_fingerprints` map every renderer consults at per-doc skip
-/// time. Rows whose `source_fingerprint` is NULL (pre-migration data,
-/// or docs render hasn't touched yet) are omitted so the caller treats
-/// them as "not rendered".
+/// `prior_fingerprints` map every renderer consults at per-markdown
+/// skip time. Rows whose `source_fingerprint` is NULL are omitted so
+/// the caller treats them as "not rendered".
 pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query(
-        "SELECT document_uuid, source_fingerprint \
-         FROM documents WHERE source_fingerprint IS NOT NULL",
+        "SELECT markdown_uuid, source_fingerprint \
+         FROM markdowns WHERE source_fingerprint IS NOT NULL",
     )
     .fetch_all(pool)
     .await
     .context("load_fingerprints")?;
     let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
     for r in rows {
-        let uuid: String = r.try_get("document_uuid")?;
+        let uuid: String = r.try_get("markdown_uuid")?;
         let fp: String = r.try_get("source_fingerprint")?;
         out.insert(uuid, fp);
     }
@@ -414,47 +378,47 @@ pub async fn load_fingerprints(pool: &SqlitePool) -> Result<HashMap<String, Stri
 /// thread's `MAX(fetched_at)`); other providers' rows are omitted.
 pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows = sqlx::query(
-        "SELECT document_uuid, upstream_cursor \
-         FROM documents WHERE upstream_cursor IS NOT NULL",
+        "SELECT markdown_uuid, upstream_cursor \
+         FROM markdowns WHERE upstream_cursor IS NOT NULL",
     )
     .fetch_all(pool)
     .await
     .context("load_cursors")?;
     let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
     for r in rows {
-        let uuid: String = r.try_get("document_uuid")?;
+        let uuid: String = r.try_get("markdown_uuid")?;
         let cur: String = r.try_get("upstream_cursor")?;
         out.insert(uuid, cur);
     }
     Ok(out)
 }
 
-async fn apply_document(
+async fn apply_markdown(
     pool: &SqlitePool,
-    doc: &RenderedDoc,
+    md: &RenderedMarkdown,
     qmd_path: &str,
     now_override: Option<&str>,
 ) -> Result<usize> {
     let mut conn = pool.acquire().await.context("acquire conn")?;
 
-    sqlx::query("DELETE FROM grid_rows WHERE document_uuid = ?")
-        .bind(&doc.document_uuid)
+    sqlx::query("DELETE FROM grid_rows WHERE markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
         .execute(&mut *conn)
         .await
         .context("delete prior rows")?;
 
-    for row in &doc.rows {
+    for row in &md.rows {
         insert_grid_row(&mut conn, row).await?;
     }
 
     let rendered_at = now_override
         .map(str::to_string)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    upsert_document(&mut conn, doc, qmd_path, &rendered_at)
+    upsert_markdown(&mut conn, md, qmd_path, &rendered_at)
         .await
-        .context("upsert documents")?;
+        .context("upsert markdowns")?;
 
-    // Stamp the document as its own dolt_log entry so re-ingests are
+    // Stamp the markdown as its own dolt_log entry so re-ingests are
     // human-auditable. doltlite exposes `dolt_commit` as a SQLite
     // scalar function — same semantics as the dolt-sql-server's
     // `CALL DOLT_COMMIT(...)`, just SELECT-shaped. With stock libsqlite3
@@ -463,7 +427,7 @@ async fn apply_document(
     if has_dolt_extensions(&mut conn).await {
         let msg = format!(
             "grid-rows-load: {} {}",
-            doc.document_uuid, doc.source_fingerprint
+            md.markdown_uuid, md.source_fingerprint
         );
         sqlx::query("SELECT dolt_commit('-Am', ?)")
             .bind(&msg)
@@ -472,30 +436,29 @@ async fn apply_document(
             .context("dolt_commit")?;
     }
 
-    Ok(doc.rows.len())
+    Ok(md.rows.len())
 }
 
-/// Pick the canonical row for a document — the row whose `uuid` matches
-/// `document_uuid` (the chat/thread/PR/page row). Fallback to the first
-/// row if nothing matches, mirroring the Python `documents.py:175`
-/// behavior.
-fn pick_canonical<'a>(rows: &'a [GridRow], document_uuid: &str) -> Option<&'a GridRow> {
+/// Pick the canonical row for a markdown — the row whose `uuid` matches
+/// `markdown_uuid` (the chat/thread/PR/page row). Fallback to the first
+/// row if nothing matches.
+fn pick_canonical<'a>(rows: &'a [GridRow], markdown_uuid: &str) -> Option<&'a GridRow> {
     rows.iter()
-        .find(|r| r.uuid == document_uuid)
+        .find(|r| r.uuid == markdown_uuid)
         .or_else(|| rows.first())
 }
 
-async fn upsert_document(
+async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    doc: &RenderedDoc,
+    md: &RenderedMarkdown,
     qmd_path: &str,
     rendered_at: &str,
 ) -> Result<()> {
-    let Some(canonical) = pick_canonical(&doc.rows, &doc.document_uuid) else {
+    let Some(canonical) = pick_canonical(&md.rows, &md.markdown_uuid) else {
         return Ok(());
     };
     let kind = doc_kind_for(&canonical.kind);
-    let timestamps: Vec<&str> = doc
+    let timestamps: Vec<&str> = md
         .rows
         .iter()
         .map(|r| r.when_ts.as_str())
@@ -503,29 +466,29 @@ async fn upsert_document(
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
-    let row_set_hash = compute_row_set_hash(&doc.rows);
-    let version_str = format!("{RENDERER_VERSION}.{}", doc.render_version);
+    let row_set_hash = compute_row_set_hash(&md.rows);
+    let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
     // Prefer the user-facing source_name the renderer was invoked with
     // (config.sources[].name in sync). Fall back to the canonical row's
     // provider when load_all rebuilds from disk without that context.
-    let source_name = if doc.source_name.is_empty() {
+    let source_name = if md.source_name.is_empty() {
         canonical.provider.clone()
     } else {
-        doc.source_name.clone()
+        md.source_name.clone()
     };
 
-    sqlx::query("DELETE FROM documents WHERE document_uuid = ?")
-        .bind(&doc.document_uuid)
+    sqlx::query("DELETE FROM markdowns WHERE markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
         .execute(&mut **conn)
         .await
-        .context("delete prior documents row")?;
+        .context("delete prior markdowns row")?;
     sqlx::query(
-        "INSERT INTO documents \
-         (document_uuid, source_name, provider, kind, title, created_at, updated_at, \
+        "INSERT INTO markdowns \
+         (markdown_uuid, source_name, provider, kind, title, created_at, updated_at, \
           md_path, source_fingerprint, upstream_cursor, row_set_hash, renderer_version, rendered_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&doc.document_uuid)
+    .bind(&md.markdown_uuid)
     .bind(&source_name)
     .bind(&canonical.provider)
     .bind(kind)
@@ -533,14 +496,14 @@ async fn upsert_document(
     .bind(created_at)
     .bind(updated_at)
     .bind(qmd_path)
-    .bind(&doc.source_fingerprint)
-    .bind(doc.upstream_cursor.as_deref())
+    .bind(&md.source_fingerprint)
+    .bind(md.upstream_cursor.as_deref())
     .bind(&row_set_hash)
     .bind(&version_str)
     .bind(rendered_at)
     .execute(&mut **conn)
     .await
-    .context("insert documents row")?;
+    .context("insert markdowns row")?;
     Ok(())
 }
 
@@ -553,7 +516,7 @@ async fn insert_grid_row(
          (uuid, provider, kind, source_label, when_ts, author, account, project, channel, \
           conversation_name, conversation_uuid, message_index, entire_chat, text, slack_link, \
           qmd_path, source_url, git_sha, external_id, notion_page_uuid, notion_block_uuid, \
-          document_uuid) \
+          markdown_uuid) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.uuid)
@@ -577,7 +540,7 @@ async fn insert_grid_row(
     .bind(&row.external_id)
     .bind(&row.notion_page_uuid)
     .bind(&row.notion_block_uuid)
-    .bind(&row.document_uuid)
+    .bind(&row.markdown_uuid)
     .execute(&mut **conn)
     .await
     .with_context(|| format!("insert grid_row {}", row.uuid))?;

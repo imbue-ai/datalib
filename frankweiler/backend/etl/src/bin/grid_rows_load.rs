@@ -2,7 +2,7 @@
 //! `<out>/rendered_md/**/*.grid_rows.json` (written by any Translate
 //! step) and inserts rows into the doltlite file at `<out>/<db_filename>`.
 //!
-//! Incremental: a `documents_loaded(qmd_path PK, source_fingerprint)`
+//! Incremental: a `markdowns_loaded(qmd_path PK, source_fingerprint)`
 //! table tracks which documents have already been ingested. Sidecars
 //! whose fingerprint matches the recorded one are skipped — zero
 //! writes.
@@ -88,9 +88,9 @@ async fn main() -> Result<()> {
 
     let span = info_span!(
         "grid_rows_load",
-        documents_total = tracing::field::Empty,
-        documents_loaded = tracing::field::Empty,
-        documents_skipped = tracing::field::Empty,
+        markdowns_total = tracing::field::Empty,
+        markdowns_loaded = tracing::field::Empty,
+        markdowns_skipped = tracing::field::Empty,
     );
     let _enter = span.enter();
 
@@ -108,9 +108,9 @@ async fn main() -> Result<()> {
 
     info!(
         event = "grid_rows_load_complete",
-        documents_total = summary.documents_total,
-        documents_loaded = summary.documents_loaded,
-        documents_skipped = summary.documents_skipped,
+        markdowns_total = summary.markdowns_total,
+        markdowns_loaded = summary.markdowns_loaded,
+        markdowns_skipped = summary.markdowns_skipped,
         rows_inserted = summary.rows_inserted,
     );
 

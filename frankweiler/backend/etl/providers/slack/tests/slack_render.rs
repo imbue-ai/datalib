@@ -55,8 +55,8 @@ fn renders_tng_fixture_and_is_idempotent() {
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            priors.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
     )
@@ -148,8 +148,8 @@ fn renders_only_changed_and_new_threads_on_resync() {
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            priors.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            priors.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
     )
@@ -241,16 +241,16 @@ fn renders_only_changed_and_new_threads_on_resync() {
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
             // Mutated thread must produce a different fingerprint.
-            if doc.document_uuid == mutated_thread_uuid {
-                let old = priors.get(&doc.document_uuid).expect("prior present");
+            if doc.markdown_uuid == mutated_thread_uuid {
+                let old = priors.get(&doc.markdown_uuid).expect("prior present");
                 assert_ne!(
                     old, &doc.source_fingerprint,
                     "mutated thread's fingerprint did not change",
                 );
             }
-            rendered_uuids.push(doc.document_uuid.clone());
+            rendered_uuids.push(doc.markdown_uuid.clone());
             Ok(())
         },
     )
@@ -308,8 +308,8 @@ fn renders_only_changed_and_new_threads_on_resync() {
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedDoc| -> anyhow::Result<()> {
-            capture.insert(doc.document_uuid.clone(), doc.source_fingerprint.clone());
+        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            capture.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
     )

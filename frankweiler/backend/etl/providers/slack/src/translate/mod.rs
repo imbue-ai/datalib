@@ -562,7 +562,7 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
             external_id: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(thread_uuid.clone()),
+            markdown_uuid: Some(thread_uuid.clone()),
         });
 
         // Message rows.
@@ -598,7 +598,7 @@ pub fn grid_rows(t: &TranslatedSlack) -> Vec<GridRow> {
                 external_id: None,
                 notion_page_uuid: None,
                 notion_block_uuid: None,
-                document_uuid: Some(thread_uuid.clone()),
+                markdown_uuid: Some(thread_uuid.clone()),
             });
         }
     }

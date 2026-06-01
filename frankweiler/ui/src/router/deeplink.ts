@@ -4,7 +4,7 @@
 
 export type Route =
   | { kind: "search"; params: Record<string, string> }
-  | { kind: "chat"; conversationUuid: string; params: Record<string, string> }
+  | { kind: "chat"; markdownUuid: string; params: Record<string, string> }
   | { kind: "prefs" };
 
 export class ParseError extends Error {}
@@ -29,7 +29,7 @@ export function parse(url: string): Route {
   if (head === "prefs") return { kind: "prefs" };
   if (head === "chat") {
     if (!rest) throw new ParseError("missing chat uuid");
-    return { kind: "chat", conversationUuid: rest, params };
+    return { kind: "chat", markdownUuid: rest, params };
   }
   throw new ParseError(`unknown route: ${head}`);
 }
@@ -39,7 +39,7 @@ export function toHash(route: Route): string {
     case "search":
       return withQuery("search", route.params);
     case "chat":
-      return withQuery(`chat/${route.conversationUuid}`, route.params);
+      return withQuery(`chat/${route.markdownUuid}`, route.params);
     case "prefs":
       return "prefs";
   }

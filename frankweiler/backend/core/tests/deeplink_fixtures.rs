@@ -21,8 +21,8 @@ enum RouteJson {
         params: BTreeMap<String, String>,
     },
     Chat {
-        #[serde(rename = "conversationUuid")]
-        conversation_uuid: String,
+        #[serde(rename = "markdownUuid")]
+        markdown_uuid: String,
         params: BTreeMap<String, String>,
     },
     Prefs,
@@ -33,10 +33,10 @@ impl From<RouteJson> for Route {
         match r {
             RouteJson::Search { params } => Route::Search { params },
             RouteJson::Chat {
-                conversation_uuid,
+                markdown_uuid,
                 params,
             } => Route::Chat {
-                conversation_uuid,
+                markdown_uuid,
                 params,
             },
             RouteJson::Prefs => Route::Prefs,

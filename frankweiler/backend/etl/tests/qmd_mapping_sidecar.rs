@@ -53,15 +53,15 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(uuid.into()),
+        markdown_uuid: Some(uuid.into()),
     }
 }
 
 fn write_sidecar(root: &Path, qmd_path: &str, rows: Vec<GridRow>) {
-    let doc_uuid = rows[0].document_uuid.clone().unwrap();
+    let doc_uuid = rows[0].markdown_uuid.clone().unwrap();
     let sidecar = Sidecar {
         header: SidecarHeader {
-            document_uuid: doc_uuid,
+            markdown_uuid: doc_uuid,
             source_fingerprint: "deadbeef".into(),
             render_version: 1,
         },

@@ -58,7 +58,7 @@ pub fn beeper_event_uuid(source: &str, native_event_id: &str) -> String {
 /// Per-period document UUID. Stable for the lifetime of the
 /// `(room, period)` pair regardless of how many times we re-render
 /// — so the load step can foreign-key against it consistently.
-pub fn beeper_document_uuid(room_uuid: &str, period_key: &str) -> String {
+pub fn beeper_markdown_uuid(room_uuid: &str, period_key: &str) -> String {
     Uuid::new_v5(
         &BEEPER_UUID_NS,
         format!("beeper:doc:{room_uuid}:{period_key}").as_bytes(),

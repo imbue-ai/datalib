@@ -30,6 +30,10 @@ pub mod download_runs {
     include!("generated/download_runs.rs");
 }
 
+pub mod markdowns {
+    include!("generated/markdowns.rs");
+}
+
 #[cfg(test)]
 mod tests {
     use super::anthropic::*;

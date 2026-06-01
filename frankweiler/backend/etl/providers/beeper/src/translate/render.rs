@@ -17,13 +17,13 @@ use chrono::{DateTime, Utc};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::parse::{DocBucket, Event, ParsedBeeper, Room};
-use super::{beeper_document_uuid, beeper_event_uuid};
+use super::{beeper_event_uuid, beeper_markdown_uuid};
 
 /// Bump when the rendered markdown / grid_rows layout changes
 /// enough that we need every existing doc rebuilt.
@@ -47,7 +47,7 @@ pub fn render_all(
     source_name: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     raw_db_path: &Path,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
@@ -100,14 +100,14 @@ fn render_one(
     out_dir: &Path,
     source_name: &str,
     prior_fingerprints: &HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     raw_db_path: &Path,
 ) -> Result<RenderOutcome> {
-    let document_uuid = beeper_document_uuid(&room.room_uuid, &doc.period_key);
+    let markdown_uuid = beeper_markdown_uuid(&room.room_uuid, &doc.period_key);
     let fingerprint = compute_fingerprint(doc);
     let (md_path, json_path, page_dir) = output_paths(out_dir, room, &doc.period_key);
 
-    if prior_fingerprints.get(&document_uuid).map(String::as_str) == Some(fingerprint.as_str())
+    if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
         return Ok(RenderOutcome::Skipped);
@@ -119,7 +119,7 @@ fn render_one(
     // fingerprint, so a re-run will redo the whole doc cleanly.
     let blobs_dir = page_dir.join("blobs");
     let blob_count = materialize_blobs(raw_db_path, doc, &blobs_dir)
-        .with_context(|| format!("materialize blobs for {document_uuid}"))?;
+        .with_context(|| format!("materialize blobs for {markdown_uuid}"))?;
 
     let md_rel = md_path
         .strip_prefix(out_dir)
@@ -128,17 +128,17 @@ fn render_one(
     let md = render_markdown(
         room,
         doc,
-        &document_uuid,
+        &markdown_uuid,
         &fingerprint,
         source_name,
         &md_rel,
     );
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = build_grid_rows(room, doc, &document_uuid, &md_rel);
+    let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel);
     let sidecar = Sidecar {
         header: SidecarHeader {
-            document_uuid: document_uuid.clone(),
+            markdown_uuid: markdown_uuid.clone(),
             source_fingerprint: fingerprint.clone(),
             render_version: RENDER_VERSION,
         },
@@ -147,8 +147,8 @@ fn render_one(
     let sj = serde_json::to_string_pretty(&sidecar).context("serialize beeper sidecar")?;
     fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
 
-    on_doc_complete(RenderedDoc {
-        document_uuid: document_uuid.clone(),
+    on_doc_complete(RenderedMarkdown {
+        markdown_uuid: markdown_uuid.clone(),
         source_name: source_name.to_string(),
         source_fingerprint: fingerprint,
         // No provider-side cheap-probe signal today. The
@@ -162,7 +162,7 @@ fn render_one(
         render_version: RENDER_VERSION,
         rows,
     })
-    .with_context(|| format!("on_doc_complete {document_uuid}"))?;
+    .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
 
     Ok(RenderOutcome::Rendered { blobs: blob_count })
 }
@@ -227,7 +227,7 @@ fn compute_fingerprint(doc: &DocBucket) -> String {
 fn render_markdown(
     room: &Room,
     doc: &DocBucket,
-    document_uuid: &str,
+    markdown_uuid: &str,
     fingerprint: &str,
     source_name: &str,
     md_rel: &Path,
@@ -237,7 +237,7 @@ fn render_markdown(
 
     // Frontmatter — minimal but searchable.
     out.push_str("---\n");
-    out.push_str(&format!("document_uuid: {document_uuid}\n"));
+    out.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
     out.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     out.push_str(&format!("source_name: {source_name}\n"));
     out.push_str("provider: beeper\n");
@@ -603,7 +603,7 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
 fn build_grid_rows(
     room: &Room,
     doc: &DocBucket,
-    document_uuid: &str,
+    markdown_uuid: &str,
     md_rel: &Path,
 ) -> Vec<GridRow> {
     let qmd_path = Some(md_rel.display().to_string());
@@ -623,7 +623,7 @@ fn build_grid_rows(
 
     // One "conversation" header row per doc.
     rows.push(GridRow {
-        uuid: document_uuid.to_string(),
+        uuid: markdown_uuid.to_string(),
         provider: "beeper".into(),
         kind: kind_for_conversation(&room.network),
         source_label: source_label.clone(),
@@ -655,7 +655,7 @@ fn build_grid_rows(
         external_id: room.external_room_id.clone(),
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(document_uuid.to_string()),
+        markdown_uuid: Some(markdown_uuid.to_string()),
     });
 
     for (idx, m) in doc.messages.iter().enumerate() {
@@ -681,7 +681,7 @@ fn build_grid_rows(
             external_id: m.external_event_id.clone(),
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(document_uuid.to_string()),
+            markdown_uuid: Some(markdown_uuid.to_string()),
         });
     }
 
@@ -715,7 +715,7 @@ fn build_grid_rows(
                 external_id: r.external_event_id.clone(),
                 notion_page_uuid: None,
                 notion_block_uuid: None,
-                document_uuid: Some(document_uuid.to_string()),
+                markdown_uuid: Some(markdown_uuid.to_string()),
             });
         }
     }

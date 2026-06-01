@@ -32,26 +32,21 @@ pub trait MirrorRepo: Send + Sync {
     /// Run a grid-search query and return rows for the UI.
     async fn search(&self, query: &ParsedQuery, limit: usize) -> Result<Vec<SearchRow>, RepoError>;
 
-    /// Fetch the per-conversation header data. Returns `Ok(None)` when
-    /// no chat-level row exists for the UUID.
-    async fn chat_meta(&self, conversation_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
+    /// Fetch the per-markdown header data (title, account, channel, …)
+    /// for the chat preview pane. Returns `Ok(None)` when no row
+    /// matches. `markdown_uuid` is the canonical addressing primitive
+    /// — the same UUID `/api/chat/{markdown_uuid}` takes.
+    async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
 
-    /// Resolve the on-disk QMD path for a conversation. The returned
-    /// path is absolute (already joined with the data root).
-    async fn qmd_path_for_conversation(
+    /// Resolve the on-disk QMD path for one rendered markdown, keyed
+    /// by `markdowns.markdown_uuid`. The returned path is absolute
+    /// (already joined with the data root). This is the only file
+    /// lookup left after the document_uuid → markdown_uuid cleanup:
+    /// one UUID per rendered file, no enumeration, no fallbacks.
+    async fn qmd_path_for_markdown(
         &self,
-        conversation_uuid: &str,
+        markdown_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError>;
-
-    /// Resolve the on-disk QMD path for a single grid row by its
-    /// `uuid`. Some providers shard a conversation across multiple
-    /// rendered files (e.g. beeper renders one file per period —
-    /// month/day/year), so `qmd_path_for_conversation` returning
-    /// "some file for that conversation" can pick the wrong file
-    /// when the click points at a specific row. The UI sends the
-    /// clicked row's uuid in `/api/chat/{conv}?row=<uuid>` and the
-    /// chat handler prefers this lookup when present.
-    async fn qmd_path_for_row(&self, row_uuid: &str) -> Result<Option<PathBuf>, RepoError>;
 
     /// Fetch every row's `(uuid, kind, qmd_path, provider)` tuple. Used to
     /// build a `GridIndex` so qmd-routed search can map hits → grid rows.

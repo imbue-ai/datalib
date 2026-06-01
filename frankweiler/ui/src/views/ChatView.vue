@@ -23,9 +23,9 @@ async function load(uuid: string) {
   }
 }
 
-onMounted(() => load(String(route.params.conversationUuid)));
+onMounted(() => load(String(route.params.markdownUuid)));
 watch(
-  () => route.params.conversationUuid,
+  () => route.params.markdownUuid,
   (u) => u && load(String(u)),
 );
 </script>
@@ -38,10 +38,10 @@ watch(
     <template v-else-if="chat">
       <header>
         <h2>
-          {{ chat.name || chat.conversation_uuid }}
-          <CopyUuidButton :uuid="chat.conversation_uuid" label="Copy page ID" />
+          {{ chat.name || chat.markdown_uuid }}
+          <CopyUuidButton :uuid="chat.markdown_uuid" label="Copy page ID" />
           <FeedbackButton
-            :entity-uuid="chat.conversation_uuid"
+            :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />

@@ -545,7 +545,7 @@
           "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml bff8394d593bf2fddb7c6a9af7b3a6399c2b21ac526e46178d221de44e1b454b",
           "FILE:@@//frankweiler/backend/sync/Cargo.toml 8c6b6de8a6b6c24c48d1ac8c56a74c5f0a1fd8e6d31b903135d387cede89e3cc",
           "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1",
-          "FILE:@@//frankweiler/backend/etl/providers/beeper/Cargo.toml 149a74cc65121146d58ede8c1e0f0b01f6315185b776271c849ab0cdf292f14b"
+          "FILE:@@//frankweiler/backend/etl/providers/beeper/Cargo.toml c55ebeb21188746104645825ad569a88eb4b03e1da7691367d4673ff5bfa7c9c"
         ],
         "generatedRepoSpecs": {
           "frankweiler_crates": {

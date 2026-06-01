@@ -117,7 +117,7 @@ fn chat_row(conv: &OAConversationRow) -> GridRow {
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(conv.conversation_id.clone()),
+        markdown_uuid: Some(conv.conversation_id.clone()),
     }
 }
 
@@ -154,7 +154,7 @@ fn message_row(conv: &OAConversationRow, m: &OAMessageRow, idx: usize, conv_time
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(conv.conversation_id.clone()),
+        markdown_uuid: Some(conv.conversation_id.clone()),
     }
 }
 

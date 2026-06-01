@@ -308,10 +308,10 @@
           "x-sql-type": "VARCHAR(96)",
           "description": "Notion-only. UUID of the specific block this row is anchored to. For heading rows this is the heading block; for comment-thread rows it is the block the discussion is attached to (`discussion.parent_id` when parent_table='block'); for individual comment rows it is the same as the parent thread's block. Null for page-level rows and non-Notion rows."
         },
-        "document_uuid": {
+        "markdown_uuid": {
           "type": ["string", "null"],
           "x-sql-type": "VARCHAR(96)",
-          "description": "FK into the `documents` table — every renderable document (conversation, thread, page, …) gets one row in `documents`, and every grid_row that participates in that document points at it. Many-to-1. Nullable today because the column is being introduced ahead of the producer-side population pass (see plan-ui-driven-sync.md, Phase C); will become NOT NULL once every renderer emits it. Drives incremental re-render (skip if `documents.row_set_hash` unchanged) and per-document re-ingest."
+          "description": "FK into the `markdowns` table — every rendered `.md` file gets one row in `markdowns`, and every grid_row that lives inside that file points at it. Many-to-1. A single upstream 'conversation' can shard across multiple markdowns when a provider renders one file per period (beeper); `markdown_uuid` is the addressing primitive the rest of the system (notably `/api/chat/{markdown_uuid}`) uses. Nullable today because the column is being introduced ahead of the producer-side population pass (see plan-ui-driven-sync.md, Phase C); will become NOT NULL once every renderer emits it. Drives incremental re-render (skip if `markdowns.row_set_hash` unchanged) and per-markdown re-ingest."
         }
       }
     }

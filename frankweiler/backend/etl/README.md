@@ -19,7 +19,7 @@ uniformly.
 |-----------|-----------------------------|-----------------------------------------|--------------------------------------------|
 | Extract   | `<provider>-download`       | upstream API                            | `<out>/raw/<name>.doltlite_db`             |
 | Translate | called in-process by sync   | `<out>/raw/<name>.doltlite_db`          | `<out>/rendered_md/<provider>/...`         |
-| Load      | `grid-rows-load` (generic)  | `<out>/rendered_md/`                    | rows in Dolt + `documents_loaded` bookkeeping |
+| Load      | `grid-rows-load` (generic)  | `<out>/rendered_md/`                    | rows in Dolt + `markdowns_loaded` bookkeeping |
 
 Every provider's Extract step writes to a single sqlite file at
 `<out>/raw/<name>.doltlite_db`. Object payloads, sync-run bookkeeping,
@@ -78,7 +78,7 @@ deciding to do work.
     payload; if the existing `.md` already carries that fingerprint,
     the write is skipped.
   * **Load** stores `(qmd_path, source_fingerprint)` in
-    `documents_loaded`. Re-running with no upstream changes is a no-op:
+    `markdowns_loaded`. Re-running with no upstream changes is a no-op:
     every sidecar is short-circuited before the DELETE/INSERT.
 
 Bump `RENDER_VERSION` in the per-provider translate module (e.g.

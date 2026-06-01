@@ -10,7 +10,7 @@ use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
 use frankweiler_etl::blobs::safe_filename;
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 
@@ -393,7 +393,7 @@ pub fn render_all(
     source_name: &str,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> anyhow::Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
     progress.set_length(Some(parsed.conversations.len() as u64));
     let mut written = Vec::new();
@@ -435,7 +435,7 @@ pub fn render_all(
         let rows = rows_for_conversation(&shredded);
         let sidecar = Sidecar {
             header: SidecarHeader {
-                document_uuid: conv_uuid.clone(),
+                markdown_uuid: conv_uuid.clone(),
                 source_fingerprint: fingerprint.clone(),
                 render_version: RENDER_VERSION,
             },
@@ -445,8 +445,8 @@ pub fn render_all(
         let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
         std::fs::write(&sidecar_abs, sidecar_json)?;
 
-        on_doc_complete(RenderedDoc {
-            document_uuid: conv_uuid.clone(),
+        on_doc_complete(RenderedMarkdown {
+            markdown_uuid: conv_uuid.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
             upstream_cursor: None,

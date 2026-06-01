@@ -9,7 +9,7 @@
 //! level fails immediately on that kind of drift, and shows a
 //! reviewable diff of exactly what changed.
 //!
-//! Snapshot contents: `grid_rows`, `documents`, and `documents_loaded`
+//! Snapshot contents: `grid_rows`, `documents`, and `markdowns_loaded`
 //! tables, each dumped as one JSON object per row, sorted by their
 //! primary key for stability. Long `text` bodies are truncated +
 //! hashed to keep the snapshot diff-friendly (a one-character change
@@ -123,7 +123,7 @@ async fn snapshot_grid_rows_and_documents() {
                 project, channel, conversation_name, conversation_uuid, \
                 message_index, entire_chat, text, slack_link, qmd_path, \
                 source_url, git_sha, external_id, notion_page_uuid, \
-                notion_block_uuid, document_uuid \
+                notion_block_uuid, markdown_uuid \
          FROM grid_rows ORDER BY uuid",
     )
     .fetch_all(&pool)
@@ -158,19 +158,19 @@ async fn snapshot_grid_rows_and_documents() {
                 "external_id": r.try_get::<Option<String>, _>("external_id").ok().flatten(),
                 "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
                 "notion_block_uuid": r.try_get::<Option<String>, _>("notion_block_uuid").ok().flatten(),
-                "document_uuid": r.try_get::<Option<String>, _>("document_uuid").ok().flatten(),
+                "markdown_uuid": r.try_get::<Option<String>, _>("markdown_uuid").ok().flatten(),
             })
         })
         .collect();
 
     // ── documents ────────────────────────────────────────────────
     // Includes source_fingerprint (render's input-hash) since the
-    // documents_loaded table merged into documents.
+    // markdowns_loaded table merged into documents.
     let drows = sqlx::query(
-        "SELECT document_uuid, source_name, provider, kind, title, \
+        "SELECT markdown_uuid, source_name, provider, kind, title, \
                 created_at, updated_at, md_path, source_fingerprint, \
                 row_set_hash, renderer_version, rendered_at \
-         FROM documents ORDER BY document_uuid",
+         FROM markdowns ORDER BY markdown_uuid",
     )
     .fetch_all(&pool)
     .await
@@ -180,7 +180,7 @@ async fn snapshot_grid_rows_and_documents() {
         .iter()
         .map(|r| {
             json!({
-                "document_uuid": r.try_get::<String, _>("document_uuid").ok(),
+                "markdown_uuid": r.try_get::<String, _>("markdown_uuid").ok(),
                 "source_name": r.try_get::<String, _>("source_name").ok(),
                 "provider": r.try_get::<String, _>("provider").ok(),
                 "kind": r.try_get::<String, _>("kind").ok(),

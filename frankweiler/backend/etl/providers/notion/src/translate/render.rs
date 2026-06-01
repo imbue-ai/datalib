@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_store::BlobStore;
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use once_cell::sync::Lazy;
@@ -1149,7 +1149,7 @@ pub fn render_notion_official(
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let pages_root = root.join(pages_subdir());
@@ -1233,7 +1233,7 @@ pub fn render_notion_official(
         if let Some(pd) = page_doc_by_uuid.get(&pid) {
             let sidecar = Sidecar {
                 header: SidecarHeader {
-                    document_uuid: pd.page_uuid.clone(),
+                    markdown_uuid: pd.page_uuid.clone(),
                     source_fingerprint: pd.source_fingerprint.clone(),
                     render_version: RENDER_VERSION,
                 },
@@ -1243,8 +1243,8 @@ pub fn render_notion_official(
             let json = serde_json::to_string_pretty(&sidecar)?;
             fs::write(&sidecar_path, json)?;
 
-            on_doc_complete(RenderedDoc {
-                document_uuid: pd.page_uuid.clone(),
+            on_doc_complete(RenderedMarkdown {
+                markdown_uuid: pd.page_uuid.clone(),
                 source_name: String::new(),
                 source_fingerprint: pd.source_fingerprint.clone(),
                 upstream_cursor: None,
@@ -1338,7 +1338,7 @@ pub fn render_notion_official(
         if let Some(td) = thread_doc_by_uuid.get(&disc_id) {
             let sidecar = Sidecar {
                 header: SidecarHeader {
-                    document_uuid: td.discussion_uuid.clone(),
+                    markdown_uuid: td.discussion_uuid.clone(),
                     source_fingerprint: td.source_fingerprint.clone(),
                     render_version: RENDER_VERSION,
                 },
@@ -1348,8 +1348,8 @@ pub fn render_notion_official(
             let json = serde_json::to_string_pretty(&sidecar)?;
             fs::write(&sidecar_path, json)?;
 
-            on_doc_complete(RenderedDoc {
-                document_uuid: td.discussion_uuid.clone(),
+            on_doc_complete(RenderedMarkdown {
+                markdown_uuid: td.discussion_uuid.clone(),
                 source_name: String::new(),
                 source_fingerprint: td.source_fingerprint.clone(),
                 upstream_cursor: None,

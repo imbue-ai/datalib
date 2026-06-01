@@ -8,6 +8,10 @@ pub struct SearchRow {
     /// Stable per-row identifier; equals the `uuid` column of `grid_rows`.
     pub uuid: String,
     pub conversation_uuid: String,
+    /// FK into the `markdowns` table — addresses the rendered `.md`
+    /// this row lives inside. The UI passes this to
+    /// `/api/chat/{markdown_uuid}` when the user clicks the row.
+    pub markdown_uuid: Option<String>,
     pub message_index: Option<usize>,
     pub snippet: String,
     pub sender: String,

@@ -12,6 +12,7 @@ use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::query::parse_query;
 use frankweiler_core::repo::MirrorRepo;
 use frankweiler_schema::grid_rows::DDL as GRID_DDL;
+use frankweiler_schema::markdowns::DDL as MARKDOWNS_DDL;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -36,13 +37,21 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
             .await
             .expect("create grid_rows");
     }
+    for (_t, ddl) in MARKDOWNS_DDL {
+        sqlx::query(ddl)
+            .execute(repo.pool())
+            .await
+            .expect("create markdowns");
+    }
+    // For Anthropic chats the rendered file is 1:1 with the
+    // conversation, so markdown_uuid == conversation_uuid here.
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link, qmd_path, source_url) \
+         message_index, entire_chat, text, slack_link, qmd_path, source_url, markdown_uuid) \
          VALUES ('c-1','anthropic','Chat','Claude','2026-04-01T10:00:00+00:00', \
                  NULL,'acct-a',NULL,NULL,'Test conv','c-1',NULL,'/chat/c-1', \
-                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1')",
+                 'summary','', 'chats/c-1.md', 'https://claude.ai/chat/c-1', 'c-1')",
     )
     .execute(repo.pool())
     .await
@@ -50,13 +59,21 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     sqlx::query(
         "INSERT INTO grid_rows (uuid, provider, kind, source_label, when_ts, \
          author, account, project, channel, conversation_name, conversation_uuid, \
-         message_index, entire_chat, text, slack_link) \
+         message_index, entire_chat, text, slack_link, markdown_uuid) \
          VALUES ('m-1','anthropic','User Input','Claude','2026-04-01T10:01:00+00:00', \
-                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','')",
+                 'acct-a','acct-a',NULL,NULL,'Test conv','c-1',0,'/chat/c-1','hello there','','c-1')",
     )
     .execute(repo.pool())
     .await
     .expect("insert message row");
+    sqlx::query(
+        "INSERT INTO markdowns (markdown_uuid, source_name, provider, kind, md_path, \
+         row_set_hash, renderer_version) \
+         VALUES ('c-1','test','anthropic','chat','chats/c-1.md','deadbeef','test-v1')",
+    )
+    .execute(repo.pool())
+    .await
+    .expect("insert markdown row");
 
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 2, "expected 2 rows, got {rows:?}");
@@ -83,7 +100,7 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         Some("https://claude.ai/chat/c-1")
     );
 
-    let qmd = repo.qmd_path_for_conversation("c-1").await.unwrap();
+    let qmd = repo.qmd_path_for_markdown("c-1").await.unwrap();
     assert!(qmd.is_some());
     let qmd = qmd.unwrap();
     assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");

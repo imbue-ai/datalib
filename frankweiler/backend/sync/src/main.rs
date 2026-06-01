@@ -60,7 +60,9 @@ use frankweiler_core::config::{
     NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
-use frankweiler_etl::load::{apply_one, init_schema, load_cursors, load_fingerprints, RenderedDoc};
+use frankweiler_etl::load::{
+    apply_one, init_schema, load_cursors, load_fingerprints, RenderedMarkdown,
+};
 use frankweiler_etl::progress::{FanOut, Progress, TracingSink};
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
@@ -533,8 +535,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     // than in turn.
     let translate_multi = make_multi();
     let load_totals = Arc::new(Mutex::new(summary::LoadOutcome {
-        documents_loaded: 0,
-        documents_total: 0,
+        markdowns_loaded: 0,
+        markdowns_total: 0,
         rows_inserted: 0,
         error: None,
     }));
@@ -586,7 +588,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             // `block_in_place` needed, since this thread isn't a
             // worker thread.
             let name_for_cb = name.clone();
-            let mut on_doc_complete = move |mut doc: RenderedDoc| -> Result<()> {
+            let mut on_doc_complete = move |mut doc: RenderedMarkdown| -> Result<()> {
                 // Render doesn't always have the user-facing config
                 // name (notion/github/gitlab pass empty); fill it in
                 // here so documents.source_name is consistent.
@@ -601,8 +603,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
                     apply_one(pool_ref, root_path, &doc, Some(now_str)).await
                 })?;
                 let mut t = lt.lock().unwrap();
-                t.documents_loaded += 1;
-                t.documents_total += 1;
+                t.markdowns_loaded += 1;
+                t.markdowns_total += 1;
                 t.rows_inserted += rows_inserted;
                 Ok(())
             };
@@ -1206,7 +1208,7 @@ fn translate_source(
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     prior_cursors: &std::collections::HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedDoc) -> Result<()>,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();

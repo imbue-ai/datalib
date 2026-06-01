@@ -143,8 +143,8 @@ impl MirrorRepo for DoltRepo {
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    channel, conversation_name, conversation_uuid, message_index, \
-                    entire_chat, text, slack_link, notion_page_uuid \
+                    channel, conversation_name, conversation_uuid, markdown_uuid, \
+                    message_index, entire_chat, text, slack_link, notion_page_uuid \
              FROM grid_rows{} \
              ORDER BY when_ts ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
@@ -174,6 +174,7 @@ impl MirrorRepo for DoltRepo {
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
+            let markdown_uuid: Option<String> = r.try_get("markdown_uuid").ok();
             let message_index: Option<i64> = r.try_get("message_index").ok();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             let text: String = r.try_get("text").unwrap_or_default();
@@ -188,6 +189,7 @@ impl MirrorRepo for DoltRepo {
             out.push(SearchRow {
                 uuid,
                 conversation_uuid,
+                markdown_uuid,
                 message_index: message_index.map(|n| n as usize),
                 snippet: snip,
                 sender: author.clone(),
@@ -208,15 +210,20 @@ impl MirrorRepo for DoltRepo {
         Ok(out)
     }
 
-    async fn chat_meta(&self, conversation_uuid: &str) -> Result<Option<ChatMeta>, RepoError> {
+    async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError> {
+        // Project the per-markdown header fields out of any grid_row
+        // that points at this markdown — they're denormalized identically
+        // across the rows of a single markdown, so picking the canonical
+        // (Chat / Slack Thread / per-provider top-level row) keeps the
+        // result deterministic.
         let sql = "SELECT conversation_name, account, project, channel, when_ts, source_label, \
                           COALESCE(source_url, slack_link) AS source_url_or_link \
                    FROM grid_rows \
-                   WHERE conversation_uuid = ? \
+                   WHERE markdown_uuid = ? \
                    ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
                    LIMIT 1";
         let row = sqlx::query(sql)
-            .bind(conversation_uuid)
+            .bind(markdown_uuid)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| RepoError::Internal(e.to_string()))?;
@@ -305,8 +312,8 @@ impl MirrorRepo for DoltRepo {
         }
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    channel, conversation_name, conversation_uuid, message_index, \
-                    entire_chat, text, slack_link, notion_page_uuid \
+                    channel, conversation_name, conversation_uuid, markdown_uuid, \
+                    message_index, entire_chat, text, slack_link, notion_page_uuid \
              FROM grid_rows{}",
             where_sql
         );
@@ -331,6 +338,7 @@ impl MirrorRepo for DoltRepo {
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
+            let markdown_uuid: Option<String> = r.try_get("markdown_uuid").ok();
             let message_index: Option<i64> = r.try_get("message_index").ok();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             let text: String = r.try_get("text").unwrap_or_default();
@@ -346,6 +354,7 @@ impl MirrorRepo for DoltRepo {
                 SearchRow {
                     uuid,
                     conversation_uuid,
+                    markdown_uuid,
                     message_index: message_index.map(|n| n as usize),
                     snippet: snip,
                     sender: author.clone(),
@@ -484,34 +493,19 @@ impl MirrorRepo for DoltRepo {
         Ok(())
     }
 
-    async fn qmd_path_for_conversation(
+    async fn qmd_path_for_markdown(
         &self,
-        conversation_uuid: &str,
+        markdown_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError> {
-        let sql = "SELECT qmd_path FROM grid_rows \
-                   WHERE conversation_uuid = ? AND qmd_path IS NOT NULL \
-                   ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
-                   LIMIT 1";
-        let row = sqlx::query(sql)
-            .bind(conversation_uuid)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
-        let Some(r) = row else { return Ok(None) };
-        let rel: Option<String> = r.try_get("qmd_path").ok();
-        Ok(rel.map(|p| self.root.as_ref().join(p)))
-    }
-
-    async fn qmd_path_for_row(&self, row_uuid: &str) -> Result<Option<PathBuf>, RepoError> {
         let row = sqlx::query(
-            "SELECT qmd_path FROM grid_rows WHERE uuid = ? AND qmd_path IS NOT NULL LIMIT 1",
+            "SELECT md_path FROM markdowns WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
         )
-        .bind(row_uuid)
+        .bind(markdown_uuid)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
         let Some(r) = row else { return Ok(None) };
-        let rel: Option<String> = r.try_get("qmd_path").ok();
+        let rel: Option<String> = r.try_get("md_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
     }
 }

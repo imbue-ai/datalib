@@ -6,7 +6,7 @@ expression: sbundle
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "c0000003-1701-4d00-8000-00000000c003",
+    "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003",
     "source_fingerprint": "4bd6a5def8a9a0c9",
     "render_version": 2
   },
@@ -33,7 +33,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "30000001-1701-4d00-8000-000000030001",
@@ -57,7 +57,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "30000002-1701-4d00-8000-000000030002",
@@ -81,7 +81,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "th-30000002-1701-4d00-8000-000000030002-0",
@@ -105,7 +105,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "tu-toolu_FAKE0001ngfedcba9876543210",
@@ -129,7 +129,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "tr-toolu_FAKE0001ngfedcba9876543210",
@@ -153,7 +153,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     },
     {
       "uuid": "30000003-1701-4d00-8000-000000030003",
@@ -177,14 +177,14 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000003-1701-4d00-8000-00000000c003"
+      "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003"
     }
   ]
 }
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/llm_chats/c0000005-1701-4d00-8000-00000000c005/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "c0000005-1701-4d00-8000-00000000c005",
+    "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005",
     "source_fingerprint": "b000b9b1b5e872e5",
     "render_version": 2
   },
@@ -211,7 +211,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "50000001-1701-4d00-8000-000000050001",
@@ -235,7 +235,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "50000002-1701-4d00-8000-000000050002",
@@ -259,7 +259,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "tu-toolu_FAKE0002borgsigfirstattempt0",
@@ -283,7 +283,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "tr-toolu_FAKE0002borgsigfirstattempt0",
@@ -307,7 +307,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "tu-toolu_FAKE0003borgsigsecondtry00",
@@ -331,7 +331,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     },
     {
       "uuid": "tr-toolu_FAKE0003borgsigsecondtry00",
@@ -355,14 +355,14 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000005-1701-4d00-8000-00000000c005"
+      "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005"
     }
   ]
 }
 === rendered_md/anthropic/00000003-1701-4d00-8000-000000000003/llm_chats/c0000004-1701-4d00-8000-00000000c004/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "c0000004-1701-4d00-8000-00000000c004",
+    "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004",
     "source_fingerprint": "eeb3ca8884970488",
     "render_version": 2
   },
@@ -389,7 +389,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000004-1701-4d00-8000-00000000c004"
+      "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004"
     },
     {
       "uuid": "40000001-1701-4d00-8000-000000040001",
@@ -413,7 +413,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000004-1701-4d00-8000-00000000c004"
+      "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004"
     },
     {
       "uuid": "40000002-1701-4d00-8000-000000040002",
@@ -437,7 +437,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "c0000004-1701-4d00-8000-00000000c004"
+      "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004"
     }
   ]
 }

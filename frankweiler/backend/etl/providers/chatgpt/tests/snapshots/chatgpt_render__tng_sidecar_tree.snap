@@ -6,7 +6,7 @@ expression: sbundle
 === rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0001-fake-7000-8000-positronic0001/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "68fa0001-fake-7000-8000-positronic0001",
+    "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001",
     "source_fingerprint": "12a6b44b8afcabeb",
     "render_version": 2
   },
@@ -33,7 +33,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001"
+      "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001"
     },
     {
       "uuid": "msg-fake-spot-0000",
@@ -57,7 +57,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001"
+      "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001"
     },
     {
       "uuid": "msg-fake-spot-0001",
@@ -81,7 +81,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001"
+      "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001"
     },
     {
       "uuid": "msg-fake-spot-0002",
@@ -105,7 +105,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001"
+      "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001"
     },
     {
       "uuid": "msg-fake-spot-0003",
@@ -129,14 +129,14 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0001-fake-7000-8000-positronic0001"
+      "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001"
     }
   ]
 }
 === rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0002-fake-7000-8000-positronic0002/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "68fa0002-fake-7000-8000-positronic0002",
+    "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002",
     "source_fingerprint": "930c1ddc1c3baaa3",
     "render_version": 2
   },
@@ -163,7 +163,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0002-fake-7000-8000-positronic0002"
+      "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002"
     },
     {
       "uuid": "msg-fake-poly-0001",
@@ -187,7 +187,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0002-fake-7000-8000-positronic0002"
+      "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002"
     },
     {
       "uuid": "msg-fake-poly-0002",
@@ -211,7 +211,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0002-fake-7000-8000-positronic0002"
+      "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002"
     },
     {
       "uuid": "msg-fake-poly-0003",
@@ -235,14 +235,14 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0002-fake-7000-8000-positronic0002"
+      "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002"
     }
   ]
 }
 === rendered_md/openai/user-FAKE0DATAANDROID0POSITRONIC1/llm_chats/68fa0003-fake-7000-8000-positronic0003/index.grid_rows.json ===
 {
   "header": {
-    "document_uuid": "68fa0003-fake-7000-8000-positronic0003",
+    "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003",
     "source_fingerprint": "20eab2556ca6bd01",
     "render_version": 2
   },
@@ -269,7 +269,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0003-fake-7000-8000-positronic0003"
+      "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003"
     },
     {
       "uuid": "msg-fake-warp-0001",
@@ -293,7 +293,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0003-fake-7000-8000-positronic0003"
+      "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003"
     },
     {
       "uuid": "msg-fake-warp-0002",
@@ -317,7 +317,7 @@ expression: sbundle
       "external_id": null,
       "notion_page_uuid": null,
       "notion_block_uuid": null,
-      "document_uuid": "68fa0003-fake-7000-8000-positronic0003"
+      "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003"
     }
   ]
 }

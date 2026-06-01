@@ -22,8 +22,8 @@ pub struct DownloadRunRow {
     pub finished_at: Option<String>,
     /// When ingest finished consuming `raw_path` (ISO-8601 with explicit offset). NULL until then. Ingest's work queue is `SELECT ... WHERE finished_at IS NOT NULL AND ingested_at IS NULL`.
     pub ingested_at: Option<String>,
-    /// JSON array of `documents.document_uuid` values that this run produced changes for. Populated by ingest when it sets `ingested_at`. Useful for `which sync surfaced this thread?` provenance queries; not used by the hot path.
-    pub doc_uuids_touched: Option<String>,
+    /// JSON array of `markdowns.markdown_uuid` values that this run produced changes for. Populated by ingest when it sets `ingested_at`. Useful for `which sync surfaced this thread?` provenance queries; not used by the hot path.
+    pub markdown_uuids_touched: Option<String>,
 }
 
 pub const TABLES: &[(&str, &str)] = &[
@@ -41,12 +41,12 @@ pub const DDL: &[(&str, &str)] = &[
     started_at VARCHAR(40) NOT NULL,
     finished_at VARCHAR(40),
     ingested_at VARCHAR(40),
-    doc_uuids_touched JSON,
+    markdown_uuids_touched JSON,
     PRIMARY KEY (id)
 )"#),
 ];
 
 /// Column names per table, in declaration order.
 pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("download_runs", &["id", "source_name", "raw_path", "kind", "started_at", "finished_at", "ingested_at", "doc_uuids_touched"]),
+    ("download_runs", &["id", "source_name", "raw_path", "kind", "started_at", "finished_at", "ingested_at", "markdown_uuids_touched"]),
 ];

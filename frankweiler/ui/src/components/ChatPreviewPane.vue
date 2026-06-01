@@ -14,7 +14,10 @@ import {
 } from "@/feedback/context";
 
 const props = defineProps<{
-  conversationUuid: string | null;
+  // Addresses one rendered `.md` file — the file the preview pane
+  // should fetch and display. Same value `/api/chat/{markdown_uuid}`
+  // takes.
+  markdownUuid: string | null;
   // The clicked grid row's uuid (= the message UUID for message rows,
   // the prefixed `tu-…`/`tr-…`/`th-…` for block rows, null for
   // conversation-level rows). The renderer emits each section with a
@@ -63,7 +66,7 @@ const ctxTarget = ref<PendingTarget | null>(null);
 
 function onPaneContextMenu(ev: MouseEvent) {
   if (!chat.value) return;
-  const conv = chat.value.conversation_uuid;
+  const conv = chat.value.markdown_uuid;
   const target = ev.target instanceof Element ? ev.target : null;
 
   // Cascade: active selection > message under cursor > whole-page fallback.
@@ -190,13 +193,12 @@ function onFeedback() {
 }
 
 watch(
-  // Refetch when either the conversation OR the clicked row changes:
-  // providers like beeper render one file per period inside a single
-  // conversation, so the row uuid is what disambiguates *which* file
-  // to load. Without this, clicking a different period's message
-  // would leave the wrong file in the preview.
-  () => [props.conversationUuid, props.selectedSectionUuid] as const,
-  async ([uuid, rowUuid]) => {
+  // One UUID per rendered file — when `markdownUuid` changes, refetch
+  // the file. No row-uuid disambiguation needed: provider-specific
+  // sharding (beeper's per-period files) is already encoded in the
+  // markdown_uuid the parent passes.
+  () => props.markdownUuid,
+  async (uuid) => {
     if (!uuid) {
       chat.value = null;
       return;
@@ -204,7 +206,7 @@ watch(
     loading.value = true;
     error.value = null;
     try {
-      chat.value = await fetchChat(uuid, rowUuid ?? undefined);
+      chat.value = await fetchChat(uuid);
     } catch (e) {
       error.value = (e as Error).message;
     } finally {
@@ -218,10 +220,10 @@ watch(
 <template>
   <section
     class="chat-preview"
-    :data-conversation-uuid="chat?.conversation_uuid ?? null"
+    :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
   >
-    <p v-if="!conversationUuid" class="empty">
+    <p v-if="!markdownUuid" class="empty">
       Select a row to preview the conversation.
     </p>
     <p v-else-if="loading && !chat" class="empty">loading…</p>
@@ -229,10 +231,10 @@ watch(
     <template v-else-if="chat">
       <header class="chat-header">
         <h2>
-          {{ chat.name || chat.conversation_uuid }}
-          <CopyUuidButton :uuid="chat.conversation_uuid" label="Copy page ID" />
+          {{ chat.name || chat.markdown_uuid }}
+          <CopyUuidButton :uuid="chat.markdown_uuid" label="Copy page ID" />
           <FeedbackButton
-            :entity-uuid="chat.conversation_uuid"
+            :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />
@@ -241,7 +243,7 @@ watch(
           <RouterLink
             :to="{
               name: 'chat',
-              params: { conversationUuid: chat.conversation_uuid },
+              params: { markdownUuid: chat.markdown_uuid },
             }"
             >open full view ↗</RouterLink
           >

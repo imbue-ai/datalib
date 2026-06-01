@@ -60,7 +60,7 @@ rust_binary(
 )
 
 # Provider-agnostic Load step: walk *.grid_rows.json sidecars and
-# upsert into Dolt; tracks documents_loaded(qmd_path, fingerprint) for
+# upsert into Dolt; tracks markdowns_loaded(qmd_path, fingerprint) for
 # idempotent skips.
 rust_binary(
     name = "grid_rows_load",

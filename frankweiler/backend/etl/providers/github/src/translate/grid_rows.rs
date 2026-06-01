@@ -189,7 +189,7 @@ pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Vec<GridRow>
         external_id: Some(pr.pr_number.to_string()),
         notion_page_uuid: None,
         notion_block_uuid: None,
-        document_uuid: Some(pr.uuid.clone()),
+        markdown_uuid: Some(pr.uuid.clone()),
     });
 
     for (idx, c) in ordered_comments(comments).into_iter().enumerate() {
@@ -215,7 +215,7 @@ pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Vec<GridRow>
             external_id: Some(c.external_id.to_string()),
             notion_page_uuid: None,
             notion_block_uuid: None,
-            document_uuid: Some(pr.uuid.clone()),
+            markdown_uuid: Some(pr.uuid.clone()),
         });
     }
     rows

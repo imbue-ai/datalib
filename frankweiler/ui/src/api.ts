@@ -9,6 +9,10 @@ import type { FeedbackContext } from "./feedback/context";
 export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
+  // FK into the markdowns table — every grid row knows which rendered
+  // .md it lives inside. Drives `/api/chat/{markdown_uuid}` lookups
+  // when the user clicks a row in the preview pane.
+  markdown_uuid: string | null;
   message_index: number | null;
   snippet: string;
   sender: string;
@@ -54,7 +58,7 @@ export type SearchResponse = {
 // tool_use / tool_result / thinking blocks). The attribute value is
 // the same as the grid row's `uuid` column.
 export type ChatResponse = {
-  conversation_uuid: string;
+  markdown_uuid: string;
   name: string | null;
   account: string | null;
   project: string | null;
@@ -104,17 +108,14 @@ export function fetchSearch(
 }
 
 export function fetchChat(
-  uuid: string,
-  rowUuid?: string,
+  markdownUuid: string,
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
-  // `rowUuid` disambiguates which file to load when a single
-  // conversation_uuid maps to multiple rendered files (beeper renders
-  // one file per period). The backend prefers the row lookup when
-  // present and falls back to picking a file by conversation_uuid.
-  const q = rowUuid ? `?row=${encodeURIComponent(rowUuid)}` : "";
+  // One UUID per rendered `.md` file — no disambiguation needed.
+  // Provider-specific sharding (beeper's per-period files) is already
+  // encoded in the markdown_uuid scheme.
   return getJson<ChatResponse>(
-    `/api/chat/${encodeURIComponent(uuid)}${q}`,
+    `/api/chat/${encodeURIComponent(markdownUuid)}`,
     signal,
   );
 }

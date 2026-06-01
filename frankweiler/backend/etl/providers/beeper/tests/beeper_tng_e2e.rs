@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::RenderedDoc;
+use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_beeper::extract::{self, FetchOptions, FetchSummary};
 use frankweiler_etl_beeper::translate::{self, Period};
@@ -291,8 +291,8 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
 
     let parsed = translate::parse::parse(&out_db, Period::Month)?;
     let rendered_root = tmp.path().join("rendered");
-    let mut rendered: Vec<RenderedDoc> = Vec::new();
-    let mut on_doc = |d: RenderedDoc| -> anyhow::Result<()> {
+    let mut rendered: Vec<RenderedMarkdown> = Vec::new();
+    let mut on_doc = |d: RenderedMarkdown| -> anyhow::Result<()> {
         rendered.push(d);
         Ok(())
     };

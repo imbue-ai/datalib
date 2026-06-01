@@ -2,7 +2,7 @@
 //!
 //! v0 implements parse/unparse for two routes:
 //!     search?q=<text>&type=<message|chat>&before=<date>&after=<date>&grid=<b64>
-//!     chat/<conversation_uuid>?msg=<message_uuid>&grid=<b64>
+//!     chat/<markdown_uuid>?msg=<message_uuid>&grid=<b64>
 //!     prefs
 
 use std::collections::BTreeMap;
@@ -13,7 +13,7 @@ pub enum Route {
         params: BTreeMap<String, String>,
     },
     Chat {
-        conversation_uuid: String,
+        markdown_uuid: String,
         params: BTreeMap<String, String>,
     },
     Prefs,
@@ -56,7 +56,7 @@ pub fn parse(url: &str) -> Result<Route, ParseError> {
                 return Err(ParseError::MissingChatUuid);
             }
             Ok(Route::Chat {
-                conversation_uuid: uuid,
+                markdown_uuid: uuid,
                 params,
             })
         }
@@ -69,9 +69,9 @@ pub fn to_hash(route: &Route) -> String {
     match route {
         Route::Search { params } => with_query("search", params),
         Route::Chat {
-            conversation_uuid,
+            markdown_uuid,
             params,
-        } => with_query(&format!("chat/{}", conversation_uuid), params),
+        } => with_query(&format!("chat/{}", markdown_uuid), params),
         Route::Prefs => "prefs".to_string(),
     }
 }
@@ -173,7 +173,7 @@ mod tests {
         assert_eq!(
             parse("frankweiler://chat/abc-123?msg=def-456").unwrap(),
             Route::Chat {
-                conversation_uuid: "abc-123".into(),
+                markdown_uuid: "abc-123".into(),
                 params: p(&[("msg", "def-456")]),
             },
         );
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn round_trip_chat_with_special_chars() {
         let r = Route::Chat {
-            conversation_uuid: "abc-123".into(),
+            markdown_uuid: "abc-123".into(),
             params: p(&[("msg", "m/x?y=1"), ("grid", "AAAA==")]),
         };
         assert_eq!(parse(&to_deeplink(&r)).unwrap(), r);
