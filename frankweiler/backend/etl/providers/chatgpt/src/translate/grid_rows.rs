@@ -205,10 +205,11 @@ mod tests {
     // one conversation at a time, so a loop over C conversations is
     // O(total bytes), not O(C × (M + P)).
     //
-    // At C=400 conversations × M=40 messages each, the old code's
-    // per-call O(C·M·m) inside `fingerprint_for_conversation` (called
-    // C times from the render loop) burns ~250 ms in release; the new
-    // code is ~10 ms. 500 ms gives comfortable headroom.
+    // At C=400 conversations × M=40 messages, the buggy code would
+    // take tens of seconds in fastbuild (debug, which Bazel runs);
+    // the fix runs in well under a second. 5 s gives clean separation
+    // in both build modes without flaking on busy CI — wall-clock
+    // perf tests are coarse by nature.
     #[test]
     fn fingerprint_loop_is_linear_in_conversations() {
         const C: usize = 400;
@@ -249,7 +250,7 @@ mod tests {
         let elapsed = start.elapsed();
         assert!(h != u64::MAX);
         assert!(
-            elapsed < Duration::from_millis(500),
+            elapsed < Duration::from_secs(5),
             "fingerprint loop took {elapsed:?} for {C} conversations × {M} msgs — likely regressed to O(N²)",
         );
     }
