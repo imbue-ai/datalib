@@ -3,7 +3,6 @@ import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import { fetchChat, type ChatResponse } from "@/api";
 import ChatBody from "./ChatBody.vue";
-import CopyUuidButton from "./CopyUuidButton.vue";
 import FeedbackButton from "./FeedbackButton.vue";
 import FeedbackModal from "./FeedbackModal.vue";
 import {
@@ -230,16 +229,18 @@ watch(
     <p v-else-if="error" class="error">error: {{ error }}</p>
     <template v-else-if="chat">
       <header class="chat-header">
-        <h2>
-          {{ chat.name || chat.markdown_uuid }}
-          <CopyUuidButton :uuid="chat.markdown_uuid" label="Copy page ID" />
+        <!-- Title block (with copy-id button and source-URL arrow) is
+             rendered inline at the top of the body by the cross-provider
+             `Title` helper. The header here only carries the
+             non-title chrome: feedback button, "open full view" link,
+             and timestamps. -->
+        <p class="meta">
           <FeedbackButton
             :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />
-        </h2>
-        <p class="meta">
+          ·
           <RouterLink
             :to="{
               name: 'chat',
@@ -247,15 +248,6 @@ watch(
             }"
             >open full view ↗</RouterLink
           >
-          <template v-if="chat.source_url">
-            ·
-            <a
-              :href="chat.source_url"
-              target="_blank"
-              rel="noopener noreferrer"
-              >{{ chat.source_label || "source" }} ↗</a
-            >
-          </template>
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>

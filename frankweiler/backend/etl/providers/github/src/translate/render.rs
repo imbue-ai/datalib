@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -169,10 +170,15 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
     out.push_str("---\n\n");
 
     // -- title --
-    out.push_str(&format!("# {} (#{})\n\n", pr.title, pr.pr_number));
-    if let Some(url) = &pr.html_url {
-        out.push_str(&format!("[View on GitHub ↗]({url})\n\n"));
-    }
+    let title_text = format!("{} (#{})", pr.title, pr.pr_number);
+    out.push_str(
+        &Title {
+            text: &title_text,
+            markdown_uuid: Some(&pr.uuid),
+            source_url: pr.html_url.as_deref(),
+        }
+        .render(),
+    );
     let state = pr.state.as_deref().unwrap_or("unknown");
     let author = pr.user_login.as_deref().unwrap_or("unknown");
     let head_ref = pr.head_ref.as_deref().unwrap_or("?");

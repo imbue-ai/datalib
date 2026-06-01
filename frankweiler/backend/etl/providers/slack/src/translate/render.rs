@@ -33,6 +33,7 @@ use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, Message, TranslatedSlack};
@@ -269,7 +270,18 @@ fn render_thread_md(
     p.push(format!("render_version: {RENDER_VERSION}"));
     p.push("---".into());
     p.push(String::new());
-    p.push(format!("# #{channel_name}: {title}"));
+    let title_text = format!("#{channel_name}: {title}");
+    let permalink = slack_link(team_id, channel_id, &root.ts, None);
+    p.push(
+        Title {
+            text: &title_text,
+            markdown_uuid: Some(thread_uuid),
+            source_url: Some(&permalink),
+        }
+        .render()
+        .trim_end()
+        .to_string(),
+    );
     p.push(String::new());
 
     for m in msgs.iter() {

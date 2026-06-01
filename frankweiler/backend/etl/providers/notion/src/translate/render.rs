@@ -22,6 +22,7 @@ use frankweiler_etl::blob_store::BlobStore;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -936,9 +937,18 @@ fn render_one_page(
     } else {
         String::new()
     };
-    parts.push(format!("# {icon_prefix}{title}"));
-    parts.push(String::new());
-    parts.push(format!("[View on Notion ↗]({})", notion_url(pid)));
+    let title_text = format!("{icon_prefix}{title}");
+    let url = notion_url(pid);
+    parts.push(
+        Title {
+            text: &title_text,
+            markdown_uuid: Some(pid),
+            source_url: Some(&url),
+        }
+        .render()
+        .trim_end()
+        .to_string(),
+    );
     parts.push(String::new());
 
     // Materialize every blob that hangs off a block on this page.

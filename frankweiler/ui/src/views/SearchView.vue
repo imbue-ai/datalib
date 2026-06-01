@@ -215,36 +215,21 @@ function openFeedbackForCell() {
   closeContextMenu();
 }
 
-function openFeedbackForColumnHeader(ev: MouseEvent, colId: string) {
-  ev.preventDefault();
-  const anchor = ev.target instanceof Element ? ev.target : null;
-  feedbackContext.value = buildContext({
-    surface: "column_header",
-    anchor,
-    targetUuids: [],
-    payload: { key: colId },
-  });
-  feedbackSurfaceLabel.value = `Column header · ${colId}`;
-  feedbackOpen.value = true;
-}
-
-// AG Grid doesn't expose a column-header right-click event, so we
-// listen on the grid wrapper and check whether the target sits inside a
-// `.ag-header-cell`. The colId comes from the AG-Grid-supplied
-// `col-id` attribute on that wrapper. Falls through (no preventDefault)
-// when the target isn't a header so the existing cell-context handler
-// still gets a chance to fire.
+// Wrapper-level contextmenu handler. We don't intercept right-clicks
+// on column headers anymore — those used to open the feedback modal,
+// which was both surprising and missed the standard "filter / hide
+// column" affordances users expect from a header right-click. For
+// headers we let AG Grid's own handling (or the browser's native
+// menu) take over; only row/cell right-clicks get our custom menu
+// (the cellContextMenu event AG Grid emits asynchronously), so we
+// preventDefault on non-header targets to make sure the native menu
+// doesn't race ahead of it.
 function onGridWrapContextMenu(ev: MouseEvent) {
-  // Suppress the UA's native menu synchronously during bubble — AG Grid
-  // dispatches `cellContextMenu` asynchronously, so its `preventDefault`
-  // lands too late and the native menu wins over our custom `.ctx-menu`.
-  ev.preventDefault();
   if (!(ev.target instanceof Element)) return;
-  const headerCell = ev.target.closest(".ag-header-cell");
-  if (!headerCell) return;
-  const colId = headerCell.getAttribute("col-id") || "";
-  if (!colId) return;
-  openFeedbackForColumnHeader(ev, colId);
+  if (ev.target.closest(".ag-header-cell")) return;
+  // Cell or row body — suppress the UA's native menu synchronously
+  // during bubble so AG Grid's cellContextMenu dispatch lands first.
+  ev.preventDefault();
 }
 
 function openFeedbackForSearchBar(ev: MouseEvent) {
@@ -537,21 +522,48 @@ function applyDefaultSort() {
     });
   }
   restoring = false;
-  // ensureIndexVisible needs the post-sort row order to be computed,
-  // which happens after the current tick.
-  nextTick(() => {
-    if (!gridApi) return;
-    // If the URL is pinning a row, tryRestoreSelection scrolls to it —
-    // don't fight that with a default scroll.
-    if (typeof route.query.sel === "string" && route.query.sel.length > 0) {
-      return;
-    }
-    if (hasScores) {
-      gridApi.ensureIndexVisible(0, "top");
+  // ensureIndexVisible needs the post-sort row order to be computed
+  // AND the new rowData to be ingested by AG Grid's virtualizer. A
+  // single Vue nextTick fires before that finishes — the grid is
+  // still showing the previous result set, so ensureIndexVisible
+  // operates on stale rows and the scroll write gets clobbered as
+  // soon as the new rows land. We instead listen for the grid's own
+  // `rowDataUpdated` event, which fires once the new rows are in
+  // place; the listener runs at most once per applyDefaultSort call.
+  if (typeof route.query.sel === "string" && route.query.sel.length > 0) {
+    // tryRestoreSelection will scroll to the pinned row; don't fight it.
+    return;
+  }
+  const target: "top" | "bottom" = hasScores ? "top" : "bottom";
+  const api = gridApi;
+  const scrollToEnd = () => {
+    if (target === "top") {
+      api.ensureIndexVisible(0, "top");
     } else {
-      const last = gridApi.getDisplayedRowCount() - 1;
-      if (last >= 0) gridApi.ensureIndexVisible(last, "bottom");
+      const last = api.getDisplayedRowCount() - 1;
+      if (last >= 0) api.ensureIndexVisible(last, "bottom");
     }
+  };
+  // Subscribe to the next rowDataUpdated event, then deregister.
+  // Wrapped in a try/catch because ag-grid versions disagree on
+  // whether one-shot subscriptions are allowed.
+  const handler = () => {
+    scrollToEnd();
+    api.removeEventListener("rowDataUpdated", handler);
+  };
+  try {
+    api.addEventListener("rowDataUpdated", handler);
+  } catch {
+    /* fall through to the rAF-based scroll */
+  }
+  // Also schedule a deferred scroll via two animation frames — covers
+  // the case where rowDataUpdated already fired before we subscribed
+  // (the row prop assignment that triggered this applyDefaultSort
+  // call also lands in AG Grid synchronously in some code paths).
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scrollToEnd();
+    });
   });
 }
 
@@ -1175,9 +1187,14 @@ const gridOptions: GridOptions<SearchRow> = {
   white-space: normal;
   line-height: 1.25;
   width: 100%;
-  /* break-all lets the ellipsis land mid-word when a long word would
-     otherwise wrap whole to a clipped third line, leaving line 2 short. */
-  word-break: break-all;
-  overflow-wrap: anywhere;
+  /* `word-break: normal` keeps line wraps at word boundaries (so we
+     never get "bu / t the trilithium…" from the user's bug report),
+     while `overflow-wrap: break-word` still allows a single super-long
+     word to break when it can't fit on its own line. The line-clamp
+     ellipsis on line 2 is independent of `word-break` and will land
+     mid-word when truncating a long word, which is fine — wraps stay
+     clean, only the visible truncation cuts mid-word. */
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 </style>

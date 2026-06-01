@@ -12,6 +12,7 @@ use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{shred, OAAttachmentRef, OAMessageRow, ParsedChatGPTApi, ShreddedConversation};
@@ -250,10 +251,17 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
     }
     out.push("---".into());
     out.push(String::new());
-    out.push(format!(
-        "# {}",
-        conv.title.as_deref().unwrap_or("(untitled)")
-    ));
+    let source_url = format!("https://chatgpt.com/c/{}", conv.conversation_id);
+    let title_block = Title {
+        text: conv.title.as_deref().unwrap_or("(untitled)"),
+        markdown_uuid: Some(&conv.conversation_id),
+        source_url: Some(&source_url),
+    }
+    .render();
+    // `render()` ends with `\n\n`; we're about to `out.join("\n")`, so
+    // strip the trailing newlines and push a single String — the
+    // following blank line restores paragraph separation.
+    out.push(title_block.trim_end().to_string());
     out.push(String::new());
 
     let mut last_ts: Option<String> = conv.create_time.clone();

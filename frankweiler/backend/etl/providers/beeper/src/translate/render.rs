@@ -20,6 +20,7 @@ use sqlx::Row;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::parse::{DocBucket, Event, ParsedBeeper, Room};
@@ -262,11 +263,21 @@ fn render_markdown(
     out.push_str(&format!("last_ts: {}\n", iso_from_ms(doc.last_ms)));
     out.push_str("---\n\n");
 
-    out.push_str(&format!(
-        "# {} · {}\n\n",
+    let title_text = format!(
+        "{} · {}",
         room.title.as_deref().unwrap_or(&room.network),
-        doc.period_key
-    ));
+        doc.period_key,
+    );
+    out.push_str(
+        &Title {
+            text: &title_text,
+            markdown_uuid: Some(markdown_uuid),
+            // Beeper doesn't have a public per-room URL — local app
+            // links don't make sense as a target="_blank" arrow.
+            source_url: None,
+        }
+        .render(),
+    );
 
     for m in &doc.messages {
         // Every grid row this provider emits for an event must have a

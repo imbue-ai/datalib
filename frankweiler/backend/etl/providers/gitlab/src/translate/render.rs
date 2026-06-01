@@ -21,6 +21,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -163,10 +164,15 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     ));
     out.push_str("---\n\n");
 
-    out.push_str(&format!("# {} (!{})\n\n", mr.title, mr.mr_iid));
-    if let Some(url) = &mr.web_url {
-        out.push_str(&format!("[View on GitLab ↗]({url})\n\n"));
-    }
+    let title_text = format!("{} (!{})", mr.title, mr.mr_iid);
+    out.push_str(
+        &Title {
+            text: &title_text,
+            markdown_uuid: Some(&mr.uuid),
+            source_url: mr.web_url.as_deref(),
+        }
+        .render(),
+    );
     let state = mr.state.as_deref().unwrap_or("unknown");
     let author = mr.author_username.as_deref().unwrap_or("unknown");
     let src = mr.source_branch.as_deref().unwrap_or("?");

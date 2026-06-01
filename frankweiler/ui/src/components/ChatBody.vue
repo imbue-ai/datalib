@@ -85,6 +85,25 @@ function injectCopyUuidButtons() {
       el.prepend(btn);
     }
   }
+  // Page-title H1 emitted by the Rust `Title` helper: walk
+  // `[data-page-title-uuid]` and append a copy-id button at the end
+  // of the H1, after the source-link arrow if present. Same button
+  // styling + clipboard handler as the section buttons above.
+  for (const el of root.value.querySelectorAll<HTMLElement>(
+    "[data-page-title-uuid]",
+  )) {
+    if (el.querySelector(":scope > button.copy-uuid")) continue;
+    const uuid = el.getAttribute("data-page-title-uuid") ?? "";
+    if (!uuid) continue;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "copy-uuid";
+    btn.dataset.uuid = uuid;
+    btn.title = `Copy page ID (${uuid})`;
+    btn.setAttribute("aria-label", "Copy page ID");
+    btn.textContent = "🆔";
+    el.append(document.createTextNode(" "), btn);
+  }
 }
 
 async function onCopyClick(ev: MouseEvent) {

@@ -13,6 +13,7 @@ use frankweiler_etl::blobs::safe_filename;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_etl::title::Title;
 
 use frankweiler_etl::blob_store::BlobStore;
 
@@ -524,10 +525,17 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
     }
     parts.push("---".into());
     parts.push(String::new());
-    parts.push(format!(
-        "# {}",
-        conv.name.as_deref().unwrap_or("(untitled)")
-    ));
+    let source_url = format!("https://claude.ai/chat/{}", conv.conversation_uuid);
+    parts.push(
+        Title {
+            text: conv.name.as_deref().unwrap_or("(untitled)"),
+            markdown_uuid: Some(&conv.conversation_uuid),
+            source_url: Some(&source_url),
+        }
+        .render()
+        .trim_end()
+        .to_string(),
+    );
     parts.push(String::new());
 
     let mut last_ts: Option<String> = conv.created_at.clone();

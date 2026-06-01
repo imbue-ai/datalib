@@ -30,3 +30,4 @@ pub mod progress;
 pub mod raw_store;
 pub mod sidecar;
 pub mod synthesize;
+pub mod title;
