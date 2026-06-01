@@ -161,15 +161,23 @@ async fn main() {
 
     let summary = Arc::new(Mutex::new(SyncSummary::new()));
     let start = Instant::now();
+    // Shared handle the `run()` body fills in as it makes progress —
+    // the SIGINT handler reads from it to issue best-effort commits
+    // against whatever doltlite databases happen to have uncommitted
+    // writes when the user Ctrl-Cs.
+    let ctrlc = Arc::new(Mutex::new(CtrlcState::default()));
 
-    // Ctrl-C: best-effort flush of the summary before exit. We can't
-    // join the running task graph from here cleanly, so we accept that
-    // mid-flight extract work is abandoned. The summary still captures
-    // every source that finished (or failed) before the signal.
+    // Ctrl-C: best-effort flush of the summary AND best-effort dolt
+    // commit before exit. We can't join the running task graph from
+    // here cleanly, so mid-flight extract work is abandoned — but any
+    // rows already on disk get a commit, so re-running picks up where
+    // the interrupt happened with a clean dolt_log.
     let s_sig = summary.clone();
+    let c_sig = ctrlc.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\n[frankweiler-sync] caught Ctrl-C; writing partial summary…");
+            eprintln!("\n[frankweiler-sync] caught Ctrl-C; committing partial state…");
+            interrupt_commit_all(&c_sig).await;
             let mut s = s_sig.lock().unwrap();
             s.interrupted = true;
             s.finalize(start);
@@ -184,7 +192,7 @@ async fn main() {
         }
     });
 
-    let fatal: Option<anyhow::Error> = run(&summary).await.err();
+    let fatal: Option<anyhow::Error> = run(&summary, &ctrlc).await.err();
 
     let mut s = summary.lock().unwrap();
     if let Some(e) = fatal.as_ref() {
@@ -239,6 +247,57 @@ async fn main() {
         0
     };
     std::process::exit(code);
+}
+
+/// Shared state populated by the main `run()` body and read by the
+/// SIGINT handler. Each field is independently `None` while the
+/// corresponding resource isn't ready yet.
+#[derive(Default)]
+struct CtrlcState {
+    /// Open pool to the index doltlite_db. Populated after
+    /// `open_index_pool`. The handler issues one commit against this
+    /// pool to capture whatever rows the translate phase already wrote.
+    index_pool: Option<sqlx::sqlite::SqlitePool>,
+    /// Per-source doltlite_db paths discovered from the resolved
+    /// config. The handler opens each, commits best-effort, and closes.
+    extract_dbs: Vec<PathBuf>,
+}
+
+/// Commit every doltlite database the run has touched. Called from the
+/// SIGINT handler; each individual failure is downgraded to a stderr
+/// warning so one stuck file doesn't block the others.
+async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
+    let (pool_opt, db_paths) = {
+        let s = state.lock().unwrap();
+        (s.index_pool.clone(), s.extract_dbs.clone())
+    };
+    if let Some(pool) = pool_opt {
+        let msg = "frankweiler-sync: interrupted (Ctrl-C); committing partial state".to_string();
+        match frankweiler_etl::doltlite_raw::commit_run(&pool, &msg).await {
+            Ok(Some(h)) => eprintln!("[frankweiler-sync] interrupt index commit: {h}"),
+            Ok(None) => {}
+            Err(e) => eprintln!("[frankweiler-sync] interrupt index commit failed: {e:#}"),
+        }
+    }
+    for path in db_paths {
+        let msg = format!(
+            "extract {}: interrupted (Ctrl-C)",
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("<unknown>")
+        );
+        match commit_extract_db(&path, &msg).await {
+            Ok(Some(h)) => eprintln!(
+                "[frankweiler-sync] interrupt extract commit {}: {h}",
+                path.display()
+            ),
+            Ok(None) => {}
+            Err(e) => eprintln!(
+                "[frankweiler-sync] interrupt extract commit failed for {}: {e:#}",
+                path.display()
+            ),
+        }
+    }
 }
 
 /// Walk the anyhow error chain top-to-bottom (so the user reads
@@ -422,7 +481,7 @@ See frankweiler/backend/etl/providers/beeper/EXTRACT.md for details."
     }
 }
 
-async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
+async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) -> Result<()> {
     let args = Args::parse();
     let _ = args.deterministic;
 
@@ -465,6 +524,21 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         s.output_path = Some(root.join(format!("sync_summary_{safe_now}.json")));
     }
 
+    // Register each managed source's doltlite_db path with the SIGINT
+    // handler so a Ctrl-C mid-extract still gets a commit. We use
+    // `db_path_for` which handles both the explicit `.doltlite_db` file
+    // shape and the legacy directory shape.
+    {
+        let dbs: Vec<PathBuf> = cfg
+            .enabled_sources()
+            .filter(|s| s.is_managed())
+            .map(|s| {
+                frankweiler_etl::doltlite_raw::db_path_for(&s.resolved_input_path(&cfg.data_root))
+            })
+            .collect();
+        ctrlc.lock().unwrap().extract_dbs = dbs;
+    }
+
     // ── Extract ────────────────────────────────────────────────────
     if args.skip_extract {
         eprintln!("[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths");
@@ -503,6 +577,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
     // here.
     let index_pool = open_index_pool(&cfg).await?;
     init_schema(&index_pool).await?;
+    ctrlc.lock().unwrap().index_pool = Some(index_pool.clone());
     let prior_fingerprints = load_fingerprints(&index_pool)
         .await
         .context("load prior fingerprints")?;
@@ -539,6 +614,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
         markdowns_total: 0,
         rows_inserted: 0,
         error: None,
+        commit_hash: None,
     }));
 
     let prior_fingerprints = Arc::new(prior_fingerprints);
@@ -662,20 +738,51 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>) -> Result<()> {
             .unwrap_or(fallback_pos)
     });
 
+    // One commit per run for the index DB. We snapshot the load totals
+    // into the commit message so `dolt log` carries the same row-count
+    // info the JSON summary has — no need to cross-reference. Failure
+    // is logged but not fatal: the data is still on disk, dolt_log just
+    // won't have an entry for this run.
+    {
+        let totals = load_totals.lock().unwrap().clone();
+        let extract_names: Vec<String> = summary
+            .lock()
+            .unwrap()
+            .extract
+            .iter()
+            .filter(|o| o.status == Status::Ok)
+            .map(|o| o.name.clone())
+            .collect();
+        let msg = format!(
+            "frankweiler-sync: markdowns_loaded={} markdowns_total={} rows_inserted={} sources=[{}]",
+            totals.markdowns_loaded,
+            totals.markdowns_total,
+            totals.rows_inserted,
+            extract_names.join(","),
+        );
+        match frankweiler_etl::doltlite_raw::commit_run(&index_pool, &msg).await {
+            Ok(hash) => {
+                if let Some(h) = hash.as_deref() {
+                    eprintln!("[frankweiler-sync] index commit: {h}");
+                }
+                load_totals.lock().unwrap().commit_hash = hash;
+            }
+            Err(e) => {
+                eprintln!("[frankweiler-sync] index commit failed: {e:#}");
+            }
+        }
+    }
+
     summary.lock().unwrap().load = Some(load_totals.lock().unwrap().clone());
 
-    // Force-checkpoint the WAL into the main DB before closing the
-    // pool. Under WAL mode, all writes go to `<db>.db-wal` and only
-    // get merged into the main `.db` file on a checkpoint. sqlx's
-    // default close path runs only a PASSIVE checkpoint, which copies
-    // bytes but leaves the WAL file populated — so a downstream
-    // process that copies just `backend_index.doltlite_db` ends up
-    // with an empty file. TRUNCATE checkpoints + zeros the WAL so the
-    // `.db` file is self-contained.
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(&index_pool)
-        .await
-        .context("wal_checkpoint at end of translate")?;
+    // Under stock SQLite (WAL mode) we used to TRUNCATE-checkpoint the
+    // WAL here so the on-disk `.db` was self-contained for downstream
+    // genrules. On doltlite there's no WAL sidecar — the chunk store
+    // is the source of truth and writes land in the main file as
+    // they happen. The pragma is a no-op (doltlite rejects
+    // `wal_checkpoint` as "not configurable") so we just drop the
+    // pool and trust that all writes (including the dolt_commit we
+    // just issued) are durable.
     drop(index_pool);
     eprintln!("[frankweiler-sync] wrote {}", cfg.dolt_db_path().display());
     eprintln!(
@@ -719,10 +826,13 @@ async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
         fs::create_dir_all(parent)?;
     }
     eprintln!("[frankweiler-sync] doltlite db = {}", db_path.display());
+    // doltlite manages its own chunk-store; `PRAGMA journal_mode = …`
+    // is rejected as "not configurable on doltlite-format databases",
+    // so we leave it at default. The WAL_CHECKPOINT call we used to
+    // do after the translate phase to flush sidecars is now a no-op
+    // for doltlite — see the comment at that callsite.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+        .create_if_missing(true);
     // Pool sized for the parallel translate phase: each source runs
     // in its own `spawn_blocking` task and writes per-doc through
     // `apply_one`, so we want roughly one connection per concurrent
@@ -953,6 +1063,8 @@ impl ExtractPlan {
     /// fetched/skipped/errors, etc).
     async fn run(self) -> Result<String> {
         let progress = self.progress.clone();
+        let name = self.name.clone();
+        let out_dir = self.out_dir.clone();
         let result: Result<String> = match self.kind {
             ExtractKind::Anthropic { sync } => {
                 frankweiler_etl_anthropic::extract::fetch(
@@ -1154,8 +1266,54 @@ impl ExtractPlan {
             }
         };
         progress.finish("done");
-        result
+        // One commit per source at the end of extract. We pop open the
+        // doltlite_db briefly here rather than threading the hash
+        // through every provider's `extract::fetch` return type — the
+        // raw-store pool the provider used is already dropped by now,
+        // but the file is on disk and reopening is cheap.
+        //
+        // Best-effort: a commit failure doesn't fail the extract — the
+        // data is still on disk, dolt_log just won't have an entry for
+        // this run. We attach a `; commit=<hash>` suffix to the stats
+        // string on success so the orchestrator's JSON summary carries
+        // the identifier.
+        match result {
+            Ok(stats) => {
+                let msg = format!("extract {name}: {stats}");
+                match commit_extract_db(&out_dir, &msg).await {
+                    Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
+                    Ok(None) => Ok(stats),
+                    Err(e) => {
+                        eprintln!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
+                        Ok(stats)
+                    }
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
+}
+
+/// Open the doltlite_db at `out_dir` (or `<out_dir>.doltlite_db` for
+/// the legacy-directory shape) and commit any uncommitted writes from
+/// this run. Returns the commit hash, or `None` when libsqlite3 has no
+/// doltlite extensions (unit-test builds). Errors here are surfaced to
+/// the caller, which downgrades them to a stderr warning so a missing
+/// commit doesn't fail the extract.
+async fn commit_extract_db(out_dir: &Path, msg: &str) -> Result<Option<String>> {
+    use frankweiler_etl::doltlite_raw as dr;
+    let db_path = dr::db_path_for(out_dir);
+    if !db_path.exists() {
+        // No db materialized (e.g. extract aborted before opening): nothing to commit.
+        return Ok(None);
+    }
+    // No extra DDL: the shared tables (sync_runs, blobs, …) are already
+    // present from the extract pool's lifetime. `open` is
+    // CREATE-IF-NOT-EXISTS so it's a no-op for tables that already exist.
+    let pool = dr::open(&db_path, &[]).await.context("open for commit")?;
+    let hash = dr::commit_run(&pool, msg).await?;
+    pool.close().await;
+    Ok(hash)
 }
 
 /// Walk `<playback>/notion/*.json`, decode each as an `HttpResponse`,

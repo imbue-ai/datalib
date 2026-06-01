@@ -33,15 +33,25 @@ bazel_dep(name = "rules_shell", version = "0.6.1")
 bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "platforms", version = "1.0.0")
 
-# doltlite amalgamation — the SQLite-fork source we statically link
-# into every Rust binary via sqlx-sqlite. Pinned to a sha so the fetch
-# is one-time-per-pin; consumed by `//third-party/doltlite:libsqlite3_doltlite`.
+# doltlite full source — the SQLite-fork tree we statically link into
+# every Rust binary via sqlx-sqlite. Pinned to a sha so the fetch is
+# one-time-per-pin; consumed by `//third-party/doltlite:sqlite3`.
+#
+# IMPORTANT: this is the **autoconf source tarball**, not the
+# `amalgamation` zip. The amalgamation contains only `sqlite3.c` —
+# vanilla SQLite plus the `#ifdef DOLTLITE_PROLLY` hooks, which compile
+# to nothing without the rest of the tree. The version-control SQL
+# surface (`dolt_commit`, `dolt_log`, `dolt_branch`, `dolt_merge`, …)
+# lives in separate files under `src/doltlite_*.c` that the
+# amalgamation does NOT include. The autoconf tarball ships
+# `sqlite3.c` plus the full `src/` and `ext/blake3/` trees we compile
+# alongside it.
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.2/doltlite-amalgamation-0.11.2.zip"],
-    sha256 = "7153139278ceebddc029177d503e79dc5d5f887f08397b80a2504c0eca256395",
-    strip_prefix = "doltlite-amalgamation-0.11.2",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.3/doltlite-autoconf-0.11.3.tar.gz"],
+    sha256 = "03bbdecfcb080711c63de2c7b1354d981873275834379fe9ffbaca4896f6db6d",
+    strip_prefix = "doltlite-autoconf-0.11.3",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 

@@ -323,19 +323,6 @@ fn derive_md_path(sidecar: &Path) -> Option<PathBuf> {
     Some(sidecar.with_file_name(format!("{stem}.md")))
 }
 
-/// Probe the connection's libsqlite3 for the `dolt_commit` scalar
-/// function. Same probe as [`frankweiler_core::dolt_repo`] uses at
-/// connect-time, but at the connection level so the loader doesn't
-/// need a `DoltRepo` handle.
-async fn has_dolt_extensions(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> bool {
-    let res = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
-    )
-    .fetch_one(&mut **conn)
-    .await;
-    matches!(res, Ok(n) if n > 0)
-}
-
 /// Look up the on-disk render's fingerprint for one markdown. Caller
 /// uses this to decide whether to skip work (sync builds a bulk
 /// `HashMap<uuid, fingerprint>` once per source via [`load_fingerprints`]
@@ -418,24 +405,11 @@ async fn apply_markdown(
         .await
         .context("upsert markdowns")?;
 
-    // Stamp the markdown as its own dolt_log entry so re-ingests are
-    // human-auditable. doltlite exposes `dolt_commit` as a SQLite
-    // scalar function — same semantics as the dolt-sql-server's
-    // `CALL DOLT_COMMIT(...)`, just SELECT-shaped. With stock libsqlite3
-    // the function isn't registered, so we skip the call silently;
-    // production runs against doltlite will populate dolt_log normally.
-    if has_dolt_extensions(&mut conn).await {
-        let msg = format!(
-            "grid-rows-load: {} {}",
-            md.markdown_uuid, md.source_fingerprint
-        );
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
-            .bind(&msg)
-            .execute(&mut *conn)
-            .await
-            .context("dolt_commit")?;
-    }
-
+    // dolt_commit is issued ONCE per sync run by the orchestrator after
+    // the full translate phase finishes — not here. Per-doc commits
+    // would land thousands of entries in dolt_log per run, drowning the
+    // audit trail. See `frankweiler-sync::main` for the post-translate
+    // commit_run call.
     Ok(md.rows.len())
 }
 

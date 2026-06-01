@@ -224,11 +224,16 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
+    // Don't set journal_mode here: doltlite manages its own storage
+    // via the prolly chunk store, not SQLite's pager journal, and
+    // rejects `PRAGMA journal_mode = …` with
+    // "journal_mode is not configurable on doltlite-format databases".
+    // synchronous is harmless on doltlite (it just maps to the
+    // chunk-store fsync policy) but we leave it default to avoid
+    // surprises.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
-        .create_if_missing(true)
-        .journal_mode(sqlx::sqlite::SqliteJournalMode::Delete)
-        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+        .create_if_missing(true);
     let pool = SqlitePoolOptions::new()
         .max_connections(4)
         .connect_with(opts)
@@ -284,6 +289,44 @@ pub async fn finish_run(
         .await
         .context("update sync_runs")?;
     Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// dolt commit
+// ─────────────────────────────────────────────────────────────────────
+
+/// True iff this connection's libsqlite3 has the `dolt_commit` scalar
+/// function registered. Lets callers skip commit calls silently against
+/// stock libsqlite3 (e.g. in unit tests that build the binary without
+/// linking against doltlite).
+pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
+    let res = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
+    )
+    .fetch_one(pool)
+    .await;
+    matches!(res, Ok(n) if n > 0)
+}
+
+/// Stamp the pool's doltlite DB with one commit and return the new
+/// commit hash. No-op (returns `Ok(None)`) when the connection's
+/// libsqlite3 doesn't expose the doltlite scalars — production runs
+/// against doltlite will always populate dolt_log.
+///
+/// The commit picks up all uncommitted changes (`-A`), with `msg` as
+/// the commit message. Callers should put run-summary stats in `msg`
+/// (row counts etc.) so `dolt log` is human-auditable without
+/// cross-referencing the JSON summary.
+pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
+    if !has_dolt_extensions(pool).await {
+        return Ok(None);
+    }
+    let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', ?)")
+        .bind(msg)
+        .fetch_optional(pool)
+        .await
+        .context("dolt_commit")?;
+    Ok(hash)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -685,6 +728,110 @@ mod tests {
         );
         let q = Path::new("/tmp/raw/whatever.doltlite_db");
         assert_eq!(db_path_for(q), q);
+    }
+
+    /// `commit_run` against a connection without dolt extensions
+    /// returns `Ok(None)` rather than failing — the production
+    /// behavior on stock libsqlite3 (e.g. cargo-only unit tests).
+    ///
+    /// Under bazel (with doltlite linked) this test exercises the
+    /// full path: the call returns a real hash, `dolt_log` carries
+    /// the new entry with that hash, and the commit message we passed
+    /// is the one stored.
+    /// Diagnostic — prints what the linked libsqlite3 actually is.
+    /// Helps catch the "we thought we were on doltlite but the build
+    /// is actually stock SQLite" failure mode.
+    #[tokio::test]
+    async fn diagnostic_print_sqlite_identity() {
+        let d = tempdir().unwrap();
+        let pool = open(&d.path().join("probe.doltlite_db"), TEST_DDL)
+            .await
+            .unwrap();
+        let ver: String = sqlx::query_scalar("SELECT sqlite_version()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let src: String = sqlx::query_scalar("SELECT sqlite_source_id()")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let scalar_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pragma_function_list WHERE name LIKE 'dolt_%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        // Also try a direct call against `dolt_commit` — virtual tables
+        // and eponymous functions don't always appear in
+        // pragma_function_list.
+        let direct_call = sqlx::query("SELECT dolt_commit('-Am', 'probe')")
+            .execute(&pool)
+            .await;
+        eprintln!(
+            "[sqlite probe] version={ver} source_id={src} dolt_funcs_in_pragma={scalar_count} direct_dolt_commit_ok={}",
+            direct_call.is_ok(),
+        );
+        if let Err(e) = direct_call {
+            eprintln!("[sqlite probe] direct_call error: {e}");
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_run_returns_hash_and_dolt_log_entry_or_skips() {
+        let d = tempdir().unwrap();
+        let pool = open(&d.path().join("commit.doltlite_db"), TEST_DDL)
+            .await
+            .unwrap();
+
+        if !has_dolt_extensions(&pool).await {
+            // Stock SQLite path: commit_run should return None without
+            // error, and there's no dolt_log to inspect.
+            let hash = commit_run(&pool, "stock-sqlite probe")
+                .await
+                .expect("commit_run ok");
+            assert!(
+                hash.is_none(),
+                "expected None on stock SQLite, got {hash:?}"
+            );
+            eprintln!("[commit_run test] stock libsqlite3 — dolt_log not asserted");
+            return;
+        }
+
+        // Doltlite path. Configure committer identity (per-session,
+        // not persisted) so dolt_commit doesn't error on a missing
+        // user.email when it tries to stamp the commit author.
+        sqlx::query("SELECT dolt_config('user.name', 'frankweiler-test')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("SELECT dolt_config('user.email', 'test@frankweiler.local')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Make an uncommitted change so dolt has something to record.
+        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'first')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let msg = "test commit: rows=1";
+        let hash = commit_run(&pool, msg)
+            .await
+            .expect("commit_run ok")
+            .expect("doltlite linked but commit_run returned None");
+        assert!(!hash.is_empty(), "doltlite returned empty commit hash");
+
+        // The hash dolt_commit returns must appear in dolt_log with
+        // the message we passed — confirms the version-control SQL
+        // surface is really live (not just that the function exists).
+        let logged_msg: String =
+            sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
+                .bind(&hash)
+                .fetch_one(&pool)
+                .await
+                .expect("dolt_log lookup");
+        assert_eq!(logged_msg, msg, "dolt_log message mismatch");
     }
 
     #[tokio::test]

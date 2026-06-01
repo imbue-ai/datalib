@@ -71,22 +71,30 @@ fn fixture_db_path() -> PathBuf {
 }
 
 async fn open_readonly(path: &std::path::Path) -> SqlitePool {
-    // `immutable(true)` (not just `read_only`) is load-bearing under
-    // bazel's darwin-sandbox: the runfiles directory is mounted r/o,
-    // and the fixture DB is WAL-mode, so a plain `mode=ro` open still
-    // tries to touch a `-shm` sidecar in that directory and fails with
-    // SQLITE_CANTOPEN (code 14). `immutable=1` tells SQLite to skip all
-    // WAL/locking/change-detection and treat the file as frozen.
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+    // Doltlite-format databases reject `immutable=1` (and the WAL-mode
+    // open machinery in general) — the prolly chunk store doesn't
+    // model a frozen-bytes view the way stock SQLite's pager does. So
+    // we open with `read_only=true` only.
+    //
+    // We canonicalize the path before passing it to sqlx because
+    // doltlite's chunk_store does NOT resolve symlinks — it stat()s
+    // the path the caller passed and fails with SQLITE_CANTOPEN when
+    // that path is a symlink (even one pointing at a perfectly valid
+    // doltlite file). Bazel's runfiles tree is entirely symlinks, so
+    // every test that opens a `data`-dep'd doltlite file would fail
+    // without this. `canonicalize` follows the symlinks at the OS
+    // level so doltlite sees the real on-disk path.
+    let real = path
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("canonicalize {}: {e}", path.display()));
+    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", real.display()))
         .expect("parse url")
-        .read_only(true)
-        .immutable(true)
-        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+        .read_only(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(opts)
         .await
-        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()))
+        .unwrap_or_else(|e| panic!("open {}: {e}", real.display()))
 }
 
 /// SHA-256 of a long string, truncated to 16 hex chars. We snapshot
@@ -196,13 +204,45 @@ async fn snapshot_grid_rows_and_documents() {
         })
         .collect();
 
+    // ── dolt_log ─────────────────────────────────────────────────
+    // doltlite stamps every `dolt_commit` call into `dolt_log`. The
+    // sync orchestrator issues exactly ONE commit per run for the
+    // index DB (see frankweiler-sync::main, post-translate block);
+    // that, plus doltlite's own "Initialize data repository" boot
+    // commit, is what we expect to see here. Snapshotting the
+    // commit-message column catches:
+    //
+    //   * Regression to the per-doc commit pattern we removed — the
+    //     log would balloon from 2 entries to hundreds.
+    //   * The orchestrator silently skipping the commit (e.g. if a
+    //     future refactor drops the post-translate call) — the log
+    //     would shrink to 1 entry.
+    //   * Format drift in the commit-message template (the stats
+    //     string would change shape).
+    //
+    // We don't snapshot the commit hashes themselves — they're
+    // content-addressed and would change on any byte-level data
+    // change. Author/email is also not snapshotted: it comes from
+    // host `git config` which differs between dev machines and CI.
+    let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC")
+        .fetch_all(&pool)
+        .await
+        .expect("read dolt_log");
+
+    let dolt_log: Vec<serde_json::Value> = log_rows
+        .iter()
+        .map(|r| json!({"message": r.try_get::<String, _>("message").ok()}))
+        .collect();
+
     let bundle = json!({
         "summary": {
             "grid_rows_count": grid_rows.len(),
             "documents_count": documents.len(),
+            "dolt_log_count": dolt_log.len(),
         },
         "grid_rows": grid_rows,
         "documents": documents,
+        "dolt_log": dolt_log,
     });
 
     // Pretty-printed JSON is the most diff-friendly representation —

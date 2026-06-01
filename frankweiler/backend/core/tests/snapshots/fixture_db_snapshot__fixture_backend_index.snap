@@ -1,5 +1,5 @@
 ---
-source: core/tests/fixture_db_snapshot.rs
+source: frankweiler/backend/core/tests/fixture_db_snapshot.rs
 expression: snapshot
 ---
 {
@@ -297,6 +297,14 @@ expression: snapshot
       "source_name": "beeper",
       "title": "tng-crusher-conv-uuid-0002",
       "updated_at": "2024-04-10T19:01:00.000Z"
+    }
+  ],
+  "dolt_log": [
+    {
+      "message": "frankweiler-sync: markdowns_loaded=21 markdowns_total=21 rows_inserted=75 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper]"
+    },
+    {
+      "message": "Initialize data repository"
     }
   ],
   "grid_rows": [
@@ -2178,6 +2186,7 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 21,
+    "dolt_log_count": 2,
     "grid_rows_count": 75
   }
 }

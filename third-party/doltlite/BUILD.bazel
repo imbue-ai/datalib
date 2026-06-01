@@ -6,44 +6,54 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-# `libsqlite3_doltlite` — doltlite's SQLite amalgamation, compiled once
-# by Bazel and statically linked into every Rust binary that pulls in
+# `sqlite3` — a from-source doltlite build, compiled once by Bazel
+# and statically linked into every Rust binary that pulls in
 # sqlx-sqlite (transitively via `libsqlite3-sys`).
 #
-# Cache shape:
-#   * The doltlite source lives in `@doltlite_amalgamation//` — a bzlmod
-#     http_archive pinned by sha256 in MODULE.bazel. Bazel fetches the
-#     ~2.6 MB zip exactly once per pin, ever, across every build/host.
-#   * This cc_library action is keyed on the doltlite zip's sha + the
-#     C toolchain hermetic action key, so it rebuilds only when one of
-#     those moves. Touching Rust code never invalidates it.
-#   * Downstream Rust crates depend on `:libsqlite3_doltlite` via a
-#     crate_universe annotation on `libsqlite3-sys` (see MODULE.bazel)
-#     so a single .a flows into every binary.
+# Why we compile every individual source file rather than using
+# `sqlite3.c` (the amalgamation): per upstream's `main.mk`, a
+# DOLTLITE_PROLLY=1 build takes the non-amalgamation code path. The
+# amalgamation declares the prolly hooks as `SQLITE_PRIVATE` (=
+# `static`), so their external-linkage definitions in `prolly_btree.c`
+# can't satisfy them — the only way to link a working prolly build is
+# to compile the engine + dolt-SQL files into the same archive as the
+# core sources. We mirror upstream's PROLLY-mode link set: every
+# `src/*.c` (minus the five files the prolly engine replaces — btree,
+# pager, wal, btmutex, backup), every `doltlite_*.c` + `prolly_*.c` +
+# `chunk_*.c` + `*_orig.c` file, every blake3 source with
+# platform-appropriate SIMD, the listed SQLite extensions, and the
+# Lemon-generated parser tables.
 #
-# Why we rename `doltlite.{c,h}` → `sqlite3.{c,h}`:
-#   doltlite's public header is byte-equivalent to upstream SQLite's
-#   `sqlite3.h` (same `#ifndef SQLITE3_H`, same `sqlite3_*` prototypes).
-#   `libsqlite3-sys` and every other SQLite-shaped Rust crate looks for
-#   the header at `sqlite3.h`, so we expose it under that name. Cheap
-#   genrule that just copies the bytes.
+# Cache shape:
+#   * The doltlite source lives in `@doltlite_amalgamation//` — a
+#     bzlmod http_archive pinned by sha256 in MODULE.bazel. Bazel
+#     fetches the autoconf tarball exactly once per pin, ever, across
+#     every build/host.
+#   * This cc_library action is keyed on every source file digest
+#     plus the C toolchain hermetic action key, so it rebuilds only
+#     when one of those moves. Touching Rust code never invalidates it.
+#   * Downstream Rust crates depend on `:sqlite3` via a crate_universe
+#     annotation on `libsqlite3-sys` (see MODULE.bazel) so a single
+#     .a flows into every binary.
 
+# Surface the public header at the canonical name `sqlite3.h` in our
+# package so consumers can do `#include <sqlite3.h>` and find it via
+# the `:sqlite3.h` label that MODULE.bazel's `build_script_data`
+# references.
 genrule(
-    name = "rename_amalgamation",
+    name = "copy_sqlite_header",
     srcs = [
-        "@doltlite_amalgamation//:doltlite.c",
-        "@doltlite_amalgamation//:doltlite.h",
+        "@doltlite_amalgamation//:sqlite3.h",
+        "@doltlite_amalgamation//:sqlite3ext.h",
     ],
     outs = [
-        "sqlite3.c",
         "sqlite3.h",
+        "sqlite3ext.h",
     ],
     cmd = """
-        cp $(location @doltlite_amalgamation//:doltlite.c) $(location sqlite3.c)
-        cp $(location @doltlite_amalgamation//:doltlite.h) $(location sqlite3.h)
+        cp $(location @doltlite_amalgamation//:sqlite3.h) $(location sqlite3.h)
+        cp $(location @doltlite_amalgamation//:sqlite3ext.h) $(location sqlite3ext.h)
     """,
-    # Public so the libsqlite3-sys crate_universe annotation can pull
-    # sqlite3.h into the build script's runfiles.
     visibility = ["//visibility:public"],
 )
 
@@ -53,38 +63,84 @@ genrule(
 # `cargo:rustc-link-lib=sqlite3` against `SQLITE3_LIB_DIR`.
 cc_library(
     name = "sqlite3",
-    srcs = ["sqlite3.c"],
-    hdrs = ["sqlite3.h"],
-    # Expose the header dir so libsqlite3-sys's build-time bindgen can
-    # find `#include <sqlite3.h>`.
+    srcs = [
+        "@doltlite_amalgamation//:sqlite_core_src",
+        "@doltlite_amalgamation//:doltlite_engine_src",
+        "@doltlite_amalgamation//:sqlite_extension_src",
+        "@doltlite_amalgamation//:sqlite_generated_src",
+        "@doltlite_amalgamation//:blake3_portable_src",
+    ] + select({
+        "@platforms//cpu:x86_64": [
+            "@doltlite_amalgamation//:blake3_x86_simd_src",
+        ],
+        "@platforms//cpu:aarch64": [
+            "@doltlite_amalgamation//:blake3_arm_simd_src",
+        ],
+        "//conditions:default": [],
+    }),
+    hdrs = [
+        "sqlite3.h",
+        "sqlite3ext.h",
+    ],
+    deps = ["@doltlite_amalgamation//:doltlite_headers"],
     includes = ["."],
-    # Standard SQLite compile flags. Match upstream's recommended
-    # production set so doltlite behaves like a "modern" SQLite to
-    # everything above the C ABI.
     copts = [
+        # `SQLITE_CORE` switches the bundled extensions (FTS3, FTS5,
+        # RTree, …) from loadable-extension entry points to the
+        # statically-callable init functions main.c expects (e.g.
+        # `sqlite3Fts5Init`). The amalgamation defines it
+        # automatically; the non-amalgamation build has to opt in.
+        "-DSQLITE_CORE",
+        # The flag that flips on the storage-engine swap + the
+        # version-control SQL function registrations. Without it the
+        # build is indistinguishable from upstream SQLite.
+        "-DDOLTLITE_PROLLY=1",
+        "-DDOLTLITE_VERSION=\\\"0.11.3\\\"",
+        # SQLite vtable extensions doltlite expects (mirrors
+        # OPT_FEATURE_FLAGS once DOLTLITE_PROLLY=1 is set upstream).
+        "-DSQLITE_ENABLE_BYTECODE_VTAB",
+        "-DSQLITE_ENABLE_DBPAGE_VTAB",
+        "-DSQLITE_ENABLE_DBSTAT_VTAB",
+        "-DSQLITE_ENABLE_FTS3",
+        "-DSQLITE_ENABLE_FTS4",
         "-DSQLITE_ENABLE_FTS5",
-        "-DSQLITE_ENABLE_JSON1",
         "-DSQLITE_ENABLE_RTREE",
+        "-DSQLITE_ENABLE_STMTVTAB",
+        "-DSQLITE_ENABLE_JSON1",
         "-DSQLITE_ENABLE_UNLOCK_NOTIFY",
+        # ICU (Unicode tokenization for FTS3). doltlite enables this
+        # by default; we have to either compile against the system
+        # ICU libs or `-DSQLITE_OMIT_ICU` to skip — but we DO compile
+        # ext/icu/icu.c, so the symbols are present.
         # sqlx-sqlite calls sqlite3_column_{database,origin,table}_name
-        # for nullability inference. They're only defined when SQLite is
-        # built with this flag; without it, link fails with "Undefined
-        # symbols for architecture arm64: _sqlite3_column_origin_name".
+        # for nullability inference. They're only defined when SQLite
+        # is built with this flag; without it, link fails with
+        # "Undefined symbols for architecture arm64:
+        # _sqlite3_column_origin_name".
         "-DSQLITE_ENABLE_COLUMN_METADATA",
         "-DSQLITE_THREADSAFE=1",
         "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
-        # Silence the noisier of doltlite's own build warnings — they're
-        # in upstream-SQLite-shaped code we don't own.
+        # Silence the noisier doltlite/SQLite build warnings — they
+        # live in upstream-shaped code we don't own.
         "-Wno-unused-but-set-variable",
         "-Wno-unused-function",
         "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-Wno-unused-but-set-parameter",
+        "-Wno-implicit-fallthrough",
+        "-Wno-sign-compare",
+        "-Wno-deprecated-non-prototype",
     ],
     linkopts = select({
         # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
         # ever calls sqlite3_load_extension at runtime (we don't, but
         # the symbol references dlopen so the linker complains
         # otherwise on Linux).
-        "@platforms//os:linux": ["-lpthread", "-ldl", "-lm"],
+        "@platforms//os:linux": [
+            "-lpthread",
+            "-ldl",
+            "-lm",
+        ],
         "@platforms//os:macos": [],
         "//conditions:default": [],
     }),

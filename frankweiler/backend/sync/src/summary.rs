@@ -129,6 +129,10 @@ pub struct LoadOutcome {
     pub markdowns_total: usize,
     pub rows_inserted: usize,
     pub error: Option<String>,
+    /// dolt_commit hash for the single index-DB commit we issue at the
+    /// end of the translate phase. `None` when the binary is built
+    /// against stock libsqlite3 (unit tests) or when the commit failed.
+    pub commit_hash: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +188,7 @@ impl SyncSummary {
                 "markdowns_total": l.markdowns_total,
                 "rows_inserted": l.rows_inserted,
                 "error": l.error,
+                "commit_hash": l.commit_hash,
             })
         });
         let any_error = self.fatal_error.is_some()
