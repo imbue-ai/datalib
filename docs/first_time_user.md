@@ -1,5 +1,8 @@
 # First-time user guide
 
+> Codenames in this project (`frankweiler`, etc.) are inspired by
+> [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
+
 Getting a personal mirror of your Claude conversations onto your laptop,
 end-to-end. macOS arm64 only for now.
 
