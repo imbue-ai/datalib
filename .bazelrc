@@ -3,22 +3,21 @@ common --noenable_workspace
 test --test_output=errors
 
 # Every bazel action inherits a fixed PATH, not the developer's host
-# PATH. Build and test actions resolve `dolt`, `npx`, `cmake`, etc.
-# against this PATH, so those tools must be installed somewhere here
+# PATH. Build and test actions resolve `npx`, `cmake`, etc. against
+# this PATH, so those tools must be installed somewhere here
 # (`/opt/homebrew/bin` covers the brew defaults; `/usr/bin:/bin` covers
 # system `make`/`perl`/`cc` etc.). boring-sys2's build script in
 # particular shells out to cmake + a C toolchain to build boringssl.
 #
-# We deliberately do NOT `--action_env=DOLT_BIN/NPX_BIN`. Forwarded host
-# env vars contribute to every action's cache key, so any caller-side
-# variance (direnv loaded vs not, `which dolt` resolving to different
+# We deliberately do NOT `--action_env=NPX_BIN`. Forwarded host env
+# vars contribute to every action's cache key, so any caller-side
+# variance (direnv loaded vs not, `which npx` resolving to different
 # paths in different shells, agent sessions, CI machines) invalidates
 # every cached action — including the expensive boring-sys2 build
-# script. Rust call sites still honor `$DOLT_BIN`/`$NPX_BIN` if set at
-# *runtime* (handy when running the sync binary directly outside
-# bazel), but bazel doesn't propagate them into the action graph.
-# Resolvers:
-#   * DOLT_BIN — frankweiler_core::dolt_server::resolve_dolt_binary
+# script. Rust call sites still honor `$NPX_BIN` if set at *runtime*
+# (handy when running the sync binary directly outside bazel), but
+# bazel doesn't propagate it into the action graph.
+# Resolver:
 #   * NPX_BIN  — frankweiler_qmd_indexer::run_qmd
 #                and frankweiler_etl::latchkey::latchkey_command
 build --action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin

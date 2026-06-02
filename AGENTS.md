@@ -100,11 +100,14 @@ data-msg-index="N" class="msg msg--{provider}">` wrappers the renderer
 emits in the body. If you find yourself writing a QMD parser in the
 backend, stop — add the field to `grid_rows` instead.
 
-## Feedback persistence (Dolt)
+## Feedback persistence (doltlite)
 
-The backend talks to a managed `dolt sql-server` subprocess
-(`frankweiler/backend/core/src/dolt_server.rs`) via `sqlx::MySqlPool`
-in `DoltRepo`. `dolt` must be on `$PATH`. There is no SQLite fallback.
+The backend opens the data root's `backend_index.doltlite_db` via
+`sqlx::sqlite::SqlitePool` and wraps it in `DoltRepo`
+(`frankweiler/backend/core/src/dolt_repo.rs`). doltlite is statically
+linked into every Rust binary by `//third-party/doltlite:sqlite3`
+(see `MODULE.bazel`); no host `dolt` install, no subprocess, no MySQL
+client. The same pool serves reads and writes.
 
 Every UUID-bearing UI surface has a "Feedback…" path. Right-click on
 the grid emits `grid_cell` / `grid_row`; the search input emits
@@ -118,14 +121,18 @@ the backend-side row + discriminated payload schema lives in
 languages.
 
 Each `POST /api/feedback` inserts a row **and** runs
-`CALL DOLT_COMMIT('-Am', 'feedback: <uuid>')` so each row gets its own
-`dolt log` entry — keep INSERT + DOLT_COMMIT pinned to one pool
-connection because `--no-auto-commit` makes writes session-scoped.
+`SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
+connection so the commit covers exactly the row we just wrote — no
+chance of a concurrent writer's INSERT slipping into the same
+`dolt_log` entry. Doltlite's working set is per-file, not
+per-connection, so a sibling task on a different pool connection
+sees the commit immediately.
 
 Bazel stamps the binary with the git hash via
 `tools/workspace_status.sh` (referenced from `.bazelrc`); cargo builds
 get the same value from `frankweiler/backend/core/build.rs`. Read-back
-of feedback rows is out of scope — query Dolt directly.
+of feedback rows is out of scope — query the doltlite_db directly with
+any SQLite-shaped client.
 
 ## Git: prefer merges over rebases
 

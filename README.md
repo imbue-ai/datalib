@@ -3,6 +3,31 @@
 > Codenames in this project (`frankweiler`, etc.) are inspired by
 > [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
 
+## First-time setup
+
+```sh
+# 1. Install host tools Bazel can't provide for itself. `cmake` is
+#    required by the `boring-sys2` crate (BoringSSL bindings) at
+#    build time; `bazel` is the build driver.
+brew install bazel cmake
+
+# 2. Create the shared qmd-models cache directory. `.bazelrc`
+#    bind-mounts this into every sandboxed action via
+#    `--sandbox_add_mount_pair=$(HOME)/.cache/qmd-models` so the
+#    qmd-indexer genrule doesn't re-download ~2 GB of GGUF models
+#    on every build — Bazel can read the dir, but won't create it.
+mkdir -p ~/.cache/qmd-models
+
+# 3. Verify Bazel can resolve `npx` on the pinned PATH. Bazel
+#    actions inherit a fixed PATH from `.bazelrc`
+#    (`/opt/homebrew/bin:/usr/bin:/bin`) instead of your interactive
+#    shell's PATH — host `direnv` / `nvm` / shell-init pnpm aren't
+#    in scope. `qmd-indexer` shells out to `npx`, so it has to be
+#    findable here. Empty output = trouble; expect
+#    `/opt/homebrew/bin/npx` (Homebrew Node).
+PATH=/opt/homebrew/bin:/usr/bin:/bin command -v npx
+```
+
 Two coupled projects that mirror personal data into a queryable local store:
 
 - **`frankweiler/backend/`** — Rust workspace that downloads + ingests
@@ -15,20 +40,6 @@ Two coupled projects that mirror personal data into a queryable local store:
 Both projects share row shapes through **`schemas/`**, the single
 source-of-truth that emits Rust / Python / TypeScript types from one JSON
 Schema.
-
-## Installing the CLI
-
-macOS arm64 only for now. Downloads the latest tagged release and
-drops the binaries into `~/.local/bin` (override with
-`FRANKWEILER_INSTALL_DIR`):
-
-```sh
-curl -LsSf https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/scripts/install.sh | sh
-```
-
-Releases are produced by `.github/workflows/release.yml` when a `v*`
-tag is pushed; the set of shipped binaries is whatever
-`//frankweiler/backend:dist` depends on.
 
 ## Slug + UUID identifiers (Notion-style)
 
@@ -46,19 +57,6 @@ form is `slug-uuid` (e.g.
 - **Right-click "filter by this cell"** assembles the form automatically:
   it has both the row's UUID (for the column the click landed on) and the
   human display label (from accounts.json, conversation name, etc.).
-
-### Why no visual chips (yet)
-
-The filter bar is a single text input on purpose. Visual chip components
-are nice to look at but **hard to copy-paste out of** — the user can't
-grab a filter to send in chat or paste into a deeplink without
-re-typing. The Notion-shaped tokens are already self-describing as plain
-text, so they round-trip through any text channel cleanly.
-
-A reasonable future compromise: render chips visually but make
-double-click (or a chip menu) turn the chip back into editable plain
-text. Several editors do this for hashtags / mentions. Worth considering
-once the tokens themselves stabilise.
 
 ## Repo layout
 

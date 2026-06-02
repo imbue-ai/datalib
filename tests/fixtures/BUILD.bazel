@@ -43,11 +43,13 @@ filegroup(
 
 # Cacheable, deterministic ingest of the TNG fixtures via
 # //frankweiler/backend/sync:frankweiler_sync_bin. The orchestrator
-# walks every provider's Translate step over the checked-in fixtures,
-# loads the resulting sidecars into a scratch Dolt repo, then writes
-# dump.sql + rendered_md/ to a staging dir; this rule then tars the
-# markdown tree into qmd.tar. Tar packaging is *not* the pipeline
-# binary's concern — it operates at the layer of DB + qmd files.
+# walks every provider's Translate step over the checked-in fixtures
+# and loads the resulting sidecars into `backend_index.doltlite_db`
+# (the doltlite chunk store is linked statically into the sync binary
+# via `//third-party/doltlite:sqlite3`, so no host `dolt` install is
+# required). This rule then tars the rendered_md tree into qmd.tar.
+# Tar packaging is *not* the pipeline binary's concern — it operates
+# at the layer of DB + qmd files.
 genrule(
     name = "ingested_tng",
     srcs = [":source_json"],

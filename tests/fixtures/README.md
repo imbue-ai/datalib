@@ -123,39 +123,34 @@ without re-running the pipeline:
 
 ```
 bazelisk build //tests/fixtures:ingested_tng
-# bazel-bin/tests/fixtures/ingested/dump.sql
+# bazel-bin/tests/fixtures/ingested/backend_index.doltlite_db
 # bazel-bin/tests/fixtures/ingested/qmd.tar
 ```
 
 **Determinism**: the genrule pins `--now` to a fixed TNG-era timestamp,
-the dumper sorts rows by primary key and canonicalizes JSON, and the
-tar normalizes mtime/uid/gid. A clean rebuild produces byte-identical
-outputs (verified). Dolt commit hashes themselves are non-deterministic
-and intentionally **not** included in either artifact \u2014 the SQL dump is
-keyed on provider UUIDs, which are stable.
+the orchestrator inserts rows in primary-key order, and the tar
+normalizes mtime/uid/gid. A clean rebuild produces byte-identical
+outputs (verified). The trailing per-run `dolt_commit` lands a single
+deterministic entry in `dolt_log` whose hash is stable given identical
+inputs.
 
-**Why not the live `.dolt/` directory?** Dolt's chunk store / journal
-files differ across runs (and across Dolt versions). The SQL dump is the
-canonical projection of the data; load it into a fresh Dolt (or any
-MySQL-compatible engine) to reconstruct the live DB on demand.
+**Reading the doltlite_db.** It's a SQLite-shaped file. Consumers that
+link doltlite (via `//third-party/doltlite:sqlite3`) get the full
+version-control surface; consumers that link stock libsqlite3 get the
+same table schemas without the `dolt_*` SQL functions. Either way, a
+plain `SELECT` works:
 
-**Reading the dump without Dolt.** The DDL is the portable subset shared
-by Dolt, MySQL, and SQLite, so consumers that only need to *query*
-ingested data can skip the Dolt subprocess entirely:
-
-```python
-from ingest.sqlite_load import load_dump_into_memory
-conn = load_dump_into_memory(Path(".../dump.sql"))   # in-memory SQLite
-conn.execute("SELECT full_name FROM anthropic_accounts").fetchall()
+```rust
+let pool = sqlx::sqlite::SqlitePool::connect(
+    &format!("sqlite://{}", db_path.display())
+).await?;
+let n: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
+    .fetch_one(&pool).await?;
 ```
 
-Loading into `:memory:` is sub-millisecond and hermetic — preferred for
-unit tests over spinning up Dolt. Use Dolt only when you need its
-write/versioning semantics.
-
-**Constraints**: the genrule requires `dolt` on PATH and is tagged
-`requires-dolt`, `no-remote`, `no-sandbox`. It runs locally only \u2014 not
-on RBE.
+**Constraints**: the genrule is fully hermetic. No host `dolt` install
+is needed; the sync binary statically links doltlite via
+`//third-party/doltlite:sqlite3`.
 
 ## Maintenance
 

@@ -326,8 +326,13 @@ mod tests {
         }
         let elapsed = start.elapsed();
         assert!(h != u64::MAX);
+        // Budget is generous (5s) on purpose. We only want to catch a
+        // genuine O(N²) regression — under the old implementation this
+        // workload took >30s. The linear path is sub-100ms on a fast
+        // box, but bazel-sandboxed CI / loaded laptops drift up to a
+        // few hundred ms; mirrors the chatgpt-side bump in 541920c.
         assert!(
-            elapsed < Duration::from_millis(500),
+            elapsed < Duration::from_secs(5),
             "fingerprint loop took {elapsed:?} for {C} conversations × {M} msgs — likely regressed to O(N²)",
         );
     }
