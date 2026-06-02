@@ -286,7 +286,7 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
                 .and_then(|s| s.to_str())
                 .unwrap_or("<unknown>")
         );
-        match commit_extract_db(&path, &msg).await {
+        match frankweiler_etl::doltlite_raw::commit_run_at_path(&path, &msg).await {
             Ok(Some(h)) => eprintln!(
                 "[frankweiler-sync] interrupt extract commit {}: {h}",
                 path.display()
@@ -1280,7 +1280,7 @@ impl ExtractPlan {
         match result {
             Ok(stats) => {
                 let msg = format!("extract {name}: {stats}");
-                match commit_extract_db(&out_dir, &msg).await {
+                match frankweiler_etl::doltlite_raw::commit_run_at_path(&out_dir, &msg).await {
                     Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
                     Ok(None) => Ok(stats),
                     Err(e) => {
@@ -1292,28 +1292,6 @@ impl ExtractPlan {
             Err(e) => Err(e),
         }
     }
-}
-
-/// Open the doltlite_db at `out_dir` (or `<out_dir>.doltlite_db` for
-/// the legacy-directory shape) and commit any uncommitted writes from
-/// this run. Returns the commit hash, or `None` when libsqlite3 has no
-/// doltlite extensions (unit-test builds). Errors here are surfaced to
-/// the caller, which downgrades them to a stderr warning so a missing
-/// commit doesn't fail the extract.
-async fn commit_extract_db(out_dir: &Path, msg: &str) -> Result<Option<String>> {
-    use frankweiler_etl::doltlite_raw as dr;
-    let db_path = dr::db_path_for(out_dir);
-    if !db_path.exists() {
-        // No db materialized (e.g. extract aborted before opening): nothing to commit.
-        return Ok(None);
-    }
-    // No extra DDL: the shared tables (sync_runs, blobs, …) are already
-    // present from the extract pool's lifetime. `open` is
-    // CREATE-IF-NOT-EXISTS so it's a no-op for tables that already exist.
-    let pool = dr::open(&db_path, &[]).await.context("open for commit")?;
-    let hash = dr::commit_run(&pool, msg).await?;
-    pool.close().await;
-    Ok(hash)
 }
 
 /// Walk `<playback>/notion/*.json`, decode each as an `HttpResponse`,
@@ -1582,4 +1560,187 @@ fn build_qmd_index(
         opts.models_dir = d.to_path_buf();
     }
     frankweiler_qmd_indexer::run_index(&opts).context("qmd index build")
+}
+
+#[cfg(test)]
+mod interrupt_tests {
+    //! Tests for the SIGINT-handler commit path. We can't easily send
+    //! SIGINT to ourselves mid-`#[tokio::test]` and observe what
+    //! [`interrupt_commit_all`] did — async-signal-safe tokio teardown
+    //! is its own rabbit hole. Instead we drive the function directly
+    //! against a `CtrlcState` we populate by hand, which is exactly
+    //! the same state the real SIGINT handler would see (because
+    //! [`run`] writes into the same `Arc<Mutex<CtrlcState>>` that
+    //! handler reads). The commit-landing assertions are the
+    //! load-bearing piece — the actual signal plumbing is just glue.
+    use super::*;
+    use frankweiler_etl::doltlite_raw as dr;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    async fn has_dolt(pool: &sqlx::sqlite::SqlitePool) -> bool {
+        dr::has_dolt_extensions(pool).await
+    }
+
+    /// Populate `CtrlcState` with one index pool + two extract DB
+    /// paths (one materialized, one never-created), call
+    /// [`interrupt_commit_all`], then verify:
+    ///   * the index pool got exactly one new commit
+    ///   * the materialized extract DB got exactly one new commit
+    ///   * the never-created path was silently skipped (no file
+    ///     materialized, no error)
+    ///
+    /// Mirrors the production state the SIGINT handler sees at
+    /// any point during a sync run: the index pool is always live
+    /// once `open_index_pool` returns, and `extract_dbs` is the
+    /// list of every managed source's resolved input path —
+    /// regardless of whether that source's extract has actually
+    /// run yet.
+    #[tokio::test]
+    async fn interrupt_commit_all_commits_index_and_extract_dbs() {
+        let d = tempdir().unwrap();
+        let index_db = d.path().join("backend_index.doltlite_db");
+        let extract_db = d.path().join("raw").join("source_a.doltlite_db");
+        let never_created = d.path().join("raw").join("source_b.doltlite_db");
+
+        // Sanity-prime the index DB so dolt_log has a head to count from.
+        // Use the same DDL the real index DB carries — empty extra DDL
+        // is fine; we just need the file to exist and be doltlite-format.
+        let index_pool = dr::open(&index_db, &[]).await.unwrap();
+
+        if !has_dolt(&index_pool).await {
+            eprintln!(
+                "[interrupt_tests] stock libsqlite3 — full assertion skipped. \
+                 Run under bazel (which links doltlite) for the load-bearing check."
+            );
+            return;
+        }
+
+        // Both pools need per-session committer identity. doltlite
+        // doesn't persist this, so the real sync binary configures
+        // it once per connection at sync start — we'd do the same in
+        // production. Here we configure right before the interrupt.
+        for q in [
+            "SELECT dolt_config('user.name', 'frankweiler-interrupt-test')",
+            "SELECT dolt_config('user.email', 'interrupt@frankweiler.local')",
+        ] {
+            sqlx::query(q).execute(&index_pool).await.unwrap();
+        }
+
+        // Materialize the extract DB so commit_run_at_path has
+        // something to open. Apply the standard `start_run` so there's
+        // a row to commit (otherwise dolt would say "nothing to commit"
+        // and skip the new log entry).
+        {
+            let pool = dr::open(&extract_db, &[]).await.unwrap();
+            for q in [
+                "SELECT dolt_config('user.name', 'frankweiler-interrupt-test')",
+                "SELECT dolt_config('user.email', 'interrupt@frankweiler.local')",
+            ] {
+                sqlx::query(q).execute(&pool).await.unwrap();
+            }
+            let _ = dr::start_run(&pool, &json!({"phase": "extract"}))
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        // Stage an uncommitted change on the index DB too, so the
+        // interrupt path has something to commit there.
+        sqlx::query("CREATE TABLE IF NOT EXISTS canary (id INTEGER PRIMARY KEY, note TEXT)")
+            .execute(&index_pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO canary (note) VALUES ('staged-before-interrupt')")
+            .execute(&index_pool)
+            .await
+            .unwrap();
+
+        // Snapshot dolt_log counts BEFORE the interrupt so we can
+        // assert exactly one new entry lands per DB.
+        let index_log_before: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+            .fetch_one(&index_pool)
+            .await
+            .unwrap();
+        let extract_log_before: i64 = {
+            let p = dr::open(&extract_db, &[]).await.unwrap();
+            let n = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+                .fetch_one(&p)
+                .await
+                .unwrap();
+            p.close().await;
+            n
+        };
+
+        // Build the shared state EXACTLY as the run() body would:
+        // index pool live, every managed source's path registered,
+        // including paths whose extract hasn't materialized a file.
+        let state = Arc::new(Mutex::new(CtrlcState {
+            index_pool: Some(index_pool.clone()),
+            extract_dbs: vec![extract_db.clone(), never_created.clone()],
+        }));
+
+        // Invoke the same function the SIGINT handler invokes.
+        interrupt_commit_all(&state).await;
+
+        // ── Verify ────────────────────────────────────────────────
+        // Index DB: exactly one new dolt_log entry, with the
+        // interrupt-stamped message. We count via a FRESH pool because
+        // doltlite's per-connection view doesn't see commits issued
+        // from a different connection inside the same pool — the
+        // original index_pool we held would report a stale count.
+        index_pool.close().await;
+        let verify_index = dr::open(&index_db, &[]).await.unwrap();
+        let index_log_after: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+            .fetch_one(&verify_index)
+            .await
+            .unwrap();
+        assert_eq!(
+            index_log_after - index_log_before,
+            1,
+            "expected exactly one new index commit from interrupt"
+        );
+        let index_head_msg: String =
+            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1")
+                .fetch_one(&verify_index)
+                .await
+                .unwrap();
+        assert!(
+            index_head_msg.contains("interrupted (Ctrl-C)"),
+            "index interrupt commit message wrong: {index_head_msg}"
+        );
+
+        // Extract DB: same.
+        let verify = dr::open(&extract_db, &[]).await.unwrap();
+        let extract_log_after: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+            .fetch_one(&verify)
+            .await
+            .unwrap();
+        assert_eq!(
+            extract_log_after - extract_log_before,
+            1,
+            "expected exactly one new extract commit from interrupt"
+        );
+        let extract_head_msg: String =
+            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1")
+                .fetch_one(&verify)
+                .await
+                .unwrap();
+        assert!(
+            extract_head_msg.contains("interrupted (Ctrl-C)")
+                && extract_head_msg.contains("source_a"),
+            "extract interrupt commit message wrong: {extract_head_msg}"
+        );
+        verify.close().await;
+
+        // Never-created path: must NOT have been materialized by the
+        // interrupt commit attempt. Same defensive contract as the
+        // commit_run_at_path no-op test in doltlite_raw.
+        assert!(
+            !never_created.exists(),
+            "interrupt_commit_all must not create files for nonexistent extract paths"
+        );
+
+        verify_index.close().await;
+    }
 }

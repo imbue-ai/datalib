@@ -308,6 +308,31 @@ pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
     matches!(res, Ok(n) if n > 0)
 }
 
+/// Open (or no-op) a doltlite file on disk and stamp it with one
+/// commit. Returns the commit hash, `Ok(None)` if the file doesn't
+/// exist (e.g. extract aborted before materializing any rows) or if
+/// the linked libsqlite3 isn't doltlite. Errors only on a real
+/// open/commit failure.
+///
+/// Used by `frankweiler-sync` after each extract source finishes
+/// (`ExtractPlan::run`) AND from the SIGINT handler to flush
+/// in-flight stores before exit. Tests live in this module.
+///
+/// The helper opens a brief pool with no extra DDL — the shared
+/// tables (sync_runs, blobs, …) are already in the file from the
+/// extract pool's lifetime; `open` is CREATE-IF-NOT-EXISTS so it's a
+/// no-op for tables that already exist.
+pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<String>> {
+    let db_path = db_path_for(out_dir);
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = open(&db_path, &[]).await.context("open for commit")?;
+    let hash = commit_run(&pool, msg).await?;
+    pool.close().await;
+    Ok(hash)
+}
+
 /// Stamp the pool's doltlite DB with one commit and return the new
 /// commit hash. No-op (returns `Ok(None)`) when the connection's
 /// libsqlite3 doesn't expose the doltlite scalars — production runs
@@ -832,6 +857,92 @@ mod tests {
                 .await
                 .expect("dolt_log lookup");
         assert_eq!(logged_msg, msg, "dolt_log message mismatch");
+    }
+
+    /// End-to-end test of the per-source extract commit path:
+    /// `frankweiler-sync::ExtractPlan::run` calls `commit_run_at_path`
+    /// after each provider's extract finishes, against the doltlite_db
+    /// the provider wrote during the run. This test mirrors that
+    /// pattern: stage a row via `open` + `start_run` + insert + drop
+    /// pool (simulating an extract closing its pool), then reopen via
+    /// `commit_run_at_path` (the orchestrator's hook) and verify the
+    /// commit lands in dolt_log with the expected message.
+    ///
+    /// Also exercises `commit_run_at_path`'s no-op behavior for a
+    /// non-existent path (extract aborted before the file was created
+    /// — `interrupt_commit_all` walks every enabled-source path and
+    /// some may not yet exist).
+    #[tokio::test]
+    async fn commit_run_at_path_persists_across_pool_lifetimes() {
+        let d = tempdir().unwrap();
+        let db = d.path().join("source.doltlite_db");
+
+        // Phase 1: simulate an extract — open, write, close.
+        {
+            let pool = open(&db, TEST_DDL).await.unwrap();
+            if !has_dolt_extensions(&pool).await {
+                eprintln!("[commit_run_at_path test] stock libsqlite3 — full assertion skipped");
+                // Still exercise the no-op-on-missing-file path; it
+                // shouldn't depend on doltlite being linked.
+                let missing = d.path().join("never_created.doltlite_db");
+                let hash = commit_run_at_path(&missing, "ignored")
+                    .await
+                    .expect("missing-path open should succeed");
+                assert!(hash.is_none(), "expected None on missing path");
+                return;
+            }
+            // Per-session committer identity (doltlite requires this).
+            sqlx::query("SELECT dolt_config('user.name', 'frankweiler-extract-test')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("SELECT dolt_config('user.email', 'extract@frankweiler.local')")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            let run_id = start_run(&pool, &json!({"source": "test"})).await.unwrap();
+            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w-extract', 'staged')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            finish_run(&pool, run_id, "ok", &json!({"rows": 1}))
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        // Phase 2: reopen via the orchestrator's hook and commit.
+        let msg = "extract source: rows=1 commit_run_at_path test";
+        let hash = commit_run_at_path(&db, msg)
+            .await
+            .expect("commit_run_at_path ok")
+            .expect("doltlite linked but commit hash was None");
+
+        // Phase 3: verify the commit is durable by reopening AGAIN
+        // and querying dolt_log. This is the load-bearing assertion —
+        // proves the commit actually persisted to disk, not just that
+        // commit_run returned a hash.
+        let verify = open(&db, TEST_DDL).await.unwrap();
+        let logged_msg: String =
+            sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
+                .bind(&hash)
+                .fetch_one(&verify)
+                .await
+                .expect("dolt_log lookup after reopen");
+        assert_eq!(logged_msg, msg, "dolt_log message mismatch after reopen");
+
+        // No-op path: pointing at a never-created file should NOT
+        // create one and should NOT error.
+        let missing = d.path().join("never_created.doltlite_db");
+        let h2 = commit_run_at_path(&missing, "ignored")
+            .await
+            .expect("missing-path open should succeed");
+        assert!(h2.is_none(), "expected None on missing path");
+        assert!(
+            !missing.exists(),
+            "missing-path call must not create the file"
+        );
     }
 
     #[tokio::test]
