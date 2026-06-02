@@ -116,34 +116,25 @@ impl RawDb {
     /// in `users.json` from a bulk export, or what `/api/account`
     /// returns).
     pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("uuid")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("user entry missing uuid"))?;
-        let email = payload.get("email_address").and_then(|v| v.as_str());
-        let full_name = payload.get("full_name").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize user")?;
+        let mut tx = self.pool.begin().await.context("begin user tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO users (id, email, full_name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                email = COALESCE(excluded.email, users.email),
-                full_name = COALESCE(excluded.full_name, users.full_name),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(id)
-        .bind(email)
-        .bind(full_name)
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .context("upsert user")?;
+        upsert_user_in(&mut tx, payload, &now).await?;
+        tx.commit().await.context("commit user tx")?;
+        Ok(())
+    }
+
+    /// Upsert a whole batch of users in a single transaction (e.g. a
+    /// bulk-export `users.json` array).
+    pub async fn upsert_users(&self, payloads: &[Value]) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin users batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for payload in payloads {
+            upsert_user_in(&mut tx, payload, &now).await?;
+        }
+        tx.commit().await.context("commit users batch tx")?;
         Ok(())
     }
 
@@ -172,31 +163,25 @@ impl RawDb {
     // ── orgs ───────────────────────────────────────────────────────
 
     pub async fn upsert_org(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("uuid")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("org missing uuid"))?;
-        let name = payload.get("name").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize org")?;
+        let mut tx = self.pool.begin().await.context("begin org tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO orgs (id, name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                name = COALESCE(excluded.name, orgs.name),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .context("upsert org")?;
+        upsert_org_in(&mut tx, payload, &now).await?;
+        tx.commit().await.context("commit org tx")?;
+        Ok(())
+    }
+
+    /// Upsert a whole `/api/organizations` response in a single
+    /// transaction.
+    pub async fn upsert_orgs(&self, payloads: &[Value]) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin orgs batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for payload in payloads {
+            upsert_org_in(&mut tx, payload, &now).await?;
+        }
+        tx.commit().await.context("commit orgs batch tx")?;
         Ok(())
     }
 
@@ -373,6 +358,75 @@ pub struct LoadedConversation {
     /// Raw API payload — the translate step calls
     /// `normalize_to_export_shape` over this on read.
     pub payload: Value,
+}
+
+// ── private row-level upserts (shared by single + batch APIs) ──────────
+
+async fn upsert_user_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    let id = payload
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("user entry missing uuid"))?;
+    let email = payload.get("email_address").and_then(|v| v.as_str());
+    let full_name = payload.get("full_name").and_then(|v| v.as_str());
+    let payload_str = serde_json::to_string(payload).context("serialize user")?;
+    sqlx::query(
+        "INSERT INTO users (id, email, full_name, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            email = COALESCE(excluded.email, users.email),
+            full_name = COALESCE(excluded.full_name, users.full_name),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(id)
+    .bind(email)
+    .bind(full_name)
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .context("upsert user")?;
+    Ok(())
+}
+
+async fn upsert_org_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    let id = payload
+        .get("uuid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("org missing uuid"))?;
+    let name = payload.get("name").and_then(|v| v.as_str());
+    let payload_str = serde_json::to_string(payload).context("serialize org")?;
+    sqlx::query(
+        "INSERT INTO orgs (id, name, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            name = COALESCE(excluded.name, orgs.name),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .context("upsert org")?;
+    Ok(())
 }
 
 #[derive(Clone)]

@@ -97,9 +97,7 @@ async fn fetch_channels(
         }
         let resp = call(M_CHANNELS, &p).await?;
         if let Some(arr) = resp.get("channels").and_then(|v| v.as_array()) {
-            for ch in arr {
-                db.upsert_channel(ch).await?;
-            }
+            db.upsert_channels(arr).await?;
         }
         cursor = next_cursor(&resp);
         if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
@@ -123,9 +121,7 @@ async fn fetch_users(db: &RawDb) -> Result<usize> {
         }
         let resp = call(M_USERS, &p).await?;
         if let Some(arr) = resp.get("members").and_then(|v| v.as_array()) {
-            for u in arr {
-                db.upsert_user(u).await?;
-            }
+            db.upsert_users(arr).await?;
             count += arr.len();
         }
         cursor = next_cursor(&resp);
@@ -321,11 +317,16 @@ async fn list_history(
             .map(|a| a.to_vec())
             .unwrap_or_default();
 
-        for m in &messages {
-            upsert_history_message(db, team_id, channel_id, m).await?;
-            totals.messages += 1;
-            progress.inc(1);
-        }
+        let rows: Vec<db::MessageRow> = messages
+            .iter()
+            .filter_map(|m| history_message_row(team_id, channel_id, m))
+            .collect();
+        db.upsert_messages(&rows).await?;
+        // Count every message in the response — including any
+        // (vanishingly rare) ones without a `ts` that we skipped —
+        // so the progress total matches what Slack returned.
+        totals.messages += messages.len();
+        progress.inc(messages.len() as u64);
 
         // Per-page media. Sequential — Slack hates concurrency on
         // files.slack.com. Threads (in pass B) download their replies'
@@ -384,8 +385,12 @@ async fn paginate_replies(
             .map(|a| a.to_vec())
             .unwrap_or_default();
 
+        let rows: Vec<db::MessageRow> = msgs
+            .iter()
+            .filter_map(|m| reply_message_row(team_id, channel_id, thread_ts, m))
+            .collect();
+        db.upsert_messages(&rows).await?;
         for m in &msgs {
-            upsert_reply_message(db, team_id, channel_id, thread_ts, m).await?;
             if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
                 if ts != thread_ts {
                     // Track the max child ts we've seen so the
@@ -416,15 +421,12 @@ async fn paginate_replies(
     Ok(())
 }
 
-async fn upsert_history_message(
-    db: &RawDb,
+fn history_message_row(
     team_id: &str,
     channel_id: &str,
     m: &Value,
-) -> Result<()> {
-    let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
+) -> Option<db::MessageRow> {
+    let ts = m.get("ts").and_then(|v| v.as_str())?;
     let thread_ts = m
         .get("thread_ts")
         .and_then(|v| v.as_str())
@@ -433,7 +435,7 @@ async fn upsert_history_message(
         None => true,
         Some(tts) => tts == ts,
     };
-    let row = db::MessageRow {
+    Some(db::MessageRow {
         team_id: team_id.to_string(),
         channel_id: channel_id.to_string(),
         ts: ts.to_string(),
@@ -441,20 +443,16 @@ async fn upsert_history_message(
         is_thread_root,
         user_id: m.get("user").and_then(|v| v.as_str()).map(String::from),
         payload: m.clone(),
-    };
-    db.upsert_message(&row).await
+    })
 }
 
-async fn upsert_reply_message(
-    db: &RawDb,
+fn reply_message_row(
     team_id: &str,
     channel_id: &str,
     requested_thread_ts: &str,
     m: &Value,
-) -> Result<()> {
-    let Some(ts) = m.get("ts").and_then(|v| v.as_str()) else {
-        return Ok(());
-    };
+) -> Option<db::MessageRow> {
+    let ts = m.get("ts").and_then(|v| v.as_str())?;
     // Slack returns the parent inline with replies; treat ts == requested
     // as the root regardless of which endpoint delivered it. Replies
     // that omit `thread_ts` get it filled in from the request.
@@ -464,7 +462,7 @@ async fn upsert_reply_message(
         .map(String::from)
         .or_else(|| Some(requested_thread_ts.to_string()));
     let is_thread_root = ts == requested_thread_ts;
-    let row = db::MessageRow {
+    Some(db::MessageRow {
         team_id: team_id.to_string(),
         channel_id: channel_id.to_string(),
         ts: ts.to_string(),
@@ -472,8 +470,7 @@ async fn upsert_reply_message(
         is_thread_root,
         user_id: m.get("user").and_then(|v| v.as_str()).map(String::from),
         payload: m.clone(),
-    };
-    db.upsert_message(&row).await
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -223,49 +223,36 @@ impl RawDb {
     // ── discussions ─────────────────────────────────────────────────
 
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
-        let discussion_id = payload
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("discussion missing id"))?
-            .to_string();
-        let id = discussion_pk(proj, iid, &discussion_id);
-        let individual_note = payload.get("individual_note").and_then(|v| v.as_bool());
-        let max_note_updated_at = payload
-            .get("notes")
-            .and_then(|n| n.as_array())
-            .and_then(|arr| {
-                arr.iter()
-                    .filter_map(|n| n.get("updated_at").and_then(|v| v.as_str()))
-                    .max()
-                    .map(|s| s.to_string())
-            });
-        let payload_str = serde_json::to_string(payload).context("serialize discussion")?;
+        let mut tx = self.pool.begin().await.context("begin discussion tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO discussions
-                (id, project_full_path, mr_iid, discussion_id, individual_note,
-                 max_note_updated_at, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                individual_note = COALESCE(excluded.individual_note, discussions.individual_note),
-                max_note_updated_at = COALESCE(excluded.max_note_updated_at, discussions.max_note_updated_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(&id)
-        .bind(proj)
-        .bind(iid as i64)
-        .bind(&discussion_id)
-        .bind(individual_note.map(|b| b as i64))
-        .bind(max_note_updated_at.as_deref())
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("upsert discussion {id}"))?;
+        upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
+        tx.commit().await.context("commit discussion tx")?;
+        Ok(())
+    }
+
+    /// Upsert every discussion of one MR in a single transaction. The
+    /// natural commit boundary here is "all discussions for one MR" —
+    /// the caller's outer loop is per-MR, and a partial set would just
+    /// be re-fetched on the next sync.
+    pub async fn upsert_discussions(
+        &self,
+        proj: &str,
+        iid: u32,
+        payloads: &[Value],
+    ) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin discussions batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for payload in payloads {
+            upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
+        }
+        tx.commit().await.context("commit discussions batch tx")?;
         Ok(())
     }
 
@@ -365,6 +352,60 @@ impl RawDb {
         }
         Ok(out)
     }
+}
+
+// ── private row-level upserts (shared by single + batch APIs) ──────────
+
+async fn upsert_discussion_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    proj: &str,
+    iid: u32,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    let discussion_id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("discussion missing id"))?
+        .to_string();
+    let id = discussion_pk(proj, iid, &discussion_id);
+    let individual_note = payload.get("individual_note").and_then(|v| v.as_bool());
+    let max_note_updated_at = payload
+        .get("notes")
+        .and_then(|n| n.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .filter_map(|n| n.get("updated_at").and_then(|v| v.as_str()))
+                .max()
+                .map(|s| s.to_string())
+        });
+    let payload_str = serde_json::to_string(payload).context("serialize discussion")?;
+    sqlx::query(
+        "INSERT INTO discussions
+            (id, project_full_path, mr_iid, discussion_id, individual_note,
+             max_note_updated_at, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            individual_note = COALESCE(excluded.individual_note, discussions.individual_note),
+            max_note_updated_at = COALESCE(excluded.max_note_updated_at, discussions.max_note_updated_at),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(&id)
+    .bind(proj)
+    .bind(iid as i64)
+    .bind(&discussion_id)
+    .bind(individual_note.map(|b| b as i64))
+    .bind(max_note_updated_at.as_deref())
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert discussion {id}"))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone)]

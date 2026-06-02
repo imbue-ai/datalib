@@ -213,52 +213,26 @@ impl RawDb {
     // ── users ───────────────────────────────────────────────────────
 
     pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("user response missing id"))?;
-        let team_id = payload.get("team_id").and_then(|v| v.as_str());
-        let name = payload.get("name").and_then(|v| v.as_str());
-        let real_name = payload
-            .get("real_name")
-            .and_then(|v| v.as_str())
-            .or_else(|| {
-                payload
-                    .get("profile")
-                    .and_then(|p| p.get("real_name"))
-                    .and_then(|v| v.as_str())
-            });
-        let display_name = payload
-            .get("profile")
-            .and_then(|p| p.get("display_name"))
-            .and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize user")?;
+        let mut tx = self.pool.begin().await.context("begin user tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO users
-                (id, team_id, name, real_name, display_name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                team_id = COALESCE(excluded.team_id, users.team_id),
-                name = COALESCE(excluded.name, users.name),
-                real_name = COALESCE(excluded.real_name, users.real_name),
-                display_name = COALESCE(excluded.display_name, users.display_name),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(id)
-        .bind(team_id)
-        .bind(name)
-        .bind(real_name)
-        .bind(display_name)
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("upsert user {id}"))?;
+        upsert_user_in(&mut tx, payload, &now).await?;
+        tx.commit().await.context("commit user tx")?;
+        Ok(())
+    }
+
+    /// Upsert a whole `users.list` page in a single transaction. One
+    /// `fsync` per page instead of per row makes Slack's listing phase
+    /// ~100× cheaper on contended sqlite.
+    pub async fn upsert_users(&self, payloads: &[Value]) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin users batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for payload in payloads {
+            upsert_user_in(&mut tx, payload, &now).await?;
+        }
+        tx.commit().await.context("commit users batch tx")?;
         Ok(())
     }
 
@@ -269,38 +243,24 @@ impl RawDb {
     // ── channels ────────────────────────────────────────────────────
 
     pub async fn upsert_channel(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("channel response missing id"))?;
-        let name = payload.get("name").and_then(|v| v.as_str());
-        let is_member = payload.get("is_member").and_then(|v| v.as_bool());
-        let is_archived = payload.get("is_archived").and_then(|v| v.as_bool());
-        let payload_str = serde_json::to_string(payload).context("serialize channel")?;
+        let mut tx = self.pool.begin().await.context("begin channel tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO channels
-                (id, name, is_member, is_archived, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                name = COALESCE(excluded.name, channels.name),
-                is_member = COALESCE(excluded.is_member, channels.is_member),
-                is_archived = COALESCE(excluded.is_archived, channels.is_archived),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(is_member.map(|b| b as i64))
-        .bind(is_archived.map(|b| b as i64))
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("upsert channel {id}"))?;
+        upsert_channel_in(&mut tx, payload, &now).await?;
+        tx.commit().await.context("commit channel tx")?;
+        Ok(())
+    }
+
+    /// Upsert a whole `conversations.list` page in a single transaction.
+    pub async fn upsert_channels(&self, payloads: &[Value]) -> Result<()> {
+        if payloads.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin channels batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for payload in payloads {
+            upsert_channel_in(&mut tx, payload, &now).await?;
+        }
+        tx.commit().await.context("commit channels batch tx")?;
         Ok(())
     }
 
@@ -341,55 +301,24 @@ impl RawDb {
     // ── messages ────────────────────────────────────────────────────
 
     pub async fn upsert_message(&self, row: &MessageRow) -> Result<()> {
-        let id = slack_message_uuid(&row.team_id, &row.channel_id, &row.ts);
-        // Every message belongs to some thread — either a real reply
-        // thread (thread_ts present) or a standalone "thread of one"
-        // whose effective_thread_ts is the message's own ts. We stamp
-        // thread_root_uuid for both so the `messages_by_thread` index
-        // covers every row, which lets the translate-side cheap probe
-        // (`GROUP BY thread_root_uuid`) and the per-thread filtered
-        // load (`WHERE thread_root_uuid IN (...)`) hit the index
-        // instead of scanning + sorting.
-        let effective_thread_ts = row.thread_ts.as_deref().unwrap_or(row.ts.as_str());
-        let thread_root_uuid = Some(slack_thread_uuid(
-            &row.team_id,
-            &row.channel_id,
-            effective_thread_ts,
-        ));
-        let payload_str = serde_json::to_string(&row.payload).context("serialize message")?;
+        let mut tx = self.pool.begin().await.context("begin message tx")?;
         let now = Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO messages
-                (id, team_id, channel_id, ts, thread_ts, thread_root_uuid, is_thread_root,
-                 user_id, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
-             ON CONFLICT(id) DO UPDATE SET
-                team_id = excluded.team_id,
-                channel_id = excluded.channel_id,
-                ts = excluded.ts,
-                thread_ts = COALESCE(excluded.thread_ts, messages.thread_ts),
-                thread_root_uuid = COALESCE(excluded.thread_root_uuid, messages.thread_root_uuid),
-                is_thread_root = COALESCE(excluded.is_thread_root, messages.is_thread_root),
-                user_id = COALESCE(excluded.user_id, messages.user_id),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
-        )
-        .bind(&id)
-        .bind(&row.team_id)
-        .bind(&row.channel_id)
-        .bind(&row.ts)
-        .bind(row.thread_ts.as_deref())
-        .bind(thread_root_uuid.as_deref())
-        .bind(row.is_thread_root as i64)
-        .bind(row.user_id.as_deref())
-        .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
-        .await
-        .with_context(|| format!("upsert message {id}"))?;
+        upsert_message_in(&mut tx, row, &now).await?;
+        tx.commit().await.context("commit message tx")?;
+        Ok(())
+    }
+
+    /// Upsert a whole history / replies page in a single transaction.
+    pub async fn upsert_messages(&self, rows: &[MessageRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin messages batch tx")?;
+        let now = Utc::now().to_rfc3339();
+        for row in rows {
+            upsert_message_in(&mut tx, row, &now).await?;
+        }
+        tx.commit().await.context("commit messages batch tx")?;
         Ok(())
     }
 
@@ -569,6 +498,156 @@ impl RawDb {
     pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {
         dr::load_blobs_by_id(&self.pool).await
     }
+}
+
+// ── private row-level upserts (shared by single + batch APIs) ──────────
+
+async fn upsert_user_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    let id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("user response missing id"))?;
+    let team_id = payload.get("team_id").and_then(|v| v.as_str());
+    let name = payload.get("name").and_then(|v| v.as_str());
+    let real_name = payload
+        .get("real_name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            payload
+                .get("profile")
+                .and_then(|p| p.get("real_name"))
+                .and_then(|v| v.as_str())
+        });
+    let display_name = payload
+        .get("profile")
+        .and_then(|p| p.get("display_name"))
+        .and_then(|v| v.as_str());
+    let payload_str = serde_json::to_string(payload).context("serialize user")?;
+    sqlx::query(
+        "INSERT INTO users
+            (id, team_id, name, real_name, display_name, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            team_id = COALESCE(excluded.team_id, users.team_id),
+            name = COALESCE(excluded.name, users.name),
+            real_name = COALESCE(excluded.real_name, users.real_name),
+            display_name = COALESCE(excluded.display_name, users.display_name),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(id)
+    .bind(team_id)
+    .bind(name)
+    .bind(real_name)
+    .bind(display_name)
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert user {id}"))?;
+    Ok(())
+}
+
+async fn upsert_channel_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    payload: &Value,
+    now: &str,
+) -> Result<()> {
+    let id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("channel response missing id"))?;
+    let name = payload.get("name").and_then(|v| v.as_str());
+    let is_member = payload.get("is_member").and_then(|v| v.as_bool());
+    let is_archived = payload.get("is_archived").and_then(|v| v.as_bool());
+    let payload_str = serde_json::to_string(payload).context("serialize channel")?;
+    sqlx::query(
+        "INSERT INTO channels
+            (id, name, is_member, is_archived, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            name = COALESCE(excluded.name, channels.name),
+            is_member = COALESCE(excluded.is_member, channels.is_member),
+            is_archived = COALESCE(excluded.is_archived, channels.is_archived),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(is_member.map(|b| b as i64))
+    .bind(is_archived.map(|b| b as i64))
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert channel {id}"))?;
+    Ok(())
+}
+
+async fn upsert_message_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    row: &MessageRow,
+    now: &str,
+) -> Result<()> {
+    let id = slack_message_uuid(&row.team_id, &row.channel_id, &row.ts);
+    // Every message belongs to some thread — either a real reply thread
+    // (thread_ts present) or a standalone "thread of one" whose
+    // effective_thread_ts is the message's own ts. Stamping
+    // thread_root_uuid for both keeps `messages_by_thread` covering every
+    // row, so the translate-side cheap probe (`GROUP BY
+    // thread_root_uuid`) and per-thread filtered load
+    // (`WHERE thread_root_uuid IN (...)`) hit the index instead of
+    // scanning + sorting.
+    let effective_thread_ts = row.thread_ts.as_deref().unwrap_or(row.ts.as_str());
+    let thread_root_uuid = Some(slack_thread_uuid(
+        &row.team_id,
+        &row.channel_id,
+        effective_thread_ts,
+    ));
+    let payload_str = serde_json::to_string(&row.payload).context("serialize message")?;
+    sqlx::query(
+        "INSERT INTO messages
+            (id, team_id, channel_id, ts, thread_ts, thread_root_uuid, is_thread_root,
+             user_id, payload, fetched_at, last_attempt_at, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            team_id = excluded.team_id,
+            channel_id = excluded.channel_id,
+            ts = excluded.ts,
+            thread_ts = COALESCE(excluded.thread_ts, messages.thread_ts),
+            thread_root_uuid = COALESCE(excluded.thread_root_uuid, messages.thread_root_uuid),
+            is_thread_root = COALESCE(excluded.is_thread_root, messages.is_thread_root),
+            user_id = COALESCE(excluded.user_id, messages.user_id),
+            payload = excluded.payload,
+            fetched_at = excluded.fetched_at,
+            last_attempt_at = excluded.last_attempt_at,
+            last_error = NULL",
+    )
+    .bind(&id)
+    .bind(&row.team_id)
+    .bind(&row.channel_id)
+    .bind(&row.ts)
+    .bind(row.thread_ts.as_deref())
+    .bind(thread_root_uuid.as_deref())
+    .bind(row.is_thread_root as i64)
+    .bind(row.user_id.as_deref())
+    .bind(&payload_str)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("upsert message {id}"))?;
+    Ok(())
 }
 
 /// One row's worth of loaded message data — payload plus the columns

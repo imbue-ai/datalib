@@ -243,10 +243,9 @@ async fn fetch_one_mr(
 
     let disc_url =
         format!("{BASE}/projects/{pid}/merge_requests/{iid}/discussions?per_page={PER_PAGE}");
-    for d in client.paginate(&disc_url).await.unwrap_or_default() {
-        db.upsert_discussion(proj, iid, &d).await?;
-        summary.new_discussions += 1;
-    }
+    let discussions = client.paginate(&disc_url).await.unwrap_or_default();
+    db.upsert_discussions(proj, iid, &discussions).await?;
+    summary.new_discussions += discussions.len();
     Ok(())
 }
 

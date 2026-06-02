@@ -114,8 +114,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await
             .map_err(|e| anyhow::anyhow!("list orgs: {e}"))?;
         info!(event = "anthropic_orgs", count = orgs.len());
-        for org in &orgs {
-            let _ = db.upsert_org(org).await;
+        if let Err(e) = db.upsert_orgs(&orgs).await {
+            warn!(event = "anthropic_orgs_upsert_failed", error = %e);
         }
 
         if !opts.conv_uuids.is_empty() {
@@ -352,10 +352,8 @@ async fn ingest_export_users(db: &RawDb, export_dir: &Path) -> Result<()> {
     let v: Value =
         serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))?;
     if let Some(arr) = v.as_array() {
-        for u in arr {
-            if let Err(e) = db.upsert_user(u).await {
-                warn!(event = "anthropic_user_upsert_failed", error = %e);
-            }
+        if let Err(e) = db.upsert_users(arr).await {
+            warn!(event = "anthropic_users_upsert_failed", error = %e);
         }
     }
     Ok(())
