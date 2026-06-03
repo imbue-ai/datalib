@@ -70,9 +70,9 @@ cc_library(
         "@doltlite_amalgamation//:sqlite_generated_src",
         "@doltlite_amalgamation//:blake3_portable_src",
     ] + select({
-        "@platforms//cpu:x86_64": [
-            "@doltlite_amalgamation//:blake3_x86_simd_src",
-        ],
+        # x86 SIMD srcs each need their own `-m...` flag; they live in
+        # per-file cc_libraries pulled in via `deps` below.
+        "@platforms//cpu:x86_64": [],
         "@platforms//cpu:aarch64": [
             "@doltlite_amalgamation//:blake3_arm_simd_src",
         ],
@@ -82,7 +82,14 @@ cc_library(
         "sqlite3.h",
         "sqlite3ext.h",
     ],
-    deps = ["@doltlite_amalgamation//:doltlite_headers"],
+    deps = [
+        "@doltlite_amalgamation//:doltlite_headers",
+    ] + select({
+        "@platforms//cpu:x86_64": [
+            "@doltlite_amalgamation//:blake3_x86_simd_lib",
+        ],
+        "//conditions:default": [],
+    }),
     includes = ["."],
     copts = [
         # `SQLITE_CORE` switches the bundled extensions (FTS3, FTS5,

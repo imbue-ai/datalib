@@ -192,19 +192,75 @@ filegroup(
 )
 
 filegroup(
-    name = "blake3_x86_simd_src",
-    srcs = [
-        "ext/blake3/blake3_avx2.c",
-        "ext/blake3/blake3_avx512.c",
-        "ext/blake3/blake3_sse2.c",
-        "ext/blake3/blake3_sse41.c",
-    ],
+    name = "blake3_arm_simd_src",
+    srcs = ["ext/blake3/blake3_neon.c"],
     visibility = ["//visibility:public"],
 )
 
-filegroup(
-    name = "blake3_arm_simd_src",
-    srcs = ["ext/blake3/blake3_neon.c"],
+# ─────────────────────────────────────────────────────────────────
+# blake3 x86 SIMD — per-file -march so each TU compiles
+# ─────────────────────────────────────────────────────────────────
+#
+# Each SIMD source uses intrinsics from a specific ISA extension and
+# must be compiled with the matching `-m...` flag, otherwise gcc bails
+# with "inlining failed in call to 'always_inline' '_mm_shuffle_epi8':
+# target specific option mismatch". macOS clang is permissive enough
+# that the un-flagged build accidentally works on x86 darwin, so this
+# only surfaces on Linux gcc — see CI failures circa Nov 2026.
+#
+# The flag sets mirror what blake3's own CMake build uses:
+#   sse2.c    → -msse2
+#   sse41.c   → -mssse3 -msse4.1   (uses `_mm_shuffle_epi8` from SSSE3)
+#   avx2.c    → -mavx2
+#   avx512.c  → -mavx512f -mavx512vl
+#
+# Each file is its own cc_library so the per-file copts only apply
+# where intended (cc_library `copts` is per-rule, not per-source).
+# `blake3_x86_simd_lib` bundles them so the consuming cc_library can
+# pull all four in via a single dep.
+
+cc_library(
+    name = "blake3_sse2",
+    srcs = ["ext/blake3/blake3_sse2.c"],
+    copts = ["-msse2"],
+    deps = [":doltlite_headers"],
+)
+
+cc_library(
+    name = "blake3_sse41",
+    srcs = ["ext/blake3/blake3_sse41.c"],
+    copts = [
+        "-msse4.1",
+        "-mssse3",
+    ],
+    deps = [":doltlite_headers"],
+)
+
+cc_library(
+    name = "blake3_avx2",
+    srcs = ["ext/blake3/blake3_avx2.c"],
+    copts = ["-mavx2"],
+    deps = [":doltlite_headers"],
+)
+
+cc_library(
+    name = "blake3_avx512",
+    srcs = ["ext/blake3/blake3_avx512.c"],
+    copts = [
+        "-mavx512f",
+        "-mavx512vl",
+    ],
+    deps = [":doltlite_headers"],
+)
+
+cc_library(
+    name = "blake3_x86_simd_lib",
+    deps = [
+        ":blake3_avx2",
+        ":blake3_avx512",
+        ":blake3_sse2",
+        ":blake3_sse41",
+    ],
     visibility = ["//visibility:public"],
 )
 
