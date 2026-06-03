@@ -1,13 +1,41 @@
-//! vCard tree → in-memory [`ParsedContacts`].
+//! vCard tree / file → in-memory [`ParsedContacts`].
 //!
-//! Layout the parser expects:
+//! `input_path` can be either:
 //!
-//!   `<input_path>/<addressbook>/<some_name>.vcf`
+//!   * A directory of `.vcf` files (recursively walked). Each `.vcf`
+//!     may contain one or many `BEGIN:VCARD…END:VCARD` blocks.
+//!   * A single `.vcf` file. Same multi-block semantics — Google's
+//!     "Export contacts" gives you exactly this shape: every contact
+//!     concatenated into one file.
 //!
-//! `<addressbook>` is treated as the addressbook label — it shows
-//! up on grid rows as `channel` and groups contacts together in
-//! the UI. The leaf filename doesn't matter; the vCard's `UID:`
-//! property carries upstream identity.
+//! The addressbook label for a contact is the **file stem** (basename
+//! without extension) of the `.vcf` it came from. So
+//! `~/Downloads/contacts.vcf` lands every contact in addressbook
+//! `"contacts"`, and `<input>/Bridge.vcf` groups everything under
+//! `"Bridge"`. Putting contacts that should share an addressbook into
+//! a single file is the natural shape.
+//!
+//! ## Why not pull in a vCard crate?
+//!
+//! Surveyed the Rust ecosystem (2026-Q2): `vcard4` is the most
+//! actively maintained and most spec-faithful for RFC 6350 / vCard
+//! 4.0, with looser support for 3.0; `vcard` is older and less
+//! maintained; `ical` covers vCalendar primarily and treats vCard as
+//! a side concern. None is the de-facto "serde_json of vCards".
+//!
+//! Our read surface is intentionally small — UID / FN / EMAIL / TEL /
+//! ADR / ORG / TITLE / NOTE / PHOTO / REV — so hand-rolling the line
+//! folding + param parsing + multi-block splitting is ~50 lines and
+//! lets us keep our promoted-column shape (`ParsedContact`) without
+//! an adaptation layer. If we ever need to *write* vCards (e.g. push
+//! changes back to CardDAV), or hit a real spec edge case (grouped
+//! 4.0 properties, quoted-printable PHOTO), swap in `vcard4`:
+//!
+//!   https://crates.io/crates/vcard4
+//!
+//! The promoted columns + the `extract::api::vcard_*` helpers are the
+//! seam — flip `parse_file` to call `vcard4::parse` and re-derive the
+//! same `ParsedContact` fields from its AST.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,13 +49,15 @@ use crate::extract::api::{vcard_all, vcard_fn, vcard_rev, vcard_uid, VcardProp};
 #[derive(Debug, Clone)]
 pub struct ParsedContact {
     /// Stable identifier from the vCard's `UID:`. Falls back to a
-    /// deterministic UUIDv5 derived from `(addressbook, file_path)`
-    /// when a card omits it.
+    /// deterministic UUIDv5 derived from `(addressbook, file_path,
+    /// block_index)` when a card omits it.
     pub uid: String,
-    /// Addressbook label (the parent directory under `input_path`).
+    /// Addressbook label — the file stem of the `.vcf` this contact
+    /// came from. Shows up on grid rows as `channel` and groups
+    /// contacts together in the UI.
     pub addressbook: String,
     /// Source file on disk — surfaced in tracing so misformatted
-    /// vCards point at the right card.
+    /// vCards point at the right file.
     pub source_path: PathBuf,
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
@@ -35,7 +65,7 @@ pub struct ParsedContact {
     /// `REV:` (revision timestamp). Translate uses it for `when_ts`;
     /// falls back to the `--now` stamp when absent.
     pub revision: Option<String>,
-    /// Multi-valued properties surfaced in display order.
+    /// Multi-valued properties surfaced in document order.
     pub emails: Vec<VcardProp>,
     pub phones: Vec<VcardProp>,
     pub addresses: Vec<VcardProp>,
@@ -66,12 +96,28 @@ pub struct ParsedContacts {
     pub contacts: Vec<ParsedContact>,
 }
 
-/// Walk `input_path` recursively, picking up every `.vcf` file.
-/// Errors on individual cards are logged and skipped — one
-/// malformed vCard shouldn't tank the whole translate run.
+/// Walk `input_path`, returning every vCard found.
+///
+/// * If `input_path` is a `.vcf` file, parse it directly (may contain
+///   many vCards).
+/// * If `input_path` is a directory, recursively walk it for `.vcf`
+///   files and parse each.
+/// * If `input_path` doesn't exist or is neither a file nor a
+///   directory, return an empty result. Mirrors how
+///   `frankweiler_etl_anthropic::ingest_export_users` handles a
+///   missing `users.json` — translate paths shouldn't fail hard on
+///   "the user hasn't dropped their export here yet."
+///
+/// Per-file errors are logged + skipped (one malformed `.vcf` doesn't
+/// tank the whole translate run); only IO errors on the directory
+/// walk propagate.
 pub fn parse(input_path: &Path) -> Result<ParsedContacts> {
     let mut out = ParsedContacts::default();
-    walk_dir(input_path, input_path, &mut out)?;
+    if input_path.is_file() {
+        parse_into(input_path, &mut out);
+    } else if input_path.is_dir() {
+        walk_dir(input_path, &mut out)?;
+    }
     out.contacts.sort_by(|a, b| {
         a.addressbook
             .cmp(&b.addressbook)
@@ -80,10 +126,7 @@ pub fn parse(input_path: &Path) -> Result<ParsedContacts> {
     Ok(out)
 }
 
-fn walk_dir(root: &Path, dir: &Path, out: &mut ParsedContacts) -> Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
+fn walk_dir(dir: &Path, out: &mut ParsedContacts) -> Result<()> {
     let entries = fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))?;
     let mut paths: Vec<PathBuf> = Vec::new();
     for entry in entries {
@@ -93,64 +136,116 @@ fn walk_dir(root: &Path, dir: &Path, out: &mut ParsedContacts) -> Result<()> {
     paths.sort();
     for path in paths {
         if path.is_dir() {
-            walk_dir(root, &path, out)?;
+            walk_dir(&path, out)?;
             continue;
         }
         if path.extension().and_then(|s| s.to_str()) != Some("vcf") {
             continue;
         }
-        let addressbook = addressbook_label(root, &path);
-        match parse_file(&path, &addressbook) {
+        parse_into(&path, out);
+    }
+    Ok(())
+}
+
+/// Read one `.vcf` from disk and append every contained vCard to
+/// `out`. Log + skip individual block failures.
+fn parse_into(path: &Path, out: &mut ParsedContacts) {
+    let raw = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                event = "contacts_vcard_read_failed",
+                path = %path.display(),
+                error = %e,
+            );
+            return;
+        }
+    };
+    let addressbook = addressbook_label(path);
+    for (idx, block) in split_vcards(&raw).into_iter().enumerate() {
+        match parse_block(&block, path, &addressbook, idx) {
             Ok(c) => out.contacts.push(c),
             Err(e) => {
                 tracing::warn!(
                     event = "contacts_vcard_parse_failed",
                     path = %path.display(),
+                    block_index = idx,
                     error = %e,
                 );
             }
         }
     }
-    Ok(())
 }
 
-/// Label for the addressbook a contact belongs to: the first path
-/// component under `root`. Falls back to `"default"` when the vCard
-/// sits directly under root.
-fn addressbook_label(root: &Path, vcard_path: &Path) -> String {
-    let rel = vcard_path.strip_prefix(root).unwrap_or(vcard_path);
-    let mut comps = rel.components();
-    let first = comps.next();
-    match (first, comps.next()) {
-        // root/<addressbook>/<file.vcf> — there's still another
-        // component after the first one, so the first IS the
-        // addressbook.
-        (Some(c), Some(_)) => c.as_os_str().to_string_lossy().into_owned(),
-        // root/file.vcf — no addressbook subdir.
-        _ => "default".to_string(),
+/// Addressbook label = the file stem (basename without extension).
+/// Falls back to `"default"` when the path has no stem (e.g.
+/// `~/Downloads/.vcf` for whatever reason).
+fn addressbook_label(vcard_path: &Path) -> String {
+    vcard_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "default".to_string())
+}
+
+/// Split a `.vcf` body into individual `BEGIN:VCARD…END:VCARD`
+/// blocks. Tolerates CRLF / LF / mixed line endings and case-
+/// insensitive markers (RFC 6350 §3.3 says "BEGIN" / "END" are
+/// case-insensitive in practice every server emits uppercase, but
+/// stay defensive).
+///
+/// Discards any text outside a block — wrapper-style exports
+/// (CardDAV's `<address-data>` wrapping, leading mail-server
+/// envelope text) wouldn't survive a round trip through this and
+/// shouldn't.
+fn split_vcards(body: &str) -> Vec<String> {
+    let normalized = body.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out: Vec<String> = Vec::new();
+    let mut current: Option<String> = None;
+    for line in normalized.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("BEGIN:VCARD") {
+            current = Some(String::new());
+        }
+        if let Some(buf) = current.as_mut() {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+        if trimmed.eq_ignore_ascii_case("END:VCARD") {
+            if let Some(buf) = current.take() {
+                out.push(buf);
+            }
+        }
     }
+    out
 }
 
-fn parse_file(path: &Path, addressbook: &str) -> Result<ParsedContact> {
-    let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let uid = vcard_uid(&raw).unwrap_or_else(|| derive_uid_from_path(addressbook, path));
-    let emails = vcard_all(&raw, "EMAIL");
-    let phones = vcard_all(&raw, "TEL");
-    let addresses = vcard_all(&raw, "ADR");
-    let photo = vcard_all(&raw, "PHOTO");
+fn parse_block(
+    block: &str,
+    source_path: &Path,
+    addressbook: &str,
+    block_index: usize,
+) -> Result<ParsedContact> {
+    let uid =
+        vcard_uid(block).unwrap_or_else(|| derive_uid_from_path(addressbook, source_path, block_index));
+    let emails = vcard_all(block, "EMAIL");
+    let phones = vcard_all(block, "TEL");
+    let addresses = vcard_all(block, "ADR");
+    let photo = vcard_all(block, "PHOTO");
     let (photo, photo_url) = pick_photo(photo);
     Ok(ParsedContact {
         uid,
         addressbook: addressbook.to_string(),
-        source_path: path.to_path_buf(),
-        display_name: vcard_fn(&raw),
-        revision: vcard_rev(&raw),
+        source_path: source_path.to_path_buf(),
+        display_name: vcard_fn(block),
+        revision: vcard_rev(block),
         emails,
         phones,
         addresses,
-        org: extract_single(&raw, "ORG"),
-        title: extract_single(&raw, "TITLE"),
-        note: extract_single(&raw, "NOTE"),
+        org: extract_single(block, "ORG"),
+        title: extract_single(block, "TITLE"),
+        note: extract_single(block, "NOTE"),
         photo,
         photo_url,
     })
@@ -210,12 +305,12 @@ fn pick_photo(props: Vec<VcardProp>) -> (Option<ContactPhoto>, Option<String>) {
     (None, url)
 }
 
-fn derive_uid_from_path(addressbook: &str, path: &Path) -> String {
+fn derive_uid_from_path(addressbook: &str, path: &Path, block_index: usize) -> String {
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("anon");
-    format!("{addressbook}:{stem}")
+    format!("{addressbook}:{stem}:{block_index}")
 }
 
 #[cfg(test)]
@@ -223,64 +318,101 @@ mod tests {
     use super::*;
 
     #[test]
-    fn addressbook_label_uses_first_dir_under_root() {
-        let root = Path::new("/x");
+    fn addressbook_label_is_the_file_stem() {
+        assert_eq!(addressbook_label(Path::new("/x/Bridge.vcf")), "Bridge");
         assert_eq!(
-            addressbook_label(root, Path::new("/x/Personal/picard.vcf")),
-            "Personal"
+            addressbook_label(Path::new("/Downloads/contacts.vcf")),
+            "contacts"
         );
-        assert_eq!(
-            addressbook_label(root, Path::new("/x/picard.vcf")),
-            "default"
-        );
+        // Stem can include the dot when the filename starts with one
+        // (POSIX hidden-file convention; Rust's `Path::file_stem`
+        // matches that). Not common in real exports, but we tolerate
+        // it as the label rather than crashing.
+        assert_eq!(addressbook_label(Path::new("/.vcf")), ".vcf");
     }
 
     #[test]
-    fn parse_walks_directory_and_returns_sorted_contacts() {
+    fn split_vcards_walks_multiple_blocks_with_crlf_and_lf() {
+        let body = "BEGIN:VCARD\r\nUID:a\r\nFN:Alice\r\nEND:VCARD\r\nBEGIN:VCARD\nUID:b\nFN:Bob\nEND:VCARD\n";
+        let blocks = split_vcards(body);
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].contains("UID:a"));
+        assert!(blocks[1].contains("UID:b"));
+    }
+
+    #[test]
+    fn split_vcards_drops_text_outside_blocks() {
+        let body = "junk before\nBEGIN:VCARD\nUID:a\nEND:VCARD\ngarbage between\nBEGIN:VCARD\nUID:b\nEND:VCARD\ntrailer\n";
+        let blocks = split_vcards(body);
+        assert_eq!(blocks.len(), 2);
+        assert!(!blocks[0].contains("junk"));
+        assert!(!blocks[1].contains("garbage"));
+        assert!(!blocks[1].contains("trailer"));
+    }
+
+    #[test]
+    fn parse_single_file_with_many_vcards() {
         let dir = tempfile::tempdir().unwrap();
-        let ab1 = dir.path().join("Bridge");
-        let ab2 = dir.path().join("Engineering");
-        fs::create_dir_all(&ab1).unwrap();
-        fs::create_dir_all(&ab2).unwrap();
+        let path = dir.path().join("contacts.vcf");
         fs::write(
-            ab1.join("picard.vcf"),
-            "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\nEMAIL;TYPE=WORK:jlp@enterprise.starfleet\nEND:VCARD\n",
+            &path,
+            "BEGIN:VCARD\nVERSION:3.0\nUID:a\nFN:Alice\nEND:VCARD\n\
+             BEGIN:VCARD\nVERSION:3.0\nUID:b\nFN:Bob\nEND:VCARD\n",
+        )
+        .unwrap();
+        let parsed = parse(&path).unwrap();
+        assert_eq!(parsed.contacts.len(), 2);
+        for c in &parsed.contacts {
+            // File stem = "contacts" — both end up in that addressbook.
+            assert_eq!(c.addressbook, "contacts");
+        }
+    }
+
+    #[test]
+    fn parse_directory_walks_top_level_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("Bridge.vcf"),
+            "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\n\
+             EMAIL;TYPE=WORK:jlp@enterprise.starfleet\nEND:VCARD\n\
+             BEGIN:VCARD\nVERSION:3.0\nUID:riker\nFN:William Riker\nEND:VCARD\n",
         )
         .unwrap();
         fs::write(
-            ab2.join("laforge.vcf"),
+            dir.path().join("Engineering.vcf"),
             "BEGIN:VCARD\nVERSION:3.0\nUID:laforge\nFN:Geordi La Forge\nEND:VCARD\n",
         )
         .unwrap();
-
         let parsed = parse(dir.path()).unwrap();
-        assert_eq!(parsed.contacts.len(), 2);
-        // Sorted by (addressbook, uid).
+        assert_eq!(parsed.contacts.len(), 3);
+        // Sort order: (addressbook, uid).
         assert_eq!(parsed.contacts[0].addressbook, "Bridge");
         assert_eq!(parsed.contacts[0].uid, "picard");
-        assert_eq!(parsed.contacts[0].emails.len(), 1);
-        assert_eq!(parsed.contacts[0].emails[0].value, "jlp@enterprise.starfleet");
-        assert_eq!(parsed.contacts[1].addressbook, "Engineering");
+        assert_eq!(parsed.contacts[1].uid, "riker");
+        assert_eq!(parsed.contacts[2].addressbook, "Engineering");
+    }
+
+    #[test]
+    fn parse_missing_path_returns_empty_silently() {
+        let parsed = parse(Path::new("/this/does/not/exist.vcf")).unwrap();
+        assert_eq!(parsed.contacts.len(), 0);
     }
 
     #[test]
     fn parse_picks_inline_base64_photo() {
         let dir = tempfile::tempdir().unwrap();
-        let ab = dir.path().join("Bridge");
-        fs::create_dir_all(&ab).unwrap();
-        // Tiny 1x1 PNG — base64 round-trip target.
+        let path = dir.path().join("contacts.vcf");
+        // Tiny 1×1 PNG — base64 round-trip target.
         let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
         let vcard = format!(
             "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\nPHOTO;ENCODING=b;TYPE=PNG:{png_b64}\nEND:VCARD\n"
         );
-        fs::write(ab.join("picard.vcf"), &vcard).unwrap();
-        let parsed = parse(dir.path()).unwrap();
+        fs::write(&path, &vcard).unwrap();
+        let parsed = parse(&path).unwrap();
         let c = &parsed.contacts[0];
         assert!(c.photo.is_some(), "expected decoded photo");
         let ph = c.photo.as_ref().unwrap();
         assert_eq!(ph.content_type, "image/png");
-        // Decoded PNG starts with the magic 8 bytes (?PNG?).
-        assert!(ph.bytes.len() > 8);
         assert_eq!(&ph.bytes[1..4], b"PNG");
     }
 }

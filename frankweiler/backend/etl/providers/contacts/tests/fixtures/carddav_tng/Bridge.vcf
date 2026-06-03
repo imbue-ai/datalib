@@ -1,0 +1,39 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-picard
+FN:Jean-Luc Picard
+N:Picard;Jean-Luc;;Captain;
+ORG:Starfleet;USS Enterprise NCC-1701-D
+TITLE:Captain
+EMAIL;TYPE=WORK:jlpicard@enterprise.starfleet
+TEL;TYPE=WORK:+1-555-NCC-1701
+ADR;TYPE=WORK:;;Ready Room;Deck 1;Saucer Section;;
+NOTE:Make it so.
+PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=
+REV:2370-04-15T00:00:00Z
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-riker
+FN:William T. Riker
+N:Riker;William;Thomas;Commander;
+ORG:Starfleet;USS Enterprise NCC-1701-D
+TITLE:Commander
+EMAIL;TYPE=WORK:wriker@enterprise.starfleet
+EMAIL;TYPE=HOME:will.riker@alaska.earth
+TEL;TYPE=CELL:+1-555-NUMBER-1
+NOTE:Plays the trombone. Owns a beard.
+PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=
+REV:2370-08-22T00:00:00Z
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-data
+FN:Data
+N:;Data;;Lt. Commander;
+ORG:Starfleet;USS Enterprise NCC-1701-D;Operations
+TITLE:Operations Officer
+EMAIL;TYPE=WORK:data@enterprise.starfleet
+NOTE:Soong-type android. Positronic. Probability of friendship: 1.0.
+REV:2370-02-11T00:00:00Z
+END:VCARD
