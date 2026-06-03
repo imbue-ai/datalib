@@ -79,6 +79,17 @@ jobs:
           repository-cache: true
           external-cache: true
 
+      # Install the Linux-only build dependencies the macOS runner gets
+      # for free via Xcode CLT. So far:
+      #   libclang-dev — bindgen (in libsqlite3-sys's build script)
+      #                  uses libclang to parse C headers.
+      # Skipped on macOS; the runner already has clang via the SDK.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev
+
       - name: Show toolchain versions
         run: |
           bazel version

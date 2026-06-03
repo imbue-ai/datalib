@@ -21,20 +21,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 # (see f08151c).
 #
 # cmake + perl + pkg-config + libssl-dev cover the boring-sys2 +
-# openssl-sys build scripts in our crate graph. python3 is used by
-# `tests/fixtures/build_qmd_index.py`. unzip is occasionally pulled
-# in by rules_rust workspace setup. lld is included because rustc on
-# Linux currently picks the deprecated gold linker by default and
-# warns about it (see notes circa 0cc018e); having lld present means
-# we can opt into it later via RUSTFLAGS/--linkopt if we ever want
-# to silence that warning.
+# openssl-sys build scripts in our crate graph. libclang-dev (plus
+# the `clang` driver for completeness) is needed by bindgen, which
+# libsqlite3-sys's build script invokes to parse <sqlite3.h>. macOS
+# gets clang via Xcode CLT; Ubuntu needs it from apt. python3 is
+# used by `tests/fixtures/build_qmd_index.py`. unzip is occasionally
+# pulled in by rules_rust workspace setup. lld is included because
+# rustc on Linux currently picks the deprecated gold linker by
+# default and warns about it (see notes circa 0cc018e); having lld
+# present means we can opt into it later via RUSTFLAGS/--linkopt if
+# we ever want to silence that warning.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        clang \
         cmake \
         curl \
         git \
         gnupg \
+        libclang-dev \
         libssl-dev \
         lld \
         make \
