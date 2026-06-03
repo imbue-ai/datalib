@@ -98,6 +98,22 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],
+  // Drop Playwright's default `-{projectName}-{platform}` suffix on
+  // snapshot filenames. Our snapshots today are text dumps of API
+  // payloads (see grid-fixture-golden.spec.ts) — identical on every
+  // OS, so the platform suffix is meaningless churn. If we ever
+  // add screenshot snapshots (which legitimately differ per
+  // platform because of font hinting + anti-aliasing), opt those
+  // back in by passing `snapshotPathTemplate` per
+  // `toMatchSnapshot()` call.
+  //
+  // Playwright's default template is
+  // `{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{-platform}{ext}`;
+  // we drop the last two `-…` segments. The `{snapshotDir}` anchor
+  // is required — without it `{testFileDir}` evaluates to a bare
+  // relative path that mkdir interprets as absolute (rooted at `/`).
+  snapshotPathTemplate:
+    "{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{ext}",
   use: {
     baseURL: BACKEND_URL,
     headless: true,
