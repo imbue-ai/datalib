@@ -148,9 +148,17 @@ filegroup(
         "ext/misc/stmt.c",
     ] + glob(
         ["ext/fts3/fts3*.c"],
-        # `fts3_icu.c` is the ICU-specific tokenizer; skip it for the
-        # same reason we skip `ext/icu/icu.c`.
-        exclude = ["ext/fts3/fts3_icu.c"],
+        exclude = [
+            # `fts3_icu.c` is the ICU-specific tokenizer; skip it for
+            # the same reason we skip `ext/icu/icu.c`.
+            "ext/fts3/fts3_icu.c",
+            # `fts3_test.c` is a TCL-based test harness, not part of
+            # the runtime library. It #includes `src/tclsqlite.h`,
+            # which pulls in `<tcl.h>`. macOS Command Line Tools ship
+            # `tcl.h`, but Ubuntu runners don't (and we don't want
+            # tcl-dev as a build dep). Drop it from the library link.
+            "ext/fts3/fts3_test.c",
+        ],
     ),
     visibility = ["//visibility:public"],
 )
