@@ -1,8 +1,9 @@
-# Builds the `//frankweiler/backend:dist` bins on macOS arm64 and
-# attaches a tarball to a GitHub Release. Triggered by pushing a `v*`
-# tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`). The tarball
-# is published with a stable, un-versioned filename so the install
-# script's `releases/latest/download/<name>` URL stays valid.
+# Builds the `//frankweiler/backend:dist` bins on every supported
+# host platform and attaches a per-triple tarball to a GitHub Release.
+# Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
+# origin v0.1.0`). Each tarball is published with a stable,
+# un-versioned filename so the install script's
+# `releases/latest/download/<name>` URL stays valid.
 #
 # Also runs on every push to main, with the release-publish steps
 # skipped. The main-branch runs exist purely to warm the bazel caches:
@@ -34,8 +35,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  macos-arm64:
-    runs-on: macos-14  # Apple Silicon
+  build:
+    name: build (${{ matrix.triple }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      # One platform failing shouldn't cancel the others: a successful
+      # build's tarball can still be published to the release while we
+      # investigate the broken one.
+      fail-fast: false
+      matrix:
+        include:
+          - triple: aarch64-apple-darwin
+            runs-on: macos-14  # Apple Silicon
+          - triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+          - triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm  # GitHub-hosted native ARM Linux
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -52,8 +68,10 @@ jobs:
       #   disk-cache           — bazel's action cache (build outputs)
       #   repository-cache     — http_archive downloads (rules_rust, etc.)
       #   external-cache       — fully-resolved external repos (crate_universe deps)
-      # All four share the 10 GB-per-repo actions/cache quota. The action
-      # keys caches on the runner OS so cross-platform runs don't collide.
+      # All four share the 10 GB-per-repo actions/cache quota. Cache keys
+      # include `${platform}-${arch}` (see setup-bazel's config.js
+      # baseCacheKey), so every matrix entry gets its own slice —
+      # darwin-arm64, linux-x64, and linux-arm64 never stomp each other.
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
@@ -71,8 +89,8 @@ jobs:
       # ingested_tng_qmd genrule can read its ~2GB GGUF cache without
       # re-downloading per action. macOS sandboxing refuses to mount a
       # nonexistent host path ("Operation not permitted (os error 1)"),
-      # so create the dir up-front. Empty dir is fine — qmd populates it
-      # on first run (this is also the first run for a fresh CI cache).
+      # so create the dir up-front; harmless on Linux. Empty dir is
+      # fine — qmd populates it on first run.
       - name: Ensure ~/.cache/qmd-models exists
         run: mkdir -p "$HOME/.cache/qmd-models"
 
@@ -119,11 +137,11 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
+          TRIPLE: ${{ matrix.triple }}
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
-          triple="aarch64-apple-darwin"
-          stage="frankweiler-${version}-${triple}"
+          stage="frankweiler-${version}-${TRIPLE}"
           mkdir -p "${stage}"
 
           # Map bazel output paths -> public `frankweiler-<name>` names.
@@ -137,9 +155,15 @@ jobs:
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_shim "${stage}/frankweiler-latchkey-curl-shim"
           chmod +x "${stage}"/*
 
-          tarball="frankweiler-${triple}.tar.gz"
+          tarball="frankweiler-${TRIPLE}.tar.gz"
           tar -czf "${tarball}" "${stage}"
-          shasum -a 256 "${tarball}" > "${tarball}.sha256"
+          # Linux runners have `sha256sum`; macOS has `shasum`. Use
+          # whichever is available so the same step works on both.
+          if command -v sha256sum >/dev/null; then
+              sha256sum "${tarball}" > "${tarball}.sha256"
+          else
+              shasum -a 256 "${tarball}" > "${tarball}.sha256"
+          fi
 
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
