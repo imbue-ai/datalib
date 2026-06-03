@@ -30,6 +30,21 @@ mkdir -p ~/.cache/qmd/models
 PATH=/opt/homebrew/bin:/usr/bin:/bin command -v npx
 ```
 
+### Linux iteration via devcontainer
+
+If you're debugging a Linux-only build issue (e.g. one the macOS host
+masks because clang is more permissive than gcc), `.devcontainer/`
+ships an Ubuntu 24.04 container that mirrors GHA's release runner.
+Open in VS Code via "Reopen in Container", or from the CLI:
+
+```sh
+devcontainer up --workspace-folder .
+devcontainer exec --workspace-folder . bazelisk build //frankweiler/backend:dist -c opt
+```
+
+Caches (bazel output base, disk cache, qmd model cache, npm cache)
+live in named volumes so rebuilds aren't cold.
+
 Two coupled projects that mirror personal data into a queryable local store:
 
 - **`frankweiler/backend/`** — Rust workspace that downloads + ingests

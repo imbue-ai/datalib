@@ -1,0 +1,59 @@
+// Devcontainer that reproduces the linux-amd64 release runner locally.
+// Spin up via VS Code's "Reopen in Container" or `devcontainer up
+// --workspace-folder .`. Caches are persisted in named volumes so
+// the second `bazel build` doesn't pay the cold-cache cost.
+//
+// JSON5-style trailing commas + comments are accepted by the
+// devcontainer CLI / VS Code; do not switch to strict JSON.
+{
+    "name": "mixed_up_files (linux)",
+    "build": {
+        "dockerfile": "Dockerfile",
+        // The Dockerfile auto-detects amd64 vs arm64 via $TARGETARCH;
+        // override --platform here if you want to force x86_64 on an
+        // Apple Silicon host (under Rosetta / qemu) to mirror the
+        // linux-amd64 release matrix entry exactly.
+        // "args": { "TARGETARCH": "amd64" }
+    },
+    "workspaceFolder": "/workspaces/mixed_up_files",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/mixed_up_files,type=bind,consistency=cached",
+    "remoteUser": "ubuntu",
+
+    // Persist the expensive caches across container rebuilds. Without
+    // this, every `Rebuild Container` repeats the ~10-minute cold
+    // boring-sys2 / tokio build and re-downloads ~2 GB of GGUF
+    // models. Each named volume is scoped by the container name so
+    // multiple checkouts don't collide.
+    //
+    // Paths to know:
+    //   ~/.cache/bazel        — bazel's output base (action cache)
+    //   ~/Library/Caches/...  — disk_cache from .bazelrc (yes, the
+    //                           macOS-style path; .bazelrc was written
+    //                           macOS-first, and Linux happily creates
+    //                           the dir wherever ~ resolves to)
+    //   ~/.cache/qmd/models   — qmd's shared GGUF model cache
+    //   ~/.npm                — npx download cache for the qmd npm pkg
+    "mounts": [
+        "source=mixed-up-files-bazel-output,target=/home/ubuntu/.cache/bazel,type=volume",
+        "source=mixed-up-files-bazel-disk,target=/home/ubuntu/Library/Caches/bazel-disk-cache,type=volume",
+        "source=mixed-up-files-qmd-models,target=/home/ubuntu/.cache/qmd/models,type=volume",
+        "source=mixed-up-files-npm,target=/home/ubuntu/.npm,type=volume"
+    ],
+
+    // Fix ownership on the named volumes the first time they're
+    // mounted (Docker creates them owned by root). Idempotent —
+    // subsequent starts are no-ops because chown on an already-owned
+    // tree is cheap.
+    "postCreateCommand": "sudo chown -R ubuntu:ubuntu /home/ubuntu/.cache /home/ubuntu/Library /home/ubuntu/.npm",
+
+    // Mild quality-of-life: bash history + git config are usually
+    // bind-mounted by VS Code already, so we don't list them here.
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer",
+                "bazelbuild.vscode-bazel"
+            ]
+        }
+    }
+}
