@@ -102,8 +102,16 @@ filegroup(
             "src/mutex_w32.c",
             # Windows-only OS adapter
             "src/os_win.c",
-            # Shell (not part of the library proper)
+            # Standalone binary entry points — each defines its own
+            # `main()`. Linking them into libsqlite3.a is fine on macOS
+            # (archive members are only pulled in by symbol reference)
+            # but Linux's gold linker rejects libsqlite3.so for
+            # "multiple definition of 'main'". They're entry points
+            # for upstream's `dolt`-shell + `doltlite-remotesrv`
+            # binaries, neither of which we ship.
             "src/shell.c",
+            "src/shell_wrapper.c",
+            "src/remotesrv_main.c",
         ],
     ),
     visibility = ["//visibility:public"],
