@@ -483,6 +483,8 @@ pub struct FetchOptions {
     pub members_only: bool,
     pub media: bool,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 impl Default for FetchOptions {
@@ -495,6 +497,7 @@ impl Default for FetchOptions {
             members_only: true,
             media: true,
             progress: frankweiler_etl::progress::Progress::noop(),
+            control: frankweiler_etl::control::ExtractControl::default(),
         }
     }
 }
@@ -512,6 +515,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open raw db {}", db_path.display()))?;
+
+    if opts.control.reset_and_redownload {
+        tracing::info!(event = "slack_reset_and_redownload");
+        db.reset().await.context("reset raw db before redownload")?;
+    }
 
     let since_dt =
         parse_iso_or_utc_date(&opts.since).with_context(|| format!("--since {:?}", opts.since))?;

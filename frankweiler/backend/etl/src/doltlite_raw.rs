@@ -382,6 +382,48 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Reset
+// ─────────────────────────────────────────────────────────────────────
+
+/// Truncate every per-row table in the provider's raw store, so the
+/// next `extract::fetch` re-downloads everything from upstream.
+///
+/// Wipes, in one transaction:
+///   - each `<table>` in `data_tables`
+///   - each `<table>_bookkeeping` paired sidecar
+///   - the shared `blobs` table and `blobs_bookkeeping` sidecar
+///
+/// Whole-table bookkeeping (`sync_runs`, `endpoint_shapes`,
+/// `sync_scope_state`) is preserved — that's audit log + API
+/// discovery metadata + resume cursor, none of which is "content"
+/// the reset is trying to re-pull.
+///
+/// Tables names are interpolated into SQL; callers must pass
+/// trusted identifiers, not user input.
+pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Result<()> {
+    let mut tx = pool.begin().await.context("begin truncate tx")?;
+    for table in data_tables {
+        for sql in [
+            format!("DELETE FROM {table}"),
+            format!("DELETE FROM {table}_bookkeeping"),
+        ] {
+            sqlx::query(&sql)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("truncate {sql}"))?;
+        }
+    }
+    for sql in ["DELETE FROM blobs", "DELETE FROM blobs_bookkeeping"] {
+        sqlx::query(sql)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("truncate {sql}"))?;
+    }
+    tx.commit().await.context("commit truncate tx")?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Generic object-table ops
 // ─────────────────────────────────────────────────────────────────────
 

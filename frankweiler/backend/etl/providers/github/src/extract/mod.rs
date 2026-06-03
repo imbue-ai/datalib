@@ -57,6 +57,8 @@ pub struct FetchOptions {
     pub full_sync: bool,
     pub sleep_between: Duration,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 impl Default for FetchOptions {
@@ -70,6 +72,7 @@ impl Default for FetchOptions {
             full_sync: false,
             sleep_between: Duration::ZERO,
             progress: frankweiler_etl::progress::Progress::noop(),
+            control: frankweiler_etl::control::ExtractControl::default(),
         }
     }
 }
@@ -218,6 +221,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open raw db {}", db_path.display()))?;
+    if opts.control.reset_and_redownload {
+        tracing::info!(event = "github_reset_and_redownload");
+        db.reset().await.context("reset raw db before redownload")?;
+    }
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,

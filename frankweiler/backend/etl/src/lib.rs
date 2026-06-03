@@ -19,6 +19,7 @@
 
 pub mod blob_store;
 pub mod blobs;
+pub mod control;
 pub mod doltlite_raw;
 pub mod event_store;
 pub mod events;

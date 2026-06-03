@@ -60,6 +60,8 @@ pub struct FetchOptions {
     /// only.
     pub media: bool,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 impl Default for FetchOptions {
@@ -70,6 +72,7 @@ impl Default for FetchOptions {
             beeper_data_dir: None,
             media: true,
             progress: frankweiler_etl::progress::Progress::noop(),
+            control: frankweiler_etl::control::ExtractControl::default(),
         }
     }
 }
@@ -99,6 +102,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let dst = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open dest doltlite {}", db_path.display()))?;
+
+    if opts.control.reset_and_redownload {
+        tracing::info!(event = "beeper_reset_and_redownload");
+        dst.reset()
+            .await
+            .context("reset raw db before redownload")?;
+    }
 
     let beeper_dir = opts
         .beeper_data_dir

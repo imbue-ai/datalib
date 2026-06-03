@@ -92,6 +92,7 @@ async fn run_extract(
         beeper_data_dir: Some(beeper_data_dir),
         media: true,
         progress: Progress::noop(),
+        control: Default::default(),
     })
     .await
 }

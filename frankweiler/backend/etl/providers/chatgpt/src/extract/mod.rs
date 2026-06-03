@@ -58,6 +58,8 @@ pub struct FetchOptions {
     /// stamp.
     pub fetched_at: Option<String>,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 #[derive(Debug, Default)]
@@ -80,6 +82,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open raw db {}", db_path.display()))?;
+
+    if opts.control.reset_and_redownload {
+        tracing::info!(event = "chatgpt_reset_and_redownload");
+        db.reset().await.context("reset raw db before redownload")?;
+    }
 
     let run_config = json!({
         "max_pages": opts.max_pages,

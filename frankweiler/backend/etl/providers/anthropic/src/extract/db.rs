@@ -106,6 +106,13 @@ impl RawDb {
         &self.pool
     }
 
+    /// Wipe every per-row table so the next fetch re-downloads
+    /// everything from upstream. See
+    /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
+    pub async fn reset(&self) -> Result<()> {
+        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
+    }
+
     pub async fn start_run(&self, config: &Value) -> Result<i64> {
         dr::start_run(&self.pool, config).await
     }

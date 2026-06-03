@@ -138,6 +138,19 @@ struct Args {
     #[arg(long, default_value_t = true)]
     deterministic: bool,
 
+    /// Wipe every enabled source's raw doltlite DB before the run and
+    /// re-download every row from upstream. The resulting `dolt diff`
+    /// between the pre-reset and post-reset commits then shows only
+    /// upstream-content changes (because the bookkeeping sidecars
+    /// are not part of the data diff), which is how we verify our
+    /// PK design is stable across re-fetches.
+    ///
+    /// Whole-table bookkeeping (sync_runs, endpoint_shapes,
+    /// sync_scope_state) is preserved — that's audit log + API
+    /// discovery metadata + resume cursor, not row content.
+    #[arg(long)]
+    reset_and_redownload: bool,
+
     #[command(flatten)]
     obs: frankweiler_obs::ObsArgs,
 }
@@ -565,7 +578,16 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
             None
         };
-        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now).await;
+        let control = frankweiler_etl::control::ExtractControl {
+            reset_and_redownload: args.reset_and_redownload,
+        };
+        if control.reset_and_redownload {
+            eprintln!(
+                "[frankweiler-sync] extract: --reset-and-redownload — wiping every source's \
+                 data + bookkeeping tables before fetch"
+            );
+        }
+        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control).await;
         summary.lock().unwrap().extract.extend(outcomes);
     }
 
@@ -943,11 +965,12 @@ async fn run_extract_phase(
     cfg: &Config,
     playback_root: Option<&Path>,
     now: &str,
+    control: &frankweiler_etl::control::ExtractControl,
 ) -> Vec<PhaseOutcome> {
     let mut outcomes: Vec<PhaseOutcome> = Vec::new();
     let mut plans: Vec<ExtractPlan> = Vec::new();
     for s in cfg.enabled_sources() {
-        let Some(plan_res) = ExtractPlan::for_source(s, cfg, playback_root, now) else {
+        let Some(plan_res) = ExtractPlan::for_source(s, cfg, playback_root, now, control) else {
             continue;
         };
         match plan_res {
@@ -1060,6 +1083,10 @@ struct ExtractPlan {
     now: String,
     progress: Progress,
     kind: ExtractKind,
+    /// Cross-provider knobs (e.g. `--reset-and-redownload`). Flows
+    /// from the CLI through `ExtractPlan::for_source` into each
+    /// provider's `FetchOptions.control`.
+    control: frankweiler_etl::control::ExtractControl,
 }
 
 enum ExtractKind {
@@ -1094,6 +1121,7 @@ impl ExtractPlan {
         cfg: &Config,
         playback_root: Option<&Path>,
         now: &str,
+        control: &frankweiler_etl::control::ExtractControl,
     ) -> Option<Result<Self>> {
         if !src.is_managed() {
             return None;
@@ -1133,6 +1161,7 @@ impl ExtractPlan {
             now: now.to_string(),
             progress: Progress::noop(),
             kind,
+            control: control.clone(),
         }))
     }
 
@@ -1144,6 +1173,7 @@ impl ExtractPlan {
         let progress = self.progress.clone();
         let name = self.name.clone();
         let out_dir = self.out_dir.clone();
+        let control = self.control.clone();
         let result: Result<String> = match self.kind {
             ExtractKind::Anthropic { sync } => {
                 frankweiler_etl_anthropic::extract::fetch(
@@ -1158,6 +1188,7 @@ impl ExtractPlan {
                         sleep_between: Duration::ZERO,
                         conv_uuids: sync.conv_uuids.clone(),
                         progress: progress.clone(),
+                        control: control.clone(),
                     },
                 )
                 .await
@@ -1177,6 +1208,7 @@ impl ExtractPlan {
                     conv_uuids: sync.conv_uuids.clone(),
                     fetched_at: Some(self.now.clone()),
                     progress: progress.clone(),
+                    control: control.clone(),
                 },
             )
             .await
@@ -1198,6 +1230,7 @@ impl ExtractPlan {
                     members_only: !sync.all_channels && sync.channels.is_none(),
                     media: sync.media,
                     progress: progress.clone(),
+                    control: control.clone(),
                 },
             )
             .await
@@ -1229,6 +1262,7 @@ impl ExtractPlan {
                         targets,
                         sleep_between: Duration::ZERO,
                         progress: progress.clone(),
+                        control: control.clone(),
                         ..Default::default()
                     },
                 )
@@ -1259,6 +1293,7 @@ impl ExtractPlan {
                         targets,
                         sleep_between: Duration::ZERO,
                         progress: progress.clone(),
+                        control: control.clone(),
                         ..Default::default()
                     },
                 )
@@ -1277,6 +1312,7 @@ impl ExtractPlan {
                     beeper_data_dir: sync.beeper_data_dir.clone(),
                     media: sync.media,
                     progress: progress.clone(),
+                    control: control.clone(),
                 },
             )
             .await
@@ -1325,6 +1361,7 @@ impl ExtractPlan {
                         space: sync.inbox.as_ref().and_then(|i| i.space.clone()),
                         sleep_between: Duration::ZERO,
                         progress: progress.clone(),
+                        control: control.clone(),
                         ..Default::default()
                     },
                 )

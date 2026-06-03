@@ -48,6 +48,8 @@ pub struct FetchOptions {
     pub retry_failed: bool,
     pub sleep_between: Duration,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 impl Default for FetchOptions {
@@ -66,6 +68,7 @@ impl Default for FetchOptions {
             retry_failed: false,
             sleep_between: Duration::ZERO,
             progress: frankweiler_etl::progress::Progress::noop(),
+            control: frankweiler_etl::control::ExtractControl::default(),
         }
     }
 }
@@ -573,6 +576,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open raw db {}", db_path.display()))?;
+    if opts.control.reset_and_redownload {
+        tracing::info!(event = "notion_reset_and_redownload");
+        db.reset().await.context("reset raw db before redownload")?;
+    }
     let run_config = json!({
         "subtree_pages": opts.subtree_pages,
         "inbox": opts.inbox,

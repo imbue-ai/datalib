@@ -45,6 +45,8 @@ pub struct FetchOptions {
     /// listing walk is skipped entirely.
     pub conv_uuids: Vec<String>,
     pub progress: frankweiler_etl::progress::Progress,
+    /// Cross-provider knobs (`--reset-and-redownload`, etc).
+    pub control: frankweiler_etl::control::ExtractControl,
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +70,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = RawDb::open(&db_path)
         .await
         .with_context(|| format!("open raw db {}", db_path.display()))?;
+
+    if opts.control.reset_and_redownload {
+        info!(event = "anthropic_reset_and_redownload");
+        db.reset().await.context("reset raw db before redownload")?;
+    }
 
     let run_config = json!({
         "overlap": opts.overlap,
