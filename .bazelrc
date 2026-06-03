@@ -48,6 +48,23 @@ test --test_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
 build --sandbox_add_mount_pair=$(HOME)/.cache/qmd/models
 build --action_env=HOME
 
+# libsqlite3-sys's build script invokes bindgen, which uses
+# `clang-sys` to dlopen libclang and parse <sqlite3.h>. Point it at
+# Xcode Command Line Tools' bundled libclang.dylib — present on every
+# macOS host (incl. GitHub Actions `macos-*` runners) since bazel
+# already requires CLT for the C toolchain.
+#
+# Linux hosts must override on the command line (later flags win):
+#   bazel build ... --action_env=LIBCLANG_PATH=$(llvm-config --libdir)
+# `release.yml` does this for the linux-amd64 / linux-arm64 matrix
+# entries. The devcontainer's user-level ~/.bazelrc carries the same
+# override so interactive Linux work doesn't need to remember the flag.
+#
+# DO NOT set LIBCLANG_PATH via `crate.annotation(... build_script_env)`
+# in MODULE.bazel — that wins over `--action_env` and would re-break
+# Linux. See the libsqlite3-sys annotation comment.
+build --action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
+
 # Stamp builds with the git hash via tools/workspace_status.sh. Consumers
 # read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
 # lives in frankweiler_core::version::git_hash() (cargo builds use build.rs).

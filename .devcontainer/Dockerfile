@@ -115,6 +115,19 @@ RUN usermod -aG sudo ubuntu \
 RUN mkdir -p /home/ubuntu/.cache/qmd/models /home/ubuntu/.cache/bazel-disk \
     && chown -R ubuntu:ubuntu /home/ubuntu/.cache
 
+# User-level .bazelrc that overrides the workspace .bazelrc's macOS
+# LIBCLANG_PATH default with the path Ubuntu's apt install puts
+# libclang at. Without this, every bazel invocation inside the
+# container would have to remember to pass
+# `--action_env=LIBCLANG_PATH=...` on the command line — same
+# friction we removed for the CI workflow via bazelargs.
+#
+# `llvm-config --libdir` is run at image-build time and baked in;
+# rebuild the image after a major LLVM bump (e.g. 18 → 19).
+RUN ldir="$(llvm-config --libdir)" \
+    && printf 'build --action_env=LIBCLANG_PATH=%s\n' "$ldir" > /home/ubuntu/.bazelrc \
+    && chown ubuntu:ubuntu /home/ubuntu/.bazelrc
+
 USER ubuntu
 WORKDIR /workspaces/mixed_up_files
 

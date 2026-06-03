@@ -142,20 +142,13 @@ crate.annotation(
         "SQLITE3_INCLUDE_DIR": "$(BINDIR)/third-party/doltlite",
         "SQLITE3_LIB_DIR": "$(BINDIR)/third-party/doltlite",
         "SQLITE3_STATIC": "1",
-        # bindgen (transitively required by sqlx-sqlite's `unbundled`
-        # feature, which enables `libsqlite3-sys/buildtime_bindgen`)
-        # needs libclang to parse `sqlite3.h`. Point it at Xcode
-        # Command Line Tools, which ship libclang.dylib at a fixed
-        # path that's present on every macOS host — including the
-        # standard GitHub Actions `macos-*` runners, where Homebrew
-        # LLVM is NOT preinstalled. (`xcode-select --install` populates
-        # /Library/Developer/CommandLineTools; bazel already requires
-        # CLT for the C toolchain used by `cc_library`.)
-        #
-        # Linux hosts: override with `--action_env=LIBCLANG_PATH=...`
-        # pointing at /usr/lib/llvm-*/lib (apt `libclang-dev`) or the
-        # equivalent.
-        "LIBCLANG_PATH": "/Library/Developer/CommandLineTools/usr/lib",
+        # NOTE: LIBCLANG_PATH (also needed by libsqlite3-sys's bindgen
+        # invocation) is set via .bazelrc's `--action_env`, NOT here.
+        # Setting it in `build_script_env` hardcodes a single value
+        # at the rule level and silently overrides `--action_env`
+        # forwarding — which broke the linux-* legs of the release
+        # workflow until we noticed (commit dac4a5d's investigation).
+        # See .bazelrc for the macOS default + Linux override path.
     },
 )
 

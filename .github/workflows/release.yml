@@ -156,16 +156,29 @@ jobs:
       # discarding analysis cache"), costing ~30s of re-analysis on
       # the second invocation despite the action cache being warm.
       #
-      # `--action_env=LIBCLANG_PATH` forwards the env var the Linux
-      # install step set above into every action's environment, so
-      # libsqlite3-sys's bindgen invocation can find libclang.so. On
-      # macOS the variable is unset, so bazel forwards "unset" — a
-      # no-op (clang-sys falls back to the SDK's libclang).
+      # `BAZEL_EXTRA` carries platform-specific bazel args:
+      #   * Linux — override `.bazelrc`'s macOS LIBCLANG_PATH default
+      #     with the path the install step computed via llvm-config.
+      #     Later flags win in bazel, so the command-line value beats
+      #     the workspace .bazelrc.
+      #   * macOS — empty; `.bazelrc` already points at Xcode CLT's
+      #     libclang.dylib.
+      - name: Compute platform-specific bazel args
+        id: bazelargs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+              echo "extra=--action_env=LIBCLANG_PATH=${LIBCLANG_PATH}" >> "$GITHUB_OUTPUT"
+          else
+              echo "extra=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run version-consistency test
-        run: bazel test //frankweiler/backend:version_consistency_test -c opt --action_env=LIBCLANG_PATH
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt ${{ steps.bazelargs.outputs.extra }}
 
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt --action_env=LIBCLANG_PATH
+        run: bazel build //frankweiler/backend:dist -c opt ${{ steps.bazelargs.outputs.extra }}
 
       # NOTE: the full `bazel test //...` step previously lived here
       # but was removed because rules_rust's ExtractCargoTomlEnvVars
