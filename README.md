@@ -11,12 +11,14 @@
 #    build time; `bazel` is the build driver.
 brew install bazel cmake
 
-# 2. Create the shared qmd-models cache directory. `.bazelrc`
+# 2. Create the shared qmd model cache directory. `.bazelrc`
 #    bind-mounts this into every sandboxed action via
-#    `--sandbox_add_mount_pair=$(HOME)/.cache/qmd-models` so the
+#    `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the
 #    qmd-indexer genrule doesn't re-download ~2 GB of GGUF models
 #    on every build — Bazel can read the dir, but won't create it.
-mkdir -p ~/.cache/qmd-models
+#    Path matches qmd's own default, so a standalone `qmd` populates
+#    the same cache.
+mkdir -p ~/.cache/qmd/models
 
 # 3. Verify Bazel can resolve `npx` on the pinned PATH. Bazel
 #    actions inherit a fixed PATH from `.bazelrc`
@@ -219,7 +221,8 @@ Design notes:
   are no-ops (a couple of seconds).
 - **Models cache**: qmd's embedding model (~300 MB) is shared across
   data roots via a symlink at `<root>/.frankweiler/qmd/models ->
-  ~/.cache/qmd-models`. Override with `models_dir=` if you call
+  ~/.cache/qmd/models` (qmd's own default, so a standalone `qmd` run
+  shares the same cache). Override with `models_dir=` if you call
   `build_qmd_index` directly.
 
 ### Manual integration tests (live Slack)

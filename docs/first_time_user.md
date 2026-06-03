@@ -167,7 +167,7 @@ First run does the slow work; subsequent runs are mostly cache hits.
 ├── backend_index.doltlite_db  # doltlite SQL store (grid rows + audit log)
 └── .frankweiler/qmd/
     ├── index.sqlite           # search index hit by hybrid / vector queries
-    └── models -> ~/.cache/qmd-models
+    └── models -> ~/.cache/qmd/models
 ```
 
 A final `Summary` line reports per-source counts (new / updated /

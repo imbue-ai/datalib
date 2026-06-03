@@ -1,7 +1,10 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-exports_files(["requirements.txt"])
+exports_files([
+    ".bazelrc",  # read by //tools:qmd_model_cache_path_test
+    "requirements.txt",
+])
 
 test_suite(
     name = "all_tests",

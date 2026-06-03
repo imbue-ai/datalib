@@ -18,8 +18,9 @@
 //! `<XDG_CACHE_HOME>/qmd/models/`, which would otherwise land inside the
 //! data root and bloat any archive of it. The models cache is independent
 //! of the index, so we pre-create `<root>/qmd/models` as a symlink to a
-//! shared `models_dir` (default `~/.cache/qmd-models`). qmd treats the
-//! symlink transparently and models stay outside the data root.
+//! shared `models_dir` (default `~/.cache/qmd/models` — the same path a
+//! standalone `qmd` run uses, so the two share one cache). qmd treats
+//! the symlink transparently and models stay outside the data root.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -55,11 +56,19 @@ impl IndexOptions {
     }
 }
 
+/// Default location of the shared qmd model cache. Matches qmd's own
+/// default (`$XDG_CACHE_HOME/qmd/models`, falling back to
+/// `~/.cache/qmd/models` — see `third-party/qmd/src/llm.ts`'s
+/// `MODEL_CACHE_DIR`), so a standalone `qmd` run and a build-driven run
+/// share one cache instead of each downloading their own copy.
 pub fn default_models_dir() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("qmd").join("models");
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    home.join(".cache").join("qmd-models")
+    home.join(".cache").join("qmd").join("models")
 }
 
 /// Result of a `run_index` pass. `status_output` is the raw stdout of
@@ -230,4 +239,34 @@ fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
         bail!("qmd {:?} failed: {status}", args);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `default_models_dir()` must agree with qmd's `MODEL_CACHE_DIR`
+    /// (`third-party/qmd/src/llm.ts`) so a standalone `qmd` run and a
+    /// build-driven run share one cache. Upstream-side drift is caught
+    /// by `//tools:check_qmd_model_cache_path_test`; this end checks
+    /// our half of the contract.
+    #[test]
+    fn default_models_dir_matches_qmd_default() {
+        // XDG_CACHE_HOME branch: $XDG/qmd/models.
+        // Use the temp dir as a stand-in so we don't depend on the
+        // host's actual XDG_CACHE_HOME value (which CI may or may not
+        // set). `set_var` here is fine — Rust tests in a crate share a
+        // process, but no other test in this file touches the env.
+        // SAFETY: single-threaded test, no concurrent env access.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", "/tmp/qmd-test-xdg") };
+        let dir = default_models_dir();
+        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-xdg/qmd/models"));
+
+        // HOME fallback: $HOME/.cache/qmd/models.
+        // SAFETY: single-threaded test, no concurrent env access.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        unsafe { std::env::set_var("HOME", "/tmp/qmd-test-home") };
+        let dir = default_models_dir();
+        assert_eq!(dir, PathBuf::from("/tmp/qmd-test-home/.cache/qmd/models"));
+    }
 }

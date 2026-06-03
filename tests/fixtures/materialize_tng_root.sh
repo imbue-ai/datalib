@@ -9,13 +9,13 @@
 #   backend_index.doltlite_db               doltlite (SQLite-compatible) file the backend reads.
 #   rendered_md/...         Conversation markdown tree (from qmd.tar).
 #   qmd/index.sqlite        QMD index (from qmd-index.tar).
-#   qmd/models -> ~/.cache/qmd-models  (shared, populated externally)
+#   qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
 #   config.yaml             { data_root, dolt.db_filename } — backend reads via
 #                           FRANKWEILER_CONFIG.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
-# Requires python3 on PATH. The qmd model cache at ~/.cache/qmd-models
+# Requires python3 on PATH. The qmd model cache at ~/.cache/qmd/models
 # must already contain the required GGUF files — this script refuses to
 # trigger a download (silent multi-minute stall).
 
@@ -61,10 +61,12 @@ dolt:
   db_filename: backend_index.doltlite_db
 EOF
 
-# qmd models live once in ~/.cache/qmd-models (~1.6 GB) and every data
+# qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data
 # root symlinks them in. If the cache is empty we refuse — letting qmd
 # download silently is a multi-minute stall that masquerades as a hang.
-SHARED_MODELS="${HOME:-.}/.cache/qmd-models"
+# Path matches qmd's own default so a standalone `qmd` populates the
+# same cache the build reads from.
+SHARED_MODELS="${HOME:-.}/.cache/qmd/models"
 REQUIRED_MODELS=(
   "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf"
   "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf"

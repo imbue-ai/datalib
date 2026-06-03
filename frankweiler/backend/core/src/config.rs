@@ -376,9 +376,10 @@ pub struct QmdConfig {
     #[serde(default)]
     pub skip: bool,
     /// Directory where `qmd` should cache its ~300MB embedding model.
-    /// Defaults to `~/.cache/qmd-models`. The sync runner symlinks this
-    /// into its scratch workspace so the model blob stays outside the
-    /// data root.
+    /// Defaults to `~/.cache/qmd/models` (matching qmd's own default),
+    /// so a standalone `qmd` run and the sync runner share one cache.
+    /// The sync runner symlinks this into its scratch workspace so the
+    /// model blob stays outside the data root.
     #[serde(default)]
     pub models_dir: Option<PathBuf>,
 }

@@ -48,7 +48,7 @@ def main() -> int:
     host_home = Path(
         os.environ.get("CLAUDE_MIRROR_HOST_HOME") or os.path.expanduser("~")
     )
-    models_dir = host_home / ".cache" / "qmd-models"
+    models_dir = host_home / ".cache" / "qmd" / "models"
 
     work = out_tar_path.parent / "qmd_work"
     if work.exists():

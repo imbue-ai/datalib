@@ -125,7 +125,7 @@ genrule(
     tags = [
         # qmd's first run downloads ~2GB of GGUF models from
         # HuggingFace via `npx -y qmd`. Subsequent runs use the host
-        # cache at ~/.cache/qmd-models (mounted into the sandbox via
+        # cache at ~/.cache/qmd/models (mounted into the sandbox via
         # --sandbox_add_mount_pair in .bazelrc).
         "requires-network",
         "no-remote",

@@ -1,6 +1,9 @@
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
+exports_files([
+    "Cargo.toml",
+    "src/lib.rs",  # read by //tools:qmd_model_cache_path_test
+])
 
 rust_library(
     name = "frankweiler_qmd_indexer",
@@ -11,6 +14,11 @@ rust_library(
     deps = [
         "@frankweiler_crates//:anyhow",
     ],
+)
+
+rust_test(
+    name = "qmd_indexer_unittests",
+    crate = ":frankweiler_qmd_indexer",
 )
 
 rust_binary(
