@@ -80,20 +80,42 @@ jobs:
           external-cache: true
 
       # Install the Linux-only build dependencies the macOS runner gets
-      # for free via Xcode CLT / Homebrew. So far:
+      # for free via Xcode CLT / Homebrew:
       #   cmake        — boring-sys2's build script shells out to it
       #                  to build BoringSSL.
-      #   libclang-dev — bindgen (in libsqlite3-sys's build script)
-      #                  uses libclang to parse C headers.
-      # Skipped on macOS; that runner already has both via the SDK +
-      # Homebrew (`brew install bazel cmake` per README).
+      #   clang        — driver binary plus llvm-config; the latter
+      #                  prints the canonical libclang install dir.
+      #   libclang-dev — provides the libclang.so symlink. Bindgen
+      #                  (in libsqlite3-sys's build script) loads it
+      #                  via clang-sys to parse <sqlite3.h>.
+      #
+      # NOTE: deliberately not passing `--no-install-recommends` here.
+      # Ubuntu's `libclang-dev` is a transition metapackage; without
+      # recommends, apt installs the empty stub and skips the
+      # libclang1-NN runtime package that actually carries libclang.so
+      # — which is exactly what bit us on the first attempt
+      # (b4b12e4): the package "installed" but bindgen still failed
+      # with "Unable to find libclang".
+      #
+      # Skipped on macOS; that runner already has clang via the SDK
+      # and cmake via Homebrew (`brew install bazel cmake` per README).
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo apt-get install -y \
             cmake \
+            clang \
             libclang-dev
+          # Surface libclang's directory so bindgen finds it inside
+          # bazel's processwrapper-sandbox even when clang-sys's
+          # default Linux search paths miss (we forward this via
+          # --action_env on the bazel commands below). Using
+          # llvm-config makes us robust to LLVM version bumps —
+          # whatever clang the runner installs, we point at its
+          # actual libdir.
+          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
 
       - name: Show toolchain versions
         run: |
@@ -133,11 +155,17 @@ jobs:
       # ("WARNING: Build option --compilation_mode has changed,
       # discarding analysis cache"), costing ~30s of re-analysis on
       # the second invocation despite the action cache being warm.
+      #
+      # `--action_env=LIBCLANG_PATH` forwards the env var the Linux
+      # install step set above into every action's environment, so
+      # libsqlite3-sys's bindgen invocation can find libclang.so. On
+      # macOS the variable is unset, so bazel forwards "unset" — a
+      # no-op (clang-sys falls back to the SDK's libclang).
       - name: Run version-consistency test
-        run: bazel test //frankweiler/backend:version_consistency_test -c opt
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt --action_env=LIBCLANG_PATH
 
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt
+        run: bazel build //frankweiler/backend:dist -c opt --action_env=LIBCLANG_PATH
 
       # NOTE: the full `bazel test //...` step previously lived here
       # but was removed because rules_rust's ExtractCargoTomlEnvVars
