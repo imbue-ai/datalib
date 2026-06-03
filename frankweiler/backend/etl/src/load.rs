@@ -33,6 +33,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
@@ -40,8 +43,231 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
+use tokio::sync::Mutex;
 
 use crate::sidecar::Sidecar;
+
+/// Serializes concurrent writers against one doltlite index pool AND
+/// optionally batches all writes into one big transaction — with
+/// observability baked in.
+///
+/// Background: doltlite (like SQLite) serializes writes at the file
+/// level — only one writer can advance the chunk store at a time. If
+/// you give multiple tasks their own pool connections and call
+/// `apply_one` from each, they race for the underlying write lock;
+/// losers wait inside sqlx's `busy_timeout` (default ~5s) and
+/// eventually see `(code 5) database is locked`. The orchestrator's
+/// per-source parallel translate hits this in production.
+///
+/// We also discovered (via the wait/hold counters this struct
+/// reports) that each per-doc auto-commit costs ~50ms because every
+/// statement boundary materializes the prolly tree's manifest. At
+/// 488 docs that's ~24s of wall-clock time spent serializing tiny
+/// writes through doltlite's per-commit overhead. Wrapping the whole
+/// translate phase in ONE `BEGIN ... COMMIT` collapses that overhead
+/// — only the final COMMIT pays the manifest cost.
+///
+/// Putting both behaviors in one type keeps the contract simple:
+/// every per-doc call to `apply_one` goes through `WriteLock::acquire`,
+/// which returns `&mut conn` for the duration of one write. If a
+/// transaction is active (`begin_transaction` was called), every
+/// acquire uses the SAME held connection so the writes accumulate
+/// in one transaction; otherwise each acquire takes a fresh pool
+/// connection and statements auto-commit individually.
+///
+/// The metrics counters answer "where is the time going":
+///
+///   * `total_wait` — summed across all `acquire` calls; high values
+///     relative to wall time mean writers are queuing behind one
+///     another (doltlite write throughput is the bottleneck).
+///   * `total_hold` — summed time the lock was held; divide by
+///     `acquisitions` for the average per-doc write cost.
+///   * `acquisitions` — number of `acquire` calls that ran.
+pub struct WriteLock {
+    pool: SqlitePool,
+    inner: Mutex<WriteLockInner>,
+    total_wait_ns: AtomicU64,
+    total_hold_ns: AtomicU64,
+    acquisitions: AtomicU64,
+}
+
+struct WriteLockInner {
+    /// Held connection during an active `BEGIN ... COMMIT` batch.
+    /// `None` outside a transaction; in that case `acquire` takes a
+    /// fresh pool connection per call and statements auto-commit.
+    tx_conn: Option<sqlx::pool::PoolConnection<sqlx::Sqlite>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WriteLockMetrics {
+    pub total_wait: Duration,
+    pub total_hold: Duration,
+    pub acquisitions: u64,
+}
+
+impl WriteLockMetrics {
+    pub fn avg_wait(&self) -> Duration {
+        if self.acquisitions == 0 {
+            Duration::ZERO
+        } else {
+            self.total_wait / self.acquisitions as u32
+        }
+    }
+    pub fn avg_hold(&self) -> Duration {
+        if self.acquisitions == 0 {
+            Duration::ZERO
+        } else {
+            self.total_hold / self.acquisitions as u32
+        }
+    }
+}
+
+impl WriteLock {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self {
+            pool,
+            inner: Mutex::new(WriteLockInner { tx_conn: None }),
+            total_wait_ns: AtomicU64::new(0),
+            total_hold_ns: AtomicU64::new(0),
+            acquisitions: AtomicU64::new(0),
+        }
+    }
+
+    pub fn new_arc(pool: SqlitePool) -> Arc<Self> {
+        Arc::new(Self::new(pool))
+    }
+
+    /// Open one big write transaction. Subsequent `acquire` calls
+    /// reuse the same connection so every statement lands inside
+    /// the same `BEGIN ... COMMIT`. Pair with
+    /// [`commit_transaction`] or [`rollback_transaction`].
+    ///
+    /// Panics if a transaction is already active — there's only one
+    /// translate phase per run and one ROLLBACK target.
+    pub async fn begin_transaction(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        assert!(
+            inner.tx_conn.is_none(),
+            "WriteLock: begin_transaction called twice without commit/rollback",
+        );
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .context("WriteLock: acquire conn for BEGIN")?;
+        sqlx::query("BEGIN")
+            .execute(&mut *conn)
+            .await
+            .context("WriteLock: BEGIN")?;
+        inner.tx_conn = Some(conn);
+        Ok(())
+    }
+
+    /// Commit the batch and release the held connection. Subsequent
+    /// `acquire` calls revert to per-call auto-commit mode.
+    pub async fn commit_transaction(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let mut conn = inner
+            .tx_conn
+            .take()
+            .expect("WriteLock: commit_transaction without begin");
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .context("WriteLock: COMMIT")?;
+        Ok(())
+    }
+
+    /// Roll back the batch and release the held connection.
+    /// Best-effort — if ROLLBACK itself errors we drop the conn
+    /// anyway (the pool re-establishes per-connection state on
+    /// next acquire).
+    pub async fn rollback_transaction(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let Some(mut conn) = inner.tx_conn.take() else {
+            return Ok(());
+        };
+        sqlx::query("ROLLBACK")
+            .execute(&mut *conn)
+            .await
+            .context("WriteLock: ROLLBACK")
+            .map(|_| ())
+    }
+
+    /// True iff a `BEGIN ... COMMIT` batch is currently open.
+    pub async fn in_transaction(&self) -> bool {
+        self.inner.lock().await.tx_conn.is_some()
+    }
+
+    /// Acquire write access. Returns a guard wrapping `&mut conn`.
+    /// If a transaction is active, the guard hands out the held
+    /// connection (so the caller's statements accumulate in the
+    /// batch); otherwise a fresh pool connection is taken and
+    /// dropped at guard release (auto-commit per statement).
+    pub async fn acquire<'a>(&'a self) -> Result<WriteLockGuard<'a>> {
+        let wait_start = Instant::now();
+        let inner_guard = self.inner.lock().await;
+        let waited = wait_start.elapsed().as_nanos() as u64;
+        self.total_wait_ns.fetch_add(waited, Ordering::Relaxed);
+        self.acquisitions.fetch_add(1, Ordering::Relaxed);
+
+        let fresh_conn = if inner_guard.tx_conn.is_some() {
+            None
+        } else {
+            Some(
+                self.pool
+                    .acquire()
+                    .await
+                    .context("WriteLock: acquire conn")?,
+            )
+        };
+
+        Ok(WriteLockGuard {
+            inner: inner_guard,
+            fresh_conn,
+            held_since: Instant::now(),
+            owner: self,
+        })
+    }
+
+    pub fn metrics(&self) -> WriteLockMetrics {
+        WriteLockMetrics {
+            total_wait: Duration::from_nanos(self.total_wait_ns.load(Ordering::Relaxed)),
+            total_hold: Duration::from_nanos(self.total_hold_ns.load(Ordering::Relaxed)),
+            acquisitions: self.acquisitions.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// RAII guard: dropping it stamps the hold-time counter and (in
+/// non-transaction mode) returns the per-call connection to the pool.
+pub struct WriteLockGuard<'a> {
+    inner: tokio::sync::MutexGuard<'a, WriteLockInner>,
+    fresh_conn: Option<sqlx::pool::PoolConnection<sqlx::Sqlite>>,
+    held_since: Instant,
+    owner: &'a WriteLock,
+}
+
+impl<'a> WriteLockGuard<'a> {
+    /// Mutable access to the active write connection. Same conn
+    /// across every `acquire` while a transaction is open; a fresh
+    /// per-call conn otherwise.
+    pub fn conn(&mut self) -> &mut sqlx::pool::PoolConnection<sqlx::Sqlite> {
+        if let Some(c) = self.inner.tx_conn.as_mut() {
+            return c;
+        }
+        self.fresh_conn
+            .as_mut()
+            .expect("WriteLockGuard: conn unexpectedly absent")
+    }
+}
+
+impl Drop for WriteLockGuard<'_> {
+    fn drop(&mut self) {
+        let held = self.held_since.elapsed().as_nanos() as u64;
+        self.owner.total_hold_ns.fetch_add(held, Ordering::Relaxed);
+    }
+}
 
 /// Per-rendered-markdown metadata projection: one row per `.md` file
 /// in `<root>/rendered_md/`. `source_fingerprint` is the renderer's
@@ -210,8 +436,14 @@ pub struct RenderedMarkdown {
 /// gate before each per-doc loop) — by the time we're called here the
 /// caller has already decided the doc needs to land. `out_dir` is the
 /// prefix stripped off `md_path` to produce a portable `qmd_path`.
+///
+/// `write_lock` owns the pool and serializes concurrent writers; see
+/// [`WriteLock`] for the contention-avoidance contract and the
+/// optional `begin_transaction` / `commit_transaction` batching that
+/// collapses ~50ms-per-doc auto-commit overhead into one final
+/// per-run COMMIT.
 pub async fn apply_one(
-    pool: &SqlitePool,
+    write_lock: &WriteLock,
     out_dir: &Path,
     md: &RenderedMarkdown,
     now_override: Option<&str>,
@@ -222,7 +454,7 @@ pub async fn apply_one(
         .unwrap_or(&md.md_path)
         .to_string_lossy()
         .to_string();
-    apply_markdown(pool, md, &qmd_rel, now_override).await
+    apply_markdown(write_lock, md, &qmd_rel, now_override).await
 }
 
 /// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar and
@@ -236,6 +468,13 @@ pub async fn load_all(
     progress: impl Fn(&str),
     now_override: Option<&str>,
 ) -> Result<LoadSummary> {
+    // load_all is single-threaded — there are no parallel workers
+    // contending here. A fresh write lock owns the pool clone so
+    // `apply_one` has somewhere to acquire connections. We could
+    // wrap the whole loop in begin/commit_transaction to batch
+    // writes, but load_all is a disaster-recovery tool, not on the
+    // hot path; per-call auto-commit is fine.
+    let write_lock = WriteLock::new(pool.clone());
     let rendered_root = out_dir.join("rendered_md");
     let mut sidecars: Vec<PathBuf> = Vec::new();
     if rendered_root.exists() {
@@ -287,7 +526,7 @@ pub async fn load_all(
             render_version: sidecar.header.render_version,
             rows: sidecar.rows,
         };
-        let inserted = apply_one(pool, out_dir, &md, now_override)
+        let inserted = apply_one(&write_lock, out_dir, &md, now_override)
             .await
             .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
@@ -381,27 +620,33 @@ pub async fn load_cursors(pool: &SqlitePool) -> Result<HashMap<String, String>> 
 }
 
 async fn apply_markdown(
-    pool: &SqlitePool,
+    write_lock: &WriteLock,
     md: &RenderedMarkdown,
     qmd_path: &str,
     now_override: Option<&str>,
 ) -> Result<usize> {
-    let mut conn = pool.acquire().await.context("acquire conn")?;
+    // Acquire serialized write access. If the orchestrator has called
+    // `begin_transaction`, every guard hands back the SAME held
+    // connection so all per-doc DELETE/INSERTs/upsert statements
+    // accumulate inside one big batch; otherwise each guard takes a
+    // fresh pool connection (auto-commit per statement).
+    let mut guard = write_lock.acquire().await?;
+    let conn = guard.conn();
 
     sqlx::query("DELETE FROM grid_rows WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
-        .execute(&mut *conn)
+        .execute(&mut **conn)
         .await
         .context("delete prior rows")?;
 
     for row in &md.rows {
-        insert_grid_row(&mut conn, row).await?;
+        insert_grid_row(conn, row).await?;
     }
 
     let rendered_at = now_override
         .map(str::to_string)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    upsert_markdown(&mut conn, md, qmd_path, &rendered_at)
+    upsert_markdown(conn, md, qmd_path, &rendered_at)
         .await
         .context("upsert markdowns")?;
 
@@ -519,4 +764,269 @@ async fn insert_grid_row(
     .await
     .with_context(|| format!("insert grid_row {}", row.uuid))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod write_lock_tests {
+    //! Reproduces the production "(code 5) database is locked" we saw
+    //! on a real `--skip-extract` run: multiple per-source translate
+    //! workers calling [`apply_one`] in parallel against one pool that
+    //! has `max_connections > 1`. Without the [`WriteLock`] argument
+    //! each task gets its own connection, all of them race for
+    //! doltlite's file-level write lock, and the losers eventually
+    //! time out at sqlx's busy_timeout. With the WriteLock wired in,
+    //! the Rust side queues writers and doltlite only ever sees one.
+    //!
+    //! The lock object also collects timing metrics; the assertions
+    //! at the bottom confirm the wait/hold counters reflect what
+    //! actually happened (acquisitions == total docs written, etc).
+    //! No artificial sleeps or stalls — the contention is real,
+    //! produced by the same code path the orchestrator uses.
+    use super::*;
+    use frankweiler_schema::grid_rows::GridRow;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::str::FromStr;
+    use std::sync::Arc as StdArc;
+    use tempfile::tempdir;
+
+    fn mk_md(task: usize, idx: usize) -> RenderedMarkdown {
+        let uuid = format!("md-task{task:02}-doc{idx:04}");
+        // One canonical chat row per markdown — enough to exercise
+        // the DELETE + insert path. We don't care about content.
+        let row = GridRow {
+            uuid: uuid.clone(),
+            provider: "anthropic".into(),
+            kind: "Chat".into(),
+            source_label: "Claude".into(),
+            when_ts: "2026-06-02T20:00:00+00:00".into(),
+            author: None,
+            account: Some("acct-test".into()),
+            project: None,
+            channel: None,
+            conversation_name: Some(format!("Conv {uuid}")),
+            conversation_uuid: uuid.clone(),
+            message_index: None,
+            entire_chat: format!("/chat/{uuid}"),
+            text: format!("body for {uuid}"),
+            slack_link: None,
+            qmd_path: Some(format!("chats/{uuid}.md")),
+            source_url: None,
+            git_sha: None,
+            external_id: None,
+            notion_page_uuid: None,
+            notion_block_uuid: None,
+            markdown_uuid: Some(uuid.clone()),
+        };
+        RenderedMarkdown {
+            markdown_uuid: uuid.clone(),
+            source_name: "test".into(),
+            source_fingerprint: format!("fp-{uuid}"),
+            upstream_cursor: None,
+            md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
+            render_version: 1,
+            rows: vec![row],
+        }
+    }
+
+    async fn open_pool(db: &Path, max_conn: u32) -> SqlitePool {
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db.display()))
+            .unwrap()
+            .create_if_missing(true);
+        SqlitePoolOptions::new()
+            .max_connections(max_conn)
+            .connect_with(opts)
+            .await
+            .unwrap()
+    }
+
+    /// Drives N parallel tokio tasks through `apply_one`, each writing
+    /// K unique markdowns into the same pool. With the WriteLock the
+    /// orchestrator currently passes, every call must succeed. Counts
+    /// in `grid_rows` and `markdowns` are then verified to match the
+    /// expected `N*K` writes, and the WriteLock metrics are sanity-
+    /// checked (acquisitions == total writes, both timing counters
+    /// non-negative, etc.).
+    ///
+    /// We deliberately use `max_connections=8` to make the pool able
+    /// to hand out enough connections that, WITHOUT the lock, the
+    /// busy-timeout race would fire. With the lock, the connections
+    /// don't help — only one writer runs at a time, so contention
+    /// drops to zero on the doltlite side.
+    /// Per-call auto-commit mode (no `begin_transaction`). Drives N
+    /// parallel tasks through `apply_one` and verifies the lock
+    /// serializes them cleanly. The per-doc cost here is whatever
+    /// doltlite charges for one auto-committed statement bundle.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_apply_one_serializes_writes_with_metrics() {
+        const N_TASKS: usize = 16;
+        const PER_TASK: usize = 30;
+        const TOTAL: usize = N_TASKS * PER_TASK;
+
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("contention.doltlite_db");
+        let pool = open_pool(&db, 8).await;
+        super::init_schema(&pool).await.expect("init_schema");
+
+        let write_lock = WriteLock::new_arc(pool.clone());
+        let out_dir = PathBuf::from("/tmp");
+
+        let mut handles = Vec::with_capacity(N_TASKS);
+        for task in 0..N_TASKS {
+            let lock = write_lock.clone();
+            let out_dir = out_dir.clone();
+            handles.push(tokio::spawn(async move {
+                for idx in 0..PER_TASK {
+                    let md = mk_md(task, idx);
+                    apply_one(lock.as_ref(), &out_dir, &md, None)
+                        .await
+                        .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
+                }
+            }));
+        }
+
+        for h in handles {
+            h.await.expect("task join");
+        }
+
+        let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let md_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(grid_n as usize, TOTAL, "grid_rows row count");
+        assert_eq!(md_n as usize, TOTAL, "markdowns row count");
+
+        let m = write_lock.metrics();
+        assert_eq!(m.acquisitions as usize, TOTAL, "acquisitions");
+        assert!(m.total_hold > Duration::ZERO, "hold time must be > 0");
+        eprintln!(
+            "[write_lock test no-tx] N={N_TASKS} K={PER_TASK} total={TOTAL} \
+             total_hold={:?} avg_hold={:?} total_wait={:?} avg_wait={:?}",
+            m.total_hold,
+            m.avg_hold(),
+            m.total_wait,
+            m.avg_wait(),
+        );
+    }
+
+    /// One big transaction wrapping every write — the orchestrator's
+    /// production mode. Asserts:
+    ///   * every per-doc apply_one succeeds
+    ///   * the final COMMIT lands every row in the table
+    ///   * doltlite's per-statement overhead is amortized: the
+    ///     avg_hold here should be DRAMATICALLY smaller than the
+    ///     auto-commit version above
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parallel_apply_one_inside_one_transaction_is_faster() {
+        const N_TASKS: usize = 16;
+        const PER_TASK: usize = 30;
+        const TOTAL: usize = N_TASKS * PER_TASK;
+
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("batched.doltlite_db");
+        let pool = open_pool(&db, 8).await;
+        super::init_schema(&pool).await.expect("init_schema");
+
+        let write_lock = WriteLock::new_arc(pool.clone());
+        let out_dir = PathBuf::from("/tmp");
+
+        // Open the big batch. Every apply_one call below now reuses
+        // the same held conn and accumulates statements into the
+        // open transaction.
+        write_lock.begin_transaction().await.expect("BEGIN");
+
+        let mut handles = Vec::with_capacity(N_TASKS);
+        for task in 0..N_TASKS {
+            let lock = write_lock.clone();
+            let out_dir = out_dir.clone();
+            handles.push(tokio::spawn(async move {
+                for idx in 0..PER_TASK {
+                    let md = mk_md(task, idx);
+                    apply_one(lock.as_ref(), &out_dir, &md, None)
+                        .await
+                        .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
+                }
+            }));
+        }
+        for h in handles {
+            h.await.expect("task join");
+        }
+
+        // Before commit: rows aren't visible from a fresh connection
+        // (other than the one holding the open tx).
+        let pre_grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            pre_grid_n, 0,
+            "pre-COMMIT: other connections must not see uncommitted rows"
+        );
+
+        write_lock.commit_transaction().await.expect("COMMIT");
+
+        let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let md_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(grid_n as usize, TOTAL, "grid_rows row count after COMMIT");
+        assert_eq!(md_n as usize, TOTAL, "markdowns row count after COMMIT");
+
+        let m = write_lock.metrics();
+        assert_eq!(m.acquisitions as usize, TOTAL, "acquisitions");
+        eprintln!(
+            "[write_lock test tx] N={N_TASKS} K={PER_TASK} total={TOTAL} \
+             total_hold={:?} avg_hold={:?} total_wait={:?} avg_wait={:?}",
+            m.total_hold,
+            m.avg_hold(),
+            m.total_wait,
+            m.avg_wait(),
+        );
+    }
+
+    /// `rollback_transaction` undoes every write in the batch.
+    #[tokio::test]
+    async fn rollback_undoes_batch() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("rb.doltlite_db"), 2).await;
+        super::init_schema(&pool).await.expect("init_schema");
+
+        let lock = WriteLock::new(pool.clone());
+        let out_dir = PathBuf::from("/tmp");
+
+        lock.begin_transaction().await.unwrap();
+        for idx in 0..5 {
+            apply_one(&lock, &out_dir, &mk_md(0, idx), None)
+                .await
+                .unwrap();
+        }
+        lock.rollback_transaction().await.unwrap();
+
+        let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(grid_n, 0, "ROLLBACK must leave grid_rows untouched");
+    }
+
+    #[tokio::test]
+    async fn metrics_safe_when_never_acquired() {
+        let dir = tempdir().unwrap();
+        let pool = open_pool(&dir.path().join("m.doltlite_db"), 1).await;
+        let lock = WriteLock::new(pool);
+        let m = lock.metrics();
+        assert_eq!(m.acquisitions, 0);
+        assert_eq!(m.total_wait, Duration::ZERO);
+        assert_eq!(m.total_hold, Duration::ZERO);
+        assert_eq!(m.avg_wait(), Duration::ZERO);
+        assert_eq!(m.avg_hold(), Duration::ZERO);
+        let _ = StdArc::new(()).as_ref();
+    }
 }

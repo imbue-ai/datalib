@@ -615,6 +615,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         rows_inserted: 0,
         error: None,
         commit_hash: None,
+        write_lock: None,
     }));
 
     let prior_fingerprints = Arc::new(prior_fingerprints);
@@ -622,6 +623,25 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     let cfg_arc = Arc::new(cfg.clone());
     let root_arc: Arc<PathBuf> = Arc::new(root.clone());
     let now_arc: Arc<String> = Arc::new(now.clone());
+    // One shared write-serialization lock for every per-source worker.
+    // It owns a clone of the index pool, serializes concurrent writers
+    // so doltlite never sees more than one writer at a time, and (via
+    // begin_transaction below) batches every per-doc DELETE/INSERTs/
+    // upsert into ONE big `BEGIN ... COMMIT`. Doltlite charges ~50ms
+    // per auto-committed statement bundle for the prolly-tree manifest
+    // mutation; batching collapses that into a single per-run commit.
+    // The lock also records wait/hold timings, which surface in the
+    // sync_summary.json's `load.write_lock` block.
+    let write_lock = frankweiler_etl::load::WriteLock::new_arc(index_pool.clone());
+    // All-or-nothing semantics: if any source's render path errors
+    // out, we rollback every write the run had accumulated so far
+    // — the grid_rows/markdowns tables stay exactly as they were
+    // before this run started. Successful completion runs COMMIT
+    // after every worker has joined and BEFORE the dolt_commit.
+    write_lock
+        .begin_transaction()
+        .await
+        .context("WriteLock::begin_transaction for translate phase")?;
 
     let mut set: JoinSet<(String, String, Result<String>)> = JoinSet::new();
     for src in cfg.enabled_sources() {
@@ -641,7 +661,6 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         let bar = make_bar(&translate_multi, name.clone());
         let mp = translate_multi.clone();
         let src_owned = src.clone();
-        let pool = index_pool.clone();
         let cfg_t = cfg_arc.clone();
         let root_t = root_arc.clone();
         // Separate clone for the on_doc_complete closure so the outer
@@ -651,6 +670,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         let pfp = prior_fingerprints.clone();
         let pc = prior_cursors.clone();
         let lt = load_totals.clone();
+        let wl = write_lock.clone();
         set.spawn_blocking(move || {
             let sinks: Vec<std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink>> = vec![
                 std::sync::Arc::new(IndicatifSink::new(bar, mp)),
@@ -672,11 +692,11 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                     doc.source_name = name_for_cb.clone();
                 }
                 let rows_inserted = doc.rows.len();
-                let pool_ref = &pool;
+                let lock_ref = wl.as_ref();
                 let root_path = root_for_cb.as_path();
                 let now_str = now_t.as_str();
                 tokio::runtime::Handle::current().block_on(async move {
-                    apply_one(pool_ref, root_path, &doc, Some(now_str)).await
+                    apply_one(lock_ref, root_path, &doc, Some(now_str)).await
                 })?;
                 let mut t = lt.lock().unwrap();
                 t.markdowns_loaded += 1;
@@ -737,6 +757,56 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             .copied()
             .unwrap_or(fallback_pos)
     });
+
+    // All-or-nothing semantics: COMMIT the big batch if every source
+    // succeeded; ROLLBACK otherwise so the index DB is left exactly
+    // as it was before this run started. We check `translate`
+    // outcomes here (extract failures already filter into Skipped
+    // translate outcomes above, which are NOT errors). A ROLLBACK
+    // failure is logged but not propagated — the open transaction
+    // will be closed when the held connection drops.
+    let any_translate_error = summary
+        .lock()
+        .unwrap()
+        .translate
+        .iter()
+        .any(|o| o.status == Status::Error);
+    if any_translate_error {
+        eprintln!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
+        if let Err(e) = write_lock.rollback_transaction().await {
+            eprintln!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");
+        }
+        // Zero out the load totals so the summary reflects what's
+        // actually in the index DB (rolled back → nothing).
+        let mut t = load_totals.lock().unwrap();
+        t.markdowns_loaded = 0;
+        t.rows_inserted = 0;
+        t.error = Some("translate phase had errors; batch rolled back".into());
+    } else {
+        write_lock
+            .commit_transaction()
+            .await
+            .context("WriteLock::commit_transaction for translate phase")?;
+    }
+
+    // Stash write-lock contention metrics into the load outcome so
+    // they end up in sync_summary_*.json. Two numbers to watch:
+    //
+    //   * `avg_hold_ms` — average time inside `apply_markdown`'s
+    //     DELETE/INSERTs/upsert. Per-doc write cost against doltlite;
+    //     a small number means writes are cheap, a big number means
+    //     each doc is genuinely expensive and a batched-transaction
+    //     refactor would help.
+    //
+    //   * `avg_wait_ms` — average time each `apply_one` call was
+    //     queued behind another writer. Large values mean the parallel
+    //     render side is producing docs faster than serialized writes
+    //     can absorb. If `avg_wait_ms >> avg_hold_ms` the lock itself
+    //     is the bottleneck, not the underlying write.
+    {
+        let mut t = load_totals.lock().unwrap();
+        t.write_lock = Some(summary::WriteLockStats::from_metrics(write_lock.metrics()));
+    }
 
     // One commit per run for the index DB. We snapshot the load totals
     // into the commit message so `dolt log` carries the same row-count
@@ -833,14 +903,23 @@ async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
     // for doltlite — see the comment at that callsite.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true);
-    // Pool sized for the parallel translate phase: each source runs
-    // in its own `spawn_blocking` task and writes per-doc through
-    // `apply_one`, so we want roughly one connection per concurrent
-    // source plus a couple of spares for the orchestrator. SQLite WAL
-    // serializes the writes themselves, but having enough connections
-    // avoids pool-acquire stalls.
+    // Doltlite serializes writes at the file level — only ONE writer
+    // can advance the chunk store at any time. The orchestrator already
+    // enforces this in Rust via `WriteLock` (one shared mutex queueing
+    // every per-source translate worker), and the translate phase
+    // batches all of its writes into ONE held connection across a
+    // single BEGIN ... COMMIT.
+    //
+    // We size the pool at 2 anyway: the WriteLock owns the one writer
+    // connection for the duration of translate, and the SIGINT handler
+    // needs a SECOND connection to issue its best-effort `dolt_commit`
+    // against the file's pre-translate working set. (At 1 the
+    // interrupt handler would block forever on conn-acquire.) Reads
+    // at the start of the run — `load_fingerprints`, `load_cursors` —
+    // happen BEFORE `begin_transaction`, so they fit in the same slot
+    // the writer later takes.
     SqlitePoolOptions::new()
-        .max_connections(16)
+        .max_connections(2)
         .connect_with(opts)
         .await
         .with_context(|| format!("open doltlite at {}", db_path.display()))

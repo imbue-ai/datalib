@@ -234,12 +234,7 @@ impl RawDb {
     /// natural commit boundary here is "all discussions for one MR" —
     /// the caller's outer loop is per-MR, and a partial set would just
     /// be re-fetched on the next sync.
-    pub async fn upsert_discussions(
-        &self,
-        proj: &str,
-        iid: u32,
-        payloads: &[Value],
-    ) -> Result<()> {
+    pub async fn upsert_discussions(&self, proj: &str, iid: u32, payloads: &[Value]) -> Result<()> {
         if payloads.is_empty() {
             return Ok(());
         }

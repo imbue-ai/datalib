@@ -421,11 +421,7 @@ async fn paginate_replies(
     Ok(())
 }
 
-fn history_message_row(
-    team_id: &str,
-    channel_id: &str,
-    m: &Value,
-) -> Option<db::MessageRow> {
+fn history_message_row(team_id: &str, channel_id: &str, m: &Value) -> Option<db::MessageRow> {
     let ts = m.get("ts").and_then(|v| v.as_str())?;
     let thread_ts = m
         .get("thread_ts")

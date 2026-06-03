@@ -133,6 +133,38 @@ pub struct LoadOutcome {
     /// end of the translate phase. `None` when the binary is built
     /// against stock libsqlite3 (unit tests) or when the commit failed.
     pub commit_hash: Option<String>,
+    /// Write-lock contention metrics from the per-source parallel
+    /// translate workers. Captures how often the writers queued behind
+    /// each other and how long each per-doc write actually took, so
+    /// "the translate phase is slow" can be answered by reading the
+    /// summary instead of bisecting code. `None` when no docs were
+    /// loaded (translate skipped or all sources errored at extract).
+    pub write_lock: Option<WriteLockStats>,
+}
+
+/// Plain serializable snapshot of
+/// [`frankweiler_etl::load::WriteLockMetrics`], expressed in
+/// milliseconds for human-readable summary output.
+#[derive(Debug, Clone, Copy)]
+pub struct WriteLockStats {
+    pub acquisitions: u64,
+    pub total_hold_ms: f64,
+    pub total_wait_ms: f64,
+    pub avg_hold_ms: f64,
+    pub avg_wait_ms: f64,
+}
+
+impl WriteLockStats {
+    pub fn from_metrics(m: frankweiler_etl::load::WriteLockMetrics) -> Self {
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+        Self {
+            acquisitions: m.acquisitions,
+            total_hold_ms: ms(m.total_hold),
+            total_wait_ms: ms(m.total_wait),
+            avg_hold_ms: ms(m.avg_hold()),
+            avg_wait_ms: ms(m.avg_wait()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -183,12 +215,22 @@ impl SyncSummary {
 
     pub fn to_json(&self) -> Value {
         let load = self.load.as_ref().map(|l| {
+            let write_lock = l.write_lock.as_ref().map(|s| {
+                json!({
+                    "acquisitions": s.acquisitions,
+                    "total_hold_ms": s.total_hold_ms,
+                    "total_wait_ms": s.total_wait_ms,
+                    "avg_hold_ms": s.avg_hold_ms,
+                    "avg_wait_ms": s.avg_wait_ms,
+                })
+            });
             json!({
                 "markdowns_loaded": l.markdowns_loaded,
                 "markdowns_total": l.markdowns_total,
                 "rows_inserted": l.rows_inserted,
                 "error": l.error,
                 "commit_hash": l.commit_hash,
+                "write_lock": write_lock,
             })
         });
         let any_error = self.fatal_error.is_some()
