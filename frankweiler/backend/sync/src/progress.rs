@@ -22,11 +22,19 @@ pub struct IndicatifSink {
     // Held so child bars can attach to the same MultiProgress. Cheap
     // to clone (it's an `Arc` internally).
     multi: Arc<MultiProgress>,
+    // Nesting depth — 0 for the per-source bar, 1+ for children
+    // spawned via `child(...)`. Used to indent the prefix column so
+    // nested bars visually belong to their parent.
+    depth: usize,
 }
 
 impl IndicatifSink {
     pub fn new(bar: ProgressBar, multi: Arc<MultiProgress>) -> Self {
-        Self { bar, multi }
+        Self {
+            bar,
+            multi,
+            depth: 0,
+        }
     }
 }
 
@@ -47,10 +55,12 @@ impl ProgressSink for IndicatifSink {
         self.bar.finish_with_message(msg.to_string());
     }
     fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
-        let child_bar = make_bar(&self.multi, prefix.to_string());
+        let depth = self.depth + 1;
+        let child_bar = make_bar_at_depth(&self.multi, prefix.to_string(), depth);
         Arc::new(IndicatifSink {
             bar: child_bar,
             multi: self.multi.clone(),
+            depth,
         })
     }
 }
@@ -69,13 +79,43 @@ pub fn make_multi() -> Arc<MultiProgress> {
 /// Starts as an indeterminate spinner with `{prefix}`; switches to a
 /// determinate bar once the worker calls `set_length`.
 pub fn make_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
+    make_bar_at_depth(multi, prefix, 0)
+}
+
+/// Like [`make_bar`] but indents the prefix column by `depth` levels so
+/// nested child bars visually belong to their parent. Depth 0 matches
+/// `make_bar` exactly; each level adds two leading spaces and shrinks
+/// the prefix field by the same amount, keeping every column aligned.
+pub fn make_bar_at_depth(
+    multi: &MultiProgress,
+    prefix: impl Into<String>,
+    depth: usize,
+) -> ProgressBar {
+    const PREFIX_COL_WIDTH: usize = 14;
+    const INDENT_PER_DEPTH: usize = 2;
+
     let bar = multi.add(ProgressBar::new_spinner());
+    // Bound depth so the prefix field never shrinks below a usable
+    // width even if some caller spawns deeply nested children.
+    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
+    let prefix_width = PREFIX_COL_WIDTH - indent;
+    // For nested bars, replace the final two indent columns with a
+    // tree marker ("↳ ") so the parent/child relationship reads at a
+    // glance. Column count is unchanged — "↳ " renders as two cells.
+    let leading = if depth == 0 {
+        String::new()
+    } else {
+        let mut s = " ".repeat(indent.saturating_sub(2));
+        s.push_str("↳ ");
+        s
+    };
+    let template = format!(
+        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}}/{{len:5}} [{{wide_bar}}] {{per_sec:>10}} {{msg}}"
+    );
     bar.set_style(
-        ProgressStyle::with_template(
-            "{prefix:>14} {spinner} {pos:>5}/{len:5} [{wide_bar}] {per_sec:>10} {msg}",
-        )
-        .unwrap()
-        .progress_chars("=> "),
+        ProgressStyle::with_template(&template)
+            .unwrap()
+            .progress_chars("=> "),
     );
     bar.set_prefix(prefix.into());
     bar.enable_steady_tick(std::time::Duration::from_millis(120));

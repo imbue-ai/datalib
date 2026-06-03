@@ -145,9 +145,58 @@ impl RawDb {
 
     /// Wipe every per-row table so the next fetch re-downloads
     /// everything from upstream. See
-    /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
+    /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`]. Also
+    /// clears the slack-scoped manifest-sweep markers in
+    /// `sync_scope_state` so the next run actually refetches the
+    /// channel/user lists rather than honoring a stale TTL skip.
     pub async fn reset(&self) -> Result<()> {
-        dr::truncate_data_tables(&self.pool, DATA_TABLES).await
+        dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope LIKE 'slack:sweep:%'")
+            .execute(&self.pool)
+            .await
+            .context("clear slack manifest sweep markers on reset")?;
+        Ok(())
+    }
+
+    /// Age of the most recent successful sweep for `key` (e.g.
+    /// `"channels:members_only=false:archived=true"`), or `None` if no
+    /// sweep has ever completed. Backed by the shared
+    /// `sync_scope_state` table; the scope string is namespaced as
+    /// `slack:sweep:<key>` so `reset()` can wipe all slack entries with
+    /// a single `LIKE`.
+    pub async fn manifest_sweep_age(&self, key: &str) -> Result<Option<chrono::Duration>> {
+        let scope = format!("slack:sweep:{key}");
+        let row = sqlx::query("SELECT last_seen_at FROM sync_scope_state WHERE scope = ?")
+            .bind(&scope)
+            .fetch_optional(&self.pool)
+            .await
+            .context("select manifest sweep marker")?;
+        let Some(row) = row else { return Ok(None) };
+        let s: String = row
+            .try_get("last_seen_at")
+            .context("read manifest sweep timestamp")?;
+        let dt = chrono::DateTime::parse_from_rfc3339(&s)
+            .with_context(|| format!("parse manifest sweep timestamp {s:?}"))?
+            .with_timezone(&Utc);
+        Ok(Some(Utc::now() - dt))
+    }
+
+    /// Stamp `key`'s sweep as completed at `now()`. Call this only
+    /// after every page of the sweep has been written, so an interrupted
+    /// sweep doesn't poison the TTL check.
+    pub async fn record_manifest_sweep(&self, key: &str) -> Result<()> {
+        let scope = format!("slack:sweep:{key}");
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?) \
+             ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
+        )
+        .bind(&scope)
+        .bind(&now)
+        .execute(&self.pool)
+        .await
+        .context("record manifest sweep marker")?;
+        Ok(())
     }
 
     pub async fn start_run(&self, config: &Value) -> Result<i64> {

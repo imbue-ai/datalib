@@ -36,6 +36,16 @@ use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 pub const DEFAULT_SINCE: &str = "2024-01-01";
 pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 
+/// Max age of a successful channel/user list sweep before we refetch.
+/// Slack `conversations.list` is Tier-2 rate-limited (~20 req/min), so
+/// a workspace with thousands of channels costs tens of seconds per
+/// refetch even on warm-cache runs. Channels and users change on a
+/// human timescale; six hours of staleness is fine for an ETL whose
+/// downstream consumers re-resolve names from the cached `channels` /
+/// `users` tables anyway. `--reset-and-redownload` bypasses this by
+/// clearing the sweep markers in `RawDb::reset`.
+pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
+
 // ---------------------------------------------------------------------------
 // Per-method drivers.
 // ---------------------------------------------------------------------------
@@ -58,7 +68,9 @@ async fn call(method: &str, params: &BTreeMap<String, String>) -> Result<Value> 
 }
 
 #[instrument(skip_all)]
-async fn fetch_self(db: &RawDb) -> Result<String> {
+async fn fetch_self(db: &RawDb, progress: &frankweiler_etl::progress::Progress) -> Result<String> {
+    progress.set_message("auth.test");
+    let t0 = std::time::Instant::now();
     let resp = call(M_AUTH_TEST, &empty_params()).await?;
     db.upsert_workspace(&resp).await?;
     let team_id = resp
@@ -66,18 +78,44 @@ async fn fetch_self(db: &RawDb) -> Result<String> {
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("auth.test response missing team_id"))?
         .to_string();
+    info!(
+        event = "slack_fetch_self_done",
+        team_id = %team_id,
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+    );
     Ok(team_id)
 }
 
 /// Fetch every channel listing page, upserting each channel into the
 /// DB along the way. Returns the set of channels visible to this run
-/// (after the `members_only`/`include_archived` filter).
-#[instrument(skip(db))]
+/// (after the `members_only`/`include_archived` filter). Skips the
+/// sweep entirely if the previous sweep with the same filter completed
+/// within `MANIFEST_TTL`.
+#[instrument(skip(db, progress))]
 async fn fetch_channels(
     db: &RawDb,
     members_only: bool,
     include_archived: bool,
+    progress: &frankweiler_etl::progress::Progress,
 ) -> Result<Vec<(String, Option<String>)>> {
+    let sweep_key = format!("channels:archived={include_archived}");
+    if let Some(age) = db.manifest_sweep_age(&sweep_key).await? {
+        if age < MANIFEST_TTL {
+            let age_s = age.num_seconds().max(0);
+            info!(
+                event = "slack_fetch_channels_skipped",
+                reason = "ttl",
+                age_s = age_s,
+                ttl_s = MANIFEST_TTL.num_seconds(),
+            );
+            progress.set_message(&format!(
+                "conversations.list cached ({age_s}s old, TTL {}s)",
+                MANIFEST_TTL.num_seconds()
+            ));
+            return db.channels_for_fetch(members_only, include_archived).await;
+        }
+    }
+
     let mut params = BTreeMap::new();
     params.insert(
         "exclude_archived".to_string(),
@@ -89,7 +127,11 @@ async fn fetch_channels(
         "public_channel,private_channel".to_string(),
     );
 
+    let t0 = std::time::Instant::now();
+    progress.set_message("conversations.list page 1");
     let mut cursor: Option<String> = None;
+    let mut pages = 0u64;
+    let mut total = 0usize;
     loop {
         let mut p = params.clone();
         if let Some(c) = &cursor {
@@ -98,22 +140,54 @@ async fn fetch_channels(
         let resp = call(M_CHANNELS, &p).await?;
         if let Some(arr) = resp.get("channels").and_then(|v| v.as_array()) {
             db.upsert_channels(arr).await?;
+            total += arr.len();
         }
+        pages += 1;
+        progress.set_message(&format!(
+            "conversations.list page {pages} ({total} channels so far)"
+        ));
         cursor = next_cursor(&resp);
         if cursor.is_none() || resp.get("has_more").and_then(|v| v.as_bool()) == Some(false) {
             break;
         }
     }
+    info!(
+        event = "slack_fetch_channels_done",
+        pages = pages,
+        channels = total,
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+    );
+    db.record_manifest_sweep(&sweep_key).await?;
     db.channels_for_fetch(members_only, include_archived).await
 }
 
 #[instrument(skip_all)]
-async fn fetch_users(db: &RawDb) -> Result<usize> {
+async fn fetch_users(db: &RawDb, progress: &frankweiler_etl::progress::Progress) -> Result<usize> {
+    let sweep_key = "users";
+    if let Some(age) = db.manifest_sweep_age(sweep_key).await? {
+        if age < MANIFEST_TTL {
+            let age_s = age.num_seconds().max(0);
+            info!(
+                event = "slack_fetch_users_skipped",
+                reason = "ttl",
+                age_s = age_s,
+                ttl_s = MANIFEST_TTL.num_seconds(),
+            );
+            progress.set_message(&format!(
+                "users.list cached ({age_s}s old, TTL {}s)",
+                MANIFEST_TTL.num_seconds()
+            ));
+            return Ok(0);
+        }
+    }
+
     let mut base = BTreeMap::new();
     base.insert("limit".to_string(), "200".to_string());
     let t0 = std::time::Instant::now();
+    progress.set_message("users.list page 1");
     let mut cursor: Option<String> = None;
     let mut count = 0usize;
+    let mut pages = 0u64;
     loop {
         let mut p = base.clone();
         if let Some(c) = &cursor {
@@ -124,12 +198,22 @@ async fn fetch_users(db: &RawDb) -> Result<usize> {
             db.upsert_users(arr).await?;
             count += arr.len();
         }
+        pages += 1;
+        progress.set_message(&format!("users.list page {pages} ({count} users so far)"));
         cursor = next_cursor(&resp);
         if cursor.is_none() {
             break;
         }
     }
-    events::indexed_batch("users", count, t0.elapsed().as_millis() as u64);
+    let elapsed_ms = t0.elapsed().as_millis() as u64;
+    events::indexed_batch("users", count, elapsed_ms);
+    info!(
+        event = "slack_fetch_users_done",
+        pages = pages,
+        users = count,
+        elapsed_ms = elapsed_ms,
+    );
+    db.record_manifest_sweep(sweep_key).await?;
     Ok(count)
 }
 
@@ -535,8 +619,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run_id = db.start_run(&run_config).await?;
 
+    let t_scan = std::time::Instant::now();
     let channel_latest_ts = db.latest_ts_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
+    info!(
+        event = "slack_resume_scan_done",
+        channels_with_history = channel_latest_ts.len(),
+        threads_with_replies = latest_reply_map.len(),
+        elapsed_ms = t_scan.elapsed().as_millis() as u64,
+    );
 
     let mut grand = FetchSummary {
         messages: 0,
@@ -545,10 +636,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let work = async {
-        let team_id = fetch_self(&db).await?;
+        // Nested bar covers everything that happens before the
+        // per-channel loop starts — auth, channel list, user list —
+        // so the user can see what stage we're stuck in.
+        let setup = opts.progress.child("setup");
+        setup.set_message("starting");
+        let t_setup = std::time::Instant::now();
+        let team_id = fetch_self(&db, &setup).await?;
         let visible_channels =
-            fetch_channels(&db, opts.members_only, opts.channels.is_some()).await?;
-        fetch_users(&db).await?;
+            fetch_channels(&db, opts.members_only, opts.channels.is_some(), &setup).await?;
+        fetch_users(&db, &setup).await?;
+        setup.finish(&format!(
+            "setup done in {}ms",
+            t_setup.elapsed().as_millis() as u64
+        ));
 
         let targets: Vec<(String, String)> = match &opts.channels {
             Some(names) => {
