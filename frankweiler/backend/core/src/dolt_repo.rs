@@ -102,13 +102,19 @@ impl DoltRepo {
         }
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
             .create_if_missing(true)
-            // WAL gives readers + writers concurrency without our own
-            // connection pinning. NORMAL sync is fine — the file is the
-            // source of truth, not an in-flight transaction log.
+            // WAL / NORMAL synchronous are no-ops on doltlite (its
+            // chunk store ignores the SQLite pager journal), but
+            // harmless to leave as documentation of intent for
+            // stock-libsqlite3 builds (e.g. cargo-only unit tests).
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+        // Pool size 1: doltlite's per-connection HEAD pointer means
+        // pool sizes >1 produce silent dolt_log dropouts and
+        // `commit conflict` errors on interleaved writes. See
+        // `frankweiler_etl::doltlite_raw` module docs for the full
+        // story (dolt-team-confirmed advice).
         let pool = SqlitePoolOptions::new()
-            .max_connections(8)
+            .max_connections(1)
             .connect_with(opts)
             .await?;
         let repo = Self::from_pool(pool, root).await;

@@ -925,23 +925,24 @@ async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
     // for doltlite — see the comment at that callsite.
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?
         .create_if_missing(true);
-    // Doltlite serializes writes at the file level — only ONE writer
-    // can advance the chunk store at any time. The orchestrator already
-    // enforces this in Rust via `WriteLock` (one shared mutex queueing
-    // every per-source translate worker), and the translate phase
-    // batches all of its writes into ONE held connection across a
-    // single BEGIN ... COMMIT.
+    // Pool size 1: doltlite's HEAD pointer + working tree are
+    // per-connection, so multiple pool connections produce silent
+    // dolt_log dropouts and `commit conflict` errors on interleaved
+    // writes. See `frankweiler_etl::doltlite_raw` module docs for
+    // the full story (and the dolt-team-confirmed advice).
     //
-    // We size the pool at 2 anyway: the WriteLock owns the one writer
-    // connection for the duration of translate, and the SIGINT handler
-    // needs a SECOND connection to issue its best-effort `dolt_commit`
-    // against the file's pre-translate working set. (At 1 the
-    // interrupt handler would block forever on conn-acquire.) Reads
-    // at the start of the run — `load_fingerprints`, `load_cursors` —
-    // happen BEFORE `begin_transaction`, so they fit in the same slot
-    // the writer later takes.
+    // Implication for the SIGINT handler: while the translate
+    // writer holds the connection, a Ctrl-C can't acquire the pool
+    // to issue its best-effort `dolt_commit` against the
+    // pre-translate working set. That's fine — sqlx drops the
+    // writer's connection on shutdown, doltlite rolls back the
+    // in-flight transaction, and the next run picks up cleanly
+    // (every translate write is idempotent). If you ever need
+    // an actually-async-safe interrupt commit, open a separate
+    // one-shot connection from the SIGINT path rather than
+    // widening the pool.
     SqlitePoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect_with(opts)
         .await
         .with_context(|| format!("open doltlite at {}", db_path.display()))

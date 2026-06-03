@@ -154,8 +154,10 @@ async fn reset_and_redownload_preserves_data_tables() {
     .unwrap();
     assert_eq!(s1.fetched, 2, "first run should fetch 2 conversations");
 
+    // Pool size 1 is the only safe choice for doltlite (per-connection
+    // HEAD pointer; see `frankweiler_etl::doltlite_raw` module docs).
     let pool = SqlitePoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect(&format!("sqlite://{}", db_path_for(&out_db).display()))
         .await
         .unwrap();
@@ -196,8 +198,10 @@ async fn reset_and_redownload_preserves_data_tables() {
         "after reset the second run should refetch every conversation"
     );
 
+    // Pool size 1 is the only safe choice for doltlite (per-connection
+    // HEAD pointer; see `frankweiler_etl::doltlite_raw` module docs).
     let pool = SqlitePoolOptions::new()
-        .max_connections(2)
+        .max_connections(1)
         .connect(&format!("sqlite://{}", db_path_for(&out_db).display()))
         .await
         .unwrap();

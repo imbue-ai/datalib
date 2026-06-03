@@ -68,6 +68,37 @@
 //! `sync_runs.config` / `summary` and `endpoint_shapes.example_*`
 //! stay as plain TEXT — they're tiny single-row bookkeeping where
 //! debug-friendly `sqlite3` SELECT matters more than parse perf.
+//!
+//! ─────────────────────────────────────────────────────────────────
+//!
+//! ## Connection pool size: ALWAYS 1 for doltlite files
+//!
+//! Doltlite's session has a per-connection HEAD pointer / working
+//! set. Connecting through a `SqlitePool` with
+//! `max_connections > 1` means individual statements in your
+//! Rust code can land on different pool connections, each of which
+//! sees its own working tree. Symptoms we've hit in practice:
+//!
+//!   * a `SELECT dolt_commit('-Am', '...')` that returns a fresh
+//!     hash but doesn't appear in the next `SELECT message FROM
+//!     dolt_log()` (read landed on a connection whose HEAD hadn't
+//!     refreshed), and
+//!   * `commit conflict: another connection committed to this
+//!     branch. Please retry your transaction.` errors when
+//!     interleaved INSERT/DELETE/`dolt_commit` calls happen to be
+//!     scheduled across two connections.
+//!
+//! The dolt maintainers confirm (2026-06-03 conversation): "we have
+//! the problem in Dolt too — connection pools are tricky, you can
+//! get around it by setting the pool size to 1". For our workload
+//! that's the right answer anyway: every doltlite file in this
+//! codebase has at most one writer at a time and one reader at a
+//! time, and the [`crate::load::WriteLock`] already serializes
+//! cross-task writers at the application layer.
+//!
+//! [`open`] therefore pins `max_connections(1)`. All other code
+//! that opens a `SqlitePool` against a `.doltlite_db` file MUST
+//! do the same. If you find a callsite that doesn't, fix it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -261,8 +292,13 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
         .create_if_missing(true);
+    // Pool size 1: doltlite's HEAD pointer + working tree are
+    // per-connection. See the "Connection pool size" section in this
+    // module's docs for the full story. Multiple pool connections
+    // produce silent dolt_log dropouts and `commit conflict` errors
+    // on interleaved writes.
     let pool = SqlitePoolOptions::new()
-        .max_connections(4)
+        .max_connections(1)
         .connect_with(opts)
         .await
         .context("open sqlite pool")?;
@@ -1161,5 +1197,164 @@ mod tests {
         assert!(row.0.is_some(), "fetched_at should be set on success");
         assert_eq!(row.1, 1);
         assert!(row.2.is_none(), "last_error should be cleared on success");
+    }
+
+    /// Regression guard for the "always pool size 1 against
+    /// doltlite" rule (see this module's docs for the full story
+    /// and the dolt-team-confirmed advice).
+    ///
+    /// At `max_connections=1`: a `dolt_commit` followed by a
+    /// `dolt_log()` query produces a consistent view — the new
+    /// commit's message appears in the log. ASSERT this — if it
+    /// ever stops being true, our connection-pool assumption has
+    /// regressed.
+    ///
+    /// At `max_connections=2` and `4`: we also exercise the path
+    /// and just OBSERVE the failure mode (via eprintln) so a
+    /// future doltlite upgrade can be diff'd against the
+    /// historical shape. Two outcomes we've seen empirically:
+    ///   - `commit conflict: another connection committed to
+    ///     this branch` errors on the second commit,
+    ///   - the commit succeeding but its message not appearing in
+    ///     `dolt_log()` (stale-HEAD reader connection).
+    /// We DO NOT assert on these — that'd codify a bug as a test
+    /// requirement.
+    ///
+    /// A skip-out path covers stock libsqlite3 (cargo-only runs).
+    #[tokio::test]
+    async fn dolt_log_visibility_across_pool_sizes() {
+        for max_conns in [1u32, 2, 4] {
+            let d = tempdir().unwrap();
+            let db_path = d.path().join(format!("probe_{max_conns}.doltlite_db"));
+            // Apply DDL (incl. shared blobs) via the normal open() so
+            // we get the canonical shape, then close and re-open with
+            // a tunable pool size.
+            let _ = open_test(&db_path).await;
+
+            let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+                .unwrap()
+                .create_if_missing(true);
+            let pool = SqlitePoolOptions::new()
+                .max_connections(max_conns)
+                .connect_with(opts)
+                .await
+                .unwrap();
+
+            if !has_dolt_extensions(&pool).await {
+                eprintln!("[pool_probe] stock libsqlite3 — skipping (max_conns={max_conns})");
+                continue;
+            }
+            // Per-session committer identity.
+            sqlx::query("SELECT dolt_config('user.name', 'pool-probe')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("SELECT dolt_config('user.email', 'pool-probe@x')")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+            // Helper closure: stage a write + return any sqlx error
+            // instead of panicking, so we can observe the failure
+            // mode at each pool size.
+            let try_exec = |sql: &'static str| {
+                let pool = pool.clone();
+                async move {
+                    sqlx::query(sql)
+                        .execute(&pool)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                }
+            };
+
+            // Stage row + sidecar.
+            let mut errs: Vec<String> = Vec::new();
+            for sql in [
+                "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at) VALUES ('w1', '2026-06-03T00:00:00Z')",
+            ] {
+                if let Err(e) = try_exec(sql).await {
+                    errs.push(format!("setup `{sql}`: {e}"));
+                }
+            }
+
+            // First commit.
+            let h1: Result<Option<String>, String> =
+                sqlx::query_scalar("SELECT dolt_commit('-Am', 'pool-probe-first')")
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| e.to_string());
+
+            // Reset: delete + reinsert IDENTICAL data, plus new
+            // fetched_at on the sidecar — the integration-test shape.
+            for sql in [
+                "DELETE FROM widgets",
+                "DELETE FROM widgets_bookkeeping",
+                "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at) VALUES ('w1', '2026-06-03T00:00:05Z')",
+            ] {
+                if let Err(e) = try_exec(sql).await {
+                    errs.push(format!("reset `{sql}`: {e}"));
+                }
+            }
+
+            // Second commit — the call that errored at max_conns>=2.
+            let h2: Result<Option<String>, String> =
+                sqlx::query_scalar("SELECT dolt_commit('-Am', 'pool-probe-second')")
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|e| e.to_string());
+
+            // dolt_log readback.
+            let messages: Result<Vec<String>, String> =
+                sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date ASC")
+                    .fetch_all(&pool)
+                    .await
+                    .map_err(|e| e.to_string());
+
+            eprintln!(
+                "[pool_probe max_conns={max_conns}]\n  \
+                 setup_errors={errs:?}\n  \
+                 h1={h1:?}\n  \
+                 h2={h2:?}\n  \
+                 messages={messages:?}"
+            );
+
+            // Regression guard only for the supported configuration.
+            if max_conns == 1 {
+                assert!(
+                    errs.is_empty(),
+                    "max_conns=1: no setup errors should fire; got {errs:?}"
+                );
+                let h1 = h1
+                    .clone()
+                    .expect("max_conns=1: first dolt_commit should not error")
+                    .expect("max_conns=1: first dolt_commit should return a hash");
+                let h2 = h2
+                    .clone()
+                    .expect("max_conns=1: second dolt_commit should not error")
+                    .expect("max_conns=1: second dolt_commit should return a hash");
+                assert_ne!(
+                    h1, h2,
+                    "max_conns=1: second commit hash should differ from first"
+                );
+                let msgs = messages
+                    .clone()
+                    .expect("max_conns=1: dolt_log read should succeed");
+                assert!(
+                    msgs.iter().any(|m| m == "pool-probe-first"),
+                    "max_conns=1: first commit message missing from dolt_log: {msgs:?}"
+                );
+                assert!(
+                    msgs.iter().any(|m| m == "pool-probe-second"),
+                    "max_conns=1: second commit message missing from dolt_log: {msgs:?}"
+                );
+            }
+            // For max_conns ∈ {2, 4} we deliberately don't assert —
+            // the eprintln above logs whatever doltlite happens to do.
+
+            pool.close().await;
+        }
     }
 }

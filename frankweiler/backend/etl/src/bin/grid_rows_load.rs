@@ -79,8 +79,12 @@ async fn main() -> Result<()> {
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
+    // Pool size 1: doltlite's per-connection HEAD pointer means
+    // pool sizes >1 produce silent dolt_log dropouts and
+    // `commit conflict` errors on interleaved writes. See
+    // `frankweiler_etl::doltlite_raw` module docs.
     let pool = SqlitePoolOptions::new()
-        .max_connections(4)
+        .max_connections(1)
         .connect_with(opts)
         .await
         .context("open doltlite file")?;

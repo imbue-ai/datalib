@@ -70,6 +70,25 @@ rust_test(
     ],
 )
 
+# Integration test for --reset-and-redownload: synth a playback fixture,
+# fetch, reset, refetch, assert per-row data-table equality. Verifies
+# PK design is stable across re-downloads.
+rust_test(
+    name = "anthropic_reset_and_redownload",
+    srcs = ["tests/reset_and_redownload.rs"],
+    crate_root = "tests/reset_and_redownload.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
 rust_test(
     name = "anthropic_unittests",
     size = "small",
