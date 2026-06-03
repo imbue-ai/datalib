@@ -16,6 +16,7 @@ frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 frankweiler-etl-anthropic = { path = "../etl/providers/anthropic" }
 frankweiler-etl-beeper = { path = "../etl/providers/beeper" }
 frankweiler-etl-chatgpt = { path = "../etl/providers/chatgpt" }
+frankweiler-etl-contacts = { path = "../etl/providers/contacts" }
 frankweiler-etl-slack = { path = "../etl/providers/slack" }
 frankweiler-etl-github = { path = "../etl/providers/github" }
 frankweiler-etl-gitlab = { path = "../etl/providers/gitlab" }

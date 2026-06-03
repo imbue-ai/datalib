@@ -94,6 +94,26 @@ pub struct ChatgptApiSync {
     pub conv_uuids: Vec<String>,
 }
 
+/// Tunables for the CardDAV provider (Apple, Fastmail, Google
+/// contacts — see `frankweiler_etl_contacts`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CarddavSync {
+    /// Server URL. Discovery walks
+    /// `current-user-principal` → `addressbook-home-set` from here.
+    /// Examples:
+    ///   - `https://contacts.icloud.com/`
+    ///   - `https://carddav.fastmail.com/`
+    ///   - `https://www.googleapis.com/carddav/v1/principals/`
+    pub server_url: String,
+    /// Restrict the run to the named addressbooks (matched against
+    /// each addressbook's `displayname` returned in PROPFIND).
+    /// `None`/missing = sync every addressbook the server lists
+    /// under the principal.
+    #[serde(default)]
+    pub addressbooks: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SlackApiSync {
@@ -263,6 +283,12 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<BeeperSync>,
     },
+    Carddav {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<CarddavSync>,
+    },
 }
 
 impl SourceConfig {
@@ -275,7 +301,8 @@ impl SourceConfig {
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
-            | SourceConfig::Beeper { common, .. } => common,
+            | SourceConfig::Beeper { common, .. }
+            | SourceConfig::Carddav { common, .. } => common,
         }
     }
 
@@ -299,6 +326,7 @@ impl SourceConfig {
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
             SourceConfig::Beeper { .. } => "beeper",
+            SourceConfig::Carddav { .. } => "carddav",
         }
     }
 
@@ -314,6 +342,7 @@ impl SourceConfig {
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
+            SourceConfig::Carddav { sync, .. } => sync.is_some(),
         }
     }
 

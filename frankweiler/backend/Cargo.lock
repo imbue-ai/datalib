@@ -1122,6 +1122,7 @@ dependencies = [
  "frankweiler-etl-anthropic",
  "frankweiler-etl-beeper",
  "frankweiler-etl-chatgpt",
+ "frankweiler-etl-contacts",
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",
  "frankweiler-etl-notion",

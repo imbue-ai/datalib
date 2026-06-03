@@ -529,7 +529,7 @@
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
           "REPO_MAPPING:rules_rust+,rules_rust rules_rust+",
-          "FILE:@@//frankweiler/backend/Cargo.lock d0d9f59dc9040bee356023a32d4074f11352fd4835d58113d1838a12a42cd3e4",
+          "FILE:@@//frankweiler/backend/Cargo.lock e53017098e950b59fc809456870de5b1a02c2fa4030a7109ce950f51dc891027",
           "FILE:@@//frankweiler/backend/Cargo.toml 1b704e31c23582ec7c568757dcb06b0e38b8d81c4266fe664febd0b5c0e1693d",
           "FILE:@@//frankweiler/backend/schema/Cargo.toml 4a9a9724eaf4bbc8ecc9f487f8bdf9c6474b067a61422dd9808230067d417420",
           "FILE:@@//frankweiler/backend/core/Cargo.toml f06356432adfa2802a62e07998f680bccb8c3adcac998c94ee59161a50455538",
@@ -544,7 +544,7 @@
           "FILE:@@//frankweiler/backend/etl/providers/notion/Cargo.toml d345245b76fc329593f297c1580e93248e158fc74a44507db9cae830cd78cf47",
           "FILE:@@//frankweiler/backend/etl/providers/slack/Cargo.toml 9b196da916ed0eb754c4fb71f71dc22e969c2833ef32af791d8d06369f89aa4e",
           "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml bff8394d593bf2fddb7c6a9af7b3a6399c2b21ac526e46178d221de44e1b454b",
-          "FILE:@@//frankweiler/backend/sync/Cargo.toml 8c6b6de8a6b6c24c48d1ac8c56a74c5f0a1fd8e6d31b903135d387cede89e3cc",
+          "FILE:@@//frankweiler/backend/sync/Cargo.toml e2e65d797572cd213640a7f7fa5a707e375c1e1e5e53eb5f3bc975cff703428d",
           "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1",
           "FILE:@@//frankweiler/backend/etl/providers/beeper/Cargo.toml c55ebeb21188746104645825ad569a88eb4b03e1da7691367d4673ff5bfa7c9c"
         ],

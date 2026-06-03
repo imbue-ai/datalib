@@ -36,6 +36,7 @@ rust_binary(
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",
         "//frankweiler/backend/etl/providers/beeper:frankweiler_etl_beeper",
+        "//frankweiler/backend/etl/providers/contacts:frankweiler_etl_contacts",
         "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
         "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
         "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",

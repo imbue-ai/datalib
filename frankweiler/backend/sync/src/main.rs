@@ -56,8 +56,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync, GitlabApiSync,
-    NotionApiSync, SlackApiSync, SourceConfig,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
+    GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -1113,6 +1113,9 @@ enum ExtractKind {
     Beeper {
         sync: BeeperSync,
     },
+    Carddav {
+        sync: CarddavSync,
+    },
 }
 
 impl ExtractPlan {
@@ -1151,6 +1154,9 @@ impl ExtractPlan {
                 playback_root: playback_root.map(|p| p.to_path_buf()),
             },
             SourceConfig::Beeper { sync, .. } => ExtractKind::Beeper {
+                sync: sync.clone().unwrap_or_default(),
+            },
+            SourceConfig::Carddav { sync, .. } => ExtractKind::Carddav {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
@@ -1327,6 +1333,27 @@ impl ExtractPlan {
                     s.blob_errors,
                     s.events_enriched,
                     s.events_orphaned,
+                )
+            }),
+            ExtractKind::Carddav { sync } => frankweiler_etl_contacts::extract::fetch(
+                frankweiler_etl_contacts::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    server_url: sync.server_url.clone(),
+                    addressbooks: sync.addressbooks.clone(),
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
+                    s.addressbooks,
+                    s.contacts_new,
+                    s.contacts_updated,
+                    s.contacts_deleted,
+                    s.errors,
+                    s.requests,
                 )
             }),
             ExtractKind::Notion {
@@ -1624,6 +1651,15 @@ fn translate_source(
             .context("beeper render_all")
             .map(|_| ())
         }
+        SourceConfig::Carddav { .. } => {
+            // The carddav translate path (vCard → grid rows) lands
+            // in a follow-up commit; for now the extract just
+            // populates the raw store and translate is a no-op.
+            eprintln!(
+                "[translate] {name} (carddav): skipped (translate not yet implemented)"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -1649,6 +1685,17 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
             SourceConfig::GitlabApi { .. } => Box::new(GitlabSynth::new(input.clone())),
             SourceConfig::NotionApi { .. } => Box::new(NotionSynth::new(input.clone())),
             SourceConfig::Beeper { .. } => Box::new(BeeperSynth::new(input.clone())),
+            SourceConfig::Carddav { .. } => {
+                // No synthesizer yet — the carddav translate path is
+                // a follow-up. Skip synth quietly so a config that
+                // mixes carddav with synth-supported sources doesn't
+                // error out.
+                eprintln!(
+                    "[synth] {} (carddav): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
         };
         let report = synth
             .synthesize(out)
