@@ -80,15 +80,20 @@ jobs:
           external-cache: true
 
       # Install the Linux-only build dependencies the macOS runner gets
-      # for free via Xcode CLT. So far:
+      # for free via Xcode CLT / Homebrew. So far:
+      #   cmake        — boring-sys2's build script shells out to it
+      #                  to build BoringSSL.
       #   libclang-dev — bindgen (in libsqlite3-sys's build script)
       #                  uses libclang to parse C headers.
-      # Skipped on macOS; the runner already has clang via the SDK.
+      # Skipped on macOS; that runner already has both via the SDK +
+      # Homebrew (`brew install bazel cmake` per README).
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libclang-dev
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            libclang-dev
 
       - name: Show toolchain versions
         run: |
