@@ -1,0 +1,38 @@
+[package]
+name = "frankweiler-etl-contacts"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_contacts"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-schema = { path = "../../../schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
+uuid = { workspace = true, features = ["v5"] }
+sqlx = { workspace = true }
+tracing = "0.1"
+# quick-xml parses the WebDAV multistatus responses we get back from
+# `PROPFIND` / `REPORT`. We use the `Reader` event API rather than
+# `serde_xmlrs` deserialization because multistatus payloads have
+# variable namespace prefixes (`d:` vs `D:`) and our parsing strategy
+# is "walk events, fish out the leaves I care about" — cheaper and
+# more forgiving than deriving a strict schema for what is in
+# practice a quirky WebDAV server zoo.
+quick-xml = "0.36"
+# Lightweight base64 codec — vCard `PHOTO` properties inline binary
+# data as base64 in line-folded text. We decode + store the bytes in
+# the shared `blobs` table.
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

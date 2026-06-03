@@ -33,10 +33,16 @@ use crate::latchkey::latchkey_tokio_command;
 
 /// HTTP method. We only model the methods any provider currently issues;
 /// extend as needed.
+///
+/// `Propfind` / `Report` are WebDAV verbs (RFCs 4918 + 6578) used by
+/// the CardDAV provider for collection discovery and sync-collection
+/// REPORTs. curl forwards them via `-X <METHOD>` like POST does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HttpMethod {
     Get,
     Post,
+    Propfind,
+    Report,
 }
 
 impl HttpMethod {
@@ -44,7 +50,16 @@ impl HttpMethod {
         match self {
             HttpMethod::Get => "GET",
             HttpMethod::Post => "POST",
+            HttpMethod::Propfind => "PROPFIND",
+            HttpMethod::Report => "REPORT",
         }
+    }
+
+    /// True for methods that get a `-X <METHOD>` flag — i.e. anything
+    /// other than the default `GET`. Keeps the curl invocation in
+    /// [`live::send`] from having to enumerate the verbs by name.
+    fn needs_x_flag(self) -> bool {
+        !matches!(self, HttpMethod::Get)
     }
 }
 
@@ -210,8 +225,8 @@ mod live {
         // so headers and body are cleanly separated (no need to split
         // on a CRLFCRLF boundary).
         cmd.args(["-D", "-", "-o"]).arg(&body_path);
-        if req.method == HttpMethod::Post {
-            cmd.args(["-X", "POST"]);
+        if req.method.needs_x_flag() {
+            cmd.args(["-X", req.method.as_str()]);
         }
         for (k, v) in &req.headers {
             cmd.arg("-H").arg(format!("{}: {}", k, v));

@@ -941,6 +941,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-contacts"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "frankweiler-etl",
+ "frankweiler-schema",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-github"
 version = "0.4.1"
 dependencies = [
@@ -2392,6 +2412,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
