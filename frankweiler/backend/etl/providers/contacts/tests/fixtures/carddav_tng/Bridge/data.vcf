@@ -1,0 +1,11 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-data
+FN:Data
+N:;Data;;Lt. Commander;
+ORG:Starfleet;USS Enterprise NCC-1701-D;Operations
+TITLE:Operations Officer
+EMAIL;TYPE=WORK:data@enterprise.starfleet
+NOTE:Soong-type android. Positronic. Probability of friendship: 1.0.
+REV:2370-02-11T00:00:00Z
+END:VCARD

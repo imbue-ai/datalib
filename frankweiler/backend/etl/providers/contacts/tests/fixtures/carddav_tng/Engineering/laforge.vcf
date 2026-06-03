@@ -1,0 +1,12 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:tng-laforge
+FN:Geordi La Forge
+N:La Forge;Geordi;;Lt. Commander;
+ORG:Starfleet;USS Enterprise NCC-1701-D;Engineering
+TITLE:Chief Engineer
+EMAIL;TYPE=WORK:glaforge@enterprise.starfleet
+TEL;TYPE=WORK:+1-555-WARP-FAC
+NOTE:If we modulate the deflector array we should be able to render this contact correctly.
+REV:2370-09-04T00:00:00Z
+END:VCARD

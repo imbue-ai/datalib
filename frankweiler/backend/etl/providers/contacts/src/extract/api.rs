@@ -496,6 +496,71 @@ pub fn vcard_rev(vcard: &str) -> Option<String> {
     extract_property(vcard, "REV")
 }
 
+/// All occurrences of a vCard property, in document order. vCards
+/// can repeat properties (multiple emails, phones, addresses) and
+/// translate cares about each one individually.
+pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
+    let unfolded = unfold_vcard_lines(vcard);
+    let mut out = Vec::new();
+    for line in unfolded.lines() {
+        let head_end = line
+            .find(|c: char| c == ':' || c == ';')
+            .unwrap_or(line.len());
+        let prop = &line[..head_end];
+        if !prop.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let Some(colon) = line.find(':') else {
+            continue;
+        };
+        let head = &line[..colon];
+        let value = line[colon + 1..].trim().to_string();
+        if value.is_empty() {
+            continue;
+        }
+        // Parse the parameter block between `;` separators after the
+        // property name. We only surface a few keys callers care
+        // about; everything else is left in `raw_params`.
+        let mut params: Vec<(String, String)> = Vec::new();
+        for chunk in head.split(';').skip(1) {
+            if let Some((k, v)) = chunk.split_once('=') {
+                params.push((k.trim().to_string(), v.trim().to_string()));
+            } else if !chunk.is_empty() {
+                params.push(("TYPE".into(), chunk.trim().to_string()));
+            }
+        }
+        out.push(VcardProp { value, params });
+    }
+    out
+}
+
+/// One occurrence of a vCard property, with its parameters preserved
+/// so translate can render `EMAIL;TYPE=work:p@…` as "work email"
+/// rather than just "email".
+#[derive(Debug, Clone)]
+pub struct VcardProp {
+    pub value: String,
+    pub params: Vec<(String, String)>,
+}
+
+impl VcardProp {
+    /// First-matching parameter value (case-insensitive on key).
+    /// Returns `None` if the parameter isn't set on this occurrence.
+    pub fn param(&self, key: &str) -> Option<&str> {
+        self.params
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// `TYPE=` label, with the bare-token form (`EMAIL;HOME:…`) folded
+    /// in as `TYPE=HOME`. Used by translate to label a multi-valued
+    /// property. Lowercase for stability across servers.
+    pub fn type_label(&self) -> Option<String> {
+        self.param("TYPE").map(|s| s.to_ascii_lowercase())
+    }
+}
+
 fn extract_property(vcard: &str, name: &str) -> Option<String> {
     let unfolded = unfold_vcard_lines(vcard);
     for line in unfolded.lines() {

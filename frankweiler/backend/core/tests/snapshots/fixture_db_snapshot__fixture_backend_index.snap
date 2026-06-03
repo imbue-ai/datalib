@@ -5,6 +5,34 @@ expression: snapshot
 {
   "documents": [
     {
+      "created_at": "2370-08-22T00:00:00Z",
+      "kind": "chat",
+      "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
+      "md_path": "rendered_md/contacts/tng_contacts/Bridge/tng-riker__william-t-riker.md",
+      "provider": "contacts",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "5c5f19ffae7da52cf46f149f33765da05d99a1afdfa9906c1d27cbd9b0224f5e",
+      "source_fingerprint": "9b5505329dcdd881",
+      "source_name": "tng_contacts",
+      "title": "Bridge",
+      "updated_at": "2370-08-22T00:00:00Z"
+    },
+    {
+      "created_at": "2370-09-04T00:00:00Z",
+      "kind": "chat",
+      "markdown_uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
+      "md_path": "rendered_md/contacts/tng_contacts/Engineering/tng-laforge__geordi-la-forge.md",
+      "provider": "contacts",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "42d83c7b88ba56303647c414b5f8963ec25a5770d33b16d166cb8045dc776564",
+      "source_fingerprint": "3408c2ce1a00b6e0",
+      "source_name": "tng_contacts",
+      "title": "Engineering",
+      "updated_at": "2370-09-04T00:00:00Z"
+    },
+    {
       "created_at": "2369-05-28T15:20:00.000800+00:00",
       "kind": "thread",
       "markdown_uuid": "18661749-ed35-5c92-aa13-7cb73be53387",
@@ -17,6 +45,20 @@ expression: snapshot
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00.000800+00:00"
+    },
+    {
+      "created_at": "2370-02-11T00:00:00Z",
+      "kind": "chat",
+      "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
+      "md_path": "rendered_md/contacts/tng_contacts/Bridge/tng-data__data.md",
+      "provider": "contacts",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "a53921497c3468f5be7b594d8f435815e41fa813afab1ded815341ef5d3f91ce",
+      "source_fingerprint": "836b50e7691d9a49",
+      "source_name": "tng_contacts",
+      "title": "Bridge",
+      "updated_at": "2370-02-11T00:00:00Z"
     },
     {
       "created_at": "2024-03-20T13:58:20.000Z",
@@ -271,6 +313,20 @@ expression: snapshot
       "updated_at": "2369-04-16T09:01:30.000004+00:00"
     },
     {
+      "created_at": "2370-04-15T00:00:00Z",
+      "kind": "chat",
+      "markdown_uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
+      "md_path": "rendered_md/contacts/tng_contacts/Bridge/tng-picard__jean-luc-picard.md",
+      "provider": "contacts",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "9ee1dfc3b8ed5f016c6387969924dfba5b3f35948f8ff82342a8bb20c3a5c5d0",
+      "source_fingerprint": "67bbe1495732fbca",
+      "source_name": "tng_contacts",
+      "title": "Bridge",
+      "updated_at": "2370-04-15T00:00:00Z"
+    },
+    {
       "created_at": "2024-03-15T09:00:00.000Z",
       "kind": "chat",
       "markdown_uuid": "e28ed67d-507b-5319-8732-00e249b6ebf6",
@@ -301,7 +357,7 @@ expression: snapshot
   ],
   "dolt_log": [
     {
-      "message": "frankweiler-sync: markdowns_loaded=21 markdowns_total=21 rows_inserted=75 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper]"
+      "message": "frankweiler-sync: markdowns_loaded=25 markdowns_total=25 rows_inserted=79 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper]"
     },
     {
       "message": "Initialize data repository"
@@ -484,6 +540,56 @@ expression: snapshot
       "when_ts": "2024-03-15T09:00:00.000Z"
     },
     {
+      "account": "tng_contacts",
+      "author": "William T. Riker",
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
+      "entire_chat": "/contact/14207f4b-af38-5ee1-8d55-6fd426d572f2",
+      "external_id": "tng-riker",
+      "git_sha": null,
+      "kind": "Contact",
+      "markdown_uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "rendered_md/contacts/tng_contacts/Bridge/tng-riker__william-t-riker.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts",
+      "source_url": null,
+      "text_len": 132,
+      "text_sha": "sha256:8accf03773fb3ff6e083e51e2594ab9578a951609bc3a50c23352b93ede82dbc",
+      "uuid": "14207f4b-af38-5ee1-8d55-6fd426d572f2",
+      "when_ts": "2370-08-22T00:00:00Z"
+    },
+    {
+      "account": "tng_contacts",
+      "author": "Geordi La Forge",
+      "channel": "Engineering",
+      "conversation_name": "Engineering",
+      "conversation_uuid": "88e14637-6031-536e-be8f-bba2835bf431",
+      "entire_chat": "/contact/1544ef1c-ce85-59cd-a01f-235133651a2c",
+      "external_id": "tng-laforge",
+      "git_sha": null,
+      "kind": "Contact",
+      "markdown_uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "rendered_md/contacts/tng_contacts/Engineering/tng-laforge__geordi-la-forge.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts",
+      "source_url": null,
+      "text_len": 128,
+      "text_sha": "sha256:35564f1c4cf67b02c50f19238f8d78cb9e00e0994c54fd27f80f0ef90c6f7003",
+      "uuid": "1544ef1c-ce85-59cd-a01f-235133651a2c",
+      "when_ts": "2370-09-04T00:00:00Z"
+    },
+    {
       "account": "T_NCC1701D",
       "author": "William T. Riker",
       "channel": "bridge",
@@ -532,6 +638,31 @@ expression: snapshot
       "text_sha": "sha256:dad932332792e5c6b5717b3fb9919c4b2cac9a9664ceb1e6c12c0883e92f08c8",
       "uuid": "18661749-ed35-5c92-aa13-7cb73be53387",
       "when_ts": "2369-05-28T15:20:00.000800+00:00"
+    },
+    {
+      "account": "tng_contacts",
+      "author": "Data",
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
+      "entire_chat": "/contact/1db2d2f9-e79a-58ad-978f-eb56fba5060f",
+      "external_id": "tng-data",
+      "git_sha": null,
+      "kind": "Contact",
+      "markdown_uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "rendered_md/contacts/tng_contacts/Bridge/tng-data__data.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts",
+      "source_url": null,
+      "text_len": 100,
+      "text_sha": "sha256:153c1afe46f78a09358f89c1903c6356ced08fc42bd2cab98a4aa06eb2b570ad",
+      "uuid": "1db2d2f9-e79a-58ad-978f-eb56fba5060f",
+      "when_ts": "2370-02-11T00:00:00Z"
     },
     {
       "account": "00000001-1701-4d00-8000-000000000001",
@@ -1634,6 +1765,31 @@ expression: snapshot
       "when_ts": "2369-05-28T15:18:20.000700+00:00"
     },
     {
+      "account": "tng_contacts",
+      "author": "Jean-Luc Picard",
+      "channel": "Bridge",
+      "conversation_name": "Bridge",
+      "conversation_uuid": "5156e157-6274-594f-886c-dbb4e4db0ad9",
+      "entire_chat": "/contact/c27813c9-e0d8-551d-87fe-33ed24b93bb6",
+      "external_id": "tng-picard",
+      "git_sha": null,
+      "kind": "Contact",
+      "markdown_uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "contacts",
+      "qmd_path": "rendered_md/contacts/tng_contacts/Bridge/tng-picard__jean-luc-picard.md",
+      "slack_link": null,
+      "source_label": "Tng Contacts",
+      "source_url": null,
+      "text_len": 107,
+      "text_sha": "sha256:f6195113a6eeec8fe7bd95e2426488de5e199a247a93b9fb91ff2df093e044a0",
+      "uuid": "c27813c9-e0d8-551d-87fe-33ed24b93bb6",
+      "when_ts": "2370-04-15T00:00:00Z"
+    },
+    {
       "account": null,
       "author": "wtriker",
       "channel": null,
@@ -2185,8 +2341,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 21,
+    "documents_count": 25,
     "dolt_log_count": 2,
-    "grid_rows_count": 75
+    "grid_rows_count": 79
   }
 }

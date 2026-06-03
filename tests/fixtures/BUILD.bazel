@@ -37,6 +37,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/chatgpt:tng_fixture",
         "//frankweiler/backend/etl/providers/anthropic:tng_fixture",
         "//frankweiler/backend/etl/providers/beeper:tng_fixture",
+        "//frankweiler/backend/etl/providers/contacts:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -79,6 +80,11 @@ genrule(
             # materializes a BeeperTexts-shaped dir from it on the
             # fly.
             "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+            # Contacts (carddav) is translate-only in the fixture
+            # pipeline: vCard files on disk feed the translate path
+            # directly, no synth/extract for these. The directory
+            # structure is `carddav_tng/<addressbook>/*.vcf`.
+            "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",

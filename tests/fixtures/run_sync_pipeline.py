@@ -23,6 +23,11 @@ Args (positional):
     9:  notion_web    fixture dir
     10: beeper_tng    fixture dir (SQL files + media; we materialize a
                                    BeeperTexts-shaped dir from it)
+    11: carddav_tng   fixture dir (vCard files; translate-only —
+                                    config carries no `sync:` block so
+                                    extract is skipped and translate
+                                    reads `.vcf` files straight from
+                                    `input_path`)
 """
 
 from __future__ import annotations
@@ -38,8 +43,8 @@ def main() -> int:
     sync_bin = Path(sys.argv[1]).resolve()
     now = sys.argv[2]
     data_root = Path(sys.argv[3]).resolve()
-    anth_fx, cgpt_fx, slack_fx, gh_fx, gl_fx, notion_fx, beeper_fx = (
-        Path(p).resolve() for p in sys.argv[4:11]
+    anth_fx, cgpt_fx, slack_fx, gh_fx, gl_fx, notion_fx, beeper_fx, carddav_fx = (
+        Path(p).resolve() for p in sys.argv[4:12]
     )
 
     data_root.mkdir(parents=True, exist_ok=True)
@@ -80,6 +85,11 @@ def main() -> int:
                 "gitlab": ("gitlab_api", gl_fx),
                 "notion": ("notion_api", notion_fx),
                 "beeper": ("beeper", beeper_data_dir),
+                # Contacts (carddav) is translate-only — no synth
+                # fixture, no extract. Listing it keeps the synth
+                # phase's `enabled_sources()` set consistent with
+                # extract's, mirroring beeper's pattern.
+                "tng_contacts": ("carddav", carddav_fx),
             },
         )
     )
@@ -108,6 +118,12 @@ def main() -> int:
                 # sync block's `beeper_data_dir:` field; see
                 # `_yaml` below.
                 "beeper": ("beeper", raw_root / "beeper"),
+                # Carddav: translate-only. `_yaml` omits the
+                # `sync:` block for type `carddav` so is_managed()
+                # returns false and extract skips this source —
+                # translate then reads vCards straight from
+                # `input_path`.
+                "tng_contacts": ("carddav", carddav_fx),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
@@ -195,6 +211,13 @@ def _yaml(
             lines.append("      sources: ['signal', 'googlechat']")
             if beeper_data_dir is not None:
                 lines.append(f"      beeper_data_dir: {beeper_data_dir}")
+        elif type_str == "carddav":
+            # Translate-only. Omitting the `sync:` block flips
+            # is_managed() to false, so the extract pass skips
+            # carddav and translate reads vCards directly from
+            # `input_path`. This is the same shape claude_export
+            # uses for "drop a fixture, render it" sources.
+            pass
         elif type_str != "claude_export":
             lines.append("    sync: {}")
     return "\n".join(lines) + "\n"

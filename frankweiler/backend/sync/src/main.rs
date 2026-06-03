@@ -1652,13 +1652,21 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::Carddav { .. } => {
-            // The carddav translate path (vCard → grid rows) lands
-            // in a follow-up commit; for now the extract just
-            // populates the raw store and translate is a no-op.
-            eprintln!(
-                "[translate] {name} (carddav): skipped (translate not yet implemented)"
-            );
-            Ok(())
+            use frankweiler_etl_contacts::translate::{parse, render};
+            let parsed = parse::parse(&fixture)
+                .with_context(|| format!("carddav parse {}", fixture.display()))?;
+            let now = chrono::Utc::now().to_rfc3339();
+            render::render_all(
+                &parsed,
+                root,
+                name,
+                &now,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("carddav render_all")
+            .map(|_| ())
         }
     }
 }

@@ -2,6 +2,17 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Checked-in TNG-themed vCard fixture consumed by both this crate's
+# parse tests and //tests/fixtures:ingested_tng (which runs the
+# translate path end-to-end into the grid). The directory shape is
+# `carddav_tng/<addressbook>/<name>.vcf` — the parser uses the
+# first subdirectory as the addressbook label.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/carddav_tng/**/*.vcf"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "frankweiler_etl_contacts",
     srcs = glob(["src/**/*.rs"]),

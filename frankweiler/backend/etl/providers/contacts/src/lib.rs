@@ -31,3 +31,4 @@
 //!   contact) and let the front-end overlay user-authored linkages.
 
 pub mod extract;
+pub mod translate;
