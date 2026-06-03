@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libclang-dev \
         libssl-dev \
         lld \
+        llvm \
         make \
         perl \
         pkg-config \

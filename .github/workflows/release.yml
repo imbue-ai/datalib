@@ -104,18 +104,33 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
+          # `llvm` brings in the `llvm-config` binary — clang and
+          # libclang-dev DO NOT, contrary to intuition. The
+          # ubuntu-24.04-arm runner happens to have llvm preinstalled
+          # so the previous attempt (without `llvm` here) worked on
+          # arm64; ubuntu-latest x86_64 does not, so the same step
+          # silently set LIBCLANG_PATH="" and bindgen panicked
+          # downstream. See run 26860782615 for the trace.
           sudo apt-get install -y \
             cmake \
             clang \
-            libclang-dev
+            libclang-dev \
+            llvm
           # Surface libclang's directory so bindgen finds it inside
-          # bazel's processwrapper-sandbox even when clang-sys's
-          # default Linux search paths miss (we forward this via
-          # --action_env on the bazel commands below). Using
-          # llvm-config makes us robust to LLVM version bumps —
-          # whatever clang the runner installs, we point at its
-          # actual libdir.
-          echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> "$GITHUB_ENV"
+          # bazel's processwrapper-sandbox (forwarded via
+          # --action_env on the bazel commands below, which override
+          # .bazelrc's macOS default). Using llvm-config keeps us
+          # robust to LLVM version bumps — whatever clang the runner
+          # installs, we point at its actual libdir.
+          lib_dir="$(llvm-config --libdir)"
+          if [[ -z "$lib_dir" ]]; then
+              echo "ERROR: llvm-config --libdir returned empty." >&2
+              echo "PATH=$PATH" >&2
+              command -v llvm-config || true
+              exit 1
+          fi
+          echo "Resolved LIBCLANG_PATH=$lib_dir"
+          echo "LIBCLANG_PATH=$lib_dir" >> "$GITHUB_ENV"
 
       - name: Show toolchain versions
         run: |
@@ -169,6 +184,10 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$RUNNER_OS" == "Linux" ]]; then
+              if [[ -z "${LIBCLANG_PATH:-}" ]]; then
+                  echo "ERROR: LIBCLANG_PATH unset/empty on Linux — install step regressed." >&2
+                  exit 1
+              fi
               echo "extra=--action_env=LIBCLANG_PATH=${LIBCLANG_PATH}" >> "$GITHUB_OUTPUT"
           else
               echo "extra=" >> "$GITHUB_OUTPUT"
