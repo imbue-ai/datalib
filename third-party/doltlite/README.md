@@ -23,11 +23,11 @@ runtime `brew install`, no system libsqlite3 dependency.
        (genrule: doltlite.{c,h}  →  sqlite3.{c,h})
        │
        ▼
-   //third-party/doltlite:libsqlite3_doltlite
-       (cc_library — compiles sqlite3.c into a static archive)
+   //third-party/doltlite:sqlite3
+       (cc_library — compiles sqlite3.c into libsqlite3.a)
        │
        │  crate.annotation(crate="libsqlite3-sys",
-       │                   deps=[":libsqlite3_doltlite"])
+       │                   deps=[":sqlite3"])
        ▼
    @frankweiler_crates//:libsqlite3-sys
    @frankweiler_crates//:sqlx-sqlite
@@ -41,9 +41,10 @@ Each arrow above is a Bazel action with its own cache entry:
 - **Fetch** the zip: keyed on the http_archive `sha256`. Once per
   workstation, forever, until the pin changes.
 - **Genrule** to rename: keyed on the source file digests. Trivial cost.
-- **cc_library** compile: keyed on the source digest + the C toolchain
-  hermetic key. One ~30-second compile per (toolchain, doltlite-version)
-  pair, then cached in `bazel-out/` and (if configured) on RBE.
+- **cc_library** compile: keyed on `sqlite3.c`'s digest + the C
+  toolchain hermetic key. One ~30-second compile per (toolchain,
+  doltlite-version) pair, then cached in `bazel-out/` and (if
+  configured) on RBE.
 - **libsqlite3-sys** Rust compile: pulls the cc_library output as a
   native dep. Recompiles only when libsqlite3-sys's source or our
   cc_library output moves.
@@ -54,14 +55,17 @@ In normal day-to-day edits to Rust code, none of these actions re-run.
 
 1. Find the new release: <https://github.com/dolthub/doltlite/releases>.
 2. Pick the **amalgamation** zip (e.g.
-   `doltlite-amalgamation-X.Y.Z.zip`).
+   `doltlite-amalgamation-X.Y.Z.zip`). **Do not use any 0.11.x release
+   before 0.11.4** — those amalgamation zips were broken and built
+   stock SQLite, missing the prolly hooks.
 3. Compute the sha256:
    ```sh
    curl -fsSL <url> | shasum -a 256
    ```
 4. Update `urls` + `sha256` + `strip_prefix` in `MODULE.bazel`'s
    `http_archive(name = "doltlite_amalgamation", ...)`.
-5. `bazelisk build //...` — Bazel re-downloads, recompiles, and feeds
+5. Bump `DOLTLITE_VERSION` in `BUILD.bazel`'s `copts`.
+6. `bazelisk build //...` — Bazel re-downloads, recompiles, and feeds
    the new archive into every downstream binary.
 
 No code or wiring changes needed unless the doltlite public API shifts
@@ -71,6 +75,7 @@ No code or wiring changes needed unless the doltlite public API shifts
 
 | Path                        | Purpose                                                                |
 |-----------------------------|------------------------------------------------------------------------|
-| `BUILD.bazel`               | `rename_amalgamation` genrule + `libsqlite3_doltlite` cc_library.       |
+| `BUILD.bazel`               | `rename_amalgamation` genrule + `sqlite3` cc_library.                  |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
+| `libsqlite3-sys.patch`      | Absolutize `$(BINDIR)`-derived paths inside libsqlite3-sys's build.rs. |
 | `README.md`                 | This file.                                                             |
