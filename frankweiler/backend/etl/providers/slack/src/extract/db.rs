@@ -43,17 +43,24 @@ pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
 
 use crate::translate::{slack_message_uuid, slack_thread_uuid};
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &[
+    "workspaces",
+    "users",
+    "channels",
+    "messages",
+    "replies_pages",
+];
+
+const DDL_DATA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
         team_name TEXT NULL,
         team_url TEXT NULL,
         self_user_id TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -61,22 +68,14 @@ const DDL: &[&str] = &[
         name TEXT NULL,
         real_name TEXT NULL,
         display_name TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS channels (
         id TEXT PRIMARY KEY,
         name TEXT NULL,
         is_member INTEGER NULL,
         is_archived INTEGER NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -87,11 +86,7 @@ const DDL: &[&str] = &[
         thread_root_uuid TEXT NULL,
         is_thread_root INTEGER NULL,
         user_id TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS messages_by_channel_ts ON messages(channel_id, ts)",
     "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)",
@@ -99,13 +94,17 @@ const DDL: &[&str] = &[
         id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
         thread_ts TEXT NOT NULL,
-        latest_reply TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        latest_reply TEXT NULL
     )",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 #[derive(Clone)]
 pub struct RawDb {
@@ -129,7 +128,9 @@ pub struct MessageRow {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         // Backfill thread_root_uuid for rows written by older versions
         // that left it NULL on standalone messages. Idempotent: once
         // every row has a non-NULL thread_root_uuid, the SELECT below
@@ -161,41 +162,44 @@ impl RawDb {
         let team_url = payload.get("url").and_then(|v| v.as_str());
         let self_user_id = payload.get("user_id").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize auth.test")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin workspace tx")?;
         sqlx::query(
             "INSERT INTO workspaces
-                (id, team_name, team_url, self_user_id, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                (id, team_name, team_url, self_user_id, payload)
+             VALUES (?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 team_name = COALESCE(excluded.team_name, workspaces.team_name),
                 team_url = COALESCE(excluded.team_url, workspaces.team_url),
                 self_user_id = COALESCE(excluded.self_user_id, workspaces.self_user_id),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(team_id)
         .bind(team_name)
         .bind(team_url)
         .bind(self_user_id)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("upsert workspace")?;
+        dr::record_object_attempt(&mut tx, "workspaces", team_id, None).await?;
+        tx.commit().await.context("commit workspace tx")?;
         Ok(())
     }
 
     /// Return the cached workspace `team_id` (the most-recently-seen
     /// row) so callers that need it before re-fetching `auth.test`
-    /// don't have to walk the payload.
+    /// don't have to walk the payload. `fetched_at` now lives on
+    /// `workspaces_bookkeeping`; LEFT JOIN keeps the same recency
+    /// ordering.
     pub async fn cached_team_id(&self) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT id FROM workspaces ORDER BY fetched_at DESC LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await
-            .context("select cached team_id")?;
+        let row = sqlx::query(
+            "SELECT w.id FROM workspaces w \
+             LEFT JOIN workspaces_bookkeeping b ON b.id = w.id \
+             ORDER BY b.fetched_at DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("select cached team_id")?;
         Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
     }
 
@@ -390,26 +394,23 @@ impl RawDb {
         latest_reply: Option<&str>,
     ) -> Result<()> {
         let id = format!("{channel_id}:{thread_ts}");
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
         sqlx::query(
             "INSERT INTO replies_pages
-                (id, channel_id, thread_ts, latest_reply, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, NULL)
+                (id, channel_id, thread_ts, latest_reply)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
-                latest_reply = COALESCE(excluded.latest_reply, replies_pages.latest_reply),
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                latest_reply = COALESCE(excluded.latest_reply, replies_pages.latest_reply)",
         )
         .bind(&id)
         .bind(channel_id)
         .bind(thread_ts)
         .bind(latest_reply)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert replies_page {id}"))?;
+        dr::record_object_attempt(&mut tx, "replies_pages", &id, None).await?;
+        tx.commit().await.context("commit replies_page tx")?;
         Ok(())
     }
 
@@ -449,8 +450,9 @@ impl RawDb {
         content_type: Option<&str>,
         source_url: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob stub tx")?;
         dr::pre_seed_blob_stub(
-            &self.pool,
+            &mut tx,
             id,
             "file",
             owning_id,
@@ -458,7 +460,9 @@ impl RawDb {
             content_type,
             source_url,
         )
-        .await
+        .await?;
+        tx.commit().await.context("commit blob stub tx")?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -472,8 +476,9 @@ impl RawDb {
         bytes: &[u8],
         source_url: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
         dr::upsert_blob_bytes(
-            &self.pool,
+            &mut tx,
             id,
             kind,
             owning_id,
@@ -482,7 +487,9 @@ impl RawDb {
             bytes,
             source_url,
         )
-        .await
+        .await?;
+        tx.commit().await.context("commit blob upsert tx")?;
+        Ok(())
     }
 
     pub async fn record_blob_error(
@@ -492,7 +499,10 @@ impl RawDb {
         slot: &str,
         err: &str,
     ) -> Result<()> {
-        dr::record_blob_error(&self.pool, id, owning_id, slot, err).await
+        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        tx.commit().await.context("commit blob error tx")?;
+        Ok(())
     }
 
     pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {
@@ -505,7 +515,7 @@ impl RawDb {
 async fn upsert_user_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     payload: &Value,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let id = payload
         .get("id")
@@ -529,17 +539,14 @@ async fn upsert_user_in(
     let payload_str = serde_json::to_string(payload).context("serialize user")?;
     sqlx::query(
         "INSERT INTO users
-            (id, team_id, name, real_name, display_name, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+            (id, team_id, name, real_name, display_name, payload)
+         VALUES (?, ?, ?, ?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             team_id = COALESCE(excluded.team_id, users.team_id),
             name = COALESCE(excluded.name, users.name),
             real_name = COALESCE(excluded.real_name, users.real_name),
             display_name = COALESCE(excluded.display_name, users.display_name),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(id)
     .bind(team_id)
@@ -547,18 +554,16 @@ async fn upsert_user_in(
     .bind(real_name)
     .bind(display_name)
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert user {id}"))?;
-    Ok(())
+    dr::record_object_attempt(tx, "users", id, None).await
 }
 
 async fn upsert_channel_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     payload: &Value,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let id = payload
         .get("id")
@@ -570,34 +575,29 @@ async fn upsert_channel_in(
     let payload_str = serde_json::to_string(payload).context("serialize channel")?;
     sqlx::query(
         "INSERT INTO channels
-            (id, name, is_member, is_archived, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+            (id, name, is_member, is_archived, payload)
+         VALUES (?, ?, ?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             name = COALESCE(excluded.name, channels.name),
             is_member = COALESCE(excluded.is_member, channels.is_member),
             is_archived = COALESCE(excluded.is_archived, channels.is_archived),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(id)
     .bind(name)
     .bind(is_member.map(|b| b as i64))
     .bind(is_archived.map(|b| b as i64))
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert channel {id}"))?;
-    Ok(())
+    dr::record_object_attempt(tx, "channels", id, None).await
 }
 
 async fn upsert_message_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     row: &MessageRow,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let id = slack_message_uuid(&row.team_id, &row.channel_id, &row.ts);
     // Every message belongs to some thread — either a real reply thread
@@ -618,8 +618,8 @@ async fn upsert_message_in(
     sqlx::query(
         "INSERT INTO messages
             (id, team_id, channel_id, ts, thread_ts, thread_root_uuid, is_thread_root,
-             user_id, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+             user_id, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             team_id = excluded.team_id,
             channel_id = excluded.channel_id,
@@ -628,10 +628,7 @@ async fn upsert_message_in(
             thread_root_uuid = COALESCE(excluded.thread_root_uuid, messages.thread_root_uuid),
             is_thread_root = COALESCE(excluded.is_thread_root, messages.is_thread_root),
             user_id = COALESCE(excluded.user_id, messages.user_id),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(&id)
     .bind(&row.team_id)
@@ -642,12 +639,10 @@ async fn upsert_message_in(
     .bind(row.is_thread_root as i64)
     .bind(row.user_id.as_deref())
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert message {id}"))?;
-    Ok(())
+    dr::record_object_attempt(tx, "messages", &id, None).await
 }
 
 /// One row's worth of loaded message data — payload plus the columns
@@ -739,11 +734,20 @@ async fn backfill_thread_root_uuid(pool: &SqlitePool) -> Result<()> {
 /// conservative "did anything change in this thread" signal.
 pub async fn probe_thread_cursors(db_path: &Path) -> Result<HashMap<String, String>> {
     let db = RawDb::open(db_path).await?;
+    // `fetched_at` now lives on the bookkeeping sidecar — LEFT JOIN
+    // by message id and aggregate as before. Semantics preserved:
+    // any upsert into a thread (including no-op re-fetch) bumps the
+    // sidecar's fetched_at, so MAX(fetched_at) still moves on every
+    // run — the conservative "did anything change in this thread"
+    // signal the orchestrator wants.
     let rows = sqlx::query(
-        "SELECT thread_root_uuid, MAX(fetched_at) AS max_fetched_at, COUNT(*) AS msg_count
-         FROM messages
-         WHERE payload IS NOT NULL AND thread_root_uuid IS NOT NULL
-         GROUP BY thread_root_uuid",
+        "SELECT m.thread_root_uuid,
+                MAX(b.fetched_at) AS max_fetched_at,
+                COUNT(*) AS msg_count
+         FROM messages m
+         LEFT JOIN messages_bookkeeping b ON b.id = m.id
+         WHERE m.payload IS NOT NULL AND m.thread_root_uuid IS NOT NULL
+         GROUP BY m.thread_root_uuid",
     )
     .fetch_all(&db.pool)
     .await

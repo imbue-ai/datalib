@@ -37,7 +37,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -48,7 +47,12 @@ pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 use crate::translate::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &["rooms", "users", "events"];
+
+const DDL_DATA: &[&str] = &[
     // Native vs external IDs:
     //
     //   * `native_room_id` is the room's identifier inside Beeper's
@@ -74,11 +78,7 @@ const DDL: &[&str] = &[
         description TEXT NULL,
         is_dm INTEGER NOT NULL DEFAULT 0,
         is_space INTEGER NOT NULL DEFAULT 0,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE UNIQUE INDEX IF NOT EXISTS rooms_by_source_native ON rooms(source, native_room_id)",
     "CREATE INDEX IF NOT EXISTS rooms_by_network ON rooms(network)",
@@ -91,11 +91,7 @@ const DDL: &[&str] = &[
         full_name TEXT NULL,
         remote_id TEXT NULL,
         avatar_blob_id TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE UNIQUE INDEX IF NOT EXISTS users_by_source_native ON users(source, native_user_id)",
     // `external_event_id`: the upstream system's canonical message
@@ -120,15 +116,19 @@ const DDL: &[&str] = &[
         edit_of_native_event_id TEXT NULL,
         reaction_emoji TEXT NULL,
         reaction_target_native_event_id TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS events_by_room_ts ON events(room_uuid, timestamp_ms)",
     "CREATE INDEX IF NOT EXISTS events_by_source_native ON events(source, native_event_id)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 #[derive(Clone)]
 pub struct RawDb {
@@ -209,7 +209,9 @@ pub struct EventRow {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -249,8 +251,9 @@ impl RawDb {
             .context("count blobs with bytes")?
             .try_get::<i64, _>("n")
             .unwrap_or(0) as usize;
+        // `last_error` now lives on the bookkeeping sidecar — join in.
         let blob_errors =
-            sqlx::query("SELECT COUNT(*) AS n FROM blobs WHERE last_error IS NOT NULL")
+            sqlx::query("SELECT COUNT(*) AS n FROM blobs_bookkeeping WHERE last_error IS NOT NULL")
                 .fetch_one(&self.pool)
                 .await
                 .context("count blobs with errors")?
@@ -267,15 +270,15 @@ impl RawDb {
 
     pub async fn upsert_room(&self, row: &RoomRow) -> Result<String> {
         let id = beeper_room_uuid(&row.source, &row.native_room_id);
-        let now = Utc::now().to_rfc3339();
         let payload = serde_json::to_string(&row.payload).context("serialize room payload")?;
+        let mut tx = self.pool.begin().await.context("begin room tx")?;
         sqlx::query(
             "INSERT INTO rooms (
                 id, source, network, native_room_id,
                 external_room_id, external_workspace_id,
                 account_id, room_type, title, description, is_dm, is_space,
-                payload, fetched_at, attempt_count, last_attempt_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, 1, ?)
+                payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
             ON CONFLICT(id) DO UPDATE SET
                 network               = excluded.network,
                 external_room_id      = COALESCE(excluded.external_room_id, rooms.external_room_id),
@@ -286,10 +289,7 @@ impl RawDb {
                 description           = excluded.description,
                 is_dm                 = excluded.is_dm,
                 is_space              = excluded.is_space,
-                payload               = excluded.payload,
-                fetched_at            = excluded.fetched_at,
-                attempt_count         = rooms.attempt_count + 1,
-                last_attempt_at       = excluded.last_attempt_at",
+                payload               = excluded.payload",
         )
         .bind(&id)
         .bind(&row.source)
@@ -304,34 +304,31 @@ impl RawDb {
         .bind(row.is_dm as i64)
         .bind(row.is_space as i64)
         .bind(&payload)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("insert rooms")?;
+        dr::record_object_attempt(&mut tx, "rooms", &id, None).await?;
+        tx.commit().await.context("commit room tx")?;
         Ok(id)
     }
 
     pub async fn upsert_user(&self, row: &UserRow) -> Result<String> {
         let id = beeper_user_uuid(&row.source, &row.native_user_id);
-        let now = Utc::now().to_rfc3339();
         let payload = serde_json::to_string(&row.payload).context("serialize user payload")?;
+        let mut tx = self.pool.begin().await.context("begin user tx")?;
         sqlx::query(
             "INSERT INTO users (
                 id, source, network, native_user_id,
                 display_name, full_name, remote_id, avatar_blob_id,
-                payload, fetched_at, attempt_count, last_attempt_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, 1, ?)
+                payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
             ON CONFLICT(id) DO UPDATE SET
                 network         = COALESCE(excluded.network, users.network),
                 display_name    = COALESCE(excluded.display_name, users.display_name),
                 full_name       = COALESCE(excluded.full_name, users.full_name),
                 remote_id       = COALESCE(excluded.remote_id, users.remote_id),
                 avatar_blob_id  = COALESCE(excluded.avatar_blob_id, users.avatar_blob_id),
-                payload         = excluded.payload,
-                fetched_at      = excluded.fetched_at,
-                attempt_count   = users.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at",
+                payload         = excluded.payload",
         )
         .bind(&id)
         .bind(&row.source)
@@ -342,11 +339,11 @@ impl RawDb {
         .bind(row.remote_id.as_deref())
         .bind(row.avatar_blob_id.as_deref())
         .bind(&payload)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("insert users")?;
+        dr::record_object_attempt(&mut tx, "users", &id, None).await?;
+        tx.commit().await.context("commit user tx")?;
         Ok(id)
     }
 
@@ -357,8 +354,8 @@ impl RawDb {
             .sender_native_user_id
             .as_deref()
             .map(|s| beeper_user_uuid(&row.source, s));
-        let now = Utc::now().to_rfc3339();
         let payload = serde_json::to_string(&row.payload).context("serialize event payload")?;
+        let mut tx = self.pool.begin().await.context("begin event tx")?;
         sqlx::query(
             "INSERT INTO events (
                 id, source, network, room_uuid, sender_uuid,
@@ -366,8 +363,8 @@ impl RawDb {
                 event_type, timestamp_ms, text_content,
                 reply_to_native_event_id, edit_of_native_event_id,
                 reaction_emoji, reaction_target_native_event_id,
-                payload, fetched_at, attempt_count, last_attempt_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, 1, ?)
+                payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
             ON CONFLICT(id) DO UPDATE SET
                 sender_uuid                       = COALESCE(excluded.sender_uuid, events.sender_uuid),
                 external_event_id                 = COALESCE(excluded.external_event_id, events.external_event_id),
@@ -378,10 +375,7 @@ impl RawDb {
                 edit_of_native_event_id           = COALESCE(excluded.edit_of_native_event_id, events.edit_of_native_event_id),
                 reaction_emoji                    = COALESCE(excluded.reaction_emoji, events.reaction_emoji),
                 reaction_target_native_event_id   = COALESCE(excluded.reaction_target_native_event_id, events.reaction_target_native_event_id),
-                payload                           = excluded.payload,
-                fetched_at                        = excluded.fetched_at,
-                attempt_count                     = events.attempt_count + 1,
-                last_attempt_at                   = excluded.last_attempt_at",
+                payload                           = excluded.payload",
         )
         .bind(&id)
         .bind(&row.source)
@@ -398,11 +392,11 @@ impl RawDb {
         .bind(row.reaction_emoji.as_deref())
         .bind(row.reaction_target_native_event_id.as_deref())
         .bind(&payload)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("insert events")?;
+        dr::record_object_attempt(&mut tx, "events", &id, None).await?;
+        tx.commit().await.context("commit event tx")?;
         Ok(id)
     }
 }

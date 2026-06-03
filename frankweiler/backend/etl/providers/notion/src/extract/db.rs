@@ -14,7 +14,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -33,17 +32,18 @@ pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
 // The shared module owns `blobs`, `endpoint_shapes`, and `sync_runs`.
 // Everything below is Notion-specific. PK policy: upstream Notion
 // UUIDs; see `frankweiler_etl::doltlite_raw` module docs.
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &["pages", "blocks", "databases", "users", "comments"];
+
+const DDL_DATA: &[&str] = &[
     // pages — PK is the Notion page UUID.
     "CREATE TABLE IF NOT EXISTS pages (
         id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
         last_edited_time TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pages_last_edited ON pages(last_edited_time)",
     // blocks — PK is the Notion block UUID. `page_order` is the
@@ -58,11 +58,7 @@ const DDL: &[&str] = &[
         page_id TEXT NULL,
         page_order INTEGER NULL,
         last_edited_time TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS blocks_page ON blocks(page_id, page_order)",
     // databases — PK is the Notion database UUID.
@@ -70,34 +66,30 @@ const DDL: &[&str] = &[
         id TEXT PRIMARY KEY,
         parent_id TEXT NULL,
         last_edited_time TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     // users — PK is the Notion user UUID.
     "CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     // comments — PK is the Notion comment UUID.
     "CREATE TABLE IF NOT EXISTS comments (
         id TEXT PRIMARY KEY,
         parent_id TEXT NOT NULL,
         page_id TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS comments_page ON comments(page_id)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
 #[derive(Clone)]
@@ -133,7 +125,9 @@ pub struct BlockUpsert {
 impl RawDb {
     /// Open (or create) the file at `db_path`, apply DDL idempotently.
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -176,7 +170,10 @@ impl RawDb {
     }
 
     pub async fn ensure_id(&self, table: &str, id: &str) -> Result<()> {
-        dr::ensure_id(&self.pool, table, id).await
+        let mut tx = self.pool.begin().await.context("begin ensure_id tx")?;
+        dr::ensure_object_row(&mut tx, table, id).await?;
+        tx.commit().await.context("commit ensure_id tx")?;
+        Ok(())
     }
 
     /// Batch upsert pages. We compare-on-upsert: if the stored
@@ -188,19 +185,15 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = Utc::now().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin pages tx")?;
         for (id, parent_id, last_edited_time, payload) in rows {
             let sql = if payload.is_some() {
-                "INSERT INTO pages (id, parent_id, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+                "INSERT INTO pages (id, parent_id, last_edited_time, payload)
+                 VALUES (?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = COALESCE(excluded.parent_id, pages.parent_id),
                     last_edited_time = excluded.last_edited_time,
-                    payload = excluded.payload,
-                    fetched_at = excluded.fetched_at,
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_error = NULL"
+                    payload = excluded.payload"
             } else {
                 "INSERT INTO pages (id, parent_id, last_edited_time)
                  VALUES (?, ?, ?)
@@ -212,12 +205,23 @@ impl RawDb {
                 .bind(id)
                 .bind(parent_id)
                 .bind(last_edited_time);
-            if payload.is_some() {
-                q = q.bind(payload).bind(&now).bind(&now);
+            if let Some(p) = payload {
+                q = q.bind(p);
             }
             q.execute(&mut *tx)
                 .await
                 .with_context(|| format!("upsert page {id}"))?;
+            // Sidecar update: success attempt when payload arrived,
+            // bare pre-seed (attempt_count=0) otherwise.
+            if payload.is_some() {
+                dr::record_object_attempt(&mut tx, "pages", id, None).await?;
+            } else {
+                sqlx::query("INSERT OR IGNORE INTO pages_bookkeeping (id) VALUES (?)")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("pre-seed pages_bookkeeping {id}"))?;
+            }
         }
         tx.commit().await.context("commit pages tx")?;
         Ok(())
@@ -229,7 +233,6 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = Utc::now().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin blocks tx")?;
         for BlockUpsert {
             id,
@@ -241,17 +244,14 @@ impl RawDb {
         } in rows
         {
             sqlx::query(
-                "INSERT INTO blocks (id, parent_id, page_id, page_order, last_edited_time, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                "INSERT INTO blocks (id, parent_id, page_id, page_order, last_edited_time, payload)
+                 VALUES (?, ?, ?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = COALESCE(excluded.parent_id, blocks.parent_id),
                     page_id = COALESCE(excluded.page_id, blocks.page_id),
                     page_order = COALESCE(excluded.page_order, blocks.page_order),
                     last_edited_time = excluded.last_edited_time,
-                    payload = excluded.payload,
-                    fetched_at = excluded.fetched_at,
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_error = NULL",
+                    payload = excluded.payload",
             )
             .bind(id)
             .bind(parent_id)
@@ -259,11 +259,10 @@ impl RawDb {
             .bind(page_order)
             .bind(last_edited_time)
             .bind(payload)
-            .bind(&now)
-            .bind(&now)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("upsert block {id}"))?;
+            dr::record_object_attempt(&mut tx, "blocks", id, None).await?;
         }
         tx.commit().await.context("commit blocks tx")?;
         Ok(())
@@ -277,36 +276,38 @@ impl RawDb {
         if rows.is_empty() {
             return Ok(());
         }
-        let now = Utc::now().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin comments tx")?;
         for (id, parent_id, page_id, payload) in rows {
             sqlx::query(
-                "INSERT INTO comments (id, parent_id, page_id, payload, fetched_at, last_attempt_at, last_error)
-                 VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+                "INSERT INTO comments (id, parent_id, page_id, payload)
+                 VALUES (?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
                     parent_id = excluded.parent_id,
                     page_id = COALESCE(excluded.page_id, comments.page_id),
-                    payload = excluded.payload,
-                    fetched_at = excluded.fetched_at,
-                    last_attempt_at = excluded.last_attempt_at,
-                    last_error = NULL",
+                    payload = excluded.payload",
             )
             .bind(id)
             .bind(parent_id)
             .bind(page_id)
             .bind(payload)
-            .bind(&now)
-            .bind(&now)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("upsert comment {id}"))?;
+            dr::record_object_attempt(&mut tx, "comments", id, None).await?;
         }
         tx.commit().await.context("commit comments tx")?;
         Ok(())
     }
 
     pub async fn record_page_error(&self, id: &str, err: &str) -> Result<()> {
-        dr::record_object_error(&self.pool, "pages", id, err).await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin record_page_error tx")?;
+        dr::record_object_error(&mut tx, "pages", id, err).await?;
+        tx.commit().await.context("commit record_page_error tx")?;
+        Ok(())
     }
 
     pub async fn failed_page_ids(&self) -> Result<Vec<String>> {
@@ -379,8 +380,9 @@ impl RawDb {
         bytes: &[u8],
         source_url: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
         dr::upsert_blob_bytes(
-            &self.pool,
+            &mut tx,
             id,
             kind,
             owning_id,
@@ -389,7 +391,9 @@ impl RawDb {
             bytes,
             source_url,
         )
-        .await
+        .await?;
+        tx.commit().await.context("commit blob upsert tx")?;
+        Ok(())
     }
 
     pub async fn record_blob_error(&self, id: &str, err: &str) -> Result<()> {
@@ -402,7 +406,10 @@ impl RawDb {
             .rsplit_once(':')
             .map(|(o, s)| (o.to_string(), s.to_string()))
             .unwrap_or_else(|| (id.to_string(), "image".to_string()));
-        dr::record_blob_error(&self.pool, id, &owning, &slot, err).await
+        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        dr::record_blob_error(&mut tx, id, &owning, &slot, err).await?;
+        tx.commit().await.context("commit blob error tx")?;
+        Ok(())
     }
 
     pub async fn load_blobs_by_owner(

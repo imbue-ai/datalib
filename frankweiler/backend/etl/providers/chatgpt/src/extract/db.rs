@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -28,30 +27,35 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &["me", "conversations"];
+
+const DDL_DATA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS me (
         id TEXT PRIMARY KEY,
         email TEXT NULL,
         name TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
         title TEXT NULL,
         update_time TEXT NULL,
         last_listing_update_time TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS conversations_update ON conversations(update_time)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 /// One row's worth of "what does the listing pass know about this
 /// conversation right now". Used to decide whether to short-circuit a
@@ -81,7 +85,9 @@ pub struct RawDb {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -110,27 +116,24 @@ impl RawDb {
         let email = payload.get("email").and_then(|v| v.as_str());
         let name = payload.get("name").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize /me")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin upsert_me tx")?;
         sqlx::query(
-            "INSERT INTO me (id, email, name, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+            "INSERT INTO me (id, email, name, payload)
+             VALUES (?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 email = COALESCE(excluded.email, me.email),
                 name = COALESCE(excluded.name, me.name),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(id)
         .bind(email)
         .bind(name)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("upsert me")?;
+        dr::record_object_attempt(&mut tx, "me", id, None).await?;
+        tx.commit().await.context("commit upsert_me tx")?;
         Ok(())
     }
 
@@ -180,6 +183,12 @@ impl RawDb {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("pre_seed conversation {id}"))?;
+            // Always-paired sidecar: ensure a bookkeeping row exists.
+            sqlx::query("INSERT OR IGNORE INTO conversations_bookkeeping (id) VALUES (?)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("pre_seed conversation bookkeeping {id}"))?;
         }
         tx.commit().await.context("commit pre_seed tx")?;
         Ok(())
@@ -219,38 +228,50 @@ impl RawDb {
     /// Upsert a full `/backend-api/conversation/{id}` response. Clears
     /// `last_error` on success.
     pub async fn upsert_conversation_detail(&self, row: &ConversationDetail) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
         let listing_ut_str = row
             .last_listing_update_time
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin upsert_conversation_detail tx")?;
         sqlx::query(
-            "INSERT INTO conversations (id, title, update_time, last_listing_update_time, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+            "INSERT INTO conversations (id, title, update_time, last_listing_update_time, payload)
+             VALUES (?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 title = COALESCE(excluded.title, conversations.title),
                 update_time = COALESCE(excluded.update_time, conversations.update_time),
                 last_listing_update_time = COALESCE(excluded.last_listing_update_time, conversations.last_listing_update_time),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&row.id)
         .bind(row.title.as_deref())
         .bind(row.update_time.as_deref())
         .bind(listing_ut_str.as_deref())
         .bind(&row.payload)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert conversation {}", row.id))?;
+        dr::record_object_attempt(&mut tx, "conversations", &row.id, None).await?;
+        tx.commit()
+            .await
+            .context("commit upsert_conversation_detail tx")?;
         Ok(())
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
-        dr::record_object_error(&self.pool, "conversations", id, err).await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin record_conversation_error tx")?;
+        dr::record_object_error(&mut tx, "conversations", id, err).await?;
+        tx.commit()
+            .await
+            .context("commit record_conversation_error tx")?;
+        Ok(())
     }
 
     pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
@@ -263,9 +284,15 @@ impl RawDb {
     /// is the raw upstream response; downstream layers stamp synthetic
     /// keys back on if they want them.
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
+        // `fetched_at` lives on the bookkeeping sidecar; LEFT JOIN so a
+        // pre-seeded row (no payload yet) still wouldn't surface here
+        // (filtered by payload IS NOT NULL).
         let rows = sqlx::query(
-            "SELECT id, json(payload) AS payload, fetched_at, last_listing_update_time
-             FROM conversations WHERE payload IS NOT NULL ORDER BY id",
+            "SELECT c.id, json(c.payload) AS payload, b.fetched_at, c.last_listing_update_time
+             FROM conversations c
+             LEFT JOIN conversations_bookkeeping b ON b.id = c.id
+             WHERE c.payload IS NOT NULL
+             ORDER BY c.id",
         )
         .fetch_all(&self.pool)
         .await
@@ -310,8 +337,9 @@ impl RawDb {
         bytes: &[u8],
         source_url: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
         dr::upsert_blob_bytes(
-            &self.pool,
+            &mut tx,
             id,
             kind,
             owning_id,
@@ -320,7 +348,9 @@ impl RawDb {
             bytes,
             source_url,
         )
-        .await
+        .await?;
+        tx.commit().await.context("commit blob upsert tx")?;
+        Ok(())
     }
 
     pub async fn record_blob_error(
@@ -330,7 +360,10 @@ impl RawDb {
         slot: &str,
         err: &str,
     ) -> Result<()> {
-        dr::record_blob_error(&self.pool, id, owning_id, slot, err).await
+        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        tx.commit().await.context("commit blob error tx")?;
+        Ok(())
     }
 
     pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {

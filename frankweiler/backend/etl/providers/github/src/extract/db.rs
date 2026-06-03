@@ -21,7 +21,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -30,16 +29,23 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &[
+    "self_identity",
+    "pull_requests",
+    "issue_comments",
+    "pr_reviews",
+    "pr_review_comments",
+];
+
+const DDL_DATA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS self_identity (
         id TEXT PRIMARY KEY,
         login TEXT NULL,
         html_url TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS pull_requests (
         id TEXT PRIMARY KEY,
@@ -53,11 +59,7 @@ const DDL: &[&str] = &[
         base_ref TEXT NULL,
         updated_at TEXT NULL,
         merged_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pull_requests_by_repo ON pull_requests(repo_full_name, pr_number)",
     "CREATE TABLE IF NOT EXISTS issue_comments (
@@ -68,11 +70,7 @@ const DDL: &[&str] = &[
         user_login TEXT NULL,
         created_at TEXT NULL,
         updated_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS issue_comments_by_pr ON issue_comments(repo_full_name, pr_number)",
     "CREATE TABLE IF NOT EXISTS pr_reviews (
@@ -84,11 +82,7 @@ const DDL: &[&str] = &[
         user_login TEXT NULL,
         submitted_at TEXT NULL,
         html_url TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pr_reviews_by_pr ON pr_reviews(repo_full_name, pr_number)",
     "CREATE TABLE IF NOT EXISTS pr_review_comments (
@@ -106,14 +100,18 @@ const DDL: &[&str] = &[
         original_commit_id TEXT NULL,
         created_at TEXT NULL,
         updated_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS pr_review_comments_by_pr ON pr_review_comments(repo_full_name, pr_number)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 /// Composite PK for a PR row: `"<repo>#<num>"`.
 pub fn pr_pk(repo: &str, num: u32) -> String {
@@ -127,7 +125,9 @@ pub struct RawDb {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -154,27 +154,24 @@ impl RawDb {
         let login = payload.get("login").and_then(|v| v.as_str());
         let html_url = payload.get("html_url").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize /user")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
         sqlx::query(
-            "INSERT INTO self_identity (id, login, html_url, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+            "INSERT INTO self_identity (id, login, html_url, payload)
+             VALUES (?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 login = COALESCE(excluded.login, self_identity.login),
                 html_url = COALESCE(excluded.html_url, self_identity.html_url),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(login)
         .bind(html_url)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("upsert self_identity")?;
+        dr::record_object_attempt(&mut tx, "self_identity", &id, None).await?;
+        tx.commit().await.context("commit self_identity tx")?;
         Ok(())
     }
 
@@ -206,13 +203,12 @@ impl RawDb {
         let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
         let merged_at = payload.get("merged_at").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize PR")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin pull_request tx")?;
         sqlx::query(
             "INSERT INTO pull_requests
                 (id, repo_full_name, pr_number, state, html_url, head_sha, base_sha,
-                 head_ref, base_ref, updated_at, merged_at, payload, fetched_at,
-                 last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                 head_ref, base_ref, updated_at, merged_at, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 state = COALESCE(excluded.state, pull_requests.state),
                 html_url = COALESCE(excluded.html_url, pull_requests.html_url),
@@ -222,10 +218,7 @@ impl RawDb {
                 base_ref = COALESCE(excluded.base_ref, pull_requests.base_ref),
                 updated_at = COALESCE(excluded.updated_at, pull_requests.updated_at),
                 merged_at = COALESCE(excluded.merged_at, pull_requests.merged_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(repo)
@@ -239,11 +232,11 @@ impl RawDb {
         .bind(updated_at)
         .bind(merged_at)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert pull_request {id}"))?;
+        dr::record_object_attempt(&mut tx, "pull_requests", &id, None).await?;
+        tx.commit().await.context("commit pull_request tx")?;
         Ok(())
     }
 
@@ -263,21 +256,18 @@ impl RawDb {
         let created_at = payload.get("created_at").and_then(|v| v.as_str());
         let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize issue_comment")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin issue_comment tx")?;
         sqlx::query(
             "INSERT INTO issue_comments
                 (id, repo_full_name, pr_number, html_url, user_login, created_at, updated_at,
-                 payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                 payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 html_url = COALESCE(excluded.html_url, issue_comments.html_url),
                 user_login = COALESCE(excluded.user_login, issue_comments.user_login),
                 created_at = COALESCE(excluded.created_at, issue_comments.created_at),
                 updated_at = COALESCE(excluded.updated_at, issue_comments.updated_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(repo)
@@ -287,11 +277,11 @@ impl RawDb {
         .bind(created_at)
         .bind(updated_at)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert issue_comment {id}"))?;
+        dr::record_object_attempt(&mut tx, "issue_comments", &id, None).await?;
+        tx.commit().await.context("commit issue_comment tx")?;
         Ok(())
     }
 
@@ -310,22 +300,19 @@ impl RawDb {
         let submitted_at = payload.get("submitted_at").and_then(|v| v.as_str());
         let html_url = payload.get("html_url").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize pr_review")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin pr_review tx")?;
         sqlx::query(
             "INSERT INTO pr_reviews
                 (id, repo_full_name, pr_number, state, commit_id, user_login, submitted_at,
-                 html_url, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                 html_url, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 state = COALESCE(excluded.state, pr_reviews.state),
                 commit_id = COALESCE(excluded.commit_id, pr_reviews.commit_id),
                 user_login = COALESCE(excluded.user_login, pr_reviews.user_login),
                 submitted_at = COALESCE(excluded.submitted_at, pr_reviews.submitted_at),
                 html_url = COALESCE(excluded.html_url, pr_reviews.html_url),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(repo)
@@ -336,11 +323,11 @@ impl RawDb {
         .bind(submitted_at)
         .bind(html_url)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert pr_review {id}"))?;
+        dr::record_object_attempt(&mut tx, "pr_reviews", &id, None).await?;
+        tx.commit().await.context("commit pr_review tx")?;
         Ok(())
     }
 
@@ -372,13 +359,17 @@ impl RawDb {
         let created_at = payload.get("created_at").and_then(|v| v.as_str());
         let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize pr_review_comment")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin pr_review_comment tx")?;
         sqlx::query(
             "INSERT INTO pr_review_comments
                 (id, repo_full_name, pr_number, in_reply_to_id, pull_request_review_id,
                  html_url, user_login, path, line, original_line, commit_id, original_commit_id,
-                 created_at, updated_at, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                 created_at, updated_at, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 in_reply_to_id = COALESCE(excluded.in_reply_to_id, pr_review_comments.in_reply_to_id),
                 pull_request_review_id = COALESCE(excluded.pull_request_review_id, pr_review_comments.pull_request_review_id),
@@ -391,10 +382,7 @@ impl RawDb {
                 original_commit_id = COALESCE(excluded.original_commit_id, pr_review_comments.original_commit_id),
                 created_at = COALESCE(excluded.created_at, pr_review_comments.created_at),
                 updated_at = COALESCE(excluded.updated_at, pr_review_comments.updated_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(repo)
@@ -411,11 +399,11 @@ impl RawDb {
         .bind(created_at)
         .bind(updated_at)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert pr_review_comment {id}"))?;
+        dr::record_object_attempt(&mut tx, "pr_review_comments", &id, None).await?;
+        tx.commit().await.context("commit pr_review_comment tx")?;
         Ok(())
     }
 

@@ -30,16 +30,17 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
+/// via `dr::bookkeeping_ddl_for(...)` below.
+const DATA_TABLES: &[&str] = &["self_identity", "merge_requests", "discussions"];
+
+const DDL_DATA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS self_identity (
         id TEXT PRIMARY KEY,
         username TEXT NULL,
         web_url TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE TABLE IF NOT EXISTS merge_requests (
         id TEXT PRIMARY KEY,
@@ -54,11 +55,7 @@ const DDL: &[&str] = &[
         target_branch TEXT NULL,
         updated_at TEXT NULL,
         merged_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS merge_requests_by_proj ON merge_requests(project_full_path, mr_iid)",
     "CREATE TABLE IF NOT EXISTS discussions (
@@ -68,14 +65,18 @@ const DDL: &[&str] = &[
         discussion_id TEXT NOT NULL,
         individual_note INTEGER NULL,
         max_note_updated_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS discussions_by_mr ON discussions(project_full_path, mr_iid)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 pub fn mr_pk(proj: &str, iid: u32) -> String {
     format!("{proj}!{iid}")
@@ -92,7 +93,9 @@ pub struct RawDb {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -119,27 +122,24 @@ impl RawDb {
         let username = payload.get("username").and_then(|v| v.as_str());
         let web_url = payload.get("web_url").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize /user")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
         sqlx::query(
-            "INSERT INTO self_identity (id, username, web_url, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+            "INSERT INTO self_identity (id, username, web_url, payload)
+             VALUES (?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 username = COALESCE(excluded.username, self_identity.username),
                 web_url = COALESCE(excluded.web_url, self_identity.web_url),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(username)
         .bind(web_url)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .context("upsert self_identity")?;
+        dr::record_object_attempt(&mut tx, "self_identity", &id, None).await?;
+        tx.commit().await.context("commit self_identity tx")?;
         Ok(())
     }
 
@@ -177,13 +177,12 @@ impl RawDb {
         let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
         let merged_at = payload.get("merged_at").and_then(|v| v.as_str());
         let payload_str = serde_json::to_string(payload).context("serialize MR")?;
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
         sqlx::query(
             "INSERT INTO merge_requests
                 (id, project_full_path, mr_iid, state, web_url, head_sha, base_sha, start_sha,
-                 source_branch, target_branch, updated_at, merged_at, payload, fetched_at,
-                 last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+                 source_branch, target_branch, updated_at, merged_at, payload)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 state = COALESCE(excluded.state, merge_requests.state),
                 web_url = COALESCE(excluded.web_url, merge_requests.web_url),
@@ -194,10 +193,7 @@ impl RawDb {
                 target_branch = COALESCE(excluded.target_branch, merge_requests.target_branch),
                 updated_at = COALESCE(excluded.updated_at, merge_requests.updated_at),
                 merged_at = COALESCE(excluded.merged_at, merge_requests.merged_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&id)
         .bind(proj)
@@ -212,11 +208,11 @@ impl RawDb {
         .bind(updated_at)
         .bind(merged_at)
         .bind(&payload_str)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert merge_request {id}"))?;
+        dr::record_object_attempt(&mut tx, "merge_requests", &id, None).await?;
+        tx.commit().await.context("commit merge_request tx")?;
         Ok(())
     }
 
@@ -356,7 +352,7 @@ async fn upsert_discussion_in(
     proj: &str,
     iid: u32,
     payload: &Value,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let discussion_id = payload
         .get("id")
@@ -378,15 +374,12 @@ async fn upsert_discussion_in(
     sqlx::query(
         "INSERT INTO discussions
             (id, project_full_path, mr_iid, discussion_id, individual_note,
-             max_note_updated_at, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+             max_note_updated_at, payload)
+         VALUES (?, ?, ?, ?, ?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             individual_note = COALESCE(excluded.individual_note, discussions.individual_note),
             max_note_updated_at = COALESCE(excluded.max_note_updated_at, discussions.max_note_updated_at),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(&id)
     .bind(proj)
@@ -395,12 +388,10 @@ async fn upsert_discussion_in(
     .bind(individual_note.map(|b| b as i64))
     .bind(max_note_updated_at.as_deref())
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert discussion {id}"))?;
-    Ok(())
+    dr::record_object_attempt(tx, "discussions", &id, None).await
 }
 
 #[derive(Debug, Clone)]

@@ -27,7 +27,13 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
 
-const DDL: &[&str] = &[
+/// Data tables — what `dolt diff` should see across re-fetches.
+/// Bookkeeping columns (fetched_at, attempt_count, last_attempt_at,
+/// last_error) live in sidecar `<table>_bookkeeping` tables added
+/// to the DDL list via `dr::bookkeeping_ddl_for(...)`.
+const DATA_TABLES: &[&str] = &["users", "orgs", "conversations"];
+
+const DDL_DATA: &[&str] = &[
     // users — PK is the Anthropic user UUID. Carries the `users.json`
     // entries from the bulk export plus anything synthesized from
     // `/api/account` when no export is available.
@@ -35,21 +41,13 @@ const DDL: &[&str] = &[
         id TEXT PRIMARY KEY,
         email TEXT NULL,
         full_name TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     // orgs — PK is the Anthropic organization UUID.
     "CREATE TABLE IF NOT EXISTS orgs (
         id TEXT PRIMARY KEY,
         name TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     // conversations — PK is the Anthropic conversation UUID. We store
     // the raw `/api/.../chat_conversations/{uuid}` payload here, NOT
@@ -61,15 +59,19 @@ const DDL: &[&str] = &[
         org_uuid TEXT NULL,
         name TEXT NULL,
         updated_at TEXT NULL,
-        payload TEXT NULL,
-        fetched_at TEXT NULL,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        last_attempt_at TEXT NULL,
-        last_error TEXT NULL
+        payload TEXT NULL
     )",
     "CREATE INDEX IF NOT EXISTS conversations_org ON conversations(org_uuid)",
     "CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at)",
 ];
+
+fn full_ddl() -> Vec<String> {
+    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
+    for table in DATA_TABLES {
+        out.push(dr::bookkeeping_ddl_for(table));
+    }
+    out
+}
 
 #[derive(Clone)]
 pub struct RawDb {
@@ -94,7 +96,9 @@ pub struct ConversationDetail {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
 
@@ -216,6 +220,14 @@ impl RawDb {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("pre_seed conv {id}"))?;
+            // Always-paired sidecar: ensure a bookkeeping row exists
+            // for this pre-seeded conversation, with attempt_count=0
+            // until the first fetch attempt.
+            sqlx::query("INSERT OR IGNORE INTO conversations_bookkeeping (id) VALUES (?)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("pre_seed conv bookkeeping {id}"))?;
         }
         tx.commit().await.context("commit pre_seed tx")?;
         Ok(())
@@ -245,34 +257,46 @@ impl RawDb {
     }
 
     pub async fn upsert_conversation_detail(&self, row: &ConversationDetail) -> Result<()> {
-        let now = Utc::now().to_rfc3339();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin upsert_conversation_detail tx")?;
         sqlx::query(
-            "INSERT INTO conversations (id, org_uuid, name, updated_at, payload, fetched_at, last_attempt_at, last_error)
-             VALUES (?, ?, ?, ?, jsonb(?), ?, ?, NULL)
+            "INSERT INTO conversations (id, org_uuid, name, updated_at, payload)
+             VALUES (?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
                 name = COALESCE(excluded.name, conversations.name),
                 updated_at = COALESCE(excluded.updated_at, conversations.updated_at),
-                payload = excluded.payload,
-                fetched_at = excluded.fetched_at,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL",
+                payload = excluded.payload",
         )
         .bind(&row.id)
         .bind(&row.org_uuid)
         .bind(row.name.as_deref())
         .bind(row.updated_at.as_deref())
         .bind(&row.payload)
-        .bind(&now)
-        .bind(&now)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert conversation {}", row.id))?;
+        dr::record_object_attempt(&mut tx, "conversations", &row.id, None).await?;
+        tx.commit()
+            .await
+            .context("commit upsert_conversation_detail tx")?;
         Ok(())
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
-        dr::record_object_error(&self.pool, "conversations", id, err).await
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin record_conversation_error tx")?;
+        dr::record_object_error(&mut tx, "conversations", id, err).await?;
+        tx.commit()
+            .await
+            .context("commit record_conversation_error tx")?;
+        Ok(())
     }
 
     pub async fn failed_conversation_ids(&self) -> Result<Vec<String>> {
@@ -323,8 +347,9 @@ impl RawDb {
         bytes: &[u8],
         source_url: Option<&str>,
     ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
         dr::upsert_blob_bytes(
-            &self.pool,
+            &mut tx,
             id,
             kind,
             owning_id,
@@ -333,7 +358,9 @@ impl RawDb {
             bytes,
             source_url,
         )
-        .await
+        .await?;
+        tx.commit().await.context("commit blob upsert tx")?;
+        Ok(())
     }
 
     pub async fn record_blob_error(
@@ -343,7 +370,10 @@ impl RawDb {
         slot: &str,
         err: &str,
     ) -> Result<()> {
-        dr::record_blob_error(&self.pool, id, owning_id, slot, err).await
+        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        tx.commit().await.context("commit blob error tx")?;
+        Ok(())
     }
 
     pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {
@@ -365,7 +395,7 @@ pub struct LoadedConversation {
 async fn upsert_user_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     payload: &Value,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let id = payload
         .get("uuid")
@@ -375,32 +405,27 @@ async fn upsert_user_in(
     let full_name = payload.get("full_name").and_then(|v| v.as_str());
     let payload_str = serde_json::to_string(payload).context("serialize user")?;
     sqlx::query(
-        "INSERT INTO users (id, email, full_name, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, jsonb(?), ?, ?, NULL)
+        "INSERT INTO users (id, email, full_name, payload)
+         VALUES (?, ?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             email = COALESCE(excluded.email, users.email),
             full_name = COALESCE(excluded.full_name, users.full_name),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(id)
     .bind(email)
     .bind(full_name)
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .context("upsert user")?;
-    Ok(())
+    dr::record_object_attempt(tx, "users", id, None).await
 }
 
 async fn upsert_org_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     payload: &Value,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
     let id = payload
         .get("uuid")
@@ -409,24 +434,19 @@ async fn upsert_org_in(
     let name = payload.get("name").and_then(|v| v.as_str());
     let payload_str = serde_json::to_string(payload).context("serialize org")?;
     sqlx::query(
-        "INSERT INTO orgs (id, name, payload, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, jsonb(?), ?, ?, NULL)
+        "INSERT INTO orgs (id, name, payload)
+         VALUES (?, ?, jsonb(?))
          ON CONFLICT(id) DO UPDATE SET
             name = COALESCE(excluded.name, orgs.name),
-            payload = excluded.payload,
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            payload = excluded.payload",
     )
     .bind(id)
     .bind(name)
     .bind(&payload_str)
-    .bind(now)
-    .bind(now)
     .execute(&mut **tx)
     .await
     .context("upsert org")?;
-    Ok(())
+    dr::record_object_attempt(tx, "orgs", id, None).await
 }
 
 #[derive(Clone)]

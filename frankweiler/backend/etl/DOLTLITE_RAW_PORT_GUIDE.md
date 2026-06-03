@@ -127,27 +127,43 @@ port.
 
 ### 6. Object table shape
 
-Every object table carries the same bookkeeping columns. The shared
-module's `OBJECT_BOOKKEEPING_COLUMNS` constant in `doltlite_raw.rs`
-is the canonical reference. Spelled out per-table because const
-concat doesn't play well with the DDL macro story:
+Data columns live on the object table; bookkeeping
+(`fetched_at`, `attempt_count`, `last_attempt_at`, `last_error`)
+lives on a sidecar `<entity>_bookkeeping` table built by
+`dr::bookkeeping_ddl_for("<entity>")`. The split lets
+`dolt diff` over the data tables reflect only upstream content
+change — bookkeeping churn from re-fetches is invisible to
+`dolt diff`.
 
 ```sql
+-- data table — provider-owned
 CREATE TABLE IF NOT EXISTS <entity> (
     id TEXT PRIMARY KEY,                -- upstream id
     parent_id TEXT NULL,                -- if relevant
     -- ... provider-specific columns ...
-    payload TEXT NULL,                  -- raw JSON wire payload (stored as JSONB; see below)
-    fetched_at TEXT NULL,               -- set when payload becomes non-null
+    payload TEXT NULL                   -- raw JSON wire payload (stored as JSONB; see below)
+)
+-- sidecar — added via `dr::bookkeeping_ddl_for("<entity>")`
+CREATE TABLE IF NOT EXISTS <entity>_bookkeeping (
+    id TEXT PRIMARY KEY,
+    fetched_at TEXT NULL,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_attempt_at TEXT NULL,
     last_error TEXT NULL
 )
 ```
 
+**Always-paired**: every object row has a matching sidecar row in
+the same transaction (use `dr::record_object_attempt(&mut tx,
+table, id, None)` on success, `dr::record_object_error(&mut tx,
+table, id, err)` on failure, or `dr::ensure_object_row(&mut tx,
+table, id)` to pre-seed both with `attempt_count=0`).
+
 `payload IS NULL` means "exists upstream, not yet fetched."
 `--retry-failed` re-fetches rows with
-`last_error IS NOT NULL OR (payload IS NULL AND attempt_count > 0)`.
+`last_error IS NOT NULL OR (payload IS NULL AND attempt_count > 0)`,
+which `dr::failed_ids(table)` computes via a JOIN against the
+sidecar.
 
 ### 6a. JSONB storage for payloads
 
@@ -220,11 +236,13 @@ Don't re-implement these in your provider:
 | Open DB + apply DDL | `dr::open(db_path, provider_specific_ddl)` |
 | `<data_root>/raw/<name>` ↔ `<...>.doltlite_db` | `dr::db_path_for()` |
 | Sync run logging | `dr::start_run()` / `dr::finish_run()` |
-| Pre-seed (id) row | `dr::ensure_id(table, id)` |
-| Record fetch error | `dr::record_object_error(table, id, err)` |
+| Sidecar bookkeeping DDL | `dr::bookkeeping_ddl_for(table)` |
+| Pre-seed (id) row + sidecar | `dr::ensure_object_row(&mut tx, table, id)` |
+| Record fetch attempt | `dr::record_object_attempt(&mut tx, table, id, None\|Some(err))` |
+| Record fetch error (alias) | `dr::record_object_error(&mut tx, table, id, err)` |
 | Retry list | `dr::failed_ids(table)` |
 | Read JSON payloads | `dr::load_payloads(table)` |
-| Blob CRUD | `dr::blob_exists` / `dr::upsert_blob_bytes` / `dr::record_blob_error` / `dr::load_blobs_by_id` / `dr::load_blobs_by_owner` |
+| Blob CRUD (all take `&mut tx`) | `dr::blob_exists` / `dr::upsert_blob_bytes` / `dr::record_blob_error` / `dr::load_blobs_by_id` / `dr::load_blobs_by_owner` |
 | Endpoint shape stamping | `dr::record_endpoint_shape()` |
 | `BlobBytes` type | `dr::BlobBytes` (re-export from your db.rs) |
 

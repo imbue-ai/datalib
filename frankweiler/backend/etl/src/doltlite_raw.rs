@@ -94,29 +94,49 @@ pub const COL_ATTEMPT_COUNT: &str = "attempt_count";
 pub const COL_LAST_ATTEMPT_AT: &str = "last_attempt_at";
 pub const COL_LAST_ERROR: &str = "last_error";
 
-/// Standard bookkeeping columns every object table carries. Splice
-/// into the table's `CREATE TABLE` after the provider-specific columns:
+/// `payload` is content — stays on the object table. The four
+/// bookkeeping fields (`fetched_at`, `attempt_count`,
+/// `last_attempt_at`, `last_error`) live in a sidecar
+/// `<table>_bookkeeping` table — see [`bookkeeping_ddl_for`].
 ///
+/// Splitting them out means `dolt diff` over the data tables
+/// reflects only upstream content change, not bookkeeping churn
+/// from re-fetches. This is what makes the
+/// `--reset-and-redownload` sync flag's "did anything actually
+/// change?" assertion meaningful.
+///
+/// Provider DDL example:
 /// ```ignore
-/// const CREATE_PAGES: &str = const_format::concatcp!(
-///     "CREATE TABLE IF NOT EXISTS pages (
-///         id TEXT PRIMARY KEY,
-///         parent_id TEXT NULL,
-///         last_edited_time TEXT NULL,
-///         ",
-///     OBJECT_BOOKKEEPING_COLUMNS,
-///     ")"
-/// );
+/// const CREATE_PAGES: &str = "CREATE TABLE IF NOT EXISTS pages (
+///     id TEXT PRIMARY KEY,
+///     parent_id TEXT NULL,
+///     last_edited_time TEXT NULL,
+///     payload TEXT NULL
+/// )";
+/// // Plus, in the provider's DDL list:
+/// //   bookkeeping_ddl_for("pages")
 /// ```
+/// CREATE TABLE text for the sidecar bookkeeping table paired with
+/// `<table>`. PK matches the parent table's `id` so the sidecar
+/// inner-joins trivially.
 ///
-/// (We don't use `const_format` in practice — providers just inline
-/// the same SQL text. This constant is the canonical reference.)
-pub const OBJECT_BOOKKEEPING_COLUMNS: &str = "\
-    payload TEXT NULL, \
-    fetched_at TEXT NULL, \
-    attempt_count INTEGER NOT NULL DEFAULT 0, \
-    last_attempt_at TEXT NULL, \
-    last_error TEXT NULL";
+/// Per the "always-paired" lifecycle: every row inserted into the
+/// object table gets a matching sidecar row in the same
+/// transaction (use [`ensure_object_row`] to seed both). The
+/// sidecar starts with `attempt_count=0` and the other columns
+/// NULL; the first fetch attempt updates them via
+/// [`record_object_attempt`].
+pub fn bookkeeping_ddl_for(table: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
+            id TEXT PRIMARY KEY,
+            fetched_at TEXT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT NULL,
+            last_error TEXT NULL
+        )"
+    )
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Shared DDL
@@ -159,7 +179,13 @@ pub const BLOBS_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs (
     content_type TEXT NULL,
     sha256 TEXT NULL,
     bytes BLOB NULL,
-    source_url TEXT NULL,
+    source_url TEXT NULL
+)";
+
+/// Sidecar bookkeeping for `blobs`. Same shape as every other
+/// object-table sidecar — see [`bookkeeping_ddl_for`].
+pub const BLOBS_BOOKKEEPING_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs_bookkeeping (
+    id TEXT PRIMARY KEY,
     fetched_at TEXT NULL,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     last_attempt_at TEXT NULL,
@@ -184,6 +210,7 @@ pub const SHARED_DDL: &[&str] = &[
     SYNC_RUNS_DDL,
     ENDPOINT_SHAPES_DDL,
     BLOBS_DDL,
+    BLOBS_BOOKKEEPING_DDL,
     SYNC_SCOPE_STATE_DDL,
 ];
 
@@ -358,58 +385,129 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 // Generic object-table ops
 // ─────────────────────────────────────────────────────────────────────
 
-/// Pre-seed an `id`-only row (NULL payload) into a table. Used when we
-/// know an entity exists upstream but haven't fetched its body yet.
-/// Existing rows are left untouched (no clobber of payload).
+/// Pre-seed an `id`-only row (NULL payload) into a table, AND its
+/// matching sidecar bookkeeping row. Used when we know an entity
+/// exists upstream but haven't fetched its body yet. Existing rows
+/// are left untouched (no clobber of payload or attempt counters).
+///
+/// Always-paired lifecycle: every object row has a matching
+/// `<table>_bookkeeping` row. The sidecar row starts with
+/// `attempt_count=0` and other columns NULL until a fetch attempt
+/// updates it via [`record_object_attempt`].
+///
+/// Takes a transaction (not a pool) so the data INSERT and the
+/// sidecar INSERT land atomically.
 ///
 /// `table` is interpolated into the SQL string — callers must pass a
 /// trusted identifier, not user input. (In practice, every callsite
 /// passes a `&'static str` table name.)
-pub async fn ensure_id(pool: &SqlitePool, table: &str, id: &str) -> Result<()> {
-    let sql = format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
-    sqlx::query(&sql)
+pub async fn ensure_object_row(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+) -> Result<()> {
+    let data_sql = format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
+    sqlx::query(&data_sql)
         .bind(id)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
-        .with_context(|| format!("ensure_id {table}={id}"))?;
+        .with_context(|| format!("ensure_object_row data {table}={id}"))?;
+    let bk_sql =
+        format!("INSERT INTO {table}_bookkeeping (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
+    sqlx::query(&bk_sql)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("ensure_object_row bookkeeping {table}={id}"))?;
     Ok(())
 }
 
-/// Bump attempt counters + record an error against an object row.
-/// Leaves any previously-fetched payload intact. The row is inserted
-/// if not already present.
+/// Record one fetch attempt against an object row's sidecar.
+///
+/// `result = None` → success: sets `fetched_at = now`, clears
+/// `last_error`. `result = Some(err)` → failure: leaves
+/// `fetched_at` untouched, sets `last_error = err`. Both branches
+/// bump `attempt_count` and set `last_attempt_at = now`.
+///
+/// Pairs an `INSERT ... ON CONFLICT DO UPDATE` so it's safe even
+/// when the sidecar row hasn't been pre-seeded by
+/// [`ensure_object_row`] — but callers should normally pre-seed
+/// the data row and its sidecar together for the always-paired
+/// invariant.
+pub async fn record_object_attempt(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    id: &str,
+    result: Option<&str>,
+) -> Result<()> {
+    // Always-paired invariant: a sidecar row never exists without a
+    // matching data row. The success-branch upsert above already
+    // wrote the data row before this call; the failure-branch
+    // callers (record_object_error before any successful fetch)
+    // wouldn't have, so we INSERT OR IGNORE here. Cheap and idempotent.
+    let stub_sql = format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)");
+    sqlx::query(&stub_sql)
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record_object_attempt data stub {table}={id}"))?;
+    let now = Utc::now().to_rfc3339();
+    let sql = match result {
+        None => format!(
+            "INSERT INTO {table}_bookkeeping (id, fetched_at, attempt_count, last_attempt_at, last_error)
+             VALUES (?, ?, 1, ?, NULL)
+             ON CONFLICT(id) DO UPDATE SET
+                fetched_at = excluded.fetched_at,
+                attempt_count = {table}_bookkeeping.attempt_count + 1,
+                last_attempt_at = excluded.last_attempt_at,
+                last_error = NULL"
+        ),
+        Some(_) => format!(
+            "INSERT INTO {table}_bookkeeping (id, attempt_count, last_attempt_at, last_error)
+             VALUES (?, 1, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                attempt_count = {table}_bookkeeping.attempt_count + 1,
+                last_attempt_at = excluded.last_attempt_at,
+                last_error = excluded.last_error"
+        ),
+    };
+    let q = sqlx::query(&sql).bind(id).bind(&now);
+    let q = match result {
+        None => q,
+        Some(err) => q.bind(err),
+    };
+    q.execute(&mut **tx)
+        .await
+        .with_context(|| format!("record_object_attempt {table}={id}"))?;
+    Ok(())
+}
+
+/// Convenience: failure branch of [`record_object_attempt`].
+/// Kept for callsite readability — same semantics as
+/// `record_object_attempt(tx, table, id, Some(err))`.
 pub async fn record_object_error(
-    pool: &SqlitePool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
     id: &str,
     err: &str,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    let sql = format!(
-        "INSERT INTO {table} (id, attempt_count, last_attempt_at, last_error)
-         VALUES (?, 1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            attempt_count = {table}.attempt_count + 1,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = excluded.last_error"
-    );
-    sqlx::query(&sql)
-        .bind(id)
-        .bind(&now)
-        .bind(err)
-        .execute(pool)
-        .await
-        .with_context(|| format!("record_object_error {table}={id}"))?;
-    Ok(())
+    record_object_attempt(tx, table, id, Some(err)).await
 }
 
 /// Ids that should be re-fetched on a `--retry-failed` run: rows whose
 /// last attempt left an error set, or that have a NULL payload after
 /// at least one attempt.
+///
+/// Joins `<table>` (for payload) and `<table>_bookkeeping` (for
+/// attempt_count / last_error). Uses LEFT JOIN so a data row
+/// missing its sidecar (shouldn't happen post-migration, but
+/// defensively) still surfaces if payload is NULL.
 pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
     let sql = format!(
-        "SELECT id FROM {table} \
-         WHERE last_error IS NOT NULL OR (payload IS NULL AND attempt_count > 0)"
+        "SELECT t.id FROM {table} t \
+         LEFT JOIN {table}_bookkeeping b ON b.id = t.id \
+         WHERE b.last_error IS NOT NULL \
+            OR (t.payload IS NULL AND COALESCE(b.attempt_count, 0) > 0)"
     );
     let rows = sqlx::query(&sql)
         .fetch_all(pool)
@@ -547,14 +645,17 @@ pub async fn blob_exists(pool: &SqlitePool, id: &str) -> Result<bool> {
     Ok(row.is_some())
 }
 
-/// Pre-seed a blob row before its bytes have been fetched. Lets the
-/// caller record "we know this file exists" as soon as the listing
-/// reveals it, so a Ctrl-C / network failure leaves behind enough
-/// state to count "known but undownloaded" in tooling. INSERT OR
-/// IGNORE so we never clobber a row that already has bytes (or an
-/// error history).
+/// Pre-seed a blob row before its bytes have been fetched, AND
+/// its matching bookkeeping sidecar row. Lets the caller record
+/// "we know this file exists" as soon as the listing reveals it,
+/// so a Ctrl-C / network failure leaves behind enough state to
+/// count "known but undownloaded" in tooling. INSERT OR IGNORE on
+/// both tables so an existing row with bytes (or an error history)
+/// is never clobbered.
+///
+/// Takes a transaction so data and sidecar inserts are atomic.
 pub async fn pre_seed_blob_stub(
-    pool: &SqlitePool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     id: &str,
     kind: &str,
     owning_id: &str,
@@ -572,16 +673,23 @@ pub async fn pre_seed_blob_stub(
     .bind(slot)
     .bind(content_type)
     .bind(source_url)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
-    .with_context(|| format!("pre_seed_blob_stub {id}"))?;
+    .with_context(|| format!("pre_seed_blob_stub data {id}"))?;
+    sqlx::query("INSERT OR IGNORE INTO blobs_bookkeeping (id) VALUES (?)")
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("pre_seed_blob_stub bookkeeping {id}"))?;
     Ok(())
 }
 
-/// Insert (or refresh) a blob row with its bytes.
+/// Insert (or refresh) a blob row with its bytes, plus a
+/// success entry in `blobs_bookkeeping`. Both writes in one
+/// transaction.
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_blob_bytes(
-    pool: &SqlitePool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     id: &str,
     kind: &str,
     owning_id: &str,
@@ -590,20 +698,16 @@ pub async fn upsert_blob_bytes(
     bytes: &[u8],
     source_url: Option<&str>,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO blobs (id, kind, owning_id, slot, content_type, bytes, source_url, fetched_at, last_attempt_at, last_error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        "INSERT INTO blobs (id, kind, owning_id, slot, content_type, bytes, source_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             kind = excluded.kind,
             owning_id = excluded.owning_id,
             slot = excluded.slot,
             content_type = COALESCE(excluded.content_type, blobs.content_type),
             bytes = excluded.bytes,
-            source_url = COALESCE(excluded.source_url, blobs.source_url),
-            fetched_at = excluded.fetched_at,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = NULL",
+            source_url = COALESCE(excluded.source_url, blobs.source_url)",
     )
     .bind(id)
     .bind(kind)
@@ -612,12 +716,10 @@ pub async fn upsert_blob_bytes(
     .bind(content_type)
     .bind(bytes)
     .bind(source_url)
-    .bind(&now)
-    .bind(&now)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
-    .with_context(|| format!("upsert_blob_bytes {id}"))?;
-    Ok(())
+    .with_context(|| format!("upsert_blob_bytes data {id}"))?;
+    record_object_attempt(tx, "blobs", id, None).await
 }
 
 /// Record a blob fetch failure. We need *some* values for the NOT
@@ -625,31 +727,27 @@ pub async fn upsert_blob_bytes(
 /// `slot` so the row carries useful context for a later retry. `kind`
 /// defaults to `"unknown"` since the caller often doesn't yet know
 /// whether the file is external / uploaded / hosted.
+///
+/// Inserts the (stub) blobs row if absent, then records the
+/// failure attempt in `blobs_bookkeeping`. Both atomic.
 pub async fn record_blob_error(
-    pool: &SqlitePool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     id: &str,
     owning_id: &str,
     slot: &str,
     err: &str,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
     sqlx::query(
-        "INSERT INTO blobs (id, kind, owning_id, slot, attempt_count, last_attempt_at, last_error)
-         VALUES (?, 'unknown', ?, ?, 1, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            attempt_count = blobs.attempt_count + 1,
-            last_attempt_at = excluded.last_attempt_at,
-            last_error = excluded.last_error",
+        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot)
+         VALUES (?, 'unknown', ?, ?)",
     )
     .bind(id)
     .bind(owning_id)
     .bind(slot)
-    .bind(&now)
-    .bind(err)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
-    .with_context(|| format!("record_blob_error {id}"))?;
-    Ok(())
+    .with_context(|| format!("record_blob_error data {id}"))?;
+    record_object_attempt(tx, "blobs", id, Some(err)).await
 }
 
 /// Load every blob row's bytes keyed by `owning_id`. When a single
@@ -712,23 +810,29 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    const TEST_DDL: &[&str] = &["CREATE TABLE IF NOT EXISTS widgets (
+    const WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (
             id TEXT PRIMARY KEY,
             name TEXT NULL,
-            payload TEXT NULL,
-            fetched_at TEXT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            last_attempt_at TEXT NULL,
-            last_error TEXT NULL
-        )"];
+            payload TEXT NULL
+        )";
+
+    fn test_ddl() -> Vec<String> {
+        vec![WIDGETS_DDL.to_string(), bookkeeping_ddl_for("widgets")]
+    }
+
+    async fn open_test(p: &Path) -> SqlitePool {
+        let owned = test_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        open(p, &slices).await.unwrap()
+    }
 
     #[tokio::test]
     async fn open_creates_tables_idempotently() {
         let d = tempdir().unwrap();
         let p = d.path().join("x.doltlite_db");
-        let _ = open(&p, TEST_DDL).await.unwrap();
+        let _ = open_test(&p).await;
         // Re-opening doesn't error (DDL is IF NOT EXISTS).
-        let pool = open(&p, TEST_DDL).await.unwrap();
+        let pool = open_test(&p).await;
         // Shared tables exist.
         sqlx::query("SELECT COUNT(*) FROM sync_runs")
             .fetch_one(&pool)
@@ -769,9 +873,7 @@ mod tests {
     #[tokio::test]
     async fn diagnostic_print_sqlite_identity() {
         let d = tempdir().unwrap();
-        let pool = open(&d.path().join("probe.doltlite_db"), TEST_DDL)
-            .await
-            .unwrap();
+        let pool = open_test(&d.path().join("probe.doltlite_db")).await;
         let ver: String = sqlx::query_scalar("SELECT sqlite_version()")
             .fetch_one(&pool)
             .await
@@ -804,9 +906,7 @@ mod tests {
     #[tokio::test]
     async fn commit_run_returns_hash_and_dolt_log_entry_or_skips() {
         let d = tempdir().unwrap();
-        let pool = open(&d.path().join("commit.doltlite_db"), TEST_DDL)
-            .await
-            .unwrap();
+        let pool = open_test(&d.path().join("commit.doltlite_db")).await;
 
         if !has_dolt_extensions(&pool).await {
             // Stock SQLite path: commit_run should return None without
@@ -879,7 +979,7 @@ mod tests {
 
         // Phase 1: simulate an extract — open, write, close.
         {
-            let pool = open(&db, TEST_DDL).await.unwrap();
+            let pool = open_test(&db).await;
             if !has_dolt_extensions(&pool).await {
                 eprintln!("[commit_run_at_path test] stock libsqlite3 — full assertion skipped");
                 // Still exercise the no-op-on-missing-file path; it
@@ -923,7 +1023,7 @@ mod tests {
         // and querying dolt_log. This is the load-bearing assertion —
         // proves the commit actually persisted to disk, not just that
         // commit_run returned a hash.
-        let verify = open(&db, TEST_DDL).await.unwrap();
+        let verify = open_test(&db).await;
         let logged_msg: String =
             sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
                 .bind(&hash)
@@ -948,9 +1048,7 @@ mod tests {
     #[tokio::test]
     async fn run_lifecycle() {
         let d = tempdir().unwrap();
-        let pool = open(&d.path().join("y.doltlite_db"), TEST_DDL)
-            .await
-            .unwrap();
+        let pool = open_test(&d.path().join("y.doltlite_db")).await;
         let id = start_run(&pool, &json!({"x": 1})).await.unwrap();
         finish_run(&pool, id, "ok", &json!({"done": true}))
             .await
@@ -960,27 +1058,40 @@ mod tests {
     #[tokio::test]
     async fn error_and_retry_flow() {
         let d = tempdir().unwrap();
-        let pool = open(&d.path().join("z.doltlite_db"), TEST_DDL)
-            .await
-            .unwrap();
-        record_object_error(&pool, "widgets", "w1", "boom")
-            .await
-            .unwrap();
-        record_object_error(&pool, "widgets", "w1", "boom2")
-            .await
-            .unwrap();
+        let pool = open_test(&d.path().join("z.doltlite_db")).await;
+        // Pre-seed the data row + sidecar via ensure_object_row, then
+        // record two failures in their own transactions.
+        {
+            let mut tx = pool.begin().await.unwrap();
+            ensure_object_row(&mut tx, "widgets", "w1").await.unwrap();
+            tx.commit().await.unwrap();
+        }
+        for err in ["boom", "boom2"] {
+            let mut tx = pool.begin().await.unwrap();
+            record_object_error(&mut tx, "widgets", "w1", err)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
         let failed = failed_ids(&pool, "widgets").await.unwrap();
         assert_eq!(failed, vec!["w1".to_string()]);
+
+        // Verify the sidecar carries the expected attempt count.
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 2);
     }
 
     #[tokio::test]
     async fn blob_roundtrip() {
         let d = tempdir().unwrap();
-        let pool = open(&d.path().join("b.doltlite_db"), TEST_DDL)
-            .await
-            .unwrap();
+        let pool = open_test(&d.path().join("b.doltlite_db")).await;
+        let mut tx = pool.begin().await.unwrap();
         upsert_blob_bytes(
-            &pool,
+            &mut tx,
             "id1",
             "external",
             "owner1",
@@ -991,10 +1102,22 @@ mod tests {
         )
         .await
         .unwrap();
+        tx.commit().await.unwrap();
         assert!(blob_exists(&pool, "id1").await.unwrap());
         let by_owner = load_blobs_by_owner(&pool).await.unwrap();
         assert_eq!(by_owner["owner1"].bytes, b"hello".to_vec());
         let by_id = load_blobs_by_id(&pool).await.unwrap();
         assert_eq!(by_id["id1"].owning_id, "owner1");
+
+        // Sidecar should reflect one successful attempt.
+        let row: (Option<String>, i64, Option<String>) = sqlx::query_as(
+            "SELECT fetched_at, attempt_count, last_error FROM blobs_bookkeeping WHERE id = 'id1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(row.0.is_some(), "fetched_at should be set on success");
+        assert_eq!(row.1, 1);
+        assert!(row.2.is_none(), "last_error should be cleared on success");
     }
 }

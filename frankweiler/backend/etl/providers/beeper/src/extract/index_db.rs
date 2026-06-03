@@ -574,8 +574,9 @@ async fn ingest_attachment(
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
 
     if !download_media {
+        let mut tx = dst.pool().begin().await.context("begin pre_seed_blob tx")?;
         dr::pre_seed_blob_stub(
-            dst.pool(),
+            &mut tx,
             &blob_id,
             "beeper_media",
             owning_event_uuid,
@@ -584,26 +585,34 @@ async fn ingest_attachment(
             Some(&src_url),
         )
         .await?;
+        tx.commit().await.context("commit pre_seed_blob tx")?;
         return Ok(());
     }
 
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
         Err(e) => {
+            let mut tx = dst
+                .pool()
+                .begin()
+                .await
+                .context("begin record_blob_error tx")?;
             dr::record_blob_error(
-                dst.pool(),
+                &mut tx,
                 &blob_id,
                 owning_event_uuid,
                 &slot_str,
                 &format!("media file not found at {}: {e}", path.display()),
             )
             .await?;
+            tx.commit().await.context("commit record_blob_error tx")?;
             summary.blob_errors += 1;
             return Ok(());
         }
     };
+    let mut tx = dst.pool().begin().await.context("begin upsert_blob tx")?;
     dr::upsert_blob_bytes(
-        dst.pool(),
+        &mut tx,
         &blob_id,
         "beeper_media",
         owning_event_uuid,
@@ -613,6 +622,7 @@ async fn ingest_attachment(
         Some(&src_url),
     )
     .await?;
+    tx.commit().await.context("commit upsert_blob tx")?;
     summary.blobs += 1;
     Ok(())
 }
