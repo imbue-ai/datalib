@@ -755,6 +755,16 @@ const columnDefs = computed<ColDef<SearchRow>[]>(() => [
     hide: true,
     valueFormatter: (p) => accountLabel(p.value as string),
   },
+  {
+    // Cell renders the human-readable org_name; the row also carries
+    // org_uuid (shown on hover as the tooltip) so filtering / scripts
+    // can target the stable opaque key.
+    field: "org_name",
+    headerName: "Org",
+    width: 130,
+    hide: true,
+    tooltipField: "org_uuid",
+  },
 ]);
 
 const defaultColDef: ColDef = {

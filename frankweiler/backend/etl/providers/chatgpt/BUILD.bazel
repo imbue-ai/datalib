@@ -144,6 +144,10 @@ rust_test(
 insta_update(
     name = "chatgpt_render.update",
     test = ":chatgpt_render",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "CHATGPT_FIXTURE_DIR": "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+    },
 )
 
 insta_update(

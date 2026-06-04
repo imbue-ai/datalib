@@ -371,20 +371,21 @@ fn _ensure_json_used(_: Value) {
 pub struct Rendered {
     pub conversation_uuid: String,
     pub account_uuid: String,
+    /// Owning Anthropic organization UUID — segment in the rendered
+    /// path so two conversations from the same logged-in account but
+    /// different orgs don't collide. Falls back to "unknown-org" when
+    /// the upstream `_source.org_uuid` is missing (legacy raw rows).
+    pub org_uuid: String,
     pub body: String,
 }
 
 impl Rendered {
-    /// Page-dir layout: `<conv_uuid>/index.md`. Blobs live in a
-    /// sibling `blobs/` subdir under the same dir so a conversation
-    /// is sharable in isolation. Mirrors Notion's `<page_dir>/index.md`
-    /// shape.
+    /// Page-dir layout: `<conv_uuid>/index.md` under
+    /// `<account>/<org>/llm_chats/`. Blobs live in a sibling `blobs/`
+    /// subdir under the same dir so a conversation is sharable in
+    /// isolation. Mirrors Notion's `<page_dir>/index.md` shape.
     pub fn relative_path(&self) -> std::path::PathBuf {
-        std::path::PathBuf::from("rendered_md/anthropic")
-            .join(&self.account_uuid)
-            .join("llm_chats")
-            .join(&self.conversation_uuid)
-            .join("index.md")
+        conv_relative_path(&self.account_uuid, &self.org_uuid, &self.conversation_uuid)
     }
 }
 
@@ -401,7 +402,12 @@ pub fn render_all(
     for c in &parsed.conversations {
         let fingerprint = fingerprint_for_conversation(&c.upstream_payload);
         let conv_uuid = c.conv.conversation_uuid.clone();
-        let rel = conv_relative_path(&c.conv.account_uuid, &conv_uuid);
+        let org_uuid = c
+            .conv
+            .org_uuid
+            .clone()
+            .unwrap_or_else(|| "unknown-org".into());
+        let rel = conv_relative_path(&c.conv.account_uuid, &org_uuid, &conv_uuid);
         let abs = root.join(&rel);
 
         // Skip when the indexer has the same fingerprint AND the md
@@ -464,9 +470,10 @@ pub fn render_all(
 
 /// Mirror of `Rendered::relative_path` for use *before* we've rendered
 /// (so we can fingerprint-skip without paying for a render first).
-fn conv_relative_path(account_uuid: &str, conv_uuid: &str) -> std::path::PathBuf {
+fn conv_relative_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> std::path::PathBuf {
     std::path::PathBuf::from("rendered_md/anthropic")
         .join(account_uuid)
+        .join(org_uuid)
         .join("llm_chats")
         .join(conv_uuid)
         .join("index.md")
@@ -600,6 +607,10 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
     Some(Rendered {
         conversation_uuid: conv_uuid.into(),
         account_uuid: conv.account_uuid.clone(),
+        org_uuid: conv
+            .org_uuid
+            .clone()
+            .unwrap_or_else(|| "unknown-org".into()),
         body,
     })
 }

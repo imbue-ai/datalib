@@ -48,9 +48,9 @@ bazel_dep(name = "platforms", version = "1.0.0")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.4/doltlite-amalgamation-0.11.4.zip"],
-    sha256 = "dc9588343a02021f8af31b171ee9c4328888de525c6caa7a5106c9141713fbed",
-    strip_prefix = "doltlite-amalgamation-0.11.4",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.11.5/doltlite-amalgamation-0.11.5.zip"],
+    sha256 = "c9b6f4dbf46b5fa6c2a8a889ed862997f3b48b03ee745051bb6e9f4008ba66b0",
+    strip_prefix = "doltlite-amalgamation-0.11.5",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 

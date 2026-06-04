@@ -20,6 +20,11 @@ export type SearchRow = {
   conversation_name: string;
   project: string;
   account: string;
+  // Anthropic-only. Stable owning-org UUID; pair with org_name for display.
+  // Empty for non-Anthropic rows.
+  org_uuid: string;
+  // Human-readable org name (from /api/organizations). Empty when missing.
+  org_name: string;
   entire_chat: string;
   source: string;
   kind: string;

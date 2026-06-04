@@ -50,10 +50,17 @@ fn bump_micros(ts: &str, n: i64) -> String {
     bumped.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
 }
 
-fn qmd_path(account_uuid: &str, conv_uuid: &str) -> String {
-    // Page-dir layout: `<conv_uuid>/index.md`. Matches
-    // `Rendered::relative_path` in `render.rs`.
-    format!("rendered_md/anthropic/{account_uuid}/llm_chats/{conv_uuid}/index.md")
+fn qmd_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> String {
+    // Page-dir layout: `<conv_uuid>/index.md` under
+    // `<account>/<org>/llm_chats/`. Matches `Rendered::relative_path`
+    // in `render.rs`. The org segment lets two conversations from the
+    // same logged-in account but different orgs (e.g. personal Max
+    // plan vs. a Team-plan workspace) render to disjoint paths.
+    format!("rendered_md/anthropic/{account_uuid}/{org_uuid}/llm_chats/{conv_uuid}/index.md")
+}
+
+fn org_uuid_for_path(conv: &ConversationRow) -> &str {
+    conv.org_uuid.as_deref().unwrap_or("unknown-org")
 }
 
 pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
@@ -124,6 +131,8 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
             when_ts: m.created_at.clone().unwrap_or_default(),
             author,
             account: Some(conv.account_uuid.clone()),
+            org_uuid: conv.org_uuid.clone(),
+            org_name: conv.org_name.clone(),
             project: conv.project_uuid.clone(),
             channel: None,
             conversation_name: conv.name.clone(),
@@ -132,7 +141,11 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
             entire_chat: format!("/chat/{conv_uuid}"),
             text: row_text,
             slack_link: None,
-            qmd_path: Some(qmd_path(&conv.account_uuid, conv_uuid)),
+            qmd_path: Some(qmd_path(
+                &conv.account_uuid,
+                org_uuid_for_path(conv),
+                conv_uuid,
+            )),
             source_url: None,
             git_sha: None,
             external_id: None,
@@ -182,6 +195,8 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
                 when_ts: row_when,
                 author: Some(row_author),
                 account: Some(conv.account_uuid.clone()),
+                org_uuid: conv.org_uuid.clone(),
+                org_name: conv.org_name.clone(),
                 project: conv.project_uuid.clone(),
                 channel: None,
                 conversation_name: conv.name.clone(),
@@ -194,7 +209,11 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
                     btext
                 },
                 slack_link: None,
-                qmd_path: Some(qmd_path(&conv.account_uuid, conv_uuid)),
+                qmd_path: Some(qmd_path(
+                    &conv.account_uuid,
+                    org_uuid_for_path(conv),
+                    conv_uuid,
+                )),
                 source_url: None,
                 git_sha: None,
                 external_id: None,
@@ -227,6 +246,8 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
         when_ts: when,
         author: None,
         account: Some(conv.account_uuid.clone()),
+        org_uuid: conv.org_uuid.clone(),
+        org_name: conv.org_name.clone(),
         project: conv.project_uuid.clone(),
         channel: None,
         conversation_name: conv.name.clone(),
@@ -235,7 +256,11 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
         entire_chat: format!("/chat/{}", conv.conversation_uuid),
         text,
         slack_link: None,
-        qmd_path: Some(qmd_path(&conv.account_uuid, &conv.conversation_uuid)),
+        qmd_path: Some(qmd_path(
+            &conv.account_uuid,
+            org_uuid_for_path(conv),
+            &conv.conversation_uuid,
+        )),
         source_url: None,
         git_sha: None,
         external_id: None,

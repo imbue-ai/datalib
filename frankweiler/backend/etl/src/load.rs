@@ -805,6 +805,8 @@ mod write_lock_tests {
             author: None,
             account: Some("acct-test".into()),
             project: None,
+            org_uuid: None,
+            org_name: None,
             channel: None,
             conversation_name: Some(format!("Conv {uuid}")),
             conversation_uuid: uuid.clone(),

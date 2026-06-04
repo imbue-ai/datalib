@@ -417,6 +417,7 @@ fn default_columns() -> Vec<ColumnSpec> {
         col("snippet", "Contents", true),
         col("author", "Author", true),
         col("account", "Account", true),
+        col("org_name", "Org", false),
         col("conversation_name", "Conversation Name", false),
         col("project", "Project", false),
         col("entire_chat", "Entire Chat", false),
@@ -591,6 +592,6 @@ mod tests {
 
     #[test]
     fn default_columns_listed() {
-        assert_eq!(default_columns().len(), 10);
+        assert_eq!(default_columns().len(), 11);
     }
 }

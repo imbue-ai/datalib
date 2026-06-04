@@ -158,6 +158,10 @@ rust_test(
 insta_update(
     name = "anthropic_render.update",
     test = ":anthropic_render",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "ANTHROPIC_FIXTURE_DIR": "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+    },
 )
 
 insta_update(
