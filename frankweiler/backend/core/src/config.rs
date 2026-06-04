@@ -14,8 +14,40 @@ pub struct Config {
     pub dolt: DoltConfig,
     #[serde(default)]
     pub sync: SyncConfig,
+    /// Knobs that can be set both globally (here) and overridden on any
+    /// individual source. Flattened so YAML stays flat: top-level entries
+    /// like `blob_size_limit_bytes:` sit next to `data_root:`, and the
+    /// same fields on a source entry sit next to `name:` / `type:`.
+    #[serde(flatten, default)]
+    pub shared: SharedConfig,
     #[serde(default)]
     pub sources: Vec<SourceConfig>,
+}
+
+/// Settings that have a sensible global default but that any individual
+/// source may want to override. The same struct is `#[serde(flatten)]`-ed
+/// onto both `Config` and `SourceCommon`; resolution merges the two with
+/// the source's value winning. Empty fields fall through to the global.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SharedConfig {
+    /// Skip downloading any blob attachment larger than this many bytes.
+    /// `None` (the default) = no limit. Provider download paths consult
+    /// the size advertised in the source's metadata (e.g. Slack's `size`
+    /// on a file object) before pulling bytes. Attachments whose size is
+    /// not known up front are downloaded normally — there's nothing to
+    /// gate against.
+    #[serde(default)]
+    pub blob_size_limit_bytes: Option<u64>,
+}
+
+impl SharedConfig {
+    /// Merge `self` (a global default) with a per-source override.
+    /// Source-level `Some(...)` wins; `None` falls through.
+    pub fn merge(&self, source: &SharedConfig) -> SharedConfig {
+        SharedConfig {
+            blob_size_limit_bytes: source.blob_size_limit_bytes.or(self.blob_size_limit_bytes),
+        }
+    }
 }
 
 /// Settings for `frankweiler-sync` — the one-shot pipeline that walks
@@ -52,6 +84,23 @@ pub struct SourceCommon {
     pub enabled: bool,
     #[serde(default)]
     pub input_path: Option<PathBuf>,
+    // Per-source overrides for the global [`SharedConfig`] knobs. Each
+    // field here mirrors one on `SharedConfig`; they're not nested behind
+    // a `shared:` key (and not `#[serde(flatten)]`-ed either, because
+    // `deny_unknown_fields` on the enum variants doesn't compose with
+    // nested flatten in serde). Resolved via `SourceConfig::resolved_shared`.
+    #[serde(default)]
+    pub blob_size_limit_bytes: Option<u64>,
+}
+
+impl SourceCommon {
+    /// Per-source overrides as a `SharedConfig`, for merging against the
+    /// global. Mirrors the flatten relationship on `Config`.
+    fn shared_override(&self) -> SharedConfig {
+        SharedConfig {
+            blob_size_limit_bytes: self.blob_size_limit_bytes,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -375,6 +424,12 @@ impl SourceConfig {
         }
     }
 
+    /// Merged view of [`SharedConfig`] for this source: the source's own
+    /// fields win, with `None` falling back to the global at `cfg.shared`.
+    pub fn resolved_shared(&self, cfg: &Config) -> SharedConfig {
+        cfg.shared.merge(&self.common().shared_override())
+    }
+
     /// Resolved on-disk input directory: the explicit `input_path:` if set,
     /// else `<data_root>/raw/<name>`. Matches `_fill_input_path_defaults`
     /// in `src/ingest/config.py`.
@@ -625,6 +680,7 @@ mod tests {
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
             sync: SyncConfig::default(),
+            shared: SharedConfig::default(),
             sources: Vec::new(),
         };
         let resolved = cfg.resolved_qmd_index();
@@ -647,6 +703,7 @@ mod tests {
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
             sync: SyncConfig::default(),
+            shared: SharedConfig::default(),
             sources: Vec::new(),
         };
         assert_eq!(cfg.dolt_db_path(), tmp.join("backend_index.doltlite_db"));
@@ -794,6 +851,70 @@ sources:
         let cfg = load_config(Some(&cfg_path)).unwrap();
         let names: Vec<&str> = cfg.enabled_sources().map(|s| s.name()).collect();
         assert_eq!(names, vec!["on"]);
+    }
+
+    #[test]
+    fn shared_global_falls_through_when_source_omits() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+blob_size_limit_bytes: 5000000
+sources:
+  - name: slack
+    type: slack_api
+    sync: {channels: ['c']}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        assert_eq!(cfg.shared.blob_size_limit_bytes, Some(5_000_000));
+        let resolved = cfg.sources[0].resolved_shared(&cfg);
+        assert_eq!(resolved.blob_size_limit_bytes, Some(5_000_000));
+    }
+
+    #[test]
+    fn shared_source_overrides_global() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+blob_size_limit_bytes: 5000000
+sources:
+  - name: slack
+    type: slack_api
+    blob_size_limit_bytes: 100000
+    sync: {channels: ['c']}
+  - name: gh
+    type: github_api
+    sync: {}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
+        let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
+        assert_eq!(
+            slack.resolved_shared(&cfg).blob_size_limit_bytes,
+            Some(100_000)
+        );
+        // sibling source still inherits the global default
+        assert_eq!(
+            gh.resolved_shared(&cfg).blob_size_limit_bytes,
+            Some(5_000_000)
+        );
+    }
+
+    #[test]
+    fn shared_unset_means_unlimited() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: slack
+    type: slack_api
+    sync: {channels: ['c']}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        assert_eq!(cfg.shared.blob_size_limit_bytes, None);
+        assert_eq!(
+            cfg.sources[0].resolved_shared(&cfg).blob_size_limit_bytes,
+            None
+        );
     }
 
     /// Pytest-tmp_path-style: every call yields a brand-new, uniquely-named

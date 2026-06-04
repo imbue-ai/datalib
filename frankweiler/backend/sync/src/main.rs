@@ -1011,8 +1011,7 @@ async fn run_extract_phase(
     // runs; we just keep `plan.db == None`.
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
-        let path =
-            frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
+        let path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
         match open_extract_db(&plan.kind, &path).await {
             Ok(Some(db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
@@ -1234,6 +1233,7 @@ enum ExtractKind {
     },
     Slack {
         sync: SlackApiSync,
+        blob_size_limit_bytes: Option<u64>,
     },
     Github {
         sync: GithubApiSync,
@@ -1280,6 +1280,7 @@ impl ExtractPlan {
             },
             SourceConfig::SlackApi { sync, .. } => ExtractKind::Slack {
                 sync: sync.clone().unwrap_or_default(),
+                blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
             },
             SourceConfig::GithubApi { sync, .. } => ExtractKind::Github {
                 sync: sync.clone().unwrap_or_default(),
@@ -1355,27 +1356,35 @@ impl ExtractPlan {
                     )
                 })
             }
-            (ExtractKind::Chatgpt { sync }, Some(DbHandle::Chatgpt(db))) => frankweiler_etl_chatgpt::extract::fetch(
-                frankweiler_etl_chatgpt::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    max_pages: sync.max_pages.map(|v| v as usize),
-                    limit: sync.limit.map(|v| v as usize),
-                    sleep_between: Duration::ZERO,
-                    conv_uuids: sync.conv_uuids.clone(),
-                    fetched_at: Some(self.now.clone()),
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "fetched={} skipped={} errors={} listing={} requests={}",
-                    s.fetched, s.skipped, s.errors, s.listing, s.requests,
+            (ExtractKind::Chatgpt { sync }, Some(DbHandle::Chatgpt(db))) => {
+                frankweiler_etl_chatgpt::extract::fetch(
+                    frankweiler_etl_chatgpt::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        max_pages: sync.max_pages.map(|v| v as usize),
+                        limit: sync.limit.map(|v| v as usize),
+                        sleep_between: Duration::ZERO,
+                        conv_uuids: sync.conv_uuids.clone(),
+                        fetched_at: Some(self.now.clone()),
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
                 )
-            }),
-            (ExtractKind::Slack { sync }, Some(DbHandle::Slack(db))) => frankweiler_etl_slack::extract::fetch(
+                .await
+                .map(|s| {
+                    format!(
+                        "fetched={} skipped={} errors={} listing={} requests={}",
+                        s.fetched, s.skipped, s.errors, s.listing, s.requests,
+                    )
+                })
+            }
+            (
+                ExtractKind::Slack {
+                    sync,
+                    blob_size_limit_bytes,
+                },
+                Some(DbHandle::Slack(db)),
+            ) => frankweiler_etl_slack::extract::fetch(
                 frankweiler_etl_slack::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
                     db: Some(db),
@@ -1387,6 +1396,7 @@ impl ExtractPlan {
                     refresh_window_days: sync.refresh_window_days.unwrap_or(0),
                     members_only: !sync.all_channels && sync.channels.is_none(),
                     media: sync.media,
+                    blob_size_limit_bytes,
                     progress: progress.clone(),
                     control: control.clone(),
                 },
@@ -1465,20 +1475,21 @@ impl ExtractPlan {
                     )
                 })
             }
-            (ExtractKind::Beeper { sync }, Some(DbHandle::Beeper(db))) => frankweiler_etl_beeper::extract::fetch(
-                frankweiler_etl_beeper::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    sources: sync.sources.clone(),
-                    beeper_data_dir: sync.beeper_data_dir.clone(),
-                    media: sync.media,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
+            (ExtractKind::Beeper { sync }, Some(DbHandle::Beeper(db))) => {
+                frankweiler_etl_beeper::extract::fetch(
+                    frankweiler_etl_beeper::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        sources: sync.sources.clone(),
+                        beeper_data_dir: sync.beeper_data_dir.clone(),
+                        media: sync.media,
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
                     "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
                     s.rooms,
                     s.users,
@@ -1488,29 +1499,32 @@ impl ExtractPlan {
                     s.events_enriched,
                     s.events_orphaned,
                 )
-            }),
-            (ExtractKind::Carddav { sync }, Some(DbHandle::Carddav(db))) => frankweiler_etl_contacts::extract::fetch(
-                frankweiler_etl_contacts::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    server_url: sync.server_url.clone(),
-                    addressbooks: sync.addressbooks.clone(),
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
-                    s.addressbooks,
-                    s.contacts_new,
-                    s.contacts_updated,
-                    s.contacts_deleted,
-                    s.errors,
-                    s.requests,
+                })
+            }
+            (ExtractKind::Carddav { sync }, Some(DbHandle::Carddav(db))) => {
+                frankweiler_etl_contacts::extract::fetch(
+                    frankweiler_etl_contacts::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        server_url: sync.server_url.clone(),
+                        addressbooks: sync.addressbooks.clone(),
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
                 )
-            }),
+                .await
+                .map(|s| {
+                    format!(
+                        "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
+                        s.addressbooks,
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.errors,
+                        s.requests,
+                    )
+                })
+            }
             // Perseus is file-tree-backed (raw XML files on disk), not
             // doltlite — so it has no `DbHandle` and skips both the
             // pre-open and the post-extract dolt_commit. The pre-open
@@ -1531,10 +1545,13 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
-            (ExtractKind::Notion {
-                sync,
-                playback_root,
-            }, Some(DbHandle::Notion(db))) => {
+            (
+                ExtractKind::Notion {
+                    sync,
+                    playback_root,
+                },
+                Some(DbHandle::Notion(db)),
+            ) => {
                 // Notion has no listing endpoint; in playback mode we
                 // derive seeds by scanning the fixture tree for every
                 // synthesized page response. Outside playback we honor

@@ -193,6 +193,7 @@ pub async fn download_one_file(
     channel_id: &str,
     file_obj: &Value,
     have_blob: &mut HashSet<String>,
+    blob_size_limit_bytes: Option<u64>,
 ) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
@@ -220,6 +221,26 @@ pub async fn download_one_file(
     // Trust-our-copy refetch policy: signed URLs rotate but bytes don't.
     if have_blob.contains(file_id) {
         return Ok("skipped");
+    }
+
+    // Honor the resolved `blob_size_limit_bytes` knob. Slack file objects
+    // carry `size` (bytes) in their metadata; when it's both present and
+    // over the limit, skip the fetch. The pre-seeded blob stub still
+    // records the URL and mime so downstream tools can see the link
+    // existed — only the bytes are absent.
+    if let (Some(limit), Some(size)) = (
+        blob_size_limit_bytes,
+        file_obj.get("size").and_then(|v| v.as_u64()),
+    ) {
+        if size > limit {
+            debug!(
+                event = "slack_media_too_large",
+                file_id = file_id,
+                size = size,
+                limit = limit,
+            );
+            return Ok("too_large");
+        }
     }
 
     let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
@@ -284,9 +305,17 @@ pub async fn download_files_for_messages(
     channel_id: &str,
     messages: &[Value],
     have_blob: &mut HashSet<String>,
+    blob_size_limit_bytes: Option<u64>,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
+    for k in [
+        "downloaded",
+        "skipped",
+        "tombstone",
+        "external",
+        "error",
+        "too_large",
+    ] {
         counts.insert(k.to_string(), 0);
     }
     let mut targets: Vec<Value> = Vec::new();
@@ -326,7 +355,8 @@ pub async fn download_files_for_messages(
         let _ = db.pre_seed_blob_stub(id, channel_id, mime, url).await;
     }
     for f in &targets {
-        let outcome = download_one_file(db, channel_id, f, have_blob).await?;
+        let outcome =
+            download_one_file(db, channel_id, f, have_blob, blob_size_limit_bytes).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(

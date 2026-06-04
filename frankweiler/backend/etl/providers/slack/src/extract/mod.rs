@@ -240,6 +240,7 @@ async fn export_channel(
     latest_reply_by_thread: &std::collections::HashMap<(String, String), String>,
     now: &DateTime<Utc>,
     download_blobs: bool,
+    blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
     have_blob: &mut HashSet<String>,
     progress: &frankweiler_etl::progress::Progress,
@@ -263,6 +264,7 @@ async fn export_channel(
         inclusive,
         None,
         download_blobs,
+        blob_size_limit_bytes,
         totals,
         have_blob,
         progress,
@@ -288,6 +290,7 @@ async fn export_channel(
                     true,
                     Some(latest_ts),
                     download_blobs,
+                    blob_size_limit_bytes,
                     totals,
                     have_blob,
                     progress,
@@ -344,6 +347,7 @@ async fn export_channel(
             channel_id,
             ts,
             download_blobs,
+            blob_size_limit_bytes,
             totals,
             have_blob,
         )
@@ -383,6 +387,7 @@ async fn list_history(
     inclusive: bool,
     latest_ts: Option<&str>,
     download_blobs: bool,
+    blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
     have_blob: &mut HashSet<String>,
     progress: &frankweiler_etl::progress::Progress,
@@ -429,8 +434,14 @@ async fn list_history(
         // files.slack.com. Threads (in pass B) download their replies'
         // files inline inside `paginate_replies`.
         if download_blobs {
-            let counts =
-                api::download_files_for_messages(db, channel_id, &messages, have_blob).await?;
+            let counts = api::download_files_for_messages(
+                db,
+                channel_id,
+                &messages,
+                have_blob,
+                blob_size_limit_bytes,
+            )
+            .await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
@@ -456,12 +467,14 @@ async fn list_history(
 /// message in the response (including the parent re-served by Slack)
 /// and records a `replies_pages` row so the next sync can skip if no
 /// new replies have landed.
+#[allow(clippy::too_many_arguments)]
 async fn paginate_replies(
     db: &RawDb,
     team_id: &str,
     channel_id: &str,
     thread_ts: &str,
     download_blobs: bool,
+    blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
     have_blob: &mut HashSet<String>,
 ) -> Result<()> {
@@ -505,7 +518,14 @@ async fn paginate_replies(
         totals.replies += msgs.len().saturating_sub(1);
 
         if download_blobs {
-            let counts = api::download_files_for_messages(db, channel_id, &msgs, have_blob).await?;
+            let counts = api::download_files_for_messages(
+                db,
+                channel_id,
+                &msgs,
+                have_blob,
+                blob_size_limit_bytes,
+            )
+            .await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
@@ -586,6 +606,11 @@ pub struct FetchOptions {
     pub refresh_window_days: i64,
     pub members_only: bool,
     pub media: bool,
+    /// Resolved blob size limit (bytes). Slack files whose advertised
+    /// `size` exceeds this are skipped before fetching. `None` = no limit;
+    /// files without a `size` field are never skipped (nothing to gate
+    /// against). Mirrors `SharedConfig::blob_size_limit_bytes`.
+    pub blob_size_limit_bytes: Option<u64>,
     pub progress: frankweiler_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: frankweiler_etl::control::ExtractControl,
@@ -601,6 +626,7 @@ impl Default for FetchOptions {
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
             members_only: true,
             media: true,
+            blob_size_limit_bytes: None,
             progress: frankweiler_etl::progress::Progress::noop(),
             control: frankweiler_etl::control::ExtractControl::default(),
         }
@@ -640,6 +666,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "refresh_window_days": opts.refresh_window_days,
         "members_only": opts.members_only,
         "media": opts.media,
+        "blob_size_limit_bytes": opts.blob_size_limit_bytes,
     });
     let run_id = db.start_run(&run_config).await?;
 
@@ -727,6 +754,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &latest_reply_map,
                 &now,
                 opts.media,
+                opts.blob_size_limit_bytes,
                 &mut totals,
                 &mut have_blob,
                 &inner,
