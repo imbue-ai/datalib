@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Trimmed Perseus TEI fixture. Two books, each with two chapters; the
+  second book's second chapter has no section divs (text on the
+  chapter itself), exercising the fallback-to-section-1 path. Greek
+  text is short, nonsense placeholders; we're testing structure, not
+  philology.
+-->
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title>Thucydides, Histories (tiny test fixture, GRC)</title></titleStmt>
+      <publicationStmt><p>test fixture</p></publicationStmt>
+      <sourceDesc><p>synthetic</p></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <div type="edition">
+        <div subtype="book" n="1">
+          <div subtype="chapter" n="1">
+            <div subtype="section" n="1">Θουκυδίδης Ἀθηναῖος ξυνέγραψε.</div>
+            <div subtype="section" n="2">τὸν πόλεμον τῶν Πελοποννησίων.</div>
+          </div>
+          <div subtype="chapter" n="2">
+            <div subtype="section" n="1">δηλωτικὸν ἐποίησε.</div>
+          </div>
+        </div>
+        <div subtype="book" n="2">
+          <div subtype="chapter" n="1">
+            <div subtype="section" n="1">δευτέρα βίβλος, πρώτη κεφαλή.</div>
+          </div>
+          <div subtype="chapter" n="2">Κεφαλὴ χωρίς ἑνότητος — ὅλον τὸ κείμενον ἐνταῦθα.</div>
+        </div>
+      </div>
+    </body>
+  </text>
+</TEI>

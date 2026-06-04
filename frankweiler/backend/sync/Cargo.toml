@@ -21,6 +21,7 @@ frankweiler-etl-slack = { path = "../etl/providers/slack" }
 frankweiler-etl-github = { path = "../etl/providers/github" }
 frankweiler-etl-gitlab = { path = "../etl/providers/gitlab" }
 frankweiler-etl-notion = { path = "../etl/providers/notion" }
+frankweiler-etl-perseus = { path = "../etl/providers/perseus" }
 anyhow = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 indicatif = "0.18"

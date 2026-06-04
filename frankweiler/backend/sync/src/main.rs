@@ -57,7 +57,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, NotionApiSync, SlackApiSync, SourceConfig,
+    GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -1128,6 +1128,9 @@ enum ExtractKind {
     Carddav {
         sync: CarddavSync,
     },
+    Perseus {
+        sync: PerseusSync,
+    },
 }
 
 impl ExtractPlan {
@@ -1169,6 +1172,9 @@ impl ExtractPlan {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::Carddav { sync, .. } => ExtractKind::Carddav {
+                sync: sync.clone().unwrap_or_default(),
+            },
+            SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
@@ -1366,6 +1372,21 @@ impl ExtractPlan {
                     s.contacts_deleted,
                     s.errors,
                     s.requests,
+                )
+            }),
+            ExtractKind::Perseus { sync } => frankweiler_etl_perseus::extract::fetch(
+                frankweiler_etl_perseus::extract::FetchOptions {
+                    out_dir: self.out_dir.clone(),
+                    files: sync.files.clone(),
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "fetched={} skipped={} bytes={} requests={}",
+                    s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
             ExtractKind::Notion {
@@ -1680,6 +1701,21 @@ fn translate_source(
             .context("carddav render_all")
             .map(|_| ())
         }
+        SourceConfig::Perseus { .. } => {
+            use frankweiler_etl_perseus::translate::{parse, render};
+            let parsed = parse::parse(&fixture)
+                .with_context(|| format!("perseus parse {}", fixture.display()))?;
+            render::render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("perseus render_all")
+            .map(|_| ())
+        }
     }
 }
 
@@ -1712,6 +1748,15 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // error out.
                 status_line!(
                     "[synth] {} (carddav): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Perseus { .. } => {
+                // Perseus has no extract phase (no HTTP playback to
+                // synthesize against), so synth is a no-op.
+                status_line!(
+                    "[synth] {} (perseus): skipped (translate-only, no extract)",
                     src.name()
                 );
                 continue;

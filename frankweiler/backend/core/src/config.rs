@@ -94,6 +94,22 @@ pub struct ChatgptApiSync {
     pub conv_uuids: Vec<String>,
 }
 
+/// Tunables for the Perseus Digital Library provider (TEI editions
+/// rendered into chapters + paragraphs — see `frankweiler_etl_perseus`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct PerseusSync {
+    /// Subpaths within `PerseusDL/canonical-greekLit` at
+    /// `refs/heads/master/data/`. Each entry is fetched verbatim from
+    /// `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/{subpath}`
+    /// and written to `<input_path>/<basename>`. Empty/omitted falls
+    /// back to the Thucydides Histories pair the translate path
+    /// currently expects (`grc2` + `1st1K-eng1`) so a bare
+    /// `sync: {}` block does the right thing for the default work.
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
 /// Tunables for the CardDAV provider (Apple, Fastmail, Google
 /// contacts — see `frankweiler_etl_contacts`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -289,6 +305,16 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<CarddavSync>,
     },
+    /// Perseus Digital Library TEI editions. The `sync:` block names
+    /// which TEI files to download from `PerseusDL/canonical-greekLit`
+    /// (or, in translate-only mode with `sync:` omitted, expects the
+    /// files to already be on disk at `input_path`).
+    Perseus {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<PerseusSync>,
+    },
 }
 
 impl SourceConfig {
@@ -302,7 +328,8 @@ impl SourceConfig {
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
             | SourceConfig::Beeper { common, .. }
-            | SourceConfig::Carddav { common, .. } => common,
+            | SourceConfig::Carddav { common, .. }
+            | SourceConfig::Perseus { common, .. } => common,
         }
     }
 
@@ -327,6 +354,7 @@ impl SourceConfig {
             SourceConfig::NotionApi { .. } => "notion_api",
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
+            SourceConfig::Perseus { .. } => "perseus",
         }
     }
 
@@ -343,6 +371,7 @@ impl SourceConfig {
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
+            SourceConfig::Perseus { sync, .. } => sync.is_some(),
         }
     }
 

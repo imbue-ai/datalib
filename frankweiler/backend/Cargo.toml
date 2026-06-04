@@ -13,6 +13,7 @@ members = [
     "etl/providers/github",
     "etl/providers/gitlab",
     "etl/providers/notion",
+    "etl/providers/perseus",
     "etl/providers/slack",
     "qmd_indexer",
     "sync",
