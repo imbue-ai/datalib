@@ -121,8 +121,7 @@ fn parse_one(path: &Path) -> Result<FlatMap> {
                     continue;
                 }
                 if let Some(top) = stack.last_mut() {
-                    let decoded =
-                        t.unescape().with_context(|| "decoding TEI text node")?;
+                    let decoded = t.unescape().with_context(|| "decoding TEI text node")?;
                     push_normalized(&mut top.text, &decoded);
                 }
             }
@@ -158,7 +157,10 @@ impl DivFrame {
         let mut f = DivFrame::default();
         for attr in e.attributes().flatten() {
             let key = attr.key.as_ref();
-            let val = attr.unescape_value().map(|v| v.into_owned()).unwrap_or_default();
+            let val = attr
+                .unescape_value()
+                .map(|v| v.into_owned())
+                .unwrap_or_default();
             // attr keys are e.g. b"subtype" or b"n" (no namespace
             // prefix in PerseusDL editions).
             if key == b"subtype" {
@@ -289,7 +291,8 @@ fn align(grc: FlatMap, eng: FlatMap) -> ParsedPerseus {
         chapter.sections.push(Section {
             n: sn.clone(),
             grc: grc_text.clone(),
-            eng: eng.get(&(bn.clone(), cn.clone(), sn.clone()))
+            eng: eng
+                .get(&(bn.clone(), cn.clone(), sn.clone()))
                 .cloned()
                 .unwrap_or_default(),
         });
@@ -324,7 +327,10 @@ mod tests {
         std::fs::write(dir.path().join(GRC_FILENAME), TINY_GRC).unwrap();
         // English file can be a minimal stub; alignment falls back to empty.
         let tiny_eng = TINY_GRC
-            .replace("Θουκυδίδης Ἀθηναῖος ξυνέγραψε.", "Thucydides the Athenian wrote.")
+            .replace(
+                "Θουκυδίδης Ἀθηναῖος ξυνέγραψε.",
+                "Thucydides the Athenian wrote.",
+            )
             .replace(
                 "τὸν πόλεμον τῶν Πελοποννησίων.",
                 "the war of the Peloponnesians.",

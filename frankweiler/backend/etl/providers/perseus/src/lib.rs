@@ -153,9 +153,6 @@ mod tests {
             chapter_uuid("1", "1", "grc"),
         );
         // grc ≠ eng for the same chapter.
-        assert_ne!(
-            chapter_uuid("1", "1", "grc"),
-            chapter_uuid("1", "1", "eng")
-        );
+        assert_ne!(chapter_uuid("1", "1", "grc"), chapter_uuid("1", "1", "eng"));
     }
 }

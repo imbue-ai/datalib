@@ -19,7 +19,7 @@
 //!
 //! The translate path under [`crate::translate`] currently expects
 //! the **Thucydides Histories** pair specifically — `perseus-grc2.xml`
-//! + `1st1K-eng1.xml`. The default [`PerseusSync::files`] list
+//! and `1st1K-eng1.xml`. The default [`PerseusSync::files`] list
 //! ([`DEFAULT_FILES`]) matches that, so an empty / `sync: {}` block
 //! does the right thing. If you point `files:` at a different work,
 //! Extract will happily fetch it but Translate will fail to find the
@@ -90,9 +90,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut summary = FetchSummary::default();
 
     for subpath in &files {
-        let basename = basename(subpath).ok_or_else(|| {
-            anyhow::anyhow!("perseus `files` entry has no basename: {subpath:?}")
-        })?;
+        let basename = basename(subpath)
+            .ok_or_else(|| anyhow::anyhow!("perseus `files` entry has no basename: {subpath:?}"))?;
         let dest = opts.out_dir.join(basename);
         let url = format!("{RAW_GITHUB_BASE}/{subpath}");
         opts.progress.set_message(&format!("perseus: {subpath}"));
@@ -132,11 +131,7 @@ async fn curl_to_file(url: &str, dest: &Path) -> Result<()> {
         .with_context(|| "wait curl")?;
     if !status.status.success() {
         let stderr = String::from_utf8_lossy(&status.stderr).into_owned();
-        anyhow::bail!(
-            "curl {url}: exit {}: {}",
-            status.status,
-            stderr.trim()
-        );
+        anyhow::bail!("curl {url}: exit {}: {}", status.status, stderr.trim());
     }
     Ok(())
 }
@@ -145,14 +140,11 @@ fn clear_xml_files(dir: &Path) -> Result<()> {
     // Wipe every `.xml` in the target dir so a follow-up Translate
     // sees a clean state. We only touch `.xml` to avoid blowing
     // away a sibling subdirectory or a user-staged playback fixture.
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("readdir {}", dir.display()))?
-    {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("readdir {}", dir.display()))? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) == Some("xml") {
-            std::fs::remove_file(&path)
-                .with_context(|| format!("rm {}", path.display()))?;
+            std::fs::remove_file(&path).with_context(|| format!("rm {}", path.display()))?;
         }
     }
     Ok(())
@@ -180,10 +172,8 @@ mod tests {
         // Spine-of-the-pipeline assertion: if these drift, a default
         // `sync: {}` block leaves Translate looking for files Extract
         // never wrote.
-        let default_basenames: Vec<&str> = DEFAULT_FILES
-            .iter()
-            .map(|s| basename(s).unwrap())
-            .collect();
+        let default_basenames: Vec<&str> =
+            DEFAULT_FILES.iter().map(|s| basename(s).unwrap()).collect();
         assert!(default_basenames.contains(&GRC_FILENAME));
         assert!(default_basenames.contains(&ENG_FILENAME));
     }

@@ -128,7 +128,10 @@ fn sidecars_carry_stable_uuids_and_provider_metadata() {
     assert_eq!(row["conversation_uuid"], expected);
     assert_eq!(row["markdown_uuid"], expected);
     assert!(row["text"].as_str().unwrap().contains("Θουκυδίδης"));
-    assert!(row["qmd_path"].as_str().unwrap().ends_with("/chapter_001_grc.md"));
+    assert!(row["qmd_path"]
+        .as_str()
+        .unwrap()
+        .ends_with("/chapter_001_grc.md"));
 
     // Book sidecar uses the book uuid, not the chapter uuid.
     let book_sidecar = out
@@ -172,7 +175,10 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
     assert_eq!(doc.rows[1].kind, "Section (grc)");
     assert_eq!(doc.rows[2].kind, "Section (grc)");
     // Section rows point at the chapter doc.
-    assert_eq!(doc.rows[1].markdown_uuid.as_deref(), Some(ch11_grc.as_str()));
+    assert_eq!(
+        doc.rows[1].markdown_uuid.as_deref(),
+        Some(ch11_grc.as_str())
+    );
     assert_eq!(doc.rows[1].uuid, paragraph_uuid("1", "1", "1", "grc"));
     assert_eq!(doc.rows[2].uuid, paragraph_uuid("1", "1", "2", "grc"));
     // message_index counts non-empty sections in emission order,
@@ -185,14 +191,21 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
     // we deliberately put in the fixture). So 1 chapter + 1 section
     // = 2 rows.
     let ch11_eng = chapter_uuid("1", "1", "eng");
-    let doc_e = emitted.iter().find(|d| d.markdown_uuid == ch11_eng).unwrap();
+    let doc_e = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == ch11_eng)
+        .unwrap();
     assert_eq!(doc_e.rows.len(), 2);
 
     // The chapter md actually carries matching div anchors for each
     // section row's uuid — without this the SPA's deep-link
     // querySelector would 404 and the click would just open the doc
     // unscrolled. Read the file and grep for the attribute.
-    let chapter_md = std::fs::read_to_string(out.path().join(doc.md_path.strip_prefix(out.path()).unwrap())).unwrap();
+    let chapter_md = std::fs::read_to_string(
+        out.path()
+            .join(doc.md_path.strip_prefix(out.path()).unwrap()),
+    )
+    .unwrap();
     for r in doc.rows.iter().skip(1) {
         let needle = format!("data-section-uuid=\"{}\"", r.uuid);
         assert!(
@@ -228,7 +241,10 @@ fn book_index_md_links_every_chapter_in_both_languages() {
     for (b, c) in [("1", "1"), ("1", "2")] {
         for lang in ["grc", "eng"] {
             let u = chapter_uuid(b, c, lang);
-            assert!(idx.contains(&format!("/#/chat/{u}")), "missing {b}.{c} {lang} link");
+            assert!(
+                idx.contains(&format!("/#/chat/{u}")),
+                "missing {b}.{c} {lang} link"
+            );
         }
     }
 }

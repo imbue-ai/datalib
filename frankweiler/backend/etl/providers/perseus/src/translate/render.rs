@@ -62,11 +62,7 @@ pub fn render_all(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    let total: usize = parsed
-        .books
-        .iter()
-        .map(|b| 1 + 2 * b.chapters.len())
-        .sum();
+    let total: usize = parsed.books.iter().map(|b| 1 + 2 * b.chapters.len()).sum();
     summary.markdowns_total = total;
     progress.set_length(Some(total as u64));
 
@@ -173,8 +169,7 @@ fn render_chapter(
     }
 
     if let Some(parent) = md_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("mkdir -p {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
 
     let md = render_chapter_md(chapter, lang);
@@ -368,7 +363,11 @@ fn chapter_text_for_grid(chapter: &Chapter, lang: &str) -> String {
 }
 
 fn book_text_for_grid(book: &Book) -> String {
-    let mut out = format!("{} — {} chapters.", book_title(&book.n), book.chapters.len());
+    let mut out = format!(
+        "{} — {} chapters.",
+        book_title(&book.n),
+        book.chapters.len()
+    );
     for chapter in &book.chapters {
         out.push_str(&format!("\n{}", chapter_title(&book.n, &chapter.n)));
     }
