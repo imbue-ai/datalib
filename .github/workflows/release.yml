@@ -311,57 +311,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Smoke test BEFORE pushing: build the amd64 image locally
-      # (`--load`), then run the `latchkey services register` + `auth
-      # set` + `auth list` roundtrip against a tmp `.latchkey` dir.
-      # This validates the assumption that latchkey's encryption falls
-      # back to a file-keyed scheme on a keyring-less Linux container
-      # (no Secret Service running), so credentials written inside the
-      # container can be read back by the same container. If this
-      # assumption ever breaks, we want to fail BEFORE pushing :latest.
+      # Build and push the multi-arch image in one go. We previously had
+      # a separate `--load` amd64 build that ran a latchkey
+      # services-register / auth-set / auth-list roundtrip against the
+      # loaded image before this step pushed; that doubled cold-cache
+      # wall time (the amd64 build was effectively done twice — once
+      # for smoke, once for publish, with the latter cache-hitting via
+      # GHA but still re-exporting layers) and the only thing it
+      # uniquely caught was a regression in the entrypoint's
+      # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
+      # (`frankweiler-sync --version`, `frankweiler-http --help`)
+      # duplicate `qmd --version` + binary-presence checks the
+      # Dockerfile already runs inline. If the latchkey bootstrap ever
+      # regresses, ghcr.io will briefly have a broken `:latest` until
+      # someone notices — acceptable while the user base is small;
+      # revisit if we ever get pulls from real users.
       #
-      # Cache layer with `type=gha` so subsequent tag runs don't pay
-      # the ~2.25 GB `qmd pull` cost from scratch every time — that
-      # download has been hitting HuggingFace rate limits, and the
-      # base apt + npm steps alone run for ~5 minutes cold. `mode=max`
-      # writes ALL intermediate layers (not just the final image) so
-      # the qmd model layer is reusable across tags. GHA caches have a
-      # 10 GB-per-repo quota; the qmd layer alone is 2.25 GB so we
-      # have headroom but not infinite. Same cache key is reused by
-      # the multi-arch push step below, so amd64 layers built here
-      # are reused there.
-      - name: Smoke test (latchkey roundtrip inside the image)
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${REF_NAME#v}"
-          tag="ghcr.io/${GITHUB_REPOSITORY,,}:smoke-${version}"
-          docker buildx build \
-              --platform linux/amd64 \
-              --tag "${tag}" \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
-              --load \
-              ctx
-          tmp_latchkey="$(mktemp -d)"
-          trap 'rm -rf "${tmp_latchkey}"' EXIT
-          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
-              latchkey services register claude-ai --base-api-url=https://claude.ai/
-          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
-              latchkey auth set claude-ai -H "Cookie: sessionKey=smoke-test-not-real"
-          # The roundtrip assertion: a fresh container reading the same
-          # bind-mounted dir must see the credential we just stored.
-          out="$(docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" latchkey auth list)"
-          echo "${out}"
-          echo "${out}" | grep -q claude-ai
-          # Verify binaries respond to --version (cheap sanity check).
-          docker run --rm "${tag}" frankweiler-sync --version
-          # frankweiler-http requires a positional DATA_ROOT, so we can't
-          # --version it; just verify it loads its dynamic libs by asking
-          # for help (which exits 0 after clap renders usage).
-          docker run --rm --entrypoint /usr/local/bin/frankweiler-http "${tag}" --help
-
+      # `type=gha` cache means consecutive tag pushes within ~7 days
+      # cache-hit both arches (the eviction window) — only the first
+      # tag in a long while pays a full cold build. `mode=max` writes
+      # ALL intermediate layers (not just the final image) so the
+      # 2.25 GB qmd model layer is the dominant cache hit.
       - name: Build and push multi-arch image
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -371,11 +341,6 @@ jobs:
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          # Same `type=gha` cache as the smoke step above. amd64 layers
-          # built during the smoke run are already in the cache; this
-          # invocation reuses them and only builds arm64 fresh on the
-          # first cold tag, then both arches cache-hit on subsequent
-          # tags.
           docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
