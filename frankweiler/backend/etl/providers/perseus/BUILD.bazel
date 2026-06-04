@@ -1,0 +1,64 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in tiny TEI fixture (3 sections across 1 book / 1 chapter)
+# consumed by the translate test. Big enough to exercise both
+# languages + book / chapter / section nesting; small enough to read
+# in a code review.
+filegroup(
+    name = "tiny_fixture",
+    srcs = glob(["tests/fixtures/perseus_tiny/*.xml"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_perseus",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_perseus",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:quick-xml",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "perseus_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_perseus",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# End-to-end translate smoke test against the in-crate tiny fixture.
+# Bazel stages the fixture via `data` and points
+# PERSEUS_FIXTURE_DIR at the runfiles-relative path (the test reads
+# it with CARGO_MANIFEST_DIR as the cargo fallback).
+rust_test(
+    name = "perseus_translate_test",
+    srcs = ["tests/perseus_translate.rs"],
+    crate_root = "tests/perseus_translate.rs",
+    data = [":tiny_fixture"],
+    edition = "2021",
+    env = {
+        "PERSEUS_FIXTURE_DIR": "frankweiler/backend/etl/providers/perseus/tests/fixtures/perseus_tiny",
+    },
+    deps = [
+        ":frankweiler_etl_perseus",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
+)

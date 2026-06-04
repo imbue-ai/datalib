@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mirrors the Greek fixture, with one section deliberately missing on
+  the English side (book 1 chapter 1 section 2) to verify that
+  alignment leaves `eng` empty when a translation gap exists.
+-->
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title>Thucydides, Histories (tiny test fixture, ENG)</title></titleStmt>
+      <publicationStmt><p>test fixture</p></publicationStmt>
+      <sourceDesc><p>synthetic</p></sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <div type="edition">
+        <div subtype="book" n="1">
+          <div subtype="chapter" n="1">
+            <div subtype="section" n="1">Thucydides the Athenian wrote the history.</div>
+            <!-- intentionally missing section n="2" -->
+          </div>
+          <div subtype="chapter" n="2">
+            <div subtype="section" n="1">A demonstrative observation.</div>
+          </div>
+        </div>
+        <div subtype="book" n="2">
+          <div subtype="chapter" n="1">
+            <div subtype="section" n="1">Second book, first chapter.</div>
+          </div>
+          <div subtype="chapter" n="2">A whole chapter with no section divs at all.</div>
+        </div>
+      </div>
+    </body>
+  </text>
+</TEI>

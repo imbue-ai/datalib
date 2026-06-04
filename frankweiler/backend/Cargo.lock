@@ -1033,6 +1033,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-perseus"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "frankweiler-etl",
+ "frankweiler-schema",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-slack"
 version = "0.4.1"
 dependencies = [
@@ -1128,6 +1145,7 @@ dependencies = [
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",
  "frankweiler-etl-notion",
+ "frankweiler-etl-perseus",
  "frankweiler-etl-slack",
  "frankweiler-obs",
  "frankweiler-qmd-indexer",

@@ -1,0 +1,27 @@
+[package]
+name = "frankweiler-etl-perseus"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_perseus"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-schema = { path = "../../../schema" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+quick-xml = "0.36"
+# Async runtime — needed for the `extract::fetch` entry point which is
+# `async` to match every other provider's `FetchOptions -> FetchSummary`
+# signature. The shared `latchkey_curl` is async too.
+tokio = { workspace = true, features = ["process", "io-util", "time", "rt-multi-thread", "macros"] }
+uuid = { workspace = true, features = ["v5"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
