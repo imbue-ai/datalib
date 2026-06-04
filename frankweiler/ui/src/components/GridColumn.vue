@@ -1,9 +1,12 @@
 <script setup lang="ts">
+// One Miller column: the search bar + AG Grid + grid context menu +
+// feedback wiring. Self-contained — owns query, fetched rows, accounts,
+// and writes its own URL params (`q`, `sel`, `cols` (AG Grid state)).
+// Emits `select-row` upward so the parent MillerView can decide what
+// document column to show.
 import { ref, watch, onMounted, computed, nextTick } from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { useRouter } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
-import { Splitpanes, Pane } from "splitpanes";
-import "splitpanes/dist/splitpanes.css";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -27,9 +30,9 @@ import {
   type Health,
   type SearchRow,
 } from "@/api";
-import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
+import { encodeStack } from "@/router/columns";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -50,9 +53,33 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
+// Parent (MillerView) owns the column's URL-persisted state — query,
+// selected row uuid, AG Grid column-state blob — and threads it
+// through these props. We mirror them to local refs for input
+// reactivity; a `syncing` flag breaks the prop → local → emit → prop
+// loop that would otherwise fire on every external write.
+const props = defineProps<{
+  q: string;
+  sel: string | null;
+  agCols: string | null;
+}>();
+
+const emit = defineEmits<{
+  // Fired whenever a grid row becomes the active selection. The
+  // payload is the row data (so the parent can read `markdown_uuid`,
+  // `uuid`, `kind`, etc.) and a `restoring` flag — true when the
+  // event came from URL-restore rather than a user click, so the
+  // parent can avoid clobbering already-restored downstream state.
+  (e: "select-row", row: SearchRow, restoring: boolean): void;
+  // v-model-style writebacks for the three pieces of URL state this
+  // column owns. `update:agCols` may pass `null` when the AG Grid
+  // column state is empty (no custom sort / column changes yet).
+  (e: "update:q", q: string): void;
+  (e: "update:agCols", agCols: string | null): void;
+}>();
+
 const router = useRouter();
-const route = useRoute();
-const query = ref(typeof route.query.q === "string" ? route.query.q : "");
+const query = ref(props.q);
 const rows = ref<SearchRow[]>([]);
 const total = ref(0);
 const loading = ref(false);
@@ -64,6 +91,12 @@ const qmdError = ref<string | null>(null);
 const health = ref<Health | null>(null);
 const accounts = ref<AccountsMap>({});
 const selectedRow = ref<SearchRow | null>(null);
+
+// True while we are applying a value that came from a prop (rather
+// than from a user action), so internal watchers know to skip the
+// emit-back. Same role as the existing `restoring` flag used for
+// AG-Grid-API-driven mutations.
+let syncingFromProps = false;
 
 // AG Grid handle for applying / reading column state. Set by onGridReady.
 let gridApi: GridApi<SearchRow> | null = null;
@@ -308,7 +341,7 @@ function escapeRegExp(s: string): string {
 function slugifyForToken(label: string): string {
   const ascii = label
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -367,25 +400,16 @@ async function copyTargetUuids() {
   closeContextMenu();
 }
 
-function syncHash() {
-  if (restoring) return;
-  const q: Record<string, string> = {};
-  if (query.value) q.q = query.value;
-  if (selectedRow.value) q.sel = rowKey(selectedRow.value);
-  else if (typeof route.query.sel === "string" && rows.value.length === 0) {
-    // Preserve the URL's pending `sel` until rows load and
-    // tryRestoreSelection has had a chance to run. AG Grid's column
-    // events fire as microtasks after applyColumnState, slipping out of
-    // the `restoring=true` window, and would otherwise clobber the
-    // URL's selection target before we can restore it on reload.
-    q.sel = route.query.sel;
-  }
-  if (gridApi) {
-    const state = gridApi.getColumnState();
-    if (state.length > 0) q.cols = encodeColumnState(state);
-  }
-  // replace, not push — selection / column tweaks are not history events.
-  router.replace({ name: "search", query: q });
+// Emit the current AG Grid column state to the parent. Called from
+// the column-event hooks (resize / sort / move / visibility) — query
+// changes flow via `watch(query, …)` and selection via `select-row`,
+// so each piece of state has its own narrow emit path. Skipped during
+// programmatic mutation (`restoring`) and during prop sync.
+function emitAgCols() {
+  if (restoring || syncingFromProps) return;
+  if (!gridApi) return;
+  const state = gridApi.getColumnState();
+  emit("update:agCols", state.length > 0 ? encodeColumnState(state) : null);
 }
 
 function accountLabel(uuid: string): string {
@@ -465,17 +489,29 @@ watch(query, (q) => {
   // leaves the user staring at stale rows with no feedback.
   if (!searchCache.has(q)) loading.value = true;
   debounceTimer = setTimeout(() => runSearch(q), 150);
-  syncHash();
+  if (!syncingFromProps) emit("update:q", q);
 });
 
-// Restore the selected row from the URL after rows load (or after the
-// grid first becomes ready, whichever happens last — onGridReady can
-// race with the initial fetch). Selection state outlives the result
-// set: searches that drop the selected row leave selection cleared,
-// which is the right behavior for a deep-link.
+// Mirror external prop changes (back/forward nav, parent-driven
+// rewrites) into our local refs without re-emitting them.
+watch(
+  () => props.q,
+  (q) => {
+    if (q === query.value) return;
+    syncingFromProps = true;
+    query.value = q;
+    syncingFromProps = false;
+  },
+);
+
+// Restore the selected row from the parent-provided `sel` prop after
+// rows load (or after the grid first becomes ready, whichever happens
+// last — onGridReady can race with the initial fetch). Selection state
+// outlives the result set: searches that drop the selected row leave
+// selection cleared, which is the right behavior for a deep-link.
 async function tryRestoreSelection() {
-  const sel = route.query.sel;
-  if (typeof sel !== "string" || !gridApi || rows.value.length === 0) return;
+  const sel = props.sel;
+  if (!sel || !gridApi || rows.value.length === 0) return;
   if (selectedRow.value && rowKey(selectedRow.value) === sel) return;
   const target = rows.value.find((r) => rowKey(r) === sel);
   if (!target) return;
@@ -494,6 +530,16 @@ async function tryRestoreSelection() {
   if (found) selectedRow.value = target;
   restoring = false;
 }
+
+// External `sel` change (back/forward nav, or parent rewrote URL):
+// reflect into the grid selection. Skipped while we're already
+// applying it, and idempotent if the prop matches what we have.
+watch(
+  () => props.sel,
+  () => {
+    tryRestoreSelection();
+  },
+);
 
 // Apply the default sort whenever results change, unless the user has
 // taken sort into their own hands.
@@ -530,7 +576,7 @@ function applyDefaultSort() {
   // soon as the new rows land. We instead listen for the grid's own
   // `rowDataUpdated` event, which fires once the new rows are in
   // place; the listener runs at most once per applyDefaultSort call.
-  if (typeof route.query.sel === "string" && route.query.sel.length > 0) {
+  if (props.sel) {
     // tryRestoreSelection will scroll to the pinned row; don't fight it.
     return;
   }
@@ -622,11 +668,15 @@ onMounted(async () => {
 });
 
 function openRow(row: SearchRow) {
-  const href = router.resolve({
-    name: "chat",
-    params: { markdownUuid: row.markdown_uuid ?? row.uuid },
-    hash: row.message_index != null ? `#m${row.message_index}` : undefined,
-  }).href;
+  // Double-click → open this row's doc as a standalone single-column
+  // stack in a new tab. Same shape as the "view this column alone ↗"
+  // link in DocColumn: `/doc:<uuid>`. The message-anchor hash
+  // (`#m<index>`) is appended when present so deep-linking to a
+  // specific message still works.
+  const md = row.markdown_uuid ?? row.uuid;
+  const path = encodeStack([{ kind: "doc", md }]);
+  const hash = row.message_index != null ? `#m${row.message_index}` : "";
+  const href = router.resolve(path).href + hash;
   window.open(href, "_blank", "noopener");
 }
 
@@ -733,9 +783,8 @@ const gridOptions: GridOptions<SearchRow> = {
     // into view before clicking.
     (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
       e.api;
-    const cols = route.query.cols;
-    if (typeof cols === "string") {
-      const state = decodeColumnState(cols);
+    if (props.agCols) {
+      const state = decodeColumnState(props.agCols);
       if (state) {
         restoring = true;
         gridApi.applyColumnState({ state, applyOrder: true });
@@ -752,7 +801,12 @@ const gridOptions: GridOptions<SearchRow> = {
   onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
     if (e.node.isSelected() && e.data) {
       selectedRow.value = e.data;
-      syncHash();
+      // Tell the parent which row is selected. `restoring` is true
+      // when this is a URL-driven re-selection (we don't want the
+      // parent to wipe URL-restored downstream column state in that
+      // case). The parent rewrites both `sel` and the deeper columns
+      // for us — there's no separate `update:sel` event.
+      emit("select-row", e.data, restoring);
     }
   },
   onRowDoubleClicked: (e) => {
@@ -839,12 +893,12 @@ const gridOptions: GridOptions<SearchRow> = {
     contextMenuVisible.value = true;
   },
   // Any change a user can make to columns gets reflected in the URL.
-  onColumnVisible: () => syncHash(),
+  onColumnVisible: () => emitAgCols(),
   onColumnResized: (e) => {
-    if (e.finished) syncHash();
+    if (e.finished) emitAgCols();
   },
   onColumnMoved: (e) => {
-    if (e.finished) syncHash();
+    if (e.finished) emitAgCols();
   },
   onSortChanged: (e) => {
     // Only treat header-click sorts as "user intent". Programmatic
@@ -853,13 +907,35 @@ const gridOptions: GridOptions<SearchRow> = {
     if (!restoring && e.source === "uiColumnSorted") {
       userSortedManually = true;
     }
-    syncHash();
+    emitAgCols();
   },
 };
+
+// External `agCols` change (parent rewrote the URL): re-apply to the
+// grid. No-op when we don't have an api yet (the agCols prop is also
+// read in onGridReady for that case).
+watch(
+  () => props.agCols,
+  (next) => {
+    if (!gridApi) return;
+    if (!next) return;
+    const state = decodeColumnState(next);
+    if (!state) return;
+    // Compare encoded form to current — avoid re-applying our own
+    // emitted value and triggering another column-event burst.
+    const current = encodeColumnState(gridApi.getColumnState());
+    if (current === next) return;
+    syncingFromProps = true;
+    restoring = true;
+    gridApi.applyColumnState({ state, applyOrder: true });
+    restoring = false;
+    syncingFromProps = false;
+  },
+);
 </script>
 
 <template>
-  <section class="search-view">
+  <div class="grid-column">
     <div class="search-input-wrap">
       <input
         v-model="query"
@@ -895,37 +971,23 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <Splitpanes class="split" :dbl-click-splitter="false">
-      <Pane size="55" min-size="25" class="left-pane">
-        <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
-          <AgGridVue
-            class="grid"
-            :class="{ 'grid--loading': loading }"
-            :rowData="rows"
-            :columnDefs="columnDefs"
-            :defaultColDef="defaultColDef"
-            :gridOptions="gridOptions"
-          />
-          <div v-if="loading" class="grid-spinner" aria-label="searching">
-            <div class="grid-spinner__ring" />
-            <div class="grid-spinner__label">searching…</div>
-          </div>
-        </div>
-        <p v-if="!loading && rows.length === 0 && !error" class="empty">
-          no matches.
-        </p>
-      </Pane>
-      <Pane size="45" min-size="20" class="right-pane">
-        <ChatPreviewPane
-          :markdown-uuid="selectedRow?.markdown_uuid ?? null"
-          :selected-section-uuid="
-            selectedRow != null && selectedRow.kind !== 'Chat'
-              ? selectedRow.uuid
-              : null
-          "
-        />
-      </Pane>
-    </Splitpanes>
+    <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
+      <AgGridVue
+        class="grid"
+        :class="{ 'grid--loading': loading }"
+        :rowData="rows"
+        :columnDefs="columnDefs"
+        :defaultColDef="defaultColDef"
+        :gridOptions="gridOptions"
+      />
+      <div v-if="loading" class="grid-spinner" aria-label="searching">
+        <div class="grid-spinner__ring" />
+        <div class="grid-spinner__label">searching…</div>
+      </div>
+    </div>
+    <p v-if="!loading && rows.length === 0 && !error" class="empty">
+      no matches.
+    </p>
 
     <div
       v-if="contextMenuVisible"
@@ -985,15 +1047,17 @@ const gridOptions: GridOptions<SearchRow> = {
       :context="feedbackContext"
       @close="feedbackOpen = false"
     />
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.search-view {
+.grid-column {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 6rem);
+  height: 100%;
   gap: 0.5rem;
+  padding: 0.5rem;
+  box-sizing: border-box;
 }
 .search-input-wrap {
   position: relative;
@@ -1060,22 +1124,6 @@ const gridOptions: GridOptions<SearchRow> = {
   color: #d18a3a;
   font-size: 0.9rem;
 }
-.split {
-  flex: 1 1 auto;
-  min-height: 300px;
-}
-.left-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.right-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-left: 1px solid var(--fw-border);
-  background: var(--fw-bg);
-}
 .grid-wrap {
   flex: 1 1 auto;
   min-height: 200px;
@@ -1099,7 +1147,6 @@ const gridOptions: GridOptions<SearchRow> = {
   justify-content: center;
   gap: 0.75rem;
   pointer-events: none;
-  /* Above the (blurred) grid but below any modals/menus. */
   z-index: 5;
 }
 .grid-spinner__ring {
@@ -1162,16 +1209,6 @@ const gridOptions: GridOptions<SearchRow> = {
 </style>
 
 <style>
-/* Splitter styling — outside scoped block so it reaches splitpanes' DOM. */
-.splitpanes__splitter {
-  background: var(--fw-border);
-  position: relative;
-  width: 6px;
-  cursor: col-resize;
-}
-.splitpanes__splitter:hover {
-  background: var(--fw-accent);
-}
 .source-icon {
   width: 20px;
   height: 20px;
