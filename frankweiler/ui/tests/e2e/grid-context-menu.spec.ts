@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 
 // Bug: right-clicking on an AG Grid row pops the *browser's* native context
-// menu on top of our custom `.ctx-menu`. The handler in SearchView.vue
+// menu on top of our custom `.ctx-menu`. The handler in GridColumn.vue
 // (`onCellContextMenu`) does call `me.preventDefault()` on the original
 // MouseEvent, but AG Grid dispatches `cellContextMenu` from inside its own
 // listener — by the time our handler runs, the contextmenu event has

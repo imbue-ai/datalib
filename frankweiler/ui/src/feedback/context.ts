@@ -184,8 +184,8 @@ export function messageAncestor(el: Element | null | undefined): string | null {
 }
 
 /** Walk up looking for an element carrying `data-markdown-uuid`. The
- *  ChatPreviewPane sets this on its root so any descendant can find
- *  the markdown without prop-drilling. */
+ *  DocColumn sets this on its root so any descendant can find the
+ *  markdown without prop-drilling. */
 export function conversationAncestor(messageUuid: string | Element): string | null {
   // Allow callers to hand either an element or a message UUID. Looking up
   // by element is more robust (works for page-header context where there

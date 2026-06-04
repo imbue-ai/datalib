@@ -1,9 +1,12 @@
 <script setup lang="ts">
+// One Miller column: the search bar + AG Grid + grid context menu +
+// feedback wiring. Self-contained — owns query, fetched rows, accounts,
+// and writes its own URL params (`q`, `sel`, `cols` (AG Grid state)).
+// Emits `select-row` upward so the parent MillerView can decide what
+// document column to show.
 import { ref, watch, onMounted, computed, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
-import { Splitpanes, Pane } from "splitpanes";
-import "splitpanes/dist/splitpanes.css";
 import {
   ModuleRegistry,
   AllCommunityModule,
@@ -27,7 +30,6 @@ import {
   type Health,
   type SearchRow,
 } from "@/api";
-import ChatPreviewPane from "@/components/ChatPreviewPane.vue";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
 import claudeIconUrl from "@/assets/claude.svg";
@@ -49,6 +51,32 @@ const SOURCE_ICONS: Record<string, string> = {
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
+
+// State this column owns and surfaces to the parent for URL
+// persistence. `cols` is the base64url-packed AG Grid column state;
+// see encodeColumnState below. Any field that hasn't been set yet is
+// `null` (vs. the empty string, which would still serialize). The
+// parent merges this with sibling-component state and writes the URL
+// in a single atomic step — having GridColumn write the URL directly
+// would race with the parent's own writes.
+export type GridUrlState = {
+  q: string | null;
+  sel: string | null;
+  cols: string | null;
+};
+
+const emit = defineEmits<{
+  // Fired whenever a grid row becomes the active selection. The
+  // payload is the row data (so the parent can read `markdown_uuid`,
+  // `uuid`, `kind`, etc.) and a `restoring` flag — true when the
+  // event came from URL-restore rather than a user click, so the
+  // parent can avoid clobbering already-restored downstream state.
+  (e: "select-row", row: SearchRow, restoring: boolean): void;
+  // Fired whenever any of this column's URL-persisted state changes
+  // (query, selected row, AG Grid column state). The parent is
+  // responsible for writing the new state to the URL.
+  (e: "update-url-state", state: GridUrlState): void;
+}>();
 
 const router = useRouter();
 const route = useRoute();
@@ -308,7 +336,7 @@ function escapeRegExp(s: string): string {
 function slugifyForToken(label: string): string {
   const ascii = label
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[̀-ͯ]/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
@@ -367,25 +395,37 @@ async function copyTargetUuids() {
   closeContextMenu();
 }
 
+// Emit our URL-persisted state for the parent to merge with its own
+// keys (`docs`) and write atomically. Skipped while we're restoring
+// from the URL to avoid an immediate write-back of values we just
+// read in. The parent is the single URL writer — having both us and
+// the parent call `router.replace` synchronously would race; only
+// the second wins, and the first writer's keys are silently dropped.
 function syncHash() {
   if (restoring) return;
-  const q: Record<string, string> = {};
-  if (query.value) q.q = query.value;
-  if (selectedRow.value) q.sel = rowKey(selectedRow.value);
-  else if (typeof route.query.sel === "string" && rows.value.length === 0) {
+  let sel: string | null = null;
+  if (selectedRow.value) {
+    sel = rowKey(selectedRow.value);
+  } else if (
+    typeof route.query.sel === "string" &&
+    rows.value.length === 0
+  ) {
     // Preserve the URL's pending `sel` until rows load and
     // tryRestoreSelection has had a chance to run. AG Grid's column
-    // events fire as microtasks after applyColumnState, slipping out of
-    // the `restoring=true` window, and would otherwise clobber the
+    // events fire as microtasks after applyColumnState, slipping out
+    // of the `restoring=true` window, and would otherwise clobber the
     // URL's selection target before we can restore it on reload.
-    q.sel = route.query.sel;
+    sel = route.query.sel;
   }
-  if (gridApi) {
-    const state = gridApi.getColumnState();
-    if (state.length > 0) q.cols = encodeColumnState(state);
-  }
-  // replace, not push — selection / column tweaks are not history events.
-  router.replace({ name: "search", query: q });
+  const cols =
+    gridApi != null && gridApi.getColumnState().length > 0
+      ? encodeColumnState(gridApi.getColumnState())
+      : null;
+  emit("update-url-state", {
+    q: query.value ? query.value : null,
+    sel,
+    cols,
+  });
 }
 
 function accountLabel(uuid: string): string {
@@ -752,6 +792,11 @@ const gridOptions: GridOptions<SearchRow> = {
   onRowSelected: (e: RowSelectedEvent<SearchRow>) => {
     if (e.node.isSelected() && e.data) {
       selectedRow.value = e.data;
+      // Tell the parent which row is selected. `restoring` is true
+      // when this is a URL-driven re-selection (we don't want the
+      // parent to wipe URL-restored downstream column state in that
+      // case).
+      emit("select-row", e.data, restoring);
       syncHash();
     }
   },
@@ -859,7 +904,7 @@ const gridOptions: GridOptions<SearchRow> = {
 </script>
 
 <template>
-  <section class="search-view">
+  <div class="grid-column">
     <div class="search-input-wrap">
       <input
         v-model="query"
@@ -895,37 +940,23 @@ const gridOptions: GridOptions<SearchRow> = {
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <Splitpanes class="split" :dbl-click-splitter="false">
-      <Pane size="55" min-size="25" class="left-pane">
-        <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
-          <AgGridVue
-            class="grid"
-            :class="{ 'grid--loading': loading }"
-            :rowData="rows"
-            :columnDefs="columnDefs"
-            :defaultColDef="defaultColDef"
-            :gridOptions="gridOptions"
-          />
-          <div v-if="loading" class="grid-spinner" aria-label="searching">
-            <div class="grid-spinner__ring" />
-            <div class="grid-spinner__label">searching…</div>
-          </div>
-        </div>
-        <p v-if="!loading && rows.length === 0 && !error" class="empty">
-          no matches.
-        </p>
-      </Pane>
-      <Pane size="45" min-size="20" class="right-pane">
-        <ChatPreviewPane
-          :markdown-uuid="selectedRow?.markdown_uuid ?? null"
-          :selected-section-uuid="
-            selectedRow != null && selectedRow.kind !== 'Chat'
-              ? selectedRow.uuid
-              : null
-          "
-        />
-      </Pane>
-    </Splitpanes>
+    <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
+      <AgGridVue
+        class="grid"
+        :class="{ 'grid--loading': loading }"
+        :rowData="rows"
+        :columnDefs="columnDefs"
+        :defaultColDef="defaultColDef"
+        :gridOptions="gridOptions"
+      />
+      <div v-if="loading" class="grid-spinner" aria-label="searching">
+        <div class="grid-spinner__ring" />
+        <div class="grid-spinner__label">searching…</div>
+      </div>
+    </div>
+    <p v-if="!loading && rows.length === 0 && !error" class="empty">
+      no matches.
+    </p>
 
     <div
       v-if="contextMenuVisible"
@@ -985,15 +1016,17 @@ const gridOptions: GridOptions<SearchRow> = {
       :context="feedbackContext"
       @close="feedbackOpen = false"
     />
-  </section>
+  </div>
 </template>
 
 <style scoped>
-.search-view {
+.grid-column {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 6rem);
+  height: 100%;
   gap: 0.5rem;
+  padding: 0.5rem;
+  box-sizing: border-box;
 }
 .search-input-wrap {
   position: relative;
@@ -1060,22 +1093,6 @@ const gridOptions: GridOptions<SearchRow> = {
   color: #d18a3a;
   font-size: 0.9rem;
 }
-.split {
-  flex: 1 1 auto;
-  min-height: 300px;
-}
-.left-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.right-pane {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-left: 1px solid var(--fw-border);
-  background: var(--fw-bg);
-}
 .grid-wrap {
   flex: 1 1 auto;
   min-height: 200px;
@@ -1099,7 +1116,6 @@ const gridOptions: GridOptions<SearchRow> = {
   justify-content: center;
   gap: 0.75rem;
   pointer-events: none;
-  /* Above the (blurred) grid but below any modals/menus. */
   z-index: 5;
 }
 .grid-spinner__ring {
@@ -1162,16 +1178,6 @@ const gridOptions: GridOptions<SearchRow> = {
 </style>
 
 <style>
-/* Splitter styling — outside scoped block so it reaches splitpanes' DOM. */
-.splitpanes__splitter {
-  background: var(--fw-border);
-  position: relative;
-  width: 6px;
-  cursor: col-resize;
-}
-.splitpanes__splitter:hover {
-  background: var(--fw-accent);
-}
 .source-icon {
   width: 20px;
   height: 20px;

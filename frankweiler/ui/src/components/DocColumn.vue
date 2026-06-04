@@ -11,6 +11,7 @@ import {
   messageAncestor,
   type FeedbackContext,
 } from "@/feedback/context";
+import { chatHrefFromClick } from "@/router/chat_link";
 
 const props = defineProps<{
   // Addresses one rendered `.md` file — the file the preview pane
@@ -24,6 +25,21 @@ const props = defineProps<{
   // forward this prop and ChatBody does an exact-string lookup.
   selectedSectionUuid: string | null;
 }>();
+
+// Miller columns: when the body contains a markdown link to another
+// chat (`href="/chat/<uuid>"`), intercept the click and emit so the
+// parent MillerView can push a new column to the right instead of
+// performing a full-page navigation.
+const emit = defineEmits<{
+  (e: "open-chat", markdownUuid: string): void;
+}>();
+
+function onBodyClick(ev: MouseEvent) {
+  const uuid = chatHrefFromClick(ev);
+  if (!uuid) return;
+  ev.preventDefault();
+  emit("open-chat", uuid);
+}
 
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
@@ -232,8 +248,8 @@ watch(
         <!-- Title block (with copy-id button and source-URL arrow) is
              rendered inline at the top of the body by the cross-provider
              `Title` helper. The header here only carries the
-             non-title chrome: feedback button, "open full view" link,
-             and timestamps. -->
+             non-title chrome: feedback button, "view this column alone"
+             link, and timestamps. -->
         <p class="meta">
           <FeedbackButton
             :entity-uuid="chat.markdown_uuid"
@@ -241,17 +257,25 @@ watch(
             label="Conversation"
           />
           ·
+          <!-- Standalone view: opens this single column on its own
+               page in a new tab. Replaces the old "open full view"
+               flow now that the main view stacks columns instead of
+               replacing the page on click. -->
           <RouterLink
             :to="{
               name: 'chat',
               params: { markdownUuid: chat.markdown_uuid },
             }"
-            >open full view ↗</RouterLink
+            target="_blank"
+            rel="noopener"
+            >view this column alone ↗</RouterLink
           >
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
-      <ChatBody :body="chat.body" :selected-section-uuid="selectedSectionUuid" />
+      <div @click="onBodyClick">
+        <ChatBody :body="chat.body" :selected-section-uuid="selectedSectionUuid" />
+      </div>
     </template>
     <FeedbackModal
       :open="feedbackOpen"
