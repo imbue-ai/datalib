@@ -17,3 +17,11 @@ sources:
       media: true
       channels:
         - "project-data-liberation"
+
+  - name: perseus              # Classical texts: TEI from PerseusDL.
+    type: perseus
+    sync: {}                   # defaults to Thucydides Histories
+                               # (Greek + English). Override with:
+                               # files:
+                               #   - tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml
+                               #   - tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml
