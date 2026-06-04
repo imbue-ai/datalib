@@ -12,6 +12,7 @@ members = [
     "etl/providers/contacts",
     "etl/providers/github",
     "etl/providers/gitlab",
+    "etl/providers/jmap",
     "etl/providers/notion",
     "etl/providers/perseus",
     "etl/providers/slack",

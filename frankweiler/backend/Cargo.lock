@@ -1010,6 +1010,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-jmap"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-etl",
+ "frankweiler-obs",
+ "frankweiler-schema",
+ "insta",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-notion"
 version = "0.4.1"
 dependencies = [
@@ -1144,6 +1166,7 @@ dependencies = [
  "frankweiler-etl-contacts",
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",
+ "frankweiler-etl-jmap",
  "frankweiler-etl-notion",
  "frankweiler-etl-perseus",
  "frankweiler-etl-slack",

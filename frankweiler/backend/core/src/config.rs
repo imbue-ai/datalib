@@ -285,6 +285,30 @@ pub struct BeeperSync {
     pub period: Option<String>,
 }
 
+/// Tunables for the generic JMAP-mail provider (Fastmail today; any
+/// RFC 8620 + RFC 8621 server in principle — see `frankweiler_etl_jmap`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct JmapApiSync {
+    /// JMAP server hostname. Session discovered at
+    /// `https://<hostname>/.well-known/jmap`. Examples:
+    ///   - `api.fastmail.com`
+    ///   - `mail.example.com` (any RFC 8620 server)
+    pub hostname: String,
+    /// JMAP account id. Defaults to the session's
+    /// `primaryAccounts['urn:ietf:params:jmap:mail']`.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Restrict the sync to these JMAP Mailbox ids. Empty = every
+    /// mailbox the account exposes.
+    #[serde(default)]
+    pub only_mailbox_ids: Vec<String>,
+    /// Force full Email/query enumeration even if an `Email/changes`
+    /// state token is stored. Defaults to false (incremental).
+    #[serde(default)]
+    pub full_resync: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionApiSync {
@@ -342,6 +366,12 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<NotionApiSync>,
     },
+    JmapApi {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<JmapApiSync>,
+    },
     Beeper {
         #[serde(flatten)]
         common: SourceCommon,
@@ -376,6 +406,7 @@ impl SourceConfig {
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
+            | SourceConfig::JmapApi { common, .. }
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
             | SourceConfig::Perseus { common, .. } => common,
@@ -401,6 +432,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { .. } => "github_api",
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
+            SourceConfig::JmapApi { .. } => "jmap_api",
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
             SourceConfig::Perseus { .. } => "perseus",
@@ -418,6 +450,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
+            SourceConfig::JmapApi { sync, .. } => sync.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),

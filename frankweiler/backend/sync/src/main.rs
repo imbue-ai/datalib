@@ -57,7 +57,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
+    GitlabApiSync, JmapApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -381,6 +381,7 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
         "type=github_api",
         "type=gitlab_api",
         "type=notion_api",
+        "type=jmap_api",
         "type=beeper",
     ] {
         if s.contains(marker) {
@@ -491,6 +492,25 @@ notion integration token expired or missing.
          -d '{}' | head -c 200
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
+            .into(),
+        "jmap_api" => "\
+JMAP (Fastmail / generic) auth missing or expired.
+
+  1. Create an API token at https://app.fastmail.com/settings/security/tokens
+     with the 'Read-only access to mail' scope; copy it to the clipboard.
+  2. Register the two host services and attach the token to both
+     (Fastmail serves blob bytes from a separate host):
+       latchkey services register fastmail \\
+           --base-api-url=\"https://api.fastmail.com/\"
+       latchkey services register fastmail-content \\
+           --base-api-url=\"https://www.fastmailusercontent.com/\"
+       latchkey auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
+       latchkey auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
+  3. Smoke-test:
+       latchkey curl -sSL https://api.fastmail.com/.well-known/jmap \\
+           | jq .primaryAccounts
+
+See frankweiler/backend/etl/providers/jmap/EXTRACT.md for details."
             .into(),
         "beeper" => "\
 beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
@@ -1168,6 +1188,7 @@ enum DbHandle {
     Notion(frankweiler_etl_notion::extract::RawDb),
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
+    Jmap(frankweiler_etl_jmap::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1181,6 +1202,7 @@ impl DbHandle {
             DbHandle::Notion(d) => d.pool(),
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
+            DbHandle::Jmap(d) => d.pool(),
         }
     }
 }
@@ -1219,6 +1241,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Carddav { .. } => {
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
+        ExtractKind::Jmap { .. } => {
+            DbHandle::Jmap(frankweiler_etl_jmap::extract::RawDb::open(path).await?)
+        }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1253,6 +1278,10 @@ enum ExtractKind {
     },
     Perseus {
         sync: PerseusSync,
+    },
+    Jmap {
+        sync: JmapApiSync,
+        blob_size_limit_bytes: Option<u64>,
     },
 }
 
@@ -1302,6 +1331,18 @@ impl ExtractPlan {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
+            SourceConfig::JmapApi { sync, .. } => {
+                let sync = sync.clone().ok_or_else(|| {
+                    anyhow::anyhow!("jmap_api source {name} missing sync: block")
+                });
+                match sync {
+                    Ok(sync) => ExtractKind::Jmap {
+                        sync,
+                        blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
+                    },
+                    Err(e) => return Some(Err(e)),
+                }
+            }
         };
         Some(Ok(Self {
             name,
@@ -1602,6 +1643,38 @@ impl ExtractPlan {
                 })
             }
             // The open phase pairs each ExtractKind with the
+            (
+                ExtractKind::Jmap {
+                    sync,
+                    blob_size_limit_bytes,
+                },
+                Some(DbHandle::Jmap(db)),
+            ) => frankweiler_etl_jmap::extract::fetch(
+                frankweiler_etl_jmap::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    hostname: sync.hostname.clone(),
+                    account_id: sync.account_id.clone(),
+                    full_resync: sync.full_resync,
+                    only_mailbox_ids: sync.only_mailbox_ids.clone(),
+                    blob_size_limit_bytes,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
+                    s.mailboxes_upserted,
+                    s.emails_upserted,
+                    s.emails_destroyed,
+                    s.threads_upserted,
+                    s.blobs_downloaded,
+                    s.blobs_oversize,
+                    s.blobs_errored,
+                )
+            }),
             // matching DbHandle variant, so any mismatch here would
             // be a bug in `open_extract_db`. We don't try to recover.
             _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
@@ -1885,6 +1958,31 @@ fn translate_source(
             .context("carddav render_all")
             .map(|_| ())
         }
+        SourceConfig::JmapApi { .. } => {
+            use frankweiler_etl_jmap::extract::block_on_load_all;
+            use frankweiler_etl_jmap::extract::db_path_for as jmap_db_path_for;
+            use frankweiler_etl_jmap::translate::render::render_all;
+            let db = jmap_db_path_for(&fixture);
+            if !db.exists() {
+                status_line!(
+                    "[translate] {name} (jmap): no raw db at {} — skipping",
+                    db.display()
+                );
+                return Ok(());
+            }
+            let parsed = block_on_load_all(&db)
+                .with_context(|| format!("jmap block_on_load_all {}", db.display()))?;
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("jmap render_all")
+            .map(|_| ())
+        }
         SourceConfig::Perseus { .. } => {
             use frankweiler_etl_perseus::translate::{parse, render};
             let parsed = parse::parse(&fixture)
@@ -1934,6 +2032,12 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                     "[synth] {} (carddav): skipped (no synthesizer yet)",
                     src.name()
                 );
+                continue;
+            }
+            SourceConfig::JmapApi { .. } => {
+                // No synthesizer yet — JMAP playback fixtures are a
+                // follow-up. Skip quietly.
+                status_line!("[synth] {} (jmap): skipped (no synthesizer yet)", src.name());
                 continue;
             }
             SourceConfig::Perseus { .. } => {
