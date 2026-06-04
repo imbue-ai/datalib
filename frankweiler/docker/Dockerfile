@@ -127,37 +127,80 @@ RUN arch="$(dpkg --print-architecture)" \
     && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
     && doltlite --version
 
-# Pre-fetch qmd's three embedding/reranker/expansion models so a fresh
-# `frankweiler-sync` run doesn't pay a ~2.25 GB HuggingFace download on
-# first use. Layered *before* the release-binary copy so it's cached
-# across version bumps — model URIs only change when qmd's defaults
-# change (rare), but the binaries change every release.
+# Warm qmd's model cache by driving the actual qmd pipeline against a
+# seed markdown file. Concretely:
 #
-# Model URIs and the `hf_<owner>_<basename>.gguf` cache-filename pattern
-# come from `@tobilu/qmd`'s `dist/llm.js` (the `DEFAULT_EMBED_MODEL` /
-# `DEFAULT_RERANK_MODEL` / `DEFAULT_GENERATE_MODEL` constants and
-# node-llama-cpp's `resolveModelFile` cache layout). If qmd flips a
-# default (or the user passes `QMD_EMBED_MODEL=...` to override), the
-# baked-in copy is simply ignored and qmd downloads the alternate model
-# on first use — no harm done, just no speed-up.
+#   * `qmd collection add <path>`  — register the seed dir as a collection.
+#   * `qmd update`                 — re-index (sanity check; no-op after add).
+#   * `qmd embed`                  — pulls the embedding model
+#                                    (hf:ggml-org/embeddinggemma-300M-GGUF/...).
+#   * `qmd query "<text>"`         — pulls the query-expansion model
+#                                    (hf:tobil/qmd-query-expansion-...).
+#                                    With ≥1 result returned, also pulls
+#                                    the reranker model
+#                                    (hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/...).
 #
-# FIXME: Instead of this, we should create some markdown, then qmd add and index it, then check that the files we expect to be created got created.
-# Total layer size: ~2.25 GB. Yes, the image is correspondingly chunky;
-# the alternative was every fresh `docker run frankweiler-sync` paying a
-# multi-minute, network-bound, easily-interrupted download, which is a
-# much worse first-run experience than a one-time `docker pull`.
-RUN mkdir -p /root/.cache/qmd/models && \
-    cd /root/.cache/qmd/models && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_ggml-org_embeddinggemma-300M-Q8_0.gguf \
-        "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf" && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf \
-        "https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/resolve/main/qwen3-reranker-0.6b-q8_0.gguf" && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf \
-        "https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/main/qmd-query-expansion-1.7B-q4_k_m.gguf" && \
-    ls -lh /root/.cache/qmd/models
+# Why this instead of curl'ing GGUFs directly: qmd knows the canonical
+# URIs, the on-disk cache layout (`hf_<owner>_<basename>.gguf` under
+# `~/.cache/qmd/models`), and which model versions it's actually going
+# to use at runtime. When qmd bumps a default model (or someone
+# overrides via `QMD_EMBED_MODEL=...`), the right files land in the
+# cache instead of us silently baking stale GGUFs that get ignored.
+# Also exercises the embed + query path end-to-end, so a build that
+# succeeds here proves qmd actually works in this image.
+#
+# Pin to the same qmd version that `frankweiler-sync` invokes via
+# `npx -y @tobilu/qmd@<v>` at runtime so the warmed cache is exactly
+# what would otherwise be downloaded on first sync.
+#
+# Layered *before* the release-binary copy so it's cached across
+# version bumps — model URIs only change when qmd's defaults change
+# (rare), but the binaries change every release. Total layer size:
+# ~2.25 GB; build-step duration ~1–2 minutes (most of it the model
+# downloads themselves; embedding 1 chunk + 1 search query are sub-
+# 10s on CPU).
+#
+# Keep this block (and the `qmd` install above) in sync with
+# `.devcontainer/Dockerfile`.
+ARG QMD_VERSION=2.1.0
+RUN npm install -g "@tobilu/qmd@${QMD_VERSION}"
+
+RUN set -eux; \
+    mkdir -p /opt/qmd-warmup; \
+    printf '%s\n' \
+        '# qmd warmup' '' \
+        'Seed document used during docker image build to drive first-run' \
+        'model download.' '' \
+        '## doltlite version control' '' \
+        'The doltlite SQL store keeps version history of every change to' \
+        'indexed markdown collections. Run `SELECT * FROM dolt_log()` against' \
+        'the prolly store to inspect the commit timeline.' '' \
+        '## frankweiler synchronization' '' \
+        'The frankweiler-sync binary mirrors conversations from Anthropic,' \
+        'Slack, GitHub, GitLab, and Notion into a queryable local store.' \
+        > /opt/qmd-warmup/hello.md; \
+    qmd collection add /opt/qmd-warmup; \
+    qmd update; \
+    qmd embed; \
+    qmd query "doltlite version control"; \
+    # End-state check: at least 3 GGUFs are now cached (embed + expand +
+    # reranker). Don't assert on specific filenames — those are qmd's
+    # internal naming convention and we want this to keep working when
+    # qmd flips a default model URI.
+    model_count="$(find /root/.cache/qmd/models -type f -name '*.gguf' | wc -l)"; \
+    test "$model_count" -ge 3 || { \
+        echo "qmd warmup left only $model_count models in /root/.cache/qmd/models" >&2; \
+        ls -la /root/.cache/qmd/models >&2; \
+        exit 1; \
+    }; \
+    ls -lh /root/.cache/qmd/models; \
+    # Drop the seed dir and the warmup-only qmd index so the image only
+    # carries the model cache (which is what we wanted to bake) — not
+    # the collection registry that points at a path no runtime caller
+    # will ever look at. At runtime frankweiler-sync sets
+    # XDG_CACHE_HOME=<root>/.frankweiler so the runtime index lives
+    # elsewhere; this default-location index is purely build artifact.
+    rm -rf /opt/qmd-warmup /root/.cache/qmd/index.sqlite
 
 # Pre-create the bind-mount targets so empty-dir mounts behave predictably
 # and so an unmounted run still has somewhere to write.
