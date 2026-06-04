@@ -28,7 +28,7 @@
 //!   `messages` table. Replies' bodies land in `messages` like history
 //!   messages do.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -497,6 +497,26 @@ impl RawDb {
 
     pub async fn blob_exists(&self, id: &str) -> Result<bool> {
         dr::blob_exists(&self.pool, id).await
+    }
+
+    /// Snapshot of every blob id that already has bytes stored. Loaded
+    /// once at run start so the per-file `download_one_file` short-circuit
+    /// is a `HashSet` hit instead of a SQLite round trip on the
+    /// single shared pool connection — the per-file SELECT was queuing
+    /// behind preceding multi-MB `upsert_blob_bytes` commits and showing
+    /// up as multi-second "slow statement" warns.
+    pub async fn loaded_blob_ids(&self) -> Result<HashSet<String>> {
+        let rows = sqlx::query("SELECT id FROM blobs WHERE bytes IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .context("load blob ids with bytes")?;
+        let mut out = HashSet::with_capacity(rows.len());
+        for r in rows {
+            if let Ok(id) = r.try_get::<String, _>("id") {
+                out.insert(id);
+            }
+        }
+        Ok(out)
     }
 
     pub async fn pre_seed_blob_stub(

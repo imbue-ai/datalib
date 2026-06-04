@@ -17,7 +17,7 @@ pub mod api;
 pub mod db;
 pub mod shapes;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -241,6 +241,7 @@ async fn export_channel(
     now: &DateTime<Utc>,
     download_blobs: bool,
     totals: &mut ChannelTotals,
+    have_blob: &mut HashSet<String>,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
     // Pass A: list every history page, upsert top-level messages, and
@@ -263,6 +264,7 @@ async fn export_channel(
         None,
         download_blobs,
         totals,
+        have_blob,
         progress,
         &mut collected,
     )
@@ -287,6 +289,7 @@ async fn export_channel(
                     Some(latest_ts),
                     download_blobs,
                     totals,
+                    have_blob,
                     progress,
                     &mut collected,
                 )
@@ -335,7 +338,16 @@ async fn export_channel(
             }
         }
         let before = totals.replies;
-        paginate_replies(db, team_id, channel_id, ts, download_blobs, totals).await?;
+        paginate_replies(
+            db,
+            team_id,
+            channel_id,
+            ts,
+            download_blobs,
+            totals,
+            have_blob,
+        )
+        .await?;
         let fetched = totals.replies.saturating_sub(before) as u64;
         progress.inc(fetched);
         let media_downloaded = totals.media.get("downloaded").copied().unwrap_or(0);
@@ -372,6 +384,7 @@ async fn list_history(
     latest_ts: Option<&str>,
     download_blobs: bool,
     totals: &mut ChannelTotals,
+    have_blob: &mut HashSet<String>,
     progress: &frankweiler_etl::progress::Progress,
     collected: &mut Vec<Value>,
 ) -> Result<()> {
@@ -416,7 +429,8 @@ async fn list_history(
         // files.slack.com. Threads (in pass B) download their replies'
         // files inline inside `paginate_replies`.
         if download_blobs {
-            let counts = api::download_files_for_messages(db, channel_id, &messages).await?;
+            let counts =
+                api::download_files_for_messages(db, channel_id, &messages, have_blob).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
@@ -449,6 +463,7 @@ async fn paginate_replies(
     thread_ts: &str,
     download_blobs: bool,
     totals: &mut ChannelTotals,
+    have_blob: &mut HashSet<String>,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -490,7 +505,7 @@ async fn paginate_replies(
         totals.replies += msgs.len().saturating_sub(1);
 
         if download_blobs {
-            let counts = api::download_files_for_messages(db, channel_id, &msgs).await?;
+            let counts = api::download_files_for_messages(db, channel_id, &msgs, have_blob).await?;
             for (k, v) in counts {
                 *totals.media.entry(k).or_insert(0) += v;
             }
@@ -622,10 +637,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let t_scan = std::time::Instant::now();
     let channel_latest_ts = db.latest_ts_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
+    // Snapshot already-downloaded blob ids once so the per-file
+    // dedupe check inside `download_one_file` is a HashSet hit instead
+    // of a SQLite round trip queued behind the single doltlite pool
+    // connection. Augmented in-place as we successfully upsert new
+    // blobs during this run.
+    let mut have_blob = db.loaded_blob_ids().await?;
     info!(
         event = "slack_resume_scan_done",
         channels_with_history = channel_latest_ts.len(),
         threads_with_replies = latest_reply_map.len(),
+        blobs_with_bytes = have_blob.len(),
         elapsed_ms = t_scan.elapsed().as_millis() as u64,
     );
 
@@ -697,6 +719,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 &now,
                 opts.media,
                 &mut totals,
+                &mut have_blob,
                 &inner,
             )
             .instrument(span)

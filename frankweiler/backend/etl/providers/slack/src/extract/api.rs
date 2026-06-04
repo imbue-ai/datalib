@@ -4,7 +4,7 @@
 //! `slack` service's `baseApiUrls` (latchkey ≥ 2.11.2), so a single
 //! credential signs both API calls and file downloads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -181,11 +181,18 @@ pub async fn call_slack(
 /// `owning_id` we record is the channel containing the message that
 /// references the file — Slack files can be shared across channels,
 /// but bytes-are-bytes and the first downloader wins (subsequent
-/// references no-op via `blob_exists`).
+/// references no-op via the `have_blob` cache).
+///
+/// `have_blob` is the run-scoped set of blob ids we've already
+/// confirmed bytes for (seeded from `RawDb::loaded_blob_ids` at run
+/// start, augmented on every successful upsert here). Checking it
+/// avoids a SQLite round trip per file, which on a single-connection
+/// doltlite pool was queuing behind preceding multi-MB blob commits.
 pub async fn download_one_file(
     db: &RawDb,
     channel_id: &str,
     file_obj: &Value,
+    have_blob: &mut HashSet<String>,
 ) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
         Some(s) => s,
@@ -211,7 +218,7 @@ pub async fn download_one_file(
     };
 
     // Trust-our-copy refetch policy: signed URLs rotate but bytes don't.
-    if db.blob_exists(file_id).await.unwrap_or(false) {
+    if have_blob.contains(file_id) {
         return Ok("skipped");
     }
 
@@ -259,6 +266,7 @@ pub async fn download_one_file(
     let len = bytes.len() as u64;
     db.upsert_blob_bytes(file_id, "file", channel_id, "file", mime, &bytes, Some(url))
         .await?;
+    have_blob.insert(file_id.to_string());
     events::item_fetched(url, len, 0);
     debug!(
         event = "slack_media_downloaded",
@@ -275,6 +283,7 @@ pub async fn download_files_for_messages(
     db: &RawDb,
     channel_id: &str,
     messages: &[Value],
+    have_blob: &mut HashSet<String>,
 ) -> Result<BTreeMap<String, usize>> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for k in ["downloaded", "skipped", "tombstone", "external", "error"] {
@@ -317,7 +326,7 @@ pub async fn download_files_for_messages(
         let _ = db.pre_seed_blob_stub(id, channel_id, mime, url).await;
     }
     for f in &targets {
-        let outcome = download_one_file(db, channel_id, f).await?;
+        let outcome = download_one_file(db, channel_id, f, have_blob).await?;
         *counts.entry(outcome.to_string()).or_insert(0) += 1;
     }
     debug!(
