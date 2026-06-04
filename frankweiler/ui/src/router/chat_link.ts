@@ -4,7 +4,15 @@
 // non-Miller standalone view) can share the modifier-click bailout
 // and `<a>` traversal without re-deriving them.
 
-const CHAT_HREF_RE = /^#?\/chat\/([^/?#]+)/;
+// Accepts the three internal-link shapes our renderers emit:
+//   /chat/<uuid>       — bare path (older anthropic / chatgpt / etc.)
+//   #/chat/<uuid>      — bare hash (vue-router hash form)
+//   /#/chat/<uuid>     — hash-prefixed absolute URL (perseus); a plain
+//                        `<a href>` of this form would normally navigate
+//                        to "/" + set the hash, which trips through to
+//                        Vue Router but as a page-replace from the
+//                        miller view's perspective.
+const CHAT_HREF_RE = /^(?:#|\/#?)?\/chat\/([^/?#]+)/;
 
 /**
  * Return the markdown UUID this click should navigate to, or null if

@@ -12,6 +12,7 @@ import {
   type FeedbackContext,
 } from "@/feedback/context";
 import { chatHrefFromClick } from "@/router/chat_link";
+import { encodeStack } from "@/router/columns";
 
 const props = defineProps<{
   // Addresses one rendered `.md` file — the file the preview pane
@@ -258,14 +259,12 @@ watch(
           />
           ·
           <!-- Standalone view: opens this single column on its own
-               page in a new tab. Replaces the old "open full view"
-               flow now that the main view stacks columns instead of
-               replacing the page on click. -->
+               page in a new tab. The URL is a one-column stack
+               (`/doc:<uuid>`), which the same MillerView renders. -->
           <RouterLink
-            :to="{
-              name: 'chat',
-              params: { markdownUuid: chat.markdown_uuid },
-            }"
+            :to="
+              encodeStack([{ kind: 'doc', md: chat.markdown_uuid }])
+            "
             target="_blank"
             rel="noopener"
             >view this column alone ↗</RouterLink

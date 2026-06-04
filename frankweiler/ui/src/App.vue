@@ -74,7 +74,7 @@ onUnmounted(() => {
           </div>
           <ul class="fw-drawer-list">
             <li>
-              <RouterLink to="/search" @click="closeMenu">Search</RouterLink>
+              <RouterLink to="/" @click="closeMenu">Search</RouterLink>
             </li>
             <li>
               <RouterLink to="/sync" @click="closeMenu">Sync</RouterLink>

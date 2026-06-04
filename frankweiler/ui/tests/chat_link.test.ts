@@ -48,6 +48,10 @@ describe("chatHrefFromClick", () => {
     expect(chatHrefFromClick(clickOn("#/chat/xyz-789"))).toBe("xyz-789");
   });
 
+  it("returns the uuid for a /#/chat/<uuid> link (perseus form)", () => {
+    expect(chatHrefFromClick(clickOn("/#/chat/per-456"))).toBe("per-456");
+  });
+
   it("strips trailing query / hash from the uuid segment", () => {
     expect(chatHrefFromClick(clickOn("/chat/u1?msg=42"))).toBe("u1");
     expect(chatHrefFromClick(clickOn("/chat/u1#m5"))).toBe("u1");

@@ -5,7 +5,7 @@
 // Emits `select-row` upward so the parent MillerView can decide what
 // document column to show.
 import { ref, watch, onMounted, computed, nextTick } from "vue";
-import { useRouter, useRoute } from "vue-router";
+import { useRouter } from "vue-router";
 import { AgGridVue } from "ag-grid-vue3";
 import {
   ModuleRegistry,
@@ -32,6 +32,7 @@ import {
 } from "@/api";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import { buildContext, type FeedbackContext } from "@/feedback/context";
+import { encodeStack } from "@/router/columns";
 import claudeIconUrl from "@/assets/claude.svg";
 import chatgptIconUrl from "@/assets/chatgpt.svg";
 import slackIconUrl from "@/assets/slack.svg";
@@ -52,18 +53,16 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
-// State this column owns and surfaces to the parent for URL
-// persistence. `cols` is the base64url-packed AG Grid column state;
-// see encodeColumnState below. Any field that hasn't been set yet is
-// `null` (vs. the empty string, which would still serialize). The
-// parent merges this with sibling-component state and writes the URL
-// in a single atomic step — having GridColumn write the URL directly
-// would race with the parent's own writes.
-export type GridUrlState = {
-  q: string | null;
+// Parent (MillerView) owns the column's URL-persisted state — query,
+// selected row uuid, AG Grid column-state blob — and threads it
+// through these props. We mirror them to local refs for input
+// reactivity; a `syncing` flag breaks the prop → local → emit → prop
+// loop that would otherwise fire on every external write.
+const props = defineProps<{
+  q: string;
   sel: string | null;
-  cols: string | null;
-};
+  agCols: string | null;
+}>();
 
 const emit = defineEmits<{
   // Fired whenever a grid row becomes the active selection. The
@@ -72,15 +71,15 @@ const emit = defineEmits<{
   // event came from URL-restore rather than a user click, so the
   // parent can avoid clobbering already-restored downstream state.
   (e: "select-row", row: SearchRow, restoring: boolean): void;
-  // Fired whenever any of this column's URL-persisted state changes
-  // (query, selected row, AG Grid column state). The parent is
-  // responsible for writing the new state to the URL.
-  (e: "update-url-state", state: GridUrlState): void;
+  // v-model-style writebacks for the three pieces of URL state this
+  // column owns. `update:agCols` may pass `null` when the AG Grid
+  // column state is empty (no custom sort / column changes yet).
+  (e: "update:q", q: string): void;
+  (e: "update:agCols", agCols: string | null): void;
 }>();
 
 const router = useRouter();
-const route = useRoute();
-const query = ref(typeof route.query.q === "string" ? route.query.q : "");
+const query = ref(props.q);
 const rows = ref<SearchRow[]>([]);
 const total = ref(0);
 const loading = ref(false);
@@ -92,6 +91,12 @@ const qmdError = ref<string | null>(null);
 const health = ref<Health | null>(null);
 const accounts = ref<AccountsMap>({});
 const selectedRow = ref<SearchRow | null>(null);
+
+// True while we are applying a value that came from a prop (rather
+// than from a user action), so internal watchers know to skip the
+// emit-back. Same role as the existing `restoring` flag used for
+// AG-Grid-API-driven mutations.
+let syncingFromProps = false;
 
 // AG Grid handle for applying / reading column state. Set by onGridReady.
 let gridApi: GridApi<SearchRow> | null = null;
@@ -395,37 +400,16 @@ async function copyTargetUuids() {
   closeContextMenu();
 }
 
-// Emit our URL-persisted state for the parent to merge with its own
-// keys (`docs`) and write atomically. Skipped while we're restoring
-// from the URL to avoid an immediate write-back of values we just
-// read in. The parent is the single URL writer — having both us and
-// the parent call `router.replace` synchronously would race; only
-// the second wins, and the first writer's keys are silently dropped.
-function syncHash() {
-  if (restoring) return;
-  let sel: string | null = null;
-  if (selectedRow.value) {
-    sel = rowKey(selectedRow.value);
-  } else if (
-    typeof route.query.sel === "string" &&
-    rows.value.length === 0
-  ) {
-    // Preserve the URL's pending `sel` until rows load and
-    // tryRestoreSelection has had a chance to run. AG Grid's column
-    // events fire as microtasks after applyColumnState, slipping out
-    // of the `restoring=true` window, and would otherwise clobber the
-    // URL's selection target before we can restore it on reload.
-    sel = route.query.sel;
-  }
-  const cols =
-    gridApi != null && gridApi.getColumnState().length > 0
-      ? encodeColumnState(gridApi.getColumnState())
-      : null;
-  emit("update-url-state", {
-    q: query.value ? query.value : null,
-    sel,
-    cols,
-  });
+// Emit the current AG Grid column state to the parent. Called from
+// the column-event hooks (resize / sort / move / visibility) — query
+// changes flow via `watch(query, …)` and selection via `select-row`,
+// so each piece of state has its own narrow emit path. Skipped during
+// programmatic mutation (`restoring`) and during prop sync.
+function emitAgCols() {
+  if (restoring || syncingFromProps) return;
+  if (!gridApi) return;
+  const state = gridApi.getColumnState();
+  emit("update:agCols", state.length > 0 ? encodeColumnState(state) : null);
 }
 
 function accountLabel(uuid: string): string {
@@ -505,17 +489,29 @@ watch(query, (q) => {
   // leaves the user staring at stale rows with no feedback.
   if (!searchCache.has(q)) loading.value = true;
   debounceTimer = setTimeout(() => runSearch(q), 150);
-  syncHash();
+  if (!syncingFromProps) emit("update:q", q);
 });
 
-// Restore the selected row from the URL after rows load (or after the
-// grid first becomes ready, whichever happens last — onGridReady can
-// race with the initial fetch). Selection state outlives the result
-// set: searches that drop the selected row leave selection cleared,
-// which is the right behavior for a deep-link.
+// Mirror external prop changes (back/forward nav, parent-driven
+// rewrites) into our local refs without re-emitting them.
+watch(
+  () => props.q,
+  (q) => {
+    if (q === query.value) return;
+    syncingFromProps = true;
+    query.value = q;
+    syncingFromProps = false;
+  },
+);
+
+// Restore the selected row from the parent-provided `sel` prop after
+// rows load (or after the grid first becomes ready, whichever happens
+// last — onGridReady can race with the initial fetch). Selection state
+// outlives the result set: searches that drop the selected row leave
+// selection cleared, which is the right behavior for a deep-link.
 async function tryRestoreSelection() {
-  const sel = route.query.sel;
-  if (typeof sel !== "string" || !gridApi || rows.value.length === 0) return;
+  const sel = props.sel;
+  if (!sel || !gridApi || rows.value.length === 0) return;
   if (selectedRow.value && rowKey(selectedRow.value) === sel) return;
   const target = rows.value.find((r) => rowKey(r) === sel);
   if (!target) return;
@@ -534,6 +530,16 @@ async function tryRestoreSelection() {
   if (found) selectedRow.value = target;
   restoring = false;
 }
+
+// External `sel` change (back/forward nav, or parent rewrote URL):
+// reflect into the grid selection. Skipped while we're already
+// applying it, and idempotent if the prop matches what we have.
+watch(
+  () => props.sel,
+  () => {
+    tryRestoreSelection();
+  },
+);
 
 // Apply the default sort whenever results change, unless the user has
 // taken sort into their own hands.
@@ -570,7 +576,7 @@ function applyDefaultSort() {
   // soon as the new rows land. We instead listen for the grid's own
   // `rowDataUpdated` event, which fires once the new rows are in
   // place; the listener runs at most once per applyDefaultSort call.
-  if (typeof route.query.sel === "string" && route.query.sel.length > 0) {
+  if (props.sel) {
     // tryRestoreSelection will scroll to the pinned row; don't fight it.
     return;
   }
@@ -662,11 +668,15 @@ onMounted(async () => {
 });
 
 function openRow(row: SearchRow) {
-  const href = router.resolve({
-    name: "chat",
-    params: { markdownUuid: row.markdown_uuid ?? row.uuid },
-    hash: row.message_index != null ? `#m${row.message_index}` : undefined,
-  }).href;
+  // Double-click → open this row's doc as a standalone single-column
+  // stack in a new tab. Same shape as the "view this column alone ↗"
+  // link in DocColumn: `/doc:<uuid>`. The message-anchor hash
+  // (`#m<index>`) is appended when present so deep-linking to a
+  // specific message still works.
+  const md = row.markdown_uuid ?? row.uuid;
+  const path = encodeStack([{ kind: "doc", md }]);
+  const hash = row.message_index != null ? `#m${row.message_index}` : "";
+  const href = router.resolve(path).href + hash;
   window.open(href, "_blank", "noopener");
 }
 
@@ -773,9 +783,8 @@ const gridOptions: GridOptions<SearchRow> = {
     // into view before clicking.
     (window as unknown as { __fwGridApi?: GridApi<SearchRow> }).__fwGridApi =
       e.api;
-    const cols = route.query.cols;
-    if (typeof cols === "string") {
-      const state = decodeColumnState(cols);
+    if (props.agCols) {
+      const state = decodeColumnState(props.agCols);
       if (state) {
         restoring = true;
         gridApi.applyColumnState({ state, applyOrder: true });
@@ -795,9 +804,9 @@ const gridOptions: GridOptions<SearchRow> = {
       // Tell the parent which row is selected. `restoring` is true
       // when this is a URL-driven re-selection (we don't want the
       // parent to wipe URL-restored downstream column state in that
-      // case).
+      // case). The parent rewrites both `sel` and the deeper columns
+      // for us — there's no separate `update:sel` event.
       emit("select-row", e.data, restoring);
-      syncHash();
     }
   },
   onRowDoubleClicked: (e) => {
@@ -884,12 +893,12 @@ const gridOptions: GridOptions<SearchRow> = {
     contextMenuVisible.value = true;
   },
   // Any change a user can make to columns gets reflected in the URL.
-  onColumnVisible: () => syncHash(),
+  onColumnVisible: () => emitAgCols(),
   onColumnResized: (e) => {
-    if (e.finished) syncHash();
+    if (e.finished) emitAgCols();
   },
   onColumnMoved: (e) => {
-    if (e.finished) syncHash();
+    if (e.finished) emitAgCols();
   },
   onSortChanged: (e) => {
     // Only treat header-click sorts as "user intent". Programmatic
@@ -898,9 +907,31 @@ const gridOptions: GridOptions<SearchRow> = {
     if (!restoring && e.source === "uiColumnSorted") {
       userSortedManually = true;
     }
-    syncHash();
+    emitAgCols();
   },
 };
+
+// External `agCols` change (parent rewrote the URL): re-apply to the
+// grid. No-op when we don't have an api yet (the agCols prop is also
+// read in onGridReady for that case).
+watch(
+  () => props.agCols,
+  (next) => {
+    if (!gridApi) return;
+    if (!next) return;
+    const state = decodeColumnState(next);
+    if (!state) return;
+    // Compare encoded form to current — avoid re-applying our own
+    // emitted value and triggering another column-event burst.
+    const current = encodeColumnState(gridApi.getColumnState());
+    if (current === next) return;
+    syncingFromProps = true;
+    restoring = true;
+    gridApi.applyColumnState({ state, applyOrder: true });
+    restoring = false;
+    syncingFromProps = false;
+  },
+);
 </script>
 
 <template>
