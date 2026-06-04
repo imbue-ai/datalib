@@ -224,7 +224,16 @@ async fn snapshot_grid_rows_and_documents() {
     // content-addressed and would change on any byte-level data
     // change. Author/email is also not snapshotted: it comes from
     // host `git config` which differs between dev machines and CI.
-    let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC")
+    // Tiebreak by commit_hash: with the fixture's fixed `--now`, the
+    // boot "Initialize data repository" commit and the sync stats
+    // commit can land with identical `date` values, and SQLite's
+    // ordering on ties is unspecified — small unrelated changes (e.g.
+    // adding a provider) can flip the order and produce spurious
+    // snapshot churn. commit_hash is preferable to `message` as a
+    // tiebreaker because messages could in principle collide (two
+    // empty-stats sync runs, say) but the content-addressed hash
+    // can't.
+    let log_rows = sqlx::query("SELECT message FROM dolt_log() ORDER BY date ASC, commit_hash ASC")
         .fetch_all(&pool)
         .await
         .expect("read dolt_log");

@@ -357,10 +357,10 @@ expression: snapshot
   ],
   "dolt_log": [
     {
-      "message": "frankweiler-sync: markdowns_loaded=25 markdowns_total=25 rows_inserted=79 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper]"
+      "message": "Initialize data repository"
     },
     {
-      "message": "Initialize data repository"
+      "message": "frankweiler-sync: markdowns_loaded=25 markdowns_total=25 rows_inserted=79 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper]"
     }
   ],
   "grid_rows": [
