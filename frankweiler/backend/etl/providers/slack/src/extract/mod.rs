@@ -575,7 +575,12 @@ fn reply_message_row(
 pub struct FetchOptions {
     /// Path to the doltlite database file. If the caller passes a
     /// legacy directory, it's rewritten to `<dir>.doltlite_db`.
+    /// Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
+    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
+    /// instead of opening from `db_path`. See the matching field on
+    /// the other providers' FetchOptions for rationale.
+    pub db: Option<RawDb>,
     pub channels: Option<Vec<String>>,
     pub since: String,
     pub refresh_window_days: i64,
@@ -590,6 +595,7 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             db_path: PathBuf::new(),
+            db: None,
             channels: None,
             since: DEFAULT_SINCE.to_string(),
             refresh_window_days: DEFAULT_REFRESH_WINDOW_DAYS,
@@ -611,9 +617,12 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = frankweiler_etl::latchkey::ensure_curl_shim();
-    let db = RawDb::open(&db_path)
-        .await
-        .with_context(|| format!("open raw db {}", db_path.display()))?;
+    let db = match opts.db.clone() {
+        Some(db) => db,
+        None => RawDb::open(&db_path)
+            .await
+            .with_context(|| format!("open raw db {}", db_path.display()))?,
+    };
 
     if opts.control.reset_and_redownload {
         tracing::info!(event = "slack_reset_and_redownload");

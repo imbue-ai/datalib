@@ -41,7 +41,12 @@ pub const DEFAULT_SCOPES: &[&str] = &["author:@me", "commenter:@me", "mentions:@
 pub struct FetchOptions {
     /// Path to the doltlite database file. If the caller passes a
     /// legacy directory, it's rewritten to `<dir>.doltlite_db`.
+    /// Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
+    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
+    /// instead of opening from `db_path`. See the matching field on
+    /// the other providers' FetchOptions for rationale.
+    pub db: Option<RawDb>,
     /// Discovery scopes (search-issues `is:pr <scope>` clauses).
     pub scopes: Vec<String>,
     /// On a non-empty store, only refetch PRs updated in the last N days.
@@ -65,6 +70,7 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             db_path: PathBuf::new(),
+            db: None,
             scopes: DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect(),
             refresh_window_days: 30,
             max_prs: None,
@@ -218,9 +224,12 @@ async fn fetch_one_pr(
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = frankweiler_etl::latchkey::ensure_curl_shim();
-    let db = RawDb::open(&db_path)
-        .await
-        .with_context(|| format!("open raw db {}", db_path.display()))?;
+    let db = match opts.db.clone() {
+        Some(db) => db,
+        None => RawDb::open(&db_path)
+            .await
+            .with_context(|| format!("open raw db {}", db_path.display()))?,
+    };
     if opts.control.reset_and_redownload {
         tracing::info!(event = "github_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;

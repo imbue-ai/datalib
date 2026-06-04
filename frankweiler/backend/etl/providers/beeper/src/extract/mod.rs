@@ -48,7 +48,12 @@ fn dirs_home() -> Option<PathBuf> {
 pub struct FetchOptions {
     /// Path to the doltlite database we write into. Legacy directory
     /// paths get rewritten to `<dir>.doltlite_db` by [`db_path_for`].
+    /// Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
+    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
+    /// instead of opening from `db_path`. See the matching field on
+    /// the other providers' FetchOptions for rationale.
+    pub db: Option<RawDb>,
     /// Canonical network names to ingest. Empty = none (refuse;
     /// caller probably forgot to configure). Order doesn't matter.
     pub sources: Vec<String>,
@@ -68,6 +73,7 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             db_path: PathBuf::new(),
+            db: None,
             sources: Vec::new(),
             beeper_data_dir: None,
             media: true,
@@ -99,9 +105,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         anyhow::bail!("no sources configured; set e.g. `sources: [\"signal\", \"googlechat\"]`");
     }
     let db_path = db_path_for(&opts.db_path);
-    let dst = RawDb::open(&db_path)
-        .await
-        .with_context(|| format!("open dest doltlite {}", db_path.display()))?;
+    let dst = match opts.db.clone() {
+        Some(db) => db,
+        None => RawDb::open(&db_path)
+            .await
+            .with_context(|| format!("open dest doltlite {}", db_path.display()))?,
+    };
 
     if opts.control.reset_and_redownload {
         tracing::info!(event = "beeper_reset_and_redownload");

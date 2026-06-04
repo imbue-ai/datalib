@@ -281,18 +281,30 @@ struct CtrlcState {
     /// `open_index_pool`. The handler issues one commit against this
     /// pool to capture whatever rows the translate phase already wrote.
     index_pool: Option<sqlx::sqlite::SqlitePool>,
-    /// Per-source doltlite_db paths discovered from the resolved
-    /// config. The handler opens each, commits best-effort, and closes.
-    extract_dbs: Vec<PathBuf>,
+    /// Per-source live pools to the extract doltlite_dbs. Populated
+    /// at the start of `run_extract_phase` (before any download begins)
+    /// and never reopened. The SIGINT handler commits against these
+    /// pools directly — no `commit_run_at_path` reopen race because
+    /// these are the *same* connections the extract workers are using.
+    extract_pools: Vec<ExtractPoolEntry>,
+}
+
+/// Entry in [`CtrlcState::extract_pools`] — the source's display name
+/// and the open pool. We log the name on commit so a user reading the
+/// interrupt summary can tell which source the commit hash belongs to.
+#[derive(Clone)]
+struct ExtractPoolEntry {
+    name: String,
+    pool: sqlx::sqlite::SqlitePool,
 }
 
 /// Commit every doltlite database the run has touched. Called from the
 /// SIGINT handler; each individual failure is downgraded to a stderr
 /// warning so one stuck file doesn't block the others.
 async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
-    let (pool_opt, db_paths) = {
+    let (pool_opt, extract_pools) = {
         let s = state.lock().unwrap();
-        (s.index_pool.clone(), s.extract_dbs.clone())
+        (s.index_pool.clone(), s.extract_pools.clone())
     };
     if let Some(pool) = pool_opt {
         let msg = "frankweiler-sync: interrupted (Ctrl-C); committing partial state".to_string();
@@ -302,22 +314,17 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
             Err(e) => status_line!("[frankweiler-sync] interrupt index commit failed: {e:#}"),
         }
     }
-    for path in db_paths {
-        let msg = format!(
-            "extract {}: interrupted (Ctrl-C)",
-            path.file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("<unknown>")
-        );
-        match frankweiler_etl::doltlite_raw::commit_run_at_path(&path, &msg).await {
+    for entry in extract_pools {
+        let msg = format!("extract {}: interrupted (Ctrl-C)", entry.name);
+        match frankweiler_etl::doltlite_raw::commit_run(&entry.pool, &msg).await {
             Ok(Some(h)) => status_line!(
                 "[frankweiler-sync] interrupt extract commit {}: {h}",
-                path.display()
+                entry.name
             ),
             Ok(None) => {}
             Err(e) => status_line!(
                 "[frankweiler-sync] interrupt extract commit failed for {}: {e:#}",
-                path.display()
+                entry.name
             ),
         }
     }
@@ -547,20 +554,17 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         s.output_path = Some(root.join(format!("sync_summary_{safe_now}.json")));
     }
 
-    // Register each managed source's doltlite_db path with the SIGINT
-    // handler so a Ctrl-C mid-extract still gets a commit. We use
-    // `db_path_for` which handles both the explicit `.doltlite_db` file
-    // shape and the legacy directory shape.
-    {
-        let dbs: Vec<PathBuf> = cfg
-            .enabled_sources()
-            .filter(|s| s.is_managed())
-            .map(|s| {
-                frankweiler_etl::doltlite_raw::db_path_for(&s.resolved_input_path(&cfg.data_root))
-            })
-            .collect();
-        ctrlc.lock().unwrap().extract_dbs = dbs;
-    }
+    // Per-source extract pools are registered with `ctrlc` lazily,
+    // by `run_extract_phase` as it opens each source's doltlite_db
+    // *before* starting that source's download. That way:
+    //   * a Ctrl-C before any open hasn't started yet sees an empty
+    //     list and commits nothing (correct — nothing to commit);
+    //   * a Ctrl-C mid-extract commits against the *same* pool the
+    //     worker is using, so there's no second-connection lock
+    //     conflict on the dolt_commit;
+    //   * a source whose open *fails* never gets registered, so the
+    //     interrupt path doesn't try to commit something that isn't
+    //     there.
 
     // ── Extract ────────────────────────────────────────────────────
     if args.skip_extract {
@@ -599,7 +603,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                  data + bookkeeping tables before fetch"
             );
         }
-        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control).await;
+        let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control, ctrlc).await;
         summary.lock().unwrap().extract.extend(outcomes);
     }
 
@@ -979,6 +983,7 @@ async fn run_extract_phase(
     playback_root: Option<&Path>,
     now: &str,
     control: &frankweiler_etl::control::ExtractControl,
+    ctrlc: &Arc<Mutex<CtrlcState>>,
 ) -> Vec<PhaseOutcome> {
     let mut outcomes: Vec<PhaseOutcome> = Vec::new();
     let mut plans: Vec<ExtractPlan> = Vec::new();
@@ -991,6 +996,50 @@ async fn run_extract_phase(
             Err(e) => outcomes.push(PhaseOutcome::err(s.name(), s.type_str(), &e)),
         }
     }
+
+    // Open every doltlite-backed source's writable pool BEFORE
+    // starting any download. A source whose pool open fails is
+    // recorded as a phase error and dropped from the work set —
+    // better to fail-fast than to spend minutes pulling data we can't
+    // write. Successful opens are registered with the SIGINT state so
+    // the interrupt commit path commits against the *same* pool the
+    // worker uses (no second-connection lock race).
+    //
+    // File-tree-backed kinds (e.g. Perseus) return `Ok(None)` from
+    // `open_extract_db` — they have no doltlite_db to open, no pool
+    // to register, and no post-extract dolt_commit. Their plan still
+    // runs; we just keep `plan.db == None`.
+    let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
+    for mut plan in plans {
+        let path =
+            frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
+        match open_extract_db(&plan.kind, &path).await {
+            Ok(Some(db)) => {
+                ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
+                    name: plan.name.clone(),
+                    pool: db.pool().clone(),
+                });
+                plan.db = Some(db);
+                opened.push(plan);
+            }
+            Ok(None) => {
+                // File-tree-backed: nothing to pre-open.
+                opened.push(plan);
+            }
+            Err(e) => {
+                status_line!(
+                    "[frankweiler-sync] extract pre-open FAILED for {}: {e:#}",
+                    plan.name
+                );
+                outcomes.push(PhaseOutcome::err(
+                    &plan.name,
+                    plan.type_str,
+                    &e.context(format!("open writable doltlite for {}", path.display())),
+                ));
+            }
+        }
+    }
+    let mut plans = opened;
 
     // Each provider creates whatever on-disk layout it needs:
     //   - doltlite-backed (anthropic, chatgpt, notion, slack) write to
@@ -1100,6 +1149,80 @@ struct ExtractPlan {
     /// from the CLI through `ExtractPlan::for_source` into each
     /// provider's `FetchOptions.control`.
     control: frankweiler_etl::control::ExtractControl,
+    /// Pre-opened raw DB handle, populated by the open phase in
+    /// `run_extract_phase` before any download starts. `None` only
+    /// during the brief window between `for_source` and the open
+    /// pass; by the time `run()` is invoked this is always `Some`.
+    db: Option<DbHandle>,
+}
+
+/// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
+/// after a successful pre-open so the same connection serves the
+/// download, the post-extract commit, and (via [`CtrlcState`]) any
+/// interrupt commit. Variants match the [`ExtractKind`] variants 1:1.
+enum DbHandle {
+    Anthropic(frankweiler_etl_anthropic::extract::RawDb),
+    Chatgpt(frankweiler_etl_chatgpt::extract::RawDb),
+    Slack(frankweiler_etl_slack::extract::RawDb),
+    Github(frankweiler_etl_github::extract::RawDb),
+    Gitlab(frankweiler_etl_gitlab::extract::RawDb),
+    Notion(frankweiler_etl_notion::extract::RawDb),
+    Beeper(frankweiler_etl_beeper::extract::RawDb),
+    Carddav(frankweiler_etl_contacts::extract::RawDb),
+}
+
+impl DbHandle {
+    fn pool(&self) -> &sqlx::sqlite::SqlitePool {
+        match self {
+            DbHandle::Anthropic(d) => d.pool(),
+            DbHandle::Chatgpt(d) => d.pool(),
+            DbHandle::Slack(d) => d.pool(),
+            DbHandle::Github(d) => d.pool(),
+            DbHandle::Gitlab(d) => d.pool(),
+            DbHandle::Notion(d) => d.pool(),
+            DbHandle::Beeper(d) => d.pool(),
+            DbHandle::Carddav(d) => d.pool(),
+        }
+    }
+}
+
+/// Open the per-provider `RawDb` at `path`. Dispatched on the kind so
+/// each provider's DDL (and table layout) gets applied. The returned
+/// handle owns the writer lock for the file until it (and every clone
+/// of its pool) is dropped — see `doltlite_raw::open` for why we pin
+/// `max_connections=1`.
+///
+/// Returns `Ok(None)` for file-tree-backed kinds (e.g. Perseus), which
+/// have no doltlite_db to open and no pool to register.
+async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHandle>> {
+    Ok(Some(match kind {
+        ExtractKind::Anthropic { .. } => {
+            DbHandle::Anthropic(frankweiler_etl_anthropic::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Chatgpt { .. } => {
+            DbHandle::Chatgpt(frankweiler_etl_chatgpt::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Slack { .. } => {
+            DbHandle::Slack(frankweiler_etl_slack::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Github { .. } => {
+            DbHandle::Github(frankweiler_etl_github::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Gitlab { .. } => {
+            DbHandle::Gitlab(frankweiler_etl_gitlab::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Notion { .. } => {
+            DbHandle::Notion(frankweiler_etl_notion::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Beeper { .. } => {
+            DbHandle::Beeper(frankweiler_etl_beeper::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Carddav { .. } => {
+            DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
+        }
+        // File-tree-backed: no doltlite to open.
+        ExtractKind::Perseus { .. } => return Ok(None),
+    }))
 }
 
 enum ExtractKind {
@@ -1187,6 +1310,7 @@ impl ExtractPlan {
             progress: Progress::noop(),
             kind,
             control: control.clone(),
+            db: None,
         }))
     }
 
@@ -1197,13 +1321,20 @@ impl ExtractPlan {
     async fn run(self) -> Result<String> {
         let progress = self.progress.clone();
         let name = self.name.clone();
-        let out_dir = self.out_dir.clone();
         let control = self.control.clone();
-        let result: Result<String> = match self.kind {
-            ExtractKind::Anthropic { sync } => {
+        // Pre-open phase in `run_extract_phase` populates `self.db`
+        // for every doltlite-backed kind; file-tree-backed kinds
+        // (Perseus) legitimately leave it `None`. The pool we capture
+        // here is used for the post-extract commit and the
+        // deterministic `pool.close().await` below — both no-op when
+        // there's no pool.
+        let pool = self.db.as_ref().map(|d| d.pool().clone());
+        let result: Result<String> = match (self.kind, self.db) {
+            (ExtractKind::Anthropic { sync }, Some(DbHandle::Anthropic(db))) => {
                 frankweiler_etl_anthropic::extract::fetch(
                     frankweiler_etl_anthropic::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
+                        db: Some(db),
                         // Auto-resolve: users.json (from the bulk export)
                         // is expected to live alongside the source's
                         // input_path. In playback mode the genrule
@@ -1224,9 +1355,10 @@ impl ExtractPlan {
                     )
                 })
             }
-            ExtractKind::Chatgpt { sync } => frankweiler_etl_chatgpt::extract::fetch(
+            (ExtractKind::Chatgpt { sync }, Some(DbHandle::Chatgpt(db))) => frankweiler_etl_chatgpt::extract::fetch(
                 frankweiler_etl_chatgpt::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
+                    db: Some(db),
                     max_pages: sync.max_pages.map(|v| v as usize),
                     limit: sync.limit.map(|v| v as usize),
                     sleep_between: Duration::ZERO,
@@ -1243,9 +1375,10 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.errors, s.listing, s.requests,
                 )
             }),
-            ExtractKind::Slack { sync } => frankweiler_etl_slack::extract::fetch(
+            (ExtractKind::Slack { sync }, Some(DbHandle::Slack(db))) => frankweiler_etl_slack::extract::fetch(
                 frankweiler_etl_slack::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
+                    db: Some(db),
                     channels: sync.channels.clone(),
                     since: sync
                         .since
@@ -1268,7 +1401,7 @@ impl ExtractPlan {
                     .join(" ");
                 format!("msgs={} replies={} media[{}]", s.messages, s.replies, media)
             }),
-            ExtractKind::Github { sync } => {
+            (ExtractKind::Github { sync }, Some(DbHandle::Github(db))) => {
                 let targets = sync
                     .pull_requests
                     .iter()
@@ -1278,6 +1411,7 @@ impl ExtractPlan {
                 frankweiler_etl_github::extract::fetch(
                     frankweiler_etl_github::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
+                        db: Some(db),
                         full_sync: true,
                         refresh_window_days: sync
                             .refresh_window_days
@@ -1299,7 +1433,7 @@ impl ExtractPlan {
                     )
                 })
             }
-            ExtractKind::Gitlab { sync } => {
+            (ExtractKind::Gitlab { sync }, Some(DbHandle::Gitlab(db))) => {
                 let targets = sync
                     .merge_requests
                     .iter()
@@ -1309,6 +1443,7 @@ impl ExtractPlan {
                 frankweiler_etl_gitlab::extract::fetch(
                     frankweiler_etl_gitlab::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
+                        db: Some(db),
                         full_sync: true,
                         refresh_window_days: sync
                             .refresh_window_days
@@ -1330,9 +1465,10 @@ impl ExtractPlan {
                     )
                 })
             }
-            ExtractKind::Beeper { sync } => frankweiler_etl_beeper::extract::fetch(
+            (ExtractKind::Beeper { sync }, Some(DbHandle::Beeper(db))) => frankweiler_etl_beeper::extract::fetch(
                 frankweiler_etl_beeper::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
+                    db: Some(db),
                     sources: sync.sources.clone(),
                     beeper_data_dir: sync.beeper_data_dir.clone(),
                     media: sync.media,
@@ -1353,9 +1489,10 @@ impl ExtractPlan {
                     s.events_orphaned,
                 )
             }),
-            ExtractKind::Carddav { sync } => frankweiler_etl_contacts::extract::fetch(
+            (ExtractKind::Carddav { sync }, Some(DbHandle::Carddav(db))) => frankweiler_etl_contacts::extract::fetch(
                 frankweiler_etl_contacts::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
+                    db: Some(db),
                     server_url: sync.server_url.clone(),
                     addressbooks: sync.addressbooks.clone(),
                     progress: progress.clone(),
@@ -1374,7 +1511,12 @@ impl ExtractPlan {
                     s.requests,
                 )
             }),
-            ExtractKind::Perseus { sync } => frankweiler_etl_perseus::extract::fetch(
+            // Perseus is file-tree-backed (raw XML files on disk), not
+            // doltlite — so it has no `DbHandle` and skips both the
+            // pre-open and the post-extract dolt_commit. The pre-open
+            // phase in `run_extract_phase` leaves `plan.db == None`
+            // for this kind.
+            (ExtractKind::Perseus { sync }, _) => frankweiler_etl_perseus::extract::fetch(
                 frankweiler_etl_perseus::extract::FetchOptions {
                     out_dir: self.out_dir.clone(),
                     files: sync.files.clone(),
@@ -1389,10 +1531,10 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
-            ExtractKind::Notion {
+            (ExtractKind::Notion {
                 sync,
                 playback_root,
-            } => {
+            }, Some(DbHandle::Notion(db))) => {
                 // Notion has no listing endpoint; in playback mode we
                 // derive seeds by scanning the fixture tree for every
                 // synthesized page response. Outside playback we honor
@@ -1412,6 +1554,7 @@ impl ExtractPlan {
                 frankweiler_etl_notion::extract::fetch(
                     frankweiler_etl_notion::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
+                        db: Some(db),
                         subtree_pages: seeds,
                         inbox: sync.inbox.as_ref().is_some_and(|i| i.enabled),
                         inbox_mirror_referenced: sync
@@ -1441,31 +1584,55 @@ impl ExtractPlan {
                     )
                 })
             }
+            // The open phase pairs each ExtractKind with the
+            // matching DbHandle variant, so any mismatch here would
+            // be a bug in `open_extract_db`. We don't try to recover.
+            _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
         };
         progress.finish("done");
-        // One commit per source at the end of extract. We pop open the
-        // doltlite_db briefly here rather than threading the hash
-        // through every provider's `extract::fetch` return type — the
-        // raw-store pool the provider used is already dropped by now,
-        // but the file is on disk and reopening is cheap.
+        // One commit per source at the end of extract, against the
+        // *same* pool the worker just used. No reopen — under doltlite
+        // a second pool against the same file would race the writer's
+        // outstanding session and surface as "database is locked", even
+        // on a clean completion (the SqlitePool drop closes connections
+        // asynchronously, so the file lock can outlive the function
+        // return).
         //
         // Best-effort: a commit failure doesn't fail the extract — the
         // data is still on disk, dolt_log just won't have an entry for
         // this run. We attach a `; commit=<hash>` suffix to the stats
         // string on success so the orchestrator's JSON summary carries
         // the identifier.
-        match result {
-            Ok(stats) => {
+        let commit_outcome: Result<String> = match (&pool, &result) {
+            (Some(pool), Ok(stats)) => {
                 let msg = format!("extract {name}: {stats}");
-                match frankweiler_etl::doltlite_raw::commit_run_at_path(&out_dir, &msg).await {
+                match frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await {
                     Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
-                    Ok(None) => Ok(stats),
+                    Ok(None) => Ok(stats.clone()),
                     Err(e) => {
                         status_line!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
-                        Ok(stats)
+                        Ok(stats.clone())
                     }
                 }
             }
+            // File-tree-backed kind (Perseus): no dolt_commit, no
+            // commit hash to append — just pass the stats through.
+            (None, Ok(stats)) => Ok(stats.clone()),
+            // Fetch errored — return whatever string for the
+            // placeholder; the `match result` below replaces it with
+            // the original error.
+            (_, Err(_)) => Ok(String::new()),
+        };
+        // Release the writer's connection deterministically so
+        // downstream phases (translate, load) that re-open the file
+        // through a different code path don't race the still-closing
+        // pool. `pool.close().await` waits for every outstanding
+        // connection to drain. No-op for file-tree-backed kinds.
+        if let Some(pool) = pool {
+            pool.close().await;
+        }
+        match result {
+            Ok(_) => commit_outcome,
             Err(e) => Err(e),
         }
     }
@@ -1813,26 +1980,23 @@ mod interrupt_tests {
         dr::has_dolt_extensions(pool).await
     }
 
-    /// Populate `CtrlcState` with one index pool + two extract DB
-    /// paths (one materialized, one never-created), call
-    /// [`interrupt_commit_all`], then verify:
+    /// Populate `CtrlcState` with one index pool + one pre-opened
+    /// extract pool, call [`interrupt_commit_all`], then verify:
     ///   * the index pool got exactly one new commit
-    ///   * the materialized extract DB got exactly one new commit
-    ///   * the never-created path was silently skipped (no file
-    ///     materialized, no error)
+    ///   * the extract pool got exactly one new commit, against the
+    ///     same connection the SIGINT path uses (no reopen).
     ///
-    /// Mirrors the production state the SIGINT handler sees at
-    /// any point during a sync run: the index pool is always live
-    /// once `open_index_pool` returns, and `extract_dbs` is the
-    /// list of every managed source's resolved input path —
-    /// regardless of whether that source's extract has actually
-    /// run yet.
+    /// Mirrors the production state the SIGINT handler sees at any
+    /// point after `run_extract_phase` has begun opening pools: each
+    /// source that opened successfully is in `extract_pools`; sources
+    /// that failed to open were never registered (so the interrupt
+    /// path doesn't see them at all — there's no
+    /// "never-materialized" entry to defensively skip).
     #[tokio::test]
     async fn interrupt_commit_all_commits_index_and_extract_dbs() {
         let d = tempdir().unwrap();
         let index_db = d.path().join("backend_index.doltlite_db");
         let extract_db = d.path().join("raw").join("source_a.doltlite_db");
-        let never_created = d.path().join("raw").join("source_b.doltlite_db");
 
         // Sanity-prime the index DB so dolt_log has a head to count from.
         // Use the same DDL the real index DB carries — empty extra DDL
@@ -1858,23 +2022,21 @@ mod interrupt_tests {
             sqlx::query(q).execute(&index_pool).await.unwrap();
         }
 
-        // Materialize the extract DB so commit_run_at_path has
-        // something to open. Apply the standard `start_run` so there's
-        // a row to commit (otherwise dolt would say "nothing to commit"
-        // and skip the new log entry).
-        {
-            let pool = dr::open(&extract_db, &[]).await.unwrap();
-            for q in [
-                "SELECT dolt_config('user.name', 'frankweiler-interrupt-test')",
-                "SELECT dolt_config('user.email', 'interrupt@frankweiler.local')",
-            ] {
-                sqlx::query(q).execute(&pool).await.unwrap();
-            }
-            let _ = dr::start_run(&pool, &json!({"phase": "extract"}))
-                .await
-                .unwrap();
-            pool.close().await;
+        // Open the extract DB and stage a row so the interrupt commit
+        // has something to commit (otherwise dolt would say "nothing
+        // to commit" and skip the new log entry). The pool stays open
+        // for the duration of the test — production mirror: each
+        // source's pool is held across its whole extract run.
+        let extract_pool = dr::open(&extract_db, &[]).await.unwrap();
+        for q in [
+            "SELECT dolt_config('user.name', 'frankweiler-interrupt-test')",
+            "SELECT dolt_config('user.email', 'interrupt@frankweiler.local')",
+        ] {
+            sqlx::query(q).execute(&extract_pool).await.unwrap();
         }
+        let _ = dr::start_run(&extract_pool, &json!({"phase": "extract"}))
+            .await
+            .unwrap();
 
         // Stage an uncommitted change on the index DB too, so the
         // interrupt path has something to commit there.
@@ -1893,22 +2055,24 @@ mod interrupt_tests {
             .fetch_one(&index_pool)
             .await
             .unwrap();
-        let extract_log_before: i64 = {
-            let p = dr::open(&extract_db, &[]).await.unwrap();
-            let n = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
-                .fetch_one(&p)
-                .await
-                .unwrap();
-            p.close().await;
-            n
-        };
+        // Snapshot via the held pool — same connection that will
+        // issue the interrupt commit, so its post-commit view will
+        // see exactly the right delta.
+        let extract_log_before: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+            .fetch_one(&extract_pool)
+            .await
+            .unwrap();
 
         // Build the shared state EXACTLY as the run() body would:
-        // index pool live, every managed source's path registered,
-        // including paths whose extract hasn't materialized a file.
+        // index pool live + extract_pools populated with the live
+        // pre-opened per-source pools (registered as `run_extract_phase`
+        // opens them).
         let state = Arc::new(Mutex::new(CtrlcState {
             index_pool: Some(index_pool.clone()),
-            extract_dbs: vec![extract_db.clone(), never_created.clone()],
+            extract_pools: vec![ExtractPoolEntry {
+                name: "source_a".to_string(),
+                pool: extract_pool.clone(),
+            }],
         }));
 
         // Invoke the same function the SIGINT handler invokes.
@@ -1941,10 +2105,10 @@ mod interrupt_tests {
             "index interrupt commit message wrong: {index_head_msg}"
         );
 
-        // Extract DB: same.
-        let verify = dr::open(&extract_db, &[]).await.unwrap();
+        // Extract DB: count via the same held pool the commit ran
+        // through. That connection sees its own commit immediately.
         let extract_log_after: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
-            .fetch_one(&verify)
+            .fetch_one(&extract_pool)
             .await
             .unwrap();
         assert_eq!(
@@ -1954,7 +2118,7 @@ mod interrupt_tests {
         );
         let extract_head_msg: String =
             sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1")
-                .fetch_one(&verify)
+                .fetch_one(&extract_pool)
                 .await
                 .unwrap();
         assert!(
@@ -1962,15 +2126,7 @@ mod interrupt_tests {
                 && extract_head_msg.contains("source_a"),
             "extract interrupt commit message wrong: {extract_head_msg}"
         );
-        verify.close().await;
-
-        // Never-created path: must NOT have been materialized by the
-        // interrupt commit attempt. Same defensive contract as the
-        // commit_run_at_path no-op test in doltlite_raw.
-        assert!(
-            !never_created.exists(),
-            "interrupt_commit_all must not create files for nonexistent extract paths"
-        );
+        extract_pool.close().await;
 
         verify_index.close().await;
     }

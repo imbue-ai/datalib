@@ -92,7 +92,7 @@ fn full_ddl() -> Vec<String> {
 }
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
 }

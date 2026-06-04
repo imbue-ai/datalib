@@ -73,7 +73,7 @@ fn full_ddl() -> Vec<String> {
     out
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
 }

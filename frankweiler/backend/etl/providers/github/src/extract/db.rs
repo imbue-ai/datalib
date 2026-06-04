@@ -118,7 +118,7 @@ pub fn pr_pk(repo: &str, num: u32) -> String {
     format!("{repo}#{num}")
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
 }

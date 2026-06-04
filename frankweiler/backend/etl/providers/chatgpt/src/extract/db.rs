@@ -78,7 +78,7 @@ pub struct ConversationDetail {
     pub payload: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
 }

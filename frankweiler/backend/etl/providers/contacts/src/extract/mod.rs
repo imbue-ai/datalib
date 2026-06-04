@@ -34,8 +34,12 @@ use db::ContactRow;
 pub struct FetchOptions {
     /// Doltlite database path. May be either a `<...>.doltlite_db`
     /// file or the legacy directory shape; [`db_path_for`] resolves
-    /// either form.
+    /// either form. Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
+    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
+    /// instead of opening from `db_path`. See the matching field on
+    /// the other providers' FetchOptions for rationale.
+    pub db: Option<RawDb>,
     /// Root URL of the user's CardDAV server. We start discovery
     /// here (PROPFIND for `current-user-principal`). Examples:
     /// `https://contacts.icloud.com/`,
@@ -64,7 +68,10 @@ pub struct FetchSummary {
 
 /// Run one extract pass against `opts.server_url`.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
-    let db = RawDb::open(&db_path_for(&opts.db_path)).await?;
+    let db = match opts.db.clone() {
+        Some(db) => db,
+        None => RawDb::open(&db_path_for(&opts.db_path)).await?,
+    };
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }

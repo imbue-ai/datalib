@@ -88,6 +88,7 @@ async fn run_extract(
 ) -> Result<FetchSummary> {
     extract::fetch(FetchOptions {
         db_path,
+        db: None,
         sources: sources.into_iter().map(String::from).collect(),
         beeper_data_dir: Some(beeper_data_dir),
         media: true,

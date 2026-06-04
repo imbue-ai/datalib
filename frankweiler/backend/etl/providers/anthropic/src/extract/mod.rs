@@ -34,8 +34,15 @@ const CLAUDE_ORIGIN: &str = "https://claude.ai";
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
     /// Path to the doltlite database file. Legacy directories are
-    /// rewritten to `<dir>.doltlite_db`.
+    /// rewritten to `<dir>.doltlite_db`. Ignored for opening when
+    /// `db` is `Some`.
     pub db_path: PathBuf,
+    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
+    /// instead of opening from `db_path`. The sync orchestrator pre-
+    /// opens at startup so a download isn't started against a DB we
+    /// can't write to (and so the post-extract commit can run on the
+    /// same connection — no reopen race).
+    pub db: Option<RawDb>,
     /// Path to a bulk-export directory (`users.json` and friends). If
     /// set and the DB is missing users, we pre-seed them from here.
     pub export_dir: Option<PathBuf>,
@@ -67,9 +74,12 @@ pub struct FetchSummary {
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db_path = db_path_for(&opts.db_path);
     let _ = frankweiler_etl::latchkey::ensure_curl_shim();
-    let db = RawDb::open(&db_path)
-        .await
-        .with_context(|| format!("open raw db {}", db_path.display()))?;
+    let db = match opts.db.clone() {
+        Some(db) => db,
+        None => RawDb::open(&db_path)
+            .await
+            .with_context(|| format!("open raw db {}", db_path.display()))?,
+    };
 
     if opts.control.reset_and_redownload {
         info!(event = "anthropic_reset_and_redownload");

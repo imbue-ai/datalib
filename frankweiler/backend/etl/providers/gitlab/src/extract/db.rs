@@ -86,7 +86,7 @@ pub fn discussion_pk(proj: &str, iid: u32, discussion_id: &str) -> String {
     format!("{proj}!{iid}#{discussion_id}")
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
 }
