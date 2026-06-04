@@ -89,6 +89,40 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 ARG LATCHKEY_VERSION=2.12.2
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
+# Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
+# DB by hand. Lets users run `docker exec -it … doltlite
+# /data/backend_index.doltlite_db` and execute `SELECT * FROM
+# dolt_log()` etc. against the live store. Doltlite isn't in Ubuntu's
+# package repos, but `dolthub/doltlite` publishes signed per-arch
+# `.deb` packages on every GitHub release.
+#
+# Pin to the same version we statically link into the binary
+# (//third-party/doltlite + MODULE.bazel's `doltlite_amalgamation`), so
+# the SQL surface a user sees in the shell matches what the running
+# binary observes — drift here would be confusing without buying
+# anything. The `libdoltlite-dev` headers we don't want (no compilation
+# happens in this image); the `doltlite` CLI package pulls in its
+# `libdoltlite0 (= 0.11.5)` runtime as a hard dep, which is unavoidable
+# even though our binary doesn't dynamic-link against it (the .so just
+# sits there serving the CLI). Adds ~31 MB to the image — small price
+# for a real debug shell against the prolly store.
+#
+# public-release assets are reachable anonymously, so curl is fine here
+# (no gh CLI dep just for this step).
+ARG DOLTLITE_CLI_VERSION=0.11.5
+RUN arch="$(dpkg --print-architecture)" \
+    && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
+        -o /tmp/libdoltlite0.deb "${base}/libdoltlite0_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
+        -o /tmp/doltlite.deb "${base}/doltlite_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        /tmp/libdoltlite0.deb \
+        /tmp/doltlite.deb \
+    && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
+    && doltlite --version
+
 # Pre-fetch qmd's three embedding/reranker/expansion models so a fresh
 # `frankweiler-sync` run doesn't pay a ~2.25 GB HuggingFace download on
 # first use. Layered *before* the release-binary copy so it's cached
@@ -124,7 +158,15 @@ RUN mkdir -p /root/.cache/qmd/models && \
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# FIXME: Everything above here could be shared by a devcontainer, right?  And what's below is only prod-specific?  If so, document this.
+# Re. devcontainer overlap (see also the top-of-file note): the actually
+# shareable prefix is just the apt + NodeSource blocks (lines ~60–78) —
+# everything from `npm install -g latchkey` down is prod-only. The
+# devcontainer doesn't need a pre-installed latchkey (contributors use
+# `npx latchkey` if at all), doesn't want the ~2.25 GB qmd models baked
+# in (Bazel hits its own cache), and doesn't want the prod bind-mount
+# directories. So a `FROM <shared-base>` inheritance would have to fork
+# right after NodeSource — not interesting enough for the
+# publish-and-pin ceremony of a separate base image.
 
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must
@@ -173,10 +215,22 @@ WORKDIR /data
 
 EXPOSE 8731
 
-# FIXME: I don't think we need any entrypoint -- users will run short-lived commands like `frankweiler-sync` directly.
-# tini as PID 1 so signals reach the frankweiler binary and any qmd
-# subprocesses get reaped; frankweiler-entrypoint.sh under it bootstraps
-# LATCHKEY_ENCRYPTION_KEY. No default CMD: this image is multi-entrypoint
-# (`frankweiler-sync`, `frankweiler-http`, `latchkey`), and forcing one
-# would just make `docker run <img> latchkey ...` more awkward.
+# Even short-lived commands need `frankweiler-entrypoint.sh` because
+# every documented use case touches latchkey, and latchkey aborts with
+# "No encryption key available." if `LATCHKEY_ENCRYPTION_KEY` isn't
+# set. That includes:
+#   * `latchkey services register` / `auth set` / `auth list` directly;
+#   * `frankweiler-sync`, which shells out to `latchkey curl` per source;
+#   * `frankweiler-http`, ditto for any authenticated upstream fetch.
+# The entrypoint reads the per-bind-mount key file (or provisions one
+# on first run — see the script header) so users don't have to remember
+# `-e LATCHKEY_ENCRYPTION_KEY=...` on every `docker run`.
+#
+# tini in front of it reaps zombie subprocesses (qmd-indexer spawns
+# `npx`/`node`) and forwards SIGTERM cleanly to the long-lived
+# `frankweiler-http` case. Cheap enough to keep for short-lived runs too.
+#
+# No default CMD: this image is multi-entrypoint (`frankweiler-sync`,
+# `frankweiler-http`, `latchkey`), and forcing one would just make
+# `docker run <img> latchkey ...` more awkward.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/frankweiler-entrypoint.sh"]
