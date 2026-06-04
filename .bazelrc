@@ -77,3 +77,23 @@ build --stamp
 # don't share hits. The disk cache is keyed by action hash and shared.
 build --disk_cache=~/Library/Caches/bazel-disk-cache
 test  --disk_cache=~/Library/Caches/bazel-disk-cache
+
+# Auto-apply per-OS `build:<os>` configs below based on the build host.
+common --enable_platform_specific_config
+
+# Drop dead DT_NEEDED entries from Linux release binaries. libsqlite3-sys's
+# build script unconditionally emits `cargo:rustc-link-lib=sqlite3` (no
+# `kind=` prefix → defaults to dylib) even when its `bundled` feature is
+# on and our `//third-party/doltlite:sqlite3` annotation has already
+# statically linked doltlite. Without --as-needed, the linker still
+# records `libsqlite3.so` as a DT_NEEDED entry on the final binary, and
+# glibc's loader then refuses to launch on hosts without a system
+# libsqlite3 — even though no sqlite3_* symbols are actually unresolved
+# (verify with `nm -D --undefined-only frankweiler-sync | grep sqlite3`
+# → empty). `--as-needed` tells ld to omit DT_NEEDED entries whose
+# library contributes no symbols to the final image.
+#
+# macOS ld64 doesn't accept `-Wl,…` flags in this form and dead-strips
+# unused dylibs by default anyway, so this is Linux-only. The flag is
+# safe to apply to all Linux Rust links — at worst it's a no-op.
+build:linux --linkopt=-Wl,--as-needed
