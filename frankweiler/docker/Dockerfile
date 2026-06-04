@@ -137,6 +137,7 @@ RUN arch="$(dpkg --print-architecture)" \
 # baked-in copy is simply ignored and qmd downloads the alternate model
 # on first use — no harm done, just no speed-up.
 #
+# FIXME: Instead of this, we should create some markdown, then qmd add and index it, then check that the files we expect to be created got created.
 # Total layer size: ~2.25 GB. Yes, the image is correspondingly chunky;
 # the alternative was every fresh `docker run frankweiler-sync` paying a
 # multi-minute, network-bound, easily-interrupted download, which is a
