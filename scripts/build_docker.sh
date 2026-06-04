@@ -31,8 +31,9 @@
 #   REPO          owner/name on GitHub (default imbue-ai/mixed_up_files)
 #   IMAGE_NAME    registry image ref (default ghcr.io/imbue-ai/mixed_up_files)
 #
-# Requires: docker (with buildx), curl, tar. `gh` is NOT required —
-# tarballs are fetched via the public `releases/download/<tag>/<file>` URL.
+# Requires: docker (with buildx), gh, tar. `gh auth login` must have been
+# run — the repo is private, so anonymous releases/download/<tag>/<file>
+# URLs return 404. The `--tarball-dir` mode skips both gh and auth.
 
 set -euo pipefail
 
@@ -81,21 +82,32 @@ mkdir -p "${ctx}/dist/amd64" "${ctx}/dist/arm64"
 fetch_tarball() {
     local triple="$1" arch_dir="$2"
     local name="frankweiler-${triple}.tar.gz"
-    local dest="${ctx}/dist/${arch_dir}/${name}"
+    local dest_dir="${ctx}/dist/${arch_dir}"
     if [[ -n "${TARBALL_DIR}" ]]; then
         if [[ ! -f "${TARBALL_DIR}/${name}" ]]; then
             echo "error: ${TARBALL_DIR}/${name} not found" >&2
             exit 1
         fi
-        cp "${TARBALL_DIR}/${name}" "${dest}"
+        cp "${TARBALL_DIR}/${name}" "${dest_dir}/${name}"
     else
-        local url="https://github.com/${REPO}/releases/download/v${VERSION}/${name}"
-        echo "build_docker: downloading ${url}"
-        curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
-            -o "${dest}" "${url}"
+        # `gh release download` instead of curl: the repo is private, so
+        # plain HTTPS GETs against releases/download/<tag>/<file> return
+        # 404 to anonymous clients. `gh` handles auth via the host
+        # config from `gh auth login`. See docs/first_time_user.md for
+        # the same pattern.
+        echo "build_docker: gh release download v${VERSION} ${name} (repo ${REPO})"
+        gh release download "v${VERSION}" \
+            --repo "${REPO}" \
+            --pattern "${name}" \
+            --clobber \
+            --dir "${dest_dir}"
     fi
 }
 
+if [[ -z "${TARBALL_DIR}" ]]; then
+    command -v gh >/dev/null \
+        || { echo "error: \`gh\` not on PATH — install via \`brew install gh\` and run \`gh auth login\`" >&2; exit 1; }
+fi
 fetch_tarball x86_64-unknown-linux-gnu  amd64
 fetch_tarball aarch64-unknown-linux-gnu arm64
 

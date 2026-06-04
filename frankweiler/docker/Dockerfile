@@ -50,33 +50,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   gnupg            required by the NodeSource setup script below
 #   openssl          used by frankweiler-entrypoint.sh to generate the
 #                    latchkey encryption key on first run
-#   libsqlite3-0     frankweiler-{sync,http} dynamically link against
-#                    libsqlite3 (via libsqlite3-sys). The release tarball
-#                    is built on GHA's ubuntu-latest where the system
-#                    sqlite is present, so the binary's NEEDED entry is
-#                    the unversioned `libsqlite3.so`. Ubuntu only ships
-#                    the versioned `libsqlite3.so.0`, so we symlink the
-#                    unversioned name into the multi-arch lib dir below
-#                    after install. (Cleaner long-term fix: have the
-#                    release build static-link sqlite via the
-#                    `bundled` feature on rusqlite/libsqlite3-sys.)
+#
+# No libsqlite3-0: doltlite is statically linked into the release binary
+# via //third-party/doltlite:sqlite3 + the libsqlite3-sys crate
+# annotation in MODULE.bazel. If you see "libsqlite3.so: cannot open
+# shared object file" at runtime, the sqlx feature in
+# frankweiler/backend/Cargo.toml regressed from `sqlite` to
+# `sqlite-unbundled` — see the comment block on the sqlx dep there.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         gnupg \
-        libsqlite3-0 \
         openssl \
         tini \
-    && rm -rf /var/lib/apt/lists/* \
-    # Symlink the unversioned SONAME the binary's DT_NEEDED expects.
-    # Glob across the multi-arch dir name so this works on both
-    # x86_64-linux-gnu and aarch64-linux-gnu without pulling in
-    # `dpkg-dev` (which provides `dpkg-architecture`).
-    && for d in /usr/lib/*-linux-gnu; do \
-            [ -f "${d}/libsqlite3.so.0" ] || continue; \
-            ln -sf libsqlite3.so.0 "${d}/libsqlite3.so"; \
-       done \
-    && find /usr/lib -maxdepth 3 -name 'libsqlite3.so*' -print
+    && rm -rf /var/lib/apt/lists/*
 
 # Node 22 LTS via NodeSource. Two consumers in this image:
 #   1. `latchkey` (installed below) is an npm package.
@@ -133,6 +120,12 @@ RUN mkdir -p /root/.cache/qmd/models && \
         "https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/main/qmd-query-expansion-1.7B-q4_k_m.gguf" && \
     ls -lh /root/.cache/qmd/models
 
+# Pre-create the bind-mount targets so empty-dir mounts behave predictably
+# and so an unmounted run still has somewhere to write.
+RUN mkdir -p /root/.latchkey /data
+
+# FIXME: Everything above here could be shared by a devcontainer, right?  And what's below is only prod-specific?  If so, document this.
+
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must
 # contain `dist/<arch>/frankweiler-*-linux-gnu.tar.gz` — see the top-of-
@@ -159,9 +152,6 @@ RUN set -eux; \
     test -x /usr/local/bin/frankweiler-http; \
     test -x /usr/local/bin/frankweiler-latchkey-curl-shim
 
-# Pre-create the bind-mount targets so empty-dir mounts behave predictably
-# and so an unmounted run still has somewhere to write.
-RUN mkdir -p /root/.latchkey /data
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
 # per-bind-mount key file before exec'ing the user's command. See the
@@ -183,6 +173,7 @@ WORKDIR /data
 
 EXPOSE 8731
 
+# FIXME: I don't think we need any entrypoint -- users will run short-lived commands like `frankweiler-sync` directly.
 # tini as PID 1 so signals reach the frankweiler binary and any qmd
 # subprocesses get reaped; frankweiler-entrypoint.sh under it bootstraps
 # LATCHKEY_ENCRYPTION_KEY. No default CMD: this image is multi-entrypoint
