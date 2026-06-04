@@ -19,6 +19,13 @@ pub struct SearchRow {
     pub conversation_name: String,
     pub project: String,
     pub account: String,
+    /// Owning Anthropic org UUID (stable, opaque). Empty for non-Anthropic
+    /// rows. UI shows `org_name` as the cell value and uses `org_uuid` as
+    /// the filter key.
+    pub org_uuid: String,
+    /// Human-readable org name corresponding to `org_uuid`. Empty when
+    /// the upstream payload didn't carry one.
+    pub org_name: String,
     pub entire_chat: String,
     pub source: String,
     pub kind: String,

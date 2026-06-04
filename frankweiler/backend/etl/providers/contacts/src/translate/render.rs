@@ -336,6 +336,8 @@ fn build_grid_row(
         when_ts: when_ts.to_string(),
         author: Some(title.clone()),
         account: Some(source_name.to_string()),
+        org_uuid: None,
+        org_name: None,
         project: None,
         channel: Some(contact.addressbook.clone()),
         conversation_name: Some(contact.addressbook.clone()),

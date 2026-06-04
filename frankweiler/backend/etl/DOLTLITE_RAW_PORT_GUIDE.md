@@ -422,12 +422,22 @@ When you add a new snapshot test in your port, add a sibling
 ```python
 load("//tools:insta.bzl", "insta_update")
 
-rust_test(name = "foo_render", ...)
+rust_test(
+    name = "foo_render",
+    data = [":tng_fixture"],
+    env = {"FOO_FIXTURE_DIR": "frankweiler/.../fixtures/foo_api"},
+    ...
+)
 
 insta_update(
     name = "foo_render.update",
     test = ":foo_render",
     test_args = ["--ignored"],  # if the test is #[ignore]'d
+    # `data` and `env` on the rust_test DO NOT propagate through the
+    # sibling sh_binary wrapper. Mirror every fixture / env-var dep
+    # here or the .update run will panic with "fixture not found".
+    extra_data = [":tng_fixture"],
+    extra_env = {"FOO_FIXTURE_DIR": "frankweiler/.../fixtures/foo_api"},
 )
 ```
 

@@ -149,7 +149,7 @@ impl MirrorRepo for DoltRepo {
         let (where_sql, params) = build_where(q, &needle);
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    channel, conversation_name, conversation_uuid, markdown_uuid, \
+                    org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
                     message_index, entire_chat, text, slack_link, notion_page_uuid \
              FROM grid_rows{} \
              ORDER BY when_ts ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
@@ -177,6 +177,8 @@ impl MirrorRepo for DoltRepo {
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();
+            let org_uuid: String = r.try_get("org_uuid").unwrap_or_default();
+            let org_name: String = r.try_get("org_name").unwrap_or_default();
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
@@ -203,6 +205,8 @@ impl MirrorRepo for DoltRepo {
                 conversation_name,
                 project,
                 account,
+                org_uuid,
+                org_name,
                 entire_chat,
                 source: source_label,
                 kind,
@@ -318,7 +322,7 @@ impl MirrorRepo for DoltRepo {
         }
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
-                    channel, conversation_name, conversation_uuid, markdown_uuid, \
+                    org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
                     message_index, entire_chat, text, slack_link, notion_page_uuid \
              FROM grid_rows{}",
             where_sql
@@ -341,6 +345,8 @@ impl MirrorRepo for DoltRepo {
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();
+            let org_uuid: String = r.try_get("org_uuid").unwrap_or_default();
+            let org_name: String = r.try_get("org_name").unwrap_or_default();
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
@@ -368,6 +374,8 @@ impl MirrorRepo for DoltRepo {
                     conversation_name,
                     project,
                     account,
+                    org_uuid,
+                    org_name,
                     entire_chat,
                     source: source_label,
                     kind,

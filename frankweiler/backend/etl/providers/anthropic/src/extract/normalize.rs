@@ -13,6 +13,7 @@ pub fn normalize_to_export_shape(
     mut api_conv: Value,
     account_uuid: Option<&str>,
     org_uuid: &str,
+    org_name: Option<&str>,
 ) -> Value {
     let Some(obj) = api_conv.as_object_mut() else {
         return api_conv;
@@ -49,6 +50,9 @@ pub fn normalize_to_export_shape(
     let mut source = Map::new();
     source.insert("via".into(), Value::String("claude.ai/api".into()));
     source.insert("org_uuid".into(), Value::String(org_uuid.into()));
+    if let Some(n) = org_name {
+        source.insert("org_name".into(), Value::String(n.into()));
+    }
     obj.insert("_source".into(), Value::Object(source));
     api_conv
 }
@@ -105,11 +109,12 @@ mod tests {
                 }
             ]
         });
-        let out = normalize_to_export_shape(api, Some("acct-123"), "org-abc");
+        let out = normalize_to_export_shape(api, Some("acct-123"), "org-abc", Some("Acme"));
         assert_eq!(out["account"]["uuid"], "acct-123");
         assert_eq!(out["chat_messages"][0]["text"], "hello");
         assert_eq!(out["chat_messages"][0]["content"][0]["flags"], Value::Null);
         assert_eq!(out["_source"]["org_uuid"], "org-abc");
+        assert_eq!(out["_source"]["org_name"], "Acme");
         assert_eq!(out["_source"]["via"], "claude.ai/api");
     }
 }

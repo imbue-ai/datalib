@@ -159,11 +159,19 @@ rust_test(
 insta_update(
     name = "slack_render.update",
     test = ":slack_render",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "SLACK_FIXTURE_DIR": "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+    },
 )
 
 insta_update(
     name = "slack_translate.update",
     test = ":slack_translate",
+    extra_data = [":tng_fixture"],
+    extra_env = {
+        "SLACK_FIXTURE_DIR": "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+    },
 )
 
 insta_update(

@@ -37,30 +37,38 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 axum = "0.8"
 tower-http = { version = "0.6.8", features = ["cors", "fs"] }
 # sqlx is the SQLite client driving DoltRepo against a single file at
-# `<data_root>/<dolt.db_filename>`. End-state intent is that the file is
-# a *doltlite* file with the full version-control superpowers
-# (`SELECT dolt_commit(...)` etc.); the runtime probe in
-# `frankweiler-core::dolt_repo` already short-circuits cleanly when the
-# linked libsqlite3 is plain SQLite.
+# `<data_root>/<dolt.db_filename>`. The file is a *doltlite* file with
+# the full version-control superpowers (`SELECT dolt_commit(...)` etc.);
+# `frankweiler-core::dolt_repo` probes `pragma_function_list` at connect
+# time and short-circuits cleanly when (in cargo-only / non-Bazel
+# builds) the linked libsqlite3 happens to be stock SQLite.
 #
-# Today we use sqlx's `sqlite` feature, which routes through
-# `libsqlite3-sys`'s `bundled` mode and statically compiles upstream
-# SQLite's amalgamation. The doltlite source is fetched + built by
-# Bazel at `//third-party/doltlite:libsqlite3_doltlite` and ready to
-# swap in; see the TODO in MODULE.bazel and the docs in
-# third-party/doltlite/README.md for the bridge between
-# `libsqlite3-sys` and the bazel-built archive.
+# We use sqlx's `sqlite` feature (NOT `sqlite-unbundled`). Under Bazel,
+# the `crate.annotation` on `libsqlite3-sys` in MODULE.bazel overrides
+# the bundled amalgamation with the doltlite archive built by
+# `//third-party/doltlite:sqlite3` (via `SQLITE3_LIB_DIR` +
+# `SQLITE3_STATIC=1`), so what's actually statically linked is doltlite,
+# not stock SQLite.
+#
+# `sqlite-unbundled` was a holdover that caused sqlx-sqlite to emit
+# `cargo:rustc-link-lib=dylib=sqlite3` on its own — producing a release
+# binary that statically embedded doltlite but ALSO declared a spurious
+# DT_NEEDED on `libsqlite3.so`, so it refused to launch on minimal Linux
+# hosts (e.g. the Docker base image) that didn't have a system libsqlite3
+# installed. The `sqlite` feature has no such side-emission; the binary
+# is fully self-contained.
 #
 # Features:
 #   runtime-tokio-rustls — async runtime
-#   sqlite               — bundled libsqlite3-sys (today: stock SQLite,
-#                          eventually: doltlite via the crate annotation)
+#   sqlite               — bundled libsqlite3-sys; under Bazel the
+#                          crate annotation swaps the amalgamation for
+#                          our doltlite archive
 #   macros               — `query!` / `query_as!` (not yet used; cheap)
 #   chrono               — map ISO-8601 strings to/from chrono types
 #   uuid                 — `feedback_uuid` primary keys
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
-    "sqlite-unbundled",
+    "sqlite",
     "macros",
     "chrono",
     "uuid",

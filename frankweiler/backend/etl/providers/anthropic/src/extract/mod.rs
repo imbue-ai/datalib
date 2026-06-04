@@ -241,7 +241,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.set_message(&format!("{org_name} {uuid}"));
                 match client.get_conversation(org_uuid, uuid).await {
                     Ok(full) => {
-                        save_conversation(&db, org_uuid, uuid, &full).await?;
+                        save_conversation(&db, org_uuid, &org_name, uuid, &full).await?;
                         summary.fetched += 1;
                         fetch_files_for(&db, &full, uuid, &mut summary).await;
                         if opts.sleep_between > Duration::ZERO {
@@ -299,7 +299,7 @@ async fn fetch_single(
             .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
-                save_conversation(db, org_uuid, conv_uuid, &full).await?;
+                save_conversation(db, org_uuid, &org_name, conv_uuid, &full).await?;
                 summary.fetched += 1;
                 info!(
                     event = "anthropic_fetch_single_ok",
@@ -341,7 +341,13 @@ async fn fetch_single(
     ))
 }
 
-async fn save_conversation(db: &RawDb, org_uuid: &str, uuid: &str, full: &Value) -> Result<()> {
+async fn save_conversation(
+    db: &RawDb,
+    org_uuid: &str,
+    org_name: &str,
+    uuid: &str,
+    full: &Value,
+) -> Result<()> {
     let payload = serde_json::to_string(full).context("serialize conversation")?;
     let name = full.get("name").and_then(|v| v.as_str()).map(String::from);
     let updated_at = full
@@ -351,6 +357,7 @@ async fn save_conversation(db: &RawDb, org_uuid: &str, uuid: &str, full: &Value)
     db.upsert_conversation_detail(&db::ConversationDetail {
         id: uuid.to_string(),
         org_uuid: org_uuid.to_string(),
+        org_name: Some(org_name.to_string()),
         name,
         updated_at,
         payload,

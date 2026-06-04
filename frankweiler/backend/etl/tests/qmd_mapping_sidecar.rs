@@ -40,6 +40,8 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         author: None,
         account: None,
         project: None,
+        org_uuid: None,
+        org_name: None,
         channel: None,
         conversation_name: None,
         conversation_uuid: uuid.into(),

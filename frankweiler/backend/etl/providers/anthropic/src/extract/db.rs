@@ -57,6 +57,7 @@ const DDL_DATA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS conversations (
         id TEXT PRIMARY KEY,
         org_uuid TEXT NULL,
+        org_name TEXT NULL,
         name TEXT NULL,
         updated_at TEXT NULL,
         payload TEXT NULL
@@ -88,6 +89,7 @@ pub struct ConvState {
 pub struct ConversationDetail {
     pub id: String,
     pub org_uuid: String,
+    pub org_name: Option<String>,
     pub name: Option<String>,
     pub updated_at: Option<String>,
     /// Raw upstream `/api/.../chat_conversations/{uuid}` payload.
@@ -99,6 +101,12 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
+        // Idempotent migration for pre-org_name DBs. SQLite rejects the
+        // ADD COLUMN with "duplicate column" once it's been applied; we
+        // swallow that since the CREATE TABLE above already declares it.
+        let _ = sqlx::query("ALTER TABLE conversations ADD COLUMN org_name TEXT")
+            .execute(&pool)
+            .await;
         Ok(Self { pool })
     }
 
@@ -270,16 +278,18 @@ impl RawDb {
             .await
             .context("begin upsert_conversation_detail tx")?;
         sqlx::query(
-            "INSERT INTO conversations (id, org_uuid, name, updated_at, payload)
-             VALUES (?, ?, ?, ?, jsonb(?))
+            "INSERT INTO conversations (id, org_uuid, org_name, name, updated_at, payload)
+             VALUES (?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
+                org_name = COALESCE(excluded.org_name, conversations.org_name),
                 name = COALESCE(excluded.name, conversations.name),
                 updated_at = COALESCE(excluded.updated_at, conversations.updated_at),
                 payload = excluded.payload",
         )
         .bind(&row.id)
         .bind(&row.org_uuid)
+        .bind(row.org_name.as_deref())
         .bind(row.name.as_deref())
         .bind(row.updated_at.as_deref())
         .bind(&row.payload)
@@ -312,7 +322,7 @@ impl RawDb {
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT id, org_uuid, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id",
+            "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -321,6 +331,7 @@ impl RawDb {
         for r in rows {
             let id: String = r.try_get("id").unwrap_or_default();
             let org_uuid: Option<String> = r.try_get("org_uuid").ok();
+            let org_name: Option<String> = r.try_get("org_name").ok();
             let payload: String = match r.try_get("payload") {
                 Ok(s) => s,
                 Err(_) => continue,
@@ -331,6 +342,7 @@ impl RawDb {
             out.push(LoadedConversation {
                 id,
                 org_uuid: org_uuid.unwrap_or_default(),
+                org_name,
                 payload: p,
             });
         }
@@ -392,6 +404,7 @@ impl RawDb {
 pub struct LoadedConversation {
     pub id: String,
     pub org_uuid: String,
+    pub org_name: Option<String>,
     /// Raw API payload — the translate step calls
     /// `normalize_to_export_shape` over this on read.
     pub payload: Value,
@@ -519,6 +532,7 @@ mod tests {
         db.upsert_conversation_detail(&ConversationDetail {
             id: "c1".into(),
             org_uuid: "org-a".into(),
+            org_name: Some("A Org".into()),
             name: Some("Hi".into()),
             updated_at: Some("2026-01-01T00:00:00Z".into()),
             payload: serde_json::to_string(&json!({"uuid":"c1","chat_messages":[]})).unwrap(),
@@ -528,5 +542,6 @@ mod tests {
         let convs = db.load_conversations().await.unwrap();
         assert_eq!(convs.len(), 1);
         assert_eq!(convs[0].org_uuid, "org-a");
+        assert_eq!(convs[0].org_name.as_deref(), Some("A Org"));
     }
 }

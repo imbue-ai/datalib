@@ -237,12 +237,22 @@ When adding a new insta-using test, declare a sibling `.update`:
 ```python
 load("//tools:insta.bzl", "insta_update")
 
-rust_test(name = "my_render_test", ...)
+rust_test(
+    name = "my_render_test",
+    data = [":tng_fixture"],
+    env = {"MY_FIXTURE_DIR": "frankweiler/.../fixtures/my_api"},
+    ...
+)
 
 insta_update(
     name = "my_render_test.update",
     test = ":my_render_test",
     test_args = ["--ignored"],  # only if the test is #[ignore]'d
+    # `data` and `env` on rust_test DO NOT propagate through the
+    # sibling sh_binary wrapper — mirror every fixture / env-var dep
+    # here or `bazel run …update` will panic with "fixture not found".
+    extra_data = [":tng_fixture"],
+    extra_env = {"MY_FIXTURE_DIR": "frankweiler/.../fixtures/my_api"},
 )
 ```
 

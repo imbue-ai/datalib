@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write  # needed to create the GitHub Release
+  packages: write  # needed for the docker-publish job to push to ghcr.io
 
 # Serialize main-branch runs so the bazel disk-cache save at the end of
 # one run finishes before the next run starts. Without this, two pushes
@@ -252,3 +253,112 @@ jobs:
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha256 }}
           fail_on_unmatched_files: true
+
+  # Build and push the multi-arch runtime image to ghcr.io. Runs after
+  # the matrix `build` job has uploaded both Linux tarballs to the
+  # GitHub Release so we can fetch them by their stable
+  # `releases/download/<tag>/...` URLs from inside the docker build
+  # context. Tag-only; main-branch runs of this workflow skip it.
+  #
+  # This image is the user-facing way to run frankweiler on Linux
+  # without trusting the bare binaries to your host shell — see
+  # docs/docker.md for the bind-mount + security model. The build is
+  # NOT gated on the macOS matrix entry: a darwin-only build failure
+  # shouldn't block publishing the Linux image.
+  docker-publish:
+    name: docker-publish (ghcr.io)
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Pull the just-published tarballs from the GitHub Release into
+      # the build context at the layout frankweiler/docker/Dockerfile
+      # expects (`dist/<arch>/<tarball>`). We use curl + the public
+      # download URLs rather than `gh release download` to keep the
+      # step self-contained (no extra auth needed; the release is public
+      # the moment softprops/action-gh-release@v3 completes).
+      - name: Stage tarballs into docker build context
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p ctx/dist/amd64 ctx/dist/arm64
+          cp frankweiler/docker/Dockerfile ctx/Dockerfile
+          cp frankweiler/docker/entrypoint.sh ctx/entrypoint.sh
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${REF_NAME}"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 4 \
+              -o ctx/dist/amd64/frankweiler-x86_64-unknown-linux-gnu.tar.gz \
+              "${base}/frankweiler-x86_64-unknown-linux-gnu.tar.gz"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 4 \
+              -o ctx/dist/arm64/frankweiler-aarch64-unknown-linux-gnu.tar.gz \
+              "${base}/frankweiler-aarch64-unknown-linux-gnu.tar.gz"
+          ls -la ctx/dist/amd64 ctx/dist/arm64
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Smoke test BEFORE pushing: build the amd64 image locally
+      # (`--load`), then run the `latchkey services register` + `auth
+      # set` + `auth list` roundtrip against a tmp `.latchkey` dir.
+      # This validates the assumption that latchkey's encryption falls
+      # back to a file-keyed scheme on a keyring-less Linux container
+      # (no Secret Service running), so credentials written inside the
+      # container can be read back by the same container. If this
+      # assumption ever breaks, we want to fail BEFORE pushing :latest.
+      - name: Smoke test (latchkey roundtrip inside the image)
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          tag="ghcr.io/${GITHUB_REPOSITORY,,}:smoke-${version}"
+          docker buildx build \
+              --platform linux/amd64 \
+              --tag "${tag}" \
+              --load \
+              ctx
+          tmp_latchkey="$(mktemp -d)"
+          trap 'rm -rf "${tmp_latchkey}"' EXIT
+          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
+              latchkey services register claude-ai --base-api-url=https://claude.ai/
+          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
+              latchkey auth set claude-ai -H "Cookie: sessionKey=smoke-test-not-real"
+          # The roundtrip assertion: a fresh container reading the same
+          # bind-mounted dir must see the credential we just stored.
+          out="$(docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" latchkey auth list)"
+          echo "${out}"
+          echo "${out}" | grep -q claude-ai
+          # Verify binaries respond to --version (cheap sanity check).
+          docker run --rm "${tag}" frankweiler-sync --version
+          # frankweiler-http requires a positional DATA_ROOT, so we can't
+          # --version it; just verify it loads its dynamic libs by asking
+          # for help (which exits 0 after clap renders usage).
+          docker run --rm --entrypoint /usr/local/bin/frankweiler-http "${tag}" --help
+
+      - name: Build and push multi-arch image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
+          # preserves case from the org/repo slug. `${var,,}` lowercases.
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --tag "${image}:${version}" \
+              --tag "${image}:latest" \
+              --push \
+              ctx

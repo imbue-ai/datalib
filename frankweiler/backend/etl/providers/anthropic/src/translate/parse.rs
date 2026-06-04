@@ -43,6 +43,13 @@ pub struct ConversationRow {
     pub account_uuid: String,
     pub conversation_uuid: String,
     pub project_uuid: Option<String>,
+    /// Owning Anthropic organization UUID, lifted from `_source.org_uuid`
+    /// in the normalized payload. Used to disambiguate conversations
+    /// that share an account but live in different orgs (e.g. personal
+    /// Max plan vs. a Team-plan workspace).
+    pub org_uuid: Option<String>,
+    /// Human-readable org name, when available (from `_source.org_name`).
+    pub org_name: Option<String>,
     pub name: Option<String>,
     pub summary: Option<String>,
     pub created_at: Option<String>,
@@ -179,10 +186,12 @@ pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
     for LoadedConversation {
         id: _,
         org_uuid,
+        org_name,
         payload,
     } in raw.conversations
     {
-        let normalized = normalize_to_export_shape(payload, account_uuid, &org_uuid);
+        let normalized =
+            normalize_to_export_shape(payload, account_uuid, &org_uuid, org_name.as_deref());
         match build_conv_row(&normalized) {
             Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
                 conv,
@@ -304,12 +313,24 @@ pub fn build_conv_row(c: &Value) -> Result<Option<ConversationRow>> {
         .and_then(Value::as_str)
         .map(String::from);
 
+    let source = c_obj.get("_source").and_then(Value::as_object);
+    let org_uuid = source
+        .and_then(|s| s.get("org_uuid"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    let org_name = source
+        .and_then(|s| s.get("org_name"))
+        .and_then(Value::as_str)
+        .map(String::from);
+
     let mut conv_raw = c_obj.clone();
     conv_raw.remove("chat_messages");
     Ok(Some(ConversationRow {
         account_uuid,
         conversation_uuid: conv_uuid,
         project_uuid,
+        org_uuid,
+        org_name,
         name: str_field(c_obj, "name"),
         summary: str_field(c_obj, "summary"),
         created_at: str_field(c_obj, "created_at"),

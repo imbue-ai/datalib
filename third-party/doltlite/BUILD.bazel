@@ -10,7 +10,7 @@ exports_files(
 # statically linked into every Rust binary that pulls in sqlx-sqlite
 # (transitively via `libsqlite3-sys`).
 #
-# Single-TU build from the doltlite amalgamation. As of v0.11.4 the
+# Single-TU build from the doltlite amalgamation. As of v0.11.5 the
 # amalgamation bundles the SQLite core, the prolly storage engine, the
 # `dolt_commit`/`dolt_log`/… version-control SQL surface, blake3 with
 # runtime SIMD dispatch, and the SQLite extensions (FTS3/4/5, RTree,
@@ -63,7 +63,7 @@ cc_library(
         # at the top of doltlite.c, but we set them explicitly so the
         # intent is visible at this layer too.
         "-DDOLTLITE_PROLLY=1",
-        "-DDOLTLITE_VERSION=\\\"0.11.4\\\"",
+        "-DDOLTLITE_VERSION=\\\"0.11.5\\\"",
         "-DSQLITE_CORE",
         # SQLite vtable extensions doltlite enables by default; we
         # repeat them here so the amalgamation's extension init code

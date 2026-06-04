@@ -123,6 +123,16 @@ pub struct GridRow {
     ///   gitlab: merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')
     ///   notion: null (Notion does not have a per-page project notion; workspace lives in `account`)
     pub project: Option<String>,
+    /// Anthropic-only. Owning organization UUID, used to disambiguate conversations that share a logged-in account but live in different orgs (e.g. a personal Max plan vs. a Team-plan workspace). Stable, opaque key; pair with `org_name` for display. Null for non-Anthropic rows.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations._source.org_uuid
+    pub org_uuid: Option<String>,
+    /// Anthropic-only. Human-readable org display name (from `/api/organizations`), corresponding to `org_uuid`. Shown in the Org column; the row also carries `org_uuid` for stable filtering. Null for non-Anthropic rows.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations._source.org_name
+    pub org_name: Option<String>,
     /// Slack channel display name (e.g. 'bridge', 'engineering'). Null for non-Slack rows. Drives the Channel column and a future channel: filter.
     ///
     /// Per-provider mapping:
@@ -192,7 +202,7 @@ pub struct GridRow {
     /// Path to the rendered Markdown file for this row's conversation/thread, relative to the data root. All paths are rooted under `rendered_md/<provider>/...`. Set on every row (chat-level rows point at their own .md; message/block rows inherit their parent thread's). The chat preview pane uses this to load the conversation directly — no glob, no frontmatter scan. (Column name retained as `qmd_path` for historical reasons.)
     ///
     /// Per-provider mapping:
-    ///   anthropic: rendered_md/anthropic/{account_uuid}/llm_chats/{conversation_uuid}__{slug(name)}.md
+    ///   anthropic: rendered_md/anthropic/{account_uuid}/{org_uuid}/llm_chats/{conversation_uuid}/index.md
     ///   openai: rendered_md/openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.md
     ///   slack: rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.md
     ///   github: rendered_md/github/{owner}/{repo}/pr-{number}__{slug(title)}/index.md (PR), or .../threads/{thread_uuid}__{slug}.md (comment threads)
@@ -250,6 +260,8 @@ pub const DDL: &[(&str, &str)] = &[
     author VARCHAR(255),
     account VARCHAR(96),
     project VARCHAR(96),
+    org_uuid VARCHAR(96),
+    org_name VARCHAR(255),
     channel VARCHAR(255),
     conversation_name TEXT,
     conversation_uuid VARCHAR(96) NOT NULL,
@@ -270,5 +282,5 @@ pub const DDL: &[(&str, &str)] = &[
 
 /// Column names per table, in declaration order.
 pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid", "markdown_uuid"]),
+    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "org_uuid", "org_name", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid", "markdown_uuid"]),
 ];
