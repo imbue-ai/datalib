@@ -127,80 +127,41 @@ RUN arch="$(dpkg --print-architecture)" \
     && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
     && doltlite --version
 
-# Warm qmd's model cache by driving the actual qmd pipeline against a
-# seed markdown file. Concretely:
+# Install qmd globally and pre-fetch its three default models
+# (embedding + query-expansion + reranker, ~2.25 GB total). `qmd pull`
+# is qmd's own model-prefetch command — it reads the canonical model
+# URIs out of qmd's source, downloads each one into qmd's default cache
+# (`~/.cache/qmd/models`), and writes the matching `.etag` sidecars
+# that `qmd doctor` later uses to detect cache corruption. Using `qmd
+# pull` rather than curl'ing HuggingFace URLs ourselves means we don't
+# have to track qmd's model-URI / cache-naming conventions — qmd bumps
+# a default model, we just rebuild and the right files land.
 #
-#   * `qmd collection add <path>`  — register the seed dir as a collection.
-#   * `qmd update`                 — re-index (sanity check; no-op after add).
-#   * `qmd embed`                  — pulls the embedding model
-#                                    (hf:ggml-org/embeddinggemma-300M-GGUF/...).
-#   * `qmd query "<text>"`         — pulls the query-expansion model
-#                                    (hf:tobil/qmd-query-expansion-...).
-#                                    With ≥1 result returned, also pulls
-#                                    the reranker model
-#                                    (hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/...).
+# Pinned to the qmd version that `frankweiler-sync` invokes via
+# `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
+# frankweiler/backend/qmd_indexer/src/lib.rs. The
+# //tools:qmd_version_pins_test asserts the values agree.
 #
-# Why this instead of curl'ing GGUFs directly: qmd knows the canonical
-# URIs, the on-disk cache layout (`hf_<owner>_<basename>.gguf` under
-# `~/.cache/qmd/models`), and which model versions it's actually going
-# to use at runtime. When qmd bumps a default model (or someone
-# overrides via `QMD_EMBED_MODEL=...`), the right files land in the
-# cache instead of us silently baking stale GGUFs that get ignored.
-# Also exercises the embed + query path end-to-end, so a build that
-# succeeds here proves qmd actually works in this image.
+# qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which
+# tries to fetch a prebuilt linux binary via `prebuild-install`. There
+# isn't one for our node 22 / glibc combo so npm falls back to
+# `node-gyp build`, which needs `make` + a C compiler + `python3` to
+# compile the `.node` addon from source. We install those build deps
+# here and leave them in the image — purging them after install is
+# fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
+# aggressive cleanup pulls node out from under us) and the marginal
+# disk-size savings don't matter against the model layer.
 #
-# Pin to the same qmd version that `frankweiler-sync` invokes via
-# `npx -y @tobilu/qmd@<v>` at runtime so the warmed cache is exactly
-# what would otherwise be downloaded on first sync.
-#
-# Layered *before* the release-binary copy so it's cached across
-# version bumps — model URIs only change when qmd's defaults change
-# (rare), but the binaries change every release. Total layer size:
-# ~2.25 GB; build-step duration ~1–2 minutes (most of it the model
-# downloads themselves; embedding 1 chunk + 1 search query are sub-
-# 10s on CPU).
-#
-# Keep this block (and the `qmd` install above) in sync with
-# `.devcontainer/Dockerfile`.
+# Keep this block in sync with `.devcontainer/Dockerfile`.
 ARG QMD_VERSION=2.5.3
-RUN npm install -g "@tobilu/qmd@${QMD_VERSION}"
-
-RUN set -eux; \
-    mkdir -p /opt/qmd-warmup; \
-    printf '%s\n' \
-        '# qmd warmup' '' \
-        'Seed document used during docker image build to drive first-run' \
-        'model download.' '' \
-        '## doltlite version control' '' \
-        'The doltlite SQL store keeps version history of every change to' \
-        'indexed markdown collections. Run `SELECT * FROM dolt_log()` against' \
-        'the prolly store to inspect the commit timeline.' '' \
-        '## frankweiler synchronization' '' \
-        'The frankweiler-sync binary mirrors conversations from Anthropic,' \
-        'Slack, GitHub, GitLab, and Notion into a queryable local store.' \
-        > /opt/qmd-warmup/hello.md; \
-    qmd collection add /opt/qmd-warmup; \
-    qmd update; \
-    qmd embed; \
-    qmd query "doltlite version control"; \
-    # End-state check: at least 3 GGUFs are now cached (embed + expand +
-    # reranker). Don't assert on specific filenames — those are qmd's
-    # internal naming convention and we want this to keep working when
-    # qmd flips a default model URI.
-    model_count="$(find /root/.cache/qmd/models -type f -name '*.gguf' | wc -l)"; \
-    test "$model_count" -ge 3 || { \
-        echo "qmd warmup left only $model_count models in /root/.cache/qmd/models" >&2; \
-        ls -la /root/.cache/qmd/models >&2; \
-        exit 1; \
-    }; \
-    ls -lh /root/.cache/qmd/models; \
-    # Drop the seed dir and the warmup-only qmd index so the image only
-    # carries the model cache (which is what we wanted to bake) — not
-    # the collection registry that points at a path no runtime caller
-    # will ever look at. At runtime frankweiler-sync sets
-    # XDG_CACHE_HOME=<root>/.frankweiler so the runtime index lives
-    # elsewhere; this default-location index is purely build artifact.
-    rm -rf /opt/qmd-warmup /root/.cache/qmd/index.sqlite
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
+    && qmd --version \
+    && qmd pull \
+    && ls -lh /root/.cache/qmd/models
 
 # Pre-create the bind-mount targets so empty-dir mounts behave predictably
 # and so an unmounted run still has somewhere to write.

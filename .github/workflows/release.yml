@@ -319,6 +319,17 @@ jobs:
       # (no Secret Service running), so credentials written inside the
       # container can be read back by the same container. If this
       # assumption ever breaks, we want to fail BEFORE pushing :latest.
+      #
+      # Cache layer with `type=gha` so subsequent tag runs don't pay
+      # the ~2.25 GB `qmd pull` cost from scratch every time — that
+      # download has been hitting HuggingFace rate limits, and the
+      # base apt + npm steps alone run for ~5 minutes cold. `mode=max`
+      # writes ALL intermediate layers (not just the final image) so
+      # the qmd model layer is reusable across tags. GHA caches have a
+      # 10 GB-per-repo quota; the qmd layer alone is 2.25 GB so we
+      # have headroom but not infinite. Same cache key is reused by
+      # the multi-arch push step below, so amd64 layers built here
+      # are reused there.
       - name: Smoke test (latchkey roundtrip inside the image)
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -329,6 +340,8 @@ jobs:
           docker buildx build \
               --platform linux/amd64 \
               --tag "${tag}" \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
               --load \
               ctx
           tmp_latchkey="$(mktemp -d)"
@@ -358,9 +371,16 @@ jobs:
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          # Same `type=gha` cache as the smoke step above. amd64 layers
+          # built during the smoke run are already in the cache; this
+          # invocation reuses them and only builds arm64 fresh on the
+          # first cold tag, then both arches cache-hit on subsequent
+          # tags.
           docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
               --push \
               ctx
