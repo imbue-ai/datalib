@@ -1,7 +1,12 @@
-// Devcontainer that reproduces the linux-amd64 release runner locally.
+// Devcontainer that mirrors the prod runtime image
+// (`frankweiler/docker/Dockerfile`) plus the Bazel build toolchain on
+// top, so contributors can repro Linux-only build issues locally and
+// (because the prefix layers are byte-identical to prod) share the
+// ~2.25 GB qmd model layer with the prod image via Docker's
+// content-addressable layer cache.
 // Spin up via VS Code's "Reopen in Container" or `devcontainer up
-// --workspace-folder .`. Caches are persisted in named volumes so
-// the second `bazel build` doesn't pay the cold-cache cost.
+// --workspace-folder .`. Bazel + npm caches are persisted in named
+// volumes so the second `bazel build` doesn't pay the cold-cache cost.
 //
 // JSON5-style trailing commas + comments are accepted by the
 // devcontainer CLI / VS Code; do not switch to strict JSON.
@@ -21,9 +26,8 @@
 
     // Persist the expensive caches across container rebuilds. Without
     // this, every `Rebuild Container` repeats the ~10-minute cold
-    // boring-sys2 / tokio build and re-downloads ~2 GB of GGUF
-    // models. Each named volume is scoped by the container name so
-    // multiple checkouts don't collide.
+    // boring-sys2 / tokio build. Each named volume is scoped by the
+    // container name so multiple checkouts don't collide.
     //
     // Paths to know:
     //   ~/.cache/bazel        — bazel's output base (action cache)
@@ -31,12 +35,17 @@
     //                           macOS-style path; .bazelrc was written
     //                           macOS-first, and Linux happily creates
     //                           the dir wherever ~ resolves to)
-    //   ~/.cache/qmd/models   — qmd's shared GGUF model cache
     //   ~/.npm                — npx download cache for the qmd npm pkg
+    //
+    // NOT mounted: ~/.cache/qmd/models. The Dockerfile prefix bakes the
+    // three GGUFs into /root/.cache/qmd/models and symlinks
+    // /home/ubuntu/.cache/qmd/models to it. Mounting a named volume here
+    // would overlay (and hide) the baked models with an empty volume on
+    // first launch, defeating the whole point of the shared image
+    // layer. Models survive container rebuilds via the image layer.
     "mounts": [
         "source=mixed-up-files-bazel-output,target=/home/ubuntu/.cache/bazel,type=volume",
         "source=mixed-up-files-bazel-disk,target=/home/ubuntu/Library/Caches/bazel-disk-cache,type=volume",
-        "source=mixed-up-files-qmd-models,target=/home/ubuntu/.cache/qmd/models,type=volume",
         "source=mixed-up-files-npm,target=/home/ubuntu/.npm,type=volume"
     ],
 

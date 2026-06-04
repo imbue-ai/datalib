@@ -25,13 +25,17 @@
 #                                  re-downloading ~300 MB on every fresh
 #                                  `frankweiler-sync` run.
 #
-# NOTE on devcontainer overlap: the apt + NodeSource blocks here are
-# duplicated from `.devcontainer/Dockerfile` rather than inherited. Prod
-# wants a tight runtime image (no compiler toolchain); devcontainer wants
-# the full Bazel + clang + cmake build surface. The intersection is small
-# enough that a parent base image isn't worth the publish-and-pin
-# ceremony — keep the two NodeSource lines in sync by hand if the major
-# version moves.
+# Devcontainer overlap: the entire prefix down through `mkdir -p
+# /root/.latchkey /data` (FROM through line ~159) is duplicated
+# byte-for-byte in `.devcontainer/Dockerfile`. Docker's content-addressed
+# layer cache then dedupes those layers on a single daemon: a
+# contributor who has built one image and rebuilds the other pays zero
+# bytes of additional disk for apt + Node + latchkey + doltlite CLI +
+# the ~2.25 GB qmd model layer. The duplication has to be exact —
+# whitespace, ARG defaults, comment text all participate in the
+# layer-hash input. When editing the prefix, copy the new lines into
+# `.devcontainer/Dockerfile` verbatim or both images will rebuild from
+# scratch.
 
 FROM ubuntu:24.04
 
@@ -159,15 +163,9 @@ RUN mkdir -p /root/.cache/qmd/models && \
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# Re. devcontainer overlap (see also the top-of-file note): the actually
-# shareable prefix is just the apt + NodeSource blocks (lines ~60–78) —
-# everything from `npm install -g latchkey` down is prod-only. The
-# devcontainer doesn't need a pre-installed latchkey (contributors use
-# `npx latchkey` if at all), doesn't want the ~2.25 GB qmd models baked
-# in (Bazel hits its own cache), and doesn't want the prod bind-mount
-# directories. So a `FROM <shared-base>` inheritance would have to fork
-# right after NodeSource — not interesting enough for the
-# publish-and-pin ceremony of a separate base image.
+# === SHARED-WITH-DEVCONTAINER PREFIX ENDS HERE ===
+# Everything below is prod-only. Add new shared bits ABOVE this line and
+# mirror them into `.devcontainer/Dockerfile`.
 
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must
