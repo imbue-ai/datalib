@@ -275,25 +275,27 @@ jobs:
 
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout frankweiler/docker/Dockerfile
-      # expects (`dist/<arch>/<tarball>`). We use curl + the public
-      # download URLs rather than `gh release download` to keep the
-      # step self-contained (no extra auth needed; the release is public
-      # the moment softprops/action-gh-release@v3 completes).
+      # expects (`dist/<arch>/<tarball>`). The repo is private, so the
+      # public `releases/download/<tag>/<file>` URLs 404 anonymously —
+      # we use `gh release download` with the workflow's GITHUB_TOKEN
+      # for auth.
       - name: Stage tarballs into docker build context
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           mkdir -p ctx/dist/amd64 ctx/dist/arm64
           cp frankweiler/docker/Dockerfile ctx/Dockerfile
           cp frankweiler/docker/entrypoint.sh ctx/entrypoint.sh
-          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${REF_NAME}"
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 4 \
-              -o ctx/dist/amd64/frankweiler-x86_64-unknown-linux-gnu.tar.gz \
-              "${base}/frankweiler-x86_64-unknown-linux-gnu.tar.gz"
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-delay 4 \
-              -o ctx/dist/arm64/frankweiler-aarch64-unknown-linux-gnu.tar.gz \
-              "${base}/frankweiler-aarch64-unknown-linux-gnu.tar.gz"
+          gh release download "${REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'frankweiler-x86_64-unknown-linux-gnu.tar.gz' \
+              --clobber --dir ctx/dist/amd64
+          gh release download "${REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'frankweiler-aarch64-unknown-linux-gnu.tar.gz' \
+              --clobber --dir ctx/dist/arm64
           ls -la ctx/dist/amd64 ctx/dist/arm64
 
       - name: Set up QEMU
