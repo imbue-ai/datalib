@@ -1,3 +1,7 @@
+// `println!("cargo:...")` is the cargo build-script protocol — required
+// here, exempt from the workspace-wide ban defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! Defaults `$FRANKWEILER_UI_DIST` for the `rust-embed` proc macro
 //! when building with cargo.
 //!

@@ -767,6 +767,9 @@ async fn insert_grid_row(
 }
 
 #[cfg(test)]
+// Test diagnostics; cargo test captures stdout/stderr and prints it
+// per-test on failure or with `--nocapture`. No MP in scope here.
+#[allow(clippy::disallowed_macros)]
 mod write_lock_tests {
     //! Reproduces the production "(code 5) database is locked" we saw
     //! on a real `--skip-extract` run: multiple per-source translate

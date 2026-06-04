@@ -148,10 +148,7 @@ struct Book {
     ctag: Option<String>,
 }
 
-async fn discover(
-    server_url: &str,
-    summary: &mut FetchSummary,
-) -> Result<(String, String)> {
+async fn discover(server_url: &str, summary: &mut FetchSummary) -> Result<(String, String)> {
     // Step 1: current-user-principal.
     summary.requests += 1;
     let ms = api::propfind(server_url, "0", api::BODY_CURRENT_USER_PRINCIPAL)
@@ -179,10 +176,7 @@ async fn discover(
     Ok((principal_url, home_set_url))
 }
 
-async fn list_addressbooks(
-    home_set_url: &str,
-    summary: &mut FetchSummary,
-) -> Result<Vec<Book>> {
+async fn list_addressbooks(home_set_url: &str, summary: &mut FetchSummary) -> Result<Vec<Book>> {
     summary.requests += 1;
     let ms = api::propfind(home_set_url, "1", api::BODY_LIST_ADDRESSBOOKS)
         .await
@@ -215,7 +209,10 @@ async fn sync_addressbook(
     let body = api::body_sync_collection(prev_token);
     let ms = match api::report(book_url, &body).await {
         Ok(ms) => ms,
-        Err(CarddavError::Http { status: 403 | 405 | 501, .. }) => {
+        Err(CarddavError::Http {
+            status: 403 | 405 | 501,
+            ..
+        }) => {
             // Server explicitly doesn't support sync-collection.
             // Fall back to a multiget over what we already have plus
             // a discovery walk. Not implemented yet — record the

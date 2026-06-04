@@ -1,3 +1,9 @@
+// Standalone read-only CLI: runs outside `frankweiler-sync`, so there's
+// no MultiProgress / indicatif bars on screen. The tool's whole job is
+// to write tabular data to stdout. Exempt from the workspace-wide ban
+// defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! `beeper-inspect` — quick read-only dump of a Beeper doltlite raw
 //! store. Works around the fact that the system `sqlite3` CLI can't
 //! read our doltlite-format files (different record encoding).

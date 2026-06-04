@@ -14,3 +14,4 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+frankweiler-obs = { path = "../obs" }

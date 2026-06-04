@@ -17,3 +17,28 @@
 disallowed-methods = [
     { path = "indicatif::MultiProgress::new", reason = "Use `frankweiler_obs::shared_multi()` to get the process-wide MultiProgress that's coordinated with the tracing writer. A second MultiProgress races for stderr and flickers." },
 ]
+
+# Raw `eprintln!` / `println!` bypass indicatif's bar suspension and
+# corrupt the progress display whenever they fire during a phase that
+# has live bars. Two safe alternatives, depending on intent:
+#
+#   1. Status banners (`[frankweiler-sync] ...`, `[qmd-indexer] ...`,
+#      `[translate] ...`, error summaries, SIGINT-handler messages):
+#      use the `frankweiler_obs::status_line!` macro. It routes
+#      through the shared `MultiProgress::println`, which suspends bar
+#      draws across the write so the line lands above the bar block.
+#
+#   2. Structured log events: use `tracing::info!` / `warn!` /
+#      `error!`. The obs subscriber writes through an `IndicatifWriter`
+#      that suspends the MultiProgress for the duration of each event.
+#
+# Legitimate exceptions (compile-time `build.rs`, `#[cfg(test)]`
+# blocks, standalone helper binaries that don't run under sync, the
+# obs `Drop` fallback when the subscriber may already be torn down)
+# carry a narrowly-scoped `#[allow(clippy::disallowed_macros)]` with
+# a one-line reason — the same pattern as the `#[allow]` on the one
+# legitimate `MultiProgress::new` call in `obs/src/lib.rs`.
+disallowed-macros = [
+    { path = "std::eprintln", reason = "Bypasses bar suspension and corrupts the progress display. Use `frankweiler_obs::status_line!` for status banners or `tracing::{info,warn,error}!` for log events." },
+    { path = "std::println", reason = "Same as eprintln above. Stdout sinks (CLI piped-output tools) that genuinely need stdout add `#[allow(clippy::disallowed_macros)]`." },
+]

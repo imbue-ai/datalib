@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use frankweiler_obs::status_line;
 
 pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
@@ -103,15 +104,15 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let index_path = qmd_dir.join("index.sqlite");
     let first_run = !index_path.exists();
 
-    eprintln!("[qmd-indexer] root        = {}", root.display());
-    eprintln!("[qmd-indexer] index dir   = {}", qmd_dir.display());
-    eprintln!(
+    status_line!("[qmd-indexer] root        = {}", root.display());
+    status_line!("[qmd-indexer] index dir   = {}", qmd_dir.display());
+    status_line!(
         "[qmd-indexer] models dir  = {} (symlinked)",
         opts.models_dir.display()
     );
-    eprintln!("[qmd-indexer] qmd package = {qmd_pkg}");
-    eprintln!("[qmd-indexer] embed       = {}", opts.embed);
-    eprintln!(
+    status_line!("[qmd-indexer] qmd package = {qmd_pkg}");
+    status_line!("[qmd-indexer] embed       = {}", opts.embed);
+    status_line!(
         "[qmd-indexer] mode        = {}",
         if first_run { "create" } else { "incremental" }
     );
@@ -148,7 +149,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // hiccup pulling from huggingface; we don't want that to mark an
     // otherwise-fine sync as errored.
     if let Err(e) = run_qmd(&cache_home, &qmd_pkg, &["pull"]) {
-        eprintln!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
+        status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
     }
 
     if !index_path.exists() {
@@ -157,7 +158,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
             index_path.display()
         );
     }
-    eprintln!("[qmd-indexer] wrote {}", index_path.display());
+    status_line!("[qmd-indexer] wrote {}", index_path.display());
 
     // Capture `qmd status` for the run summary. Best-effort: a failure
     // here doesn't fail the index build — the index is already on disk
@@ -165,7 +166,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     let status_output = match capture_qmd_status(&cache_home, &qmd_pkg) {
         Ok(s) => Some(s),
         Err(e) => {
-            eprintln!("[qmd-indexer] qmd status capture failed (non-fatal): {e:#}");
+            status_line!("[qmd-indexer] qmd status capture failed (non-fatal): {e:#}");
             None
         }
     };
@@ -207,7 +208,7 @@ fn capture_qmd_status(cache_home: &Path, qmd_pkg: &str) -> Result<String> {
     // disables color when stdout isn't a TTY (which it isn't here), but
     // belt-and-braces.
     cmd.env("NO_COLOR", "1");
-    eprintln!("[qmd-indexer] $ npx -y {qmd_pkg} status");
+    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} status");
     let out = cmd
         .output()
         .with_context(|| "failed to spawn npx; is Node.js installed?")?;
@@ -231,7 +232,7 @@ fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
     cmd.arg("-y").arg(qmd_pkg).args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
-    eprintln!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
+    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
     let status = cmd
         .status()
         .with_context(|| "failed to spawn npx; is Node.js installed?")?;

@@ -79,6 +79,10 @@ mod progress;
 mod summary;
 use crate::progress::{make_bar, make_multi, IndicatifSink};
 use crate::summary::{ErrorKind, PhaseOutcome, Status, SyncSummary};
+// Use `frankweiler_obs::status_line!` for status lines that fire while
+// progress bars are on screen — it routes through the shared
+// `MultiProgress::println` to suspend bar draws across the write.
+use frankweiler_obs::status_line;
 
 // `FRANKWEILER_VERSION` is the output of `git describe --tags --always
 // --dirty` at build time, set by either
@@ -167,7 +171,13 @@ async fn main() {
     let _obs_guard = match frankweiler_obs::init(&early_args.obs, "frankweiler-sync") {
         Ok(g) => Some(g),
         Err(e) => {
-            eprintln!("[frankweiler-sync] tracing init failed: {e}");
+            // Subscriber didn't come up — tracing isn't an option, and
+            // there's no MultiProgress to write through yet. Plain
+            // stderr is the only sink we have.
+            #[allow(clippy::disallowed_macros)]
+            {
+                eprintln!("[frankweiler-sync] tracing init failed: {e}");
+            }
             None
         }
     };
@@ -189,17 +199,17 @@ async fn main() {
     let c_sig = ctrlc.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\n[frankweiler-sync] caught Ctrl-C; committing partial state…");
+            status_line!("[frankweiler-sync] caught Ctrl-C; committing partial state…");
             interrupt_commit_all(&c_sig).await;
             let mut s = s_sig.lock().unwrap();
             s.interrupted = true;
             s.finalize(start);
             match s.write() {
                 Ok(Some(p)) => {
-                    eprintln!("[frankweiler-sync] summary: {}", summary::pretty_path(&p))
+                    status_line!("[frankweiler-sync] summary: {}", summary::pretty_path(&p))
                 }
-                Ok(None) => eprintln!("[frankweiler-sync] summary: <no data_root yet>"),
-                Err(e) => eprintln!("[frankweiler-sync] failed to write summary: {e}"),
+                Ok(None) => status_line!("[frankweiler-sync] summary: <no data_root yet>"),
+                Err(e) => status_line!("[frankweiler-sync] failed to write summary: {e}"),
             }
             std::process::exit(130);
         }
@@ -223,7 +233,7 @@ async fn main() {
     // these alongside the JSON summary path.
     for outcome in s.extract.iter().chain(s.translate.iter()) {
         if outcome.status == Status::Error {
-            eprintln!(
+            status_line!(
                 "\n[{}] {} ({}): {}",
                 outcome.error_kind.map(|k| k.as_str()).unwrap_or("error"),
                 outcome.name,
@@ -231,8 +241,8 @@ async fn main() {
                 outcome.error.as_deref().unwrap_or(""),
             );
             if outcome.error_kind == Some(ErrorKind::Auth) {
-                eprintln!("--- auth hint ---");
-                eprintln!("{}", auth_hint_for(&outcome.type_str));
+                status_line!("--- auth hint ---");
+                status_line!("{}", auth_hint_for(&outcome.type_str));
             }
         }
     }
@@ -241,9 +251,9 @@ async fn main() {
     }
 
     match s.write() {
-        Ok(Some(p)) => eprintln!("\n[frankweiler-sync] summary: {}", summary::pretty_path(&p)),
-        Ok(None) => eprintln!("\n[frankweiler-sync] summary: <not written; no data_root>"),
-        Err(e) => eprintln!("\n[frankweiler-sync] failed to write summary: {e}"),
+        Ok(Some(p)) => status_line!("\n[frankweiler-sync] summary: {}", summary::pretty_path(&p)),
+        Ok(None) => status_line!("\n[frankweiler-sync] summary: <not written; no data_root>"),
+        Err(e) => status_line!("\n[frankweiler-sync] failed to write summary: {e}"),
     }
 
     let any_phase_err = s.extract.iter().any(|o| o.status == Status::Error)
@@ -287,9 +297,9 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
     if let Some(pool) = pool_opt {
         let msg = "frankweiler-sync: interrupted (Ctrl-C); committing partial state".to_string();
         match frankweiler_etl::doltlite_raw::commit_run(&pool, &msg).await {
-            Ok(Some(h)) => eprintln!("[frankweiler-sync] interrupt index commit: {h}"),
+            Ok(Some(h)) => status_line!("[frankweiler-sync] interrupt index commit: {h}"),
             Ok(None) => {}
-            Err(e) => eprintln!("[frankweiler-sync] interrupt index commit failed: {e:#}"),
+            Err(e) => status_line!("[frankweiler-sync] interrupt index commit failed: {e:#}"),
         }
     }
     for path in db_paths {
@@ -300,12 +310,12 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
                 .unwrap_or("<unknown>")
         );
         match frankweiler_etl::doltlite_raw::commit_run_at_path(&path, &msg).await {
-            Ok(Some(h)) => eprintln!(
+            Ok(Some(h)) => status_line!(
                 "[frankweiler-sync] interrupt extract commit {}: {h}",
                 path.display()
             ),
             Ok(None) => {}
-            Err(e) => eprintln!(
+            Err(e) => status_line!(
                 "[frankweiler-sync] interrupt extract commit failed for {}: {e:#}",
                 path.display()
             ),
@@ -318,10 +328,10 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
 /// when the failure looks auth-related, append source-specific
 /// instructions for fixing latchkey credentials.
 fn render_error(e: &anyhow::Error) {
-    eprintln!("\n[frankweiler-sync] FAILED");
+    status_line!("\n[frankweiler-sync] FAILED");
     for (i, cause) in e.chain().enumerate() {
         let prefix = if i == 0 { "error:" } else { "  caused by:" };
-        eprintln!("{prefix} {cause}");
+        status_line!("{prefix} {cause}");
     }
     let chain_text: String = e
         .chain()
@@ -330,11 +340,11 @@ fn render_error(e: &anyhow::Error) {
         .join("\n");
     if looks_like_auth_failure(&chain_text) {
         if let Some(provider) = extract_provider_type(&chain_text) {
-            eprintln!("\n--- auth hint ---");
-            eprintln!("{}", auth_hint_for(provider));
+            status_line!("\n--- auth hint ---");
+            status_line!("{}", auth_hint_for(provider));
         } else {
-            eprintln!("\n--- auth hint ---");
-            eprintln!("{GENERIC_AUTH_HINT}");
+            status_line!("\n--- auth hint ---");
+            status_line!("{GENERIC_AUTH_HINT}");
         }
     }
 }
@@ -507,7 +517,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     });
 
     let cfg = load_config(args.config.as_deref()).context("load config")?;
-    eprintln!(
+    status_line!(
         "[frankweiler-sync] config: data_root={}, {} source(s)",
         cfg.data_root.display(),
         cfg.sources.len()
@@ -523,7 +533,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         .with_context(|| format!("create data_root: {}", cfg.data_root.display()))?;
     let root = cfg.data_root.canonicalize()?;
     fs::create_dir_all(root.join("rendered_md"))?;
-    eprintln!("[frankweiler-sync] data_root = {}", root.display());
+    status_line!("[frankweiler-sync] data_root = {}", root.display());
 
     {
         let mut s = summary.lock().unwrap();
@@ -554,7 +564,9 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
 
     // ── Extract ────────────────────────────────────────────────────
     if args.skip_extract {
-        eprintln!("[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths");
+        status_line!(
+            "[frankweiler-sync] extract: skipped (--skip-extract); using staged input_paths"
+        );
         let mut s = summary.lock().unwrap();
         for src in cfg.enabled_sources() {
             s.extract.push(PhaseOutcome {
@@ -572,17 +584,17 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 .canonicalize()
                 .with_context(|| format!("playback root: {}", playback_root.display()))?;
             std::env::set_var(PLAYBACK_ENV, &pb);
-            eprintln!("[frankweiler-sync] playback root = {}", pb.display());
+            status_line!("[frankweiler-sync] playback root = {}", pb.display());
             Some(pb)
         } else {
-            eprintln!("[frankweiler-sync] extract: live (hitting provider APIs)");
+            status_line!("[frankweiler-sync] extract: live (hitting provider APIs)");
             None
         };
         let control = frankweiler_etl::control::ExtractControl {
             reset_and_redownload: args.reset_and_redownload,
         };
         if control.reset_and_redownload {
-            eprintln!(
+            status_line!(
                 "[frankweiler-sync] extract: --reset-and-redownload — wiping every source's \
                  data + bookkeeping tables before fetch"
             );
@@ -606,7 +618,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     let prior_cursors = load_cursors(&index_pool)
         .await
         .context("load prior cursors")?;
-    eprintln!(
+    status_line!(
         "[frankweiler-sync] prior fingerprints: {} docs ({} with cheap-probe cursor)",
         prior_fingerprints.len(),
         prior_cursors.len(),
@@ -794,9 +806,9 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         .iter()
         .any(|o| o.status == Status::Error);
     if any_translate_error {
-        eprintln!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
+        status_line!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
         if let Err(e) = write_lock.rollback_transaction().await {
-            eprintln!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");
+            status_line!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");
         }
         // Zero out the load totals so the summary reflects what's
         // actually in the index DB (rolled back → nothing).
@@ -855,12 +867,12 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         match frankweiler_etl::doltlite_raw::commit_run(&index_pool, &msg).await {
             Ok(hash) => {
                 if let Some(h) = hash.as_deref() {
-                    eprintln!("[frankweiler-sync] index commit: {h}");
+                    status_line!("[frankweiler-sync] index commit: {h}");
                 }
                 load_totals.lock().unwrap().commit_hash = hash;
             }
             Err(e) => {
-                eprintln!("[frankweiler-sync] index commit failed: {e:#}");
+                status_line!("[frankweiler-sync] index commit failed: {e:#}");
             }
         }
     }
@@ -876,8 +888,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     // pool and trust that all writes (including the dolt_commit we
     // just issued) are durable.
     drop(index_pool);
-    eprintln!("[frankweiler-sync] wrote {}", cfg.dolt_db_path().display());
-    eprintln!(
+    status_line!("[frankweiler-sync] wrote {}", cfg.dolt_db_path().display());
+    status_line!(
         "[frankweiler-sync] wrote {}/",
         root.join("rendered_md").display()
     );
@@ -886,7 +898,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     if !cfg.qmd.skip {
         match build_qmd_index(&root, cfg.qmd.models_dir.as_deref()) {
             Ok(outcome) => {
-                eprintln!("[frankweiler-sync] wrote {}", outcome.index_path.display());
+                status_line!("[frankweiler-sync] wrote {}", outcome.index_path.display());
                 let mut s = summary.lock().unwrap();
                 s.qmd_index = Some(PhaseOutcome::ok(
                     "qmd",
@@ -896,12 +908,12 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 s.qmd_status = outcome.status_output;
             }
             Err(e) => {
-                eprintln!("[frankweiler-sync] qmd index FAILED: {e:#}");
+                status_line!("[frankweiler-sync] qmd index FAILED: {e:#}");
                 summary.lock().unwrap().qmd_index = Some(PhaseOutcome::err("qmd", "qmd", &e));
             }
         }
     } else {
-        eprintln!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
+        status_line!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
     }
     Ok(())
 }
@@ -917,7 +929,7 @@ async fn open_index_pool(cfg: &Config) -> Result<sqlx::sqlite::SqlitePool> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    eprintln!("[frankweiler-sync] doltlite db = {}", db_path.display());
+    status_line!("[frankweiler-sync] doltlite db = {}", db_path.display());
     // doltlite manages its own chunk-store; `PRAGMA journal_mode = …`
     // is rejected as "not configurable on doltlite-format databases",
     // so we leave it at default. The WAL_CHECKPOINT call we used to
@@ -1428,7 +1440,7 @@ impl ExtractPlan {
                     Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
                     Ok(None) => Ok(stats),
                     Err(e) => {
-                        eprintln!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
+                        status_line!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
                         Ok(stats)
                     }
                 }
@@ -1492,7 +1504,7 @@ fn translate_source(
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();
-    eprintln!(
+    status_line!(
         "[translate] {name} ({}): {}",
         src.type_str(),
         fixture.display()
@@ -1580,7 +1592,7 @@ fn translate_source(
                 .collect();
             let total_threads = current_cursors.len();
             let changed = threads_to_render.len();
-            eprintln!(
+            status_line!(
                 "[translate] slack cheap-probe: {changed}/{total_threads} threads need rendering",
             );
 
@@ -1698,7 +1710,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // a follow-up. Skip synth quietly so a config that
                 // mixes carddav with synth-supported sources doesn't
                 // error out.
-                eprintln!(
+                status_line!(
                     "[synth] {} (carddav): skipped (no synthesizer yet)",
                     src.name()
                 );
@@ -1708,7 +1720,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
         let report = synth
             .synthesize(out)
             .with_context(|| format!("synthesize {} ({})", src.name(), src.type_str()))?;
-        eprintln!(
+        status_line!(
             "[synth] {} ({}): {} fixtures from {}",
             src.name(),
             src.type_str(),
@@ -1735,6 +1747,8 @@ fn build_qmd_index(
 }
 
 #[cfg(test)]
+// Test diagnostics; cargo-test captures stderr. No MP in scope.
+#[allow(clippy::disallowed_macros)]
 mod interrupt_tests {
     //! Tests for the SIGINT-handler commit path. We can't easily send
     //! SIGINT to ourselves mid-`#[tokio::test]` and observe what

@@ -835,6 +835,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "frankweiler-obs",
  "frankweiler-schema",
  "insta",
  "runfiles",
@@ -1100,6 +1101,7 @@ name = "frankweiler-qmd-indexer"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "frankweiler-obs",
 ]
 
 [[package]]

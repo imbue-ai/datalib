@@ -227,8 +227,8 @@ fn parse_block(
     addressbook: &str,
     block_index: usize,
 ) -> Result<ParsedContact> {
-    let uid =
-        vcard_uid(block).unwrap_or_else(|| derive_uid_from_path(addressbook, source_path, block_index));
+    let uid = vcard_uid(block)
+        .unwrap_or_else(|| derive_uid_from_path(addressbook, source_path, block_index));
     let emails = vcard_all(block, "EMAIL");
     let phones = vcard_all(block, "TEL");
     let addresses = vcard_all(block, "ADR");
@@ -277,7 +277,13 @@ fn pick_photo(props: Vec<VcardProp>) -> (Option<ContactPhoto>, Option<String>) {
                     .param("TYPE")
                     .map(|t| format!("image/{}", t.to_ascii_lowercase()))
                     .unwrap_or_else(|| "application/octet-stream".to_string());
-                return (Some(ContactPhoto { bytes, content_type }), None);
+                return (
+                    Some(ContactPhoto {
+                        bytes,
+                        content_type,
+                    }),
+                    None,
+                );
             }
         }
         // vCard 4.0 inline `data:` URL.
@@ -293,7 +299,13 @@ fn pick_photo(props: Vec<VcardProp>) -> (Option<ContactPhoto>, Option<String>) {
                 let engine = base64::engine::general_purpose::STANDARD;
                 let cleaned: String = b64.chars().filter(|c| !c.is_whitespace()).collect();
                 if let Ok(bytes) = engine.decode(cleaned.as_bytes()) {
-                    return (Some(ContactPhoto { bytes, content_type }), None);
+                    return (
+                        Some(ContactPhoto {
+                            bytes,
+                            content_type,
+                        }),
+                        None,
+                    );
                 }
             }
         }
@@ -306,10 +318,7 @@ fn pick_photo(props: Vec<VcardProp>) -> (Option<ContactPhoto>, Option<String>) {
 }
 
 fn derive_uid_from_path(addressbook: &str, path: &Path, block_index: usize) -> String {
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("anon");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("anon");
     format!("{addressbook}:{stem}:{block_index}")
 }
 

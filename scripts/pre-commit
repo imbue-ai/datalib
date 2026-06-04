@@ -63,7 +63,11 @@ if [ -d frankweiler/backend ]; then
     (cd frankweiler/backend && cargo fmt --all -- --check)
 
     echo "[rust] cargo clippy"
-    (cd frankweiler/backend && cargo clippy --all-targets --all-features -- -D warnings)
+    # `disallowed_macros` is in the `restriction` group (not enabled by
+    # default); flip it on here so the `eprintln!` / `println!` ban in
+    # `frankweiler/backend/clippy.toml` becomes a hard error via `-D
+    # warnings`. See that file's header for the rationale.
+    (cd frankweiler/backend && cargo clippy --all-targets --all-features -- -W clippy::disallowed_macros -D warnings)
 fi
 
 echo "All pre-commit checks passed."

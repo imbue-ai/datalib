@@ -1,3 +1,8 @@
+// Integration test runs under cargo-test (no MultiProgress / no
+// indicatif bars). Exempt from the workspace-wide ban on direct
+// stderr/stdout writes defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! Live Slack integration snapshot test.
 //!
 //! Hits real api.slack.com via `latchkey curl`, downloads the configured

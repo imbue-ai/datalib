@@ -56,7 +56,14 @@ pub fn render_all(
     progress.set_length(Some(summary.contacts_total as u64));
 
     for contact in &parsed.contacts {
-        match render_one(contact, out_dir, source_name, now, prior_fingerprints, on_doc_complete) {
+        match render_one(
+            contact,
+            out_dir,
+            source_name,
+            now,
+            prior_fingerprints,
+            on_doc_complete,
+        ) {
             Ok(RenderOutcome::Rendered { photo_written }) => {
                 summary.contacts_rendered += 1;
                 if photo_written {
@@ -113,12 +120,16 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    let when_ts = contact
-        .revision
-        .clone()
-        .unwrap_or_else(|| now.to_string());
+    let when_ts = contact.revision.clone().unwrap_or_else(|| now.to_string());
 
-    let md = render_markdown(contact, source_name, &m_uuid, &fingerprint, &when_ts, photo_rel.as_deref());
+    let md = render_markdown(
+        contact,
+        source_name,
+        &m_uuid,
+        &fingerprint,
+        &when_ts,
+        photo_rel.as_deref(),
+    );
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
@@ -159,7 +170,11 @@ fn render_one(
     Ok(RenderOutcome::Rendered { photo_written })
 }
 
-fn output_paths(out_dir: &Path, source_name: &str, contact: &ParsedContact) -> (PathBuf, PathBuf, PathBuf) {
+fn output_paths(
+    out_dir: &Path,
+    source_name: &str,
+    contact: &ParsedContact,
+) -> (PathBuf, PathBuf, PathBuf) {
     let page_dir = out_dir
         .join("rendered_md")
         .join("contacts")
@@ -217,7 +232,10 @@ fn render_markdown(
     out.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     out.push_str(&format!("source_name: {source_name}\n"));
     out.push_str("provider: contacts\n");
-    out.push_str(&format!("addressbook: {}\n", yaml_safe(&contact.addressbook)));
+    out.push_str(&format!(
+        "addressbook: {}\n",
+        yaml_safe(&contact.addressbook)
+    ));
     out.push_str(&format!("uid: {}\n", yaml_safe(&contact.uid)));
     if let Some(dn) = &contact.display_name {
         out.push_str(&format!("title: {}\n", yaml_safe(dn)));
@@ -247,22 +265,14 @@ fn render_markdown(
     if !contact.emails.is_empty() {
         out.push_str("## Emails\n\n");
         for e in &contact.emails {
-            out.push_str(&format!(
-                "- {}{}\n",
-                label_prefix(&e.type_label()),
-                e.value
-            ));
+            out.push_str(&format!("- {}{}\n", label_prefix(&e.type_label()), e.value));
         }
         out.push('\n');
     }
     if !contact.phones.is_empty() {
         out.push_str("## Phones\n\n");
         for p in &contact.phones {
-            out.push_str(&format!(
-                "- {}{}\n",
-                label_prefix(&p.type_label()),
-                p.value
-            ));
+            out.push_str(&format!("- {}{}\n", label_prefix(&p.type_label()), p.value));
         }
         out.push('\n');
     }
@@ -271,11 +281,7 @@ fn render_markdown(
         for a in &contact.addresses {
             // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
             let pretty = a.value.replace(';', ", ");
-            out.push_str(&format!(
-                "- {}{}\n",
-                label_prefix(&a.type_label()),
-                pretty
-            ));
+            out.push_str(&format!("- {}{}\n", label_prefix(&a.type_label()), pretty));
         }
         out.push('\n');
     }
@@ -350,8 +356,7 @@ fn build_grid_row(
 
 fn write_photo(page_dir: &Path, contact: &ParsedContact, photo: &ContactPhoto) -> Result<String> {
     let blobs_dir = page_dir.join("blobs");
-    fs::create_dir_all(&blobs_dir)
-        .with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
+    fs::create_dir_all(&blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
     let ext = ext_for(&photo.content_type);
     let filename = format!("{}.{ext}", &contact.uid);
     let path = blobs_dir.join(&filename);
@@ -445,7 +450,10 @@ mod tests {
     #[test]
     fn humanize_source_label_strips_contacts_suffix() {
         assert_eq!(humanize_source_label("apple_contacts"), "Apple Contacts");
-        assert_eq!(humanize_source_label("fastmail-contacts"), "Fastmail Contacts");
+        assert_eq!(
+            humanize_source_label("fastmail-contacts"),
+            "Fastmail Contacts"
+        );
         assert_eq!(humanize_source_label("home"), "Home Contacts");
     }
 }

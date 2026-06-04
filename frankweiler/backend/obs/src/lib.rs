@@ -119,7 +119,14 @@ impl Drop for TracingGuard {
     fn drop(&mut self) {
         if let Some(p) = self.provider.take() {
             if let Err(e) = p.shutdown() {
-                eprintln!("otlp shutdown: {e}");
+                // Process-teardown fallback: the tracing subscriber may
+                // already be torn down by the time this fires, and the
+                // MultiProgress is being dropped alongside us — raw
+                // stderr is the only sink left.
+                #[allow(clippy::disallowed_macros)]
+                {
+                    eprintln!("otlp shutdown: {e}");
+                }
             }
         }
     }
@@ -227,4 +234,36 @@ static SHARED_MULTI: OnceLock<Arc<MultiProgress>> = OnceLock::new();
 /// or simply skip rendering bars in that case.
 pub fn shared_multi() -> Option<Arc<MultiProgress>> {
     SHARED_MULTI.get().cloned()
+}
+
+/// Write a one-line status message that coexists with the indicatif
+/// progress bars. Routes through the shared `MultiProgress::println`
+/// when bars are active, which suspends draws across the write so the
+/// line lands above the bar block instead of overprinting it. Falls
+/// back to `eprintln!` before `init` runs or in tests that skip
+/// observability. Same `format!` argument grammar as `eprintln!`.
+///
+/// Use this for any user-facing status line that can fire while bars
+/// are on screen (extract / translate / synth phases, the SIGINT
+/// handler, error summaries, end-of-run banners from `qmd_indexer`,
+/// etc.). Plain `tracing::info!` / `warn!` / `error!` already go
+/// through the `IndicatifWriter` and do not need this macro.
+///
+/// Enforced by `disallowed-macros` in `frankweiler/backend/clippy.toml`:
+/// direct `std::eprintln!` / `std::println!` in production code is
+/// banned in favor of this macro (or `tracing::*` for log events).
+#[macro_export]
+macro_rules! status_line {
+    ($($arg:tt)*) => {{
+        let __msg = ::std::format!($($arg)*);
+        match $crate::shared_multi() {
+            Some(mp) => { let _ = mp.println(&__msg); }
+            // Pre-`init` (tracing not up yet) and out-of-band fallback.
+            // The lint exception is part of the macro's contract.
+            None => {
+                #[allow(clippy::disallowed_macros)]
+                { ::std::eprintln!("{}", __msg); }
+            }
+        }
+    }}
 }

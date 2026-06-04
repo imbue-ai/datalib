@@ -1,3 +1,8 @@
+// Integration test runs under cargo-test (no MultiProgress / no
+// indicatif bars). Exempt from the workspace-wide ban on direct
+// stderr/stdout writes defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! Live end-to-end golden test for `frankweiler-sync`.
 //!
 //! Spawns the sync binary against `configs/thad_tiny.yaml` (with a few

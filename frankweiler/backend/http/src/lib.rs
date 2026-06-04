@@ -1,3 +1,11 @@
+// HTTP daemon — runs as its own process via `frankweiler-http`, not
+// inside `frankweiler-sync`. No MultiProgress / no indicatif bars in
+// this process; request-error logging legitimately writes to stderr.
+// Exempt from the workspace-wide ban defined in clippy.toml. (If this
+// ever gets embedded into a process that *does* have bars, switch
+// these to `tracing::warn!` / `error!`.)
+#![allow(clippy::disallowed_macros)]
+
 //! axum router for the Frankweiler HTTP API.
 //!
 //! Endpoints:

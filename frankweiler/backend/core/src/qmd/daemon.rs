@@ -229,9 +229,9 @@ fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> {
             let r = BufReader::new(stderr);
             for line in r.lines() {
                 match line {
-                    Ok(text) => eprintln!("[qmd] {text}"),
+                    Ok(text) => frankweiler_obs::status_line!("[qmd] {text}"),
                     Err(e) => {
-                        eprintln!("[qmd] (stderr read error: {e})");
+                        frankweiler_obs::status_line!("[qmd] (stderr read error: {e})");
                         break;
                     }
                 }

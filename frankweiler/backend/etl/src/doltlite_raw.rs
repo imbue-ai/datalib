@@ -883,6 +883,9 @@ pub async fn load_blobs_by_id(pool: &SqlitePool) -> Result<HashMap<String, BlobB
 }
 
 #[cfg(test)]
+// Test diagnostics + intentional probe-failure prints under stock
+// libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
+#[allow(clippy::disallowed_macros)]
 mod tests {
     use super::*;
     use serde_json::json;

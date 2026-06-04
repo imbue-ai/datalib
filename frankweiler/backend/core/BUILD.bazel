@@ -13,6 +13,7 @@ rust_library(
         "@frankweiler_crates//:async-trait",
     ],
     deps = [
+        "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",

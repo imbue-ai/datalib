@@ -1,3 +1,8 @@
+// Standalone HTTP server binary — runs outside `frankweiler-sync`, no
+// MultiProgress / no indicatif bars in this process. Exempt from the
+// workspace-wide ban defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! `frankweiler-http` — single-binary search backend.
 //!
 //! Usage: `frankweiler-http <data_root> [--no-open]`. The data root is

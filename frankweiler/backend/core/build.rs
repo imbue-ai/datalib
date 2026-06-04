@@ -1,3 +1,7 @@
+// `println!("cargo:...")` is the cargo build-script protocol — required
+// here, exempt from the workspace-wide ban defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! Stamps the binary with the git commit SHA via `cargo:rustc-env`.
 //!
 //! Picked up at compile time by `crate::version::git_hash()` through

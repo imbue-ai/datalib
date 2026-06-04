@@ -1,3 +1,8 @@
+// Standalone CLI: --help output and qmd-status pass-through go to
+// stderr by design; nothing in this process owns a MultiProgress.
+// Exempt from the workspace-wide ban defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! CLI entry point. The actual work lives in the library
 //! (`frankweiler_qmd_indexer::run_index`) so other crates (notably
 //! `frankweiler-etl`'s loader) can drive it in-process.

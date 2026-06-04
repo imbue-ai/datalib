@@ -1,3 +1,9 @@
+// Standalone curl-shim binary spawned as a subprocess by latchkey. The
+// shim writes response bodies / status to stdout/stderr because that's
+// the contract callers consume. No MultiProgress / no bars in its
+// process. Exempt from the workspace-wide ban defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! `latchkey-curl-shim` — minimal curl-CLI-compatible front-end backed
 //! by `wreq`'s Chrome TLS impersonation. Mirror of
 //! `src/download/latchkey_curl_shim.py`.

@@ -297,7 +297,8 @@ impl RawDb {
         .fetch_all(&self.pool)
         .await
         .context("select addressbooks_for_fetch")?;
-        let want_names = only_named.map(|names| names.iter().collect::<std::collections::HashSet<_>>());
+        let want_names =
+            only_named.map(|names| names.iter().collect::<std::collections::HashSet<_>>());
         Ok(rows
             .into_iter()
             .filter_map(|r| {
@@ -475,9 +476,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
-        db.upsert_account("contacts.icloud.com", "https://contacts.icloud.com/", None, None)
-            .await
-            .unwrap();
+        db.upsert_account(
+            "contacts.icloud.com",
+            "https://contacts.icloud.com/",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         db.upsert_addressbook(
             "contacts.icloud.com",
             "/123/carddavhome/card/",
@@ -539,7 +545,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
-        db.upsert_account("h", "https://h/", None, None).await.unwrap();
+        db.upsert_account("h", "https://h/", None, None)
+            .await
+            .unwrap();
         // Start a sync_runs row — should survive reset.
         let _ = db.start_run(&serde_json::json!({"k": "v"})).await.unwrap();
         db.reset().await.unwrap();

@@ -209,7 +209,10 @@ pub async fn propfind(url: &str, depth: &str, body: &str) -> Result<Multistatus,
         headers: {
             let mut h = std::collections::BTreeMap::new();
             h.insert("Depth".into(), depth.into());
-            h.insert("Content-Type".into(), "application/xml; charset=utf-8".into());
+            h.insert(
+                "Content-Type".into(),
+                "application/xml; charset=utf-8".into(),
+            );
             h
         },
         body: Some(body.as_bytes().to_vec()),
@@ -230,7 +233,10 @@ pub async fn report(url: &str, body: &str) -> Result<Multistatus, CarddavError> 
         headers: {
             let mut h = std::collections::BTreeMap::new();
             h.insert("Depth".into(), "0".into());
-            h.insert("Content-Type".into(), "application/xml; charset=utf-8".into());
+            h.insert(
+                "Content-Type".into(),
+                "application/xml; charset=utf-8".into(),
+            );
             h
         },
         body: Some(body.as_bytes().to_vec()),
@@ -503,9 +509,7 @@ pub fn vcard_all(vcard: &str, name: &str) -> Vec<VcardProp> {
     let unfolded = unfold_vcard_lines(vcard);
     let mut out = Vec::new();
     for line in unfolded.lines() {
-        let head_end = line
-            .find(|c: char| c == ':' || c == ';')
-            .unwrap_or(line.len());
+        let head_end = line.find([':', ';']).unwrap_or(line.len());
         let prop = &line[..head_end];
         if !prop.eq_ignore_ascii_case(name) {
             continue;
@@ -566,9 +570,7 @@ fn extract_property(vcard: &str, name: &str) -> Option<String> {
     for line in unfolded.lines() {
         // Property lines are `NAME[;params]:value`. Match the prefix
         // before any `;` or `:`.
-        let head_end = line
-            .find(|c: char| c == ':' || c == ';')
-            .unwrap_or(line.len());
+        let head_end = line.find([':', ';']).unwrap_or(line.len());
         let prop = &line[..head_end];
         if prop.eq_ignore_ascii_case(name) {
             if let Some(colon) = line.find(':') {
@@ -748,16 +750,9 @@ END:VCARD&#13;
             .filter(|r| r.is_addressbook)
             .map(|r| r.href.as_str())
             .collect();
-        assert_eq!(
-            abs,
-            vec!["/dav/addressbooks/user/u%40example.com/Default/"]
-        );
+        assert_eq!(abs, vec!["/dav/addressbooks/user/u%40example.com/Default/"]);
         // ctag still captured for the addressbook.
-        let addr = ms
-            .responses
-            .iter()
-            .find(|r| r.is_addressbook)
-            .unwrap();
+        let addr = ms.responses.iter().find(|r| r.is_addressbook).unwrap();
         assert_eq!(addr.ctag.as_deref(), Some("abc-1"));
         assert_eq!(addr.display_name.as_deref(), Some("Default"));
     }
@@ -765,7 +760,10 @@ END:VCARD&#13;
     #[test]
     fn sync_collection_yields_changes_and_deletes_and_token() {
         let ms = parse_multistatus("url", SYNC_COLLECTION).unwrap();
-        assert_eq!(ms.sync_token.as_deref(), Some("http://example.com/sync/4242"));
+        assert_eq!(
+            ms.sync_token.as_deref(),
+            Some("http://example.com/sync/4242")
+        );
         let changed = changed_contacts(&ms);
         assert_eq!(changed.len(), 1);
         let (etag, vcard) = changed
@@ -806,9 +804,6 @@ END:VCARD&#13;
 
     #[test]
     fn escape_xml_handles_special_chars() {
-        assert_eq!(
-            escape_xml("Tom & <Jerry>"),
-            "Tom &amp; &lt;Jerry&gt;"
-        );
+        assert_eq!(escape_xml("Tom & <Jerry>"), "Tom &amp; &lt;Jerry&gt;");
     }
 }
