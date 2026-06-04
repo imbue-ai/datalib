@@ -162,7 +162,7 @@ RUN arch="$(dpkg --print-architecture)" \
 #
 # Keep this block (and the `qmd` install above) in sync with
 # `.devcontainer/Dockerfile`.
-ARG QMD_VERSION=2.1.0
+ARG QMD_VERSION=2.5.3
 RUN npm install -g "@tobilu/qmd@${QMD_VERSION}"
 
 RUN set -eux; \

@@ -1,0 +1,5 @@
+# Surface the devcontainer Dockerfile as a data target so consistency
+# tests (e.g. //tools:qmd_version_pins_test) can read it at test time.
+exports_files([
+    "Dockerfile",
+])

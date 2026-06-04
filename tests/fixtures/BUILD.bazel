@@ -1,5 +1,9 @@
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
+# Surface this BUILD file as a data target so //tools:qmd_version_pins_test
+# can read the QMD_VERSION constant out of it at test time.
+exports_files(["BUILD.bazel"])
+
 # Materialize a frankweiler data root from :ingested_tng + :ingested_tng_qmd
 # into a caller-provided directory. Used by both `//frankweiler:dev_tng`
 # (interactive eyeballing) and the UI e2e test (fixture setup) so the two
