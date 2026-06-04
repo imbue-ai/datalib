@@ -27,6 +27,14 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 sqlx = { workspace = true }
 sha2 = "0.10"
+# HTML → Markdown for rendering JMAP `text/html` email bodies. Prefers
+# HTML over `text/plain` when both are present so we get bare-URL
+# auto-linking, inline images via `<img src="cid:…">`, and proper list
+# / blockquote / formatting fidelity for the vast majority of mail
+# that's HTML-typed anyway. We pre-rewrite `cid:<id>` srcs to
+# `blobs/<materialized-filename>` before parsing so the resulting
+# `![](…)` link points at the on-disk byte-for-byte copy.
+html2md = "0.2"
 tempfile = "3"
 
 [dev-dependencies]

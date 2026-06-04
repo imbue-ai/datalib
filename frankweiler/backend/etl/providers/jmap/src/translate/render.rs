@@ -312,7 +312,8 @@ fn render_thread_md(
         let from = format_addresses(em.payload.get("from"));
         let when = em.received_at.as_deref().unwrap_or("(unknown date)");
         out.push_str(&format!("## #{} — {} — {}\n\n", idx + 1, from, when));
-        if let Some(body) = email_body_text(em) {
+        let atts = joins.attachments.get(&em.id).map(Vec::as_slice).unwrap_or(&[]);
+        if let Some(body) = email_body_markdown(em, atts, materialized) {
             out.push_str(&body);
             if !body.ends_with('\n') {
                 out.push('\n');
@@ -322,16 +323,25 @@ fn render_thread_md(
             out.push('\n');
         }
 
-        if let Some(atts) = joins.attachments.get(&em.id) {
-            if !atts.is_empty() {
-                out.push_str("\n### Attachments\n\n");
-                for a in atts {
-                    let label = a.name.clone().unwrap_or_else(|| a.part_id.clone());
-                    if let Some(fname) = materialized.get(&a.blob_id) {
-                        out.push_str(&format!("- [{label}](blobs/{fname})\n"));
-                    } else {
-                        out.push_str(&format!("- {label} _(blob {} not materialized)_\n", a.blob_id));
-                    }
+        // Attachment list — exclude inline attachments that were
+        // embedded into the body via `<img src="cid:…">`. They've
+        // already been rendered inline; listing them again at the
+        // bottom is just noise.
+        let trailing: Vec<&LoadedAttachment> = atts
+            .iter()
+            .filter(|a| !is_inline_attachment(a))
+            .collect();
+        if !trailing.is_empty() {
+            out.push_str("\n### Attachments\n\n");
+            for a in trailing {
+                let label = a.name.clone().unwrap_or_else(|| a.part_id.clone());
+                if let Some(fname) = materialized.get(&a.blob_id) {
+                    out.push_str(&format!("- [{label}](blobs/{fname})\n"));
+                } else {
+                    out.push_str(&format!(
+                        "- {label} _(blob {} not materialized)_\n",
+                        a.blob_id
+                    ));
                 }
             }
         }
@@ -341,7 +351,20 @@ fn render_thread_md(
     out
 }
 
-fn email_body_text(em: &LoadedEmail) -> Option<String> {
+/// True if this attachment is an inline body part (`disposition ==
+/// "inline"` or carries a `Content-ID`), i.e. something the HTML
+/// body references via `<img src="cid:…">` rather than an
+/// independent file attachment.
+fn is_inline_attachment(a: &LoadedAttachment) -> bool {
+    a.disposition.as_deref() == Some("inline") || a.cid.is_some()
+}
+
+/// Raw concatenated text for the grid_rows `text` column. Uses the
+/// `text/plain` part when present (best for search; no HTML noise)
+/// and falls back to `text/html` stripped to its `bodyValues` text.
+/// Different from [`email_body_markdown`] which prefers HTML and
+/// runs html2md for the on-disk markdown render.
+fn email_body_plain(em: &LoadedEmail) -> Option<String> {
     let body_values = em.payload.get("bodyValues")?.as_object()?;
     let parts = em
         .payload
@@ -350,15 +373,13 @@ fn email_body_text(em: &LoadedEmail) -> Option<String> {
         .or_else(|| em.payload.get("htmlBody").and_then(|v| v.as_array()))?;
     let mut out = String::new();
     for p in parts {
-        let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(bv) = body_values.get(part_id) else {
-            continue;
-        };
-        if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
-            out.push_str(s);
-            out.push('\n');
+        if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
+            if let Some(bv) = body_values.get(part_id) {
+                if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
+                    out.push_str(s);
+                    out.push('\n');
+                }
+            }
         }
     }
     if out.is_empty() {
@@ -366,6 +387,172 @@ fn email_body_text(em: &LoadedEmail) -> Option<String> {
     } else {
         Some(out)
     }
+}
+
+/// Render one email's body to markdown. Prefers the `text/html` part
+/// (run through html2md after rewriting `cid:` srcs to point at
+/// materialized blobs) so we get auto-linked URLs, inline images,
+/// lists, and blockquotes for free. Falls back to `text/plain` with
+/// a light URL-autolink pass when no HTML body is present.
+fn email_body_markdown(
+    em: &LoadedEmail,
+    attachments: &[LoadedAttachment],
+    materialized: &HashMap<String, String>,
+) -> Option<String> {
+    let body_values = em.payload.get("bodyValues")?.as_object()?;
+
+    // Build a cid → "blobs/<filename>" lookup so we can rewrite
+    // `<img src="cid:…">` URLs before html2md sees them. `cid` in
+    // JMAP is the bare Message-ID-style token (no `cid:` prefix);
+    // the HTML carries the `cid:` URL scheme around it.
+    let mut cid_to_blob: HashMap<String, String> = HashMap::new();
+    for a in attachments {
+        let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
+            continue;
+        };
+        cid_to_blob.insert(cid.to_string(), format!("blobs/{fname}"));
+    }
+
+    // Try HTML body first.
+    if let Some(html_parts) = em.payload.get("htmlBody").and_then(|v| v.as_array()) {
+        let mut html = String::new();
+        for p in html_parts {
+            if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
+                if let Some(bv) = body_values.get(part_id) {
+                    if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
+                        html.push_str(s);
+                        html.push('\n');
+                    }
+                }
+            }
+        }
+        if !html.is_empty() {
+            let rewritten = rewrite_cid_srcs(&html, &cid_to_blob);
+            let md = html2md::parse_html(&rewritten);
+            if !md.trim().is_empty() {
+                return Some(md);
+            }
+        }
+    }
+
+    // Plaintext fallback. html2md handles bare URLs via the HTML
+    // path naturally — for plaintext, the email is unlikely to
+    // contain inline images (no MIME structure), but bare URLs
+    // are common. Autolink them so they render as clickable links.
+    let plain_parts = em.payload.get("textBody")?.as_array()?;
+    let mut plain = String::new();
+    for p in plain_parts {
+        if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
+            if let Some(bv) = body_values.get(part_id) {
+                if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
+                    plain.push_str(s);
+                    plain.push('\n');
+                }
+            }
+        }
+    }
+    if plain.is_empty() {
+        return None;
+    }
+    Some(autolink_bare_urls(&plain))
+}
+
+/// Replace `src="cid:<id>"` / `src='cid:<id>'` in raw HTML with the
+/// path of the materialized blob. Case-insensitive on the `cid:`
+/// scheme; preserves the surrounding HTML byte-for-byte.
+fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String {
+    if cid_to_blob.is_empty() {
+        return html.to_string();
+    }
+    let mut out = String::with_capacity(html.len());
+    let bytes = html.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Look for `cid:` (case-insensitive) preceded by `"` or `'`
+        // (i.e. the start of an attribute value).
+        let rest = &html[i..];
+        let lower = rest.to_ascii_lowercase();
+        let Some(pos) = lower.find("cid:") else {
+            out.push_str(rest);
+            break;
+        };
+        // Need at least one char before `cid:` and it must be a quote.
+        if pos == 0 {
+            out.push_str(&rest[..pos + 4]);
+            i += pos + 4;
+            continue;
+        }
+        let prev_char = rest[..pos].chars().last();
+        if !matches!(prev_char, Some('"') | Some('\'')) {
+            out.push_str(&rest[..pos + 4]);
+            i += pos + 4;
+            continue;
+        }
+        let quote = prev_char.unwrap();
+        // Find end-quote.
+        let after = &rest[pos + 4..];
+        let Some(end_rel) = after.find(quote) else {
+            out.push_str(rest);
+            break;
+        };
+        let cid = &after[..end_rel];
+        out.push_str(&rest[..pos]);
+        if let Some(path) = cid_to_blob.get(cid) {
+            out.push_str(path);
+        } else {
+            // Leave the original `cid:<id>` so a reader can see the
+            // unresolved reference rather than a silent dead link.
+            out.push_str("cid:");
+            out.push_str(cid);
+        }
+        i += pos + 4 + end_rel;
+    }
+    out
+}
+
+/// Minimal bare-URL autolinker for the plaintext-fallback path.
+/// Wraps `http://` / `https://` runs in `<…>` (markdown autolink
+/// syntax). Stops at whitespace or common terminator chars so we
+/// don't swallow trailing punctuation.
+fn autolink_bare_urls(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &s[i..];
+        let Some(pos) = rest
+            .find("http://")
+            .or_else(|| rest.find("https://"))
+            .map(|p| p)
+        else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..pos]);
+        let after = &rest[pos..];
+        let end = after
+            .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\''))
+            .unwrap_or(after.len());
+        let mut url = &after[..end];
+        // Strip trailing punctuation that's almost never part of the URL.
+        while let Some(last) = url.chars().last() {
+            if matches!(last, '.' | ',' | ')' | ']' | '!' | '?' | ';' | ':') {
+                url = &url[..url.len() - last.len_utf8()];
+            } else {
+                break;
+            }
+        }
+        if url.is_empty() {
+            out.push_str(&after[..end]);
+        } else {
+            out.push('<');
+            out.push_str(url);
+            out.push('>');
+            out.push_str(&after[url.len()..end]);
+        }
+        i += pos + end;
+    }
+    out
 }
 
 fn format_addresses(v: Option<&Value>) -> String {
@@ -479,7 +666,7 @@ fn build_grid_rows(
 
     for (idx, em) in emails.iter().enumerate() {
         let euid = email_uuid(&em.account_id, &em.id);
-        let body = email_body_text(em).unwrap_or_else(|| {
+        let body = email_body_plain(em).unwrap_or_else(|| {
             em.payload
                 .get("preview")
                 .and_then(|v| v.as_str())
