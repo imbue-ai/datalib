@@ -371,6 +371,7 @@ watch(
       <div @click="onBodyClick">
         <ChatBody
           :body="chat.body"
+          :markdown-uuid="chat.markdown_uuid"
           :selected-section-uuid="selectedSectionUuid"
           :outgoing-edges="chat.outgoing_edges"
           :hover-anchor-uuid="hoverAnchor ?? null"
