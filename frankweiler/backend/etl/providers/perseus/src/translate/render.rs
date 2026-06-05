@@ -826,8 +826,11 @@ mod tests {
             assert!(e.dst_anchor_uuid.is_none());
             assert_eq!(e.src_markdown_uuid, bk.markdown_uuid);
         }
-        let dst_set: std::collections::HashSet<&str> =
-            bk.edges.iter().map(|e| e.dst_markdown_uuid.as_str()).collect();
+        let dst_set: std::collections::HashSet<&str> = bk
+            .edges
+            .iter()
+            .map(|e| e.dst_markdown_uuid.as_str())
+            .collect();
         assert!(dst_set.contains(chapter_uuid("1", "1", "grc").as_str()));
         assert!(dst_set.contains(chapter_uuid("1", "1", "eng").as_str()));
     }
