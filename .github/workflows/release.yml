@@ -229,7 +229,7 @@ jobs:
           fi
 
       - name: Run version-consistency test
-        run: bazel test //frankweiler/backend:version_consistency_test -c opt ${{ steps.bazelargs.outputs.extra }}
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       - name: Build dist bins
         run: bazel build //frankweiler/backend:dist -c opt ${{ steps.bazelargs.outputs.extra }}
