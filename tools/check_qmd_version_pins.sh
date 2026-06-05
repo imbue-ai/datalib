@@ -15,7 +15,11 @@
 #   * frankweiler/backend/qmd_indexer/src/lib.rs   DEFAULT_QMD_VERSION  (canonical)
 #   * tests/fixtures/BUILD.bazel                   QMD_VERSION
 #   * frankweiler/docker/Dockerfile                ARG QMD_VERSION
-#   * .devcontainer/Dockerfile                     ARG QMD_VERSION
+#
+# `.devcontainer/Dockerfile` is intentionally NOT checked: it inherits
+# qmd (and its pinned version) from the prod image via
+# `FROM ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}`, so it has
+# no qmd pin of its own to drift.
 #
 # Companion to //tools:qmd_model_cache_path_test (which asserts the
 # vendored qmd snapshot's cache-path matches what
@@ -35,9 +39,8 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 indexer_lib="$(rlocation _main/frankweiler/backend/qmd_indexer/src/lib.rs)"
 fixtures_build="$(rlocation _main/tests/fixtures/BUILD.bazel)"
 prod_dockerfile="$(rlocation _main/frankweiler/docker/Dockerfile)"
-dev_dockerfile="$(rlocation _main/.devcontainer/Dockerfile)"
 
-for f in "$indexer_lib" "$fixtures_build" "$prod_dockerfile" "$dev_dockerfile"; do
+for f in "$indexer_lib" "$fixtures_build" "$prod_dockerfile"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
 done
 
@@ -64,7 +67,6 @@ extract_from_dockerfile_arg() {
 canonical="$(extract_from_indexer "$indexer_lib")"
 fixtures_v="$(extract_from_fixtures_build "$fixtures_build")"
 prod_v="$(extract_from_dockerfile_arg "$prod_dockerfile")"
-dev_v="$(extract_from_dockerfile_arg "$dev_dockerfile")"
 
 if [[ -z "$canonical" ]]; then
     echo "ERROR: failed to extract DEFAULT_QMD_VERSION from $indexer_lib" >&2
@@ -88,7 +90,6 @@ echo "qmd version pins (canonical: ${canonical}):"
 report "frankweiler/backend/qmd_indexer/.../lib.rs"  "$canonical"
 report "tests/fixtures/BUILD.bazel"                  "$fixtures_v"
 report "frankweiler/docker/Dockerfile"               "$prod_v"
-report ".devcontainer/Dockerfile"                    "$dev_v"
 
 if [[ "$fails" != "0" ]]; then
     cat >&2 <<EOF
