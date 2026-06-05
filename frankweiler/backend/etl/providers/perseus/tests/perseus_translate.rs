@@ -227,32 +227,50 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
 }
 
 #[test]
-fn book_index_md_links_every_chapter_in_both_languages() {
+fn book_index_emits_chapter_edges_to_every_chapter_lang_pair() {
     let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
+    let mut emitted: Vec<frankweiler_etl::load::RenderedMarkdown> = Vec::new();
     render::render_all(
         &parsed,
         out.path(),
         "perseus",
         &Progress::noop(),
         &HashMap::new(),
-        &mut |_| Ok(()),
+        &mut |r| {
+            emitted.push(r);
+            Ok(())
+        },
     )
     .unwrap();
+
+    // The book doc is now a pure navigation entry — its rendered
+    // body is empty (no `## Chapters` table) and the chapter cross-
+    // links live in `edges` instead.
     let idx = std::fs::read_to_string(
         out.path()
             .join("rendered_md/perseus/thucydides/histories/book_01/index.md"),
     )
     .unwrap();
-    assert!(idx.contains("## Chapters"));
-    // Fixture has 2 chapters in book 1; both should appear in the
-    // table with both language links.
+    assert!(!idx.contains("## Chapters"));
+    assert!(!idx.contains("/#/chat/"));
+
+    // Edges: one whole-doc edge per (chapter, language) pair,
+    // labeled "chapter". Fixture's book 1 has 2 chapters → 4 edges.
+    let bk = emitted
+        .iter()
+        .find(|d| d.markdown_uuid == book_uuid("1"))
+        .expect("book doc emitted");
+    assert_eq!(bk.edges.len(), 4);
+    for e in &bk.edges {
+        assert_eq!(e.label.as_deref(), Some("chapter"));
+    }
     for (b, c) in [("1", "1"), ("1", "2")] {
         for lang in ["grc", "eng"] {
-            let u = chapter_uuid(b, c, lang);
+            let dst = chapter_uuid(b, c, lang);
             assert!(
-                idx.contains(&format!("/#/chat/{u}")),
-                "missing {b}.{c} {lang} link"
+                bk.edges.iter().any(|e| e.dst_markdown_uuid == dst),
+                "missing edge to {b}.{c} {lang}"
             );
         }
     }

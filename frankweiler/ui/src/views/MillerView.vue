@@ -90,6 +90,35 @@ function onResizeStart(i: number, ev: PointerEvent) {
 // section highlighting in the doc column directly to its right.
 const selectedGridRow = ref<SearchRow | null>(null);
 
+// The active edge-hover target. Set whenever the user's cursor sits
+// on an `.edge-source` span in a `ChatBody` or on a doc-level
+// outgoing-edge link in any `DocColumn`. We forward this state to
+// every column so the one containing the destination can light up
+// (border for whole-doc destinations, span fill for anchor
+// destinations). Null when no hover is active.
+const hoverEdgeTarget = ref<{ md: string; anchor: string | null } | null>(
+  null,
+);
+
+function onHoverEdge(target: { md: string; anchor: string | null } | null) {
+  hoverEdgeTarget.value = target;
+}
+
+function isHoverTarget(col: Column): boolean {
+  const t = hoverEdgeTarget.value;
+  if (!t) return false;
+  if (col.kind !== "doc") return false;
+  return col.md === t.md;
+}
+
+function hoverAnchorFor(col: Column): string | null {
+  const t = hoverEdgeTarget.value;
+  if (!t) return null;
+  if (col.kind !== "doc") return null;
+  if (col.md !== t.md) return null;
+  return t.anchor;
+}
+
 // Map our `columns` array into what the template renders. Plain ref
 // is the SOT; this computed exists only so the template's `:key`
 // expression can derive a stable identity per slot.
@@ -238,7 +267,10 @@ watch(
         v-else
         :markdown-uuid="col.md"
         :selected-section-uuid="selectedSectionUuidFor(col, i)"
+        :is-hover-target="isHoverTarget(col)"
+        :hover-anchor="hoverAnchorFor(col)"
         @open-chat="(md, anchor) => pushColumn(i, md, anchor)"
+        @hover-edge="onHoverEdge"
       />
       <div
         class="col-resize"

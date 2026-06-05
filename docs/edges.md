@@ -22,12 +22,28 @@ idempotent — the Load step deletes-then-inserts every edge whose
 
 - **Perseus** (`frankweiler/backend/etl/providers/perseus/`) emits two
   edge flavors per chapter doc:
-  - one `cross-language` doc-level edge to the matching chapter in the
-    other language (replacing the old inline `*Other:* […]` markdown
-    link);
+  - one doc-level edge to the matching chapter in the other language
+    (replacing the old inline `*Other:* […]` markdown link). The
+    `label` carries the destination's language name ("Greek" /
+    "English") because the UI uses it verbatim as the link text — see
+    "Label conventions" below.
   - one `bilingual-alignment` edge per bilingual section, anchored on
     the first-word span on each side — a stand-in for a future
     word-level alignment pass.
+
+### Label conventions
+
+The UI's outgoing-destinations list uses `label` as the link text
+when present, falling back to the destination markdown's title.
+Producers should therefore set `label` to whatever the user should
+read in that list — a short human-readable handle, not an
+edge-taxonomy tag. The destination doc title appears as a hover
+tooltip so it stays discoverable.
+
+Span-source edges (`src_anchor_uuid != null`) don't appear in the
+list — they show as inline clickable spans inside the body — so
+their `label` is free to be metadata (`bilingual-alignment` for
+perseus today) without UI implications.
 
 Other providers leave the table empty; sidecars without an `edges`
 field load with zero edges (the serde `default` handles older

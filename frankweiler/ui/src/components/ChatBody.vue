@@ -30,10 +30,27 @@ const props = defineProps<{
    * not specially handled (see `docs/edges.md`).
    */
   outgoingEdges?: EdgeOut[];
+  /**
+   * Anchor uuid to highlight as an *incoming* edge destination. Set
+   * by the parent column when the user hovers an edge-source in
+   * *another* column whose destination lives inside this doc.
+   * Distinct from `selectedSectionUuid` (the persistent click-driven
+   * highlight): hover-driven, transient, and styled the same color
+   * as the originating span's hover background so the link between
+   * source and destination is visually obvious across columns.
+   */
+  hoverAnchorUuid?: string | null;
 }>();
 
 const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
+  /**
+   * Fired when the cursor enters or leaves an `.edge-source` span.
+   * Payload is the edge's destination — `{ md, anchor }` — or null
+   * on hover-out. The parent forwards this to MillerView so other
+   * columns can highlight whatever the source points at.
+   */
+  (e: "hover-edge", target: { md: string; anchor: string | null } | null): void;
 }>();
 
 function highlight(code: string, lang: string): string {
@@ -205,6 +222,52 @@ function onBodyEdgeClick(ev: MouseEvent) {
   emit("open-edge", edge);
 }
 
+function onBodyMouseOver(ev: MouseEvent) {
+  const t = ev.target;
+  if (!(t instanceof Element)) return;
+  const el = t.closest<HTMLElement>(".edge-source[data-edge-id]");
+  if (!el) return;
+  const edge = (props.outgoingEdges ?? []).find(
+    (e) => e.edge_uuid === el.dataset.edgeId,
+  );
+  if (!edge) return;
+  emit("hover-edge", {
+    md: edge.dst_markdown_uuid,
+    anchor: edge.dst_anchor_uuid || null,
+  });
+}
+
+function onBodyMouseOut(ev: MouseEvent) {
+  // mouseout fires both when leaving the span entirely AND when
+  // moving between child nodes; relatedTarget tells us which.
+  const from = ev.target;
+  if (!(from instanceof Element)) return;
+  const span = from.closest<HTMLElement>(".edge-source[data-edge-id]");
+  if (!span) return;
+  const to = ev.relatedTarget;
+  if (to instanceof Element && span.contains(to)) return;
+  emit("hover-edge", null);
+}
+
+/**
+ * Mark the hover destination (if any) on the body. Adds `.hover-dst`
+ * to the matching `[data-section-uuid="X"]` so CSS can style it as
+ * an incoming-edge target. Single-target by design — overlapping
+ * spans are out of scope (see docs/edges.md).
+ */
+function applyHoverDst() {
+  if (!root.value) return;
+  for (const el of root.value.querySelectorAll(".hover-dst")) {
+    el.classList.remove("hover-dst");
+  }
+  const anchor = props.hoverAnchorUuid;
+  if (!anchor) return;
+  const target = root.value.querySelector<HTMLElement>(
+    `[data-section-uuid="${anchor.replace(/"/g, '\\"')}"]`,
+  );
+  if (target) target.classList.add("hover-dst");
+}
+
 function applySelection() {
   if (!root.value) return;
   for (const el of root.value.querySelectorAll(".msg.selected")) {
@@ -238,6 +301,7 @@ watch(html, async () => {
   injectCopyUuidButtons();
   decorateEdgeSources();
   applySelection();
+  applyHoverDst();
 });
 watch(
   () => props.selectedSectionUuid,
@@ -256,10 +320,18 @@ watch(
     decorateEdgeSources();
   },
 );
+watch(
+  () => props.hoverAnchorUuid,
+  async () => {
+    await nextTick();
+    applyHoverDst();
+  },
+);
 onMounted(() => {
   injectCopyUuidButtons();
   decorateEdgeSources();
   applySelection();
+  applyHoverDst();
 });
 </script>
 
@@ -269,6 +341,8 @@ onMounted(() => {
     ref="root"
     v-html="html"
     @click="(ev) => { onBodyEdgeClick(ev); onCopyClick(ev); }"
+    @mouseover="onBodyMouseOver"
+    @mouseout="onBodyMouseOut"
   ></div>
 </template>
 
@@ -317,23 +391,32 @@ onMounted(() => {
 /* Inline span baked by ingest for sub-section edge anchors (today
    only: perseus first-word wrappers). When the span happens to also
    be the source of an outgoing edge, `.edge-source` is added by
-   ChatBody at mount time and the user gets a subtle clickable tint;
+   ChatBody at mount time and the user gets a link-y dotted
+   underline (in the muted color so it doesn't read as "external
+   link blue"); the hover fill calls out the target and the
+   `.hover-dst` class on the matching destination anchor mirrors the
+   same fill across whichever column the destination lives in.
+
    `.selected` on the same span is how we highlight the destination
-   side after navigating via an edge.
+   side after navigating via an edge (click-driven, persistent),
+   distinct from `.hover-dst` (hover-driven, transient).
 
    We deliberately scope these to `span[data-section-uuid]` so the
    block-level `.msg.selected` styling above (which adds a 2px
    outline + 4px left border) doesn't accidentally fire for inline
    word-wrappers. */
 .chat-body span[data-section-uuid].edge-source {
-  background: rgba(99, 102, 241, 0.12);
-  border-radius: 3px;
-  padding: 0 0.1em;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--fw-muted, #94a3b8);
+  text-underline-offset: 2px;
   cursor: pointer;
   transition: background-color 100ms ease-in-out;
 }
-.chat-body span[data-section-uuid].edge-source:hover {
+.chat-body span[data-section-uuid].edge-source:hover,
+.chat-body [data-section-uuid].hover-dst {
   background: rgba(99, 102, 241, 0.28);
+  border-radius: 3px;
 }
 .chat-body span[data-section-uuid].selected {
   background: var(--fw-card-bg, #1f2937);

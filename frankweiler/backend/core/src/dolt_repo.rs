@@ -531,17 +531,30 @@ impl MirrorRepo for DoltRepo {
         };
         let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
         for r in rows {
+            // Annotate the nullable columns with explicit `Option<String>`
+            // so a SQL NULL maps to `None`. `try_get(...).ok()` against a
+            // bare `String` collapses both NULL and lookup errors into
+            // `None`; but it also turns a literal empty-string value into
+            // `Some("")`, which the UI's `src_anchor_uuid === null`
+            // filter then fails to match. Pinning the inferred type lifts
+            // that ambiguity.
             let edge = EdgeRow {
                 edge_uuid: r.try_get("edge_uuid").unwrap_or_default(),
                 src_markdown_uuid: r.try_get("src_markdown_uuid").unwrap_or_default(),
-                src_anchor_uuid: r.try_get("src_anchor_uuid").ok(),
+                src_anchor_uuid: r
+                    .try_get::<Option<String>, _>("src_anchor_uuid")
+                    .unwrap_or_default(),
                 dst_markdown_uuid: r.try_get("dst_markdown_uuid").unwrap_or_default(),
-                dst_anchor_uuid: r.try_get("dst_anchor_uuid").ok(),
-                label: r.try_get("label").ok(),
+                dst_anchor_uuid: r
+                    .try_get::<Option<String>, _>("dst_anchor_uuid")
+                    .unwrap_or_default(),
+                label: r.try_get::<Option<String>, _>("label").unwrap_or_default(),
             };
             out.push(EdgeRowOut {
                 edge,
-                dst_title: r.try_get("dst_title").ok(),
+                dst_title: r
+                    .try_get::<Option<String>, _>("dst_title")
+                    .unwrap_or_default(),
             });
         }
         Ok(out)
