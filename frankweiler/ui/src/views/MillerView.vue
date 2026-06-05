@@ -41,6 +41,51 @@ function initialColumns(): Column[] {
   return parsed.length === 0 ? [emptyGrid()] : parsed;
 }
 
+// Per-column widths (px), indexed by position in `columns`. Entries
+// stay `null` until the user resizes that slot; a null slot renders at
+// the kind's default. Not persisted across reloads — widths live in
+// memory only.
+const DEFAULT_WIDTH: Record<Column["kind"], number> = {
+  grid: 720,
+  doc: 560,
+};
+const MIN_WIDTH = 240;
+const widths = ref<(number | null)[]>(columns.value.map(() => null));
+
+function widthFor(i: number): number {
+  const w = widths.value[i];
+  if (w != null) return w;
+  const col = columns.value[i];
+  return col ? DEFAULT_WIDTH[col.kind] : DEFAULT_WIDTH.grid;
+}
+
+// Drag a column's right edge to set its width. Captures pointer so
+// the move tracks even when the cursor crosses other columns; clamps
+// to `MIN_WIDTH` so columns can't collapse to nothing.
+function onResizeStart(i: number, ev: PointerEvent) {
+  ev.preventDefault();
+  const startX = ev.clientX;
+  const startWidth = widthFor(i);
+  const target = ev.currentTarget as HTMLElement;
+  target.setPointerCapture(ev.pointerId);
+
+  const onMove = (e: PointerEvent) => {
+    const next = Math.max(MIN_WIDTH, startWidth + (e.clientX - startX));
+    const arr = widths.value.slice();
+    arr[i] = next;
+    widths.value = arr;
+  };
+  const onUp = (e: PointerEvent) => {
+    target.releasePointerCapture(e.pointerId);
+    target.removeEventListener("pointermove", onMove);
+    target.removeEventListener("pointerup", onUp);
+    target.removeEventListener("pointercancel", onUp);
+  };
+  target.addEventListener("pointermove", onMove);
+  target.addEventListener("pointerup", onUp);
+  target.addEventListener("pointercancel", onUp);
+}
+
 // The currently-selected grid row, when a GridColumn is present. Drives
 // section highlighting in the doc column directly to its right.
 const selectedGridRow = ref<SearchRow | null>(null);
@@ -147,6 +192,19 @@ watch(
     }
   },
 );
+
+// Keep `widths` length in lockstep with `columns`. Overlapping prefix
+// keeps its user-set widths; truncated slots are dropped; new slots
+// start as null (i.e. fall back to the kind's default).
+watch(
+  () => columns.value.length,
+  (len) => {
+    if (widths.value.length === len) return;
+    const next = widths.value.slice(0, len);
+    while (next.length < len) next.push(null);
+    widths.value = next;
+  },
+);
 </script>
 
 <template>
@@ -158,6 +216,7 @@ watch(
       "
       class="col"
       :class="col.kind === 'grid' ? 'col--grid' : 'col--doc'"
+      :style="{ flexBasis: widthFor(i) + 'px' }"
     >
       <GridColumn
         v-if="col.kind === 'grid'"
@@ -174,6 +233,12 @@ watch(
         :selected-section-uuid="selectedSectionUuidFor(col, i)"
         @open-chat="(md) => pushColumn(i, md)"
       />
+      <div
+        class="col-resize"
+        role="separator"
+        aria-orientation="vertical"
+        @pointerdown="(e) => onResizeStart(i, e)"
+      />
     </section>
   </div>
 </template>
@@ -189,18 +254,46 @@ watch(
   height: calc(100vh - 6rem);
 }
 .col {
+  position: relative;
   display: flex;
   flex-direction: column;
+  flex-grow: 0;
+  flex-shrink: 0;
   min-width: 0;
   background: var(--fw-bg);
 }
 .col + .col {
   border-left: 1px solid var(--fw-border);
 }
-.col--grid {
-  flex: 0 0 720px;
+/* The grab strip sits on the column's right edge, slightly wider than
+   the 1px visual border so the hit target is comfortable without
+   shifting layout. The strip itself stays transparent; a centered
+   ::before draws the always-visible grip bars so the affordance is
+   obvious without painting the full divider. */
+.col-resize {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
 }
-.col--doc {
-  flex: 0 0 560px;
+.col-resize::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  /* Two thin parallel bars — the convention for "drag to resize this
+     column" in spreadsheets and file managers. */
+  border-left: 1px solid var(--fw-border);
+  border-right: 1px solid var(--fw-border);
+}
+.col-resize:hover::before,
+.col-resize:active::before {
+  border-color: var(--fw-fg, #888);
 }
 </style>
