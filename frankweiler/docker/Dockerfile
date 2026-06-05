@@ -25,17 +25,16 @@
 #                                  re-downloading ~300 MB on every fresh
 #                                  `frankweiler-sync` run.
 #
-# Devcontainer overlap: the entire prefix down through `mkdir -p
-# /root/.latchkey /data` (FROM through line ~159) is duplicated
-# byte-for-byte in `.devcontainer/Dockerfile`. Docker's content-addressed
-# layer cache then dedupes those layers on a single daemon: a
-# contributor who has built one image and rebuilds the other pays zero
-# bytes of additional disk for apt + Node + latchkey + doltlite CLI +
-# the ~2.25 GB qmd model layer. The duplication has to be exact —
-# whitespace, ARG defaults, comment text all participate in the
-# layer-hash input. When editing the prefix, copy the new lines into
-# `.devcontainer/Dockerfile` verbatim or both images will rebuild from
-# scratch.
+# Devcontainer: `.devcontainer/Dockerfile` inherits from a published
+# version of THIS image via `FROM ghcr.io/imbue-ai/mixed_up_files:<tag>`,
+# so everything below (apt + Node + latchkey + doltlite CLI + qmd
+# models + bind-mount dirs) is carried into the devcontainer for free
+# — no Dockerfile mirroring, no double download. The devcontainer
+# just adds the Bazel build toolchain (clang/cmake/llvm/lld/bun/
+# bazelisk + the `ubuntu` non-root user) on top. When this Dockerfile
+# changes in a way the devcontainer should pick up, bump the
+# `PROD_IMAGE_TAG` ARG in `.devcontainer/Dockerfile` to the next
+# published tag.
 
 FROM ubuntu:24.04
 
@@ -167,9 +166,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# === SHARED-WITH-DEVCONTAINER PREFIX ENDS HERE ===
-# Everything below is prod-only. Add new shared bits ABOVE this line and
-# mirror them into `.devcontainer/Dockerfile`.
+# === SHARED-WITH-DEVCONTAINER STATE ENDS HERE ===
+# Everything below is prod-only (the release binaries + entrypoint).
+# `.devcontainer/Dockerfile` inherits the image at this point and adds
+# the Bazel toolchain on top — see the top-of-file note.
 
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must

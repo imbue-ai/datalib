@@ -1,180 +1,57 @@
-# Devcontainer that mirrors prod runtime + adds the Bazel build toolchain.
+# Devcontainer that inherits from the prod runtime image and adds the
+# Bazel build toolchain on top. The prod image already carries
+# `ubuntu:24.04` + Node 22 + latchkey + the doltlite CLI + qmd's three
+# default GGUFs at /root/.cache/qmd/models + the bind-mount target
+# directories, so inheriting from it gives the devcontainer all of that
+# "for free" — no byte-for-byte Dockerfile mirroring, no double
+# download. Contributors who've already pulled the prod image during
+# `docker pull ghcr.io/imbue-ai/mixed_up_files:<ver>` (or anyone who
+# ran `scripts/build_docker.sh --load`) reuse the cached layers; a
+# fresh `devcontainer up` only needs to fetch the dev-only build
+# toolchain layers added below.
 #
-# Lines 19–143 below are duplicated **byte-for-byte** from
-# `frankweiler/docker/Dockerfile`'s shared prefix (everything through
-# the `mkdir -p /root/.latchkey /data` instruction). Docker's
-# content-addressed layer cache only deduplicates when two images
-# produce identical layer hashes, and the hash inputs are the *exact*
-# instruction text (whitespace, ARG defaults, the command bytes after
-# the `RUN`). When you edit the prefix here, copy the same change into
-# `frankweiler/docker/Dockerfile` verbatim, or contributors will rebuild
-# 2.25 GB of qmd models twice.
-#
-# Below the shared prefix (search for `END SHARED PREFIX`) lives the
-# devcontainer-only toolchain: build-essential, clang/cmake/lld/llvm
-# for compiling Rust + boring-sys2 + libsqlite3-sys, bazelisk, bun,
-# sudo, the `ubuntu` non-root user, and a user-level .bazelrc that
-# overrides the workspace .bazelrc's macOS-default `LIBCLANG_PATH`.
+# Pin: the FROM tag should track a published prod image. Bump by
+# editing the ARG default below; the bump is intentionally manual
+# (rather than `:latest`) so devcontainer builds are reproducible.
+ARG PROD_IMAGE_TAG=0.5.2
+FROM ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}
 
-# === BEGIN SHARED PREFIX (verbatim from frankweiler/docker/Dockerfile) ===
-
-FROM ubuntu:24.04
+# Reset the prod image's ENTRYPOINT. Prod wraps everything in
+# `tini -- frankweiler-entrypoint.sh`, which bootstraps
+# LATCHKEY_ENCRYPTION_KEY from a per-bind-mount key file before
+# exec'ing the user's command. Inside a VS Code devcontainer that
+# wrapping just gets in the way — interactive shells, `bazel run`,
+# `cargo test`, etc. don't want latchkey state magically appearing.
+# Empty `ENTRYPOINT []` + `CMD []` defers to whatever
+# `devcontainer.json` or the user runs explicitly.
+ENTRYPOINT []
+CMD []
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Runtime deps only:
-#   ca-certificates  TLS roots for HTTPS calls the binaries make
-#   curl             debugging + healthchecks; the `latchkey curl` codepath
-#                    invokes our bundled `frankweiler-latchkey-curl-shim`
-#                    rather than this, but having curl present is useful
-#                    for `docker exec` poking
-#   tini             PID 1 that reaps zombies and forwards signals; the
-#                    Rust binaries don't fork, but `frankweiler-sync`
-#                    spawns `npx`/`node` subprocesses for the qmd indexer
-#                    and we want SIGTERM to flow through cleanly
-#   gnupg            required by the NodeSource setup script below
-#   openssl          used by frankweiler-entrypoint.sh to generate the
-#                    latchkey encryption key on first run
+# Build toolchain that prod doesn't ship. Mirrors what GHA's
+# `ubuntu-latest` carries that `release.yml`'s matrix build assumes.
+# Items already present in prod (build-essential, python3) are NOT
+# repeated here — apt would happily skip them as already-installed,
+# but listing only the deltas makes the dev-vs-prod surface visible.
 #
-# No libsqlite3-0: doltlite is statically linked into the release binary
-# via //third-party/doltlite:sqlite3 + the libsqlite3-sys crate
-# annotation in MODULE.bazel. If you see "libsqlite3.so: cannot open
-# shared object file" at runtime, the sqlx feature in
-# frankweiler/backend/Cargo.toml regressed from `sqlite` to
-# `sqlite-unbundled` — see the comment block on the sqlx dep there.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-        openssl \
-        tini \
-    && rm -rf /var/lib/apt/lists/*
-
-# Node 22 LTS via NodeSource. Two consumers in this image:
-#   1. `latchkey` (installed below) is an npm package.
-#   2. `frankweiler-sync` shells out to `npx -y @tobilu/qmd@<version>`
-#      to (re)build the qmd search index at sync time. The qmd version
-#      is chosen by the binary, not pinned here.
-# Keep `NODE_MAJOR` in sync with .devcontainer/Dockerfile.
-ARG NODE_MAJOR=22
-RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/* \
-    && node --version && npm --version && npx --version
-
-# Pinned latchkey. Bumping: follow the 7-day burn-in policy in README.md
-# (no version newer than 7 days at the time of the bump). Latest at pin
-# time (2026-06-04) that satisfied the burn-in was 2.12.2 (2026-05-28).
-#
-# No `latchkey --version` smoke here: that command initializes the
-# keyring lazily, and inside a minimal Ubuntu image there's no Secret
-# Service running, so latchkey exits non-zero with "No encryption key
-# available." The entrypoint script (frankweiler-entrypoint.sh) handles
-# this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=2.12.2
-RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
-
-# Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
-# DB by hand. Lets users run `docker exec -it … doltlite
-# /data/backend_index.doltlite_db` and execute `SELECT * FROM
-# dolt_log()` etc. against the live store. Doltlite isn't in Ubuntu's
-# package repos, but `dolthub/doltlite` publishes signed per-arch
-# `.deb` packages on every GitHub release.
-#
-# Pin to the same version we statically link into the binary
-# (//third-party/doltlite + MODULE.bazel's `doltlite_amalgamation`), so
-# the SQL surface a user sees in the shell matches what the running
-# binary observes — drift here would be confusing without buying
-# anything. The `libdoltlite-dev` headers we don't want (no compilation
-# happens in this image); the `doltlite` CLI package pulls in its
-# `libdoltlite0 (= 0.11.5)` runtime as a hard dep, which is unavoidable
-# even though our binary doesn't dynamic-link against it (the .so just
-# sits there serving the CLI). Adds ~31 MB to the image — small price
-# for a real debug shell against the prolly store.
-#
-# public-release assets are reachable anonymously, so curl is fine here
-# (no gh CLI dep just for this step).
-ARG DOLTLITE_CLI_VERSION=0.11.5
-RUN arch="$(dpkg --print-architecture)" \
-    && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
-    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o /tmp/libdoltlite0.deb "${base}/libdoltlite0_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
-    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o /tmp/doltlite.deb "${base}/doltlite_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-        /tmp/libdoltlite0.deb \
-        /tmp/doltlite.deb \
-    && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
-    && doltlite --version
-
-# Install qmd globally and pre-fetch its three default models
-# (embedding + query-expansion + reranker, ~2.25 GB total). `qmd pull`
-# is qmd's own model-prefetch command — it reads the canonical model
-# URIs out of qmd's source, downloads each one into qmd's default cache
-# (`~/.cache/qmd/models`), and writes the matching `.etag` sidecars
-# that `qmd doctor` later uses to detect cache corruption. Using `qmd
-# pull` rather than curl'ing HuggingFace URLs ourselves means we don't
-# have to track qmd's model-URI / cache-naming conventions — qmd bumps
-# a default model, we just rebuild and the right files land.
-#
-# Pinned to the qmd version that `frankweiler-sync` invokes via
-# `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
-# frankweiler/backend/qmd_indexer/src/lib.rs. The
-# //tools:qmd_version_pins_test asserts the values agree.
-#
-# qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which
-# tries to fetch a prebuilt linux binary via `prebuild-install`. There
-# isn't one for our node 22 / glibc combo so npm falls back to
-# `node-gyp build`, which needs `make` + a C compiler + `python3` to
-# compile the `.node` addon from source. We install those build deps
-# here and leave them in the image — purging them after install is
-# fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
-# aggressive cleanup pulls node out from under us) and the marginal
-# disk-size savings don't matter against the model layer.
-#
-# Keep this block in sync with `.devcontainer/Dockerfile`.
-ARG QMD_VERSION=2.5.3
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        python3 \
-    && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
-    && qmd --version \
-    && qmd pull \
-    && ls -lh /root/.cache/qmd/models
-
-# Pre-create the bind-mount targets so empty-dir mounts behave predictably
-# and so an unmounted run still has somewhere to write.
-RUN mkdir -p /root/.latchkey /data
-
-# === END SHARED PREFIX — devcontainer-only layers below ===
-
-# Build toolchain. Mirrors what GHA's ubuntu-latest carries that the
-# release.yml workflow assumes available.
-#
-# build-essential   gcc/g++/make. Ubuntu 24.04's default gcc is 13,
-#                   which matches GHA's ubuntu-latest and is the
-#                   compiler that surfaced the blake3 SIMD `-march`
-#                   issues we hit (see f08151c).
 # cmake + perl + pkg-config + libssl-dev
 #                   boring-sys2 + openssl-sys build-script deps.
 # clang + libclang-dev + llvm
 #                   bindgen (libsqlite3-sys's build script) dlopens
-#                   libclang to parse <sqlite3.h>. macOS gets clang via
-#                   Xcode CLT; on Ubuntu we install it explicitly.
+#                   libclang to parse <sqlite3.h>. macOS gets clang
+#                   via Xcode CLT; on Ubuntu we install it explicitly.
 # lld               rustc on Linux still defaults to the deprecated
 #                   gold linker and warns; lld present means we can
 #                   opt in via RUSTFLAGS/--linkopt if we want to
 #                   silence that.
-# python3 + python3-pip
-#                   `tests/fixtures/build_qmd_index.py` and similar
-#                   genrules.
+# git               needed by some build scripts (workspace_status.sh,
+#                   rules_rust crate fetches that vendor from git).
+# python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
 # sudo              passwordless sudo for the `ubuntu` user (below).
 # unzip + zip       rules_rust workspace setup occasionally pulls
 #                   these in; cheap to keep.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
         clang \
         cmake \
         git \
@@ -182,19 +59,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libssl-dev \
         lld \
         llvm \
-        make \
         perl \
         pkg-config \
-        python3 \
         python3-pip \
         sudo \
         unzip \
         zip \
     && rm -rf /var/lib/apt/lists/*
 
-# bun — not needed for the bazel build, but qmd's own dev workflow uses
-# it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working inside
-# `third-party/qmd/` doesn't need extra setup.
+# bun — not needed for the bazel build, but qmd's own dev workflow
+# uses it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working
+# inside `third-party/qmd/` doesn't need extra setup.
 ARG BUN_VERSION=1.1.45
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
@@ -202,8 +77,8 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && rm -rf /root/.bun \
     && bun --version
 
-# bazelisk reads `.bazelversion` and downloads the matching bazel, so we
-# only pin bazelisk here.
+# bazelisk reads `.bazelversion` and downloads the matching bazel, so
+# we only pin bazelisk here.
 ARG BAZELISK_VERSION=1.22.0
 ARG TARGETARCH
 RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
@@ -216,20 +91,21 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
     && chmod +x /usr/local/bin/bazelisk \
     && ln -sf /usr/local/bin/bazelisk /usr/local/bin/bazel
 
-# Non-root user. Ubuntu 24.04's base image already ships an `ubuntu` user
-# at uid 1000 — we reuse it (rather than minting `vscode`) so
-# host-bind-mounted files don't end up owned by a foreign uid.
+# Non-root user. Ubuntu 24.04's base image already ships an `ubuntu`
+# user at uid 1000 (inherited via prod's `FROM ubuntu:24.04`) — we
+# reuse it (rather than minting `vscode`) so host-bind-mounted files
+# don't end up owned by a foreign uid.
 RUN usermod -aG sudo ubuntu \
     && echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu \
     && chmod 0440 /etc/sudoers.d/ubuntu
 
-# The shared prefix baked the qmd models into /root/.cache/qmd/models
-# (owned by root, dir mode inherited from `mkdir -p` = 0755). `.bazelrc`
-# bind-mounts `$HOME/.cache/qmd/models` into the sandbox, which for the
-# devcontainer user resolves to `/home/ubuntu/.cache/qmd/models`.
-# Symlink that to the prod location so we get the model layer for free
-# without copying 2.25 GB into the user's home (a copy would mint a
-# whole new layer instead of sharing).
+# The prod image baked qmd models into /root/.cache/qmd/models (owned
+# by root, dir mode inherited from `mkdir -p` = 0755). `.bazelrc`
+# bind-mounts `$HOME/.cache/qmd/models` into the sandbox, which for
+# the devcontainer user resolves to /home/ubuntu/.cache/qmd/models.
+# Symlink that to the prod location so we get the model layer for
+# free without copying 2.25 GB into the user's home (a copy would
+# mint a whole new layer instead of sharing).
 #
 # `chmod 0755 /root` makes /root traversable for `ubuntu`. The models
 # themselves are world-readable already (curl default umask).
@@ -256,6 +132,6 @@ WORKDIR /workspaces/mixed_up_files
 
 # Bazel's output base lives under /home/ubuntu/.cache/bazel; the disk
 # cache (~/Library/Caches/bazel-disk-cache on macOS) maps to
-# /home/ubuntu/.cache/bazel-disk inside this container — see `.bazelrc`'s
-# `build --disk_cache=...`. Override at run time with `--disk_cache=...`
-# if you want a different layout.
+# /home/ubuntu/.cache/bazel-disk inside this container — see
+# `.bazelrc`'s `build --disk_cache=...`. Override at run time with
+# `--disk_cache=...` if you want a different layout.
