@@ -160,6 +160,7 @@ pub fn render_all(
                 render_version: RENDER_VERSION,
             },
             rows: rows.clone(),
+            edges: Vec::new(),
         };
         let sj = serde_json::to_string_pretty(&sidecar)?;
         fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
@@ -172,6 +173,7 @@ pub fn render_all(
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
+            edges: Vec::new(),
         })
         .with_context(|| format!("on_doc_complete {thread_uuid}"))?;
 

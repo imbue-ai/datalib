@@ -267,6 +267,7 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
             render_version: RENDER_VERSION,
         },
         rows,
+        edges: Vec::new(),
     };
     let sidecar_path = md_path.with_extension("grid_rows.json");
     fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)
@@ -316,6 +317,7 @@ pub fn render_gitlab(
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
+            edges: Vec::new(),
         })?;
         summary.rendered += 1;
         progress.inc(1);

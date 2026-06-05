@@ -68,6 +68,7 @@ fn write_sidecar(root: &Path, qmd_path: &str, rows: Vec<GridRow>) {
             render_version: 1,
         },
         rows,
+        edges: Vec::new(),
     };
     let md = root.join(qmd_path);
     let sidecar_path = md.with_extension("grid_rows.json");

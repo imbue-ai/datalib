@@ -24,7 +24,19 @@ export type GridColumnState = {
 
 export type Column =
   | ({ kind: "grid" } & GridColumnState)
-  | { kind: "doc"; md: string };
+  | {
+      kind: "doc";
+      md: string;
+      /**
+       * Optional anchor inside `md` (a `data-section-uuid` value) to
+       * scroll-and-highlight on load. Populated when the user navigates
+       * via a doc-to-doc edge: clicking a text-span source opens the
+       * destination doc with the matching span pre-selected. Null /
+       * absent when the column was opened from a grid row (selection
+       * is computed dynamically in that path).
+       */
+      anchor?: string | null;
+    };
 
 /** Empty grid column with no state. The natural default. */
 export function emptyGrid(): Column {
@@ -42,7 +54,15 @@ export function encodeColumn(c: Column): string {
   }
   // doc UUIDs are URL-safe (hex + hyphens), but defensively encode in
   // case some renderer ever emits a non-UUID markdown id.
-  return `doc:${encodeURIComponent(c.md)}`;
+  const sp = new URLSearchParams();
+  sp.set("md", c.md);
+  if (c.anchor) sp.set("a", c.anchor);
+  // Backwards-compatible: when there's no anchor we emit the legacy
+  // shape `doc:<md>` so older bookmarks still parse cleanly.
+  if (!c.anchor) {
+    return `doc:${encodeURIComponent(c.md)}`;
+  }
+  return `doc:${sp.toString()}`;
 }
 
 export function decodeColumn(segment: string): Column | null {
@@ -61,6 +81,18 @@ export function decodeColumn(segment: string): Column | null {
     };
   }
   if (kind === "doc") {
+    // Two-shape decoder: legacy `doc:<md>` (no `=`) and current
+    // `doc:md=…&a=…`. The presence of `md=` is the discriminator —
+    // a bare UUID never contains it. When there's no anchor we omit
+    // the field entirely (keep the column shape minimal so tests
+    // and old callers stay simple).
+    if (rest.includes("md=")) {
+      const sp = new URLSearchParams(rest);
+      const md = sp.get("md") ?? "";
+      if (md.length === 0) return null;
+      const anchor = sp.get("a");
+      return anchor ? { kind: "doc", md, anchor } : { kind: "doc", md };
+    }
     const md = decodeURIComponent(rest);
     if (md.length === 0) return null;
     return { kind: "doc", md };
@@ -95,7 +127,7 @@ export function columnsEqual(a: Column, b: Column): boolean {
     return a.q === b.q && a.sel === b.sel && a.agCols === b.agCols;
   }
   if (a.kind === "doc" && b.kind === "doc") {
-    return a.md === b.md;
+    return a.md === b.md && (a.anchor ?? null) === (b.anchor ?? null);
   }
   return false;
 }

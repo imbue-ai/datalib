@@ -20,5 +20,9 @@ pub const ENG_FILENAME: &str = "tlg0003.tlg001.1st1K-eng1.xml";
 /// initial Rust port (same row shape as the Python `v6`, just to
 /// flip the fingerprint once). v8 adds the per-section `<div
 /// data-section-uuid="…">` deep-link wrappers + per-paragraph grid
-/// rows + the book index's chapter cross-link table.
-pub const RENDER_VERSION: u32 = 8;
+/// rows + the book index's chapter cross-link table. v9 drops the
+/// inline `*Other:*` cross-language hyperlink (now expressed as an
+/// `edges` row with no markdown footprint) and wraps each section's
+/// first word in a `<span data-section-uuid="…">` that the
+/// bilingual-alignment edges hang off.
+pub const RENDER_VERSION: u32 = 9;

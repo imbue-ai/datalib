@@ -316,6 +316,7 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
             render_version: RENDER_VERSION,
         },
         rows,
+        edges: Vec::new(),
     };
     let sidecar_path = md_path.with_extension("grid_rows.json");
     fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)
@@ -366,6 +367,7 @@ pub fn render_github(
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
+            edges: Vec::new(),
         })?;
         summary.rendered += 1;
         progress.inc(1);

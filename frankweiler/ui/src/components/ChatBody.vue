@@ -15,10 +15,25 @@ import { ref, computed, watch, nextTick, onMounted } from "vue";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
+import type { EdgeOut } from "@/api";
 
 const props = defineProps<{
   body: string;
   selectedSectionUuid?: string | null;
+  /**
+   * Outgoing edges for the doc we're rendering. ChatBody decorates
+   * every `[data-section-uuid]` whose value appears as the
+   * `src_anchor_uuid` of an edge with `class="edge-source"` and
+   * `data-edge-id="…"` so the user-visible styling + click handler
+   * pick it up. Limitations: only the FIRST edge per source anchor
+   * is used; spans whose source anchors overlap inside the body are
+   * not specially handled (see `docs/edges.md`).
+   */
+  outgoingEdges?: EdgeOut[];
+}>();
+
+const emit = defineEmits<{
+  (e: "open-edge", edge: EdgeOut): void;
 }>();
 
 function highlight(code: string, lang: string): string {
@@ -53,7 +68,15 @@ function injectCopyUuidButtons() {
   // is the attribute value as-is (prefixed `tu-`/`tr-`/`th-` for
   // blocks, bare for messages) — that's the form the grid row carries
   // and the deeplink consumes, so "copy section ID" round-trips.
-  for (const el of root.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
+  //
+  // Sub-section spans (the perseus first-word wrappers) also carry
+  // `data-section-uuid` but as inline elements, not block divs — they
+  // have no `.msg-meta` host and no `<p><em>…</em></p>` meta line.
+  // Skip inline spans here; the copy-uuid button only makes sense on
+  // top-level block sections.
+  for (const el of root.value.querySelectorAll<HTMLElement>(
+    "div[data-section-uuid], section[data-section-uuid]",
+  )) {
     if (el.querySelector(":scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid"))
       continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
@@ -130,6 +153,58 @@ async function onCopyClick(ev: MouseEvent) {
   }
 }
 
+/**
+ * Build a (src_anchor_uuid → first matching EdgeOut) lookup over the
+ * outgoing edges that have a span-level source (`src_anchor_uuid !==
+ * null`). When the renderer baked the same anchor uuid into multiple
+ * edges, we keep only the first — see docs/edges.md, "Limitations".
+ */
+const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
+  const m = new Map<string, EdgeOut>();
+  for (const e of props.outgoingEdges ?? []) {
+    if (!e.src_anchor_uuid) continue;
+    if (!m.has(e.src_anchor_uuid)) m.set(e.src_anchor_uuid, e);
+  }
+  return m;
+});
+
+/**
+ * Walk the rendered body and decorate every `[data-section-uuid]`
+ * whose value matches a span-source edge. We stamp `data-edge-id` on
+ * the element and add `.edge-source` so the CSS picks up the subtle
+ * background. Click handling lives below via `onBodyEdgeClick`.
+ */
+function decorateEdgeSources() {
+  if (!root.value) return;
+  const lookup = edgeBySrcAnchor.value;
+  if (lookup.size === 0) return;
+  for (const el of root.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
+    const anchor = el.getAttribute("data-section-uuid") ?? "";
+    const edge = lookup.get(anchor);
+    if (!edge) continue;
+    el.classList.add("edge-source");
+    el.dataset.edgeId = edge.edge_uuid;
+  }
+}
+
+function onBodyEdgeClick(ev: MouseEvent) {
+  const t = ev.target;
+  if (!(t instanceof Element)) return;
+  const el = t.closest<HTMLElement>(".edge-source[data-edge-id]");
+  if (!el) return;
+  // Honor modifier clicks / non-primary buttons the same way
+  // `chat_link.ts` does for inline `<a href="/chat/…">` links: let
+  // the browser open the destination in a new tab/window if the user
+  // explicitly asked for it.
+  if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.button !== 0) return;
+  const edgeId = el.dataset.edgeId ?? "";
+  const edge = (props.outgoingEdges ?? []).find((e) => e.edge_uuid === edgeId);
+  if (!edge) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  emit("open-edge", edge);
+}
+
 function applySelection() {
   if (!root.value) return;
   for (const el of root.value.querySelectorAll(".msg.selected")) {
@@ -161,6 +236,7 @@ function applySelection() {
 watch(html, async () => {
   await nextTick();
   injectCopyUuidButtons();
+  decorateEdgeSources();
   applySelection();
 });
 watch(
@@ -173,8 +249,16 @@ watch(
     applySelection();
   },
 );
+watch(
+  () => props.outgoingEdges,
+  async () => {
+    await nextTick();
+    decorateEdgeSources();
+  },
+);
 onMounted(() => {
   injectCopyUuidButtons();
+  decorateEdgeSources();
   applySelection();
 });
 </script>
@@ -184,7 +268,7 @@ onMounted(() => {
     class="chat-body markdown-body"
     ref="root"
     v-html="html"
-    @click="onCopyClick"
+    @click="(ev) => { onBodyEdgeClick(ev); onCopyClick(ev); }"
   ></div>
 </template>
 
@@ -229,6 +313,32 @@ onMounted(() => {
   border-left-width: 4px;
   /* `outline` (not border) so moving the selection doesn't reflow. */
   outline: 2px solid var(--fw-accent, #6366f1);
+}
+/* Inline span baked by ingest for sub-section edge anchors (today
+   only: perseus first-word wrappers). When the span happens to also
+   be the source of an outgoing edge, `.edge-source` is added by
+   ChatBody at mount time and the user gets a subtle clickable tint;
+   `.selected` on the same span is how we highlight the destination
+   side after navigating via an edge.
+
+   We deliberately scope these to `span[data-section-uuid]` so the
+   block-level `.msg.selected` styling above (which adds a 2px
+   outline + 4px left border) doesn't accidentally fire for inline
+   word-wrappers. */
+.chat-body span[data-section-uuid].edge-source {
+  background: rgba(99, 102, 241, 0.12);
+  border-radius: 3px;
+  padding: 0 0.1em;
+  cursor: pointer;
+  transition: background-color 100ms ease-in-out;
+}
+.chat-body span[data-section-uuid].edge-source:hover {
+  background: rgba(99, 102, 241, 0.28);
+}
+.chat-body span[data-section-uuid].selected {
+  background: var(--fw-card-bg, #1f2937);
+  outline: 2px solid var(--fw-accent, #6366f1);
+  border-radius: 3px;
 }
 .chat-body .msg-meta {
   color: var(--fw-muted, #94a3b8);

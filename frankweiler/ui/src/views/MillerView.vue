@@ -73,9 +73,13 @@ function updateColumn(index: number, mutator: (c: Column) => Column) {
 
 // Truncate-and-push: a click in column `parentIndex` opens `uuid` as
 // column `parentIndex + 1`, discarding any columns past that point.
-function pushColumn(parentIndex: number, md: string) {
+// `anchor` is the doc-level `data-section-uuid` to scroll-and-
+// highlight inside the new column. Null for grid-driven navigation
+// (the grid's selected row already drives section selection in that
+// path); non-null only when an edge click brought us here.
+function pushColumn(parentIndex: number, md: string, anchor: string | null) {
   const next = columns.value.slice(0, parentIndex + 1);
-  next.push({ kind: "doc", md });
+  next.push({ kind: "doc", md, anchor });
   columns.value = next;
   syncUrl();
 }
@@ -99,7 +103,7 @@ function onSelectRow(index: number, row: SearchRow, restoring: boolean) {
   // (classic miller truncate-and-push).
   const md = row.markdown_uuid;
   const head = columns.value.slice(0, index + 1);
-  columns.value = md ? [...head, { kind: "doc", md }] : head;
+  columns.value = md ? [...head, { kind: "doc", md, anchor: null }] : head;
   syncUrl();
 }
 
@@ -119,12 +123,15 @@ function onUpdateAgCols(index: number, agCols: string | null) {
   });
 }
 
-// Section highlighting only fires in the doc column immediately to
-// the right of a grid column whose selected row actually points at
-// this doc. (Selecting a different row would already have truncated
-// any docs further right.)
+// Section highlighting fires in either of two paths:
+//   1. An edge click landed here — `col.anchor` was seeded by
+//      `pushColumn` with the destination edge's `dst_anchor_uuid`.
+//   2. The column was opened from a grid row directly to its left
+//      and that row points at a non-Chat section inside this doc.
+// Path 1 takes precedence because the URL fully describes it.
 function selectedSectionUuidFor(col: Column, index: number): string | null {
   if (col.kind !== "doc") return null;
+  if (col.anchor) return col.anchor;
   if (index === 0) return null;
   const prev = columns.value[index - 1];
   if (!prev || prev.kind !== "grid") return null;
@@ -172,7 +179,7 @@ watch(
         v-else
         :markdown-uuid="col.md"
         :selected-section-uuid="selectedSectionUuidFor(col, i)"
-        @open-chat="(md) => pushColumn(i, md)"
+        @open-chat="(md, anchor) => pushColumn(i, md, anchor)"
       />
     </section>
   </div>

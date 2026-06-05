@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { fetchChat, type ChatResponse } from "@/api";
+import { fetchChat, type ChatResponse, type EdgeOut } from "@/api";
 import ChatBody from "./ChatBody.vue";
 import FeedbackButton from "./FeedbackButton.vue";
 import FeedbackModal from "./FeedbackModal.vue";
@@ -30,17 +30,35 @@ const props = defineProps<{
 // Miller columns: when the body contains a markdown link to another
 // chat (`href="/chat/<uuid>"`), intercept the click and emit so the
 // parent MillerView can push a new column to the right instead of
-// performing a full-page navigation.
+// performing a full-page navigation. `open-chat` carries an optional
+// anchor so edge-driven navigation (with a known destination span)
+// scrolls + highlights on the other side; grid-driven navigation
+// passes anchor=null because the grid row's `uuid` already drives
+// selection.
 const emit = defineEmits<{
-  (e: "open-chat", markdownUuid: string): void;
+  (e: "open-chat", markdownUuid: string, anchor: string | null): void;
 }>();
 
 function onBodyClick(ev: MouseEvent) {
   const uuid = chatHrefFromClick(ev);
   if (!uuid) return;
   ev.preventDefault();
-  emit("open-chat", uuid);
+  emit("open-chat", uuid, null);
 }
+
+function onOpenEdge(edge: EdgeOut) {
+  emit("open-chat", edge.dst_markdown_uuid, edge.dst_anchor_uuid);
+}
+
+// Doc-level outgoing edges (whole-doc source) drive the
+// "destinations" list at the top of the preview. Span-level edges
+// (`src_anchor_uuid !== null`) drive inline clickable highlights
+// inside the body and are NOT listed here — they appear in context
+// where the user can read what they're navigating from.
+const docLevelOutgoing = computed<EdgeOut[]>(() => {
+  if (!chat.value) return [];
+  return (chat.value.outgoing_edges ?? []).filter((e) => e.src_anchor_uuid === null);
+});
 
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
@@ -272,8 +290,25 @@ watch(
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
+      <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
+        <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
+          <span class="edge-arrow" aria-hidden="true">→</span>
+          <a
+            :href="`/#/chat/${e.dst_markdown_uuid}`"
+            @click.prevent="onOpenEdge(e)"
+            :title="e.label ?? ''"
+            >{{ e.dst_title ?? e.dst_markdown_uuid }}</a
+          >
+          <span v-if="e.label" class="edge-label">({{ e.label }})</span>
+        </li>
+      </ul>
       <div @click="onBodyClick">
-        <ChatBody :body="chat.body" :selected-section-uuid="selectedSectionUuid" />
+        <ChatBody
+          :body="chat.body"
+          :selected-section-uuid="selectedSectionUuid"
+          :outgoing-edges="chat.outgoing_edges"
+          @open-edge="onOpenEdge"
+        />
       </div>
     </template>
     <FeedbackModal
@@ -324,6 +359,30 @@ watch(
 }
 .error {
   color: #e35d6a;
+}
+.outgoing-edges {
+  /* The doc-level outgoing edges list sits above the rendered body
+     and below the meta line. List markers off so the leading arrow
+     glyph stands in. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--fw-border);
+  border-bottom: 1px solid var(--fw-border);
+  padding: 0.4rem 0;
+}
+.outgoing-edges li {
+  margin: 0.15rem 0;
+}
+.edge-arrow {
+  color: var(--fw-muted, #94a3b8);
+  margin-right: 0.4rem;
+}
+.edge-label {
+  color: var(--fw-muted, #94a3b8);
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
 }
 .ctx-overlay {
   position: fixed;

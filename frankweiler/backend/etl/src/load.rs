@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use frankweiler_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use frankweiler_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -309,10 +310,13 @@ pub struct LoadSummary {
     pub rows_inserted: usize,
 }
 
-/// Apply DDL for `grid_rows` and `markdowns`. The schema is the truth
-/// for fresh DBs; no migration support is provided because we don't
-/// promise back-compat with pre-`markdowns` databases — wipe and
-/// re-ingest if you're upgrading from an older release.
+/// Apply DDL for `grid_rows`, `markdowns`, and `edges`. The schema is
+/// the truth for fresh DBs; no migration support is provided because we
+/// don't promise back-compat with pre-`markdowns` databases — wipe and
+/// re-ingest if you're upgrading from an older release. The `edges`
+/// table is created here so older data roots (which never had it) gain
+/// the table on the next `frankweiler-sync` run; sidecars that don't
+/// carry edges leave the table empty.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for (_table, ddl) in GRID_ROWS_DDL {
         sqlx::query(ddl)
@@ -324,6 +328,12 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await
         .context("create markdowns")?;
+    for (_table, ddl) in EDGES_DDL {
+        sqlx::query(ddl)
+            .execute(pool)
+            .await
+            .context("create edges")?;
+    }
     Ok(())
 }
 
@@ -428,6 +438,11 @@ pub struct RenderedMarkdown {
     pub md_path: PathBuf,
     pub render_version: u32,
     pub rows: Vec<GridRow>,
+    /// Outgoing edges originating from this markdown
+    /// (`src_markdown_uuid == markdown_uuid`). Empty for renderers that
+    /// don't emit edges yet — the Load step still issues the DELETE so
+    /// stale rows from a previous render get cleaned up.
+    pub edges: Vec<EdgeRow>,
 }
 
 /// Write one rendered document into Dolt unconditionally.
@@ -525,6 +540,7 @@ pub async fn load_all(
             md_path,
             render_version: sidecar.header.render_version,
             rows: sidecar.rows,
+            edges: sidecar.edges,
         };
         let inserted = apply_one(&write_lock, out_dir, &md, now_override)
             .await
@@ -643,6 +659,20 @@ async fn apply_markdown(
         insert_grid_row(conn, row).await?;
     }
 
+    // Edges are sharded by source markdown: each markdown owns the
+    // outgoing edges whose `src_markdown_uuid` matches. Re-rendering a
+    // markdown therefore replaces its outgoing-edge set. Incoming edges
+    // (whose `dst_markdown_uuid` matches) are owned by the source
+    // markdown's sidecar, so they survive this delete.
+    sqlx::query("DELETE FROM edges WHERE src_markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior edges")?;
+    for edge in &md.edges {
+        insert_edge(conn, edge).await?;
+    }
+
     let rendered_at = now_override
         .map(str::to_string)
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
@@ -723,6 +753,27 @@ async fn upsert_markdown(
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
+    Ok(())
+}
+
+async fn insert_edge(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    edge: &EdgeRow,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO edges \
+         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, label) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&edge.edge_uuid)
+    .bind(&edge.src_markdown_uuid)
+    .bind(&edge.src_anchor_uuid)
+    .bind(&edge.dst_markdown_uuid)
+    .bind(&edge.dst_anchor_uuid)
+    .bind(&edge.label)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert edge {}", edge.edge_uuid))?;
     Ok(())
 }
 
@@ -830,6 +881,7 @@ mod write_lock_tests {
             md_path: PathBuf::from(format!("/tmp/{uuid}.md")),
             render_version: 1,
             rows: vec![row],
+            edges: Vec::new(),
         }
     }
 
