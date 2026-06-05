@@ -34,6 +34,10 @@ pub mod markdowns {
     include!("generated/markdowns.rs");
 }
 
+pub mod edges {
+    include!("generated/edges.rs");
+}
+
 #[cfg(test)]
 mod tests {
     use super::anthropic::*;
@@ -73,5 +77,15 @@ mod tests {
         let (_, cols) = super::grid_rows::COLUMNS[0];
         assert!(cols.contains(&"uuid"));
         assert!(cols.contains(&"channel"));
+    }
+
+    #[test]
+    fn edges_table_present() {
+        assert_eq!(super::edges::TABLES.len(), 1);
+        assert_eq!(super::edges::DDL.len(), 1);
+        let (_, cols) = super::edges::COLUMNS[0];
+        assert!(cols.contains(&"edge_uuid"));
+        assert!(cols.contains(&"src_markdown_uuid"));
+        assert!(cols.contains(&"dst_markdown_uuid"));
     }
 }

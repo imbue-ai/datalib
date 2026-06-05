@@ -13,6 +13,7 @@ use crate::db::ChatMeta;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
+use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::feedback::FeedbackRow;
 use frankweiler_schema::sync_jobs::SyncJobRow;
 
@@ -64,6 +65,17 @@ pub trait MirrorRepo: Send + Sync {
         limit: usize,
     ) -> Result<Vec<SearchRow>, RepoError>;
 
+    /// List outgoing edges originating from `markdown_uuid`. Each
+    /// returned [`EdgeRowOut`] pairs the raw edge with whatever
+    /// destination metadata the UI needs to render an "outgoing
+    /// destinations" list (today: the destination markdown's title).
+    /// Returns an empty Vec when the doc has no outgoing edges, when
+    /// the edges table is missing (old data root), or — by default —
+    /// when the impl doesn't support edges at all.
+    async fn outgoing_edges(&self, _markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// Append a feedback row. The default impl returns
     /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::DoltRepo`]
     /// overrides it.
@@ -105,6 +117,22 @@ pub trait MirrorRepo: Send + Sync {
     async fn request_cancel_job(&self, _job_id: &str) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
+}
+
+/// One outgoing edge, joined with the destination markdown's metadata
+/// for direct UI rendering. Producers fill `edge` from the `edges`
+/// table; `dst_title` is the destination's `markdowns.title` (or
+/// `conversation_name` from the canonical grid_row when title is null),
+/// so the UI doesn't have to round-trip a second request per edge.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EdgeRowOut {
+    /// The raw edge from the `edges` table.
+    #[serde(flatten)]
+    pub edge: EdgeRow,
+    /// Human-readable title of the destination markdown. `None` when
+    /// the destination is missing from `markdowns` (dangling FK — e.g.
+    /// the destination was deleted but the edge wasn't pruned).
+    pub dst_title: Option<String>,
 }
 
 /// Convenience type alias for the dyn-dispatched repo handle used by

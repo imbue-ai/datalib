@@ -131,6 +131,44 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, lang: &str) -> Stri
         .to_string()
 }
 
+/// Anchor UUID for the first-word span inside one (book, chapter,
+/// section, language). The renderer wraps the first whitespace-
+/// separated token of the section's text in `<span
+/// data-section-uuid="…">` using this value; the bilingual-alignment
+/// `edges` rows reference it as `src_anchor_uuid` / `dst_anchor_uuid`
+/// so the UI can highlight the matching word on the other-language
+/// side. Frozen derivation so re-runs are idempotent.
+pub fn paragraph_first_word_uuid(book_n: &str, ch_n: &str, sec_n: &str, lang: &str) -> String {
+    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:first-word");
+    Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
+        .as_hyphenated()
+        .to_string()
+}
+
+/// Stable identifier for one `edges` row. Producers SHOULD derive
+/// edge UUIDs deterministically so re-ingest replaces existing rows
+/// rather than inserting duplicates. The canonical input is the
+/// directed tuple (src_markdown, src_anchor, dst_markdown,
+/// dst_anchor, label) — same fields the schema's `x-primary-key`
+/// section spells out.
+pub fn edge_uuid(
+    src_md: &str,
+    src_anchor: Option<&str>,
+    dst_md: &str,
+    dst_anchor: Option<&str>,
+    label: Option<&str>,
+) -> String {
+    let name = format!(
+        "edge:{src_md}/{}->{dst_md}/{}|{}",
+        src_anchor.unwrap_or(""),
+        dst_anchor.unwrap_or(""),
+        label.unwrap_or(""),
+    );
+    Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
+        .as_hyphenated()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

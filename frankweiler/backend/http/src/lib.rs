@@ -28,7 +28,7 @@ use axum::{
 };
 use frankweiler_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
 use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
-use frankweiler_core::repo::{DynRepo, RepoError};
+use frankweiler_core::repo::{DynRepo, EdgeRowOut, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
 use frankweiler_schema::feedback::FeedbackRow;
@@ -104,6 +104,12 @@ pub struct ChatResponse {
     pub source_label: Option<String>,
     pub source_url: Option<String>,
     pub body: String,
+    /// Outgoing edges from this markdown. The UI uses this to render
+    /// the "outgoing destinations" list at the top of the doc preview
+    /// AND to resolve `<span data-edge-id>` clicks inside the body to
+    /// their destinations. Empty for documents with no edges (or for
+    /// data roots without an `edges` table).
+    pub outgoing_edges: Vec<EdgeRowOut>,
 }
 
 /// Client-supplied portion of a feedback submission. The server stamps
@@ -337,6 +343,11 @@ async fn chat(
             Some("ChatGPT") => Some(format!("https://chatgpt.com/c/{markdown_uuid}")),
             _ => None,
         });
+    let outgoing_edges = s
+        .repo
+        .outgoing_edges(&markdown_uuid)
+        .await
+        .unwrap_or_default();
     Ok(Json(ChatResponse {
         markdown_uuid,
         name: meta.name,
@@ -347,6 +358,7 @@ async fn chat(
         source_label: meta.source_label,
         source_url,
         body,
+        outgoing_edges,
     }))
 }
 

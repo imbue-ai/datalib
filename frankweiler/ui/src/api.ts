@@ -62,6 +62,23 @@ export type SearchResponse = {
 // wrappers the renderer emits (one per message, plus nested ones for
 // tool_use / tool_result / thinking blocks). The attribute value is
 // the same as the grid row's `uuid` column.
+// One row from the `edges` table joined with the destination
+// markdown's title. The backend produces this list on every
+// `/api/chat/{uuid}` response — see `EdgeRowOut` in
+// `frankweiler/backend/core/src/repo.rs`. `src_anchor_uuid`/
+// `dst_anchor_uuid` reference values the renderer emits as
+// `data-section-uuid` attributes in the body; null means the
+// corresponding side is the whole document.
+export type EdgeOut = {
+  edge_uuid: string;
+  src_markdown_uuid: string;
+  src_anchor_uuid: string | null;
+  dst_markdown_uuid: string;
+  dst_anchor_uuid: string | null;
+  label: string | null;
+  dst_title: string | null;
+};
+
 export type ChatResponse = {
   markdown_uuid: string;
   name: string | null;
@@ -72,6 +89,7 @@ export type ChatResponse = {
   source_label: string | null;
   source_url: string | null;
   body: string;
+  outgoing_edges: EdgeOut[];
 };
 
 export type Health = {

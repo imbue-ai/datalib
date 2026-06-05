@@ -144,6 +144,7 @@ fn render_one(
             render_version: RENDER_VERSION,
         },
         rows: rows.clone(),
+        edges: Vec::new(),
     };
     let sj = serde_json::to_string_pretty(&sidecar).context("serialize beeper sidecar")?;
     fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
@@ -162,6 +163,7 @@ fn render_one(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        edges: Vec::new(),
     })
     .with_context(|| format!("on_doc_complete {markdown_uuid}"))?;
 
