@@ -26,10 +26,12 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::super::{
-    book_uuid, chapter_uuid, paragraph_uuid, TLG0003_TLG001, WORK_SHORT, WORK_TITLE,
+    book_uuid, chapter_uuid, edge_uuid, paragraph_first_word_uuid, paragraph_uuid, TLG0003_TLG001,
+    WORK_SHORT, WORK_TITLE,
 };
 use super::parse::{Book, Chapter, ParsedPerseus};
 use super::RENDER_VERSION;
@@ -123,7 +125,8 @@ fn render_book(
 
     let row = book_grid_row(book, &m_uuid);
     let rows = vec![row];
-    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows)?;
+    let edges = book_edges(book, &m_uuid);
+    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -134,6 +137,7 @@ fn render_book(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        edges,
     })
     .with_context(|| format!("on_doc_complete book {}", book.n))?;
 
@@ -189,7 +193,8 @@ fn render_chapter(
         ));
         idx += 1;
     }
-    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows)?;
+    let edges = chapter_edges(book, chapter, lang, &m_uuid);
+    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -200,6 +205,7 @@ fn render_chapter(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        edges,
     })
     .with_context(|| format!("on_doc_complete chapter {}.{} ({lang})", book.n, chapter.n))?;
 
@@ -229,6 +235,14 @@ fn chapter_title(book_n: &str, ch_n: &str) -> String {
     let bn: u32 = book_n.parse().unwrap_or(0);
     let ci: u32 = ch_n.parse().unwrap_or(0);
     format!("{WORK_SHORT} {bn}.{ci}")
+}
+
+/// Per-language chapter title used everywhere a single string has to
+/// disambiguate the grc vs. eng rendering (grid `Conversation Name`
+/// column, the rendered `.md` H1, and downstream `markdowns.title`
+/// which flows into the UI's outgoing-destinations link text).
+fn chapter_title_localized(book_n: &str, ch_n: &str, lang: &str) -> String {
+    format!("{} ({})", chapter_title(book_n, ch_n), lang_label(lang))
 }
 
 fn book_title(book_n: &str) -> String {
@@ -264,8 +278,15 @@ fn section_div_open(section_uuid: &str) -> String {
 const SECTION_DIV_CLOSE: &str = "</div>";
 
 fn render_book_md(book: &Book) -> String {
+    // The book doc carries only its frontmatter + H1 now. Every
+    // chapter cross-link that used to live inline as a markdown
+    // table is expressed instead as one `edges` row per (chapter,
+    // language) pair — see `book_edges` — and rendered in the UI's
+    // outgoing-destinations list. Keeping the body empty makes the
+    // book a pure navigation entry rather than a synthetic
+    // table-of-contents doc that the user has to scroll through.
     let title = book_title(&book.n);
-    let mut out = format!(
+    format!(
         "---\n\
          provider: perseus\n\
          work: {WORK_TITLE}\n\
@@ -275,34 +296,13 @@ fn render_book_md(book: &Book) -> String {
          ---\n\
          \n\
          # {title}\n\
-         \n\
-         {n_chapters} chapters.\n\
-         \n\
-         ## Chapters\n\
-         \n\
-         | # | Greek | English |\n\
-         |---|-------|---------|\n",
+         \n",
         book_n = book.n,
-        n_chapters = book.chapters.len(),
-    );
-    for chapter in &book.chapters {
-        let bi: u32 = book.n.parse().unwrap_or(0);
-        let ci: u32 = chapter.n.parse().unwrap_or(0);
-        let grc = chapter_uuid(&book.n, &chapter.n, "grc");
-        let eng = chapter_uuid(&book.n, &chapter.n, "eng");
-        // SPA uses createWebHashHistory(); routes live under /#/<path>.
-        out.push_str(&format!(
-            "| {bi}.{ci} | [{WORK_SHORT} {bi}.{ci}](/#/chat/{grc}) | [{WORK_SHORT} {bi}.{ci}](/#/chat/{eng}) |\n"
-        ));
-    }
-    out.push('\n');
-    out
+    )
 }
 
 fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
     let title = chapter_title(&chapter.book_n, &chapter.n);
-    let other = if lang == "grc" { "eng" } else { "grc" };
-    let other_uuid = chapter_uuid(&chapter.book_n, &chapter.n, other);
     let mut out = format!(
         "---\n\
          provider: perseus\n\
@@ -315,20 +315,26 @@ fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
          ---\n\
          \n\
          # {title} ({lang_label})\n\
-         \n\
-         *{other_label}:* [{title}](/#/chat/{other_uuid})\n\
          \n",
         book_n = chapter.book_n,
         ch_n = chapter.n,
         lang_label = lang_label(lang),
-        other_label = lang_label(other),
     );
+    // The cross-language jump that used to live as an inline
+    // `*Other:* [...](/#/chat/…)` here is now expressed as an
+    // outgoing `edges` row (label = "cross-language"). The UI
+    // renders it as part of the doc-level destinations list at the
+    // top of ChatBody, no markdown footprint needed.
     for sec in &chapter.sections {
         let text = if lang == "grc" { &sec.grc } else { &sec.eng };
         if text.is_empty() {
             continue;
         }
         let s_uuid = paragraph_uuid(&chapter.book_n, &chapter.n, &sec.n, lang);
+        let body = wrap_first_word(
+            text,
+            &paragraph_first_word_uuid(&chapter.book_n, &chapter.n, &sec.n, lang),
+        );
         // Blank lines around the `<div>` / `</div>` so the markdown
         // parser inside doesn't get confused — common-mark allows
         // raw HTML blocks but needs the surrounding blank lines to
@@ -337,12 +343,51 @@ fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
         out.push_str("\n\n");
         out.push_str(&format!(
             "### {}.{}.{}\n\n{}\n\n",
-            chapter.book_n, chapter.n, sec.n, text
+            chapter.book_n, chapter.n, sec.n, body
         ));
         out.push_str(SECTION_DIV_CLOSE);
         out.push_str("\n\n");
     }
     out
+}
+
+/// Wrap the first whitespace-delimited token of `text` in an inline
+/// `<span data-section-uuid="…">…</span>` so the UI can highlight it
+/// when a bilingual-alignment edge points at it. The remainder of
+/// the section is left as raw text — markdown-it treats inline HTML
+/// permissively when `html: true`.
+fn wrap_first_word(text: &str, anchor_uuid: &str) -> String {
+    // Find the first whitespace AFTER the first non-whitespace run.
+    // `char_indices()` over the original string keeps us byte-safe
+    // on multi-byte greek glyphs.
+    let mut it = text.char_indices().peekable();
+    // Skip leading whitespace (the parser's normalize step trims it
+    // but defend anyway).
+    while let Some(&(_, c)) = it.peek() {
+        if c.is_whitespace() {
+            it.next();
+        } else {
+            break;
+        }
+    }
+    let start = it.peek().map(|&(i, _)| i).unwrap_or(0);
+    // Walk to the first whitespace (or end-of-string).
+    let mut end = text.len();
+    for (i, c) in it {
+        if c.is_whitespace() {
+            end = i;
+            break;
+        }
+    }
+    if start >= end {
+        return text.to_string();
+    }
+    format!(
+        "{}<span data-section-uuid=\"{anchor_uuid}\">{}</span>{}",
+        &text[..start],
+        &text[start..end],
+        &text[end..],
+    )
 }
 
 fn chapter_text_for_grid(chapter: &Chapter, lang: &str) -> String {
@@ -363,15 +408,13 @@ fn chapter_text_for_grid(chapter: &Chapter, lang: &str) -> String {
 }
 
 fn book_text_for_grid(book: &Book) -> String {
-    let mut out = format!(
-        "{} — {} chapters.",
-        book_title(&book.n),
-        book.chapters.len()
-    );
-    for chapter in &book.chapters {
-        out.push_str(&format!("\n{}", chapter_title(&book.n, &chapter.n)));
-    }
-    out
+    // Used as the row's `text` (search body + grid Contents
+    // snippet). The book is a navigation-only entry now; its
+    // chapters live in the `edges` table, not in any free-text
+    // body. Keep this to the book title alone — enough for the
+    // grid row to read sensibly but no synthetic prose for search
+    // to match against.
+    book_title(&book.n)
 }
 
 fn book_grid_row(book: &Book, bk_uuid: &str) -> GridRow {
@@ -428,7 +471,7 @@ fn chapter_grid_row(
         org_name: None,
         project: Some(WORK_TITLE.to_string()),
         channel: None,
-        conversation_name: Some(chapter_title(&chapter.book_n, &chapter.n)),
+        conversation_name: Some(chapter_title_localized(&chapter.book_n, &chapter.n, lang)),
         conversation_uuid: ch_uuid.to_string(),
         message_index: None,
         entire_chat: format!("/chat/{ch_uuid}"),
@@ -483,7 +526,7 @@ fn section_grid_row(
         org_name: None,
         project: Some(WORK_TITLE.to_string()),
         channel: None,
-        conversation_name: Some(chapter_title(&chapter.book_n, &chapter.n)),
+        conversation_name: Some(chapter_title_localized(&chapter.book_n, &chapter.n, lang)),
         // conversation_uuid points at the chapter — clicking the row's
         // conversation column groups the rows by chapter, same as
         // message rows group by conversation in the chatgpt/anthropic
@@ -517,8 +560,9 @@ fn write_sidecar(
     markdown_uuid: &str,
     fingerprint: &str,
     rows: &[GridRow],
+    edges: &[EdgeRow],
 ) -> Result<()> {
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "header": {
             "markdown_uuid": markdown_uuid,
             "source_fingerprint": fingerprint,
@@ -526,9 +570,97 @@ fn write_sidecar(
         },
         "rows": rows,
     });
+    // Match `Sidecar`'s `skip_serializing_if = "Vec::is_empty"` so docs
+    // that have no edges (e.g. the per-book index.md) produce
+    // byte-identical sidecars to the pre-edges era. Only emit the
+    // field when at least one edge originates from this markdown.
+    if !edges.is_empty() {
+        payload["edges"] = serde_json::to_value(edges)?;
+    }
     fs::write(path, serde_json::to_string_pretty(&payload)?)
         .with_context(|| format!("write {}", path.display()))?;
     Ok(())
+}
+
+/// Edges originating from one book's index doc. The book is a
+/// pure navigation entry — its body is empty — so each chapter
+/// cross-link the old `## Chapters` table used to carry is
+/// expressed instead as one whole-doc edge per (chapter, language)
+/// pair. Label is the literal "chapter"; the destination markdown's
+/// title (e.g. "Thucydides 1.1 (Greek)") supplies the
+/// disambiguation, rendered in parens after the label by the UI.
+fn book_edges(book: &Book, bk_uuid: &str) -> Vec<EdgeRow> {
+    let label = Some("chapter");
+    let mut edges: Vec<EdgeRow> = Vec::with_capacity(book.chapters.len() * 2);
+    for chapter in &book.chapters {
+        for lang in ["grc", "eng"] {
+            let dst_md = chapter_uuid(&book.n, &chapter.n, lang);
+            edges.push(EdgeRow {
+                edge_uuid: edge_uuid(bk_uuid, None, &dst_md, None, label),
+                src_markdown_uuid: bk_uuid.to_string(),
+                src_anchor_uuid: None,
+                dst_markdown_uuid: dst_md,
+                dst_anchor_uuid: None,
+                label: label.map(str::to_string),
+            });
+        }
+    }
+    edges
+}
+
+/// Edges originating from one chapter doc (`m_uuid`, in `lang`).
+/// Emits:
+///   * one cross-language edge whose dst is the matching chapter
+///     doc in the other language; the label is the destination's
+///     language name ("Greek" / "English") so the UI's
+///     outgoing-destinations list can render it directly without a
+///     join against the dst row's metadata;
+///   * one `bilingual-alignment` edge per non-empty section where
+///     BOTH languages have text — anchored on the first-word span on
+///     each side.
+fn chapter_edges(book: &Book, chapter: &Chapter, lang: &str, m_uuid: &str) -> Vec<EdgeRow> {
+    let other = if lang == "grc" { "eng" } else { "grc" };
+    let other_md = chapter_uuid(&chapter.book_n, &chapter.n, other);
+    let mut edges: Vec<EdgeRow> = Vec::new();
+
+    // Cross-language doc-level edge. Label = destination language so
+    // `DocColumn.vue` can use it verbatim as the link text — that's
+    // the field the user actually wants to see ("→ Greek"), not the
+    // edge taxonomy ("cross-language") it replaces.
+    let cross_label = Some(lang_label(other));
+    edges.push(EdgeRow {
+        edge_uuid: edge_uuid(m_uuid, None, &other_md, None, cross_label),
+        src_markdown_uuid: m_uuid.to_string(),
+        src_anchor_uuid: None,
+        dst_markdown_uuid: other_md.clone(),
+        dst_anchor_uuid: None,
+        label: cross_label.map(str::to_string),
+    });
+
+    // First-word ↔ first-word alignment edges.
+    let label = Some("bilingual-alignment");
+    for sec in &chapter.sections {
+        if sec.grc.is_empty() || sec.eng.is_empty() {
+            continue;
+        }
+        let src_anchor = paragraph_first_word_uuid(&book.n, &chapter.n, &sec.n, lang);
+        let dst_anchor = paragraph_first_word_uuid(&book.n, &chapter.n, &sec.n, other);
+        edges.push(EdgeRow {
+            edge_uuid: edge_uuid(
+                m_uuid,
+                Some(&src_anchor),
+                &other_md,
+                Some(&dst_anchor),
+                label,
+            ),
+            src_markdown_uuid: m_uuid.to_string(),
+            src_anchor_uuid: Some(src_anchor),
+            dst_markdown_uuid: other_md.clone(),
+            dst_anchor_uuid: Some(dst_anchor),
+            label: label.map(str::to_string),
+        });
+    }
+    edges
 }
 
 fn compute_book_fingerprint(book: &Book) -> String {
@@ -657,29 +789,50 @@ mod tests {
     }
 
     #[test]
-    fn book_index_md_has_chapter_table() {
+    fn book_index_md_has_empty_body_and_chapter_edges() {
         let dir = tempfile::tempdir().unwrap();
+        let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         render_all(
             &tiny(),
             dir.path(),
             "perseus",
             &Progress::noop(),
             &HashMap::new(),
-            &mut |_| Ok(()),
+            &mut |r| {
+                emitted.push(r);
+                Ok(())
+            },
         )
         .unwrap();
+        // Body: empty navigation entry (frontmatter + H1, nothing else).
         let idx = std::fs::read_to_string(
             dir.path()
                 .join("rendered_md/perseus/thucydides/histories/book_01/index.md"),
         )
         .unwrap();
-        assert!(idx.contains("## Chapters"));
-        assert!(idx.contains("| Greek | English |"));
-        // One row per chapter with deep-links into both languages.
-        let grc = chapter_uuid("1", "1", "grc");
-        let eng = chapter_uuid("1", "1", "eng");
-        assert!(idx.contains(&format!("/#/chat/{grc}")));
-        assert!(idx.contains(&format!("/#/chat/{eng}")));
+        assert!(!idx.contains("## Chapters"));
+        assert!(!idx.contains("/#/chat/"));
+
+        // Edges: one per (chapter, language). `tiny()` has 1 chapter,
+        // so 2 edges (grc + eng), both labeled "chapter".
+        let bk = emitted
+            .iter()
+            .find(|d| d.markdown_uuid == book_uuid("1"))
+            .expect("book doc emitted");
+        assert_eq!(bk.edges.len(), 2);
+        for e in &bk.edges {
+            assert_eq!(e.label.as_deref(), Some("chapter"));
+            assert!(e.src_anchor_uuid.is_none());
+            assert!(e.dst_anchor_uuid.is_none());
+            assert_eq!(e.src_markdown_uuid, bk.markdown_uuid);
+        }
+        let dst_set: std::collections::HashSet<&str> = bk
+            .edges
+            .iter()
+            .map(|e| e.dst_markdown_uuid.as_str())
+            .collect();
+        assert!(dst_set.contains(chapter_uuid("1", "1", "grc").as_str()));
+        assert!(dst_set.contains(chapter_uuid("1", "1", "eng").as_str()));
     }
 
     #[test]
@@ -720,6 +873,102 @@ mod tests {
             .unwrap()
             .ends_with("/chapter_001_grc.md"));
         assert_eq!(sec_row.message_index, Some(0));
+    }
+
+    #[test]
+    fn chapter_emits_cross_language_and_first_word_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut emitted: Vec<RenderedMarkdown> = Vec::new();
+        render_all(
+            &tiny(),
+            dir.path(),
+            "perseus",
+            &Progress::noop(),
+            &HashMap::new(),
+            &mut |r| {
+                emitted.push(r);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let grc_doc = emitted
+            .iter()
+            .find(|d| d.markdown_uuid == chapter_uuid("1", "1", "grc"))
+            .unwrap();
+        let eng_md = chapter_uuid("1", "1", "eng");
+
+        // One cross-language edge (whole-doc) + one bilingual-alignment edge per
+        // non-empty bilingual section. tiny() has 2 sections, both bilingual, so
+        // we expect 1 + 2 = 3 edges.
+        assert_eq!(grc_doc.edges.len(), 3);
+
+        // Doc-level edge from grc → eng carries the *destination's*
+        // language as the label, not a generic "cross-language" tag —
+        // the UI uses it verbatim as the outgoing-destinations link
+        // text.
+        let cross = grc_doc
+            .edges
+            .iter()
+            .find(|e| e.label.as_deref() == Some("English"))
+            .expect("cross-language edge to English present");
+        assert_eq!(cross.src_markdown_uuid, grc_doc.markdown_uuid);
+        assert!(cross.src_anchor_uuid.is_none());
+        assert_eq!(cross.dst_markdown_uuid, eng_md);
+        assert!(cross.dst_anchor_uuid.is_none());
+
+        let aligns: Vec<_> = grc_doc
+            .edges
+            .iter()
+            .filter(|e| e.label.as_deref() == Some("bilingual-alignment"))
+            .collect();
+        assert_eq!(aligns.len(), 2);
+        for e in &aligns {
+            assert_eq!(e.src_markdown_uuid, grc_doc.markdown_uuid);
+            assert_eq!(e.dst_markdown_uuid, eng_md);
+            assert!(e.src_anchor_uuid.is_some());
+            assert!(e.dst_anchor_uuid.is_some());
+        }
+        // First section's first-word anchors on both sides are the
+        // anchors the bilingual-alignment edge MUST reference.
+        let fw_grc = paragraph_first_word_uuid("1", "1", "1", "grc");
+        let fw_eng = paragraph_first_word_uuid("1", "1", "1", "eng");
+        assert!(aligns
+            .iter()
+            .any(|e| e.src_anchor_uuid.as_deref() == Some(&fw_grc)
+                && e.dst_anchor_uuid.as_deref() == Some(&fw_eng)));
+    }
+
+    #[test]
+    fn chapter_md_wraps_first_word_of_each_section() {
+        let dir = tempfile::tempdir().unwrap();
+        render_all(
+            &tiny(),
+            dir.path(),
+            "perseus",
+            &Progress::noop(),
+            &HashMap::new(),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
+        let ch_grc = std::fs::read_to_string(
+            dir.path()
+                .join("rendered_md/perseus/thucydides/histories/book_01/chapter_001_grc.md"),
+        )
+        .unwrap();
+        let fw1 = paragraph_first_word_uuid("1", "1", "1", "grc");
+        assert!(
+            ch_grc.contains(&format!(
+                "<span data-section-uuid=\"{fw1}\">Θουκυδίδης</span>"
+            )),
+            "first-word span not found in:\n{ch_grc}"
+        );
+        // The old inline `*Other:* [Thucydides 1.1](/#/chat/…)` line is
+        // gone — replaced by an `edges` row at the data layer.
+        assert!(
+            !ch_grc.contains("*English:*"),
+            "old inline cross-language link survived"
+        );
     }
 
     #[test]

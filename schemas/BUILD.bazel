@@ -6,6 +6,7 @@ exports_files([
     "markdowns.schema.json",
     "sync_jobs.schema.json",
     "download_runs.schema.json",
+    "edges.schema.json",
     "codegen.py",
 ])
 
@@ -105,7 +106,7 @@ filegroup(
             ("ts", "ts", "typescript"),
         ]
     ]
-    for stem in ["markdowns", "sync_jobs", "download_runs"]
+    for stem in ["markdowns", "sync_jobs", "download_runs", "edges"]
 ]
 
 [
@@ -118,5 +119,5 @@ filegroup(
         ],
         visibility = ["//visibility:public"],
     )
-    for stem in ["markdowns", "sync_jobs", "download_runs"]
+    for stem in ["markdowns", "sync_jobs", "download_runs", "edges"]
 ]

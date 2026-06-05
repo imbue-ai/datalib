@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blobs::safe_filename;
-use frankweiler_etl::latchkey::latchkey_tokio_command;
+use frankweiler_etl::http::{latchkey_curl, HttpRequest};
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
@@ -476,48 +476,59 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
         .and_then(|v| v.as_str())
         .or_else(|| file_obj.get("mime_type").and_then(|v| v.as_str()));
 
-    let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
-    let mut cmd = latchkey_tokio_command();
-    cmd.arg("curl")
-        .arg("-fSL")
-        .arg("-o")
-        .arg(tmp.path())
-        .arg(&url);
-    let proc = tokio::time::timeout(ATTACH_FILE_TIMEOUT, cmd.output())
-        .await
-        .context("file curl timed out")?
-        .context("file curl spawn failed")?;
-    if !proc.status.success() {
-        let stderr_full = String::from_utf8_lossy(&proc.stderr).into_owned();
-        let tail: String = stderr_full
-            .chars()
-            .rev()
-            .take(200)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect();
-        warn!(
-            event = "anthropic_media_failed",
-            file_uuid = file_uuid,
-            exit = proc.status.code().unwrap_or(-1),
-            stderr = %tail.trim(),
-        );
-        let _ = db
-            .record_blob_error(file_uuid, conv_uuid, "file", tail.trim())
-            .await;
-        return Ok(false);
+    // Route through the shared `latchkey_curl` so playback-mode
+    // (FRANKWEILER_HTTP_PLAYBACK) intercepts these blob GETs the same
+    // way it does for every other provider's HTTP traffic. The previous
+    // implementation shelled out to `latchkey_tokio_command()` directly,
+    // bypassing playback — which made the fixture pipeline silently
+    // capture sandbox-/host-dependent failure text (the npm log-dir
+    // error you get inside Bazel's sandbox) into the `blob_errors` row
+    // we then snapshot. Going through `latchkey_curl` means the
+    // recorded error text now comes from one of `HttpError`'s
+    // well-defined variants — stable across hosts and reproducible.
+    let req = HttpRequest::get("anthropic", &url).timeout(ATTACH_FILE_TIMEOUT);
+    match latchkey_curl(&req).await {
+        Ok(resp) if (200..300).contains(&resp.status) => {
+            // Prefer the server's Content-Type when present; fall back
+            // to the file_obj-derived mime so we still record something
+            // sensible if a fixture omits the header.
+            let header_mime = resp.header("content-type").map(String::from);
+            let effective_mime = header_mime.as_deref().or(mime);
+            db.upsert_blob_bytes(
+                file_uuid,
+                "file",
+                conv_uuid,
+                "file",
+                effective_mime,
+                &resp.body,
+                Some(&url),
+            )
+            .await?;
+            Ok(true)
+        }
+        Ok(resp) => {
+            let msg = format!("HTTP {}", resp.status);
+            warn!(
+                event = "anthropic_media_failed",
+                file_uuid = file_uuid,
+                error = %msg,
+            );
+            let _ = db
+                .record_blob_error(file_uuid, conv_uuid, "file", &msg)
+                .await;
+            Ok(false)
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            warn!(
+                event = "anthropic_media_failed",
+                file_uuid = file_uuid,
+                error = %msg,
+            );
+            let _ = db
+                .record_blob_error(file_uuid, conv_uuid, "file", &msg)
+                .await;
+            Ok(false)
+        }
     }
-    let bytes = fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_uuid}"))?;
-    db.upsert_blob_bytes(
-        file_uuid,
-        "file",
-        conv_uuid,
-        "file",
-        mime,
-        &bytes,
-        Some(&url),
-    )
-    .await?;
-    Ok(true)
 }

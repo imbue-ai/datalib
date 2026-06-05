@@ -25,13 +25,16 @@
 #                                  re-downloading ~300 MB on every fresh
 #                                  `frankweiler-sync` run.
 #
-# NOTE on devcontainer overlap: the apt + NodeSource blocks here are
-# duplicated from `.devcontainer/Dockerfile` rather than inherited. Prod
-# wants a tight runtime image (no compiler toolchain); devcontainer wants
-# the full Bazel + clang + cmake build surface. The intersection is small
-# enough that a parent base image isn't worth the publish-and-pin
-# ceremony — keep the two NodeSource lines in sync by hand if the major
-# version moves.
+# Devcontainer: `.devcontainer/Dockerfile` inherits from a published
+# version of THIS image via `FROM ghcr.io/imbue-ai/mixed_up_files:<tag>`,
+# so everything below (apt + Node + latchkey + doltlite CLI + qmd
+# models + bind-mount dirs) is carried into the devcontainer for free
+# — no Dockerfile mirroring, no double download. The devcontainer
+# just adds the Bazel build toolchain (clang/cmake/llvm/lld/bun/
+# bazelisk + the `ubuntu` non-root user) on top. When this Dockerfile
+# changes in a way the devcontainer should pick up, bump the
+# `PROD_IMAGE_TAG` ARG in `.devcontainer/Dockerfile` to the next
+# published tag.
 
 FROM ubuntu:24.04
 
@@ -89,42 +92,84 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
 ARG LATCHKEY_VERSION=2.12.2
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
-# Pre-fetch qmd's three embedding/reranker/expansion models so a fresh
-# `frankweiler-sync` run doesn't pay a ~2.25 GB HuggingFace download on
-# first use. Layered *before* the release-binary copy so it's cached
-# across version bumps — model URIs only change when qmd's defaults
-# change (rare), but the binaries change every release.
+# Doltlite CLI — the SQLite-shell analogue for poking at the doltlite
+# DB by hand. Lets users run `docker exec -it … doltlite
+# /data/backend_index.doltlite_db` and execute `SELECT * FROM
+# dolt_log()` etc. against the live store. Doltlite isn't in Ubuntu's
+# package repos, but `dolthub/doltlite` publishes signed per-arch
+# `.deb` packages on every GitHub release.
 #
-# Model URIs and the `hf_<owner>_<basename>.gguf` cache-filename pattern
-# come from `@tobilu/qmd`'s `dist/llm.js` (the `DEFAULT_EMBED_MODEL` /
-# `DEFAULT_RERANK_MODEL` / `DEFAULT_GENERATE_MODEL` constants and
-# node-llama-cpp's `resolveModelFile` cache layout). If qmd flips a
-# default (or the user passes `QMD_EMBED_MODEL=...` to override), the
-# baked-in copy is simply ignored and qmd downloads the alternate model
-# on first use — no harm done, just no speed-up.
+# Pin to the same version we statically link into the binary
+# (//third-party/doltlite + MODULE.bazel's `doltlite_amalgamation`), so
+# the SQL surface a user sees in the shell matches what the running
+# binary observes — drift here would be confusing without buying
+# anything. The `libdoltlite-dev` headers we don't want (no compilation
+# happens in this image); the `doltlite` CLI package pulls in its
+# `libdoltlite0 (= 0.11.5)` runtime as a hard dep, which is unavoidable
+# even though our binary doesn't dynamic-link against it (the .so just
+# sits there serving the CLI). Adds ~31 MB to the image — small price
+# for a real debug shell against the prolly store.
 #
-# Total layer size: ~2.25 GB. Yes, the image is correspondingly chunky;
-# the alternative was every fresh `docker run frankweiler-sync` paying a
-# multi-minute, network-bound, easily-interrupted download, which is a
-# much worse first-run experience than a one-time `docker pull`.
-RUN mkdir -p /root/.cache/qmd/models && \
-    cd /root/.cache/qmd/models && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_ggml-org_embeddinggemma-300M-Q8_0.gguf \
-        "https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/main/embeddinggemma-300M-Q8_0.gguf" && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_ggml-org_qwen3-reranker-0.6b-q8_0.gguf \
-        "https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/resolve/main/qwen3-reranker-0.6b-q8_0.gguf" && \
-    curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
-        -o hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf \
-        "https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/main/qmd-query-expansion-1.7B-q4_k_m.gguf" && \
-    ls -lh /root/.cache/qmd/models
+# public-release assets are reachable anonymously, so curl is fine here
+# (no gh CLI dep just for this step).
+ARG DOLTLITE_CLI_VERSION=0.11.5
+RUN arch="$(dpkg --print-architecture)" \
+    && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
+        -o /tmp/libdoltlite0.deb "${base}/libdoltlite0_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \
+        -o /tmp/doltlite.deb "${base}/doltlite_${DOLTLITE_CLI_VERSION}_${arch}.deb" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        /tmp/libdoltlite0.deb \
+        /tmp/doltlite.deb \
+    && rm -rf /tmp/libdoltlite0.deb /tmp/doltlite.deb /var/lib/apt/lists/* \
+    && doltlite --version
+
+# Install qmd globally and pre-fetch its three default models
+# (embedding + query-expansion + reranker, ~2.25 GB total). `qmd pull`
+# is qmd's own model-prefetch command — it reads the canonical model
+# URIs out of qmd's source, downloads each one into qmd's default cache
+# (`~/.cache/qmd/models`), and writes the matching `.etag` sidecars
+# that `qmd doctor` later uses to detect cache corruption. Using `qmd
+# pull` rather than curl'ing HuggingFace URLs ourselves means we don't
+# have to track qmd's model-URI / cache-naming conventions — qmd bumps
+# a default model, we just rebuild and the right files land.
+#
+# Pinned to the qmd version that `frankweiler-sync` invokes via
+# `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
+# frankweiler/backend/qmd_indexer/src/lib.rs. The
+# //tools:qmd_version_pins_test asserts the values agree.
+#
+# qmd 2.5.3 transitively depends on `tree-sitter-javascript`, which
+# tries to fetch a prebuilt linux binary via `prebuild-install`. There
+# isn't one for our node 22 / glibc combo so npm falls back to
+# `node-gyp build`, which needs `make` + a C compiler + `python3` to
+# compile the `.node` addon from source. We install those build deps
+# here and leave them in the image — purging them after install is
+# fragile (NodeSource's nodejs deb has a hard `Depends: python3`, so
+# aggressive cleanup pulls node out from under us) and the marginal
+# disk-size savings don't matter against the model layer.
+#
+# Keep this block in sync with `.devcontainer/Dockerfile`.
+ARG QMD_VERSION=2.5.3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "@tobilu/qmd@${QMD_VERSION}" \
+    && qmd --version \
+    && qmd pull \
+    && ls -lh /root/.cache/qmd/models
 
 # Pre-create the bind-mount targets so empty-dir mounts behave predictably
 # and so an unmounted run still has somewhere to write.
 RUN mkdir -p /root/.latchkey /data
 
-# FIXME: Everything above here could be shared by a devcontainer, right?  And what's below is only prod-specific?  If so, document this.
+# === SHARED-WITH-DEVCONTAINER STATE ENDS HERE ===
+# Everything below is prod-only (the release binaries + entrypoint).
+# `.devcontainer/Dockerfile` inherits the image at this point and adds
+# the Bazel toolchain on top — see the top-of-file note.
 
 # Stage the matching per-arch tarball. `TARGETARCH` is supplied
 # automatically by `docker buildx` (amd64 | arm64). The build context must
@@ -173,10 +218,22 @@ WORKDIR /data
 
 EXPOSE 8731
 
-# FIXME: I don't think we need any entrypoint -- users will run short-lived commands like `frankweiler-sync` directly.
-# tini as PID 1 so signals reach the frankweiler binary and any qmd
-# subprocesses get reaped; frankweiler-entrypoint.sh under it bootstraps
-# LATCHKEY_ENCRYPTION_KEY. No default CMD: this image is multi-entrypoint
-# (`frankweiler-sync`, `frankweiler-http`, `latchkey`), and forcing one
-# would just make `docker run <img> latchkey ...` more awkward.
+# Even short-lived commands need `frankweiler-entrypoint.sh` because
+# every documented use case touches latchkey, and latchkey aborts with
+# "No encryption key available." if `LATCHKEY_ENCRYPTION_KEY` isn't
+# set. That includes:
+#   * `latchkey services register` / `auth set` / `auth list` directly;
+#   * `frankweiler-sync`, which shells out to `latchkey curl` per source;
+#   * `frankweiler-http`, ditto for any authenticated upstream fetch.
+# The entrypoint reads the per-bind-mount key file (or provisions one
+# on first run — see the script header) so users don't have to remember
+# `-e LATCHKEY_ENCRYPTION_KEY=...` on every `docker run`.
+#
+# tini in front of it reaps zombie subprocesses (qmd-indexer spawns
+# `npx`/`node`) and forwards SIGTERM cleanly to the long-lived
+# `frankweiler-http` case. Cheap enough to keep for short-lived runs too.
+#
+# No default CMD: this image is multi-entrypoint (`frankweiler-sync`,
+# `frankweiler-http`, `latchkey`), and forcing one would just make
+# `docker run <img> latchkey ...` more awkward.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/frankweiler-entrypoint.sh"]

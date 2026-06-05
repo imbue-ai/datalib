@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
-import { fetchChat, type ChatResponse } from "@/api";
+import { fetchChat, type ChatResponse, type EdgeOut } from "@/api";
 import ChatBody from "./ChatBody.vue";
 import FeedbackButton from "./FeedbackButton.vue";
 import FeedbackModal from "./FeedbackModal.vue";
@@ -25,22 +25,85 @@ const props = defineProps<{
   // matching `data-section-uuid` attribute, so the UI just needs to
   // forward this prop and ChatBody does an exact-string lookup.
   selectedSectionUuid: string | null;
+  /**
+   * When the user hovers an edge-source elsewhere whose destination
+   * is THIS doc as a whole (no anchor), the parent passes true so
+   * we can outline the whole column. Distinct from `hoverAnchor`,
+   * which lights up an inline span instead.
+   */
+  isHoverTarget?: boolean;
+  /**
+   * Anchor uuid inside this doc to highlight as the in-flight edge
+   * hover destination. Null when no hover is active or the hovered
+   * edge's destination is in a different column.
+   */
+  hoverAnchor?: string | null;
 }>();
 
 // Miller columns: when the body contains a markdown link to another
 // chat (`href="/chat/<uuid>"`), intercept the click and emit so the
 // parent MillerView can push a new column to the right instead of
-// performing a full-page navigation.
+// performing a full-page navigation. `open-chat` carries an optional
+// anchor so edge-driven navigation (with a known destination span)
+// scrolls + highlights on the other side; grid-driven navigation
+// passes anchor=null because the grid row's `uuid` already drives
+// selection.
 const emit = defineEmits<{
-  (e: "open-chat", markdownUuid: string): void;
+  (e: "open-chat", markdownUuid: string, anchor: string | null): void;
+  /**
+   * Forwarded from `ChatBody` (for inline span sources) and from the
+   * doc-level destinations list (for whole-doc sources). MillerView
+   * uses the payload to decide which sibling column to outline /
+   * span-highlight while the hover is active. Null on hover-out.
+   */
+  (
+    e: "hover-edge",
+    target: { md: string; anchor: string | null } | null,
+  ): void;
 }>();
 
 function onBodyClick(ev: MouseEvent) {
   const uuid = chatHrefFromClick(ev);
   if (!uuid) return;
   ev.preventDefault();
-  emit("open-chat", uuid);
+  emit("open-chat", uuid, null);
 }
+
+function onOpenEdge(edge: EdgeOut) {
+  // Falsy → "whole-doc destination", don't seed a highlight target.
+  // See the `docLevelOutgoing` comment for the null/"" tolerance
+  // rationale.
+  emit("open-chat", edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
+}
+
+function onHoverEdge(target: { md: string; anchor: string | null } | null) {
+  emit("hover-edge", target);
+}
+
+function onDocLevelHover(edge: EdgeOut) {
+  emit("hover-edge", {
+    md: edge.dst_markdown_uuid,
+    anchor: edge.dst_anchor_uuid || null,
+  });
+}
+
+function onDocLevelLeave() {
+  emit("hover-edge", null);
+}
+
+// Doc-level outgoing edges (whole-doc source) drive the
+// "destinations" list at the top of the preview. Span-level edges
+// (truthy `src_anchor_uuid`) drive inline clickable highlights
+// inside the body and are NOT listed here — they appear in context
+// where the user can read what they're navigating from.
+//
+// We treat both `null` and `""` as "whole doc": the backend's SQL
+// representation of a missing anchor can land as either depending
+// on the SQLite driver path, and the UI doesn't care which.
+const docLevelOutgoing = computed<EdgeOut[]>(() => {
+  if (!chat.value) return [];
+  return (chat.value.outgoing_edges ?? []).filter((e) => !e.src_anchor_uuid);
+});
 
 const chat = ref<ChatResponse | null>(null);
 const loading = ref(false);
@@ -236,6 +299,7 @@ watch(
 <template>
   <section
     class="chat-preview"
+    :class="{ 'is-hover-target': isHoverTarget }"
     :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
   >
@@ -272,8 +336,47 @@ watch(
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
+      <ul v-if="docLevelOutgoing.length" class="outgoing-edges">
+        <li v-for="e in docLevelOutgoing" :key="e.edge_uuid">
+          <span class="edge-arrow" aria-hidden="true">→</span>
+          <!-- Producers should set `label` to the human-readable
+               handle they want shown in the list (e.g. "Greek" /
+               "English" for perseus' cross-language edges). When
+               absent, we fall back to the destination doc's title
+               and finally the bare uuid. When BOTH label and title
+               are set we show "label (title)" — label first, since
+               that's what the producer chose to lead with, with the
+               title in parens as supplementary context.
+
+               Hover handlers mirror ChatBody's inline-span behavior:
+               while the cursor sits on the link, MillerView gets a
+               `hover-edge` so it can outline / span-highlight the
+               destination column. -->
+          <a
+            class="edge-source-link"
+            :href="`/#/chat/${e.dst_markdown_uuid}`"
+            @click.prevent="onOpenEdge(e)"
+            @mouseenter="onDocLevelHover(e)"
+            @mouseleave="onDocLevelLeave"
+            :title="e.dst_title ?? e.dst_markdown_uuid"
+            >{{ e.label || e.dst_title || e.dst_markdown_uuid }}</a
+          >
+          <span
+            v-if="e.label && e.dst_title && e.label !== e.dst_title"
+            class="edge-dst-title"
+            >({{ e.dst_title }})</span
+          >
+        </li>
+      </ul>
       <div @click="onBodyClick">
-        <ChatBody :body="chat.body" :selected-section-uuid="selectedSectionUuid" />
+        <ChatBody
+          :body="chat.body"
+          :selected-section-uuid="selectedSectionUuid"
+          :outgoing-edges="chat.outgoing_edges"
+          :hover-anchor-uuid="hoverAnchor ?? null"
+          @open-edge="onOpenEdge"
+          @hover-edge="onHoverEdge"
+        />
       </div>
     </template>
     <FeedbackModal
@@ -307,6 +410,16 @@ watch(
   overflow-y: auto;
   padding: 0.75rem 1rem;
   box-sizing: border-box;
+  /* Reserve the border width so the hover state doesn't reflow the
+     column when it gets outlined. `outline` would skip layout but
+     also fail to track the rounded scroll container's edges; a
+     transparent border that swaps color on `.is-hover-target` is
+     visually cleaner. */
+  border: 2px solid transparent;
+}
+.chat-preview.is-hover-target {
+  border-color: rgba(99, 102, 241, 0.6);
+  border-radius: 4px;
 }
 .chat-header h2 {
   margin: 0 0 0.25rem;
@@ -324,6 +437,46 @@ watch(
 }
 .error {
   color: #e35d6a;
+}
+.outgoing-edges {
+  /* The doc-level outgoing edges list sits above the rendered body
+     and below the meta line. List markers off so the leading arrow
+     glyph stands in. */
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--fw-border);
+  border-bottom: 1px solid var(--fw-border);
+  padding: 0.4rem 0;
+}
+.outgoing-edges li {
+  margin: 0.15rem 0;
+}
+.edge-arrow {
+  color: var(--fw-muted, #94a3b8);
+  margin-right: 0.4rem;
+}
+.edge-source-link {
+  /* Match the inline span styling in `ChatBody.vue`: dotted muted
+     underline so it reads as a link without the "external blue"
+     baggage, and the same hover fill so source and destination
+     (lit up via `.is-hover-target` / `.hover-dst`) share a color. */
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--fw-muted, #94a3b8);
+  text-underline-offset: 2px;
+  border-radius: 3px;
+  transition: background-color 100ms ease-in-out;
+}
+.edge-source-link:hover {
+  background: rgba(99, 102, 241, 0.28);
+}
+.edge-dst-title {
+  color: var(--fw-muted, #94a3b8);
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
 }
 .ctx-overlay {
   position: fixed;

@@ -447,6 +447,7 @@ pub fn render_all(
                 render_version: RENDER_VERSION,
             },
             rows: rows.clone(),
+            edges: Vec::new(),
         };
         let sidecar_abs = abs.with_extension("grid_rows.json");
         let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
@@ -460,6 +461,7 @@ pub fn render_all(
             md_path: abs.clone(),
             render_version: RENDER_VERSION,
             rows,
+            edges: Vec::new(),
         })?;
 
         written.push(rel);

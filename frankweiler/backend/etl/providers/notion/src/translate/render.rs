@@ -1248,6 +1248,7 @@ pub fn render_notion_official(
                     render_version: RENDER_VERSION,
                 },
                 rows: pd.rows.clone(),
+                edges: Vec::new(),
             };
             let sidecar_path = target.with_extension("grid_rows.json");
             let json = serde_json::to_string_pretty(&sidecar)?;
@@ -1261,6 +1262,7 @@ pub fn render_notion_official(
                 md_path: target.clone(),
                 render_version: RENDER_VERSION,
                 rows: pd.rows.clone(),
+                edges: Vec::new(),
             })?;
         }
 
@@ -1353,6 +1355,7 @@ pub fn render_notion_official(
                     render_version: RENDER_VERSION,
                 },
                 rows: td.rows.clone(),
+                edges: Vec::new(),
             };
             let sidecar_path = p.with_extension("grid_rows.json");
             let json = serde_json::to_string_pretty(&sidecar)?;
@@ -1366,6 +1369,7 @@ pub fn render_notion_official(
                 md_path: p.clone(),
                 render_version: RENDER_VERSION,
                 rows: td.rows.clone(),
+                edges: Vec::new(),
             })?;
         }
 

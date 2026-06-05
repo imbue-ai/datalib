@@ -8,8 +8,11 @@ sh_binary(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Full dev: backend + Vite UI, browser opens at the Vite URL. Vite proxies
-# /api → 127.0.0.1:8731. Requires pnpm on PATH.
+# Full dev: backend + Vite UI, browser opens at the Vite URL. Both Vite
+# and the backend default to ephemeral ports (printed at startup); Vite's
+# /api proxy is wired to the chosen backend port via FRANKWEILER_BACKEND.
+# Pin specific ports with FRANKWEILER_PORT / FRANKWEILER_BIND. Requires
+# pnpm on PATH.
 sh_binary(
     name = "dev",
     srcs = ["dev.sh"],
@@ -31,6 +34,24 @@ sh_binary(
     data = [
         ":serve",
         "//tests/fixtures:materialize_tng_root",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+# Same shape as :dev_tng, but bootstraps a one-shot data root from the
+# in-crate Perseus tiny fixture (Thucydides 1.1, two sections, both
+# languages). Translate-only — no GitHub fetch needed — so the
+# pipeline runs entirely off the checked-in TEI XMLs and produces a
+# data root the bilingual `edges` UI lights up against. Useful for
+# eyeballing cross-language doc links + first-word span anchors
+# without populating a real on-disk root.
+sh_binary(
+    name = "dev_perseus",
+    srcs = ["dev_perseus.sh"],
+    data = [
+        ":serve",
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "//frankweiler/backend/etl/providers/perseus:tiny_fixture",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

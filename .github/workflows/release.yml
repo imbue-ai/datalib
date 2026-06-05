@@ -138,6 +138,40 @@ jobs:
           bazel version
           rustc --version || true
 
+      # Wire BuildBuddy remote cache for this build. `.bazelrc.user` is
+      # gitignored so we can drop the API key into it from a repo
+      # secret without polluting the source tree; the `try-import` at
+      # the bottom of `.bazelrc` picks it up automatically, and the
+      # `build:buildbuddy` config block does the rest.
+      #
+      # If the secret isn't set (e.g. a PR from a fork; manual local
+      # `act` runs without secrets configured) the step writes nothing
+      # and bazel runs without remote caching — actions still execute
+      # locally, just without the cross-machine cache hits.
+      #
+      # `--remote_upload_local_results=true` is the BuildBuddy default
+      # but we name it explicitly in `.bazelrc` so a future reader
+      # doesn't wonder why CI's outputs land in the shared cache. For
+      # CI specifically the read+write semantics are exactly what we
+      # want: matrix builds populate linux-amd64 + linux-arm64 (and
+      # darwin-arm64) action results that subsequent devcontainer
+      # warmups + contributor builds cache-hit.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy
+          test  --config=buildbuddy
+          EOF
+              echo "BuildBuddy remote cache enabled for this job."
+          else
+              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+          fi
+
       # Pre-create the host-side qmd model cache. .bazelrc has
       # `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the
       # ingested_tng_qmd genrule can read its ~2GB GGUF cache without
@@ -195,10 +229,10 @@ jobs:
           fi
 
       - name: Run version-consistency test
-        run: bazel test //frankweiler/backend:version_consistency_test -c opt ${{ steps.bazelargs.outputs.extra }}
+        run: bazel test //frankweiler/backend:version_consistency_test -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt ${{ steps.bazelargs.outputs.extra }}
+        run: bazel build //frankweiler/backend:dist -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       # NOTE: the full `bazel test //...` step previously lived here
       # but was removed because rules_rust's ExtractCargoTomlEnvVars
@@ -273,6 +307,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
+      # fit a buildx run of our ~2.7 GB image × two architectures plus
+      # the `type=gha,mode=max` cache export. v0.5.0 / v0.5.1 both
+      # filled the runner's disk before docker-publish could finish.
+      # `jlumbroso/free-disk-space@main` reclaims ~30 GB by deleting
+      # preinstalled Android SDK, .NET runtimes, Haskell GHC, large
+      # apt packages we don't use, and swap. Brings the runner from
+      # ~14 GB to ~44 GB free — comfortable headroom for the build.
+      #
+      # `tool-cache: false` keeps the PATH-installed tools (gh, docker,
+      # node, etc.) that the rest of this job uses. Everything else is
+      # opt-in junk we'll never miss.
+      - name: Free up runner disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout frankweiler/docker/Dockerfile
       # expects (`dist/<arch>/<tarball>`). The repo is private, so the
@@ -311,44 +367,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Smoke test BEFORE pushing: build the amd64 image locally
-      # (`--load`), then run the `latchkey services register` + `auth
-      # set` + `auth list` roundtrip against a tmp `.latchkey` dir.
-      # This validates the assumption that latchkey's encryption falls
-      # back to a file-keyed scheme on a keyring-less Linux container
-      # (no Secret Service running), so credentials written inside the
-      # container can be read back by the same container. If this
-      # assumption ever breaks, we want to fail BEFORE pushing :latest.
-      - name: Smoke test (latchkey roundtrip inside the image)
-        env:
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          version="${REF_NAME#v}"
-          tag="ghcr.io/${GITHUB_REPOSITORY,,}:smoke-${version}"
-          docker buildx build \
-              --platform linux/amd64 \
-              --tag "${tag}" \
-              --load \
-              ctx
-          tmp_latchkey="$(mktemp -d)"
-          trap 'rm -rf "${tmp_latchkey}"' EXIT
-          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
-              latchkey services register claude-ai --base-api-url=https://claude.ai/
-          docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" \
-              latchkey auth set claude-ai -H "Cookie: sessionKey=smoke-test-not-real"
-          # The roundtrip assertion: a fresh container reading the same
-          # bind-mounted dir must see the credential we just stored.
-          out="$(docker run --rm -v "${tmp_latchkey}:/root/.latchkey" "${tag}" latchkey auth list)"
-          echo "${out}"
-          echo "${out}" | grep -q claude-ai
-          # Verify binaries respond to --version (cheap sanity check).
-          docker run --rm "${tag}" frankweiler-sync --version
-          # frankweiler-http requires a positional DATA_ROOT, so we can't
-          # --version it; just verify it loads its dynamic libs by asking
-          # for help (which exits 0 after clap renders usage).
-          docker run --rm --entrypoint /usr/local/bin/frankweiler-http "${tag}" --help
-
+      # Build and push the multi-arch image in one go. We previously had
+      # a separate `--load` amd64 build that ran a latchkey
+      # services-register / auth-set / auth-list roundtrip against the
+      # loaded image before this step pushed; that doubled cold-cache
+      # wall time (the amd64 build was effectively done twice — once
+      # for smoke, once for publish, with the latter cache-hitting via
+      # GHA but still re-exporting layers) and the only thing it
+      # uniquely caught was a regression in the entrypoint's
+      # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
+      # (`frankweiler-sync --version`, `frankweiler-http --help`)
+      # duplicate `qmd --version` + binary-presence checks the
+      # Dockerfile already runs inline. If the latchkey bootstrap ever
+      # regresses, ghcr.io will briefly have a broken `:latest` until
+      # someone notices — acceptable while the user base is small;
+      # revisit if we ever get pulls from real users.
+      #
+      # `type=gha` cache means consecutive tag pushes within ~7 days
+      # cache-hit both arches (the eviction window) — only the first
+      # tag in a long while pays a full cold build. `mode=max` writes
+      # ALL intermediate layers (not just the final image) so the
+      # 2.25 GB qmd model layer is the dominant cache hit.
       - name: Build and push multi-arch image
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -362,5 +401,97 @@ jobs:
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
+              --cache-from type=gha \
+              --cache-to type=gha,mode=max \
               --push \
               ctx
+
+  # Build and push the devcontainer image to ghcr.io. The devcontainer
+  # image inherits from the prod image (`FROM
+  # ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}`), so this MUST
+  # run after `docker-publish` has uploaded prod:${version}. We pass
+  # `--build-arg PROD_IMAGE_TAG=${version}` so the published
+  # devcontainer:${version} inherits from the prod image at the same
+  # tag — not whatever default is baked into `.devcontainer/Dockerfile`.
+  #
+  # Consumer: `.github/workflows/test.yml` runs `bazel test //...`
+  # inside this image. The image carries the full Bazel/clang/cmake
+  # toolchain that the prod image deliberately omits — see the
+  # top-of-file comment in `.devcontainer/Dockerfile`.
+  #
+  # `WARM_BAZEL_CACHE=false` skips the in-image `bazelisk fetch` +
+  # `bazelisk build` warmup. Two reasons:
+  #   * The warmup compiles boring-sys2 / tokio / sqlx etc. under
+  #     QEMU emulation on the arm64 leg, which would push tag-time
+  #     publish wall-clock from ~10 min to ~1 hour.
+  #   * BuildBuddy is the cross-run action cache for the test
+  #     workflow — disk-baked outputs in the image would just
+  #     duplicate what BuildBuddy already serves. Repository-cache
+  #     fetches still happen at test time, but those are network-
+  #     bound (cheap) rather than compile-bound.
+  # Local devcontainer users still get warmup because they build
+  # `.devcontainer/Dockerfile` themselves with the default
+  # `WARM_BAZEL_CACHE=true`.
+  devcontainer-publish:
+    name: devcontainer-publish (ghcr.io)
+    if: github.ref_type == 'tag'
+    needs: docker-publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # `.devcontainer/Dockerfile`'s bazelisk warmup is gated off
+          # (WARM_BAZEL_CACHE=false) so we don't actually need full
+          # history here, but the bind-mounted workspace is the build
+          # context regardless. Cheap to fetch deep; keep parity with
+          # the build job above.
+          fetch-depth: 0
+
+      # Same disk-pressure reasoning as docker-publish: multi-arch
+      # buildx + `type=gha,mode=max` cache export needs more than the
+      # ~14 GB free that ubuntu-latest ships with.
+      - name: Free up runner disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Image is published under `<repo>-devcontainer` rather than a
+      # `devcontainer-` tag prefix on the prod image so the two are
+      # cleanly separable in the GHCR UI and ghcr retention policies
+      # can be set independently.
+      - name: Build and push multi-arch devcontainer image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}-devcontainer"
+          docker buildx build \
+              --file .devcontainer/Dockerfile \
+              --platform linux/amd64,linux/arm64 \
+              --build-arg PROD_IMAGE_TAG=${version} \
+              --build-arg WARM_BAZEL_CACHE=false \
+              --tag "${image}:${version}" \
+              --tag "${image}:latest" \
+              --cache-from type=gha,scope=devcontainer \
+              --cache-to type=gha,mode=max,scope=devcontainer \
+              --push \
+              .

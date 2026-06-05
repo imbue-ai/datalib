@@ -26,8 +26,9 @@ use sqlx::Row;
 use crate::db::{build_where, snippet, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{MirrorRepo, RepoError};
+use crate::repo::{EdgeRowOut, MirrorRepo, RepoError};
 use crate::search::SearchRow;
+use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use frankweiler_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 
@@ -505,6 +506,58 @@ impl MirrorRepo for DoltRepo {
         let msg = format!("sync_job: {job_id} cancel-requested");
         self.commit_version(&mut conn, &msg).await?;
         Ok(())
+    }
+
+    async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
+        // LEFT JOIN so that an edge with a dangling FK (destination no
+        // longer in `markdowns`) still surfaces — the UI can show the
+        // raw uuid and the user at least learns the link exists.
+        // The edges table may not exist on older data roots; treat any
+        // SQL error as "no edges" so the chat endpoint doesn't blow up
+        // mid-render.
+        let sql = "SELECT e.edge_uuid, e.src_markdown_uuid, e.src_anchor_uuid, \
+                          e.dst_markdown_uuid, e.dst_anchor_uuid, e.label, \
+                          m.title AS dst_title \
+                   FROM edges e \
+                   LEFT JOIN markdowns m ON m.markdown_uuid = e.dst_markdown_uuid \
+                   WHERE e.src_markdown_uuid = ?";
+        let rows = match sqlx::query(sql)
+            .bind(markdown_uuid)
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(rs) => rs,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
+        for r in rows {
+            // Annotate the nullable columns with explicit `Option<String>`
+            // so a SQL NULL maps to `None`. `try_get(...).ok()` against a
+            // bare `String` collapses both NULL and lookup errors into
+            // `None`; but it also turns a literal empty-string value into
+            // `Some("")`, which the UI's `src_anchor_uuid === null`
+            // filter then fails to match. Pinning the inferred type lifts
+            // that ambiguity.
+            let edge = EdgeRow {
+                edge_uuid: r.try_get("edge_uuid").unwrap_or_default(),
+                src_markdown_uuid: r.try_get("src_markdown_uuid").unwrap_or_default(),
+                src_anchor_uuid: r
+                    .try_get::<Option<String>, _>("src_anchor_uuid")
+                    .unwrap_or_default(),
+                dst_markdown_uuid: r.try_get("dst_markdown_uuid").unwrap_or_default(),
+                dst_anchor_uuid: r
+                    .try_get::<Option<String>, _>("dst_anchor_uuid")
+                    .unwrap_or_default(),
+                label: r.try_get::<Option<String>, _>("label").unwrap_or_default(),
+            };
+            out.push(EdgeRowOut {
+                edge,
+                dst_title: r
+                    .try_get::<Option<String>, _>("dst_title")
+                    .unwrap_or_default(),
+            });
+        }
+        Ok(out)
     }
 
     async fn qmd_path_for_markdown(

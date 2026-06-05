@@ -97,10 +97,15 @@ fn parse(argv: Vec<String>) -> Args {
     // a URL. Matches `frankweiler-sync --version` (clap-rendered) by
     // printing `<bin-name> <FRANKWEILER_VERSION>` where the version is
     // the `git describe --tags --always --dirty` slug stamped at build
-    // time (cargo: build.rs; bazel: rustc_env.txt + stamp).
+    // time by cargo's build.rs. Bazel intentionally does NOT stamp this
+    // binary (see //frankweiler/backend/etl:latchkey_curl_shim in
+    // BUILD.bazel for why) so under bazel we fall back to "unknown".
     for tok in &argv {
         if tok == "--version" || tok == "-V" {
-            println!("latchkey-curl-shim {}", env!("FRANKWEILER_VERSION"));
+            println!(
+                "latchkey-curl-shim {}",
+                option_env!("FRANKWEILER_VERSION").unwrap_or("unknown")
+            );
             std::process::exit(0);
         }
     }

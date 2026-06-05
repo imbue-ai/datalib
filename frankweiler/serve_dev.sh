@@ -17,7 +17,24 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-BASE_URL="${FRANKWEILER_URL:-http://127.0.0.1:8731}"
+# Default to an ephemeral port so concurrent `serve_dev.sh` runs (e.g. one
+# agent per checkout) don't fight over a hardcoded 8731. Honor a caller-
+# supplied FRANKWEILER_BIND verbatim. Same ephemeral-port trick as
+# frankweiler/ui/playwright.config.ts — small race between close() and the
+# binary's listen() but good enough for parallel local runs.
+free_port() {
+  python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'
+}
+if [[ -z "${FRANKWEILER_BIND:-}" ]]; then
+  FRANKWEILER_BIND="127.0.0.1:$(free_port)"
+fi
+export FRANKWEILER_BIND
+echo "backend bind: $FRANKWEILER_BIND"
+
+# FRANKWEILER_URL still wins if the caller set it explicitly (legacy
+# override for "where should I open the browser / probe health?"). Otherwise
+# derive from FRANKWEILER_BIND so the random port flows through.
+BASE_URL="${FRANKWEILER_URL:-http://$FRANKWEILER_BIND}"
 HEALTH_URL="$BASE_URL/api/health"
 
 # Positional data-root arg required by the binary; default to

@@ -12,6 +12,7 @@ rust_library(
         "src/generated/markdowns.rs",
         "src/generated/sync_jobs.rs",
         "src/generated/download_runs.rs",
+        "src/generated/edges.rs",
     ],
     crate_name = "frankweiler_schema",
     edition = "2021",

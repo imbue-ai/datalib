@@ -1,7 +1,19 @@
-// Devcontainer that reproduces the linux-amd64 release runner locally.
-// Spin up via VS Code's "Reopen in Container" or `devcontainer up
-// --workspace-folder .`. Caches are persisted in named volumes so
-// the second `bazel build` doesn't pay the cold-cache cost.
+// Devcontainer that inherits from the prod runtime image
+// (`ghcr.io/imbue-ai/mixed_up_files:<tag>`, see `PROD_IMAGE_TAG` ARG
+// in `.devcontainer/Dockerfile`) and layers the Bazel build toolchain
+// on top, so contributors can repro Linux-only build issues locally
+// without re-downloading the ~2.25 GB qmd model layer that the prod
+// image already ships. Spin up via VS Code's "Reopen in Container"
+// or `devcontainer up --workspace-folder .`. Bazel + npm caches are
+// persisted in named volumes so the second `bazel build` doesn't
+// pay the cold-cache cost.
+//
+// We run as `root` to match the prod image's user — that lets bazel
+// pick up the qmd model cache at /root/.cache/qmd/models without any
+// symlink-shenanigans. The tradeoff is that files the contributor
+// creates via the workspace bind mount end up owned by uid 0; that's
+// fine on Docker-Desktop-on-macOS (VirtioFS remaps to the host user),
+// awkward on native Linux.
 //
 // JSON5-style trailing commas + comments are accepted by the
 // devcontainer CLI / VS Code; do not switch to strict JSON.
@@ -9,6 +21,12 @@
     "name": "mixed_up_files (linux)",
     "build": {
         "dockerfile": "Dockerfile",
+        // Build context is the workspace root (not `.devcontainer/`)
+        // so the Dockerfile's `--mount=type=bind,source=.,...` warmup
+        // step sees the whole repo. Without `context: ".."` the bind
+        // would point at `.devcontainer/` and bazel would find no
+        // workspace to build.
+        "context": "..",
         // The Dockerfile auto-detects amd64 vs arm64 via $TARGETARCH;
         // override --platform here if you want to force x86_64 on an
         // Apple Silicon host (under Rosetta / qemu) to mirror the
@@ -17,37 +35,38 @@
     },
     "workspaceFolder": "/workspaces/mixed_up_files",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/mixed_up_files,type=bind,consistency=cached",
-    "remoteUser": "ubuntu",
 
     // Persist the expensive caches across container rebuilds. Without
     // this, every `Rebuild Container` repeats the ~10-minute cold
-    // boring-sys2 / tokio build and re-downloads ~2 GB of GGUF
-    // models. Each named volume is scoped by the container name so
-    // multiple checkouts don't collide.
+    // boring-sys2 / tokio build (or wipes whatever the cache-warmup
+    // step in the Dockerfile pre-populated). Each named volume is
+    // scoped by the container name so multiple checkouts don't
+    // collide.
     //
-    // Paths to know:
-    //   ~/.cache/bazel        — bazel's output base (action cache)
-    //   ~/Library/Caches/...  — disk_cache from .bazelrc (yes, the
-    //                           macOS-style path; .bazelrc was written
-    //                           macOS-first, and Linux happily creates
-    //                           the dir wherever ~ resolves to)
-    //   ~/.cache/qmd/models   — qmd's shared GGUF model cache
-    //   ~/.npm                — npx download cache for the qmd npm pkg
+    // Paths to know (we're root, so ~ = /root):
+    //   /root/.cache/bazel        — bazel's output base (action cache)
+    //   /root/Library/Caches/...  — disk_cache from .bazelrc (yes, the
+    //                               macOS-style path; .bazelrc was
+    //                               written macOS-first, and Linux
+    //                               happily creates the dir wherever
+    //                               ~ resolves to)
+    //   /root/.npm                — npx download cache for the qmd
+    //                               npm pkg
+    //
+    // NOT mounted: /root/.cache/qmd/models. The prod image bakes the
+    // three GGUFs there and the devcontainer inherits them; mounting
+    // a named volume here would overlay (and hide) the baked models
+    // with an empty volume on first launch.
+    //
+    // Docker named volumes inherit the image's content at the mount
+    // point on FIRST creation (the Dockerfile's cache-warmup step
+    // seeds the bazel volumes this way), then persist across rebuilds.
     "mounts": [
-        "source=mixed-up-files-bazel-output,target=/home/ubuntu/.cache/bazel,type=volume",
-        "source=mixed-up-files-bazel-disk,target=/home/ubuntu/Library/Caches/bazel-disk-cache,type=volume",
-        "source=mixed-up-files-qmd-models,target=/home/ubuntu/.cache/qmd/models,type=volume",
-        "source=mixed-up-files-npm,target=/home/ubuntu/.npm,type=volume"
+        "source=mixed-up-files-bazel-output,target=/root/.cache/bazel,type=volume",
+        "source=mixed-up-files-bazel-disk,target=/root/Library/Caches/bazel-disk-cache,type=volume",
+        "source=mixed-up-files-npm,target=/root/.npm,type=volume"
     ],
 
-    // Fix ownership on the named volumes the first time they're
-    // mounted (Docker creates them owned by root). Idempotent —
-    // subsequent starts are no-ops because chown on an already-owned
-    // tree is cheap.
-    "postCreateCommand": "sudo chown -R ubuntu:ubuntu /home/ubuntu/.cache /home/ubuntu/Library /home/ubuntu/.npm",
-
-    // Mild quality-of-life: bash history + git config are usually
-    // bind-mounted by VS Code already, so we don't list them here.
     "customizations": {
         "vscode": {
             "extensions": [

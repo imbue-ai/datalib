@@ -159,9 +159,12 @@ be omitted if `$FRANKWEILER_ROOT` or `~/.config/frankweiler/config.yaml`
 already points where you want.
 
 Builds and runs `frankweiler_http_bin` (Rust) **and** Vite (`pnpm dev`) at
-the same time, and opens your browser at the Vite URL
-(`http://127.0.0.1:5173/`). Vite proxies `/api/*` to the backend on
-`127.0.0.1:8731`. Ctrl-C tears both down.
+the same time, and opens your browser at the Vite URL. Both Vite and the
+backend default to ephemeral ports — the script prints both at startup and
+wires Vite's `/api/*` proxy at the chosen backend port — so multiple
+concurrent runs (different agents, different worktrees) don't collide. Pin
+specific ports with `FRANKWEILER_PORT` (Vite) and `FRANKWEILER_BIND`
+(backend). Ctrl-C tears both down.
 
 Data root resolution (the QMDs feed the search index —
 `backend_index.doltlite_db` remains the source of truth):
@@ -175,8 +178,10 @@ The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.
 
 For a backend-only launch (no Vite), use `bazelisk run //frankweiler:serve`,
-which opens the browser at `/api/health`. Override the URL with
-`FRANKWEILER_URL=...`.
+which also defaults to an ephemeral backend port (printed at startup) and
+opens the browser at it. Override with `FRANKWEILER_BIND=127.0.0.1:<port>`
+(or set `FRANKWEILER_URL=...` to point the browser at a different URL than
+the one being bound — useful behind a reverse proxy).
 
 ### Re-run ingestion
 

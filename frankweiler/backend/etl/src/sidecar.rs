@@ -14,10 +14,14 @@
 //!     "source_fingerprint": "…",       // hash of upstream payload
 //!     "render_version": 1              // renderer-side schema stamp
 //!   },
-//!   "rows": [GridRow, …]
+//!   "rows": [GridRow, …],
+//!   "edges": [EdgeRow, …]              // optional; outgoing edges originating
+//!                                      // from this markdown. Older sidecars
+//!                                      // omit the field entirely.
 //! }
 //! ```
 
+use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::grid_rows::GridRow;
 use serde::{Deserialize, Serialize};
 
@@ -36,4 +40,13 @@ pub struct SidecarHeader {
 pub struct Sidecar {
     pub header: SidecarHeader,
     pub rows: Vec<GridRow>,
+    /// Outgoing edges originating from this markdown
+    /// (`src_markdown_uuid == header.markdown_uuid`). Older sidecars
+    /// pre-dating the edges table omit the field; serde default yields
+    /// an empty Vec so the Load step skips edge writes. We also skip
+    /// serializing when empty so renderers that don't emit edges
+    /// produce byte-identical sidecars to the pre-edges era — important
+    /// for golden tests and for incremental cache stability.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edges: Vec<EdgeRow>,
 }
