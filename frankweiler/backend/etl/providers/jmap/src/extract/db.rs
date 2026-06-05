@@ -385,7 +385,11 @@ impl RawDb {
         if payloads.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin mailboxes batch tx")?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin mailboxes batch tx")?;
         for p in payloads {
             upsert_mailbox_in(&mut tx, account_id, p).await?;
         }
@@ -397,7 +401,11 @@ impl RawDb {
         if ids.is_empty() {
             return Ok(());
         }
-        let mut tx = self.pool.begin().await.context("begin delete mailboxes tx")?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete mailboxes tx")?;
         for id in ids {
             for sql in [
                 "DELETE FROM mailboxes WHERE id = ?",
@@ -420,12 +428,7 @@ impl RawDb {
 
     // ── threads ────────────────────────────────────────────────────
 
-    pub async fn upsert_thread(
-        &self,
-        id: &str,
-        account_id: &str,
-        payload: &Value,
-    ) -> Result<()> {
+    pub async fn upsert_thread(&self, id: &str, account_id: &str, payload: &Value) -> Result<()> {
         let email_count = payload
             .get("emailIds")
             .and_then(|v| v.as_array())
@@ -570,7 +573,9 @@ impl RawDb {
                 thread_id: r.try_get("thread_id").unwrap_or_default(),
                 blob_id: r.try_get("blob_id").unwrap_or_default(),
                 message_id: r.try_get::<Option<String>, _>("message_id").unwrap_or(None),
-                received_at: r.try_get::<Option<String>, _>("received_at").unwrap_or(None),
+                received_at: r
+                    .try_get::<Option<String>, _>("received_at")
+                    .unwrap_or(None),
                 sent_at: r.try_get::<Option<String>, _>("sent_at").unwrap_or(None),
                 size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
                 subject: r.try_get::<Option<String>, _>("subject").unwrap_or(None),
@@ -632,7 +637,9 @@ impl RawDb {
                 name: r.try_get::<Option<String>, _>("name").unwrap_or(None),
                 content_type: r.try_get::<Option<String>, _>("type").unwrap_or(None),
                 size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
-                disposition: r.try_get::<Option<String>, _>("disposition").unwrap_or(None),
+                disposition: r
+                    .try_get::<Option<String>, _>("disposition")
+                    .unwrap_or(None),
                 cid: r.try_get::<Option<String>, _>("cid").unwrap_or(None),
             });
         }
@@ -1003,9 +1010,12 @@ mod tests {
     #[tokio::test]
     async fn account_round_trips() {
         let (_d, db) = tmp_db().await;
-        db.upsert_account("A1", &json!({"name": "thad@fastmail.com", "isPersonal": true}))
-            .await
-            .unwrap();
+        db.upsert_account(
+            "A1",
+            &json!({"name": "thad@fastmail.com", "isPersonal": true}),
+        )
+        .await
+        .unwrap();
         let accts = db.load_accounts().await.unwrap();
         assert_eq!(accts.len(), 1);
         assert_eq!(accts[0]["name"], "thad@fastmail.com");
@@ -1026,12 +1036,11 @@ mod tests {
         let mboxes = db.load_mailboxes().await.unwrap();
         assert_eq!(mboxes.len(), 2);
         // promoted columns
-        let row: (String, i64) = sqlx::query_as(
-            "SELECT name, total_emails FROM mailboxes WHERE id = 'M1'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row: (String, i64) =
+            sqlx::query_as("SELECT name, total_emails FROM mailboxes WHERE id = 'M1'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(row.0, "Inbox");
         assert_eq!(row.1, 42);
     }
@@ -1127,9 +1136,9 @@ mod tests {
 
         assert!(db.load_emails().await.unwrap().is_empty());
         let joins = db.load_email_joins().await.unwrap();
-        assert!(joins.mailboxes.get("E1").is_none());
-        assert!(joins.keywords.get("E1").is_none());
-        assert!(joins.attachments.get("E1").is_none());
+        assert!(!joins.mailboxes.contains_key("E1"));
+        assert!(!joins.keywords.contains_key("E1"));
+        assert!(!joins.attachments.contains_key("E1"));
         let bk_count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM emails_bookkeeping WHERE id = 'E1'")
                 .fetch_one(db.pool())
@@ -1172,7 +1181,9 @@ mod tests {
     #[tokio::test]
     async fn reset_clears_data_joins_and_state_but_not_runs() {
         let (_d, db) = tmp_db().await;
-        db.upsert_account("A1", &json!({"name": "x"})).await.unwrap();
+        db.upsert_account("A1", &json!({"name": "x"}))
+            .await
+            .unwrap();
         db.upsert_mailbox("A1", &json!({"id": "M1", "name": "Inbox"}))
             .await
             .unwrap();
@@ -1199,12 +1210,11 @@ mod tests {
         assert!(db.load_email_joins().await.unwrap().mailboxes.is_empty());
         assert!(db.load_state("A1", "Email").await.unwrap().is_none());
         // sync_runs untouched.
-        let run_count: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM sync_runs WHERE run_id = ?")
-                .bind(run)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let run_count: i64 = sqlx::query_scalar("SELECT count(*) FROM sync_runs WHERE run_id = ?")
+            .bind(run)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(run_count, 1);
     }
 }

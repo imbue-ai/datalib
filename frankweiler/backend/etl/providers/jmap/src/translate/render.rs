@@ -47,11 +47,19 @@ pub const JMAP_NS: Uuid = Uuid::from_bytes([
 ]);
 
 pub fn thread_uuid(account_id: &str, thread_id: &str) -> String {
-    Uuid::new_v5(&JMAP_NS, format!("jmap:{account_id}:thread:{thread_id}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &JMAP_NS,
+        format!("jmap:{account_id}:thread:{thread_id}").as_bytes(),
+    )
+    .to_string()
 }
 
 pub fn email_uuid(account_id: &str, email_id: &str) -> String {
-    Uuid::new_v5(&JMAP_NS, format!("jmap:{account_id}:email:{email_id}").as_bytes()).to_string()
+    Uuid::new_v5(
+        &JMAP_NS,
+        format!("jmap:{account_id}:email:{email_id}").as_bytes(),
+    )
+    .to_string()
 }
 
 /// Render every thread in `parsed` under `<root>/rendered_md/jmap/...`,
@@ -137,9 +145,7 @@ pub fn render_all(
         // Skip when the indexer has the same fingerprint AND the md is
         // still on disk. Matches chatgpt / anthropic / slack: a hand-
         // edited `rm -rf rendered_md/` is recoverable on the next run.
-        if prior_fingerprints.get(&tuid).map(String::as_str) == Some(fp.as_str())
-            && abs.exists()
-        {
+        if prior_fingerprints.get(&tuid).map(String::as_str) == Some(fp.as_str()) && abs.exists() {
             written.push(rel);
             progress.inc(1);
             continue;
@@ -163,9 +169,8 @@ pub fn render_all(
                     let Some(bytes) = parsed.blobs.read_by_id(&a.blob_id)? else {
                         continue;
                     };
-                    fs::create_dir_all(&blobs_dir).with_context(|| {
-                        format!("create blobs dir {}", blobs_dir.display())
-                    })?;
+                    fs::create_dir_all(&blobs_dir)
+                        .with_context(|| format!("create blobs dir {}", blobs_dir.display()))?;
                     let fname = unique_safe_filename(a, &materialized);
                     fs::write(blobs_dir.join(&fname), &bytes.bytes).with_context(|| {
                         format!("write attachment {}", blobs_dir.join(&fname).display())
@@ -186,8 +191,7 @@ pub fn render_all(
             &parsed.joins,
             &materialized,
         );
-        fs::write(&abs, &body)
-            .with_context(|| format!("write {}", abs.display()))?;
+        fs::write(&abs, &body).with_context(|| format!("write {}", abs.display()))?;
 
         let rows = build_grid_rows(
             thread_id,
@@ -207,8 +211,7 @@ pub fn render_all(
             edges: Vec::new(),
         };
         let sidecar_path = abs.with_extension("grid_rows.json");
-        let sidecar_json =
-            serde_json::to_string_pretty(&sidecar).context("serialize sidecar")?;
+        let sidecar_json = serde_json::to_string_pretty(&sidecar).context("serialize sidecar")?;
         fs::write(&sidecar_path, sidecar_json)
             .with_context(|| format!("write {}", sidecar_path.display()))?;
 
@@ -263,7 +266,12 @@ fn render_thread_md(
                 .map(|v| v.as_slice())
                 .unwrap_or(&[])
         })
-        .map(|mid| mailbox_name.get(mid).cloned().unwrap_or_else(|| mid.clone()))
+        .map(|mid| {
+            mailbox_name
+                .get(mid)
+                .cloned()
+                .unwrap_or_else(|| mid.clone())
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -289,11 +297,21 @@ fn render_thread_md(
     out.push_str(&format!("email_count: {}\n", emails.len()));
     out.push_str(&format!(
         "received_at_first: {}\n",
-        yaml_str(emails.first().and_then(|e| e.received_at.as_deref()).unwrap_or("")),
+        yaml_str(
+            emails
+                .first()
+                .and_then(|e| e.received_at.as_deref())
+                .unwrap_or("")
+        ),
     ));
     out.push_str(&format!(
         "received_at_last: {}\n",
-        yaml_str(emails.last().and_then(|e| e.received_at.as_deref()).unwrap_or("")),
+        yaml_str(
+            emails
+                .last()
+                .and_then(|e| e.received_at.as_deref())
+                .unwrap_or("")
+        ),
     ));
     out.push_str("participants:\n");
     for p in &participants {
@@ -314,7 +332,11 @@ fn render_thread_md(
         let from = format_addresses(em.payload.get("from"));
         let when = em.received_at.as_deref().unwrap_or("(unknown date)");
         out.push_str(&format!("## #{} — {} — {}\n\n", idx + 1, from, when));
-        let atts = joins.attachments.get(&em.id).map(Vec::as_slice).unwrap_or(&[]);
+        let atts = joins
+            .attachments
+            .get(&em.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         if let Some(body) = email_body_markdown(em, atts, materialized) {
             out.push_str(&body);
             if !body.ends_with('\n') {
@@ -329,10 +351,8 @@ fn render_thread_md(
         // embedded into the body via `<img src="cid:…">`. They've
         // already been rendered inline; listing them again at the
         // bottom is just noise.
-        let trailing: Vec<&LoadedAttachment> = atts
-            .iter()
-            .filter(|a| !is_inline_attachment(a))
-            .collect();
+        let trailing: Vec<&LoadedAttachment> =
+            atts.iter().filter(|a| !is_inline_attachment(a)).collect();
         if !trailing.is_empty() {
             out.push_str("\n### Attachments\n\n");
             for a in trailing {
@@ -522,11 +542,7 @@ fn autolink_bare_urls(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         let rest = &s[i..];
-        let Some(pos) = rest
-            .find("http://")
-            .or_else(|| rest.find("https://"))
-            .map(|p| p)
-        else {
+        let Some(pos) = rest.find("http://").or_else(|| rest.find("https://")) else {
             out.push_str(rest);
             break;
         };
@@ -597,10 +613,7 @@ fn yaml_str(s: &str) -> String {
     // double-quote and escape backslash + double-quote. Newlines get
     // turned into spaces so the value stays on one line.
     let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    format!(
-        "\"{}\"",
-        cleaned.replace('\\', "\\\\").replace('"', "\\\"")
-    )
+    format!("\"{}\"", cleaned.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -627,8 +640,19 @@ fn build_grid_rows(
 
     let label_str = emails
         .iter()
-        .flat_map(|e| joins.mailboxes.get(&e.id).map(|v| v.as_slice()).unwrap_or(&[]))
-        .map(|mid| mailbox_name.get(mid).cloned().unwrap_or_else(|| mid.clone()))
+        .flat_map(|e| {
+            joins
+                .mailboxes
+                .get(&e.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+        })
+        .map(|mid| {
+            mailbox_name
+                .get(mid)
+                .cloned()
+                .unwrap_or_else(|| mid.clone())
+        })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>()
@@ -646,7 +670,11 @@ fn build_grid_rows(
         project: None,
         org_uuid: None,
         org_name: None,
-        channel: if label_str.is_empty() { None } else { Some(label_str) },
+        channel: if label_str.is_empty() {
+            None
+        } else {
+            Some(label_str)
+        },
         conversation_name: Some(subject.clone()),
         conversation_uuid: tuid.clone(),
         message_index: None,
@@ -691,11 +719,7 @@ fn build_grid_rows(
             conversation_uuid: tuid.clone(),
             message_index: Some(idx as i64),
             entire_chat: format!("/chat/{tuid}"),
-            text: format!(
-                "{}\n\n{}",
-                em.subject.clone().unwrap_or_default(),
-                body
-            ),
+            text: format!("{}\n\n{}", em.subject.clone().unwrap_or_default(), body),
             slack_link: None,
             qmd_path: Some(qmd_path.clone()),
             source_url: None,
@@ -715,7 +739,10 @@ fn build_grid_rows(
 // ─────────────────────────────────────────────────────────────────────
 
 fn unique_safe_filename(a: &LoadedAttachment, taken: &HashMap<String, String>) -> String {
-    let base = a.name.clone().unwrap_or_else(|| format!("part-{}", a.part_id));
+    let base = a
+        .name
+        .clone()
+        .unwrap_or_else(|| format!("part-{}", a.part_id));
     let safe = sanitize_filename(&base);
     let used: std::collections::HashSet<&str> = taken.values().map(String::as_str).collect();
     if !used.contains(safe.as_str()) {
@@ -772,7 +799,13 @@ fn slug_acct(name: &str, fallback: &str) -> String {
     let base = if name.is_empty() { fallback } else { name };
     let s: String = base
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     let trimmed = s.trim_matches('_');
     if trimmed.is_empty() {
@@ -782,10 +815,7 @@ fn slug_acct(name: &str, fallback: &str) -> String {
     }
 }
 
-fn source_fingerprint(
-    emails: &[&LoadedEmail],
-    joins: &crate::extract::db::EmailJoins,
-) -> String {
+fn source_fingerprint(emails: &[&LoadedEmail], joins: &crate::extract::db::EmailJoins) -> String {
     let mut h = Sha256::new();
     h.update(RENDER_VERSION.to_le_bytes());
     for em in emails {

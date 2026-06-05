@@ -55,7 +55,10 @@ impl Session {
             let resp = latchkey_curl(&req).await.map_err(|e| anyhow!("{e}"))?;
             if (300..400).contains(&resp.status) {
                 let loc = resp.header("location").ok_or_else(|| {
-                    anyhow!("JMAP discovery {url} returned {} with no Location header", resp.status)
+                    anyhow!(
+                        "JMAP discovery {url} returned {} with no Location header",
+                        resp.status
+                    )
                 })?;
                 url = resolve_redirect(&url, loc)?;
                 continue;
@@ -67,8 +70,8 @@ impl Session {
                     resp.body_str(),
                 ));
             }
-            let raw: Value = serde_json::from_slice(&resp.body)
-                .context("parse JMAP session JSON")?;
+            let raw: Value =
+                serde_json::from_slice(&resp.body).context("parse JMAP session JSON")?;
             return Self::from_value(raw);
         }
         Err(anyhow!("JMAP session discovery: too many redirects starting at https://{hostname}/.well-known/jmap"))
@@ -132,9 +135,9 @@ impl Session {
                 return Ok(id.to_string());
             }
         }
-        self.primary_mail_account
-            .clone()
-            .ok_or_else(|| anyhow!("JMAP session has no primaryAccounts[mail] and no override given"))
+        self.primary_mail_account.clone().ok_or_else(|| {
+            anyhow!("JMAP session has no primaryAccounts[mail] and no override given")
+        })
     }
 
     /// Interpolate `{accountId}` / `{blobId}` / `{name}` / `{type}` into
@@ -221,11 +224,8 @@ mod tests {
     #[test]
     fn resolve_redirect_path_relative() {
         assert_eq!(
-            resolve_redirect(
-                "https://api.fastmail.com/.well-known/jmap",
-                "/jmap/session",
-            )
-            .unwrap(),
+            resolve_redirect("https://api.fastmail.com/.well-known/jmap", "/jmap/session",)
+                .unwrap(),
             "https://api.fastmail.com/jmap/session",
         );
     }

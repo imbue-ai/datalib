@@ -79,10 +79,7 @@ pub async fn download_bytes(url: &str, timeout: Duration) -> Result<(Vec<u8>, Op
     let req = HttpRequest::get("jmap", url).timeout(timeout);
     let resp = latchkey_curl(&req).await.map_err(map_http_err)?;
     if !(200..300).contains(&resp.status) {
-        return Err(anyhow!(
-            "JMAP download {url} → HTTP {}",
-            resp.status,
-        ));
+        return Err(anyhow!("JMAP download {url} → HTTP {}", resp.status,));
     }
     let content_type = resp.header("content-type").map(str::to_string);
     Ok((resp.body, content_type))

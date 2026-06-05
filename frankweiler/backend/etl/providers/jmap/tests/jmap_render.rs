@@ -169,9 +169,10 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     assert!(md.contains("Alice"));
     assert!(md.contains("doc.pdf"));
 
-    let sidecar: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(page_dir.join("index.grid_rows.json")).unwrap())
-            .unwrap();
+    let sidecar: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(page_dir.join("index.grid_rows.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(sidecar["header"]["markdown_uuid"], tuid);
     let rows = sidecar["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3, "1 thread + 2 emails");

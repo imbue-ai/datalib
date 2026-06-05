@@ -424,8 +424,15 @@ async fn incremental_emails(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            ingest_email_list(db, account_id, list, mailbox_filter, summary, touched_threads)
-                .await?;
+            ingest_email_list(
+                db,
+                account_id,
+                list,
+                mailbox_filter,
+                summary,
+                touched_threads,
+            )
+            .await?;
         }
 
         if !destroyed.is_empty() {
@@ -467,10 +474,7 @@ async fn full_enumerate_emails(
             json!({"inMailbox": set.iter().next().unwrap()})
         }
         Some(set) => {
-            let conds: Vec<Value> = set
-                .iter()
-                .map(|m| json!({"inMailbox": m}))
-                .collect();
+            let conds: Vec<Value> = set.iter().map(|m| json!({"inMailbox": m})).collect();
             json!({"operator": "OR", "conditions": conds})
         }
     };
@@ -490,7 +494,10 @@ async fn full_enumerate_emails(
         }
         let resp = call(session, "Email/query", args).await?;
 
-        let page_state = resp.get("queryState").and_then(|v| v.as_str()).map(String::from);
+        let page_state = resp
+            .get("queryState")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         if let (Some(stored), Some(now)) = (&query_state, &page_state) {
             if stored != now {
                 // Result set shifted underneath us; restart from page 0.
@@ -527,8 +534,15 @@ async fn full_enumerate_emails(
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            ingest_email_list(db, account_id, list, mailbox_filter, summary, touched_threads)
-                .await?;
+            ingest_email_list(
+                db,
+                account_id,
+                list,
+                mailbox_filter,
+                summary,
+                touched_threads,
+            )
+            .await?;
 
             // The Email/get response's `state` is the live state token —
             // grab it on the *first* successful response and use it once
