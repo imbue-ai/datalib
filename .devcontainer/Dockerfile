@@ -52,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         git \
         libclang-dev \
+        libsqlite3-0 \
         libssl-dev \
         lld \
         llvm \
@@ -60,7 +61,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         unzip \
         zip \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    # Symlink the unversioned SONAME that the (currently) buggy
+    # exec-config frankweiler_sync_bin's DT_NEEDED expects. The
+    # `--host_linkopt=-Wl,--as-needed` we added to .bazelrc fixes the
+    # source of the bug, but until BuildBuddy's cache is reseeded with
+    # post-fix actions, the warmup will still pull a stale cached
+    # exec-config tool with the phantom dep. The symlink lets it run;
+    # once the cache reseeds, the symlink becomes a dead pointer
+    # (harmless).
+    && for d in /usr/lib/*-linux-gnu; do \
+            [ -f "${d}/libsqlite3.so.0" ] || continue; \
+            ln -sf libsqlite3.so.0 "${d}/libsqlite3.so"; \
+       done
 
 # bun — not needed for the bazel build, but qmd's own dev workflow
 # uses it (`bun install`, `bun src/cli/qmd.ts <cmd>`) so working
@@ -164,12 +177,30 @@ ARG WARM_BAZEL_CACHE=true
 # Batch mode bypasses all of that — each invocation is a one-shot
 # fork.
 #
-# `--host_jvm_args=-Xmx1024m` caps the JVM heap so an under-resourced
+# `--host_jvm_args=-Xmx<N>m` caps the JVM heap so an under-resourced
 # environment doesn't trigger the same OOM. 1 GB is plenty for a
-# fetch (no compilation) and stays well under BuildKit's slice.
+# fetch (no compilation) and stays well under BuildKit's slice;
+# the build step downstream gets more headroom since it has to hold
+# the action graph.
+
+# Step 1: fetch — resolves bzlmod graph + crate_universe + every
+# external repo (BoringSSL git clone, doltlite amalgamation download,
+# rules_rust toolchains, etc.), writes them into
+# /root/.cache/bazel/_bazel_root/<hash>/external/.
 RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
         bazelisk --batch --host_jvm_args=-Xmx1024m fetch //frankweiler/backend/...:all; \
+    fi
+
+# Step 2: build — compiles the Rust backend in opt mode and lands
+# every action's output in the disk cache. With step 1's external
+# deps already warm, this step is just compilation; the contributor's
+# first interactive `bazel build` hits the disk cache and skips
+# straight to whatever they've actually edited. Heap bumped to 4 GB
+# because the action graph + analysis caches get hefty.
+RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
+    if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
+        bazelisk --batch --host_jvm_args=-Xmx4096m build //frankweiler/backend/...:all -c opt; \
     fi
 
 # Bazel's output base lives under /root/.cache/bazel; the disk cache

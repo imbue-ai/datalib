@@ -137,4 +137,13 @@ common --enable_platform_specific_config
 # macOS ld64 doesn't accept `-Wl,…` flags in this form and dead-strips
 # unused dylibs by default anyway, so this is Linux-only. The flag is
 # safe to apply to all Linux Rust links — at worst it's a no-op.
+#
+# `--host_linkopt` is the exec-config sibling. Bazel's exec config has
+# its own flag-application surface, and `--linkopt` alone doesn't
+# reach Rust binaries built `[for tool]` (the binaries genrules shell
+# out to). Without the host variant, exec-config `frankweiler_sync_bin`
+# still has the phantom `libsqlite3.so` DT_NEEDED and refuses to launch
+# inside the devcontainer's slim base image during
+# `//tests/fixtures:ingested_tng`.
 build:linux --linkopt=-Wl,--as-needed
+build:linux --host_linkopt=-Wl,--as-needed
