@@ -232,7 +232,7 @@ jobs:
         run: bazel test //frankweiler/backend:version_consistency_test -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt ${{ steps.bazelargs.outputs.extra }}
+        run: bazel build //frankweiler/backend:dist -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       # NOTE: the full `bazel test //...` step previously lived here
       # but was removed because rules_rust's ExtractCargoTomlEnvVars
