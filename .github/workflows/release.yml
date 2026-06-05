@@ -138,6 +138,40 @@ jobs:
           bazel version
           rustc --version || true
 
+      # Wire BuildBuddy remote cache for this build. `.bazelrc.user` is
+      # gitignored so we can drop the API key into it from a repo
+      # secret without polluting the source tree; the `try-import` at
+      # the bottom of `.bazelrc` picks it up automatically, and the
+      # `build:buildbuddy` config block does the rest.
+      #
+      # If the secret isn't set (e.g. a PR from a fork; manual local
+      # `act` runs without secrets configured) the step writes nothing
+      # and bazel runs without remote caching — actions still execute
+      # locally, just without the cross-machine cache hits.
+      #
+      # `--remote_upload_local_results=true` is the BuildBuddy default
+      # but we name it explicitly in `.bazelrc` so a future reader
+      # doesn't wonder why CI's outputs land in the shared cache. For
+      # CI specifically the read+write semantics are exactly what we
+      # want: matrix builds populate linux-amd64 + linux-arm64 (and
+      # darwin-arm64) action results that subsequent devcontainer
+      # warmups + contributor builds cache-hit.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy
+          test  --config=buildbuddy
+          EOF
+              echo "BuildBuddy remote cache enabled for this job."
+          else
+              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+          fi
+
       # Pre-create the host-side qmd model cache. .bazelrc has
       # `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the
       # ingested_tng_qmd genrule can read its ~2GB GGUF cache without
