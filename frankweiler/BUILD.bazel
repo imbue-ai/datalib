@@ -8,8 +8,11 @@ sh_binary(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
-# Full dev: backend + Vite UI, browser opens at the Vite URL. Vite proxies
-# /api → 127.0.0.1:8731. Requires pnpm on PATH.
+# Full dev: backend + Vite UI, browser opens at the Vite URL. Both Vite
+# and the backend default to ephemeral ports (printed at startup); Vite's
+# /api proxy is wired to the chosen backend port via FRANKWEILER_BACKEND.
+# Pin specific ports with FRANKWEILER_PORT / FRANKWEILER_BIND. Requires
+# pnpm on PATH.
 sh_binary(
     name = "dev",
     srcs = ["dev.sh"],
