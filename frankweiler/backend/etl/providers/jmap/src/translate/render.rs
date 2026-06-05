@@ -204,6 +204,7 @@ pub fn render_all(
                 render_version: RENDER_VERSION,
             },
             rows: rows.clone(),
+            edges: Vec::new(),
         };
         let sidecar_path = abs.with_extension("grid_rows.json");
         let sidecar_json =
@@ -219,6 +220,7 @@ pub fn render_all(
             md_path: abs.clone(),
             render_version: RENDER_VERSION,
             rows,
+            edges: Vec::new(),
         })?;
 
         written.push(rel);
