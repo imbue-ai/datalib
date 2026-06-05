@@ -19,6 +19,22 @@ on:
       - main
     tags:
       - "v*"
+  # Manual trigger that re-publishes the devcontainer image at an
+  # arbitrary prod-image version. Use cases:
+  #   * Bootstrap — there's no devcontainer image on GHCR yet and the
+  #     `test.yml` workflow can't run until one exists. The first
+  #     manual dispatch produces it.
+  #   * Devcontainer-only fix — `.devcontainer/Dockerfile` got a fix
+  #     (new apt dep, bun bump, etc.) that needs to land on the
+  #     published image without waiting for the next `v*` release tag.
+  # The `devcontainer-publish` job below ignores all other jobs when
+  # triggered this way; only that one job runs.
+  workflow_dispatch:
+    inputs:
+      devcontainer_version:
+        description: 'Prod-image version to publish the devcontainer image against (e.g. 0.5.2). Must already exist at ghcr.io/imbue-ai/mixed_up_files:<ver>.'
+        required: true
+        type: string
 
 permissions:
   contents: write  # needed to create the GitHub Release
@@ -434,8 +450,18 @@ jobs:
   # `WARM_BAZEL_CACHE=true`.
   devcontainer-publish:
     name: devcontainer-publish (ghcr.io)
-    if: github.ref_type == 'tag'
     needs: docker-publish
+    # Two paths in:
+    #   * Tag push — docker-publish ran and published the prod image at
+    #     ${version}; we depend on that and require it succeeded.
+    #   * workflow_dispatch — docker-publish is skipped (its own `if`
+    #     gate fails for non-tag triggers). `!cancelled()` lets this
+    #     job through despite the skipped dependency.
+    if: |
+      !cancelled() && (
+        github.event_name == 'workflow_dispatch'
+        || (github.ref_type == 'tag' && needs.docker-publish.result == 'success')
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -480,9 +506,15 @@ jobs:
       - name: Build and push multi-arch devcontainer image
         env:
           REF_NAME: ${{ github.ref_name }}
+          # Empty for tag triggers; set for workflow_dispatch.
+          DISPATCH_VERSION: ${{ inputs.devcontainer_version }}
         run: |
           set -euo pipefail
-          version="${REF_NAME#v}"
+          if [[ -n "${DISPATCH_VERSION:-}" ]]; then
+              version="${DISPATCH_VERSION}"
+          else
+              version="${REF_NAME#v}"
+          fi
           image="ghcr.io/${GITHUB_REPOSITORY,,}-devcontainer"
           docker buildx build \
               --file .devcontainer/Dockerfile \
