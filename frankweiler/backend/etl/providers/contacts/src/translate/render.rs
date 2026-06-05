@@ -253,49 +253,56 @@ fn render_markdown(
     if let Some(rel) = photo_rel {
         out.push_str(&format!("![{title}]({rel})\n\n"));
     }
-    if let Some(org) = &contact.org {
-        out.push_str(&format!("**{}**", org.replace(';', " — ")));
-        if let Some(t) = &contact.title {
-            out.push_str(&format!(" — {t}"));
-        }
-        out.push_str("\n\n");
-    } else if let Some(t) = &contact.title {
-        out.push_str(&format!("**{t}**\n\n"));
-    }
 
-    if !contact.emails.is_empty() {
-        out.push_str("## Emails\n\n");
-        for e in &contact.emails {
-            out.push_str(&format!("- {}{}\n", label_prefix(&e.type_label()), e.value));
-        }
-        out.push('\n');
+    let mut rows: Vec<(String, String)> = Vec::new();
+    if let Some(org) = &contact.org {
+        rows.push(("Org".to_string(), org.replace(';', " — ")));
     }
-    if !contact.phones.is_empty() {
-        out.push_str("## Phones\n\n");
-        for p in &contact.phones {
-            out.push_str(&format!("- {}{}\n", label_prefix(&p.type_label()), p.value));
-        }
-        out.push('\n');
+    if let Some(t) = &contact.title {
+        rows.push(("Title".to_string(), t.clone()));
     }
-    if !contact.addresses.is_empty() {
-        out.push_str("## Addresses\n\n");
-        for a in &contact.addresses {
-            // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
-            let pretty = a.value.replace(';', ", ");
-            out.push_str(&format!("- {}{}\n", label_prefix(&a.type_label()), pretty));
-        }
-        out.push('\n');
+    for e in &contact.emails {
+        rows.push((field_label("Email", &e.type_label()), e.value.clone()));
+    }
+    for p in &contact.phones {
+        rows.push((field_label("Phone", &p.type_label()), p.value.clone()));
+    }
+    for a in &contact.addresses {
+        // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
+        let pretty = a.value.replace(';', ", ");
+        rows.push((field_label("Address", &a.type_label()), pretty));
     }
     if let Some(n) = &contact.note {
-        out.push_str("## Notes\n\n");
-        out.push_str(n);
-        out.push_str("\n\n");
+        rows.push(("Note".to_string(), n.replace('\n', " <br> ")));
     }
     if let Some(url) = &contact.photo_url {
-        out.push_str(&format!("Photo: <{url}>\n\n"));
+        rows.push(("Photo URL".to_string(), format!("<{url}>")));
+    }
+
+    if !rows.is_empty() {
+        out.push_str("| Field | Value |\n");
+        out.push_str("| --- | --- |\n");
+        for (k, v) in rows {
+            out.push_str(&format!("| {} | {} |\n", k, escape_table_cell(&v)));
+        }
+        out.push('\n');
     }
 
     out
+}
+
+fn field_label(base: &str, type_label: &Option<String>) -> String {
+    match type_label {
+        Some(s) if !s.is_empty() => format!("{base} ({s})"),
+        _ => base.to_string(),
+    }
+}
+
+fn escape_table_cell(s: &str) -> String {
+    // Pipes break table cells; backslash-escape them. Collapse newlines
+    // (which also break cells) into spaces — multi-line values like
+    // notes are pre-flattened by the caller, this is the safety net.
+    s.replace('|', "\\|").replace('\n', " ")
 }
 
 fn build_grid_row(
@@ -375,13 +382,6 @@ fn ext_for(content_type: &str) -> &'static str {
         "image/webp" => "webp",
         "image/heic" => "heic",
         _ => "bin",
-    }
-}
-
-fn label_prefix(t: &Option<String>) -> String {
-    match t {
-        Some(s) if !s.is_empty() => format!("**{s}**: "),
-        _ => String::new(),
     }
 }
 
