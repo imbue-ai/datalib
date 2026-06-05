@@ -273,6 +273,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
+      # fit a buildx run of our ~2.7 GB image × two architectures plus
+      # the `type=gha,mode=max` cache export. v0.5.0 / v0.5.1 both
+      # filled the runner's disk before docker-publish could finish.
+      # `jlumbroso/free-disk-space@main` reclaims ~30 GB by deleting
+      # preinstalled Android SDK, .NET runtimes, Haskell GHC, large
+      # apt packages we don't use, and swap. Brings the runner from
+      # ~14 GB to ~44 GB free — comfortable headroom for the build.
+      #
+      # `tool-cache: false` keeps the PATH-installed tools (gh, docker,
+      # node, etc.) that the rest of this job uses. Everything else is
+      # opt-in junk we'll never miss.
+      - name: Free up runner disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout frankweiler/docker/Dockerfile
       # expects (`dist/<arch>/<tarball>`). The repo is private, so the
