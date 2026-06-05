@@ -861,6 +861,21 @@ mod write_lock_tests {
     /// parallel tasks through `apply_one` and verifies the lock
     /// serializes them cleanly. The per-doc cost here is whatever
     /// doltlite charges for one auto-committed statement bundle.
+    ///
+    /// `#[ignore]`'d because it dominates the etl_unittests critical
+    /// path (~26s for 480 serialized auto-commit dolt writes at
+    /// ~54ms each, vs. <1s for the rest of the suite combined). Its
+    /// purpose is to demonstrate — and guard against regression in —
+    /// the order-of-magnitude perf gap with the transaction-batched
+    /// companion test below, which is a one-time empirical
+    /// characterization that doesn't need to re-run on every CI build.
+    /// Run on demand with
+    ///   `bazel test //frankweiler/backend/etl:etl_unittests \
+    ///        --test_arg=--ignored \
+    ///        --test_arg=parallel_apply_one_serializes_writes_with_metrics`
+    /// when changing the WriteLock, `apply_one`, or doltlite's
+    /// auto-commit path.
+    #[ignore = "slow (~26s) — perf characterization; run on demand"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn parallel_apply_one_serializes_writes_with_metrics() {
         const N_TASKS: usize = 16;
