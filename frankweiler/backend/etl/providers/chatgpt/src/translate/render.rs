@@ -432,10 +432,29 @@ fn attachment_md(a: &OAAttachmentRef) -> String {
         .clone()
         .unwrap_or_else(|| a.file_id.clone())
         .replace(']', "");
-    let link = format!("blobs/{safe}");
+    // `safe_filename` keeps spaces and other readable characters
+    // (e.g. `Screenshot 2026-05-13 at 21.16.40.png`), but markdown
+    // link targets can't contain raw spaces or parens — percent-encode
+    // the offenders so the link still resolves.
+    let link = format!("blobs/{}", encode_link_path(&safe));
     if a.is_image {
         format!("![{alt}]({link})")
     } else {
         format!("[\\[file\\] {alt}]({link})")
     }
+}
+
+fn encode_link_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            ' ' => out.push_str("%20"),
+            '(' => out.push_str("%28"),
+            ')' => out.push_str("%29"),
+            '?' => out.push_str("%3F"),
+            '#' => out.push_str("%23"),
+            other => out.push(other),
+        }
+    }
+    out
 }
