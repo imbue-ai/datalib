@@ -5,11 +5,18 @@
 # Invoked via `bazelisk run //frankweiler:dev`.
 #
 # Configuration:
-#   $1 (positional)   data root. Leading tildes expanded relative to
-#                     $HOME. Defaults to ~/Documents/mixed-up-files when
-#                     not given.
-#                     e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
-#   FRANKWEILER_PORT  Vite port (default: 5173)
+#   $1 (positional)     data root. Leading tildes expanded relative to
+#                       $HOME. Defaults to ~/Documents/mixed-up-files when
+#                       not given.
+#                       e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
+#   FRANKWEILER_PORT    Vite port (default: ephemeral, freshly allocated)
+#   FRANKWEILER_BIND    Backend bind addr (default: 127.0.0.1:<ephemeral>)
+#   FRANKWEILER_BACKEND Vite proxy target for /api (default: derived from
+#                       FRANKWEILER_BIND)
+#
+# Both ports default to ephemeral so multiple concurrent agents/devs can
+# each `bazelisk run //frankweiler:dev` from their own checkouts without
+# colliding on a fixed port. Set the env vars to pin specific ports.
 #
 # Bazel sets BUILD_WORKSPACE_DIRECTORY when invoked via `bazel run`; we use it
 # to locate the (un-bazeled) Vite UI source tree.
@@ -41,7 +48,25 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-PORT="${FRANKWEILER_PORT:-5173}"
+# Default to ephemeral ports for both Vite and the backend so multiple
+# concurrent dev runs don't collide. Same ephemeral-port trick as
+# frankweiler/ui/playwright.config.ts: bind to :0, read back, close. Small
+# race between close() and the real listener's bind() — fine in practice.
+free_port() {
+  python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'
+}
+PORT="${FRANKWEILER_PORT:-$(free_port)}"
+if [[ -z "${FRANKWEILER_BIND:-}" ]]; then
+  FRANKWEILER_BIND="127.0.0.1:$(free_port)"
+fi
+export FRANKWEILER_BIND
+# Vite's /api proxy needs to point at whatever port the backend actually
+# bound. Honor a caller-supplied FRANKWEILER_BACKEND; otherwise derive
+# from FRANKWEILER_BIND so a random backend port flows through.
+export FRANKWEILER_BACKEND="${FRANKWEILER_BACKEND:-http://$FRANKWEILER_BIND}"
+echo "vite port:     $PORT"
+echo "backend bind:  $FRANKWEILER_BIND"
+echo "vite → /api:   $FRANKWEILER_BACKEND"
 
 # Positional data-root arg passed through to the backend binary. Manual
 # tilde expansion: shells handle ~ in unquoted args, but if someone
