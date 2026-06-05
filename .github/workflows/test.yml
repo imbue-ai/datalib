@@ -49,17 +49,23 @@ jobs:
     name: bazel test //...
     runs-on: ubuntu-latest
 
-    # Run the job inside the published devcontainer image. The tag must
-    # match an image actually present at
-    # `ghcr.io/imbue-ai/mixed_up_files-devcontainer:<tag>` — published
-    # by `release.yml`'s `devcontainer-publish` job on `v*` tags.
+    # Run the job inside the published devcontainer image. We
+    # deliberately track `:latest` rather than pinning a version: the
+    # image is only republished on `v*` tag pushes (by
+    # `release.yml`'s `devcontainer-publish` job), so `:latest` only
+    # moves on deliberate release events, not opportunistically. In
+    # exchange, contributors don't have to remember to bump a pin in
+    # this file after every release — `.devcontainer/Dockerfile`'s
+    # `PROD_IMAGE_TAG` is the only remaining manual pin (and it
+    # governs reproducible LOCAL devcontainer builds, which is a
+    # property worth keeping).
     #
-    # Keep this in sync with `PROD_IMAGE_TAG` in
-    # `.devcontainer/Dockerfile`: bump both together after a new release
-    # tag goes out so contributors (devcontainer) and CI (this workflow)
-    # see the same toolchain.
+    # Risk: a broken devcontainer image published at `:latest` taints
+    # every subsequent CI run until the next release. Acceptable
+    # because release tagging is a deliberate human action; bad images
+    # surface immediately on the next PR.
     container:
-      image: ghcr.io/imbue-ai/mixed_up_files-devcontainer:0.5.2
+      image: ghcr.io/imbue-ai/mixed_up_files-devcontainer:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
