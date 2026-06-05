@@ -14,6 +14,12 @@
     "name": "mixed_up_files (linux)",
     "build": {
         "dockerfile": "Dockerfile",
+        // Build context is the workspace root (not `.devcontainer/`)
+        // so the Dockerfile's `--mount=type=bind,source=.,...` warmup
+        // step sees the whole repo. Without `context: ".."` the bind
+        // would point at `.devcontainer/` and bazel would find no
+        // workspace to build.
+        "context": "..",
         // The Dockerfile auto-detects amd64 vs arm64 via $TARGETARCH;
         // override --platform here if you want to force x86_64 on an
         // Apple Silicon host (under Rosetta / qemu) to mirror the

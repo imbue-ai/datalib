@@ -130,8 +130,47 @@ RUN ldir="$(llvm-config --libdir)" \
 USER ubuntu
 WORKDIR /workspaces/mixed_up_files
 
+# Cache warmup: pre-populate bazel's disk cache + output base by running
+# an `opt` build of the Rust backend against the workspace source.
+# Subsequent contributor builds inside the devcontainer hit the warmed
+# caches (boring-sys2, tokio, sqlx, libsqlite3-sys, doltlite, ...) and
+# only pay incremental costs for whatever they've edited.
+#
+# The workspace source is bind-mounted ephemerally via BuildKit
+# (`--mount=type=bind`) — it isn't COPYed into a layer. That has two
+# good consequences:
+#   * Image size doesn't grow by the size of the workspace.
+#   * The layer's cache key is driven by the RUN command text alone,
+#     not by source contents — so day-to-day source edits between
+#     image builds DON'T invalidate this 20-minute warmup step. The
+#     warmup re-runs only when the Dockerfile, the parent prod image,
+#     or this RUN command itself changes.
+#
+# `chown 1000:1000` on the bind because the host workspace may be owned
+# by whatever the user's uid is — inside the build we always run as the
+# `ubuntu` user (uid 1000) and need to traverse + read.
+#
+# Cache visibility at runtime: `devcontainer.json` mounts named volumes
+# at `/home/ubuntu/.cache/bazel` and
+# `/home/ubuntu/Library/Caches/bazel-disk-cache`. Docker named volumes
+# inherit the image's contents at the mount point on FIRST creation
+# (only — subsequent mounts overlay), so a fresh devcontainer gets the
+# baked caches automatically; rebuilds reuse whatever the volume
+# accumulated during prior sessions.
+#
+# Skip with `--build-arg WARM_BAZEL_CACHE=false` for fast iteration on
+# the Dockerfile itself (or when network is unavailable at build time).
+# The build target is the Rust backend explicitly rather than `//...`
+# so we don't drag the UI's e2e Playwright machinery into the cache —
+# it needs a browser cache the image doesn't ship.
+ARG WARM_BAZEL_CACHE=true
+RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
+    if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
+        bazelisk build //frankweiler/backend/...:all -c opt; \
+    fi
+
 # Bazel's output base lives under /home/ubuntu/.cache/bazel; the disk
 # cache (~/Library/Caches/bazel-disk-cache on macOS) maps to
-# /home/ubuntu/.cache/bazel-disk inside this container — see
-# `.bazelrc`'s `build --disk_cache=...`. Override at run time with
+# /home/ubuntu/Library/Caches/bazel-disk-cache inside this container —
+# see `.bazelrc`'s `build --disk_cache=...`. Override at run time with
 # `--disk_cache=...` if you want a different layout.

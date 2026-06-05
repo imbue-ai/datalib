@@ -1,0 +1,39 @@
+# Keep `.devcontainer/Dockerfile`'s `--mount=type=bind,source=.` bind
+# mount lean. Without this, the Docker daemon ships the entire
+# workspace (including `bazel-*` convenience symlinks that target the
+# multi-GB output base) to the build, which slows every devcontainer
+# build to a crawl and risks following the bazel symlinks into the
+# user's home cache.
+#
+# The corresponding prod docker build context lives at a temp dir
+# staged by `scripts/build_docker.sh` / `release.yml`, so this file
+# doesn't affect it.
+
+# Bazel's convenience symlinks point at output_base — DO NOT follow.
+bazel-bin
+bazel-mixed_up_files
+bazel-out
+bazel-testlogs
+
+# Local build outputs.
+frankweiler/backend/target
+frankweiler/ui/node_modules
+frankweiler/ui/dist
+frankweiler/tauri/target
+third-party/qmd/node_modules
+third-party/qmd/dist
+
+# VCS state — bazelisk never reads this.
+.git
+
+# Editor + OS junk.
+.DS_Store
+.idea
+.vscode
+
+# The prod docker build context is staged at a different location, so
+# its `dist/` doesn't intersect; but local `scripts/build_docker.sh`
+# uses a temp dir anyway, so excluding here is harmless and prevents
+# anyone running `docker build .` at the root from shipping tarballs.
+dist
+ctx
