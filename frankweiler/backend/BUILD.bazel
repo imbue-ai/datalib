@@ -21,6 +21,23 @@ sh_test(
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
+# Asserts every `frankweiler-*` workspace crate in Cargo.lock is pinned
+# to the version declared by [workspace.package].version in Cargo.toml.
+# Catches the common drift where `CARGO_BAZEL_REPIN=1 bazel test //...`
+# cache-hits every target after a version bump and Cargo.lock silently
+# stays at the old version. Failure message points at //tools:repin_cargo.sh
+# for the fix.
+sh_test(
+    name = "cargo_lock_versions_test",
+    size = "small",
+    srcs = ["//tools:check_cargo_lock_versions.sh"],
+    data = [
+        "Cargo.lock",
+        "Cargo.toml",
+    ],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
 # Set of rust_binary targets bundled into the install.sh release tarball.
 # Adding a binary here gets it shipped to users on the next tagged release;
 # .github/workflows/release.yml renames each bazel output to its public
