@@ -78,6 +78,47 @@ build --stamp
 build --disk_cache=~/Library/Caches/bazel-disk-cache
 test  --disk_cache=~/Library/Caches/bazel-disk-cache
 
+# BuildBuddy remote cache + build event service. Opt-in via
+# `--config=buildbuddy` on `build` / `test`; the API key lives in
+# `.bazelrc.user` (gitignored) — see the `try-import` at the bottom of
+# this file. Without the user file the config is inert; with it,
+# subsequent invocations both read from and write to a shared content-
+# addressed cache hosted at remote.buildbuddy.io, and post Build Event
+# Protocol events to app.buildbuddy.io for inspection.
+#
+# Why this is huge for our build: actions that anyone (you, CI, the
+# devcontainer warmup, a contributor) builds once become cache hits
+# for everyone else. boring-sys2's BoringSSL compile, rules_rust's
+# crate compiles, and the bzlmod-resolved external repos all flow
+# through, so first-build cold cost on a fresh machine drops by ~90%.
+#
+# `--remote_timeout=600` because the doltlite amalgamation archive is
+# fetched through the cache layer and the default 60s is tight for
+# multi-MB uploads on residential uplinks.
+#
+# `--remote_upload_local_results=true` is the default but we name it
+# explicitly so it's obvious this is a read+write cache, not a
+# read-only mirror. Untrusted CI contexts (PR builds from forks) should
+# pass `--remote_upload_local_results=false` to avoid poisoning the
+# cache with unverified outputs.
+build:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
+build:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
+build:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+build:buildbuddy --remote_timeout=600
+build:buildbuddy --remote_upload_local_results=true
+
+# `.bazelrc.user` is per-user (gitignored). Today it carries the
+# BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an
+# `import %workspace%/.bazelrc` line followed by `build --config=buildbuddy`
+# (or callers add `--config=buildbuddy` themselves). Template:
+#
+#     common --remote_header=x-buildbuddy-api-key=<your-api-key>
+#     build --config=buildbuddy
+#     test  --config=buildbuddy
+#
+# Get your key at https://app.buildbuddy.io/settings.
+try-import %workspace%/.bazelrc.user
+
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
 common --enable_platform_specific_config
 

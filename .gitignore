@@ -15,3 +15,8 @@ playwright-report/
 test-results/
 .claude/
 *.snap.new
+
+# Per-user bazel overrides — currently the BuildBuddy API key.
+# See the `try-import` line at the bottom of `.bazelrc` for the
+# expected contents.
+.bazelrc.user
