@@ -3,11 +3,35 @@
 **Duration:** ~7 minutes
 **You'll need:** `doltlite` on your PATH and a terminal.
 
-> 💡 **Prefer a GUI?** Grab the `doltlite`-aware build of DB Browser from
+## Install `doltlite`
+
+**macOS (Apple Silicon) / Linux (x86_64 or arm64)**
+
+```bash
+sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+```
+
+**Debian / Ubuntu**
+
+`.deb` packages ship for both `amd64` and `arm64`. Substitute `$ARCH` below:
+
+```bash
+VER=$(curl -fsSL https://api.github.com/repos/dolthub/doltlite/releases/latest | jq -r .tag_name | sed 's/^v//')
+ARCH=amd64   # or arm64
+BASE=https://github.com/dolthub/doltlite/releases/download/v${VER}
+wget ${BASE}/libdoltlite0_${VER}_${ARCH}.deb ${BASE}/doltlite_${VER}_${ARCH}.deb
+sudo dpkg -i libdoltlite0_*.deb doltlite_*.deb
+```
+
+Add `libdoltlite-dev_${VER}_${ARCH}.deb` for the header and static library.
+
+> 💡 **GUI companion (read-only):** A `doltlite`-aware build of DB Browser is
+> available at
 > [github.com/thadd3us/sqlitebrowser/releases](https://github.com/thadd3us/sqlitebrowser/releases).
-> You can follow this entire codelab in it — open `fruits.db`, run the SQL from
-> each step in the Execute SQL tab, and use the Browse Data tab to watch rows
-> change between commits.
+> It's handy for browsing `fruits.db` and poking at the `dolt_log` /
+> `dolt_tags` / `dolt_diff_fruits` virtual tables visually — but it holds a
+> write lock on the open database, so you'll want to do the codelab's writes
+> in the `doltlite` shell and close the GUI before each commit step.
 
 `doltlite` is a drop-in `sqlite3` shell, with one superpower: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed — including across a `DROP TABLE` that rebuilds the table from scratch.
 
