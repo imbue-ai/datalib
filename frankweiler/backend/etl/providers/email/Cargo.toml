@@ -1,13 +1,17 @@
 [package]
-name = "frankweiler-etl-jmap"
+name = "frankweiler-etl-email"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [lib]
-name = "frankweiler_etl_jmap"
+name = "frankweiler_etl_email"
 path = "src/lib.rs"
 
+# JMAP-specific extract entry point. Lives inside the broader email
+# crate because we expect to add IMAP (and possibly POP/EWS) under
+# the same roof; each transport gets its own `*-download` bin while
+# sharing the translate + render code path.
 [[bin]]
 name = "jmap-download"
 path = "src/bin/jmap_download.rs"
@@ -36,6 +40,11 @@ sha2 = "0.10"
 # `![](…)` link points at the on-disk byte-for-byte copy.
 html2md = "0.2"
 tempfile = "3"
+# mbox / RFC 5322 parser used by `translate::mbox` to ingest Google
+# Takeout exports (the "All mail Including Spam and Trash.mbox" file)
+# without a JMAP server. Maintained by Stalwart Mail; handles MIME
+# multipart, encoded-words, base64/qp body decoding, attachments.
+mail-parser = "0.10"
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions"] }

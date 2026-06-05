@@ -40,7 +40,7 @@ rust_binary(
         "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
         "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
         "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",
-        "//frankweiler/backend/etl/providers/jmap:frankweiler_etl_jmap",
+        "//frankweiler/backend/etl/providers/email:frankweiler_etl_email",
         "//frankweiler/backend/etl/providers/notion:frankweiler_etl_notion",
         "//frankweiler/backend/etl/providers/perseus:frankweiler_etl_perseus",
         "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",

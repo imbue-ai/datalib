@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl_jmap::extract::{self as jmap, FetchOptions};
+use frankweiler_etl_email::extract::{self as jmap, FetchOptions};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info_span, Instrument};
 

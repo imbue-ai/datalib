@@ -285,11 +285,15 @@ pub struct BeeperSync {
     pub period: Option<String>,
 }
 
-/// Tunables for the generic JMAP-mail provider (Fastmail today; any
-/// RFC 8620 + RFC 8621 server in principle — see `frankweiler_etl_jmap`).
+/// Tunables for the email provider. Today this is JMAP-backed
+/// (Fastmail / any RFC 8620 + RFC 8621 server) when `sync:` is
+/// present, and Google Takeout mbox-backed when it's omitted —
+/// both paths live in `frankweiler_etl_jmap`. Named `EmailSync`
+/// rather than `JmapApiSync` because the source variant covers
+/// more than the JMAP API surface.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-pub struct JmapApiSync {
+pub struct EmailSync {
     /// JMAP server hostname. Session discovered at
     /// `https://<hostname>/.well-known/jmap`. Examples:
     ///   - `api.fastmail.com`
@@ -366,11 +370,15 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<NotionApiSync>,
     },
-    JmapApi {
+    /// Email source. `sync:` present → JMAP server (Fastmail etc.);
+    /// `sync:` absent → translate-only mode against an `.mbox` at
+    /// `input_path` (e.g. a Google Takeout export). Both paths
+    /// share `frankweiler_etl_jmap`.
+    Email {
         #[serde(flatten)]
         common: SourceCommon,
         #[serde(default)]
-        sync: Option<JmapApiSync>,
+        sync: Option<EmailSync>,
     },
     Beeper {
         #[serde(flatten)]
@@ -406,7 +414,7 @@ impl SourceConfig {
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
-            | SourceConfig::JmapApi { common, .. }
+            | SourceConfig::Email { common, .. }
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
             | SourceConfig::Perseus { common, .. } => common,
@@ -432,7 +440,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { .. } => "github_api",
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
-            SourceConfig::JmapApi { .. } => "jmap_api",
+            SourceConfig::Email { .. } => "email",
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
             SourceConfig::Perseus { .. } => "perseus",
@@ -450,7 +458,7 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
-            SourceConfig::JmapApi { sync, .. } => sync.is_some(),
+            SourceConfig::Email { sync, .. } => sync.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),

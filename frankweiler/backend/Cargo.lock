@@ -696,6 +696,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -948,6 +957,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-email"
+version = "0.5.3"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "frankweiler-etl",
+ "frankweiler-obs",
+ "frankweiler-schema",
+ "html2md",
+ "insta",
+ "mail-parser",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-github"
 version = "0.5.3"
 dependencies = [
@@ -992,29 +1025,6 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "frankweiler-etl-jmap"
-version = "0.5.3"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "frankweiler-etl",
- "frankweiler-obs",
- "frankweiler-schema",
- "html2md",
- "insta",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -1151,9 +1161,9 @@ dependencies = [
  "frankweiler-etl-beeper",
  "frankweiler-etl-chatgpt",
  "frankweiler-etl-contacts",
+ "frankweiler-etl-email",
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",
- "frankweiler-etl-jmap",
  "frankweiler-etl-notion",
  "frankweiler-etl-perseus",
  "frankweiler-etl-slack",
@@ -1386,6 +1396,18 @@ name = "hashbrown"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+
+[[package]]
+name = "hashify"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd1246c0e5493286aeb2dde35b1f4eb9c4ce00e628641210a5e553fc001a1f26"
+dependencies = [
+ "indexmap 2.14.0",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "hashlink"
@@ -1995,6 +2017,16 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
+name = "mail-parser"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "187a2b93c4c8c32f552ee06c2d99915e575de2fc7e04b07891c9edfee5b8edd6"
+dependencies = [
+ "encoding_rs",
+ "hashify",
+]
 
 [[package]]
 name = "markup5ever"

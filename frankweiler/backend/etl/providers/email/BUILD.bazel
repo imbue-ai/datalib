@@ -14,12 +14,12 @@ filegroup(
 )
 
 rust_library(
-    name = "frankweiler_etl_jmap",
+    name = "frankweiler_etl_email",
     srcs = glob(
         ["src/**/*.rs"],
         exclude = ["src/bin/**"],
     ),
-    crate_name = "frankweiler_etl_jmap",
+    crate_name = "frankweiler_etl_email",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
@@ -29,6 +29,7 @@ rust_library(
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:html2md",
+        "@frankweiler_crates//:mail-parser",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sha2",
@@ -49,7 +50,7 @@ rust_binary(
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
-        ":frankweiler_etl_jmap",
+        ":frankweiler_etl_email",
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/obs:frankweiler_obs",
         "@frankweiler_crates//:anyhow",
@@ -62,7 +63,7 @@ rust_binary(
 rust_test(
     name = "jmap_unittests",
     size = "small",
-    crate = ":frankweiler_etl_jmap",
+    crate = ":frankweiler_etl_email",
     edition = "2021",
 )
 
@@ -74,10 +75,10 @@ rust_test(
     edition = "2021",
     env = {
         "INSTA_WORKSPACE_ROOT": ".",
-        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/jmap/tests/fixtures",
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
     },
     deps = [
-        ":frankweiler_etl_jmap",
+        ":frankweiler_etl_email",
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:insta",
@@ -88,16 +89,33 @@ rust_test(
 )
 
 rust_test(
+    name = "jmap_mbox",
+    srcs = ["tests/jmap_mbox.rs"],
+    crate_root = "tests/jmap_mbox.rs",
+    data = [":fixtures"],
+    edition = "2021",
+    env = {
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":frankweiler_etl_email",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+rust_test(
     name = "jmap_playback_roundtrip",
     srcs = ["tests/playback_roundtrip.rs"],
     crate_root = "tests/playback_roundtrip.rs",
     data = [":fixtures"],
     edition = "2021",
     env = {
-        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/jmap/tests/fixtures",
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
     },
     deps = [
-        ":frankweiler_etl_jmap",
+        ":frankweiler_etl_email",
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:serde_json",
@@ -122,7 +140,7 @@ rust_test(
         "no-sandbox",
     ],
     deps = [
-        ":frankweiler_etl_jmap",
+        ":frankweiler_etl_email",
         "@frankweiler_crates//:insta",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
