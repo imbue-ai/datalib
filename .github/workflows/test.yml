@@ -49,6 +49,13 @@ jobs:
     name: bazel test //...
     runs-on: ubuntu-latest
 
+    # GitHub Actions defaults `run:` steps to `sh` (dash) when the job
+    # runs inside a container, which rejects `set -o pipefail` and `[[ ]]`.
+    # Force bash so the bash-isms in the steps below work.
+    defaults:
+      run:
+        shell: bash
+
     # Run the job inside the published devcontainer image. We
     # deliberately track `:latest` rather than pinning a version: the
     # image is only republished on `v*` tag pushes (by
