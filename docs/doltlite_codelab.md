@@ -3,7 +3,7 @@
 **Duration:** ~7 minutes
 **You'll need:** `doltlite` on your PATH and a terminal.
 
-`doltlite` is a drop-in `sqlite3` shell, with one superpower: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed.
+`doltlite` is a drop-in `sqlite3` shell, with one superpower: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed — including across a `DROP TABLE` that rebuilds the table from scratch.
 
 ---
 
@@ -25,18 +25,20 @@ You're now in the `doltlite` shell. Turn on a nicer output mode:
 
 ## Step 1 — Create a table, commit, and tag it
 
+The primary key is `name` — that's how Dolt will track each row's identity through edits, deletes, and even table rebuilds.
+
 ```sql
 CREATE TABLE fruits (
-  id    INTEGER PRIMARY KEY,
-  name  TEXT,
-  color TEXT,
-  qty   INTEGER
+  name        TEXT PRIMARY KEY,
+  color       TEXT,
+  qty         INTEGER,
+  description TEXT
 );
 
 INSERT INTO fruits VALUES
-  (1, 'apple',  'red',    10),
-  (2, 'banana', 'yellow',  5),
-  (3, 'grape',  'purple', 20);
+  ('apple',  'red',    10, 'crisp and sweet'),
+  ('banana', 'yellow',  5, 'soft and mild'),
+  ('grape',  'purple', 20, 'tiny and juicy');
 
 SELECT dolt_commit('-A', '-m', 'initial fruits');
 SELECT dolt_tag('v1-initial');
@@ -51,9 +53,10 @@ SELECT dolt_tag('v1-initial');
 ## Step 2 — Edit, delete, insert — then commit and tag again
 
 ```sql
-UPDATE fruits SET qty = 15 WHERE id = 1;            -- edit a row
-DELETE FROM fruits WHERE id = 2;                     -- delete a row
-INSERT INTO fruits VALUES (4, 'kiwi', 'green', 7);   -- add a row
+UPDATE fruits SET qty = 15 WHERE name = 'apple';              -- edit a row
+DELETE FROM fruits WHERE name = 'banana';                      -- delete a row
+INSERT INTO fruits VALUES
+  ('kiwi', 'green', 7, 'fuzzy and tart');                      -- add a row
 
 SELECT dolt_commit('-A', '-m', 'tweak fruits');
 SELECT dolt_tag('v2-tweaked');
@@ -63,22 +66,22 @@ SELECT dolt_tag('v2-tweaked');
 
 ## Step 3 — Drop the table and rebuild it differently
 
-This is the "I broke everything and started over" scenario. The table physically disappears, then comes back in a new shape.
+This is the "I broke everything and started over" scenario. The table physically disappears, then comes back populated by hand. Notice that `apple` is among the rebuilt rows — but with a different `qty` and `description`.
 
 ```sql
 DROP TABLE fruits;
 
 CREATE TABLE fruits (
-  id    INTEGER PRIMARY KEY,
-  name  TEXT,
-  color TEXT,
-  qty   INTEGER
+  name        TEXT PRIMARY KEY,
+  color       TEXT,
+  qty         INTEGER,
+  description TEXT
 );
 
 INSERT INTO fruits VALUES
-  (10, 'mango',     'orange', 12),
-  (11, 'blueberry', 'blue',   50),
-  (12, 'apple',     'red',    99);   -- apple is back, different id and qty
+  ('mango',     'orange', 12, 'tropical and sweet'),
+  ('blueberry', 'blue',   50, 'small and tangy'),
+  ('apple',     'red',    99, 'orchard fresh');     -- apple is back, changed
 
 SELECT dolt_commit('-A', '-m', 'rebuild from scratch');
 SELECT dolt_tag('v3-rebuilt');
@@ -135,20 +138,21 @@ Every versioned table `T` gets a virtual companion table `dolt_diff_T` with `to_
 One wrinkle: `from_commit` / `to_commit` store the resolved *hash*, not the tag name, so we look the tag up inline with a scalar subquery against `dolt_tags`. (You can't wrap this in a `CREATE VIEW` — `doltlite`'s safe mode disallows joining two virtual tables in a view definition.)
 
 ```sql
-SELECT diff_type, from_id, from_name, from_qty, to_id, to_name, to_qty
+SELECT diff_type, from_name, from_qty, from_description,
+                  to_name,   to_qty,   to_description
 FROM   dolt_diff_fruits
 WHERE  from_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v1-initial')
   AND  to_commit   = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v2-tweaked');
 ```
 
 ```
-╭───────────┬─────────┬───────────┬──────────┬───────┬─────────┬────────╮
-│ diff_type │ from_id │ from_name │ from_qty │ to_id │ to_name │ to_qty │
-├───────────┼─────────┼───────────┼──────────┼───────┼─────────┼────────┤
-│ modified  │       1 │ apple     │       10 │     1 │ apple   │     15 │
-│ removed   │       2 │ banana    │        5 │       │         │        │
-│ added     │         │           │          │     4 │ kiwi    │      7 │
-╰───────────┴─────────┴───────────┴──────────┴───────┴─────────┴────────╯
+╭───────────┬───────────┬──────────┬──────────────────┬─────────┬────────┬──────────────────╮
+│ diff_type │ from_name │ from_qty │ from_description │ to_name │ to_qty │  to_description  │
+├───────────┼───────────┼──────────┼──────────────────┼─────────┼────────┼──────────────────┤
+│ modified  │ apple     │       10 │ crisp and sweet  │ apple   │     15 │ crisp and sweet  │
+│ removed   │ banana    │        5 │ soft and mild    │         │        │                  │
+│ added     │           │          │                  │ kiwi    │      7 │ fuzzy and tart   │
+╰───────────┴───────────┴──────────┴──────────────────┴─────────┴────────┴──────────────────╯
 ```
 
 > **Talking point:** the diff is a *queryable relation*. You can `JOIN`, `WHERE`, `GROUP BY` it like any other table — try `WHERE diff_type = 'modified'` to audit every cell change in a release.
@@ -157,17 +161,30 @@ WHERE  from_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v1-initia
 
 ## Step 7 — Diff across the "rebuild": `v2-tweaked` → `v3-rebuilt`
 
-This is the dramatic one — the whole table contents were thrown away.
+This is the headline result. We dropped the whole table and re-inserted rows by hand — but because the primary key is `name`, Dolt still recognizes `apple` as the *same row*, and reports just the cells that changed.
 
 ```sql
-SELECT diff_type, from_id, from_name, to_id, to_name, to_qty
+SELECT diff_type, from_name, from_qty, from_description,
+                  to_name,   to_qty,   to_description
 FROM   dolt_diff_fruits
 WHERE  from_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v2-tweaked')
   AND  to_commit   = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v3-rebuilt')
-ORDER  BY diff_type, COALESCE(from_id, to_id);
+ORDER  BY diff_type, COALESCE(from_name, to_name);
 ```
 
-Every old row shows up as `removed` and every new row as `added`. Even though we dropped and recreated the table, the diff understands the table identity by name — no row identity is lost.
+```
+╭───────────┬───────────┬──────────┬──────────────────┬───────────┬────────┬────────────────────╮
+│ diff_type │ from_name │ from_qty │ from_description │  to_name  │ to_qty │   to_description   │
+├───────────┼───────────┼──────────┼──────────────────┼───────────┼────────┼────────────────────┤
+│ added     │           │          │                  │ blueberry │     50 │ small and tangy    │
+│ added     │           │          │                  │ mango     │     12 │ tropical and sweet │
+│ modified  │ apple     │       15 │ crisp and sweet  │ apple     │     99 │ orchard fresh      │
+│ removed   │ grape     │       20 │ tiny and juicy   │           │        │                    │
+│ removed   │ kiwi      │        7 │ fuzzy and tart   │           │        │                    │
+╰───────────┴───────────┴──────────┴──────────────────┴───────────┴────────┴────────────────────╯
+```
+
+> **Talking point:** identity follows the primary key, not the underlying storage. A `DROP TABLE` followed by a fresh `INSERT` of the same `name` is a `modified` row, not a `removed`+`added` pair. Schema design (which columns make up the PK) directly determines what "the same row" *means* to your diff history.
 
 ---
 
@@ -187,13 +204,13 @@ You're not stuck looking at diffs — you can read a table *as it was*:
 
 ```sql
 -- snapshot from v1-initial
-SELECT to_id AS id, to_name AS name, to_color AS color, to_qty AS qty
+SELECT to_name AS name, to_color AS color, to_qty AS qty, to_description AS description
 FROM   dolt_diff_fruits
 WHERE  to_commit = (SELECT tag_hash FROM dolt_tags WHERE tag_name = 'v1-initial')
   AND  diff_type = 'added';
 ```
 
-(For the general case you'd typically check out a branch at that tag, but for a quick peek the diff view is enough.)
+(For the general case you'd typically check out a branch at that tag, but for a quick peek the diff table is enough.)
 
 ---
 
@@ -204,7 +221,7 @@ In ~30 lines of SQL you:
 1. **Committed and tagged** schema + data changes into a single `.db` file.
 2. **Inspected history** with `dolt_log` and `dolt_tags`.
 3. **Diffed** any two tags at three resolutions: summary, stat, and row-level — all as ordinary tables you can `SELECT` from, addressed by human-readable names.
-4. **Survived a destructive `DROP TABLE`** without losing the ability to compare against earlier state.
+4. **Preserved row identity across a destructive `DROP TABLE`**, because the primary key — not the physical storage — defines what "the same row" means.
 
 The whole repository is one file. `cp fruits.db backup.db` is a clone. Email it to a colleague and they have the full history *and* the tags.
 
@@ -217,7 +234,7 @@ Branching:
 ```sql
 SELECT dolt_branch('experiment');
 SELECT dolt_checkout('experiment');
-INSERT INTO fruits VALUES (99, 'durian', 'yellow', 1);
+INSERT INTO fruits VALUES ('durian', 'yellow', 1, 'pungent and divisive');
 SELECT dolt_commit('-A', '-m', 'controversial addition');
 SELECT dolt_checkout('main');   -- durian is gone
 SELECT * FROM fruits;
