@@ -3,6 +3,12 @@
 **Duration:** ~7 minutes
 **You'll need:** `doltlite` on your PATH and a terminal.
 
+> 💡 **Prefer a GUI?** Grab the `doltlite`-aware build of DB Browser from
+> [github.com/thadd3us/sqlitebrowser/releases](https://github.com/thadd3us/sqlitebrowser/releases).
+> You can follow this entire codelab in it — open `fruits.db`, run the SQL from
+> each step in the Execute SQL tab, and use the Browse Data tab to watch rows
+> change between commits.
+
 `doltlite` is a drop-in `sqlite3` shell, with one superpower: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed — including across a `DROP TABLE` that rebuilds the table from scratch.
 
 ---
