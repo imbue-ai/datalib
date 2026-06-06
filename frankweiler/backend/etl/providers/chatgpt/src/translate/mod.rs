@@ -5,3 +5,4 @@
 pub mod grid_rows;
 pub mod parse;
 pub mod render;
+pub mod sentinels;

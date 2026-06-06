@@ -56,8 +56,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, JmapApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
+    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
+    YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -381,7 +382,7 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
         "type=github_api",
         "type=gitlab_api",
         "type=notion_api",
-        "type=jmap_api",
+        "type=email",
         "type=beeper",
     ] {
         if s.contains(marker) {
@@ -493,8 +494,8 @@ notion integration token expired or missing.
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
             .into(),
-        "jmap_api" => "\
-JMAP (Fastmail / generic) auth missing or expired.
+        "email" => "\
+Email source: JMAP (Fastmail / generic) auth missing or expired.
 
   1. Create an API token at https://app.fastmail.com/settings/security/tokens
      with the 'Read-only access to mail' scope; copy it to the clipboard.
@@ -1207,7 +1208,8 @@ enum DbHandle {
     Notion(frankweiler_etl_notion::extract::RawDb),
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
-    Jmap(frankweiler_etl_jmap::extract::RawDb),
+    Jmap(frankweiler_etl_email::extract::RawDb),
+    Yolink(frankweiler_etl_yolink::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1222,6 +1224,7 @@ impl DbHandle {
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
             DbHandle::Jmap(d) => d.pool(),
+            DbHandle::Yolink(d) => d.pool(),
         }
     }
 }
@@ -1261,7 +1264,10 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
         ExtractKind::Jmap { .. } => {
-            DbHandle::Jmap(frankweiler_etl_jmap::extract::RawDb::open(path).await?)
+            DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Yolink { .. } => {
+            DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
         }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
@@ -1299,8 +1305,11 @@ enum ExtractKind {
         sync: PerseusSync,
     },
     Jmap {
-        sync: JmapApiSync,
+        sync: EmailSync,
         blob_size_limit_bytes: Option<u64>,
+    },
+    Yolink {
+        sync: YolinkSync,
     },
 }
 
@@ -1349,11 +1358,14 @@ impl ExtractPlan {
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
             },
+            SourceConfig::Yolink { sync, .. } => ExtractKind::Yolink {
+                sync: sync.clone().unwrap_or_default(),
+            },
             SourceConfig::ClaudeExport { .. } => return None,
-            SourceConfig::JmapApi { sync, .. } => {
+            SourceConfig::Email { sync, .. } => {
                 let sync = sync
                     .clone()
-                    .ok_or_else(|| anyhow::anyhow!("jmap_api source {name} missing sync: block"));
+                    .ok_or_else(|| anyhow::anyhow!("email source {name} missing sync: block"));
                 match sync {
                     Ok(sync) => ExtractKind::Jmap {
                         sync,
@@ -1605,6 +1617,30 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
+            (ExtractKind::Yolink { sync }, Some(DbHandle::Yolink(db))) => {
+                frankweiler_etl_yolink::extract::fetch(
+                    frankweiler_etl_yolink::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        sync: sync.clone(),
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "devices={} windows={} touched={} unchanged={} commits={} errors={} requests={}",
+                        s.devices,
+                        s.windows,
+                        s.readings_touched,
+                        s.readings_unchanged,
+                        s.commits,
+                        s.errors,
+                        s.requests,
+                    )
+                })
+            }
             (
                 ExtractKind::Notion {
                     sync,
@@ -1668,8 +1704,8 @@ impl ExtractPlan {
                     blob_size_limit_bytes,
                 },
                 Some(DbHandle::Jmap(db)),
-            ) => frankweiler_etl_jmap::extract::fetch(
-                frankweiler_etl_jmap::extract::FetchOptions {
+            ) => frankweiler_etl_email::extract::fetch(
+                frankweiler_etl_email::extract::FetchOptions {
                     db_path: self.out_dir.clone(),
                     db: Some(db),
                     hostname: sync.hostname.clone(),
@@ -1813,6 +1849,26 @@ fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
 // ─────────────────────────────────────────────────────────────────────
 // Translate phase
 // ─────────────────────────────────────────────────────────────────────
+
+/// True when `fixture` looks like a Google Takeout mbox drop:
+/// either a single `.mbox` file or a directory containing at least
+/// one. Lets the jmap translate path fall back to file-mode without
+/// a doltlite raw db.
+fn is_mbox_input(fixture: &Path) -> bool {
+    if fixture.is_file() {
+        return fixture.extension().and_then(|s| s.to_str()) == Some("mbox");
+    }
+    let Ok(entries) = fs::read_dir(fixture) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mbox") {
+            return true;
+        }
+    }
+    false
+}
 
 /// Translate one source's `input_path` into the workspace's
 /// `rendered_md/` + sidecar tree. ClaudeExport shares the anthropic
@@ -2004,20 +2060,40 @@ fn translate_source(
             .context("carddav render_all")
             .map(|_| ())
         }
-        SourceConfig::JmapApi { .. } => {
-            use frankweiler_etl_jmap::extract::block_on_load_all;
-            use frankweiler_etl_jmap::extract::db_path_for as jmap_db_path_for;
-            use frankweiler_etl_jmap::translate::render::render_all;
+        SourceConfig::Email { sync, .. } => {
+            use frankweiler_etl_email::extract::block_on_load_all;
+            use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
+            use frankweiler_etl_email::translate::mbox;
+            use frankweiler_etl_email::translate::render::render_all;
+
+            // Two-mode dispatch, parallel to how contacts picks
+            // between a server-backed doltlite db and a translate-only
+            // .vcf input_path:
+            //
+            //  1. doltlite db exists at `fixture` → server-extracted
+            //     run; load via block_on_load_all.
+            //  2. else `fixture` is an .mbox file or a directory
+            //     containing one → file-backed Google Takeout mode;
+            //     parse via translate::mbox::parse.
+            //  3. else nothing staged yet → skip (matches the
+            //     translate-only contacts shape for an empty
+            //     input_path).
             let db = jmap_db_path_for(&fixture);
-            if !db.exists() {
+            let parsed = if db.exists() {
+                block_on_load_all(&db)
+                    .with_context(|| format!("jmap block_on_load_all {}", db.display()))?
+            } else if is_mbox_input(&fixture) {
+                let account_override = sync.as_ref().and_then(|s| s.account_id.as_deref());
+                mbox::parse(&fixture, account_override)
+                    .with_context(|| format!("jmap mbox parse {}", fixture.display()))?
+            } else {
                 status_line!(
-                    "[translate] {name} (jmap): no raw db at {} — skipping",
-                    db.display()
+                    "[translate] {name} (jmap): no raw db at {} and no .mbox under {} — skipping",
+                    db.display(),
+                    fixture.display(),
                 );
                 return Ok(());
-            }
-            let parsed = block_on_load_all(&db)
-                .with_context(|| format!("jmap block_on_load_all {}", db.display()))?;
+            };
             render_all(
                 &parsed,
                 root,
@@ -2043,6 +2119,15 @@ fn translate_source(
             )
             .context("perseus render_all")
             .map(|_| ())
+        }
+        SourceConfig::Yolink { .. } => {
+            // Extract-only provider. Time-series viz lives outside
+            // the rendered_md tree; the readings sit in the source's
+            // doltlite for direct query (sqlite3 / dolt log) without
+            // a markdown intermediary. Skip translate quietly so a
+            // mixed config doesn't error out.
+            status_line!("[translate] {name} (yolink): skipped (extract-only, no render path)");
+            Ok(())
         }
     }
 }
@@ -2080,11 +2165,11 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::JmapApi { .. } => {
+            SourceConfig::Email { .. } => {
                 // No synthesizer yet — JMAP playback fixtures are a
                 // follow-up. Skip quietly.
                 status_line!(
-                    "[synth] {} (jmap): skipped (no synthesizer yet)",
+                    "[synth] {} (email): skipped (no synthesizer yet)",
                     src.name()
                 );
                 continue;
@@ -2094,6 +2179,16 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // synthesize against), so synth is a no-op.
                 status_line!(
                     "[synth] {} (perseus): skipped (translate-only, no extract)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Yolink { .. } => {
+                // No playback synthesizer for yolink yet — would need
+                // to capture per-window CSV bodies into a fixture
+                // tree. Skip quietly so a mixed config doesn't error.
+                status_line!(
+                    "[synth] {} (yolink): skipped (no synthesizer yet)",
                     src.name()
                 );
                 continue;

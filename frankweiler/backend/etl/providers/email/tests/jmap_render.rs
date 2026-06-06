@@ -12,8 +12,8 @@ use frankweiler_etl::blob_store::InMemoryBlobStore;
 use frankweiler_etl::doltlite_raw::BlobBytes;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_jmap::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail, LoadedRaw};
-use frankweiler_etl_jmap::translate::render::{render_all, thread_uuid};
+use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail, LoadedRaw};
+use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 use serde_json::json;
 
 fn make_loaded() -> LoadedRaw {

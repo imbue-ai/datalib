@@ -450,7 +450,8 @@ fn email_body_markdown(
         }
         if !html.is_empty() {
             let rewritten = rewrite_cid_srcs(&html, &cid_to_blob);
-            let md = html2md::parse_html(&rewritten);
+            let stripped = strip_noisy_blocks(&rewritten);
+            let md = html2md::parse_html(&stripped);
             if !md.trim().is_empty() {
                 return Some(md);
             }
@@ -528,6 +529,59 @@ fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String
             out.push_str(cid);
         }
         i += pos + 4 + end_rel;
+    }
+    out
+}
+
+/// Remove `<style>…</style>`, `<script>…</script>`, and `<head>…</head>`
+/// blocks (case-insensitive) before html2md sees them. html2md treats
+/// CSS / JS as plain text and dumps the whole stylesheet into the
+/// rendered output, which is what produces the wall of `:root {…}`
+/// noise at the top of marketing emails.
+fn strip_noisy_blocks(html: &str) -> String {
+    let mut out = html.to_string();
+    for tag in ["style", "script", "head"] {
+        out = strip_tag_block(&out, tag);
+    }
+    out
+}
+
+fn strip_tag_block(html: &str, tag: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let open_needle = format!("<{tag}");
+    let close_needle = format!("</{tag}>");
+    let mut out = String::with_capacity(html.len());
+    let mut i = 0;
+    while i < html.len() {
+        let Some(rel_open) = lower[i..].find(&open_needle) else {
+            out.push_str(&html[i..]);
+            break;
+        };
+        let open_at = i + rel_open;
+        // Confirm the next char after `<tag` is `>` or whitespace —
+        // otherwise it's a different tag with the same prefix
+        // (e.g. `<header>` when stripping `<head>`).
+        let after_name = open_at + open_needle.len();
+        let boundary_ok = lower
+            .as_bytes()
+            .get(after_name)
+            .map(|c| matches!(c, b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/'))
+            .unwrap_or(false);
+        if !boundary_ok {
+            out.push_str(&html[i..after_name]);
+            i = after_name;
+            continue;
+        }
+        out.push_str(&html[i..open_at]);
+        match lower[after_name..].find(&close_needle) {
+            Some(rel_close) => {
+                i = after_name + rel_close + close_needle.len();
+            }
+            None => {
+                // Unterminated — drop everything from the open tag to EOF.
+                break;
+            }
+        }
     }
     out
 }
