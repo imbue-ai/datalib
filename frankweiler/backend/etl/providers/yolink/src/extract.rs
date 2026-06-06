@@ -47,7 +47,7 @@ pub struct Reading {
 /// value must end with the suffix (e.g. `-18.4℃`) or we reject it.
 fn columns_for(kind: &str) -> Result<&'static [(&'static str, &'static str, &'static str)]> {
     Ok(match kind {
-        "thsensor" => &[
+        "temperature_humidity" => &[
             ("Temperature(℃)", "temperature_c", "℃"),
             ("Humidity(%RH)", "humidity_pct", ""),
         ],
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn parse_thsensor() {
-        insta::assert_yaml_snapshot!(parse(TH, "thsensor").unwrap());
+        insta::assert_yaml_snapshot!(parse(TH, "temperature_humidity").unwrap());
     }
 
     #[test]
@@ -354,8 +354,8 @@ mod tests {
     fn parse_rejects_unit_flips() {
         let bad_header = "Device Id,Time,Temperature(℉),Humidity(%RH)\nx,2026/04/05 17:02:04-0700,-1.1℉,70.0\n";
         let bad_row = "Device Id,Time,Temperature(℃),Humidity(%RH)\nx,2026/04/05 17:02:04-0700,-1.1℉,70.0\n";
-        insta::assert_snapshot!("bad_header", format!("{:#}", parse(bad_header, "thsensor").unwrap_err()));
-        insta::assert_snapshot!("bad_row", format!("{:#}", parse(bad_row, "thsensor").unwrap_err()));
+        insta::assert_snapshot!("bad_header", format!("{:#}", parse(bad_header, "temperature_humidity").unwrap_err()));
+        insta::assert_snapshot!("bad_row", format!("{:#}", parse(bad_row, "temperature_humidity").unwrap_err()));
     }
 
     #[tokio::test]

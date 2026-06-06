@@ -14,9 +14,9 @@ fn dir() -> Option<PathBuf> {
 }
 
 #[test]
-fn thsensor() {
+fn temperature_humidity() {
     let Some(d) = dir() else { return };
-    let rows = parse(&fs::read_to_string(d.join("bfreezer1.out")).unwrap(), "thsensor").unwrap();
+    let rows = parse(&fs::read_to_string(d.join("bfreezer1.out")).unwrap(), "temperature_humidity").unwrap();
     assert!(rows.len() > 100);
 }
 

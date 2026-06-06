@@ -352,9 +352,11 @@ pub struct YolinkDevice {
     /// (`basement_freezer`, `main_fridge`); changing it later
     /// orphans prior history.
     pub name: String,
-    /// `thsensor` (Temperature(℃), Humidity(%RH) columns) or
-    /// `watermeter` (Water Meter(GAL), Water Consumption(GAL)).
-    /// Drives the column-header check in the CSV parser.
+    /// `temperature_humidity` (Temperature(℃), Humidity(%RH)
+    /// columns) or `watermeter` (Water Meter(GAL), Water
+    /// Consumption(GAL)). Drives the column-header check in the
+    /// CSV parser; also stored verbatim in the `yolink_devices`
+    /// table so what the user typed is what `dolt diff` shows.
     pub kind: String,
     /// Earliest timepoint to ever pull, as `YYYY-MM-DD`. First fetch
     /// walks forward from here in `window_days` chunks. Picked once
@@ -728,7 +730,7 @@ impl Config {
                 }
                 for d in &sync.devices {
                     match d.kind.as_str() {
-                        "thsensor" | "watermeter" => {}
+                        "temperature_humidity" | "watermeter" => {}
                         other => {
                             return Err(ConfigError::YolinkBadDeviceKind(
                                 name.into(),
@@ -1001,7 +1003,7 @@ sources:
           start: '2026-04-05'
           url: 'https://us.yosmart.com/download/AAA/BBB?start={start}&end={end}&tz=America/Vancouver&original=true'
         - name: basement_freezer
-          kind: thsensor
+          kind: temperature_humidity
           start: '2026-04-05'
           url: 'https://us.yosmart.com/download/CCC/DDD?start={start}&end={end}&tempUnit=c&tz=America/Vancouver&original=true'
 ",
@@ -1051,7 +1053,7 @@ sources:
     sync:
       devices:
         - name: x
-          kind: thsensor
+          kind: temperature_humidity
           start: '2026-04-05'
           url: 'https://h/A/B?start=1&end=2'
 ",
