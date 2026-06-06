@@ -1,0 +1,13 @@
+---
+source: etl/providers/yolink/src/extract.rs
+expression: "parse(TH, \"thsensor\").unwrap()"
+---
+- ts_ms: 1775433724000
+  metric: temperature_c
+  value: -18.4
+- ts_ms: 1775433724000
+  metric: humidity_pct
+  value: 70
+- ts_ms: 1775433934000
+  metric: temperature_c
+  value: -18

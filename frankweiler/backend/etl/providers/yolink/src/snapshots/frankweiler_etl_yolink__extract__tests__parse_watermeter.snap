@@ -1,0 +1,16 @@
+---
+source: etl/providers/yolink/src/extract.rs
+expression: "parse(WM, \"watermeter\").unwrap()"
+---
+- ts_ms: 1775433600000
+  metric: water_meter_gal
+  value: 529.084
+- ts_ms: 1775433600000
+  metric: water_consumption_gal
+  value: 0
+- ts_ms: 1775433756000
+  metric: water_meter_gal
+  value: 529.374
+- ts_ms: 1775433756000
+  metric: water_consumption_gal
+  value: 0.291

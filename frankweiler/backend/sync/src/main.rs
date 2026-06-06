@@ -58,6 +58,7 @@ use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
     GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
+    YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -1189,6 +1190,7 @@ enum DbHandle {
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
     Jmap(frankweiler_etl_email::extract::RawDb),
+    Yolink(frankweiler_etl_yolink::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1203,6 +1205,7 @@ impl DbHandle {
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
             DbHandle::Jmap(d) => d.pool(),
+            DbHandle::Yolink(d) => d.pool(),
         }
     }
 }
@@ -1244,6 +1247,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Jmap { .. } => {
             DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
         }
+        ExtractKind::Yolink { .. } => {
+            DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
+        }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1282,6 +1288,9 @@ enum ExtractKind {
     Jmap {
         sync: EmailSync,
         blob_size_limit_bytes: Option<u64>,
+    },
+    Yolink {
+        sync: YolinkSync,
     },
 }
 
@@ -1328,6 +1337,9 @@ impl ExtractPlan {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
+                sync: sync.clone().unwrap_or_default(),
+            },
+            SourceConfig::Yolink { sync, .. } => ExtractKind::Yolink {
                 sync: sync.clone().unwrap_or_default(),
             },
             SourceConfig::ClaudeExport { .. } => return None,
@@ -1586,6 +1598,30 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
+            (ExtractKind::Yolink { sync }, Some(DbHandle::Yolink(db))) => {
+                frankweiler_etl_yolink::extract::fetch(
+                    frankweiler_etl_yolink::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        sync: sync.clone(),
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "devices={} windows={} touched={} unchanged={} commits={} errors={} requests={}",
+                        s.devices,
+                        s.windows,
+                        s.readings_touched,
+                        s.readings_unchanged,
+                        s.commits,
+                        s.errors,
+                        s.requests,
+                    )
+                })
+            }
             (
                 ExtractKind::Notion {
                     sync,
@@ -2038,6 +2074,17 @@ fn translate_source(
             .context("perseus render_all")
             .map(|_| ())
         }
+        SourceConfig::Yolink { .. } => {
+            // Extract-only provider. Time-series viz lives outside
+            // the rendered_md tree; the readings sit in the source's
+            // doltlite for direct query (sqlite3 / dolt log) without
+            // a markdown intermediary. Skip translate quietly so a
+            // mixed config doesn't error out.
+            status_line!(
+                "[translate] {name} (yolink): skipped (extract-only, no render path)"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -2088,6 +2135,16 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // synthesize against), so synth is a no-op.
                 status_line!(
                     "[synth] {} (perseus): skipped (translate-only, no extract)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Yolink { .. } => {
+                // No playback synthesizer for yolink yet — would need
+                // to capture per-window CSV bodies into a fixture
+                // tree. Skip quietly so a mixed config doesn't error.
+                status_line!(
+                    "[synth] {} (yolink): skipped (no synthesizer yet)",
                     src.name()
                 );
                 continue;

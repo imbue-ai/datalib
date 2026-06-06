@@ -1,0 +1,5 @@
+---
+source: etl/providers/yolink/src/extract.rs
+expression: "format!(\"{:#}\", parse(bad_row, \"thsensor\").unwrap_err())"
+---
+row 2 temperature_c: value "-1.1℉" missing suffix "℃"
