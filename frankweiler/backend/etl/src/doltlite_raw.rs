@@ -278,6 +278,13 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 ///   - `synchronous=Normal`: durability isn't critical; the upstream
 ///     API is the source of truth and we can always re-fetch.
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
+    // Logged at every call so stray second-pool opens against an
+    // already-open file are visible — max_connections=1 means a second
+    // pool will surface as "database is locked" on dolt_commit, and
+    // without this log it's hard to attribute. The elapsed time on
+    // success also makes slow opens visible during long startup phases.
+    let started = std::time::Instant::now();
+    tracing::info!(path = %db_path.display(), "doltlite_raw::open: opening sqlite pool");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
@@ -310,6 +317,11 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
             )
         })?;
     }
+    tracing::info!(
+        path = %db_path.display(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "doltlite_raw::open: pool ready"
+    );
     Ok(pool)
 }
 

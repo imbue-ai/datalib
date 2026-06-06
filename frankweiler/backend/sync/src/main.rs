@@ -1032,6 +1032,16 @@ async fn run_extract_phase(
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
         let path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
+        // Per-source narration: without this the pre-open loop runs
+        // silently and a stall on any one source looks like the whole
+        // sync hung. `doltlite_raw::open` logs its own start/finish too,
+        // but only the orchestrator knows the source name.
+        tracing::info!(
+            source = %plan.name,
+            kind = plan.type_str,
+            path = %path.display(),
+            "extract pre-open: opening writable doltlite pool"
+        );
         match open_extract_db(&plan.kind, &path).await {
             Ok(Some(db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
@@ -1046,9 +1056,12 @@ async fn run_extract_phase(
                 opened.push(plan);
             }
             Err(e) => {
-                status_line!(
-                    "[frankweiler-sync] extract pre-open FAILED for {}: {e:#}",
-                    plan.name
+                tracing::error!(
+                    source = %plan.name,
+                    kind = plan.type_str,
+                    path = %path.display(),
+                    error = %format!("{e:#}"),
+                    "extract pre-open FAILED"
                 );
                 outcomes.push(PhaseOutcome::err(
                     &plan.name,
@@ -1087,17 +1100,19 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
-            let mp = multi.clone();
             set.spawn(async move {
-                mp.println(format!("[extract] start {name} ({type_str})"))
-                    .ok();
+                tracing::info!(source = %name, kind = type_str, "extract: start");
                 let r = plan
                     .run()
                     .await
                     .with_context(|| format!("extract {name} (type={type_str})"));
                 match &r {
-                    Ok(s) => mp.println(format!("[extract] done  {name}: {s}")).ok(),
-                    Err(e) => mp.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+                    Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                    Err(e) => tracing::error!(
+                        source = %name,
+                        error = %format!("{e:#}"),
+                        "extract: FAIL"
+                    ),
                 };
                 (name, type_str, r)
             });
@@ -1120,14 +1135,18 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
-            multi.println(format!("[extract] {name} ({type_str})")).ok();
+            tracing::info!(source = %name, kind = type_str, "extract: start");
             let r = plan
                 .run()
                 .await
                 .with_context(|| format!("extract {name} (type={type_str})"));
             match &r {
-                Ok(s) => multi.println(format!("[extract] done  {name}: {s}")).ok(),
-                Err(e) => multi.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+                Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                Err(e) => tracing::error!(
+                    source = %name,
+                    error = %format!("{e:#}"),
+                    "extract: FAIL"
+                ),
             };
             outcomes.push(summary::outcome_from(&name, type_str, r));
         }
@@ -1332,9 +1351,9 @@ impl ExtractPlan {
             },
             SourceConfig::ClaudeExport { .. } => return None,
             SourceConfig::JmapApi { sync, .. } => {
-                let sync = sync.clone().ok_or_else(|| {
-                    anyhow::anyhow!("jmap_api source {name} missing sync: block")
-                });
+                let sync = sync
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("jmap_api source {name} missing sync: block"));
                 match sync {
                     Ok(sync) => ExtractKind::Jmap {
                         sync,
@@ -1696,11 +1715,38 @@ impl ExtractPlan {
         let commit_outcome: Result<String> = match (&pool, &result) {
             (Some(pool), Ok(stats)) => {
                 let msg = format!("extract {name}: {stats}");
-                match frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await {
-                    Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
-                    Ok(None) => Ok(stats.clone()),
+                // Timing the commit makes "database is locked" episodes
+                // legible: a 2+s elapsed before failure points at pool
+                // contention rather than dolt internals.
+                tracing::info!(source = %name, "extract commit: starting dolt_commit");
+                let started = std::time::Instant::now();
+                let outcome = frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await;
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                match outcome {
+                    Ok(Some(h)) => {
+                        tracing::info!(
+                            source = %name,
+                            commit = %h,
+                            elapsed_ms,
+                            "extract commit: done"
+                        );
+                        Ok(format!("{stats} commit={h}"))
+                    }
+                    Ok(None) => {
+                        tracing::info!(
+                            source = %name,
+                            elapsed_ms,
+                            "extract commit: skipped (no dolt extensions)"
+                        );
+                        Ok(stats.clone())
+                    }
                     Err(e) => {
-                        status_line!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
+                        tracing::error!(
+                            source = %name,
+                            elapsed_ms,
+                            error = %format!("{e:#}"),
+                            "extract commit FAILED"
+                        );
                         Ok(stats.clone())
                     }
                 }
@@ -2037,7 +2083,10 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
             SourceConfig::JmapApi { .. } => {
                 // No synthesizer yet — JMAP playback fixtures are a
                 // follow-up. Skip quietly.
-                status_line!("[synth] {} (jmap): skipped (no synthesizer yet)", src.name());
+                status_line!(
+                    "[synth] {} (jmap): skipped (no synthesizer yet)",
+                    src.name()
+                );
                 continue;
             }
             SourceConfig::Perseus { .. } => {
