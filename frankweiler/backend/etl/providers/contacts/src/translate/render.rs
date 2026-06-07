@@ -181,9 +181,15 @@ fn output_paths(
         .join("contacts")
         .join(source_name)
         .join(&contact.addressbook);
+    // `uid` is `addressbook:stem:block_index`; the colons are fine in
+    // the DB primary key but bazel rejects them in label paths
+    // (`:` is the package/target separator), so we substitute them
+    // for the on-disk filename only. The grid-row + sidecar still
+    // carry the canonical `uid` unchanged.
+    let safe_uid = contact.uid.replace(':', "_");
     let stem = format!(
         "{}__{}",
-        &contact.uid,
+        safe_uid,
         slugify(contact.display_name.as_deref().unwrap_or(&contact.uid))
     );
     let md_path = page_dir.join(format!("{stem}.md"));
