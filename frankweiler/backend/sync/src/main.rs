@@ -1494,7 +1494,12 @@ impl ExtractPlan {
                     frankweiler_etl_github::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
                         db: Some(db),
-                        full_sync: true,
+                        // Same fix as gitlab below: don't force full_sync,
+                        // so discovery narrows via saved `sync_scope_state`.
+                        // Unlike gitlab, github's per-PR loop has no skip
+                        // optimization yet, so every discovered PR still
+                        // gets four API calls — but narrowing keeps the
+                        // discovered set small to begin with.
                         refresh_window_days: sync
                             .refresh_window_days
                             .map(|v| v.max(0) as u32)
@@ -1526,7 +1531,14 @@ impl ExtractPlan {
                     frankweiler_etl_gitlab::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
                         db: Some(db),
-                        full_sync: true,
+                        // full_sync stays false (FetchOptions default) so the
+                        // gitlab provider honors saved `sync_scope_state` and
+                        // narrows discovery via `updated_after`. The previous
+                        // unconditional `true` here disabled the entire
+                        // incremental path — every run re-discovered and
+                        // re-fetched every MR in the user's scope. The
+                        // `--reset-and-redownload` flag still forces a clean
+                        // re-pull via `db.reset()` when actually needed.
                         refresh_window_days: sync
                             .refresh_window_days
                             .map(|v| v.max(0) as u32)
