@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub use db::{db_path_for, BlobBytes, BlockUpsert, LoadedRaw, PageState, RawDb};
@@ -81,7 +83,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
     pub new_pages: usize,
     pub upd_pages: usize,
@@ -603,7 +605,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "page": opts.page,
         "retry_failed": opts.retry_failed,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let official = NotionOfficialClient::new();
     let mut summary = FetchSummary::default();
@@ -774,23 +776,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.official_requests = official.request_count();
-    let summary_json = json!({
-        "new_pages": summary.new_pages,
-        "upd_pages": summary.upd_pages,
-        "new_blocks": summary.new_blocks,
-        "upd_blocks": summary.upd_blocks,
-        "new_comments": summary.new_comments,
-        "upd_comments": summary.upd_comments,
-        "skipped_pages": summary.skipped_pages,
-        "new_blobs": summary.new_blobs,
-        "skipped_blobs": summary.skipped_blobs,
-        "failed_blobs": summary.failed_blobs,
-        "official_requests": summary.official_requests,
-        "unofficial_requests": summary.unofficial_requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }

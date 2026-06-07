@@ -633,6 +633,7 @@ impl Default for FetchOptions {
     }
 }
 
+#[derive(serde::Serialize)]
 pub struct FetchSummary {
     pub messages: usize,
     pub replies: usize,
@@ -668,7 +669,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "media": opts.media,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = frankweiler_etl::extract_run::ExtractRun::start(db.pool(), &run_config).await?;
 
     let t_scan = std::time::Instant::now();
     let channel_latest_ts = db.latest_ts_by_channel().await?;
@@ -783,14 +784,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let result = work.await;
-    let summary_json = json!({
-        "messages": grand.messages,
-        "replies": grand.replies,
-        "media": grand.media,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &grand).await;
     result?;
 
     info!(

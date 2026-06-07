@@ -199,14 +199,6 @@ impl RawDb {
         Ok(())
     }
 
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
-    }
-
     // ── workspace ───────────────────────────────────────────────────
 
     pub async fn upsert_workspace(&self, payload: &Value) -> Result<()> {

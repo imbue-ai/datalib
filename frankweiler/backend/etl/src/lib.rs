@@ -23,6 +23,7 @@ pub mod control;
 pub mod doltlite_raw;
 pub mod event_store;
 pub mod events;
+pub mod extract_run;
 pub mod http;
 pub mod ids;
 pub mod latchkey;

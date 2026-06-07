@@ -142,14 +142,6 @@ impl RawDb {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
-    }
-
     /// Snapshot every page's last_edited_time + payload-presence flag.
     /// Used at the start of a sync to decide which detail fetches we can
     /// skip.

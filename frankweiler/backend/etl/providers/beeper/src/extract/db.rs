@@ -226,14 +226,6 @@ impl RawDb {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
-    }
-
     /// Distinct-row counts read straight from the destination DB
     /// after a run. Authoritative numbers for the summary —
     /// previous attempts at counting via `summary.events += 1`

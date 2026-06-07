@@ -314,14 +314,6 @@ impl RawDb {
         Ok(())
     }
 
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
-    }
-
     // ── state tokens ────────────────────────────────────────────────
 
     pub async fn load_state(&self, account_id: &str, type_name: &str) -> Result<Option<String>> {
@@ -1200,7 +1192,9 @@ mod tests {
         .await
         .unwrap();
         db.save_state("A1", "Email", "tok").await.unwrap();
-        let run = db.start_run(&json!({"phase": "test"})).await.unwrap();
+        let run = frankweiler_etl::doltlite_raw::start_run(db.pool(), &json!({"phase": "test"}))
+            .await
+            .unwrap();
 
         db.reset().await.unwrap();
 

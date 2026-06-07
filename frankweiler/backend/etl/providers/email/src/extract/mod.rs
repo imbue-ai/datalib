@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::extract_run::ExtractRun;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
@@ -115,7 +116,7 @@ pub struct FetchOptions {
     pub control: frankweiler_etl::control::ExtractControl,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct FetchSummary {
     pub account_id: String,
     pub mailboxes_upserted: usize,
@@ -164,23 +165,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     );
 
     // Stamp the run + a record of the account itself.
-    let run_id = db
-        .start_run(&json!({
+    let run = ExtractRun::start(
+        db.pool(),
+        &json!({
             "hostname": opts.hostname,
             "account_id": account_id,
             "full_resync": opts.full_resync,
             "only_mailbox_ids": opts.only_mailbox_ids,
-        }))
-        .await?;
+        }),
+    )
+    .await?;
 
     let result = run_sync(&db, &session, &account_id, &opts).await;
-
-    let (status, summary_json) = match &result {
-        Ok(s) => ("ok", serde_json::to_value(s).unwrap_or(Value::Null)),
-        Err(e) => ("error", json!({"error": e.to_string()})),
-    };
-    db.finish_run(run_id, status, &summary_json).await?;
-
+    // On error we still serialize a partial-summary stub so the row
+    // has fields for grafana-style dashboards to graph. The summary
+    // type is the same on both paths; on error its fields will simply
+    // be the defaults populated up to the failure point.
+    let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
+    run.finish(&result, &summary_for_bookkeeping).await;
     result
 }
 

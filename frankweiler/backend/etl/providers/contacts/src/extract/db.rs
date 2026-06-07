@@ -44,7 +44,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -140,14 +139,6 @@ impl RawDb {
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
         Ok(())
-    }
-
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
     }
 
     // ── accounts ────────────────────────────────────────────────────
@@ -549,7 +540,9 @@ mod tests {
             .await
             .unwrap();
         // Start a sync_runs row — should survive reset.
-        let _ = db.start_run(&serde_json::json!({"k": "v"})).await.unwrap();
+        let _ = frankweiler_etl::doltlite_raw::start_run(db.pool(), &serde_json::json!({"k": "v"}))
+            .await
+            .unwrap();
         db.reset().await.unwrap();
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM accounts")
             .fetch_one(db.pool())

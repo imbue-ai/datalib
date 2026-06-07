@@ -20,6 +20,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use frankweiler_etl::extract_run::ExtractRun;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub use client::{GitHubClient, GitHubError, BASE, PER_PAGE};
@@ -83,7 +85,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
     pub new_prs: usize,
     pub new_issue_comments: usize,
@@ -241,7 +243,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "targets": opts.targets,
         "full_sync": opts.full_sync,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let client = GitHubClient::new();
     let mut summary = FetchSummary::default();
@@ -292,16 +294,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.requests = client.request_count();
-    let summary_json = json!({
-        "new_prs": summary.new_prs,
-        "new_issue_comments": summary.new_issue_comments,
-        "new_reviews": summary.new_reviews,
-        "new_review_comments": summary.new_review_comments,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }

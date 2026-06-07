@@ -23,7 +23,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Local;
 use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
@@ -67,7 +69,7 @@ pub struct FetchOptions {
     pub control: frankweiler_etl::control::ExtractControl,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
     pub fetched: usize,
     pub skipped: usize,
@@ -101,7 +103,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "limit": opts.limit,
         "conv_uuids": opts.conv_uuids,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let _started_at = opts
         .fetched_at
@@ -264,19 +266,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let result = work.await;
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
-    let summary_json = json!({
-        "fetched": summary.fetched,
-        "skipped": summary.skipped,
-        "errors": summary.errors,
-        "listing": summary.listing,
-        "new_blobs": summary.new_blobs,
-        "skipped_blobs": summary.skipped_blobs,
-        "failed_blobs": summary.failed_blobs,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }
