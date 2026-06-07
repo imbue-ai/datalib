@@ -51,7 +51,7 @@
 //! row counters: dolt is the ground truth, and the same code path
 //! works for every provider with zero per-provider plumbing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use serde::Serialize;
@@ -59,6 +59,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::doltlite_raw::{finish_run, has_dolt_extensions, start_run};
+use crate::scope_state;
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct RowDelta {
@@ -71,17 +72,28 @@ pub struct ExtractRun<'p> {
     run_id: i64,
     pool: &'p SqlitePool,
     started: std::time::Instant,
+    /// `sync_scope_state` snapshot taken right after `start_run`;
+    /// diffed against another snapshot at `finish` time so the
+    /// resulting `cursors` summary records every scope that moved
+    /// during this run.
+    cursors_before: HashMap<String, String>,
 }
 
 impl<'p> ExtractRun<'p> {
     /// Stamp a `running` row in `sync_runs` with `config`, capture
-    /// `run_id` + the wall-clock start, and return the handle.
+    /// `run_id` + the wall-clock start + the pre-run cursor snapshot,
+    /// and return the handle.
     pub async fn start(pool: &'p SqlitePool, config: &Value) -> Result<Self> {
         let run_id = start_run(pool, config).await?;
+        let cursors_before = scope_state::snapshot(pool).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at start failed");
+            HashMap::new()
+        });
         Ok(Self {
             run_id,
             pool,
             started: std::time::Instant::now(),
+            cursors_before,
         })
     }
 
@@ -111,6 +123,11 @@ impl<'p> ExtractRun<'p> {
         let elapsed_ms = self.started.elapsed().as_millis() as u64;
         let status = if result.is_ok() { "ok" } else { "error" };
         let deltas = compute_deltas(self.pool).await;
+        let cursors_after = scope_state::snapshot(self.pool).await.unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at finish failed");
+            HashMap::new()
+        });
+        let cursor_moves = scope_state::diff(self.cursors_before, cursors_after);
         let mut summary_json = serde_json::to_value(summary).unwrap_or(Value::Null);
         if let Value::Object(map) = &mut summary_json {
             map.insert("elapsed_ms".into(), Value::from(elapsed_ms));
@@ -118,6 +135,12 @@ impl<'p> ExtractRun<'p> {
                 map.insert(
                     "deltas".into(),
                     serde_json::to_value(d).unwrap_or(Value::Null),
+                );
+            }
+            if !cursor_moves.is_empty() {
+                map.insert(
+                    "cursors".into(),
+                    serde_json::to_value(&cursor_moves).unwrap_or(Value::Null),
                 );
             }
             if let Err(e) = result {
