@@ -242,7 +242,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         opts.progress.set_message(&format!("yolink: {}", dev.name));
         if let Err(e) = fetch_device(&db, dev, overlap_ms, window_ms, now_ms, &mut s).await {
             s.errors += 1;
-            warn!(event = "yolink_device_failed", device = %dev.name, error = %e);
+            warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"));
         }
         opts.progress.inc(1);
     }
@@ -284,20 +284,54 @@ async fn fetch_device(
 
     info!(event = "yolink_begin", device = %dev.name, cursor, now_ms);
 
+    // Tolerate per-window failures (a single 4xx or transient curl error
+    // shouldn't take out an entire device's backfill — common when the
+    // configured `start` predates when the device was deployed). Advance
+    // the cursor on failure and keep marching. Hard-fail only after
+    // CONSECUTIVE_FAILURE_BUDGET in a row, so a stuck credential or
+    // bad URL still surfaces instead of silently looping for years.
+    const CONSECUTIVE_FAILURE_BUDGET: u32 = 30;
+    let mut consecutive_failures: u32 = 0;
+
     while cursor < now_ms {
         let end = cursor.saturating_add(window_ms).min(now_ms);
         let url = dev
             .url
             .replace("{start}", &cursor.to_string())
             .replace("{end}", &end.to_string());
-        let body = curl(&url)
-            .await
-            .with_context(|| format!("{} {cursor}..{end}", dev.name))?;
-        s.requests += 1;
-        s.windows += 1;
-        let rows =
-            parse(&body, &dev.kind).with_context(|| format!("{} {cursor}..{end}", dev.name))?;
-        let (touched, unchanged) = upsert_readings(db.pool(), &dev.name, &rows).await?;
+        let window_result = async {
+            let body = curl(&url).await.context("curl")?;
+            s.requests += 1;
+            s.windows += 1;
+            let rows = parse(&body, &dev.kind).context("parse")?;
+            let (touched, unchanged) = upsert_readings(db.pool(), &dev.name, &rows).await?;
+            Ok::<_, anyhow::Error>((touched, unchanged))
+        }
+        .await;
+        let (touched, unchanged) = match window_result {
+            Ok(v) => {
+                consecutive_failures = 0;
+                v
+            }
+            Err(e) => {
+                consecutive_failures += 1;
+                warn!(
+                    event = "yolink_window_failed",
+                    device = %dev.name,
+                    cursor, end,
+                    consecutive_failures,
+                    error = %format!("{e:#}"),
+                );
+                if consecutive_failures >= CONSECUTIVE_FAILURE_BUDGET {
+                    return Err(e.context(format!(
+                        "{} aborted after {consecutive_failures} consecutive window failures (last window {cursor}..{end})",
+                        dev.name
+                    )));
+                }
+                cursor = (end - overlap_ms).max(cursor + 1);
+                continue;
+            }
+        };
         s.readings_touched += touched;
         s.readings_unchanged += unchanged;
         // Always attempt a per-window commit. Doltlite's

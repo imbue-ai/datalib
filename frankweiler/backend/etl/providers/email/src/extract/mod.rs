@@ -144,9 +144,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
 
+    // Coarse per-phase progress so the bar moves even though we don't
+    // have a meaningful per-item denominator before the first JMAP
+    // response. Without this, fastmail looks stuck at 0/0 in the
+    // dashboard whether it's running or wedged on Session::discover.
+    opts.progress.set_length(Some(5));
+    opts.progress.set_message("email: session");
+
     let session = Session::discover(&opts.hostname)
         .await
         .with_context(|| format!("discover JMAP session at {}", opts.hostname))?;
+    opts.progress.inc(1);
     let account_id = session.pick_account(opts.account_id.as_deref())?;
     info!(
         event = "jmap_session",
@@ -203,9 +211,12 @@ async fn run_sync(
     };
 
     // ── mailboxes ───────────────────────────────────────────────────
+    opts.progress.set_message("email: mailboxes");
     sync_mailboxes(db, session, account_id, opts, &mut summary).await?;
+    opts.progress.inc(1);
 
     // ── emails (+ collect threadIds) ────────────────────────────────
+    opts.progress.set_message("email: emails");
     let touched_threads = sync_emails(
         db,
         session,
@@ -215,12 +226,17 @@ async fn run_sync(
         &mut summary,
     )
     .await?;
+    opts.progress.inc(1);
 
     // ── threads ─────────────────────────────────────────────────────
+    opts.progress.set_message("email: threads");
     sync_threads(db, session, account_id, &touched_threads, &mut summary).await?;
+    opts.progress.inc(1);
 
     // ── blobs ───────────────────────────────────────────────────────
+    opts.progress.set_message("email: blobs");
     sync_blobs(db, session, account_id, opts, &mut summary).await?;
+    opts.progress.inc(1);
 
     info!(
         event = "jmap_download_complete",
