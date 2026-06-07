@@ -39,13 +39,33 @@
 //! Failures in the bookkeeping path itself (the `finish_run` SQL
 //! update) are **logged and swallowed**: we never want a bookkeeping
 //! write to mask whatever error the work future actually returned.
+//!
+//! # Auto-deltas (Piece B)
+//!
+//! After the run, [`ExtractRun::finish`] queries `dolt_status` for the
+//! list of dirty tables and `dolt_diff_<table>` for added / modified /
+//! removed counts since the last `dolt_commit`. The result lands in
+//! `summary.deltas` as `{table: {added, modified, removed}}`. Skipped
+//! silently when the linked libsqlite3 isn't doltlite (e.g. cargo
+//! tests under stock SQLite). This replaces the ad-hoc per-provider
+//! row counters: dolt is the ground truth, and the same code path
+//! works for every provider with zero per-provider plumbing.
+
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::doltlite_raw::{finish_run, start_run};
+use crate::doltlite_raw::{finish_run, has_dolt_extensions, start_run};
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct RowDelta {
+    pub added: u64,
+    pub modified: u64,
+    pub removed: u64,
+}
 
 pub struct ExtractRun<'p> {
     run_id: i64,
@@ -90,9 +110,16 @@ impl<'p> ExtractRun<'p> {
     {
         let elapsed_ms = self.started.elapsed().as_millis() as u64;
         let status = if result.is_ok() { "ok" } else { "error" };
+        let deltas = compute_deltas(self.pool).await;
         let mut summary_json = serde_json::to_value(summary).unwrap_or(Value::Null);
         if let Value::Object(map) = &mut summary_json {
             map.insert("elapsed_ms".into(), Value::from(elapsed_ms));
+            if let Some(d) = deltas {
+                map.insert(
+                    "deltas".into(),
+                    serde_json::to_value(d).unwrap_or(Value::Null),
+                );
+            }
             if let Err(e) = result {
                 map.insert("error".into(), Value::from(format!("{e:#}")));
             }
@@ -105,6 +132,75 @@ impl<'p> ExtractRun<'p> {
             );
         }
     }
+}
+
+/// Query `dolt_status` for dirty tables, then `dolt_diff_<table>` for
+/// per-diff-type counts since the last `dolt_commit`. Returns `None`
+/// against stock libsqlite3 (no dolt extensions); returns `Some({})`
+/// against doltlite when nothing's dirty. Individual table queries
+/// that fail are logged and skipped — we never want a single bad
+/// virtual table read to drop the rest of the summary.
+async fn compute_deltas(pool: &SqlitePool) -> Option<BTreeMap<String, RowDelta>> {
+    if !has_dolt_extensions(pool).await {
+        return None;
+    }
+    let dirty: Vec<(String, i64, String)> =
+        match sqlx::query_as("SELECT table_name, staged, status FROM dolt_status")
+            .fetch_all(pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "dolt_status read failed");
+                return None;
+            }
+        };
+    let mut out: BTreeMap<String, RowDelta> = BTreeMap::new();
+    for (table, _staged, _status) in dirty {
+        // Guard against any table name that wouldn't be a safe
+        // identifier in the dynamic `dolt_diff_<table>` query. Dolt's
+        // own naming for these virtual tables matches the underlying
+        // table's identifier rules — so an unsafe name here would mean
+        // an unsafe table name made it past our DDL, which is a
+        // separate bug, but we still skip rather than risk an
+        // injection-flavored failure mode.
+        if !is_safe_identifier(&table) {
+            tracing::warn!(table = %table, "skipping delta for unsafe-identifier table name");
+            continue;
+        }
+        let sql = format!(
+            "SELECT diff_type, COUNT(*) FROM dolt_diff_{table} \
+             WHERE to_commit = 'WORKING' GROUP BY diff_type"
+        );
+        let rows: Vec<(String, i64)> = match sqlx::query_as(&sql).fetch_all(pool).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(table = %table, error = %format!("{e:#}"),
+                    "dolt_diff_<table> read failed; delta dropped");
+                continue;
+            }
+        };
+        let mut d = RowDelta::default();
+        for (kind, n) in rows {
+            let n = n.max(0) as u64;
+            match kind.as_str() {
+                "added" => d.added = n,
+                "modified" => d.modified = n,
+                "removed" => d.removed = n,
+                _ => {}
+            }
+        }
+        out.insert(table, d);
+    }
+    Some(out)
+}
+
+fn is_safe_identifier(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
@@ -152,6 +248,70 @@ mod tests {
         assert!(s["elapsed_ms"].is_number());
         // No error field on the ok path.
         assert!(s.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn deltas_reflect_uncommitted_writes_when_dolt_extensions_present() {
+        // Doltlite-only test: against stock libsqlite3 there are no
+        // dolt_status / dolt_diff_<table> virtual tables, so
+        // `deltas` would simply be absent (asserted in the ok-path
+        // test above). Under bazel (where libsqlite3-sys is linked
+        // against doltlite) it's the real thing.
+        let (pool, _dir) = fresh_pool().await;
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            return;
+        }
+        sqlx::query(crate::doltlite_raw::SYNC_SCOPE_STATE_DDL)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Establish a baseline commit so subsequent inserts show up
+        // as a clean "added since HEAD" delta — without this, dolt's
+        // view of "what changed" includes the schema-creation step
+        // itself and the result is less predictable for assertion.
+        crate::doltlite_raw::commit_run(&pool, "baseline")
+            .await
+            .unwrap();
+
+        let run = ExtractRun::start(&pool, &json!({"k": "v"})).await.unwrap();
+        let run_id = run.run_id();
+        sqlx::query("INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?)")
+            .bind("test_scope")
+            .bind("2026-01-01T00:00:00Z")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let work_result: Result<()> = Ok(());
+        let summary = DummySummary { new: 0, skipped: 0 };
+        run.finish(&work_result, &summary).await;
+
+        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let s: Value = serde_json::from_str(&row.0).unwrap();
+        let deltas = s
+            .get("deltas")
+            .and_then(|v| v.as_object())
+            .expect("deltas object present in summary");
+        // sync_scope_state: 1 row inserted since baseline.
+        let scope_state = deltas
+            .get("sync_scope_state")
+            .unwrap_or_else(|| panic!("sync_scope_state missing in deltas: {deltas:?}"));
+        assert_eq!(
+            scope_state["added"], 1,
+            "sync_scope_state should show 1 added row; got {scope_state}"
+        );
+        // sync_runs: ExtractRun::start added one row, finish UPDATEd
+        // it. Net for dolt is one added row.
+        let sync_runs = deltas
+            .get("sync_runs")
+            .unwrap_or_else(|| panic!("sync_runs missing in deltas: {deltas:?}"));
+        assert_eq!(
+            sync_runs["added"], 1,
+            "sync_runs should show 1 added row; got {sync_runs}"
+        );
     }
 
     #[tokio::test]
