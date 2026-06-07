@@ -18,12 +18,17 @@ echo "Running pre-commit checks..."
 # commit just because a formatter happened to touch (or `git diff`
 # happened to list) it. --diff-filter=ACMR ignores deletions and
 # typechanges so we don't try to `git add` a path that no longer exists.
-# NUL-delimited so filenames with spaces (e.g. snapshot blobs named
-# after the original attachment "Hello World.pdf.snap") survive xargs.
-STAGED_FILES_Z="$(git diff -z --cached --name-only --diff-filter=ACMR)"
+# Capture the staged-file list NUL-delimited so filenames with spaces
+# (e.g. snapshot blobs named after attachments like "Hello World.pdf")
+# survive the xargs round-trip. A shell variable can't hold NUL bytes
+# — `$(...)` substitution strips them — so we route the list through a
+# tempfile.
+STAGED_FILES_LIST="$(mktemp -t pre-commit-staged-XXXXXX)"
+trap 'rm -f "$STAGED_FILES_LIST"' EXIT
+git diff -z --cached --name-only --diff-filter=ACMR > "$STAGED_FILES_LIST"
 restage_if_staged() {
-    if [ -n "$STAGED_FILES_Z" ]; then
-        printf '%s' "$STAGED_FILES_Z" | xargs -0 -r git add --
+    if [ -s "$STAGED_FILES_LIST" ]; then
+        xargs -0 -r git add -- < "$STAGED_FILES_LIST"
     fi
 }
 
