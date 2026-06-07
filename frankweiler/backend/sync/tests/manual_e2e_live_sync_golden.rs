@@ -212,6 +212,18 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         {
             continue;
         }
+        // Doltlite leaves behind sidecar lock files (e.g.
+        // `.foo.doltlite_db-lock`) for in-process flock coordination.
+        // They're ephemeral, content-free, and would clutter goldens
+        // with hidden-dotfile noise. Skip anything whose name ends in
+        // `-lock`.
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.ends_with("-lock"))
+        {
+            continue;
+        }
         let canonical_rel = canonicalize_path(rel);
         let manifest_key = format!("{top}/{canonical_rel}");
         manifest.push(manifest_key.clone());
