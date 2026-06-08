@@ -103,6 +103,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -304,11 +305,34 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // module's docs for the full story. Multiple pool connections
     // produce silent dolt_log dropouts and `commit conflict` errors
     // on interleaved writes.
+    //
+    // `acquire_timeout` is bumped well past sqlx's 30s default: cold
+    // opens of multi-GB raw stores spend most of their time inside
+    // `sqlite3_open_v2` (blake3-hashing the prolly root pages), and we
+    // saw legitimate 4–10s opens against `slack.doltlite_db` even with
+    // the `-O2` doltlite static archive. A 30s ceiling was tight
+    // enough that a transient slowness manifested as a hard timeout
+    // and 0-row sync. 5min is "obviously something else is wrong"
+    // territory.
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .acquire_timeout(Duration::from_secs(300))
         .connect_with(opts)
         .await
         .context("open sqlite pool")?;
+    // Rescue commit. If a prior run crashed mid-batch we'd inherit a
+    // pile of uncommitted rows in `dolt_status`; the orchestrator's
+    // "next run picks it up" recovery only kicks in if subsequent
+    // writes actually succeed, and `dolt_log` ends up with the
+    // crashed-run state silently folded into a much-later commit
+    // (mixing audit-trail concerns). Seal it into its own commit at
+    // the start of every open so each tool entry sees a clean tree.
+    //
+    // No-op when the status is already clean (which is the common
+    // path). Failure to take the rescue is not fatal — the orchestrator
+    // will fall back to the implicit "next commit folds it in"
+    // behavior, which is what we had before.
+    rescue_dirty_working_tree(&pool, db_path).await;
     for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
         sqlx::query(stmt).execute(&pool).await.with_context(|| {
             format!(
@@ -323,6 +347,69 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
         "doltlite_raw::open: pool ready"
     );
     Ok(pool)
+}
+
+/// Stamp a dolt commit of any orphaned working-tree changes inherited
+/// from a crashed prior run. The reasons we want this at every open:
+///
+/// 1. **Clean audit trail.** Without this, the next successful
+///    `dolt_commit()` silently folds the crashed-run rows into its
+///    own changelog entry, mixing two different runs' work under one
+///    `dolt_log` message.
+/// 2. **Health check.** A dirty tree at open is a signal worth logging
+///    even when we can rescue it — it means somebody crashed.
+///
+/// We catch and swallow errors: even a stock-libsqlite3 build (no
+/// doltlite extensions) lands here in CI, where `dolt_status` doesn't
+/// exist and `dolt_commit()` is a missing function. Logging at warn is
+/// enough — the caller still gets a usable pool.
+async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
+    // First: is there anything dirty? `dolt_status` is a vtab; on
+    // stock SQLite it errors with "no such table".
+    let dirty: std::result::Result<i64, sqlx::Error> =
+        sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+            .fetch_one(pool)
+            .await;
+    let count = match dirty {
+        Ok(n) => n,
+        Err(e) => {
+            // Differentiate "no doltlite extensions" (silent) from
+            // "real error" (warn). The former shows up as a missing-
+            // table error; everything else is interesting.
+            let msg = e.to_string();
+            if !msg.contains("no such table") {
+                tracing::warn!(
+                    path = %db_path.display(),
+                    error = %e,
+                    "rescue_dirty_working_tree: probe failed"
+                );
+            }
+            return;
+        }
+    };
+    if count == 0 {
+        return;
+    }
+    let msg = format!(
+        "rescue: pre-run snapshot of orphaned working tree ({count} dirty entries) at {}",
+        Utc::now().to_rfc3339()
+    );
+    tracing::warn!(
+        path = %db_path.display(),
+        dirty_entries = count,
+        "rescue_dirty_working_tree: prior run left {count} dirty entries; sealing into its own commit",
+    );
+    if let Err(e) = sqlx::query("SELECT dolt_commit('-Am', ?)")
+        .bind(&msg)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(
+            path = %db_path.display(),
+            error = %e,
+            "rescue_dirty_working_tree: dolt_commit failed; the next ETL commit will fold the dirty rows in implicitly"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -421,12 +508,21 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
-    let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', ?)")
+    // `dolt_commit` errors with "nothing to commit, working tree clean"
+    // when there's nothing dirty. That used to be a hard fail; with the
+    // rescue commit in `open()` it's a legitimate post-condition (rescue
+    // may have already swept everything into its own commit, leaving
+    // the orchestrator's trailing commit nothing to do). Treat it as
+    // Ok(None) so the caller can keep going.
+    match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(msg)
         .fetch_optional(pool)
         .await
-        .context("dolt_commit")?;
-    Ok(hash)
+    {
+        Ok(opt) => Ok(opt.flatten()),
+        Err(e) if e.to_string().contains("nothing to commit") => Ok(None),
+        Err(e) => Err(anyhow::Error::new(e).context("dolt_commit")),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1105,25 +1201,37 @@ mod tests {
             pool.close().await;
         }
 
-        // Phase 2: reopen via the orchestrator's hook and commit.
+        // Phase 2: reopen via the orchestrator's hook and commit. Under
+        // the rescue-commit-on-open policy in `open()`, phase 1's
+        // orphaned writes are already sealed by the time `commit_run`
+        // runs here, so the orchestrator's trailing commit is a no-op
+        // (returns None). This is the documented post-condition: a
+        // crashed run produces a `rescue: ...` commit in dolt_log, and
+        // the next run's trailing commit_run is allowed to find
+        // nothing dirty.
         let msg = "extract source: rows=1 commit_run_at_path test";
-        let hash = commit_run_at_path(&db, msg)
+        let trailing = commit_run_at_path(&db, msg)
             .await
-            .expect("commit_run_at_path ok")
-            .expect("doltlite linked but commit hash was None");
+            .expect("commit_run_at_path ok");
+        assert!(
+            trailing.is_none(),
+            "trailing commit should be a no-op after rescue swept the orphaned writes; got {trailing:?}"
+        );
 
-        // Phase 3: verify the commit is durable by reopening AGAIN
-        // and querying dolt_log. This is the load-bearing assertion —
-        // proves the commit actually persisted to disk, not just that
-        // commit_run returned a hash.
+        // Phase 3: verify the rescue commit is durable by reopening
+        // AGAIN and querying dolt_log. This is the load-bearing
+        // assertion — proves the orphaned writes were sealed by the
+        // rescue at phase 2's open(), not lost.
         let verify = open_test(&db).await;
-        let logged_msg: String =
-            sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
-                .bind(&hash)
-                .fetch_one(&verify)
+        let logged: Vec<String> =
+            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC")
+                .fetch_all(&verify)
                 .await
                 .expect("dolt_log lookup after reopen");
-        assert_eq!(logged_msg, msg, "dolt_log message mismatch after reopen");
+        assert!(
+            logged.iter().any(|m| m.starts_with("rescue: ")),
+            "expected a rescue commit in dolt_log; got {logged:?}"
+        );
 
         // No-op path: pointing at a never-created file should NOT
         // create one and should NOT error.

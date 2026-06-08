@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+# A/B between raw sqlite3_open_v2 (extern "C" against our doltlite static
+# archive) and sqlx-pool open. Purpose: attribute the ~60s slack open
+# observed by `frankweiler_etl::doltlite_raw::open` to either the C
+# library + our compile flags (raw is slow) or sqlx wrapper machinery
+# (raw is fast, sqlx is slow). No libsqlite3-sys involved — symbols
+# come directly from the Bazel cc_library link.
+rust_binary(
+    name = "slack_open_debug",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third-party/doltlite:sqlite3",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+    ],
+)
