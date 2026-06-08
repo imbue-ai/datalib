@@ -243,6 +243,10 @@ pub const SHARED_DDL: &[&str] = &[
     ENDPOINT_SHAPES_DDL,
     BLOBS_DDL,
     BLOBS_BOOKKEEPING_DDL,
+    crate::blob_cas::BLOB_REFS_DDL,
+    crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
+    crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
+    crate::blob_cas::BLOB_REFS_BOOKKEEPING_DDL,
     SYNC_SCOPE_STATE_DDL,
 ];
 

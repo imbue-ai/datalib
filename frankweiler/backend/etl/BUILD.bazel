@@ -22,6 +22,7 @@ rust_library(
         "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:blake3",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:runfiles",

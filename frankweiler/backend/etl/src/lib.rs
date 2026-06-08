@@ -17,6 +17,7 @@
 //! `documents.source_fingerprint` and skips unchanged inputs on
 //! subsequent runs.
 
+pub mod blob_cas;
 pub mod blob_store;
 pub mod blobs;
 pub mod control;
