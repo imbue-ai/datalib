@@ -117,7 +117,7 @@ pub struct ParsedChatGPTApi {
     /// `file_id`. Render materializes these onto disk in a `blobs/`
     /// directory next to each rendered `.md` so the sibling-relative
     /// link resolves.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
 }
 
 impl Default for ParsedChatGPTApi {
@@ -125,7 +125,7 @@ impl Default for ParsedChatGPTApi {
         Self {
             accounts: Vec::new(),
             conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
         }
     }
 }

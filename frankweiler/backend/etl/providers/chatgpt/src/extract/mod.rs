@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 use serde::Serialize;
@@ -31,7 +31,7 @@ use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
-pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
 
 /// Inter-fetch sleep. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop without
@@ -396,7 +396,6 @@ async fn download_one_file(
     name: Option<&str>,
     mime: Option<&str>,
 ) -> Result<bool> {
-    let safe = safe_filename(name, file_id);
     // Step 1: metadata fetch.
     let meta = match client
         .get(&format!("/backend-api/files/{file_id}/download"))
@@ -454,7 +453,7 @@ async fn download_one_file(
         warn!(
             event = "chatgpt_media_failed",
             file_id = file_id,
-            name = %safe,
+            name = name.unwrap_or(""),
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
@@ -465,14 +464,18 @@ async fn download_one_file(
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
-    db.upsert_blob_bytes(
-        file_id,
-        "attachment",
-        cid,
-        "attachment",
-        mime,
+    db.store_blob(
+        &RefStub {
+            ref_id: file_id,
+            kind: "attachment",
+            owning_id: cid,
+            slot: "attachment",
+            upstream_uuid: Some(file_id),
+            upstream_name: name,
+            source_url: Some(&signed),
+            content_type: mime,
+        },
         &bytes,
-        Some(&signed),
     )
     .await?;
     Ok(true)

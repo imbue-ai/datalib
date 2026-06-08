@@ -108,7 +108,7 @@ pub struct CasObject {
 
 /// Per-source CAS handle. Single sqlx pool of size 1, same as every
 /// other doltlite store in this codebase.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlobCas {
     pool: SqlitePool,
 }
