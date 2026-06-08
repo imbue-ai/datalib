@@ -15,9 +15,10 @@ pub mod db;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
-use frankweiler_signal_backup::{backup, Snapshot};
+use frankweiler_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use prost::Message;
 use serde::Serialize;
 use tracing::{info, warn};
@@ -36,6 +37,12 @@ pub struct FetchOptions {
     /// snapshot subdirs. The newest (lexicographically — Signal's
     /// timestamps sort correctly) is the one we ingest.
     pub snapshot_root: PathBuf,
+    /// Directory holding the encrypted attachment blobs (the shared
+    /// `files/XX/<media_name>` tree). When `None`, defaults to
+    /// `snapshot_root.join("files")` — the layout Signal Android
+    /// produces. Override exists so a user can point at a separated
+    /// files tree (e.g. on a different volume) without symlinking.
+    pub files_root: Option<PathBuf>,
     /// Name of the env var holding the AEP. Defaults to
     /// `SIGNAL_PASSPHRASE`. Letting the user override means a single
     /// process can keep AEPs for multiple Signal accounts segregated
@@ -51,6 +58,7 @@ impl Default for FetchOptions {
             db_path: PathBuf::new(),
             db: None,
             snapshot_root: PathBuf::new(),
+            files_root: None,
             aep_env_var: None,
             progress: Progress::noop(),
             control: ExtractControl::default(),
@@ -66,6 +74,15 @@ pub struct FetchSummary {
     /// Number of media file names listed in the snapshot's `files`
     /// sidecar (which catalogs the shared `files/XX/<name>` tree).
     pub media_files: usize,
+    /// Newly-stored attachment blobs (decrypted + landed in the CAS).
+    pub blobs: usize,
+    /// Attachments whose ref already had a hash attached, so we
+    /// short-circuited without touching disk.
+    pub blobs_skipped: usize,
+    /// Attachments we couldn't decrypt/read (file missing, MAC fail,
+    /// LocatorInfo without a local key, …). Surfaces as warn-level
+    /// log lines; details land on `blob_refs_bookkeeping.last_error`.
+    pub blob_errors: usize,
     pub snapshot: String,
 }
 
@@ -101,9 +118,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let snapshot_root = expand_tilde(&opts.snapshot_root);
     let snapshot_dir = pick_latest_snapshot(&snapshot_root)
         .with_context(|| format!("pick latest snapshot under {}", snapshot_root.display()))?;
+    let files_root = opts
+        .files_root
+        .clone()
+        .map(|p| expand_tilde(&p))
+        .unwrap_or_else(|| snapshot_root.join("files"));
     info!(
         event = "signal_open_snapshot",
-        snapshot = %snapshot_dir.display()
+        snapshot = %snapshot_dir.display(),
+        files_root = %files_root.display(),
     );
 
     // Heavy crypto work — gunzip + AES on tens of MB — runs in a
@@ -159,6 +182,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 db.upsert_chat_item(&pk, &chat_id, &author_id, date_sent, &raw)
                     .await?;
                 summary.chat_items += 1;
+
+                // Walk attachments + push their bytes into the CAS.
+                // Pattern matches every other media-bearing provider:
+                // `db.store_blob(&RefStub { .. }, &bytes)` with a
+                // skip-check that lets re-extracts stay cheap.
+                if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
+                    for (idx, att) in sm.attachments.iter().enumerate() {
+                        ingest_attachment(&db, &files_root, &pk, idx, att, &mut summary).await?;
+                    }
+                }
             }
             _ => {
                 // StickerPack, AdHocCall, NotificationProfile,
@@ -168,6 +201,122 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     Ok(summary)
+}
+
+/// Decrypt one `MessageAttachment`'s bytes out of the shared
+/// `<files_root>/XX/<media_name>` tree and stash them in the CAS.
+///
+/// Quietly does nothing when the attachment doesn't carry the
+/// fields we need to locate it on disk (no `LocatorInfo`, no
+/// `local_key`, integrity check is `encrypted_digest` rather than
+/// `plaintext_hash`, …). Signal's wire format permits all of those
+/// states for valid attachments — they just mean we don't have the
+/// local plaintext to surface, so the Translate pass renders the
+/// message text without an inline link.
+async fn ingest_attachment(
+    db: &RawDb,
+    files_root: &Path,
+    chat_item_pk: &str,
+    slot_idx: usize,
+    att: &backup::MessageAttachment,
+    summary: &mut FetchSummary,
+) -> Result<()> {
+    let Some(ptr) = att.pointer.as_ref() else {
+        return Ok(());
+    };
+    let Some(li) = ptr.locator_info.as_ref() else {
+        return Ok(());
+    };
+    let Some(local_key_bytes) = li.local_key.as_deref() else {
+        return Ok(());
+    };
+    if local_key_bytes.len() != 64 {
+        return Ok(());
+    }
+    let plaintext_hash = match li.integrity_check.as_ref() {
+        Some(backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h))
+            if !h.is_empty() =>
+        {
+            h.clone()
+        }
+        _ => return Ok(()),
+    };
+    let mut local_key = [0u8; 64];
+    local_key.copy_from_slice(local_key_bytes);
+
+    let media_name = local_media_name(&plaintext_hash, &local_key);
+    let slot_str = slot_idx.to_string();
+
+    // Skip-check: same shape every other provider uses. The
+    // `blob_refs.blake3 IS NOT NULL` lookup keyed on `ref_id` makes
+    // re-extracts a no-op for already-ingested attachments — see
+    // `docs/ETL_general_shape.md` "Blobs and the CAS split".
+    if db.blob_exists(&media_name).await.unwrap_or(false) {
+        summary.blobs_skipped += 1;
+        return Ok(());
+    }
+
+    let shard = &media_name[..2];
+    let enc_path = files_root.join(shard).join(&media_name);
+    let enc = match std::fs::read(&enc_path) {
+        Ok(b) => b,
+        Err(e) => {
+            warn!(
+                event = "signal_attachment_missing",
+                media_name = %media_name,
+                path = %enc_path.display(),
+                error = %e,
+            );
+            let _ = db
+                .record_blob_error(
+                    &media_name,
+                    chat_item_pk,
+                    &slot_str,
+                    &format!("read {}: {e}", enc_path.display()),
+                )
+                .await;
+            summary.blob_errors += 1;
+            return Ok(());
+        }
+    };
+
+    let plaintext = match decrypt_attachment(&enc, &local_key) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(
+                event = "signal_attachment_decrypt_failed",
+                media_name = %media_name,
+                error = %e,
+            );
+            let _ = db
+                .record_blob_error(
+                    &media_name,
+                    chat_item_pk,
+                    &slot_str,
+                    &format!("decrypt: {e}"),
+                )
+                .await;
+            summary.blob_errors += 1;
+            return Ok(());
+        }
+    };
+
+    db.store_blob(
+        &RefStub {
+            ref_id: &media_name,
+            kind: "signal_attachment",
+            owning_id: chat_item_pk,
+            slot: &slot_str,
+            upstream_uuid: Some(&media_name),
+            upstream_name: ptr.file_name.as_deref(),
+            source_url: None,
+            content_type: ptr.content_type.as_deref(),
+        },
+        &plaintext,
+    )
+    .await?;
+    summary.blobs += 1;
+    Ok(())
 }
 
 /// Pick the newest `signal-backup-*` subdir under `root`. Signal's

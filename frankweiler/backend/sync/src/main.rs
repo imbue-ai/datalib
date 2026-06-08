@@ -1770,6 +1770,10 @@ impl ExtractPlan {
                     db_path: self.out_dir.clone(),
                     db: Some(db),
                     snapshot_root,
+                    // Default: `<snapshot_root>/files/XX/<name>` —
+                    // the layout Signal Android produces. Override
+                    // via a future SignalSync knob if it matters.
+                    files_root: None,
                     aep_env_var: sync.aep_env_var.clone(),
                     progress: progress.clone(),
                     control: control.clone(),

@@ -48,6 +48,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         db_path: raw_db_path.clone(),
         db: None,
         snapshot_root: snapshot_root.clone(),
+        files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
         aep_env_var: None, // defaults to SIGNAL_PASSPHRASE
         progress: Progress::noop(),
         control: ExtractControl::default(),
@@ -56,6 +57,10 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     assert_eq!(summary.recipients, 3, "expected 3 recipients");
     assert_eq!(summary.chats, 1, "expected 1 chat");
     assert_eq!(summary.chat_items, 4, "expected 4 chat items");
+    assert_eq!(
+        summary.blobs, 0,
+        "TNG fixture has no attachments yet — 0 blobs ingested"
+    );
 
     // Translate runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the

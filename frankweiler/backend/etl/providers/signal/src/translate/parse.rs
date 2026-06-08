@@ -11,15 +11,17 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader, SqliteBlobReader};
 use frankweiler_etl::periodize::Period;
 use frankweiler_signal_backup::backup;
 use prost::Message;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Clone)]
 pub struct ParsedSignal {
     pub recipients: HashMap<String, ParsedRecipient>,
     /// Chats indexed by `chat_id` for lookup from `DocBucket`. The
@@ -30,6 +32,21 @@ pub struct ParsedSignal {
     /// ordered by chat_id then period_key so the rendered tree is
     /// deterministic.
     pub docs: Vec<DocBucket>,
+    /// Streaming handle to attachment bytes stored in the sibling
+    /// CAS file. Render fetches one blob's bytes at a time on demand
+    /// rather than bulk-loading them all into memory.
+    pub blobs: Arc<dyn BlobReader>,
+}
+
+impl Default for ParsedSignal {
+    fn default() -> Self {
+        Self {
+            recipients: HashMap::new(),
+            chats: HashMap::new(),
+            docs: Vec::new(),
+            blobs: InMemoryBlobReader::empty_handle(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,12 +83,34 @@ pub struct DocBucket {
 
 #[derive(Debug, Clone)]
 pub struct ParsedChatItem {
+    /// `{chat_id}#{author_id}#{date_sent}` — matches the
+    /// `chat_items.id` PK and the `blob_refs.owning_id` for every
+    /// attachment under this item.
+    pub item_pk: String,
     pub author_id: String,
     pub date_sent: i64,
     pub text: Option<String>,
     /// True when ChatItem.directionalDetails was `outgoing`. Drives
     /// "me" attribution in the rendered markdown.
     pub outgoing: bool,
+    /// Attachments on this item, ordered by their position in the
+    /// `StandardMessage.attachments` repeated field (matches the
+    /// `slot` we stored at extract time).
+    pub attachments: Vec<ParsedAttachment>,
+}
+
+/// One attachment referenced from a `ParsedChatItem`. `ref_id`
+/// matches `blob_refs.id`; the render walks them, hands each to
+/// `blob_cas::materialize_to_disk`, and emits an `![alt](blobs/<…>)`
+/// link via `blob_cas::attachment_md`.
+#[derive(Debug, Clone)]
+pub struct ParsedAttachment {
+    /// `local_media_name(plaintext_hash, local_key)` — the same key
+    /// extract used when calling `db.store_blob(&RefStub { ref_id: … })`.
+    pub ref_id: String,
+    pub content_type: Option<String>,
+    pub file_name: Option<String>,
+    pub is_image: bool,
 }
 
 /// Compatibility wrapper: when sync hasn't passed an explicit period
@@ -100,6 +139,25 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         .connect_with(opts)
         .await
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
+
+    // Sibling CAS file holds attachment bytes; render fetches them on
+    // demand via the SqliteBlobReader. When the file doesn't exist
+    // (e.g. extract ran before this branch landed, or never stored
+    // anything), fall back to an empty in-memory reader so render
+    // can still emit "(attachment not yet fetched)" placeholders.
+    let cas_path = blob_cas::cas_path_for(db_path);
+    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
+            .read_only(true);
+        let cas_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(cas_opts)
+            .await
+            .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
+        Arc::new(SqliteBlobReader::new(pool.clone(), cas_pool))
+    } else {
+        InMemoryBlobReader::empty_handle()
+    };
 
     // ── recipients ─────────────────────────────────────────────────
     let mut recipients: HashMap<String, ParsedRecipient> = HashMap::new();
@@ -161,7 +219,8 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
         let payload: Vec<u8> = r.try_get("payload")?;
-        let (text, outgoing) = decode_chat_item(&payload);
+        let item_pk = format!("{chat_id}#{author_id}#{date_sent}");
+        let (text, outgoing, attachments) = decode_chat_item(&payload);
         let period_key = period.key_for_ms(date_sent);
         let key = (chat_id.clone(), period_key.clone());
         let idx = *bucket_idx.entry(key).or_insert_with(|| {
@@ -173,10 +232,12 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
             docs.len() - 1
         });
         docs[idx].items.push(ParsedChatItem {
+            item_pk,
             author_id,
             date_sent,
             text,
             outgoing,
+            attachments,
         });
     }
 
@@ -184,34 +245,76 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         recipients,
         chats,
         docs,
+        blobs,
     })
 }
 
-/// Crack a `Frame.chat_item` blob and pull out (text, outgoing).
-/// Returns `(None, false)` for non-StandardMessage chat items so the
-/// renderer can skip them cleanly without panicking.
-fn decode_chat_item(payload: &[u8]) -> (Option<String>, bool) {
+/// Crack a `Frame.chat_item` blob and pull out (text, outgoing,
+/// attachments). Returns empty defaults for non-StandardMessage chat
+/// items so the renderer can skip them cleanly without panicking.
+fn decode_chat_item(payload: &[u8]) -> (Option<String>, bool, Vec<ParsedAttachment>) {
     let frame = match backup::Frame::decode(payload) {
         Ok(f) => f,
-        Err(_) => return (None, false),
+        Err(_) => return (None, false, Vec::new()),
     };
     let ci = match frame.item {
         Some(backup::frame::Item::ChatItem(ci)) => ci,
-        _ => return (None, false),
+        _ => return (None, false, Vec::new()),
     };
     let outgoing = matches!(
         ci.directional_details,
         Some(backup::chat_item::DirectionalDetails::Outgoing(_))
     );
-    let text = match ci.item {
-        Some(backup::chat_item::Item::StandardMessage(sm)) => sm.text.and_then(|t| {
-            if t.body.is_empty() {
-                None
-            } else {
-                Some(t.body)
-            }
-        }),
-        _ => None,
+    match ci.item {
+        Some(backup::chat_item::Item::StandardMessage(sm)) => {
+            let text = sm.text.and_then(|t| {
+                if t.body.is_empty() {
+                    None
+                } else {
+                    Some(t.body)
+                }
+            });
+            let attachments = sm
+                .attachments
+                .iter()
+                .filter_map(attachment_from_message)
+                .collect();
+            (text, outgoing, attachments)
+        }
+        _ => (None, outgoing, Vec::new()),
+    }
+}
+
+/// Pull a `ParsedAttachment` out of a `MessageAttachment` if it has
+/// the fields we need to address its bytes in the CAS. Returns `None`
+/// for attachments that don't (no LocatorInfo, no plaintext hash, no
+/// local key) — extract would have skipped these too, so render
+/// surfacing them as missing-bytes placeholders would be misleading.
+fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAttachment> {
+    let ptr = att.pointer.as_ref()?;
+    let li = ptr.locator_info.as_ref()?;
+    let local_key = li.local_key.as_deref()?;
+    if local_key.len() != 64 {
+        return None;
+    }
+    let plaintext_hash = match li.integrity_check.as_ref()? {
+        backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h) if !h.is_empty() => {
+            h.clone()
+        }
+        _ => return None,
     };
-    (text, outgoing)
+    let mut lk = [0u8; 64];
+    lk.copy_from_slice(local_key);
+    let ref_id = frankweiler_signal_backup::local_media_name(&plaintext_hash, &lk);
+    let content_type = ptr.content_type.clone();
+    let is_image = content_type
+        .as_deref()
+        .map(|ct| ct.starts_with("image/"))
+        .unwrap_or(false);
+    Some(ParsedAttachment {
+        ref_id,
+        content_type,
+        file_name: ptr.file_name.clone(),
+        is_image,
+    })
 }

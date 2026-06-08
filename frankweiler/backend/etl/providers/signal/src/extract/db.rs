@@ -31,7 +31,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 
-use frankweiler_etl::blob_cas::{self, BlobCas};
+use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -98,6 +98,29 @@ impl RawDb {
 
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
+        Ok(())
+    }
+
+    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
+
+    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
+        blob_cas::ref_has_hash(&self.pool, ref_id).await
+    }
+
+    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
+    }
+
+    pub async fn record_blob_error(
+        &self,
+        ref_id: &str,
+        owning_id: &str,
+        slot: &str,
+        err: &str,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
+        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
+        tx.commit().await.context("commit blob error tx")?;
         Ok(())
     }
 
