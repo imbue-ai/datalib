@@ -1,11 +1,10 @@
 //! Yolink download → doltlite. For-loop over devices, inner loop
-//! over forward-walking time windows: curl, parse, upsert, commit.
-//!
-//! Per-window `dolt_commit` is the load-bearing design choice — it
-//! gives `dolt log` one entry per fetched window and lets `dolt
-//! diff <prev>..<this>` surface server-side edits to historical
-//! data. UPSERT only writes the row when the value actually
-//! changed, so commits stay clean.
+//! over forward-walking time windows: curl, parse, upsert. No
+//! per-window `dolt_commit`: the sync orchestrator wraps the whole
+//! extract in one commit when [`fetch`] returns, which is the right
+//! grain (a sync run is a single "snapshot of upstream"). UPSERT
+//! still only writes when a value actually changed, so the trailing
+//! commit's diff is exactly the readings that moved this run.
 //!
 //! Strict CSV header check: a `℃` column with a `℉` row value is
 //! rejected, not coerced. The point is to notice unit flips
@@ -224,7 +223,6 @@ pub struct FetchSummary {
     pub windows: usize,
     pub readings_touched: usize,
     pub readings_unchanged: usize,
-    pub commits: usize,
     pub errors: usize,
     pub requests: usize,
 }
@@ -343,19 +341,6 @@ async fn fetch_device(
         };
         s.readings_touched += touched;
         s.readings_unchanged += unchanged;
-        // Always attempt a per-window commit. Doltlite's
-        // `dolt_commit('-Am', ...)` returns NULL (→ `Ok(None)`) when
-        // nothing's dirty, so no-op windows leave `dolt log` clean
-        // without us having to guard the call.
-        let msg = format!(
-            "yolink {} [{cursor}..{end}]: +{touched} ={unchanged}",
-            dev.name
-        );
-        match dr::commit_run(db.pool(), &msg).await {
-            Ok(Some(_)) => s.commits += 1,
-            Ok(None) => {}
-            Err(e) => warn!(event = "yolink_commit_failed", device = %dev.name, error = %e),
-        }
         info!(event = "yolink_window", device = %dev.name, cursor, end, touched, unchanged);
         cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
     }

@@ -1642,12 +1642,11 @@ impl ExtractPlan {
                 .await
                 .map(|s| {
                     format!(
-                        "devices={} windows={} touched={} unchanged={} commits={} errors={} requests={}",
+                        "devices={} windows={} touched={} unchanged={} errors={} requests={}",
                         s.devices,
                         s.windows,
                         s.readings_touched,
                         s.readings_unchanged,
-                        s.commits,
                         s.errors,
                         s.requests,
                     )
