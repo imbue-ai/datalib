@@ -386,54 +386,22 @@ pub fn render_one(
     })
 }
 
-/// Write every fetched blob this conversation references into
-/// `<page_dir>/blobs/<short-b3>.<ext>`. Filenames come from
-/// `BlobView::rendered_filename`; `attachment_md` does the matching
-/// lookup so its link target agrees.
 fn materialize_conv_blobs(
     shredded: &ShreddedConversation,
     blobs: &dyn BlobReader,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let blobs_dir = page_dir.join("blobs");
-    for m in &shredded.messages {
-        for a in &m.attachments {
-            if !seen.insert(a.file_id.as_str()) {
-                continue;
-            }
-            match blob_cas::materialize_to_disk(blobs, &a.file_id, &blobs_dir) {
-                Ok(_) => {}
-                Err(e) => return Err(std::io::Error::other(e)),
-            }
-        }
-    }
-    Ok(())
+    blob_cas::materialize_refs(
+        blobs,
+        shredded
+            .messages
+            .iter()
+            .flat_map(|m| m.attachments.iter().map(|a| a.file_id.as_str())),
+        &blobs_dir,
+    )
 }
 
-/// Markdown line for one attachment: `![alt](blobs/<short-b3>.<ext>)`
-/// for images, `[\[file\] name](blobs/<short-b3>.<ext>)` otherwise.
-/// If the bytes haven't been fetched yet, emits an HTML comment
-/// placeholder so the conversation history still records what was
-/// attached without a broken link.
 fn attachment_md(a: &OAAttachmentRef, blobs: &dyn BlobReader) -> String {
-    let view = blobs.read_by_ref_id(&a.file_id).ok().flatten();
-    let alt = a
-        .name
-        .clone()
-        .unwrap_or_else(|| a.file_id.clone())
-        .replace(']', "");
-    let Some(view) = view else {
-        return format!(
-            "<!-- attachment file_id={} name={:?} (not yet fetched) -->",
-            a.file_id,
-            a.name.as_deref().unwrap_or("")
-        );
-    };
-    let link = format!("blobs/{}", view.rendered_filename());
-    if a.is_image {
-        format!("![{alt}]({link})")
-    } else {
-        format!("[\\[file\\] {alt}]({link})")
-    }
+    blob_cas::attachment_md(blobs, &a.file_id, a.name.as_deref(), a.is_image)
 }

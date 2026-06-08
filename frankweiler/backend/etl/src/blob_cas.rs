@@ -602,6 +602,71 @@ pub fn materialize_to_disk(
     Ok(Some((view, abs, rel)))
 }
 
+/// Walk a set of ref_ids and materialize each one's bytes to disk
+/// under `blobs_dir`. Idempotent on the iteration order: an already-
+/// seen ref_id is skipped so the caller can pass a possibly-repeated
+/// iterator without de-duping itself.
+pub fn materialize_refs<'a, I>(
+    reader: &dyn BlobReader,
+    ref_ids: I,
+    blobs_dir: &Path,
+) -> std::io::Result<()>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut seen: std::collections::HashSet<&'a str> = std::collections::HashSet::new();
+    for ref_id in ref_ids {
+        if !seen.insert(ref_id) {
+            continue;
+        }
+        if let Err(e) = materialize_to_disk(reader, ref_id, blobs_dir) {
+            return Err(std::io::Error::other(e));
+        }
+    }
+    Ok(())
+}
+
+/// Universal attachment-link emitter. Given a ref_id and the display
+/// text the renderer wants, returns:
+///
+///   * `![display](blobs/<short-b3>.<ext>)` if `is_image` and the
+///     bytes are present,
+///   * `[\[file\] display](blobs/<short-b3>.<ext>)` otherwise when
+///     bytes are present,
+///   * `<!-- attachment ref_id=… (not yet fetched) -->` placeholder
+///     when the reader has no view for this ref_id, so the
+///     conversation history still records the attachment without a
+///     dangling link.
+///
+/// Providers that want a different decoration around the link should
+/// build it themselves and call [`BlobView::rendered_filename`]
+/// directly; this helper covers the common image-vs-file split that
+/// chatgpt, anthropic, slack and email all want.
+pub fn attachment_md(
+    reader: &dyn BlobReader,
+    ref_id: &str,
+    display: Option<&str>,
+    is_image: bool,
+) -> String {
+    let view = reader.read_by_ref_id(ref_id).ok().flatten();
+    let Some(view) = view else {
+        let label = display.unwrap_or(ref_id);
+        return format!("*[attachment not yet fetched: {label}]*");
+    };
+    let display_clean = display.unwrap_or("").replace(']', "");
+    let alt = if display_clean.is_empty() {
+        view.rendered_filename()
+    } else {
+        display_clean
+    };
+    let link = format!("blobs/{}", view.rendered_filename());
+    if is_image {
+        format!("![{alt}]({link})")
+    } else {
+        format!("[\\[file\\] {alt}]({link})")
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // content-type → extension
 // ─────────────────────────────────────────────────────────────────────

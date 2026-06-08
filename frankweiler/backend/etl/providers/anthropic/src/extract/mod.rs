@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
 use serde::Serialize;
@@ -26,7 +26,7 @@ use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ClaudeClient, ClaudeError};
-pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
@@ -459,7 +459,6 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
         format!("{CLAUDE_ORIGIN}{preview_path}")
     };
     let name = file_obj.get("file_name").and_then(|v| v.as_str());
-    let _safe = safe_filename(name, file_uuid); // sanity-check the input shape
     let mime = file_obj
         .get("file_kind")
         .and_then(|v| v.as_str())
@@ -483,14 +482,18 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
             // sensible if a fixture omits the header.
             let header_mime = resp.header("content-type").map(String::from);
             let effective_mime = header_mime.as_deref().or(mime);
-            db.upsert_blob_bytes(
-                file_uuid,
-                "file",
-                conv_uuid,
-                "file",
-                effective_mime,
+            db.store_blob(
+                &RefStub {
+                    ref_id: file_uuid,
+                    kind: "file",
+                    owning_id: conv_uuid,
+                    slot: "file",
+                    upstream_uuid: Some(file_uuid),
+                    upstream_name: name,
+                    source_url: Some(&url),
+                    content_type: effective_mime,
+                },
                 &resp.body,
-                Some(&url),
             )
             .await?;
             Ok(true)

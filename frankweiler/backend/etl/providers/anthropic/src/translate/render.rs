@@ -9,13 +9,11 @@ use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
-
-use frankweiler_etl::blob_store::BlobStore;
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{
@@ -423,7 +421,7 @@ pub fn render_all(
 
         // Changed (or first-time): walk chat_messages into msgs/blocks/atts.
         let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name) else {
+        let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
             progress.inc(1);
             continue;
         };
@@ -481,7 +479,11 @@ fn conv_relative_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> st
         .join("index.md")
 }
 
-pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option<Rendered> {
+pub fn render_one(
+    shredded: &ShreddedConversation,
+    _source_name: &str,
+    blobs: &dyn BlobReader,
+) -> Option<Rendered> {
     let conv = &shredded.conv;
     let conv_uuid = conv.conversation_uuid.as_str();
 
@@ -592,7 +594,7 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
             parts.push("**Attachments:**".into());
             parts.push(String::new());
             for at in atts {
-                parts.push(format!("- {}", attachment_md(at)));
+                parts.push(format!("- {}", attachment_md(at, blobs)));
             }
             parts.push(String::new());
         }
@@ -617,96 +619,57 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
     })
 }
 
-/// Write every blob this conversation references into
-/// `<page_dir>/blobs/<filename>`. The markdown emitted by
-/// `attachment_md` uses the same `safe_filename(name, id)` rule so the
-/// link target matches what lands on disk.
 fn materialize_conv_blobs(
     shredded: &ShreddedConversation,
-    blobs: &dyn BlobStore,
+    blobs: &dyn BlobReader,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    // file_uuid → first name we saw for it, walking only this
-    // conversation's attachments. Each conversation owns its blobs in
-    // a sibling `blobs/` dir, so there's no need to cross-reference
-    // other conversations.
-    let mut name_by_id: HashMap<String, Option<String>> = HashMap::new();
-    for at in &shredded.attachments {
-        let Some(obj) = at.raw_json.as_object() else {
-            continue;
-        };
-        let Some(id) = obj
-            .get("file_uuid")
-            .or_else(|| obj.get("id"))
-            .or_else(|| obj.get("uuid"))
-            .and_then(Value::as_str)
-        else {
-            continue;
-        };
-        let name = obj
-            .get("file_name")
-            .or_else(|| obj.get("name"))
-            .and_then(Value::as_str)
-            .map(String::from);
-        name_by_id.entry(id.to_string()).or_insert(name);
-    }
-    if name_by_id.is_empty() {
-        return Ok(());
-    }
     let blobs_dir = page_dir.join("blobs");
-    for (file_uuid, name) in &name_by_id {
-        let blob = match blobs.read_by_id(file_uuid) {
-            Ok(Some(b)) => b,
-            Ok(None) => continue,
-            Err(e) => return Err(std::io::Error::other(e)),
-        };
-        let safe = safe_filename(name.as_deref(), file_uuid);
-        std::fs::create_dir_all(&blobs_dir)?;
-        std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;
-    }
-    Ok(())
+    blob_cas::materialize_refs(
+        blobs,
+        shredded
+            .attachments
+            .iter()
+            .filter_map(|at| attachment_ref_id(at)),
+        &blobs_dir,
+    )
 }
 
-/// Render one attachment as a markdown link into
-/// `blobs/<filename>` (relative to the conversation's `index.md`).
-/// Images get `![alt](link)`; everything else becomes
-/// `[\[file\] alt](link)`. Falls back to a plain label when the
-/// upstream record lacks an id.
-fn attachment_md(at: &AttachmentRow) -> String {
+/// Pull (file_uuid, file_name, is_image) out of an Anthropic
+/// attachment row's raw_json. Anthropic uses one of several keys for
+/// the upstream id depending on whether the row came from the bulk
+/// export or the live API — `file_uuid` / `id` / `uuid` in that order.
+fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     let raw_obj = at.raw_json.as_object();
-    let label = raw_obj
-        .and_then(|o| {
-            o.get("file_name")
-                .or_else(|| o.get("name"))
-                .or_else(|| o.get("file_kind"))
-        })
-        .and_then(Value::as_str)
-        .unwrap_or("(unnamed)")
-        .to_string();
     let id = raw_obj
         .and_then(|o| {
             o.get("file_uuid")
                 .or_else(|| o.get("id"))
                 .or_else(|| o.get("uuid"))
         })
-        .and_then(Value::as_str)
-        .map(String::from);
+        .and_then(Value::as_str);
+    let name = raw_obj
+        .and_then(|o| o.get("file_name").or_else(|| o.get("name")))
+        .and_then(Value::as_str);
     let is_image = raw_obj
         .and_then(|o| o.get("file_kind").or_else(|| o.get("file_type")))
         .and_then(Value::as_str)
         .map(|s| s.eq_ignore_ascii_case("image") || s.starts_with("image/"))
         .unwrap_or(false);
+    (id, name, is_image)
+}
+
+fn attachment_ref_id(at: &AttachmentRow) -> Option<&str> {
+    attachment_meta(at).0
+}
+
+fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
+    let (id, name, is_image) = attachment_meta(at);
+    let label = name.unwrap_or("(unnamed)");
     let Some(id) = id else {
         return format!("[{}] {}", at.kind, label);
     };
-    let safe = safe_filename(Some(&label), &id);
-    let link = format!("blobs/{safe}");
-    let alt = label.replace(']', "");
-    if is_image {
-        format!("![{alt}]({link})")
-    } else {
-        format!("[\\[file\\] {alt}]({link})")
-    }
+    blob_cas::attachment_md(blobs, id, Some(label), is_image)
 }
 
 fn capitalize(s: &str) -> String {
