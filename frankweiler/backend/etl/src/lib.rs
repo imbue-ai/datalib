@@ -28,6 +28,7 @@ pub mod http;
 pub mod ids;
 pub mod latchkey;
 pub mod load;
+pub mod periodize;
 pub mod progress;
 pub mod raw_store;
 pub mod scope_state;

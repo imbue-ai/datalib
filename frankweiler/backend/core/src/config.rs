@@ -404,6 +404,13 @@ pub struct SignalSync {
     /// setup can scope per-account secrets at the shell layer.
     #[serde(default)]
     pub aep_env_var: Option<String>,
+    /// Period-bucketing knob for the rendered markdown tree —
+    /// `month` (default), `day`, `year`, or `all`. Shared across
+    /// every chat provider via `frankweiler_etl::periodize::Period`;
+    /// signal accepts the same strings beeper does so a unified
+    /// config can tune both at once.
+    #[serde(default)]
+    pub period: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

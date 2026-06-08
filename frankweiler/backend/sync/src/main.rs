@@ -2178,9 +2178,11 @@ fn translate_source(
             .context("perseus render_all")
             .map(|_| ())
         }
-        SourceConfig::SignalBackup { .. } => {
-            use frankweiler_etl_signal::translate::{parse_raw_dir, render_all};
-            let parsed = parse_raw_dir(&fixture)
+        SourceConfig::SignalBackup { sync, .. } => {
+            use frankweiler_etl_signal::translate::{parse, render_all, Period};
+            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
+                .context("parse signal period")?;
+            let parsed = parse(&fixture, period)
                 .with_context(|| format!("signal parse {}", fixture.display()))?;
             render_all(
                 &parsed,

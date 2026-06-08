@@ -60,7 +60,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Translate runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the
     // .doltlite_db extension) — extract::fetch normalized it the
-    // same way internally.
+    // same way internally. Default period (Month) is fine here; all
+    // 4 messages share a single month (2364-04) so one bucket.
     let parsed = tokio::task::spawn_blocking({
         let raw = raw_db_path.clone();
         move || parse_raw_dir(&raw)
@@ -68,6 +69,12 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     .await??;
     assert_eq!(parsed.chats.len(), 1, "expected 1 chat parsed");
     assert_eq!(parsed.recipients.len(), 3, "expected 3 recipients parsed");
+    assert_eq!(
+        parsed.docs.len(),
+        1,
+        "expected 1 (chat, period_key) bucket; all messages in same month"
+    );
+    assert_eq!(parsed.docs[0].period_key, "2364-04");
 
     let progress = Progress::noop();
     let prior: HashMap<String, String> = HashMap::new();
@@ -85,7 +92,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             &prior,
             &mut on_doc_complete,
         )?;
-        assert_eq!(render_summary.chats_rendered, 1);
+        assert_eq!(render_summary.docs_rendered, 1);
         assert_eq!(render_summary.messages_rendered, 4);
     }
 

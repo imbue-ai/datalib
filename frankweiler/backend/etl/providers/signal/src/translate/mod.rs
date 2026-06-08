@@ -46,5 +46,17 @@ pub fn signal_message_uuid(source: &str, chat_id: &str, author_id: &str, date_se
     .to_string()
 }
 
-pub use parse::{parse_raw_dir, ParsedSignal};
+/// Per-bucket document UUID. Stable for the lifetime of a
+/// `(chat, period_key)` pair regardless of how many times we
+/// re-render — the load step foreign-keys against this consistently.
+pub fn signal_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
+    Uuid::new_v5(
+        &SIGNAL_UUID_NS,
+        format!("signal:doc:{chat_uuid}:{period_key}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub use frankweiler_etl::periodize::Period;
+pub use parse::{parse, parse_raw_dir, ParsedSignal};
 pub use render::{render_all, RenderSummary, RENDER_VERSION};
