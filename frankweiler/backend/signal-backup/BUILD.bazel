@@ -1,0 +1,110 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_rust_prost//:defs.bzl", "rust_prost_library")
+
+exports_files(["Cargo.toml"])
+
+# Vendored Signal-Android protos. See proto/PROTO_PROVENANCE.md for
+# upstream SHA + license. Two files because Signal splits the
+# "envelope" (LocalArchive.proto: metadata + files sidecar) from the
+# frame stream itself (Backup.proto: BackupInfo + Frame).
+proto_library(
+    name = "signal_backup_proto",
+    srcs = [
+        "proto/Backup.proto",
+        "proto/LocalArchive.proto",
+    ],
+    strip_import_prefix = "/frankweiler/backend/signal-backup/proto",
+)
+
+rust_prost_library(
+    name = "signal_backup_rust_proto",
+    proto = ":signal_backup_proto",
+    visibility = ["//visibility:private"],
+)
+
+rust_library(
+    name = "frankweiler_signal_backup",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_signal_backup",
+    edition = "2021",
+    proc_macro_deps = [],
+    # Switches `src/proto.rs` from the cargo `include!` path (driven
+    # by `build.rs` + prost-build) to the Bazel-native re-export from
+    # the `:signal_backup_rust_proto` rust_prost_library above. Under
+    # Bazel the build script is annotated off in MODULE.bazel.
+    rustc_flags = ["--cfg=bazel_prost"],
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":signal_backup_rust_proto",
+        "@frankweiler_crates//:aes",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:cbc",
+        "@frankweiler_crates//:cipher",
+        "@frankweiler_crates//:ctr",
+        "@frankweiler_crates//:flate2",
+        "@frankweiler_crates//:hkdf",
+        "@frankweiler_crates//:hmac",
+        "@frankweiler_crates//:prost",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:subtle",
+        "@frankweiler_crates//:thiserror",
+    ],
+)
+
+# CLI used by the TNG fixture genrule (see
+# //frankweiler/backend/etl/providers/signal). Takes a JSON spec +
+# output directory; emits an encrypted snapshot. Lives in the library
+# crate so it has direct access to the writer + protos.
+rust_binary(
+    name = "signal_make_fixture",
+    srcs = ["src/bin/signal_make_fixture.rs"],
+    edition = "2021",
+    # The bin doesn't reference signal_backup_proto directly — it goes
+    # through the library's re-exports — so it doesn't need the cfg.
+    # But add it defensively in case future bin code reaches into proto.
+    rustc_flags = ["--cfg=bazel_prost"],
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_signal_backup",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "signal_backup_unittests",
+    size = "small",
+    crate = ":frankweiler_signal_backup",
+    edition = "2021",
+    # rust_test rebuilds the lib sources with `cfg(test)`, which means
+    # it doesn't inherit the rust_library's rustc_flags — re-state the
+    # `bazel_prost` cfg here so `src/proto.rs` picks the external-crate
+    # re-export path. Same goes for the env-gated rust_test below.
+    rustc_flags = ["--cfg=bazel_prost"],
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# Env-gated end-to-end test: skipped silently unless both
+# SIGNAL_BACKUP_AEP and SIGNAL_BACKUP_SNAPSHOT are set in the
+# environment, so `bazel test //...` stays green for everyone.
+rust_test(
+    name = "signal_backup_e2e",
+    srcs = ["tests/e2e.rs"],
+    crate_root = "tests/e2e.rs",
+    edition = "2021",
+    # Hermetic by default; users opt in via `--test_env`.
+    tags = ["manual"],
+    deps = [
+        ":frankweiler_signal_backup",
+        "@frankweiler_crates//:anyhow",
+    ],
+)

@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library_group")
+load("@rules_rust_prost//:defs.bzl", "rust_prost_toolchain")
+
+# Custom rust_prost_toolchain backed by our crate_universe pool.
+# Referenced from MODULE.bazel via `register_toolchains("//tools/prost_toolchain")`.
+# No tonic — we don't generate gRPC stubs; the only consumer
+# today (frankweiler-signal-backup) is parse-only.
+
+rust_library_group(
+    name = "prost_runtime",
+    deps = ["@frankweiler_crates//:prost"],
+)
+
+rust_prost_toolchain(
+    name = "prost_toolchain_impl",
+    prost_plugin = "@frankweiler_crates//:protoc-gen-prost__protoc-gen-prost",
+    prost_runtime = ":prost_runtime",
+    prost_types = "@frankweiler_crates//:prost-types",
+    # `tonic_plugin_flag` has a non-empty default in rules_rust_prost
+    # ≥0.70, so its truthiness alone trips the "all or none" tonic
+    # check unless we explicitly blank it.
+    tonic_plugin_flag = "",
+    visibility = ["//visibility:public"],
+)
+
+toolchain(
+    name = "prost_toolchain",
+    toolchain = ":prost_toolchain_impl",
+    toolchain_type = "@rules_rust_prost//:toolchain_type",
+    visibility = ["//visibility:public"],
+)
