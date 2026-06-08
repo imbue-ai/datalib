@@ -83,8 +83,9 @@ test  --disk_cache=~/Library/Caches/bazel-disk-cache
 # `.bazelrc.user` (gitignored) — see the `try-import` at the bottom of
 # this file. Without the user file the config is inert; with it,
 # subsequent invocations both read from and write to a shared content-
-# addressed cache hosted at remote.buildbuddy.io, and post Build Event
-# Protocol events to app.buildbuddy.io for inspection.
+# addressed cache hosted at imbue.buildbuddy.io (our org-scoped
+# endpoint), and post Build Event Protocol events to the same host for
+# inspection.
 #
 # Why this is huge for our build: actions that anyone (you, CI, the
 # devcontainer warmup, a contributor) builds once become cache hits
@@ -101,9 +102,9 @@ test  --disk_cache=~/Library/Caches/bazel-disk-cache
 # read-only mirror. Untrusted CI contexts (PR builds from forks) should
 # pass `--remote_upload_local_results=false` to avoid poisoning the
 # cache with unverified outputs.
-build:buildbuddy --bes_results_url=https://app.buildbuddy.io/invocation/
-build:buildbuddy --bes_backend=grpcs://remote.buildbuddy.io
-build:buildbuddy --remote_cache=grpcs://remote.buildbuddy.io
+build:buildbuddy --bes_results_url=https://imbue.buildbuddy.io/invocation/
+build:buildbuddy --bes_backend=grpcs://imbue.buildbuddy.io
+build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
 
@@ -116,7 +117,7 @@ build:buildbuddy --remote_upload_local_results=true
 #     build --config=buildbuddy
 #     test  --config=buildbuddy
 #
-# Get your key at https://app.buildbuddy.io/settings.
+# Get your key at https://imbue.buildbuddy.io/settings.
 try-import %workspace%/.bazelrc.user
 
 # Auto-apply per-OS `build:<os>` configs below based on the build host.
