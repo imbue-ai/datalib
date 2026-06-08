@@ -2,7 +2,9 @@
 //! and modes come from `dump.py` in the Python reference — kept as
 //! `&[u8]` constants so the byte-for-byte match is easy to verify.
 
-use aes::cipher::{generic_array::GenericArray, BlockDecryptMut, KeyIvInit, StreamCipher};
+use aes::cipher::{
+    generic_array::GenericArray, BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher,
+};
 use aes::Aes256;
 use anyhow::{anyhow, Result};
 use hkdf::Hkdf;
@@ -28,6 +30,7 @@ const MAC_LENGTH: usize = 32;
 
 type HmacSha256 = Hmac<Sha256>;
 type Aes256CbcDec = cbc::Decryptor<Aes256>;
+type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 type Aes256Ctr = ctr::Ctr128BE<Aes256>;
 
 /// Normalize an Account Entropy Pool string per Signal's spec:
@@ -175,6 +178,38 @@ pub fn decrypt_attachment_inplace(enc: &[u8], local_key: &[u8; 64]) -> Result<Ve
     .len();
     buf.truncate(pt_len);
     Ok(buf)
+}
+
+/// Inverse of [`decrypt_attachment_inplace`]. Produces the on-disk
+/// `iv(16) || ct || hmac(32)` layout. Exposed so tests and fixture
+/// builders can write known-good encrypted blobs without re-deriving
+/// the format. `iv` is passed in (not generated) so callers can keep
+/// fixtures byte-deterministic.
+pub fn encrypt_attachment(plaintext: &[u8], local_key: &[u8; 64], iv: &[u8; 16]) -> Vec<u8> {
+    let aes_key: &[u8; 32] = local_key[..32].try_into().unwrap();
+    let hmac_key: &[u8; 32] = local_key[32..].try_into().unwrap();
+    // CBC encrypt with PKCS7. `encrypt_padded_mut` writes into a
+    // pre-sized buffer.
+    let pad_len = 16 - (plaintext.len() % 16);
+    let mut buf = Vec::with_capacity(plaintext.len() + pad_len);
+    buf.extend_from_slice(plaintext);
+    buf.resize(plaintext.len() + pad_len, 0);
+    let ct_len = Aes256CbcEnc::new(
+        GenericArray::from_slice(aes_key),
+        GenericArray::from_slice(iv),
+    )
+    .encrypt_padded_mut::<cipher::block_padding::Pkcs7>(&mut buf, plaintext.len())
+    .expect("CBC encrypt with PKCS7 padding succeeds for any plaintext length")
+    .len();
+    buf.truncate(ct_len);
+    let mut body = Vec::with_capacity(IV_LENGTH + buf.len() + MAC_LENGTH);
+    body.extend_from_slice(iv);
+    body.extend_from_slice(&buf);
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(hmac_key).expect("hmac key length");
+    mac.update(&body);
+    let tag = mac.finalize().into_bytes();
+    body.extend_from_slice(&tag);
+    body
 }
 
 fn verify_hmac(key: &[u8; 32], body: &[u8], expected_mac: &[u8]) -> Result<()> {

@@ -34,6 +34,7 @@ pub mod write;
 pub use proto::backup;
 pub use proto::local;
 
+pub use crypto::encrypt_attachment;
 use crypto::{
     decrypt_attachment_inplace, decrypt_main, decrypt_metadata_backup_id, derive_backup_key,
     derive_message_keys, normalize_passphrase,
