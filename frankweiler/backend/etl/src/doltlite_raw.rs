@@ -196,34 +196,6 @@ pub const ENDPOINT_SHAPES_DDL: &str = "CREATE TABLE IF NOT EXISTS endpoint_shape
     captured_at TEXT NOT NULL
 )";
 
-/// Per-blob storage. PK is the upstream-stable identifier for the
-/// file (e.g. `file_upload_id`); fall back to `{owning_id}:{slot}` when
-/// none exists. NEVER key by `sha256(content)` — the PK must be known
-/// BEFORE we fetch so failed-fetch rows can attach to the right slot.
-/// `kind` is an open-ended provider-defined label; we used to check
-/// it with `CHECK(kind IN ('uploaded','external','notion_hosted'))`
-/// but every provider has its own vocabulary so the check is gone.
-pub const BLOBS_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    owning_id TEXT NOT NULL,
-    slot TEXT NOT NULL,
-    content_type TEXT NULL,
-    sha256 TEXT NULL,
-    bytes BLOB NULL,
-    source_url TEXT NULL
-)";
-
-/// Sidecar bookkeeping for `blobs`. Same shape as every other
-/// object-table sidecar — see [`bookkeeping_ddl_for`].
-pub const BLOBS_BOOKKEEPING_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs_bookkeeping (
-    id TEXT PRIMARY KEY,
-    fetched_at TEXT NULL,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at TEXT NULL,
-    last_error TEXT NULL
-)";
-
 /// Per-scope incremental-sync cursor table. Used by providers (github,
 /// gitlab) whose discovery is keyed by a search scope ("author:@me",
 /// "assigned_to_me", …) and which want to narrow each subsequent run
@@ -241,8 +213,6 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 pub const SHARED_DDL: &[&str] = &[
     SYNC_RUNS_DDL,
     ENDPOINT_SHAPES_DDL,
-    BLOBS_DDL,
-    BLOBS_BOOKKEEPING_DDL,
     crate::blob_cas::BLOB_REFS_DDL,
     crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
     crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
@@ -561,7 +531,7 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
                 .with_context(|| format!("truncate {sql}"))?;
         }
     }
-    for sql in ["DELETE FROM blobs", "DELETE FROM blobs_bookkeeping"] {
+    for sql in ["DELETE FROM blob_refs", "DELETE FROM blob_refs_bookkeeping"] {
         sqlx::query(sql)
             .execute(&mut *tx)
             .await
@@ -807,193 +777,6 @@ pub async fn record_endpoint_shape(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// blobs
-// ─────────────────────────────────────────────────────────────────────
-
-/// Bytes for one blob, paired with the metadata downstream renderers
-/// need to write it back to disk and link to it.
-#[derive(Debug, Clone)]
-pub struct BlobBytes {
-    pub id: String,
-    pub owning_id: String,
-    pub slot: String,
-    pub content_type: Option<String>,
-    pub bytes: Vec<u8>,
-    pub source_url: Option<String>,
-}
-
-/// True iff a blob row with this id already has its bytes stored.
-/// Used to short-circuit refetch: once we have a copy we trust it
-/// (signed URLs rotate; bytes don't).
-pub async fn blob_exists(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let row = sqlx::query("SELECT 1 FROM blobs WHERE id = ? AND bytes IS NOT NULL LIMIT 1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .context("blob_exists")?;
-    Ok(row.is_some())
-}
-
-/// Pre-seed a blob row before its bytes have been fetched, AND
-/// its matching bookkeeping sidecar row. Lets the caller record
-/// "we know this file exists" as soon as the listing reveals it,
-/// so a Ctrl-C / network failure leaves behind enough state to
-/// count "known but undownloaded" in tooling. INSERT OR IGNORE on
-/// both tables so an existing row with bytes (or an error history)
-/// is never clobbered.
-///
-/// Takes a transaction so data and sidecar inserts are atomic.
-pub async fn pre_seed_blob_stub(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    kind: &str,
-    owning_id: &str,
-    slot: &str,
-    content_type: Option<&str>,
-    source_url: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot, content_type, source_url)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(id)
-    .bind(kind)
-    .bind(owning_id)
-    .bind(slot)
-    .bind(content_type)
-    .bind(source_url)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("pre_seed_blob_stub data {id}"))?;
-    sqlx::query("INSERT OR IGNORE INTO blobs_bookkeeping (id) VALUES (?)")
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("pre_seed_blob_stub bookkeeping {id}"))?;
-    Ok(())
-}
-
-/// Insert (or refresh) a blob row with its bytes, plus a
-/// success entry in `blobs_bookkeeping`. Both writes in one
-/// transaction.
-#[allow(clippy::too_many_arguments)]
-pub async fn upsert_blob_bytes(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    kind: &str,
-    owning_id: &str,
-    slot: &str,
-    content_type: Option<&str>,
-    bytes: &[u8],
-    source_url: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO blobs (id, kind, owning_id, slot, content_type, bytes, source_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            owning_id = excluded.owning_id,
-            slot = excluded.slot,
-            content_type = COALESCE(excluded.content_type, blobs.content_type),
-            bytes = excluded.bytes,
-            source_url = COALESCE(excluded.source_url, blobs.source_url)",
-    )
-    .bind(id)
-    .bind(kind)
-    .bind(owning_id)
-    .bind(slot)
-    .bind(content_type)
-    .bind(bytes)
-    .bind(source_url)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("upsert_blob_bytes data {id}"))?;
-    record_object_attempt(tx, "blobs", id, None).await
-}
-
-/// Record a blob fetch failure. We need *some* values for the NOT
-/// NULL columns even on first failure; callers pass `owning_id` and
-/// `slot` so the row carries useful context for a later retry. `kind`
-/// defaults to `"unknown"` since the caller often doesn't yet know
-/// whether the file is external / uploaded / hosted.
-///
-/// Inserts the (stub) blobs row if absent, then records the
-/// failure attempt in `blobs_bookkeeping`. Both atomic.
-pub async fn record_blob_error(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    owning_id: &str,
-    slot: &str,
-    err: &str,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot)
-         VALUES (?, 'unknown', ?, ?)",
-    )
-    .bind(id)
-    .bind(owning_id)
-    .bind(slot)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("record_blob_error data {id}"))?;
-    record_object_attempt(tx, "blobs", id, Some(err)).await
-}
-
-/// Load every blob row's bytes keyed by `owning_id`. When a single
-/// owner has multiple blobs (e.g. one message with three attachments),
-/// only the lexically-last `id` wins — fine for Notion (one blob per
-/// block) but providers with multi-blob owners should use
-/// [`load_blobs_by_id`] instead.
-pub async fn load_blobs_by_owner(pool: &SqlitePool) -> Result<HashMap<String, BlobBytes>> {
-    let by_id = load_blobs_by_id(pool).await?;
-    let mut out: HashMap<String, BlobBytes> = HashMap::with_capacity(by_id.len());
-    for (_id, b) in by_id {
-        out.insert(b.owning_id.clone(), b);
-    }
-    Ok(out)
-}
-
-/// Load every blob row keyed by blob `id`. Use this when one `owning_id`
-/// may carry many blobs (chatgpt/anthropic conversations have many
-/// attachments per conversation).
-pub async fn load_blobs_by_id(pool: &SqlitePool) -> Result<HashMap<String, BlobBytes>> {
-    let rows = sqlx::query(
-        "SELECT id, owning_id, slot, content_type, bytes, source_url \
-         FROM blobs WHERE bytes IS NOT NULL ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_blobs_by_id")?;
-    let mut out: HashMap<String, BlobBytes> = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let id: String = match r.try_get("id") {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let bytes: Vec<u8> = match r.try_get("bytes") {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let owning_id: String = r.try_get("owning_id").unwrap_or_default();
-        let slot: String = r.try_get("slot").unwrap_or_default();
-        let content_type: Option<String> = r.try_get("content_type").ok();
-        let source_url: Option<String> = r.try_get("source_url").ok();
-        out.insert(
-            id.clone(),
-            BlobBytes {
-                id,
-                owning_id,
-                slot,
-                content_type,
-                bytes,
-                source_url,
-            },
-        );
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 // Test diagnostics + intentional probe-failure prints under stock
 // libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
@@ -1031,7 +814,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM blobs")
+        sqlx::query("SELECT COUNT(*) FROM blob_refs")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -1288,42 +1071,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(attempts, 2);
-    }
-
-    #[tokio::test]
-    async fn blob_roundtrip() {
-        let d = tempdir().unwrap();
-        let pool = open_test(&d.path().join("b.doltlite_db")).await;
-        let mut tx = pool.begin().await.unwrap();
-        upsert_blob_bytes(
-            &mut tx,
-            "id1",
-            "external",
-            "owner1",
-            "image",
-            Some("image/png"),
-            b"hello",
-            Some("https://x.test/i.png"),
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
-        assert!(blob_exists(&pool, "id1").await.unwrap());
-        let by_owner = load_blobs_by_owner(&pool).await.unwrap();
-        assert_eq!(by_owner["owner1"].bytes, b"hello".to_vec());
-        let by_id = load_blobs_by_id(&pool).await.unwrap();
-        assert_eq!(by_id["id1"].owning_id, "owner1");
-
-        // Sidecar should reflect one successful attempt.
-        let row: (Option<String>, i64, Option<String>) = sqlx::query_as(
-            "SELECT fetched_at, attempt_count, last_error FROM blobs_bookkeeping WHERE id = 'id1'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(row.0.is_some(), "fetched_at should be set on success");
-        assert_eq!(row.1, 1);
-        assert!(row.2.is_none(), "last_error should be cleared on success");
     }
 
     /// Regression guard for the "always pool size 1 against

@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         ("rooms".into(), single_count(&pool, "rooms").await?),
         ("users".into(), single_count(&pool, "users").await?),
         ("events".into(), single_count(&pool, "events").await?),
-        ("blobs".into(), single_count(&pool, "blobs").await?),
+        ("blob_refs".into(), single_count(&pool, "blob_refs").await?),
     ];
     println!("== counts ==");
     for (t, n) in &counts {
