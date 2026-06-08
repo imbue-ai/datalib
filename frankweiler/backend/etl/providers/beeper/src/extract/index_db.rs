@@ -37,8 +37,6 @@ use serde_json::Value;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use frankweiler_etl::doltlite_raw as dr;
-
 use super::db::{EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
 
@@ -573,18 +571,20 @@ async fn ingest_attachment(
     };
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
 
+    let stub = frankweiler_etl::blob_cas::RefStub {
+        ref_id: &blob_id,
+        kind: "beeper_media",
+        owning_id: owning_event_uuid,
+        slot: &slot_str,
+        upstream_uuid: Some(att_id),
+        upstream_name: file_name.as_deref(),
+        source_url: Some(&src_url),
+        content_type: mime.as_deref(),
+    };
+
     if !download_media {
         let mut tx = dst.pool().begin().await.context("begin pre_seed_blob tx")?;
-        dr::pre_seed_blob_stub(
-            &mut tx,
-            &blob_id,
-            "beeper_media",
-            owning_event_uuid,
-            &slot_str,
-            mime.as_deref(),
-            Some(&src_url),
-        )
-        .await?;
+        frankweiler_etl::blob_cas::pre_seed_ref(&mut tx, &stub).await?;
         tx.commit().await.context("commit pre_seed_blob tx")?;
         return Ok(());
     }
@@ -597,7 +597,7 @@ async fn ingest_attachment(
                 .begin()
                 .await
                 .context("begin record_blob_error tx")?;
-            dr::record_blob_error(
+            frankweiler_etl::blob_cas::record_ref_error(
                 &mut tx,
                 &blob_id,
                 owning_event_uuid,
@@ -610,19 +610,7 @@ async fn ingest_attachment(
             return Ok(());
         }
     };
-    let mut tx = dst.pool().begin().await.context("begin upsert_blob tx")?;
-    dr::upsert_blob_bytes(
-        &mut tx,
-        &blob_id,
-        "beeper_media",
-        owning_event_uuid,
-        &slot_str,
-        mime.as_deref(),
-        &bytes,
-        Some(&src_url),
-    )
-    .await?;
-    tx.commit().await.context("commit upsert_blob tx")?;
+    frankweiler_etl::blob_cas::store_bytes(dst.pool(), dst.cas(), &stub, &bytes).await?;
     summary.blobs += 1;
     Ok(())
 }

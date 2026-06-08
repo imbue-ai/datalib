@@ -111,18 +111,18 @@ async fn main() -> Result<()> {
         println!("  {network:10} {with_ext}/{total} events have external_event_id");
     }
 
-    println!("\n== blobs ==");
-    let rows =
-        sqlx::query("SELECT kind, slot, content_type, length(bytes) AS sz, source_url FROM blobs")
-            .fetch_all(&pool)
-            .await?;
+    println!("\n== blob_refs ==");
+    let rows = sqlx::query("SELECT kind, slot, content_type, blake3, source_url FROM blob_refs")
+        .fetch_all(&pool)
+        .await?;
     for r in &rows {
         let kind: String = r.try_get("kind")?;
         let slot: String = r.try_get("slot")?;
         let mime: Option<String> = r.try_get("content_type")?;
-        let sz: Option<i64> = r.try_get("sz")?;
+        let hash: Option<String> = r.try_get("blake3")?;
         let url: Option<String> = r.try_get("source_url")?;
-        println!("  [{kind}] slot={slot:?} mime={mime:?} sz={sz:?} url={url:?}");
+        let h_short = hash.as_deref().map(|h| &h[..16.min(h.len())]);
+        println!("  [{kind}] slot={slot:?} mime={mime:?} blake3={h_short:?} url={url:?}");
     }
 
     println!("\n== users ==");

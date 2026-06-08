@@ -161,8 +161,8 @@ impl RawDb {
         for sql in [
             "DELETE FROM yolink_devices",
             "DELETE FROM yolink_readings",
-            "DELETE FROM blobs",
-            "DELETE FROM blobs_bookkeeping",
+            "DELETE FROM blob_refs",
+            "DELETE FROM blob_refs_bookkeeping",
         ] {
             sqlx::query(sql).execute(&self.pool).await?;
         }

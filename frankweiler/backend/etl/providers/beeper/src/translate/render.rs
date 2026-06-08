@@ -10,12 +10,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::Row;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
@@ -23,7 +20,7 @@ use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
 use frankweiler_schema::grid_rows::GridRow;
 
-use super::parse::{DocBucket, Event, ParsedBeeper, Room};
+use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
 use super::{beeper_event_uuid, beeper_markdown_uuid};
 
 /// Bump when the rendered markdown / grid_rows layout changes
@@ -418,7 +415,7 @@ fn render_attachment_body(out: &mut String, m: &Event) {
         return;
     }
     for b in &m.blobs {
-        let rel = blob_relpath(&b.blob_id, b.content_type.as_deref(), &b.slot);
+        let rel = blob_relpath_for(b);
         let size = b
             .byte_len
             .map(human_bytes)
@@ -512,18 +509,26 @@ fn display_ts(ms: i64) -> String {
 // Blob materialization
 // ─────────────────────────────────────────────────────────────────────
 
-fn blob_relpath(blob_id: &str, content_type: Option<&str>, slot: &str) -> String {
-    let ext = content_type
+/// Markdown link target for a Blob — `blobs/<short-b3>.<ext>` when
+/// bytes have been ingested into the CAS, falling back to a
+/// metadata-only placeholder when we only know the ref exists.
+fn blob_relpath_for(b: &Blob) -> String {
+    let ext = b
+        .content_type
+        .as_deref()
         .and_then(content_type_to_ext)
         .or_else(|| {
-            slot.rsplit('.')
+            b.slot
+                .rsplit('.')
                 .next()
                 .filter(|s| !s.contains(' '))
                 .map(str::to_string)
         })
         .unwrap_or_else(|| "bin".to_string());
-    let safe_blob = blob_id.replace(['/', ':'], "_");
-    format!("blobs/{safe_blob}.{ext}")
+    match &b.blake3 {
+        Some(h) => format!("blobs/{}.{ext}", &h[..16.min(h.len())]),
+        None => format!("blobs/{}.{ext}", b.blob_id.replace(['/', ':'], "_")),
+    }
 }
 
 fn content_type_to_ext(ct: &str) -> Option<String> {
@@ -546,20 +551,16 @@ fn content_type_to_ext(ct: &str) -> Option<String> {
     )
 }
 
-/// Stream each blob's bytes from the raw doltlite into a file
-/// under `blobs/<blob-id>.<ext>`. Blobs without bytes (extract
-/// failed to fetch them, or `--no-media` was set) are skipped —
-/// the markdown links them but the file just won't exist.
+/// Stream each blob's bytes from the per-source CAS file into a file
+/// under `blobs/<short-b3>.<ext>`. Blobs without an attached hash
+/// (extract failed to fetch them, or `--no-media` was set) are skipped.
 fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> Result<usize> {
-    // Collect the blob ids referenced by this doc's messages. We
-    // pull every event's blobs through `parse.rs`, so the doc
-    // already has them in memory — but the BYTES are still in
-    // doltlite. Re-open the raw db and SELECT bytes by id.
-    let mut needed: Vec<(String, String)> = Vec::new(); // (id, slot)
+    // (blake3, content_type) pairs we need from the CAS.
+    let mut needed: Vec<(String, Option<String>)> = Vec::new();
     for m in &doc.messages {
         for b in &m.blobs {
-            if b.has_bytes {
-                needed.push((b.blob_id.clone(), b.slot.clone()));
+            if let Some(h) = &b.blake3 {
+                needed.push((h.clone(), b.content_type.clone()));
             }
         }
     }
@@ -568,39 +569,26 @@ fn materialize_blobs(raw_db_path: &Path, doc: &DocBucket, blobs_dir: &Path) -> R
     }
     fs::create_dir_all(blobs_dir).with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
 
-    // Same rationale as parse_async: bridge sync-Rust into async
-    // sqlx by borrowing the existing runtime rather than spawning
-    // a new one (which would panic inside the sync orchestrator's
-    // tokio context).
+    let cas_path = frankweiler_etl::blob_cas::cas_path_for(raw_db_path);
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
-            let opts =
-                SqliteConnectOptions::from_str(&format!("sqlite://{}", raw_db_path.display()))?
-                    .read_only(true);
-            let pool = SqlitePoolOptions::new()
-                .max_connections(1)
-                .connect_with(opts)
+            let cas = frankweiler_etl::blob_cas::BlobCas::open(&cas_path)
                 .await
-                .with_context(|| format!("open doltlite for blobs at {}", raw_db_path.display()))?;
+                .with_context(|| format!("open CAS at {}", cas_path.display()))?;
             let mut written = 0usize;
-            for (id, slot) in &needed {
-                let row = sqlx::query("SELECT bytes, content_type FROM blobs WHERE id = ?")
-                    .bind(id)
-                    .fetch_optional(&pool)
-                    .await?;
-                let Some(r) = row else { continue };
-                let bytes: Vec<u8> = match r.try_get::<Option<Vec<u8>>, _>("bytes")? {
-                    Some(b) => b,
-                    None => continue,
+            for (hash, _ct) in &needed {
+                let Some(obj) = cas.get(hash).await? else {
+                    continue;
                 };
-                let ct: Option<String> = r.try_get("content_type")?;
-                let rel = blob_relpath(id, ct.as_deref(), slot);
-                // rel is "blobs/<safe>.<ext>" — write under page_dir's
-                // parent of blobs_dir. blobs_dir's parent is the page
-                // dir, and rel starts with "blobs/" so we strip that.
-                let filename = rel.strip_prefix("blobs/").unwrap_or(&rel);
-                let path = blobs_dir.join(filename);
-                fs::write(&path, &bytes).with_context(|| format!("write {}", path.display()))?;
+                let short = &hash[..16.min(hash.len())];
+                let ext = frankweiler_etl::blob_cas::extension_for_content_type(
+                    obj.content_type.as_deref(),
+                )
+                .unwrap_or_else(|| "bin".to_string());
+                let filename = format!("{short}.{ext}");
+                let path = blobs_dir.join(&filename);
+                fs::write(&path, &obj.bytes)
+                    .with_context(|| format!("write {}", path.display()))?;
                 written += 1;
             }
             Ok::<usize, anyhow::Error>(written)
