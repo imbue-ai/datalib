@@ -121,14 +121,26 @@ fn star_trek_mbox_renders_through_render_all() {
         .join(&briefing_tuid);
     assert!(briefing_dir.join("index.md").exists());
     assert!(briefing_dir.join("index.grid_rows.json").exists());
-    let warp_diag = briefing_dir.join("blobs/warp_diagnostics.txt");
+    // CAS-based filenames: scan the blobs dir for any file whose body
+    // contains the expected attachment text.
+    let blobs_dir = briefing_dir.join("blobs");
+    assert!(blobs_dir.is_dir(), "blobs/ dir missing");
+    let mut found = false;
+    for entry in std::fs::read_dir(&blobs_dir).unwrap().flatten() {
+        if entry.path().is_file() {
+            if let Ok(body) = std::fs::read_to_string(entry.path()) {
+                if body.contains("Plasma flow") {
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
     assert!(
-        warp_diag.exists(),
-        "expected attachment at {}",
-        warp_diag.display()
+        found,
+        "no attachment in {} contained Plasma flow",
+        blobs_dir.display()
     );
-    let body = std::fs::read_to_string(warp_diag).unwrap();
-    assert!(body.contains("Plasma flow"));
 
     // Briefing index.md mentions every sender.
     let md = std::fs::read_to_string(briefing_dir.join("index.md")).unwrap();

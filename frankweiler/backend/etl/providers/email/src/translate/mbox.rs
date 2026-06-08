@@ -76,8 +76,7 @@ use mail_parser::{Address, HeaderValue, MessageParser, MimeHeaders, PartType};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
-use frankweiler_etl::blob_store::InMemoryBlobStore;
-use frankweiler_etl::doltlite_raw::BlobBytes;
+use frankweiler_etl::blob_cas::{blake3_hex, BlobReader, BlobView, InMemoryBlobReader};
 
 use crate::extract::db::{
     AttachmentRow, EmailJoins, EmailRow, LoadedAttachment, LoadedEmail, LoadedRaw,
@@ -267,7 +266,7 @@ struct Accumulator {
     joins_mailboxes: HashMap<String, Vec<String>>,
     joins_keywords: HashMap<String, Vec<String>>,
     joins_attachments: HashMap<String, Vec<LoadedAttachment>>,
-    blobs: HashMap<String, BlobBytes>,
+    blobs: HashMap<String, BlobView>,
     /// Dedupe set so we never push the same email_id twice when an
     /// mbox accidentally contains duplicates (Takeout sometimes does
     /// for messages in multiple labels' mboxes — though the standard
@@ -345,13 +344,15 @@ impl Accumulator {
             let disposition = part.content_disposition().map(|cd| cd.ctype().to_string());
             let cid = part.content_id().map(str::to_string);
 
-            self.blobs.entry(blob_id.clone()).or_insert(BlobBytes {
-                id: blob_id.clone(),
+            self.blobs.entry(blob_id.clone()).or_insert(BlobView {
+                ref_id: blob_id.clone(),
                 owning_id: email_id.clone(),
                 slot: part_id.clone(),
+                blake3: blake3_hex(&bytes),
                 content_type: content_type.clone(),
-                bytes,
+                upstream_name: name.clone(),
                 source_url: None,
+                bytes,
             });
 
             attachments_json.push(json!({
@@ -385,13 +386,15 @@ impl Accumulator {
         let has_attachment = !attachment_rows.is_empty();
 
         // .eml source blob.
-        self.blobs.entry(eml_blob_id.clone()).or_insert(BlobBytes {
-            id: eml_blob_id.clone(),
+        self.blobs.entry(eml_blob_id.clone()).or_insert(BlobView {
+            ref_id: eml_blob_id.clone(),
             owning_id: email_id.clone(),
             slot: "source".to_string(),
+            blake3: blake3_hex(raw),
             content_type: Some("message/rfc822".to_string()),
-            bytes: raw.to_vec(),
+            upstream_name: None,
             source_url: None,
+            bytes: raw.to_vec(),
         });
 
         // Date → ISO 8601.
@@ -584,8 +587,11 @@ impl Accumulator {
             attachments: self.joins_attachments,
         };
 
-        let blobs: Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-            Arc::new(InMemoryBlobStore::from_id_map(self.blobs));
+        let mut reader = InMemoryBlobReader::new();
+        for (_id, view) in self.blobs {
+            reader.insert(view);
+        }
+        let blobs: Arc<dyn BlobReader> = Arc::new(reader);
 
         LoadedRaw {
             accounts,

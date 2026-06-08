@@ -51,7 +51,7 @@ pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
 /// table. `blake3` is a logical FK into the sibling `cas_objects`
 /// table; NULL means the bytes haven't been fetched yet.
 pub const BLOB_REFS_DDL: &str = "CREATE TABLE IF NOT EXISTS blob_refs (
-    ref_id        TEXT PRIMARY KEY,
+    id            TEXT PRIMARY KEY,
     kind          TEXT NOT NULL,
     owning_id     TEXT NOT NULL,
     slot          TEXT NOT NULL,
@@ -70,7 +70,7 @@ pub const BLOB_REFS_OWNING_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS blob_refs_owning ON blob_refs(owning_id)";
 
 pub const BLOB_REFS_BOOKKEEPING_DDL: &str = "CREATE TABLE IF NOT EXISTS blob_refs_bookkeeping (
-    ref_id           TEXT PRIMARY KEY,
+    id               TEXT PRIMARY KEY,
     fetched_at       TEXT NULL,
     attempt_count    INTEGER NOT NULL DEFAULT 0,
     last_attempt_at  TEXT NULL,
@@ -214,7 +214,7 @@ pub async fn pre_seed_ref(
 ) -> Result<()> {
     sqlx::query(
         "INSERT OR IGNORE INTO blob_refs \
-         (ref_id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type) \
+         (id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(stub.ref_id)
@@ -228,7 +228,7 @@ pub async fn pre_seed_ref(
     .execute(&mut **tx)
     .await
     .with_context(|| format!("pre_seed_ref {}", stub.ref_id))?;
-    sqlx::query("INSERT OR IGNORE INTO blob_refs_bookkeeping (ref_id) VALUES (?)")
+    sqlx::query("INSERT OR IGNORE INTO blob_refs_bookkeeping (id) VALUES (?)")
         .bind(stub.ref_id)
         .execute(&mut **tx)
         .await
@@ -247,9 +247,9 @@ pub async fn attach_hash(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO blob_refs \
-         (ref_id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type, blake3) \
+         (id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type, blake3) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(ref_id) DO UPDATE SET \
+         ON CONFLICT(id) DO UPDATE SET \
             kind          = excluded.kind, \
             owning_id     = excluded.owning_id, \
             slot          = excluded.slot, \
@@ -283,7 +283,7 @@ pub async fn record_ref_error(
     err: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT OR IGNORE INTO blob_refs (ref_id, kind, owning_id, slot) \
+        "INSERT OR IGNORE INTO blob_refs (id, kind, owning_id, slot) \
          VALUES (?, 'unknown', ?, ?)",
     )
     .bind(ref_id)
@@ -298,12 +298,11 @@ pub async fn record_ref_error(
 /// True iff the ref already has a hash attached (i.e. bytes are in
 /// the CAS). Cheap short-circuit for skip-already-fetched paths.
 pub async fn ref_has_hash(pool: &SqlitePool, ref_id: &str) -> Result<bool> {
-    let row =
-        sqlx::query("SELECT 1 FROM blob_refs WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1")
-            .bind(ref_id)
-            .fetch_optional(pool)
-            .await
-            .context("ref_has_hash")?;
+    let row = sqlx::query("SELECT 1 FROM blob_refs WHERE id = ? AND blake3 IS NOT NULL LIMIT 1")
+        .bind(ref_id)
+        .fetch_optional(pool)
+        .await
+        .context("ref_has_hash")?;
     Ok(row.is_some())
 }
 
@@ -417,8 +416,8 @@ impl SqliteBlobReader {
 
     async fn ref_row(&self, ref_id: &str) -> Result<Option<RefRow>> {
         let row = sqlx::query(
-            "SELECT ref_id, owning_id, slot, blake3, content_type, upstream_name, source_url \
-             FROM blob_refs WHERE ref_id = ? AND blake3 IS NOT NULL",
+            "SELECT id, owning_id, slot, blake3, content_type, upstream_name, source_url \
+             FROM blob_refs WHERE id = ? AND blake3 IS NOT NULL",
         )
         .bind(ref_id)
         .fetch_optional(&self.refs_pool)
@@ -429,9 +428,9 @@ impl SqliteBlobReader {
 
     async fn ref_row_for_owner(&self, owning_id: &str) -> Result<Option<RefRow>> {
         let row = sqlx::query(
-            "SELECT ref_id, owning_id, slot, blake3, content_type, upstream_name, source_url \
+            "SELECT id, owning_id, slot, blake3, content_type, upstream_name, source_url \
              FROM blob_refs WHERE owning_id = ? AND blake3 IS NOT NULL \
-             ORDER BY ref_id DESC LIMIT 1",
+             ORDER BY id DESC LIMIT 1",
         )
         .bind(owning_id)
         .fetch_optional(&self.refs_pool)
@@ -474,7 +473,7 @@ struct RefRow {
 
 fn row_to_ref(r: SqliteRow) -> RefRow {
     RefRow {
-        ref_id: r.try_get("ref_id").unwrap_or_default(),
+        ref_id: r.try_get("id").unwrap_or_default(),
         owning_id: r.try_get("owning_id").unwrap_or_default(),
         slot: r.try_get("slot").unwrap_or_default(),
         blake3: r.try_get("blake3").unwrap_or_default(),

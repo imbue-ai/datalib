@@ -35,15 +35,19 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{
+    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
+};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
+pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 /// Object tables — wiped by [`RawDb::reset`].
 const DATA_TABLES: &[&str] = &["accounts", "mailboxes", "threads", "emails"];
@@ -282,6 +286,7 @@ impl AttachmentRow {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 impl RawDb {
@@ -289,11 +294,16 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     pub async fn reset(&self) -> Result<()> {
@@ -658,14 +668,17 @@ impl RawDb {
         Ok(out)
     }
 
-    // ── blobs (delegates) ──────────────────────────────────────────
+    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
 
-    pub async fn blob_exists(&self, id: &str) -> Result<bool> {
-        dr::blob_exists(&self.pool, id).await
+    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
+        blob_cas::ref_has_hash(&self.pool, ref_id).await
     }
 
+    /// Snapshot every ref_id that already has a hash attached. Loaded
+    /// once at run start so the per-blob `download_bytes` skip-check is
+    /// a `HashSet` hit instead of a SQLite round trip.
     pub async fn loaded_blob_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM blobs WHERE bytes IS NOT NULL")
+        let rows = sqlx::query("SELECT id FROM blob_refs WHERE blake3 IS NOT NULL")
             .fetch_all(&self.pool)
             .await
             .context("loaded_blob_ids")?;
@@ -680,7 +693,7 @@ impl RawDb {
 
     pub async fn pre_seed_blob_stub(
         &self,
-        id: &str,
+        ref_id: &str,
         kind: &str,
         owning_id: &str,
         slot: &str,
@@ -688,48 +701,37 @@ impl RawDb {
         source_url: Option<&str>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin blob stub tx")?;
-        dr::pre_seed_blob_stub(&mut tx, id, kind, owning_id, slot, content_type, source_url)
-            .await?;
+        blob_cas::pre_seed_ref(
+            &mut tx,
+            &RefStub {
+                ref_id,
+                kind,
+                owning_id,
+                slot,
+                upstream_uuid: Some(ref_id),
+                upstream_name: None,
+                source_url,
+                content_type,
+            },
+        )
+        .await?;
         tx.commit().await.context("commit blob stub tx")?;
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn upsert_blob_bytes(
-        &self,
-        id: &str,
-        kind: &str,
-        owning_id: &str,
-        slot: &str,
-        content_type: Option<&str>,
-        bytes: &[u8],
-        source_url: Option<&str>,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
-        dr::upsert_blob_bytes(
-            &mut tx,
-            id,
-            kind,
-            owning_id,
-            slot,
-            content_type,
-            bytes,
-            source_url,
-        )
-        .await?;
-        tx.commit().await.context("commit blob upsert tx")?;
-        Ok(())
+    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
     }
 
     pub async fn record_blob_error(
         &self,
-        id: &str,
+        ref_id: &str,
         owning_id: &str,
         slot: &str,
         err: &str,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
     }
@@ -943,7 +945,7 @@ pub struct LoadedRaw {
     pub threads: Vec<Value>,
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: Arc<dyn BlobReader>,
 }
 
 impl Default for LoadedRaw {
@@ -954,7 +956,7 @@ impl Default for LoadedRaw {
             threads: Vec::new(),
             emails: Vec::new(),
             joins: EmailJoins::default(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -968,10 +970,10 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
-                    db.pool().clone(),
-                ));
+            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
+                db.pool().clone(),
+                db.cas().pool().clone(),
+            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 accounts: db.load_accounts().await?,
                 mailboxes: db.load_mailboxes().await?,
@@ -1120,9 +1122,21 @@ mod tests {
             .await
             .unwrap();
         // Also stash a blob row so we can prove it survives.
-        db.upsert_blob_bytes("B-eml", BLOB_KIND_EML, "E1", "source", None, b"raw", None)
-            .await
-            .unwrap();
+        db.store_blob(
+            &RefStub {
+                ref_id: "B-eml",
+                kind: BLOB_KIND_EML,
+                owning_id: "E1",
+                slot: "source",
+                upstream_uuid: Some("B-eml"),
+                upstream_name: None,
+                source_url: None,
+                content_type: None,
+            },
+            b"raw",
+        )
+        .await
+        .unwrap();
 
         db.delete_emails(&["E1".to_string()]).await.unwrap();
 

@@ -33,7 +33,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
-pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedRaw, RawDb};
+pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
 use db::{EmailRow, BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
@@ -743,7 +743,7 @@ async fn sync_blobs(
                 if sz as u64 > limit {
                     summary.blobs_oversize += 1;
                     // Pre-seed a stub row so the bookkeeping shows we
-                    // know about it; the bytes column stays NULL.
+                    // know about it; the blake3 column stays NULL.
                     db.pre_seed_blob_stub(
                         &blob_id,
                         job.kind,
@@ -762,14 +762,18 @@ async fn sync_blobs(
         match api::download_bytes(&url, BLOB_TIMEOUT).await {
             Ok((bytes, content_type)) => {
                 let ct = content_type.as_deref().unwrap_or(job.content_type.as_str());
-                db.upsert_blob_bytes(
-                    &blob_id,
-                    job.kind,
-                    &job.owning_id,
-                    &job.slot,
-                    Some(ct),
+                db.store_blob(
+                    &frankweiler_etl::blob_cas::RefStub {
+                        ref_id: &blob_id,
+                        kind: job.kind,
+                        owning_id: &job.owning_id,
+                        slot: &job.slot,
+                        upstream_uuid: Some(&blob_id),
+                        upstream_name: Some(job.name.as_str()),
+                        source_url: Some(&url),
+                        content_type: Some(ct),
+                    },
                     &bytes,
-                    Some(&url),
                 )
                 .await?;
                 summary.blobs_downloaded += 1;

@@ -6,10 +6,8 @@
 use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use frankweiler_etl::blob_store::InMemoryBlobStore;
-use frankweiler_etl::doltlite_raw::BlobBytes;
+use frankweiler_etl::blob_cas::{blake3_hex, BlobView, InMemoryBlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail, LoadedRaw};
@@ -101,18 +99,18 @@ fn make_loaded() -> LoadedRaw {
         }],
     );
 
-    let mut bytes: HashMap<String, BlobBytes> = HashMap::new();
-    bytes.insert(
-        "B-att-1".into(),
-        BlobBytes {
-            id: "B-att-1".into(),
-            owning_id: "E2".into(),
-            slot: "2".into(),
-            content_type: Some("application/pdf".into()),
-            bytes: b"hello-pdf-12".to_vec(),
-            source_url: None,
-        },
-    );
+    let mut reader = InMemoryBlobReader::new();
+    let payload = b"hello-pdf-12";
+    reader.insert(BlobView {
+        ref_id: "B-att-1".into(),
+        owning_id: "E2".into(),
+        slot: "2".into(),
+        blake3: blake3_hex(payload),
+        content_type: Some("application/pdf".into()),
+        upstream_name: Some("hello.pdf".into()),
+        source_url: None,
+        bytes: payload.to_vec(),
+    });
 
     LoadedRaw {
         accounts: vec![account],
@@ -120,7 +118,7 @@ fn make_loaded() -> LoadedRaw {
         threads: vec![thread],
         emails,
         joins,
-        blobs: Arc::new(InMemoryBlobStore::from_id_map(bytes)),
+        blobs: reader.into_handle(),
     }
 }
 
@@ -158,10 +156,18 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         page_dir.join("index.grid_rows.json").exists(),
         "sidecar missing"
     );
-    assert!(
-        page_dir.join("blobs/doc.pdf").exists(),
-        "attachment not materialized"
-    );
+    // With CAS-based filenames, the on-disk name is `<short-b3>.<ext>`
+    // (16 hex chars + extension) rather than the upstream filename. Just
+    // assert *some* file exists in the blobs dir; the link text in the
+    // markdown still uses the original `doc.pdf`.
+    let blobs_dir = page_dir.join("blobs");
+    assert!(blobs_dir.is_dir(), "blobs/ dir missing");
+    let mut entries: Vec<_> = std::fs::read_dir(&blobs_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    entries.retain(|e| e.path().is_file());
+    assert_eq!(entries.len(), 1, "expected exactly one materialized blob");
 
     let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
     assert!(md.contains("subject: \"Hello\""));

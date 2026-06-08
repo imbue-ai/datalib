@@ -158,6 +158,8 @@ pub fn render_all(
             .with_context(|| format!("create thread dir {}", page_dir.display()))?;
 
         // Materialize attachments referenced by any email in this thread.
+        // Filenames come from `BlobView::rendered_filename` (hash + ext)
+        // so collisions across attachments are impossible.
         let blobs_dir = page_dir.join("blobs");
         let mut materialized: HashMap<String, String> = HashMap::new();
         for em in emails {
@@ -166,13 +168,13 @@ pub fn render_all(
                     if materialized.contains_key(&a.blob_id) {
                         continue;
                     }
-                    let Some(bytes) = parsed.blobs.read_by_id(&a.blob_id)? else {
+                    let Some(view) = parsed.blobs.read_by_ref_id(&a.blob_id)? else {
                         continue;
                     };
                     fs::create_dir_all(&blobs_dir)
                         .with_context(|| format!("create blobs dir {}", blobs_dir.display()))?;
-                    let fname = unique_safe_filename(a, &materialized);
-                    fs::write(blobs_dir.join(&fname), &bytes.bytes).with_context(|| {
+                    let fname = view.rendered_filename();
+                    fs::write(blobs_dir.join(&fname), &view.bytes).with_context(|| {
                         format!("write attachment {}", blobs_dir.join(&fname).display())
                     })?;
                     materialized.insert(a.blob_id.clone(), fname);
@@ -792,63 +794,6 @@ fn build_grid_rows(
 // Filename safety + dedup
 // ─────────────────────────────────────────────────────────────────────
 
-fn unique_safe_filename(a: &LoadedAttachment, taken: &HashMap<String, String>) -> String {
-    let base = a
-        .name
-        .clone()
-        .unwrap_or_else(|| format!("part-{}", a.part_id));
-    let safe = sanitize_filename(&base);
-    let used: std::collections::HashSet<&str> = taken.values().map(String::as_str).collect();
-    if !used.contains(safe.as_str()) {
-        return safe;
-    }
-    // Collide: append blob_id digest until unique.
-    let mut h = Sha256::new();
-    h.update(a.blob_id.as_bytes());
-    let suffix = format!("{:.8x}", h.finalize());
-    let (stem, ext) = split_ext(&safe);
-    let with_suffix = if ext.is_empty() {
-        format!("{stem}-{suffix}")
-    } else {
-        format!("{stem}-{suffix}.{ext}")
-    };
-    with_suffix
-}
-
-fn sanitize_filename(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '\0' => '_',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    if cleaned.trim().is_empty() {
-        return "attachment".to_string();
-    }
-    if cleaned.len() > 200 {
-        let (stem, ext) = split_ext(&cleaned);
-        let trimmed_stem: String = stem.chars().take(180).collect();
-        if ext.is_empty() {
-            trimmed_stem
-        } else {
-            format!("{trimmed_stem}.{ext}")
-        }
-    } else {
-        cleaned
-    }
-}
-
-fn split_ext(name: &str) -> (String, String) {
-    if let Some(idx) = name.rfind('.') {
-        if idx > 0 && idx < name.len() - 1 {
-            return (name[..idx].to_string(), name[idx + 1..].to_string());
-        }
-    }
-    (name.to_string(), String::new())
-}
-
 fn slug_acct(name: &str, fallback: &str) -> String {
     let base = if name.is_empty() { fallback } else { name };
     let s: String = base
@@ -903,12 +848,6 @@ mod tests {
     fn slug_acct_handles_emails() {
         assert_eq!(slug_acct("thad@fastmail.com", "A1"), "thad_fastmail_com");
         assert_eq!(slug_acct("", "A1"), "a1");
-    }
-
-    #[test]
-    fn sanitize_strips_slashes() {
-        assert_eq!(sanitize_filename("../etc/passwd"), ".._etc_passwd");
-        assert_eq!(sanitize_filename(""), "attachment");
     }
 
     #[test]
