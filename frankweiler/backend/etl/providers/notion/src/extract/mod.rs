@@ -16,12 +16,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-pub use db::{db_path_for, BlobBytes, BlockUpsert, LoadedRaw, PageState, RawDb};
+pub use db::{db_path_for, BlockUpsert, LoadedRaw, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
@@ -145,18 +146,17 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
         match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
                 let content_type = resp.header("content-type").map(String::from);
-                if let Err(e) = db
-                    .upsert_blob_bytes(
-                        &blob_id,
-                        kind,
-                        block_id,
-                        "image",
-                        content_type.as_deref(),
-                        &resp.body,
-                        Some(&url),
-                    )
-                    .await
-                {
+                let stub = RefStub {
+                    ref_id: &blob_id,
+                    kind,
+                    owning_id: block_id,
+                    slot: "image",
+                    upstream_uuid: Some(block_id),
+                    upstream_name: None,
+                    source_url: Some(&url),
+                    content_type: content_type.as_deref(),
+                };
+                if let Err(e) = db.store_blob(&stub, &resp.body).await {
                     tracing::warn!(blob = %blob_id, error = %e, "blob upsert failed");
                     summary.failed_blobs += 1;
                 } else {
