@@ -743,7 +743,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Per-channel inner bar: starts as a spinner during the
             // list pass (total unknown) and switches to a determinate
             // bar in pass B once `export_channel` calls `set_length`.
-            let inner = opts.progress.child(name);
+            // Prefix with `slack:` so the channel bars are visually
+            // attributed to the slack source — useful when several
+            // providers' inner bars are interleaved by MultiProgress.
+            let inner = opts.progress.child(&format!("slack: {name}"));
             inner.set_message("listing");
             let result = export_channel(
                 &db,
