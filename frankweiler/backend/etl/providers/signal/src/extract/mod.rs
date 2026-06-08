@@ -77,6 +77,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
+    if opts.control.refetch_blobs {
+        // Signal doesn't extract attachments into the CAS yet, but
+        // the flag flows through uniformly so the day attachment
+        // ingest lands no wiring is needed.
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
+    }
 
     let aep_env_var = opts
         .aep_env_var

@@ -16,12 +16,22 @@
 //! exactly equal to what changed in Signal's wire-format frames,
 //! without forcing a schema-mapping step into Extract. The Translate
 //! pass (deferred) will crack frames open into `event_type` rows.
+//!
+//! Attachment bytes (when an Extract enhancement starts harvesting
+//! `Frame::Attachment` from the snapshot's `files/` tree) belong in
+//! the sibling per-source CAS file managed by
+//! [`frankweiler_etl::blob_cas`], with `blob_refs` rows in this entity
+//! db pointing into it. The CAS handle is opened in [`RawDb::open`]
+//! and exposed via [`RawDb::cas`] so that future code has the plumbing
+//! ready — the same shape every other media-bearing provider
+//! (slack, beeper, anthropic, chatgpt, notion, email) follows.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 
+use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -66,6 +76,7 @@ fn full_ddl() -> Vec<String> {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 impl RawDb {
@@ -73,11 +84,16 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     pub async fn reset(&self) -> Result<()> {
