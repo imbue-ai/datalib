@@ -69,7 +69,11 @@ rust_binary(
     # through the library's re-exports — so it doesn't need the cfg.
     # But add it defensively in case future bin code reaches into proto.
     rustc_flags = ["--cfg=bazel_prost"],
-    visibility = ["//frankweiler:__subpackages__"],
+    # Consumed by //tests/fixtures:ingested_tng (outside the
+    # //frankweiler tree) so visibility is public — the binary takes a
+    # spec file path + output dir, so there's no sensitive surface to
+    # gate on package.
+    visibility = ["//visibility:public"],
     deps = [
         ":frankweiler_signal_backup",
         "@frankweiler_crates//:anyhow",

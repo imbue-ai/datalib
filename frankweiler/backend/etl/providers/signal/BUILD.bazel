@@ -2,6 +2,17 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
+# Checked-in TNG-themed fixture spec consumed by the unified
+# //tests/fixtures:ingested_tng genrule. Just a single JSON file
+# describing the Bridge Crew chat — `run_sync_pipeline.py` runs
+# `signal_make_fixture` against it at genrule-time to materialize the
+# encrypted snapshot dir before invoking the extractor.
+filegroup(
+    name = "tng_fixture",
+    srcs = ["tests/fixtures/signal_tng/tng.json"],
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "frankweiler_etl_signal",
     srcs = glob(["src/**/*.rs"]),
