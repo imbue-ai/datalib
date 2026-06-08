@@ -1,10 +1,14 @@
 //! Doltlite-backed raw store for the CardDAV provider.
 //!
-//! Shared bookkeeping tables (`blobs`, `endpoint_shapes`,
+//! Shared bookkeeping tables (`blob_refs`, `endpoint_shapes`,
 //! `sync_runs`) plus the open/blob plumbing live in
 //! [`frankweiler_etl::doltlite_raw`]. The primary-key policy that
 //! governs every object table here is documented in that module's
 //! header — read it before adding new tables.
+//!
+//! Note that contacts doesn't populate `blob_refs` / the sibling CAS
+//! file: vCard `PHOTO` bytes ride inline in the vCard payload column,
+//! so there's no separate fetch + ref-by-id pattern.
 //!
 //! ## Tables
 //!
