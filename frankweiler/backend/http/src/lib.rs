@@ -79,6 +79,13 @@ pub struct SearchResponse {
     pub rows: Vec<SearchRow>,
     pub columns: Vec<ColumnSpec>,
     pub total_estimated: u64,
+    /// Backend-side errors the user should know about even though we
+    /// returned 200 + rows. Populated when a degraded path ran (qmd
+    /// fallback) or when a swallowed error would otherwise leave the
+    /// UI staring at an empty grid with no signal. The UI surfaces
+    /// these as toasts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -204,14 +211,34 @@ async fn search_handler(
     //      the error in `query_echo.qmd_error` and fall back to repo.search
     //      (SQL substring LIKE) so the UI isn't dead.
     let mut qmd_error: Option<String> = None;
+    let mut errors: Vec<String> = Vec::new();
+    // Run repo.search but collect any error instead of swallowing it.
+    // The previous `unwrap_or_default()` hid schema mismatches and
+    // connection failures behind an empty grid with no signal.
     let rows = if parsed.free_text.is_empty() {
-        s.repo.search(&parsed, limit).await.unwrap_or_default()
+        match s.repo.search(&parsed, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                let msg = format!("structured search: {e}");
+                eprintln!("search: {msg}");
+                errors.push(msg);
+                Vec::new()
+            }
+        }
     } else {
         match run_qmd_search(&s.root, &s.repo, s.qmd_daemon.as_ref(), &parsed, limit).await {
             Ok(rows) => rows,
             Err(e) => {
                 qmd_error = Some(format!("{e:#}"));
-                s.repo.search(&parsed, limit).await.unwrap_or_default()
+                match s.repo.search(&parsed, limit).await {
+                    Ok(rows) => rows,
+                    Err(e2) => {
+                        let msg = format!("LIKE fallback: {e2}");
+                        eprintln!("search: {msg}");
+                        errors.push(msg);
+                        Vec::new()
+                    }
+                }
             }
         }
     };
@@ -233,6 +260,7 @@ async fn search_handler(
         rows,
         columns: default_columns(),
         total_estimated: total,
+        errors,
     })
 }
 

@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { RouterView, RouterLink } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
+import ToastStack from "@/components/ToastStack.vue";
 
 const menuOpen = ref(false);
 
@@ -48,6 +49,7 @@ onUnmounted(() => {
 
     <SyncProgressChrome />
     <RouterView />
+    <ToastStack />
 
     <transition name="fw-drawer">
       <div
