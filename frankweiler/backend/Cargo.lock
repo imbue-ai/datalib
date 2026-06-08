@@ -1119,10 +1119,12 @@ version = "0.5.3"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "csv",
  "frankweiler-core",
  "frankweiler-etl",
  "insta",
+ "md-5",
  "serde",
  "serde_json",
  "sqlx",

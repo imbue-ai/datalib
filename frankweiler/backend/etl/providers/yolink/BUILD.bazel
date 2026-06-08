@@ -1,10 +1,13 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
 rust_library(
     name = "frankweiler_etl_yolink",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     crate_name = "frankweiler_etl_yolink",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
@@ -14,12 +17,27 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:csv",
+        "@frankweiler_crates//:md-5",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
+    ],
+)
+
+rust_binary(
+    name = "yolink_devices",
+    srcs = ["src/bin/yolink_devices.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
     ],
 )
 

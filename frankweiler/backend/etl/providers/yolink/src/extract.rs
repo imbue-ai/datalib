@@ -16,6 +16,7 @@ use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use md5::{Digest, Md5};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use tokio::process::Command;
@@ -29,7 +30,14 @@ use frankweiler_etl::progress::Progress;
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 const DEFAULT_OVERLAP_MINUTES: i64 = 5;
-const DEFAULT_WINDOW_DAYS: i64 = 1;
+/// Stride between successive window-starts, in days. Each fetched
+/// window is `stride + overlap` wide so the cursor lands on
+/// `start + n * stride` every iteration — meaning all devices that
+/// share a `start:` date hit Yolink with the *same* (start_ms, end_ms)
+/// pair each run, which cuts request count if the user later adds
+/// per-device download caching. The default of 7 keeps the
+/// `dolt_commit`-per-window history weekly-grained.
+const DEFAULT_WINDOW_DAYS: i64 = 7;
 
 // ── parser ──────────────────────────────────────────────────────────
 
@@ -118,7 +126,7 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
 const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS yolink_devices (
         id TEXT PRIMARY KEY,
-        url_template TEXT NOT NULL,
+        family_device_id TEXT NOT NULL,
         kind TEXT NOT NULL,
         start_ms INTEGER NOT NULL,
         last_ts_ms INTEGER NULL
@@ -230,7 +238,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     let overlap_ms = opts.sync.overlap_minutes.unwrap_or(DEFAULT_OVERLAP_MINUTES) * 60_000;
-    let window_ms = opts.sync.window_days.unwrap_or(DEFAULT_WINDOW_DAYS) * 86_400_000;
+    let stride_ms = opts.sync.window_days.unwrap_or(DEFAULT_WINDOW_DAYS) * 86_400_000;
+    let window_ms = stride_ms.saturating_add(overlap_ms);
     let mut s = FetchSummary {
         devices: opts.sync.devices.len(),
         ..Default::default()
@@ -240,7 +249,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let now_ms = Utc::now().timestamp_millis();
     for dev in &opts.sync.devices {
         opts.progress.set_message(&format!("yolink: {}", dev.name));
-        if let Err(e) = fetch_device(&db, dev, overlap_ms, window_ms, now_ms, &mut s).await {
+        if let Err(e) =
+            fetch_device(&db, dev, overlap_ms, stride_ms, window_ms, now_ms, &mut s).await
+        {
             s.errors += 1;
             warn!(event = "yolink_device_failed", device = %dev.name, error = %format!("{e:#}"));
         }
@@ -253,6 +264,7 @@ async fn fetch_device(
     db: &RawDb,
     dev: &YolinkDevice,
     overlap_ms: i64,
+    stride_ms: i64,
     window_ms: i64,
     now_ms: i64,
     s: &mut FetchSummary,
@@ -263,11 +275,11 @@ async fn fetch_device(
         .map(|dt| Utc.from_utc_datetime(&dt).timestamp_millis())
         .unwrap();
     sqlx::query(
-        "INSERT INTO yolink_devices (id, url_template, kind, start_ms) VALUES (?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET url_template=excluded.url_template, kind=excluded.kind, start_ms=excluded.start_ms",
+        "INSERT INTO yolink_devices (id, family_device_id, kind, start_ms) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET family_device_id=excluded.family_device_id, kind=excluded.kind, start_ms=excluded.start_ms",
     )
     .bind(&dev.name)
-    .bind(&dev.url)
+    .bind(&dev.family_device_id)
     .bind(&dev.kind)
     .bind(start_ms)
     .execute(db.pool())
@@ -295,10 +307,7 @@ async fn fetch_device(
 
     while cursor < now_ms {
         let end = cursor.saturating_add(window_ms).min(now_ms);
-        let url = dev
-            .url
-            .replace("{start}", &cursor.to_string())
-            .replace("{end}", &end.to_string());
+        let url = build_signed_url(dev, cursor, end)?;
         let window_result = async {
             let body = curl(&url).await.context("curl")?;
             s.requests += 1;
@@ -328,7 +337,7 @@ async fn fetch_device(
                         dev.name
                     )));
                 }
-                cursor = (end - overlap_ms).max(cursor + 1);
+                cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
                 continue;
             }
         };
@@ -348,7 +357,7 @@ async fn fetch_device(
             Err(e) => warn!(event = "yolink_commit_failed", device = %dev.name, error = %e),
         }
         info!(event = "yolink_window", device = %dev.name, cursor, end, touched, unchanged);
-        cursor = (end - overlap_ms).max(cursor + 1);
+        cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
     }
 
     sqlx::query(
@@ -361,6 +370,56 @@ async fn fetch_device(
     .execute(db.pool())
     .await?;
     Ok(())
+}
+
+/// Compose and sign the per-window CSV download URL. The signature
+/// is `md5(family_device_id + start_ms + end_ms + device_udid)` —
+/// reverse-engineered from the Safehous/YoLink Android Flutter
+/// snapshot (see `ParamUtils::hashMD5` + `_THSensorNewChartScreenState`).
+/// Yolink does not expose this scheme via its public API; UAC tokens
+/// can't access historical data.
+///
+/// REDACT: the `family_device_id` + `device_udid` pair from each
+/// `YolinkDevice` is a per-device read secret. Anything that publishes
+/// generated URLs effectively publishes that secret.
+fn build_signed_url(dev: &YolinkDevice, start_ms: i64, end_ms: i64) -> Result<String> {
+    let mut hasher = Md5::new();
+    hasher.update(dev.family_device_id.as_bytes());
+    hasher.update(start_ms.to_string().as_bytes());
+    hasher.update(end_ms.to_string().as_bytes());
+    hasher.update(dev.device_udid.as_bytes());
+    let sig = format!("{:x}", hasher.finalize());
+
+    // Per-kind query params. `extParams` is a base64-url JSON blob the
+    // app appends to control CSV content (humidity inclusion for the
+    // THSensor; meter unit + step factor for the watermeter). It is
+    // NOT part of the signature input — server only signs (family,
+    // start, end, udid) — so we can hardcode reasonable defaults that
+    // match the captured live URLs.
+    let (ext_params, temp_unit) = match dev.kind.as_str() {
+        "temperature_humidity" => (
+            // {"ignoreHumidity":false}
+            "eyJpZ25vcmVIdW1pZGl0eSI6ZmFsc2V9",
+            Some("c"),
+        ),
+        "watermeter" => (
+            // {"meterUnit":3,"meterScreenUnit":0,"stepFactor":10}
+            "eyJtZXRlclVuaXQiOjMsIm1ldGVyU2NyZWVuVW5pdCI6MCwic3RlcEZhY3RvciI6MTB9",
+            None,
+        ),
+        other => bail!("unsupported yolink device kind {other:?}"),
+    };
+    let mut url = format!(
+        "https://us.yosmart.com/download/{fam}/{sig}?start={start_ms}&end={end_ms}",
+        fam = dev.family_device_id,
+    );
+    if let Some(unit) = temp_unit {
+        url.push_str("&tempUnit=");
+        url.push_str(unit);
+    }
+    url.push_str("&tz=UTC&original=true&extParams=");
+    url.push_str(ext_params);
+    Ok(url)
 }
 
 /// `curl -sSfL <url>` → stdout. `-f` makes 4xx/5xx exit non-zero so

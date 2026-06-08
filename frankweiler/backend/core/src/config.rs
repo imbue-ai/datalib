@@ -316,26 +316,38 @@ pub struct EmailSync {
 /// Tunables for the Yolink provider (per-device CSV downloads from
 /// `us.yosmart.com/download/...` — see `frankweiler_etl_yolink`).
 ///
-/// Each device's `url` is the captured browser/Android URL, with
-/// `{start}` and `{end}` placeholders where we substitute the time
-/// window bounds (epoch-millis). The two opaque path IDs in the URL
-/// are treated as bearer credentials and stay verbatim in config.
+/// Each device is identified by two opaque 32-hex IDs:
+///
+/// - `family_device_id` — the first path segment of the download URL;
+///   visible in any URL the YoLink/Safehous app generates for this
+///   device and stable over time.
+/// - `device_udid` — the second secret used in the MD5 signing of
+///   the per-window URL (`md5(family_device_id + start_ms + end_ms +
+///   device_udid)`). Same value the official `Home.getDeviceList` API
+///   returns as `deviceUDID`.
+///
+/// REDACT: both values are device-history-read secrets — they let
+/// anyone with the pair pull all CSV history for the device, forever
+/// (no rotation path). Scrub from any committed/public configs.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct YolinkSync {
-    /// Overlap (minutes) applied in two places: (a) when picking
-    /// the run's start cursor, we pull `last_observed - overlap`
-    /// to catch samples that landed just past the previous
-    /// run's end; (b) between successive in-run windows we stride
-    /// `window - overlap` so the trailing edge of each window
-    /// re-fetches into the leading edge of the next. Both
-    /// dedupe idempotently via the readings PK. Default 5.
+    /// Re-fetch overlap (minutes). On resume, the run's start
+    /// cursor is `last_observed - overlap` (so samples that landed
+    /// just past the previous run's tail get a second shot).
+    /// During a run, each fetch covers `window_days + overlap`
+    /// (the trailing edge of one window reaches into the leading
+    /// edge of the next). Both paths dedupe via the readings PK.
+    /// Default 5.
     #[serde(default)]
     pub overlap_minutes: Option<i64>,
-    /// Per-fetch window size in days. Default 1. Each window
-    /// becomes one HTTP request AND one `dolt_commit`, so this
-    /// also picks the granularity of `dolt log`. Smaller =
-    /// finer-grained commit history; larger = fewer requests.
+    /// Stride (days) between successive window-starts. Each
+    /// in-run cursor lands on `start + n*window_days`, so all
+    /// devices sharing a `start:` hit identical (start_ms, end_ms)
+    /// pairs each run — useful for any future per-window response
+    /// caching, and for keeping the `dolt log` history aligned.
+    /// The actual HTTP request covers `[cursor, cursor + stride +
+    /// overlap]`. Default 7.
     #[serde(default)]
     pub window_days: Option<i64>,
     /// Devices to fetch. Each entry's `name` is the row key in the
@@ -363,11 +375,14 @@ pub struct YolinkDevice {
     /// when you start collecting; the watermark in the DB takes over
     /// after that.
     pub start: String,
-    /// Captured download URL with `{start}` / `{end}` placeholders
-    /// where the epoch-millis bounds go. Keep the rest of the query
-    /// string (`tz`, `tempUnit`, `extParams`, `original=true`) intact
-    /// — those are device-kind-specific and we don't reconstruct them.
-    pub url: String,
+    /// First URL path segment — the `<32hex>` in
+    /// `https://us.yosmart.com/download/<32hex>/...`. The downloader
+    /// uses this verbatim and also feeds it into the MD5 that signs
+    /// the per-window URL.
+    pub family_device_id: String,
+    /// Per-device UUID returned by the YoLink open API as `deviceUDID`.
+    /// Mixed into the MD5 signature. REDACT before publishing.
+    pub device_udid: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -671,8 +686,10 @@ pub enum ConfigError {
     YolinkBadDeviceKind(String, String, String),
     #[error("yolink source {0:?} device {1:?}: start must be YYYY-MM-DD, got {2:?}")]
     YolinkBadDeviceStart(String, String, String),
-    #[error("yolink source {0:?} device {1:?}: url must contain both {{start}} and {{end}} placeholders")]
-    YolinkBadDeviceUrl(String, String),
+    #[error(
+        "yolink source {0:?} device {1:?}: {2} must be 32 lowercase-hex characters, got {3:?}"
+    )]
+    YolinkBadDeviceHex(String, String, &'static str, String),
 }
 
 impl Config {
@@ -748,8 +765,21 @@ impl Config {
                             d.start.clone(),
                         ));
                     }
-                    if !d.url.contains("{start}") || !d.url.contains("{end}") {
-                        return Err(ConfigError::YolinkBadDeviceUrl(name.into(), d.name.clone()));
+                    if !is_hex32(&d.family_device_id) {
+                        return Err(ConfigError::YolinkBadDeviceHex(
+                            name.into(),
+                            d.name.clone(),
+                            "family_device_id",
+                            d.family_device_id.clone(),
+                        ));
+                    }
+                    if !is_hex32(&d.device_udid) {
+                        return Err(ConfigError::YolinkBadDeviceHex(
+                            name.into(),
+                            d.name.clone(),
+                            "device_udid",
+                            d.device_udid.clone(),
+                        ));
                     }
                 }
             }
@@ -827,6 +857,12 @@ fn is_yyyy_mm_dd(s: &str) -> bool {
         && bytes[..4].iter().all(|b| b.is_ascii_digit())
         && bytes[5..7].iter().all(|b| b.is_ascii_digit())
         && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+}
+
+fn is_hex32(s: &str) -> bool {
+    s.len() == 32
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn expand_tilde(s: &str) -> PathBuf {
@@ -1000,11 +1036,13 @@ sources:
         - name: water_valve
           kind: watermeter
           start: '2026-04-05'
-          url: 'https://us.yosmart.com/download/AAA/BBB?start={start}&end={end}&tz=America/Vancouver&original=true'
+          family_device_id: '00112233445566778899aabbccddeeff'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
         - name: basement_freezer
           kind: temperature_humidity
           start: '2026-04-05'
-          url: 'https://us.yosmart.com/download/CCC/DDD?start={start}&end={end}&tempUnit=c&tz=America/Vancouver&original=true'
+          family_device_id: '0123456789abcdef0123456789abcdef'
+          device_udid: 'fedcba9876543210fedcba9876543210'
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
@@ -1033,7 +1071,8 @@ sources:
         - name: x
           kind: door_sensor
           start: '2026-04-05'
-          url: 'https://h/A/B?start={start}&end={end}'
+          family_device_id: '00112233445566778899aabbccddeeff'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
         assert!(matches!(
@@ -1043,7 +1082,7 @@ sources:
     }
 
     #[test]
-    fn rejects_yolink_url_without_placeholders() {
+    fn rejects_yolink_bad_hex_id() {
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:
@@ -1054,12 +1093,13 @@ sources:
         - name: x
           kind: temperature_humidity
           start: '2026-04-05'
-          url: 'https://h/A/B?start=1&end=2'
+          family_device_id: 'not-hex'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
         assert!(matches!(
             load_config(Some(&cfg_path)),
-            Err(ConfigError::YolinkBadDeviceUrl(_, _))
+            Err(ConfigError::YolinkBadDeviceHex(_, _, "family_device_id", _))
         ));
     }
 
