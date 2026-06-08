@@ -317,6 +317,33 @@ impl RawDb {
         dr::load_payloads(&self.pool, "pages").await
     }
 
+    /// Stored child-page block ids for `page_id`. Used by the
+    /// "unchanged page" skip path: when a page's `last_edited_time`
+    /// hasn't moved since our last fetch, we elide the block walk —
+    /// but the BFS still needs to recurse into known children in case
+    /// a *child*'s `last_edited_time` advanced even when the parent's
+    /// did not.
+    pub async fn stored_child_page_ids(&self, page_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT json_extract(payload, '$.id') AS id \
+             FROM blocks \
+             WHERE page_id = ? \
+               AND json_extract(payload, '$.type') = 'child_page' \
+               AND payload IS NOT NULL",
+        )
+        .bind(page_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("select stored child_page block ids")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            if let Ok(id) = r.try_get::<String, _>("id") {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn load_blocks(&self) -> Result<Vec<(Value, Option<String>)>> {
         // ORDER BY (page_id, page_order) reproduces BFS discovery
         // order from extract/mod.rs::walk_page_blocks; render relies

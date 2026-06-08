@@ -203,6 +203,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stale = stale.len(),
             up_to_date = up_to_date,
         );
+        // Surface the skip count in the summary (the field exists on
+        // FetchSummary but was previously never assigned; without this
+        // the run-2 incrementality snapshot misleadingly showed
+        // `skipped=0` even when most conversations matched their
+        // stored `last_listing_update_time`).
+        summary.skipped += up_to_date;
 
         let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
         opts.progress.set_length(Some(ordered.len() as u64));

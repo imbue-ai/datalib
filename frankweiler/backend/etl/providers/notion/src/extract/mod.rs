@@ -426,10 +426,42 @@ async fn mirror_page(
     };
     let page_ms = page_t.elapsed().as_millis() as u64;
     let was_present = page_states.get(pid).map(|s| s.has_payload).unwrap_or(false);
+    let prior_last_edited = page_states
+        .get(pid)
+        .and_then(|s| s.last_edited_time.clone());
     let last_edited = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .map(String::from);
+
+    // Post-detail incrementality skip. BFS-discovered pages don't
+    // come with an `incoming` last_edited_time hint (no list endpoint),
+    // so the pre-fetch skip at the top of this function can't fire
+    // for them. But once the page detail is in hand, we know the
+    // upstream `last_edited_time` — and if it matches what we already
+    // stored, the children/comments/etc. can't have changed either.
+    // Returning a synthetic block array of stored `child_page` ids
+    // keeps BFS recursing into known children (in case a child's own
+    // `last_edited_time` advanced even when the parent's didn't).
+    if was_present && last_edited.is_some() && last_edited == prior_last_edited {
+        summary.skipped_pages += 1;
+        let child_ids = db
+            .stored_child_page_ids(pid)
+            .await
+            .with_context(|| format!("stored child_page ids for {pid}"))?;
+        tracing::Span::current().record("skipped", true);
+        tracing::debug!(
+            page = pid,
+            child_pages = child_ids.len(),
+            page_fetch_ms = page_ms,
+            "page unchanged: skipped block walk; recursing into known children"
+        );
+        return Ok(child_ids
+            .into_iter()
+            .map(|id| serde_json::json!({"type": "child_page", "id": id}))
+            .collect());
+    }
+
     let parent_id = parent_of(&page);
     let payload = serde_json::to_string(&page).ok();
     db.upsert_pages(&[(pid.to_string(), parent_id, last_edited.clone(), payload)])
