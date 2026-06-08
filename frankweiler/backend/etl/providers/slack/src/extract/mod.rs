@@ -28,7 +28,7 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 use api::{call_slack, SlackCall, SlackError};
 pub use db::{
     block_on_load_all, block_on_load_filtered, block_on_probe_thread_cursors, db_path_for,
-    BlobBytes, LoadedMessage, LoadedRaw, MessageRow, RawDb,
+    LoadedMessage, LoadedRaw, MessageRow, RawDb,
 };
 use frankweiler_etl::events;
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
