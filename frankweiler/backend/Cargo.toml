@@ -15,6 +15,7 @@ members = [
     "etl/providers/email",
     "etl/providers/notion",
     "etl/providers/perseus",
+    "etl/providers/signal",
     "etl/providers/slack",
     "etl/providers/yolink",
     "qmd_indexer",

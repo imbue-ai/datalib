@@ -1,0 +1,56 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_etl_signal",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_signal",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/signal-backup:frankweiler_signal_backup",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:prost",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "signal_etl_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_signal",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# End-to-end against an inline TNG snapshot built via the
+# library writer. No external data deps — the test materializes
+# the encrypted snapshot itself, then drives extract + translate
+# against it, then asserts on rendered markdown content.
+rust_test(
+    name = "signal_tng_e2e",
+    srcs = ["tests/signal_tng_e2e.rs"],
+    crate_root = "tests/signal_tng_e2e.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_signal",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/signal-backup:frankweiler_signal_backup",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
