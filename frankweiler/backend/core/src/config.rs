@@ -385,6 +385,34 @@ pub struct YolinkDevice {
     pub device_udid: String,
 }
 
+/// Signal-Android directory-format backup. The provider walks the
+/// newest `signal-backup-*` subdir under the source's `input_path`,
+/// decrypts it using the AEP read from `$aep_env_var` at extract time,
+/// and UPSERTs frames into a doltlite raw store. No network; no
+/// credentials in this struct — the secret lives in the user's shell
+/// (or .envrc.private).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SignalSync {
+    /// Directory containing one or more `signal-backup-*` snapshot
+    /// subdirs (Signal Android's "Save backup" target). The newest is
+    /// ingested. Required; the source's `input_path` is reserved for
+    /// the raw doltlite store and defaults to `${data_root}/raw/<name>`.
+    pub snapshot_dir: PathBuf,
+    /// Env var holding the AEP (Account Entropy Pool). Defaults to
+    /// `SIGNAL_PASSPHRASE` when omitted. Overridable so a multi-account
+    /// setup can scope per-account secrets at the shell layer.
+    #[serde(default)]
+    pub aep_env_var: Option<String>,
+    /// Period-bucketing knob for the rendered markdown tree —
+    /// `month` (default), `day`, `year`, or `all`. Shared across
+    /// every chat provider via `frankweiler_etl::periodize::Period`;
+    /// signal accepts the same strings beeper does so a unified
+    /// config can tune both at once.
+    #[serde(default)]
+    pub period: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionApiSync {
@@ -485,6 +513,13 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<YolinkSync>,
     },
+    /// Signal Android directory-format backup. Extract-only for now.
+    SignalBackup {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<SignalSync>,
+    },
 }
 
 impl SourceConfig {
@@ -501,7 +536,8 @@ impl SourceConfig {
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
             | SourceConfig::Perseus { common, .. }
-            | SourceConfig::Yolink { common, .. } => common,
+            | SourceConfig::Yolink { common, .. }
+            | SourceConfig::SignalBackup { common, .. } => common,
         }
     }
 
@@ -529,6 +565,7 @@ impl SourceConfig {
             SourceConfig::Carddav { .. } => "carddav",
             SourceConfig::Perseus { .. } => "perseus",
             SourceConfig::Yolink { .. } => "yolink",
+            SourceConfig::SignalBackup { .. } => "signal_backup",
         }
     }
 
@@ -548,6 +585,7 @@ impl SourceConfig {
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
+            SourceConfig::SignalBackup { sync, .. } => sync.is_some(),
         }
     }
 

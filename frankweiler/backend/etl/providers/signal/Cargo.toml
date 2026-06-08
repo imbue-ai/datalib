@@ -1,0 +1,29 @@
+[package]
+name = "frankweiler-etl-signal"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_signal"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-signal-backup = { path = "../../../signal-backup" }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+tracing = "0.1"
+chrono = { workspace = true }
+sha2 = { workspace = true }
+uuid = { workspace = true }
+frankweiler-schema = { path = "../../../schema" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

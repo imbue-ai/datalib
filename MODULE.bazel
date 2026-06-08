@@ -76,6 +76,48 @@ use_repo(pip, "py_pip")
 # Rust — rules_rust + crate_universe ingesting frankweiler/backend Cargo workspace.
 bazel_dep(name = "rules_rust", version = "0.70.0")
 
+# Proto / prost — first introduced for `frankweiler-signal-backup`, which
+# parses Signal-Android's `Backup.proto`. We use the Bazel-native prost
+# codegen path (rules_rust_prost) instead of a `prost-build` build.rs:
+# codegen runs as a Bazel action driven by `rust_prost_library`, so the
+# crate stays build.rs-free and the generated code is reproducible /
+# cacheable across builds.
+#
+# Pieces:
+#
+#   * `rules_proto` — provides the standard `proto_library` rule that
+#     `rust_prost_library` consumes.
+#   * `protobuf` — stub for the `@com_google_protobuf` repo name
+#     (`rust_prost_library` and `proto_library` reference it). We do NOT
+#     compile protoc from source; toolchains_protoc replaces its
+#     `:protoc` target below.
+#   * `toolchains_protoc` — fetches a prebuilt `protoc` binary and
+#     registers a `proto_toolchain`. Saves the ~30s protobuf C++ build
+#     and (more importantly) the bindgen/cmake host-tool chain.
+#     Upstream is archived (per BCR note) but the prebuilt-protoc story
+#     it implements is unchanged; if we ever need to migrate we'll
+#     switch to whatever Bazel's blessed prebuilt path is at the time.
+#   * `rules_rust_prost` — provides `rust_prost_library` + the
+#     toolchain type. The actual toolchain wiring (which prost / tonic
+#     crate targets to use) lives at `//tools/prost_toolchain` so it
+#     can reach `@frankweiler_crates//:prost` etc.
+bazel_dep(name = "rules_proto", version = "7.1.0")
+bazel_dep(name = "protobuf", version = "33.4", repo_name = "com_google_protobuf")
+bazel_dep(name = "toolchains_protoc", version = "0.6.1")
+bazel_dep(name = "rules_rust_prost", version = "0.70.0")
+
+protoc = use_extension("@toolchains_protoc//protoc:extensions.bzl", "protoc")
+protoc.toolchain(
+    # Pin a specific prebuilt-protoc release. Bumped on the same 7-day
+    # burn-in cadence as everything else in this file.
+    google_protobuf = "com_google_protobuf",
+    version = "v33.4",
+)
+
+register_toolchains(
+    "//tools/prost_toolchain",
+)
+
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2021",
@@ -120,6 +162,25 @@ crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 #     compile dep, so rustc's final link command actually has the
 #     `.a` available on the search path (the build script's emitted
 #     `cargo:rustc-link-search=` is redundant with this but harmless).
+# Disable signal-backup's build.rs under Bazel. Cargo runs build.rs
+# to generate the prost modules into OUT_DIR; under Bazel the same
+# modules come from `rust_prost_library` (a separate crate). Without
+# this annotation, crate_universe would try to run `protobuf-src`'s
+# binary download from build.rs — which fails in Bazel's sandbox.
+crate.annotation(
+    crate = "frankweiler-signal-backup",
+    gen_build_script = "off",
+)
+
+# protoc-gen-prost ships a `protoc-gen-prost` binary that
+# `rust_prost_toolchain` (in //tools/prost_toolchain) consumes via the
+# `protoc-gen-prost__protoc-gen-prost` target — crate_universe only
+# generates that target when we explicitly opt in to gen_binaries.
+crate.annotation(
+    crate = "protoc-gen-prost",
+    gen_binaries = ["protoc-gen-prost"],
+)
+
 crate.annotation(
     crate = "libsqlite3-sys",
     # Patch build.rs to absolutize workspace-relative `bazel-out/...`
@@ -192,8 +253,10 @@ crate.from_cargo(
         "//frankweiler/backend/etl/providers/email:Cargo.toml",
         "//frankweiler/backend/etl/providers/notion:Cargo.toml",
         "//frankweiler/backend/etl/providers/perseus:Cargo.toml",
+        "//frankweiler/backend/etl/providers/signal:Cargo.toml",
         "//frankweiler/backend/etl/providers/slack:Cargo.toml",
         "//frankweiler/backend/qmd_indexer:Cargo.toml",
+        "//frankweiler/backend/signal-backup:Cargo.toml",
         "//frankweiler/backend/sync:Cargo.toml",
         "//frankweiler/backend/tauri-backend:Cargo.toml",
     ],

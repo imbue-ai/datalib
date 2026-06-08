@@ -1,0 +1,29 @@
+{
+  "aep": "0000000000000000000000000000000000000000000000000000000000000000",
+  "snapshot_dir_name": "signal-backup-2364-04-09-12-00-00",
+  "backup_time_ms": 12442118400000,
+  "recipients": [
+    { "id": 1, "self": true,  "name": "Jean-Luc Picard" },
+    { "id": 2, "name": "Will Riker",       "e164": 17015550101 },
+    { "id": 3, "name": "Data Soong",       "e164": 17015550102 },
+    { "id": 4, "name": "Geordi La Forge",  "e164": 17015550103 },
+    { "id": 5, "name": "Worf Rozhenko",    "e164": 17015550104 },
+    { "id": 6, "name": "Deanna Troi",      "e164": 17015550105 },
+    { "id": 7, "name": "Beverly Crusher",  "e164": 17015550106 }
+  ],
+  "chats": [
+    { "id": 100, "recipient_id": 2 }
+  ],
+  "chat_items": [
+    { "chat_id": 100, "author_id": 1, "date_sent": 12442118400000, "text": "Status report.",                           "outgoing": true  },
+    { "chat_id": 100, "author_id": 2, "date_sent": 12442118460000, "text": "All decks at green status, Captain.",      "outgoing": false },
+    { "chat_id": 100, "author_id": 3, "date_sent": 12442118520000, "text": "Sensors detect an unidentified vessel.",   "outgoing": false },
+    { "chat_id": 100, "author_id": 4, "date_sent": 12442118580000, "text": "Warp engines online. Ready for your order.","outgoing": false },
+    { "chat_id": 100, "author_id": 5, "date_sent": 12442118640000, "text": "Shields at maximum, Captain.",             "outgoing": false },
+    { "chat_id": 100, "author_id": 6, "date_sent": 12442118700000, "text": "I'm sensing a deep curiosity from them.",  "outgoing": false },
+    { "chat_id": 100, "author_id": 7, "date_sent": 12442118760000, "text": "Sickbay reports no casualties.",           "outgoing": false },
+    { "chat_id": 100, "author_id": 1, "date_sent": 12442118820000, "text": "Mr. Data, open hailing frequencies.",      "outgoing": true  },
+    { "chat_id": 100, "author_id": 3, "date_sent": 12442118880000, "text": "Hailing frequencies open, sir.",           "outgoing": false },
+    { "chat_id": 100, "author_id": 1, "date_sent": 12442118940000, "text": "Make it so.",                              "outgoing": true  }
+  ]
+}

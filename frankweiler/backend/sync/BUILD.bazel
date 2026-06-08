@@ -43,6 +43,7 @@ rust_binary(
         "//frankweiler/backend/etl/providers/email:frankweiler_etl_email",
         "//frankweiler/backend/etl/providers/notion:frankweiler_etl_notion",
         "//frankweiler/backend/etl/providers/perseus:frankweiler_etl_perseus",
+        "//frankweiler/backend/etl/providers/signal:frankweiler_etl_signal",
         "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",
         "//frankweiler/backend/etl/providers/yolink:frankweiler_etl_yolink",
         "//frankweiler/backend/obs:frankweiler_obs",

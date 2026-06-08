@@ -57,8 +57,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
-    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
-    YolinkSync,
+    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
+    SourceConfig, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -1237,6 +1237,7 @@ enum DbHandle {
     Carddav(frankweiler_etl_contacts::extract::RawDb),
     Jmap(frankweiler_etl_email::extract::RawDb),
     Yolink(frankweiler_etl_yolink::extract::RawDb),
+    Signal(frankweiler_etl_signal::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1252,6 +1253,7 @@ impl DbHandle {
             DbHandle::Carddav(d) => d.pool(),
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
+            DbHandle::Signal(d) => d.pool(),
         }
     }
 }
@@ -1296,6 +1298,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Yolink { .. } => {
             DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
         }
+        ExtractKind::Signal { .. } => {
+            DbHandle::Signal(frankweiler_etl_signal::extract::RawDb::open(path).await?)
+        }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1337,6 +1342,10 @@ enum ExtractKind {
     },
     Yolink {
         sync: YolinkSync,
+    },
+    Signal {
+        sync: SignalSync,
+        snapshot_root: PathBuf,
     },
 }
 
@@ -1388,6 +1397,21 @@ impl ExtractPlan {
             SourceConfig::Yolink { sync, .. } => ExtractKind::Yolink {
                 sync: sync.clone().unwrap_or_default(),
             },
+            SourceConfig::SignalBackup { sync, .. } => {
+                let sync = sync.clone().ok_or_else(|| {
+                    anyhow::anyhow!("signal_backup source {name} missing sync.snapshot_dir")
+                });
+                match sync {
+                    Ok(sync) => {
+                        let snapshot_root = sync.snapshot_dir.clone();
+                        ExtractKind::Signal {
+                            sync,
+                            snapshot_root,
+                        }
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
             SourceConfig::ClaudeExport { .. } => return None,
             SourceConfig::Email { sync, .. } => {
                 let sync = sync
@@ -1735,6 +1759,29 @@ impl ExtractPlan {
                     )
                 })
             }
+            (
+                ExtractKind::Signal {
+                    sync,
+                    snapshot_root,
+                },
+                Some(DbHandle::Signal(db)),
+            ) => frankweiler_etl_signal::extract::fetch(
+                frankweiler_etl_signal::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    snapshot_root,
+                    aep_env_var: sync.aep_env_var.clone(),
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "recipients={} chats={} chat_items={} media_files={} snapshot={}",
+                    s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
+                )
+            }),
             // The open phase pairs each ExtractKind with the
             (
                 ExtractKind::Jmap {
@@ -2158,6 +2205,23 @@ fn translate_source(
             .context("perseus render_all")
             .map(|_| ())
         }
+        SourceConfig::SignalBackup { sync, .. } => {
+            use frankweiler_etl_signal::translate::{parse, render_all, Period};
+            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
+                .context("parse signal period")?;
+            let parsed = parse(&fixture, period)
+                .with_context(|| format!("signal parse {}", fixture.display()))?;
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("signal render_all")
+            .map(|_| ())
+        }
         SourceConfig::Yolink { .. } => {
             // Extract-only provider. Time-series viz lives outside
             // the rendered_md tree; the readings sit in the source's
@@ -2217,6 +2281,15 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // synthesize against), so synth is a no-op.
                 status_line!(
                     "[synth] {} (perseus): skipped (translate-only, no extract)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::SignalBackup { .. } => {
+                // No playback synthesizer yet — Signal extract is
+                // local-file-only, no HTTP to play back.
+                status_line!(
+                    "[synth] {} (signal_backup): skipped (no synthesizer yet)",
                     src.name()
                 );
                 continue;
