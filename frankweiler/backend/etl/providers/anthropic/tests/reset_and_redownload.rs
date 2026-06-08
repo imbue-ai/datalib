@@ -193,6 +193,7 @@ async fn reset_and_redownload_preserves_data_tables() {
         conv_uuids: Vec::new(),
         control: frankweiler_etl::control::ExtractControl {
             reset_and_redownload: true,
+            refetch_blobs: false,
         },
         ..Default::default()
     })

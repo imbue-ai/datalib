@@ -538,7 +538,7 @@
           "FILE:@@//frankweiler/backend/etl/Cargo.toml 409cadbd41ac8d8191f7daba0ff740a288040ac399ad300eab9f8857b3f13607",
           "FILE:@@//frankweiler/backend/etl/providers/anthropic/Cargo.toml 9db84b7b1685ceb154eb2a666a32e86d1f8f921be72cfb69afe781f97b998322",
           "FILE:@@//frankweiler/backend/etl/providers/chatgpt/Cargo.toml 1d918a0f1ce5fe402f1751387e4f21bbc4552cc158a7014b5b7a9149d542cc3b",
-          "FILE:@@//frankweiler/backend/etl/providers/contacts/Cargo.toml 0347b0652db1f2ea7eb3a3c500a51b9faca62c3e1328d71d471cf06b13b0f484",
+          "FILE:@@//frankweiler/backend/etl/providers/contacts/Cargo.toml 5c5adef21a8eb8f46771c9f780830c3f0ef1f71e30827b4738a1bede2cbe2807",
           "FILE:@@//frankweiler/backend/etl/providers/github/Cargo.toml 836fb9a4aa6dc054d01da602029c00ac22b209903ea26ba5ad6507864ec14887",
           "FILE:@@//frankweiler/backend/etl/providers/gitlab/Cargo.toml 0f2b7c0ed6ff419edc53026902b3201d122693f2cdb7074c42ca7e213a2c4c1c",
           "FILE:@@//frankweiler/backend/etl/providers/email/Cargo.toml b7eefdf806a78b51a19712b1caefd8b11bdb37cde48b4cd402ef61c3129c6484",

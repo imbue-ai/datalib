@@ -158,12 +158,7 @@ impl RawDb {
         &self.pool
     }
     pub async fn reset(&self) -> Result<()> {
-        for sql in [
-            "DELETE FROM yolink_devices",
-            "DELETE FROM yolink_readings",
-            "DELETE FROM blob_refs",
-            "DELETE FROM blob_refs_bookkeeping",
-        ] {
+        for sql in ["DELETE FROM yolink_devices", "DELETE FROM yolink_readings"] {
             sqlx::query(sql).execute(&self.pool).await?;
         }
         Ok(())

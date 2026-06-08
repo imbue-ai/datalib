@@ -144,6 +144,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
+    if opts.control.refetch_blobs {
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
+    }
 
     // Coarse per-phase progress so the bar moves even though we don't
     // have a meaningful per-item denominator before the first JMAP

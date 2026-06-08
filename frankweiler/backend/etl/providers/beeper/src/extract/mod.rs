@@ -120,6 +120,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await
             .context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "beeper_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(dst.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let beeper_dir = opts
         .beeper_data_dir

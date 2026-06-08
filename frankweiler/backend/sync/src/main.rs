@@ -143,18 +143,38 @@ struct Args {
     #[arg(long, default_value_t = true)]
     deterministic: bool,
 
-    /// Wipe every enabled source's raw doltlite DB before the run and
-    /// re-download every row from upstream. The resulting `dolt diff`
-    /// between the pre-reset and post-reset commits then shows only
+    /// Wipe every enabled source's per-entity tables (and their
+    /// `_bookkeeping` sidecars) before the run, and re-download every
+    /// entity row from upstream. The resulting `dolt diff` between
+    /// the pre-reset and post-reset commits then shows only
     /// upstream-content changes (because the bookkeeping sidecars
     /// are not part of the data diff), which is how we verify our
     /// PK design is stable across re-fetches.
+    ///
+    /// **`blob_refs` is preserved** so attachments whose bytes are
+    /// already in the per-source CAS file are skip-checked instead of
+    /// re-fetched on the wire. Use `--refetch-blobs` to invalidate
+    /// the blob cache index when you actually want the bytes re-pulled.
     ///
     /// Whole-table bookkeeping (sync_runs, endpoint_shapes,
     /// sync_scope_state) is preserved — that's audit log + API
     /// discovery metadata + resume cursor, not row content.
     #[arg(long)]
     reset_and_redownload: bool,
+
+    /// Wipe `blob_refs` + `blob_refs_bookkeeping` for every enabled
+    /// source before the run, so each attachment is re-fetched on the
+    /// wire even when its bytes are already in the sibling CAS file.
+    /// The CAS itself is never truncated — re-fetched bytes hash to
+    /// the same blake3 and `INSERT OR IGNORE` is a no-op, so this
+    /// costs network IO but not disk.
+    ///
+    /// Orthogonal to `--reset-and-redownload`: pass both for a full
+    /// reset; pass `--reset-and-redownload` alone for the common
+    /// "check for entity gaps without burning bandwidth on blobs"
+    /// case.
+    #[arg(long)]
+    refetch_blobs: bool,
 
     #[command(flatten)]
     obs: frankweiler_obs::ObsArgs,
@@ -617,11 +637,18 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         };
         let control = frankweiler_etl::control::ExtractControl {
             reset_and_redownload: args.reset_and_redownload,
+            refetch_blobs: args.refetch_blobs,
         };
         if control.reset_and_redownload {
             status_line!(
                 "[frankweiler-sync] extract: --reset-and-redownload — wiping every source's \
-                 data + bookkeeping tables before fetch"
+                 entity tables before fetch (blob_refs preserved, see --refetch-blobs)"
+            );
+        }
+        if control.refetch_blobs {
+            status_line!(
+                "[frankweiler-sync] extract: --refetch-blobs — wiping every source's \
+                 blob_refs before fetch; CAS bytes survive but every attachment re-downloads"
             );
         }
         let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control, ctrlc).await;

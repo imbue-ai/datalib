@@ -111,40 +111,40 @@ Two reasons the split matters operationally:
 
 ### Reset semantics
 
-`RawDb::reset()` (driven by `--reset-and-redownload`) currently wipes:
+Two orthogonal flags on `frankweiler-sync`:
 
-  - every entity table + its `_bookkeeping` sidecar,
-  - `blob_refs` + `blob_refs_bookkeeping`.
+  - **`--reset-and-redownload`** wipes every entity table + its
+    `_bookkeeping` sidecar. `blob_refs` is **preserved** so the next
+    extract's skip-check (`blob_refs.blake3 IS NOT NULL` keyed by the
+    upstream-stable ref id) hits for every already-fetched blob and
+    the bytes are not re-pulled. Missing-from-the-prior-pass blobs
+    still get picked up: the entity walk discovers them, the
+    pre-seeded blob_refs row has a NULL hash, and the fetch fires
+    normally.
+  - **`--refetch-blobs`** wipes `blob_refs` + `blob_refs_bookkeeping`.
+    Forces every attachment to re-download. Use when you genuinely
+    don't trust the prior fetch (corrupted bytes, deliberately rotated
+    upstream content). The re-fetched bytes hash to the same blake3
+    as before, `INSERT OR IGNORE` into `cas_objects` is a no-op, and
+    the new `blob_refs` rows point back at the existing CAS entries.
+    No disk grows; cost is purely network IO and time.
 
-It does **not** touch the sibling `cas_objects` file. That means a
-reset preserves the bytes on disk but loses every per-source ref's
-blake3 pointer into them.
+Pass both for a full reset. Pass `--reset-and-redownload` alone for
+the common "check for entity gaps without burning bandwidth on blobs"
+case. Pass `--refetch-blobs` alone to invalidate the blob cache index
+without touching entity data.
 
-The user-facing consequence: on the next extract, every attachment is
-re-fetched from upstream. The bytes hash to the same blake3 as before,
-`INSERT OR IGNORE` into `cas_objects` is a no-op, and the new
-`blob_refs` rows point back at the existing CAS entries. No disk grows;
-the cost is purely network IO and time.
+The key insight is that the skip-check is keyed by the **upstream
+identifier** (`file_id` / `file_uuid` / `{block_id}:image` / …), known
+before fetch — not by the content hash, which is only known after.
+That makes `blob_refs` a cache index over the CAS, and
+`--reset-and-redownload` is the "invalidate entity data, keep the
+cache" path.
 
-This is the right behavior when you genuinely don't trust the prior
-fetch (corrupted bytes, deliberately rotated upstream content), and the
-wrong behavior when you reset purely to check entity completeness
-(messages potentially missed by incremental sync). The fix when that
-distinction matters is a second flag — something like
-`--reset-blobs` — that wipes `blob_refs` while
-`--reset-and-redownload` keeps it. With `blob_refs` intact, the
-skip-check `blob_cas::ref_has_hash()` returns true for every
-already-fetched blob and the re-extract emits zero network IO for
-attachments. Missing-from-the-prior-pass blobs still get picked up
-because the extract walks every entity and pre-seeds + fetches any
-ref it doesn't already know about. Not implemented yet; documented
-here so the next person hitting it knows it's a known choice rather
-than a bug.
-
-`cas_objects` itself has no reset path. Bytes are byte-stable; the
-only legitimate way to remove them is the
-`blob_cas::gc_orphans()` sweep, which deletes hashes no
-`blob_refs` row points at across every source.
+`cas_objects` itself has no reset path either way. Bytes are
+byte-stable; the only legitimate way to remove them is the
+`blob_cas::gc_orphans()` sweep, which deletes hashes no `blob_refs`
+row points at across every source.
 
 ### Why contacts doesn't participate
 

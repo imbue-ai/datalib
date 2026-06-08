@@ -87,6 +87,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(event = "anthropic_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        info!(event = "anthropic_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let run_config = json!({
         "overlap": opts.overlap,

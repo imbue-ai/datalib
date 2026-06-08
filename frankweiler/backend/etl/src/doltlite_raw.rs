@@ -531,13 +531,28 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
                 .with_context(|| format!("truncate {sql}"))?;
         }
     }
+    tx.commit().await.context("commit truncate tx")?;
+    Ok(())
+}
+
+/// Wipe `blob_refs` + `blob_refs_bookkeeping`. NOT called by
+/// [`truncate_data_tables`] (entity reset preserves the ref index so
+/// the next extract skips re-fetching bytes we already have in the
+/// sibling CAS). Use this when the user explicitly asks to invalidate
+/// the cache key — driven by `--refetch-blobs` at the CLI.
+///
+/// The sibling `cas_objects` file is never touched: bytes are
+/// byte-stable; only the
+/// [`crate::blob_cas::gc_orphans`] sweep should delete from it.
+pub async fn truncate_blob_refs(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await.context("begin truncate blob_refs tx")?;
     for sql in ["DELETE FROM blob_refs", "DELETE FROM blob_refs_bookkeeping"] {
         sqlx::query(sql)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("truncate {sql}"))?;
     }
-    tx.commit().await.context("commit truncate tx")?;
+    tx.commit().await.context("commit truncate blob_refs tx")?;
     Ok(())
 }
 
