@@ -10,14 +10,11 @@ should be either justified or fixed.
 
 Pointers to the things that are **not** in this file:
 
-  - The three-stage Extract → Translate → Load pipeline, crate
-    layout, sidecar contract: [`backend/etl/README.md`](../frankweiler/backend/etl/README.md).
-    FIXME: Move this doc into //docs/ETL_shape.md
   - The raw store's table-and-blob shape, primary-key rules,
     `sync_runs` bookkeeping: [`backend/etl/DOLTLITE_RAW_PORT_GUIDE.md`](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md).
-    FIXME: Move this doc into //docs/doltlite_patterns.md.
+    FIXME: Move this doc into //docs/doltlite_patterns.md and make it not a porting guide but a "shape of how we use doltlite"
   - Reading the dolt history of a raw store: [`docs/doltlite.md`](doltlite.md).
-    FIXME: Rename this doc to doltlite_tips.md
+    FIXME: Rename this doc to doltlite_tips.md.
   - Per-provider auth, API surface, resume strategy: each provider's
     `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
@@ -39,7 +36,19 @@ guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-stora
 in Rust the value round-trips as a text JSON string. JSONB is a storage
 encoding. The principle is wire-fidelity (§2.5).
 
-The pipeline has three stages:
+The pipeline has three stages. All three run **in-process inside
+`frankweiler-sync`** — one binary, one process, one config-driven
+walk over enabled sources. (A standalone-binary-per-stage layout is
+something we could go back to if needed; the per-provider library
+APIs are still stage-shaped, and there are vestigial
+`<provider>_download` rust_binary targets that could be revived.
+Today they aren't on the production path.)
+
+| Stage     | Entry point                                                       | Inputs                                  | Outputs                                       |
+|-----------|-------------------------------------------------------------------|-----------------------------------------|-----------------------------------------------|
+| Extract   | `frankweiler_etl_<provider>::extract::fetch(...)`                 | upstream API                            | `<data_root>/raw/<name>.doltlite_db` + sibling `.blobs.doltlite_db` |
+| Translate | `frankweiler_etl_<provider>::translate::...`                      | `<data_root>/raw/<name>.doltlite_db`    | `<data_root>/rendered_md/<provider>/...`      |
+| Load      | provider-agnostic `frankweiler_etl::load` (a.k.a. `grid-rows-load`) | `<data_root>/rendered_md/`              | rows in `backend_index.doltlite_db` + `markdowns_loaded` bookkeeping |
 
   1. **Extract** — pull from upstream, UPSERT into
      `<data_root>/raw/<name>.doltlite_db` (entities) and
@@ -51,12 +60,26 @@ The pipeline has three stages:
   3. **Load** — feed the sidecar tree into the canonical `grid_rows`
      table for the UI and for the qmd index.
 
+Each provider is its own crate at
+[`frankweiler/backend/etl/providers/<name>/`](../frankweiler/backend/etl/providers/),
+named `frankweiler-etl-<name>`. The provider crate owns its Extract +
+Translate code, its bins, its integration tests, and the sample
+fixtures the tests run against — keeping sample data next to the code
+under test serves as documentation of "what this provider's wire
+format looks like." Load is provider-agnostic and lives at
+[`src/load.rs`](../frankweiler/backend/etl/src/load.rs); a new provider
+needs no Load-side changes.
+
 This is not novel. It's the same shape as many Flume / Apache Beam / Dask /
-Prefect / Airflow pipelines. **What we're optimizing for that those
-tools don't is: easy to install, easy to configure, easy to run, easy
-to monitor — for a single user on a single laptop.** No cluster, no
-scheduler service, no DAG server. One config file, one orchestrator
-binary, one local data directory.
+Prefect / Airflow pipelines. What we're optimizing for that those
+tools don't is:
+* Easy to install
+* Easy to configure
+* Easy to run
+* Easy to monitor — for a single user on a single laptop.
+
+** No cluster, no scheduler service, no DAG server. One config file, one orchestrator
+binary, one local data directory. **
 
 ## 2. Operational principles
 
@@ -67,7 +90,22 @@ many GB). Every stage must surface progress in a way the user can
 watch in real time.
 
   - Every binary flattens [`obs::ObsArgs`](../frankweiler/backend/obs/src/lib.rs)
-    so every stage takes the same logging / OTLP / progress-bar flags.
+    into its clap parser, so every stage takes the same logging / OTLP
+    / progress-bar flags. On a TTY, pretty log lines on stderr;
+    otherwise, NDJSON events on stderr. Log emissions are routed
+    through an `IndicatifWriter` that coordinates with the shared
+    `MultiProgress` exposed by `frankweiler_obs::shared_multi()` so
+    progress bars attached by callers (e.g. sync's per-source bars)
+    don't get stomped by log lines.
+  - `--otlp-endpoint http://host:4317` exports spans + events via OTLP,
+    so a single Tempo/Jaeger collector can ingest every stage. (See
+    §15.4 for the privacy contract that constrains what may be in those
+    spans.)
+  - Each stage emits `*_start`, `*_complete`, and per-document
+    progress events with a stable provider-prefixed name
+    (`slack_download_*`, `grid_rows_load_*`, …). The `*Summary`
+    structs are `Serialize`, so a web UI can consume the final stats
+    line without knowing which provider produced it.
   - Stages emit a `*_start`, `*_complete`, and per-document progress
     events with a stable prefix. `*Summary` structs are `Serialize`
     so a web UI can consume them without knowing the provider.
@@ -269,8 +307,31 @@ the shared CAS exists for the fetch-as-separate-resource pattern.
 
 After extract, we run translations for display and indexing — render
 to markdown with YAML frontmatter, index the markdown with qmd, derive
-`grid_rows` for the UI. This part of the pipeline aspires to the same
-properties as extract:
+`grid_rows` for the UI.
+
+The cross-provider contract is the **sidecar**: for every rendered
+document, Translate emits two co-located files —
+
+  - `<id>.md` — human-readable, with YAML frontmatter.
+  - `<id>.grid_rows.json` — the
+    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs):
+
+    ```jsonc
+    {
+      "header": {
+        "document_uuid": "…",       // primary key for the document
+        "source_fingerprint": "…",  // hash of upstream payload
+        "render_version": 1         // renderer-side schema stamp
+      },
+      "rows": [GridRow, …]
+    }
+    ```
+
+Load reads the sidecar tree — **it never re-parses markdown**. The
+markdown is for humans; the JSON sidecar is the machine-readable
+projection.
+
+This part of the pipeline aspires to the same properties as extract:
 
   - **Monitorable**: same `obs` flags, same progress-bar contract.
   - **Incremental**: the sidecar `source_fingerprint` short-circuits
@@ -332,13 +393,25 @@ upstream APIs, but no real user data, so they can live in the repo and
 be the source-of-truth for "what does this provider's payload look
 like."
 
-Each provider crate owns its own `tests/fixtures/` tree. Tests resolve
-fixtures via `CARGO_MANIFEST_DIR.join("tests/fixtures/...")`, so the
-cargo inner loop is standalone. **Bazel runs both the unit tests and
-the fixture-backed integration tests** under `bazelisk test //...` —
-no `manual` tag, no special invocation. The only tests tagged
-`manual` are the per-provider `*_live` tests, which hit real upstream
-APIs and require latchkey credentials from the host machine.
+Each provider crate owns its own `tests/fixtures/` tree. **Build and
+test through bazel:**
+
+```bash
+bazelisk test //...                                        # everything
+bazelisk test //frankweiler/backend/etl/providers/<name>/...  # one provider
+```
+
+Bazel is the only supported build and test driver. It gets caching,
+sandboxing, and remote-execution right; raw `cargo build` /
+`cargo test` invocations bypass that and risk producing artifacts
+that disagree with what CI sees. If your inner loop feels slow,
+*fix the bazel target*, don't shell out to cargo.
+
+`bazelisk test //...` runs both the unit tests and the fixture-backed
+integration tests — no `manual` tag, no special invocation. The only
+tests tagged `manual` are the per-provider `*_live` tests, which hit
+real upstream APIs and require latchkey credentials from the host
+machine.
 
 When you add a provider, drop sample wire-format data into
 `providers/<name>/tests/fixtures/` and write integration tests next
@@ -348,17 +421,61 @@ documentation of "what this provider's wire format looks like."
 ## 11. Adding new sources is meant to be easy
 
 A new provider is a sibling crate under
-[`frankweiler/backend/etl/providers/`](../frankweiler/backend/etl/providers/).
-The README has a step-by-step recipe; the short version: copy the
-slack crate, rename, implement `<name>-download` (extract) and
-`<name>::translate`, drop fixtures into `tests/fixtures/`, add to the
-workspace and bazel manifests. Load needs no per-provider changes.
+[`frankweiler/backend/etl/providers/`](../frankweiler/backend/etl/providers/),
+named `frankweiler-etl-<name>`.
 
-Recent examples that exercised the framework in different ways:
+### Pick a template to copy from
+
+Reach for the simplest existing provider that's shaped like yours,
+*not* the most feature-complete one. In rough order of "simple first":
+
+  1. **`signal`** — Backup-file
+     ingestion shape (no auth, no live API, no token refresh, no rate-limit
+     dance), so the auth and resume machinery you'd need to understand
+     for live providers stays out of the way while you learn the
+     extract / translate / sidecar shape.
+  2. **`anthropic`** (Claude) — first choice if your provider *is* a
+     live API. Single-account, simple bearer auth via latchkey, clean
+     forward-walk cursor. Most of the "what does extract / translate /
+     blob-CAS look like for an API-backed provider" is here without
+     the multi-workspace / multi-channel complexity of chat.
+  3. **`slack`** — The most elaborate provider: multiple
+     entity tables (channels, users, messages, replies, files), JSONL
+     event streams in synth, workspace-wide redaction in live-golden,
+     thread-aware `source_fingerprint`. Copy from here only if you
+     genuinely need its shape; otherwise it'll drag in complexity you
+     don't want.
+
+### The recipe
+
+1. Copy your chosen template into `providers/<name>/`, then strip out
+   the provider-specific code.
+2. Rename the package in its `Cargo.toml` to `frankweiler-etl-<name>`,
+   lib name `frankweiler_etl_<name>`.
+3. Add `etl/providers/<name>` to the workspace `members =` list in
+   `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
+   manifest list in `MODULE.bazel`.
+4. Implement `extract::fetch(...)` (the in-process entry point sync
+   calls) and `<name>::translate::...`. The translate side must emit
+   `*.grid_rows.json` sidecars matching
+   [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs).
+5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
+   (TNG cast — see §10) and write integration tests next to it.
+6. Add the new source's `type:` discriminator to the `SourceConfig`
+   variants in [`backend/core/src/config.rs`](../frankweiler/backend/core/src/config.rs)
+   and wire `extract::fetch(...)` into `sync/src/main.rs`'s per-type
+   dispatch.
+
+Load needs no per-provider changes — `grid_rows_load` (in-process)
+picks up the new sidecars on its next run.
+
+### Worked examples beyond the chat shape
+
+The framework has stretched in a few directions; these are useful
+references when your provider doesn't look like chat:
 
   - **yolink** — time-windowed sampling, signed-URL auth, time-series
     data shape.
-  - **signal** — backup-file ingestion rather than live API.
   - **perseus** — the corpus (Perseus Digital Library TEI editions) is
     *immutable upstream*, so perseus deliberately doesn't use the
     incremental-fetch / cursor / refresh-window machinery. It uses the
