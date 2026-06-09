@@ -57,7 +57,7 @@ pub fn align(
                 if ni > m || nj > n {
                     continue;
                 }
-                let cost = pair_cost(grc_emb, eng_emb, grc_lens, eng_lens, i, ni, j, nj);
+                let cost = pair_cost(grc_emb, eng_emb, grc_lens, eng_lens, (i, ni), (j, nj));
                 if dp[i][j] + cost < dp[ni][nj] {
                     dp[ni][nj] = dp[i][j] + cost;
                     back[ni][nj] = Some((i, j));
@@ -94,11 +94,11 @@ fn pair_cost(
     eng_emb: &[Vec<f32>],
     grc_lens: &[usize],
     eng_lens: &[usize],
-    gi: usize,
-    gni: usize,
-    ej: usize,
-    enj: usize,
+    grc: (usize, usize),
+    eng: (usize, usize),
 ) -> f64 {
+    let (gi, gni) = grc;
+    let (ej, enj) = eng;
     let g = mean_normalize(grc_emb, gi, gni);
     let e = mean_normalize(eng_emb, ej, enj);
     let cos = dot_f32(&g, &e) as f64;

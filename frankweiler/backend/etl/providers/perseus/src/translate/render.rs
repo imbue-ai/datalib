@@ -385,7 +385,11 @@ fn render_chapter_md(chapter: &Chapter, lang: &str, alignments: &PerseusAlignmen
 /// text is returned unwrapped: the section-level `<div data-section-
 /// uuid="…">` from `section_div_open` still gives the UI a fallback
 /// anchor for click-to-scroll.
-fn wrap_sentences(text: &str, sentences: &[Sentence], anchor_for: impl Fn(usize) -> String) -> String {
+fn wrap_sentences(
+    text: &str,
+    sentences: &[Sentence],
+    anchor_for: impl Fn(usize) -> String,
+) -> String {
     if sentences.is_empty() {
         return text.to_string();
     }
@@ -684,8 +688,7 @@ fn chapter_edges(
                 (&group.eng_indices, &group.grc_indices)
             };
             for &si in src_idxs {
-                let src_anchor =
-                    paragraph_sentence_uuid(&book.n, &chapter.n, &sec.n, lang, si);
+                let src_anchor = paragraph_sentence_uuid(&book.n, &chapter.n, &sec.n, lang, si);
                 for &di in dst_idxs {
                     let dst_anchor =
                         paragraph_sentence_uuid(&book.n, &chapter.n, &sec.n, other, di);

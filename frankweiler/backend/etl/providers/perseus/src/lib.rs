@@ -150,9 +150,7 @@ pub fn paragraph_sentence_uuid(
     lang: &str,
     sent_idx: usize,
 ) -> String {
-    let name = format!(
-        "{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:sent{sent_idx}"
-    );
+    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:sent{sent_idx}");
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
         .as_hyphenated()
         .to_string()

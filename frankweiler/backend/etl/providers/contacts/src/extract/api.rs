@@ -417,13 +417,12 @@ fn apply_text(
         "addressbook-description" => c.description = Some(text.to_string()),
         "getctag" => c.ctag = Some(text.to_string()),
         "address-data" => c.vcard = Some(text.to_string()),
-        "status" => {
+        "status"
             // The status applies to the propstat block we're inside;
             // we only track one per response (first one wins).
-            if status_buf.is_empty() {
+            if status_buf.is_empty() => {
                 *status_buf = text.to_string();
             }
-        }
         _ => {}
     }
 }

@@ -1,3 +1,8 @@
+// Integration test runs under cargo-test (no MultiProgress / no
+// indicatif bars). Exempt from the workspace-wide ban on direct
+// stderr/stdout writes defined in clippy.toml.
+#![allow(clippy::disallowed_macros)]
+
 //! Cross-check the Rust sentence aligner against the Python reference
 //! produced by `tools/perseus_alignment/build_reference.py` (in this
 //! repo only as exploration output under ~/tmp/perseus/align/).
@@ -76,9 +81,9 @@ async fn matches_python_reference_on_thucydides() {
 
     let emb = Embedder::load().await.expect("load embedder");
 
+    type Pairs = Vec<(Vec<usize>, Vec<usize>)>;
     let mut matched = 0usize;
-    let mut mismatched: Vec<(String, Vec<(Vec<usize>, Vec<usize>)>, Vec<(Vec<usize>, Vec<usize>)>)> =
-        Vec::new();
+    let mut mismatched: Vec<(String, Pairs, Pairs)> = Vec::new();
 
     for rec in &reference.alignments {
         // Round-trip via the actual Section type so we exercise the

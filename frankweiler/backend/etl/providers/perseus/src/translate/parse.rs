@@ -199,23 +199,21 @@ fn flush_frame(stack: &mut [DivFrame], frame: DivFrame, out: &mut FlatMap) {
                 parent.had_section_child = true;
             }
         }
-        "chapter" => {
+        "chapter" if !frame.had_section_child => {
             // No section children → the chapter's own concatenated
             // text is section "1". This matches the Python fallback
             // path so UUIDs line up.
-            if !frame.had_section_child {
-                let book_n = stack
-                    .iter()
-                    .rev()
-                    .find(|f| f.subtype == "book")
-                    .map(|f| f.n.clone())
-                    .unwrap_or_default();
-                if !book_n.is_empty() {
-                    out.insert(
-                        (book_n, frame.n.clone(), "1".to_string()),
-                        normalize_whitespace(&frame.text),
-                    );
-                }
+            let book_n = stack
+                .iter()
+                .rev()
+                .find(|f| f.subtype == "book")
+                .map(|f| f.n.clone())
+                .unwrap_or_default();
+            if !book_n.is_empty() {
+                out.insert(
+                    (book_n, frame.n.clone(), "1".to_string()),
+                    normalize_whitespace(&frame.text),
+                );
             }
         }
         _ => {}

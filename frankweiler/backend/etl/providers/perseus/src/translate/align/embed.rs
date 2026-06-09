@@ -68,10 +68,9 @@ impl Embedder {
                 .context("fetch weights (safetensors or pytorch_model.bin)")?,
         };
 
-        let config: Config = serde_json::from_slice(
-            &std::fs::read(&config_path).context("read config.json")?,
-        )
-        .context("parse config.json")?;
+        let config: Config =
+            serde_json::from_slice(&std::fs::read(&config_path).context("read config.json")?)
+                .context("parse config.json")?;
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::anyhow!("load tokenizer.json: {e}"))?;
 
@@ -79,7 +78,13 @@ impl Embedder {
             // Safety: mmap of an immutable on-disk file; standard
             // candle pattern. The lifetime of the mapping is tied to
             // VarBuilder which the BertModel keeps alive.
-            unsafe { VarBuilder::from_mmaped_safetensors(&[weights_path.clone()], DTYPE, &device)? }
+            unsafe {
+                VarBuilder::from_mmaped_safetensors(
+                    std::slice::from_ref(&weights_path),
+                    DTYPE,
+                    &device,
+                )?
+            }
         } else {
             VarBuilder::from_pth(&weights_path, DTYPE, &device)?
         };
@@ -113,7 +118,12 @@ impl Embedder {
         let summed = h.broadcast_mul(&m)?.sum(0)?; // (D,)
         let denom = mask_f.sum(1)?.squeeze(0)?.to_scalar::<f32>()?.max(1e-6);
         let pooled = (summed / denom as f64)?;
-        let norm = pooled.sqr()?.sum_all()?.sqrt()?.to_scalar::<f32>()?.max(1e-9);
+        let norm = pooled
+            .sqr()?
+            .sum_all()?
+            .sqrt()?
+            .to_scalar::<f32>()?
+            .max(1e-9);
         let pooled = (pooled / norm as f64)?;
         let v: Vec<f32> = pooled.to_vec1()?;
         Ok(v)

@@ -540,10 +540,7 @@ async fn get_card(
     if !valid {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let path = s
-        .root
-        .join(".frankweiler/cards")
-        .join(format!("{hash}.js"));
+    let path = s.root.join(".frankweiler/cards").join(format!("{hash}.js"));
     match std::fs::read_to_string(&path) {
         Ok(body) => Ok((
             StatusCode::OK,

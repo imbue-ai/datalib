@@ -180,10 +180,7 @@ pub async fn align_all(
         for chapter in &book.chapters {
             for sec in &chapter.sections {
                 let alignment = if needs_model(sec) {
-                    align_section(
-                        emb.as_ref().expect("loaded above when n_nontrivial>0"),
-                        sec,
-                    )?
+                    align_section(emb.as_ref().expect("loaded above when n_nontrivial>0"), sec)?
                 } else {
                     SectionAlignment::trivial(
                         split::split_grc(&sec.grc),
