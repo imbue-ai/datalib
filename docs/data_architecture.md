@@ -1,8 +1,7 @@
 # Data architecture
 
 This document describes the principles we are striving towards for the
-data layer of this project. It supersedes the older
-`docs/ETL_general_shape.md`, which it absorbs.
+data layer of this project.
 
 It is aspirational as much as descriptive: not every provider or stage
 fully honors every principle today, but a new provider, table, or
@@ -13,9 +12,12 @@ Pointers to the things that are **not** in this file:
 
   - The three-stage Extract → Translate → Load pipeline, crate
     layout, sidecar contract: [`backend/etl/README.md`](../frankweiler/backend/etl/README.md).
+    FIXME: Move this doc into //docs/ETL_shape.md
   - The raw store's table-and-blob shape, primary-key rules,
     `sync_runs` bookkeeping: [`backend/etl/DOLTLITE_RAW_PORT_GUIDE.md`](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md).
+    FIXME: Move this doc into //docs/doltlite_patterns.md.
   - Reading the dolt history of a raw store: [`docs/doltlite.md`](doltlite.md).
+    FIXME: Rename this doc to doltlite_tips.md
   - Per-provider auth, API surface, resume strategy: each provider's
     `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
@@ -49,7 +51,7 @@ The pipeline has three stages:
   3. **Load** — feed the sidecar tree into the canonical `grid_rows`
      table for the UI and for the qmd index.
 
-This is not novel. It's the same shape as Flume / Apache Beam / Dask /
+This is not novel. It's the same shape as many Flume / Apache Beam / Dask /
 Prefect / Airflow pipelines. **What we're optimizing for that those
 tools don't is: easy to install, easy to configure, easy to run, easy
 to monitor — for a single user on a single laptop.** No cluster, no
@@ -87,7 +89,7 @@ The dedup index *is* the resume cursor:
   - There are no separate checkpoint files. The data we already have
     tells us where to resume.
   - If `doltlite_raw::open` finds a dirty working tree from a prior
-    crashed run, it stamps a `rescue:` commit before any DDL — see
+    crashed run, it stamps a `rescue:` commit before any DDL (FIXME: define DDL in this doc) — see
     [`docs/doltlite.md`](doltlite.md#rescue-commits-on-every-rust-side-open).
 
 ### 2.3 Efficiently incremental
@@ -166,7 +168,7 @@ We lean **heavily** on upstream-provided UUIDs to establish permanent
 object identity.
 
   - Every raw-store entity table keys by the upstream provider's
-    identifier ([port guide §1](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#1-primary-keys-are-upstream-identifiers)) —
+    identifier —
     no surrogate `AUTOINCREMENT`. That's what makes `dolt diff` stable
     across re-fetches, what makes `ON CONFLICT(id) DO UPDATE` work, and
     what makes cross-table references (e.g. `messages.conversation_id`)
@@ -207,7 +209,7 @@ end. A run that touches N upstream pages / windows / items produces
 
 Two consequences:
 
-  - `dolt diff HEAD^1 HEAD` for any raw store is exactly "what this
+  - `dolt diff HEAD^1 HEAD` for any raw store is exactly "what this sync
     run pulled" — a clean unit of analysis for incremental delta UI
     surfaces and audits.
   - Provider authors don't have to think about commit boundaries. If
@@ -239,6 +241,7 @@ content-addressable store. Each source has both
 `raw/<name>.doltlite_db` (entities + per-source attachment metadata in
 `blob_refs`) and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed
 by blake3). Full schema + helpers in [port guide §7](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+FIXME: Again this doc should move into //docs as noted above.
 
 Two reasons the split matters:
 
@@ -312,11 +315,10 @@ Two-axis distinction every provider follows:
     blob should not kill the run. Log a `warn!`, increment an error
     counter, advance the cursor, keep going. The run's `FetchSummary`
     reports `errors=N`.
+    FIXME: Document what the mechanism to retry these failures should be, especially if continuing drives a time-based cursor past them.
   - **Auth failures and consecutive-failure budgets are fatal.** A 401
     / 403 from the auth provider, or N back-to-back per-item failures
-    on the same source, should return `Err` from `fetch(...)`. That
-    cancels the trailing commit, leaves the working tree to be rescued
-    on the next open, and exits non-zero.
+    on the same source, should return `Err` from `fetch(...)`. Even on auth failure, we should still dolt commit noting the problem, then exit non-zero (when other pathways through the pipeline are finished)
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template
 for the second pattern.
@@ -335,6 +337,8 @@ fixtures via `CARGO_MANIFEST_DIR.join("tests/fixtures/...")`, so the
 cargo inner loop is standalone. Bazel runs the unit tests; the
 fixture-backed integration tests are tagged `manual` because the
 fixture tree isn't in the bazel sandbox runfiles by default.
+FIXME: Wait, what?  These fixture-backed tests should not be manual!  When did that change?  We have to fix that!
+Let's address this first!
 
 When you add a provider, drop sample wire-format data into
 `providers/<name>/tests/fixtures/` and write integration tests next
@@ -379,20 +383,15 @@ schema with `provider` + `kind` discriminators. The grid backend
 reads it with a single query and renders it without knowing which
 provider produced any given row.
 
-Where unification does **not** happen today: the raw store and the
-rendered markdown layout. Slack, Beeper, Signal, Anthropic, ChatGPT
-each have their own raw tables (`slack_messages`, `beeper_messages`,
-…) and their own per-provider render code under
-`providers/<name>/src/translate/render.rs`. There is no shared
-`chat_messages` table or shared chat-render module in `etl/src/`.
+Unification should **never** happen in the raw store.
+For example, Slack, Beeper, Signal, Anthropic, ChatGPT each have their own raw tables and even separate doltlite 
+ DBs (`slack_messages`, `beeper_messages`, …)
 
-That gap is by design *so far*, not by principle. Where families
-emerge, lifting more of the render / threading / attachment-handling
-code into a shared module is on the table — it just hasn't been the
-top of the priority list.
+ However, once we start translating data, we should aspire to share as much as possible.
+ For example, we should translate raw data into unified schemas where appropriate, then send
+ that unified data through common code paths for interpretation, rendering, and indexing.
 
-Current and planned families (the grouping is by data shape, not by
-"these already share code"):
+Examples where schema and data handling should be unified:
 
   1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
      channels/DMs between humans with attachments and threading."
@@ -478,10 +477,10 @@ are load-bearing assumptions the rest of the design rests on:
     laptop. Provider auth tokens live in latchkey (a local keyring);
     no telemetry, no cloud sync, no analytics. A new feature that
     needs to phone home should be flagged explicitly.
-  - **Python can't open doltlite files.** Anywhere a non-Rust tool
-    needs to read raw data, it should read the JSON/JSONL fixture
-    layer or call out to a Rust binary. The doltlite db only flows
-    through Rust code ([port guide gotcha 2](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#gotchas-we-hit-these-and-you-will-too)).
+  - **Opening doltlite files.** 
+    There are several options to read/write doltlite files outside of Rust:
+    * The stock doltlite CLI, a drop-in replacement for the sqlite CLI.
+    * There are python doltlite bindings: https://libraries.io/pypi/doltlite
 
 ## 15. Unresolved questions
 
@@ -499,13 +498,9 @@ artifact. `cp -r <data_root>` (or `rsync`) on one machine and dropping
 it on another should reconstitute the system byte-for-byte, with no
 re-fetch, re-render, or re-index step needed.
 
-**Open**: is this actually true today? Doltlite files are flagged as
-byte-stable (journal mode DELETE, no WAL sidecars), and the CAS is
-content-addressed, so it *should* hold — but it isn't tested. We have
-no documented backup/restore procedure and no integration test that
-roundtrips a data root across machines.
-
 ### 15.2 Removing a source
+
+Note: This is not yet handled in a meaningful way.  We haven't decided yet what it should mean.
 
 **Desired principle**: removing a `sources:` entry should leave the
 system clean. A single GC pass should reclaim the source's raw store,
@@ -515,6 +510,7 @@ its blob CAS contribution, its `rendered_md/<name>/` tree, and its
 **Open**: today we have `blob_cas::gc_orphans()` for the blob side, but
 no top-level "uninstall this source" path. If a user removes Slack
 from their config, what is the expected sequence of operations?
+
 
 ### 15.3 Multi-account / multi-instance within a provider type
 
@@ -545,6 +541,8 @@ should audit what `tracing` spans actually carry, redact at the
 source, and state the rule explicitly.
 
 ### 15.5 Time and ordering discipline
+
+FIXME: Let's elevate this principle higher in the doc.
 
 **Desired principle**: every `GridRow` carries a real wall-clock
 timestamp in ISO-8601 with explicit offset, suitable for global sort
@@ -577,6 +575,8 @@ example payload per endpoint per run.
 across runs and alert on drift. The mechanism is in place; the
 detection-and-alerting policy is not.
 
+FIXME: Hmm, I don't remember asking for this mechanism.  I think we should delete this "endpoint_shapes" thing, both from this doc, and from the codebase as well.
+
 ### 15.7 Quantitative bound on "fast incremental"
 
 **Desired principle**: a second sync run immediately after a
@@ -585,9 +585,7 @@ by *upstream API walk time*, not by local work. Concretely: tens of
 seconds for a small source, low single-digit minutes for a large one
 — never tens of minutes, never re-doing the first-sync cost.
 
-**Open**: we don't measure this. The audit should produce per-provider
-no-op-sync timings as a baseline. Without a number, "fast" is
-unfalsifiable.
+**Open**: we don't currently measure this. We should add a mechanism to roughly compute "sync time / size of sync delta" on each sync for each provider, so that we can get a handle on where the slowness it.
 
 ### 15.8 Fixture hygiene
 
