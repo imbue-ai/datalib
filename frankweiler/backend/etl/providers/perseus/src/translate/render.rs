@@ -30,9 +30,10 @@ use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::super::{
-    book_uuid, chapter_uuid, edge_uuid, paragraph_first_word_uuid, paragraph_uuid, TLG0003_TLG001,
+    book_uuid, chapter_uuid, edge_uuid, paragraph_sentence_uuid, paragraph_uuid, TLG0003_TLG001,
     WORK_SHORT, WORK_TITLE,
 };
+use super::align::{PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, ParsedPerseus};
 use super::RENDER_VERSION;
 
@@ -55,8 +56,16 @@ pub struct RenderSummary {
 
 /// Translate entry point. Mirrors the shape of `contacts::translate::render::render_all`
 /// so the sync orchestrator's match arm wires up the same way.
+///
+/// `alignments` carries within-section sentence alignments produced
+/// upstream by `align::align_all()` (async). The renderer is
+/// synchronous; the orchestrator awaits the alignment phase before
+/// calling here. Sections without a precomputed alignment fall back
+/// to the trivial 1:1 split, which keeps the existing fixture-based
+/// tests working without forcing the test harness to load the model.
 pub fn render_all(
     parsed: &ParsedPerseus,
+    alignments: &PerseusAlignments,
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
@@ -85,6 +94,7 @@ pub fn render_all(
                     book,
                     chapter,
                     lang,
+                    alignments,
                     out_dir,
                     source_name,
                     prior_fingerprints,
@@ -150,6 +160,7 @@ fn render_chapter(
     book: &Book,
     chapter: &Chapter,
     lang: &str,
+    alignments: &PerseusAlignments,
     out_dir: &Path,
     source_name: &str,
     prior_fingerprints: &HashMap<String, String>,
@@ -176,7 +187,7 @@ fn render_chapter(
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
 
-    let md = render_chapter_md(chapter, lang);
+    let md = render_chapter_md(chapter, lang, alignments);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -193,7 +204,7 @@ fn render_chapter(
         ));
         idx += 1;
     }
-    let edges = chapter_edges(book, chapter, lang, &m_uuid);
+    let edges = chapter_edges(book, chapter, lang, &m_uuid, alignments);
     write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
 
     summary.rows_emitted += rows.len();
@@ -301,7 +312,7 @@ fn render_book_md(book: &Book) -> String {
     )
 }
 
-fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
+fn render_chapter_md(chapter: &Chapter, lang: &str, alignments: &PerseusAlignments) -> String {
     let title = chapter_title(&chapter.book_n, &chapter.n);
     let mut out = format!(
         "---\n\
@@ -331,10 +342,15 @@ fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
             continue;
         }
         let s_uuid = paragraph_uuid(&chapter.book_n, &chapter.n, &sec.n, lang);
-        let body = wrap_first_word(
-            text,
-            &paragraph_first_word_uuid(&chapter.book_n, &chapter.n, &sec.n, lang),
-        );
+        let alignment = alignments.get_or_trivial(&chapter.book_n, &chapter.n, &sec.n, sec);
+        let sentences: &[Sentence] = if lang == "grc" {
+            &alignment.grc_sentences
+        } else {
+            &alignment.eng_sentences
+        };
+        let body = wrap_sentences(text, sentences, |i| {
+            paragraph_sentence_uuid(&chapter.book_n, &chapter.n, &sec.n, lang, i)
+        });
         // Blank lines around the `<div>` / `</div>` so the markdown
         // parser inside doesn't get confused — common-mark allows
         // raw HTML blocks but needs the surrounding blank lines to
@@ -351,43 +367,49 @@ fn render_chapter_md(chapter: &Chapter, lang: &str) -> String {
     out
 }
 
-/// Wrap the first whitespace-delimited token of `text` in an inline
-/// `<span data-section-uuid="…">…</span>` so the UI can highlight it
-/// when a bilingual-alignment edge points at it. The remainder of
-/// the section is left as raw text — markdown-it treats inline HTML
-/// permissively when `html: true`.
-fn wrap_first_word(text: &str, anchor_uuid: &str) -> String {
-    // Find the first whitespace AFTER the first non-whitespace run.
-    // `char_indices()` over the original string keeps us byte-safe
-    // on multi-byte greek glyphs.
-    let mut it = text.char_indices().peekable();
-    // Skip leading whitespace (the parser's normalize step trims it
-    // but defend anyway).
-    while let Some(&(_, c)) = it.peek() {
-        if c.is_whitespace() {
-            it.next();
-        } else {
-            break;
-        }
-    }
-    let start = it.peek().map(|&(i, _)| i).unwrap_or(0);
-    // Walk to the first whitespace (or end-of-string).
-    let mut end = text.len();
-    for (i, c) in it {
-        if c.is_whitespace() {
-            end = i;
-            break;
-        }
-    }
-    if start >= end {
+/// Wrap each sentence of `text` in its own inline
+/// `<span data-section-uuid="…">…</span>` so the UI can highlight any
+/// individual sentence when a bilingual-alignment edge points at it.
+///
+/// `sentences` carries the byte ranges produced by the alignment
+/// splitter; `anchor_for(i)` returns the per-sentence UUID for the
+/// i-th sentence. Whitespace between sentences (and any leading /
+/// trailing) is preserved outside the spans, so the rendered body
+/// concatenates back to the original section text modulo what the
+/// splitter trimmed (only outer whitespace on individual sentences,
+/// which never changes the user-visible result after the surrounding
+/// markdown collapses runs anyway).
+///
+/// If `sentences` is empty (no detectable sentence boundaries — rare,
+/// would mean the splitter rejected the whole section), the original
+/// text is returned unwrapped: the section-level `<div data-section-
+/// uuid="…">` from `section_div_open` still gives the UI a fallback
+/// anchor for click-to-scroll.
+fn wrap_sentences(text: &str, sentences: &[Sentence], anchor_for: impl Fn(usize) -> String) -> String {
+    if sentences.is_empty() {
         return text.to_string();
     }
-    format!(
-        "{}<span data-section-uuid=\"{anchor_uuid}\">{}</span>{}",
-        &text[..start],
-        &text[start..end],
-        &text[end..],
-    )
+    let mut out = String::with_capacity(text.len() + sentences.len() * 64);
+    let mut cursor = 0usize;
+    for (i, sent) in sentences.iter().enumerate() {
+        // Anything before this sentence's start (leading or inter-
+        // sentence whitespace) gets copied verbatim.
+        if sent.start > cursor {
+            out.push_str(&text[cursor..sent.start]);
+        }
+        let uuid = anchor_for(i);
+        out.push_str("<span data-section-uuid=\"");
+        out.push_str(&uuid);
+        out.push_str("\">");
+        out.push_str(&text[sent.start..sent.end]);
+        out.push_str("</span>");
+        cursor = sent.end;
+    }
+    // Trailing whitespace after the last sentence.
+    if cursor < text.len() {
+        out.push_str(&text[cursor..]);
+    }
+    out
 }
 
 fn chapter_text_for_grid(chapter: &Chapter, lang: &str) -> String {
@@ -615,10 +637,21 @@ fn book_edges(book: &Book, bk_uuid: &str) -> Vec<EdgeRow> {
 ///     language name ("Greek" / "English") so the UI's
 ///     outgoing-destinations list can render it directly without a
 ///     join against the dst row's metadata;
-///   * one `bilingual-alignment` edge per non-empty section where
-///     BOTH languages have text — anchored on the first-word span on
-///     each side.
-fn chapter_edges(book: &Book, chapter: &Chapter, lang: &str, m_uuid: &str) -> Vec<EdgeRow> {
+///   * one `bilingual-alignment` edge per (src-sentence, dst-sentence)
+///     pair from the within-section sentence alignment. For each
+///     `SentenceGroup` we emit the full cross-product of indices on
+///     both sides — a 1:1 group is one edge, a 1:2 group is two
+///     edges (the single src sentence pointing at each of the two
+///     dst sentences), and so on. The UI looks edges up by
+///     `(src_markdown_uuid, src_anchor_uuid)` so multiple
+///     destinations for one source span surface as multiple links.
+fn chapter_edges(
+    book: &Book,
+    chapter: &Chapter,
+    lang: &str,
+    m_uuid: &str,
+    alignments: &PerseusAlignments,
+) -> Vec<EdgeRow> {
     let other = if lang == "grc" { "eng" } else { "grc" };
     let other_md = chapter_uuid(&chapter.book_n, &chapter.n, other);
     let mut edges: Vec<EdgeRow> = Vec::new();
@@ -637,28 +670,42 @@ fn chapter_edges(book: &Book, chapter: &Chapter, lang: &str, m_uuid: &str) -> Ve
         label: cross_label.map(str::to_string),
     });
 
-    // First-word ↔ first-word alignment edges.
+    // Per-sentence-pair alignment edges.
     let label = Some("bilingual-alignment");
     for sec in &chapter.sections {
         if sec.grc.is_empty() || sec.eng.is_empty() {
             continue;
         }
-        let src_anchor = paragraph_first_word_uuid(&book.n, &chapter.n, &sec.n, lang);
-        let dst_anchor = paragraph_first_word_uuid(&book.n, &chapter.n, &sec.n, other);
-        edges.push(EdgeRow {
-            edge_uuid: edge_uuid(
-                m_uuid,
-                Some(&src_anchor),
-                &other_md,
-                Some(&dst_anchor),
-                label,
-            ),
-            src_markdown_uuid: m_uuid.to_string(),
-            src_anchor_uuid: Some(src_anchor),
-            dst_markdown_uuid: other_md.clone(),
-            dst_anchor_uuid: Some(dst_anchor),
-            label: label.map(str::to_string),
-        });
+        let alignment = alignments.get_or_trivial(&book.n, &chapter.n, &sec.n, sec);
+        for group in &alignment.groups {
+            let (src_idxs, dst_idxs) = if lang == "grc" {
+                (&group.grc_indices, &group.eng_indices)
+            } else {
+                (&group.eng_indices, &group.grc_indices)
+            };
+            for &si in src_idxs {
+                let src_anchor =
+                    paragraph_sentence_uuid(&book.n, &chapter.n, &sec.n, lang, si);
+                for &di in dst_idxs {
+                    let dst_anchor =
+                        paragraph_sentence_uuid(&book.n, &chapter.n, &sec.n, other, di);
+                    edges.push(EdgeRow {
+                        edge_uuid: edge_uuid(
+                            m_uuid,
+                            Some(&src_anchor),
+                            &other_md,
+                            Some(&dst_anchor),
+                            label,
+                        ),
+                        src_markdown_uuid: m_uuid.to_string(),
+                        src_anchor_uuid: Some(src_anchor.clone()),
+                        dst_markdown_uuid: other_md.clone(),
+                        dst_anchor_uuid: Some(dst_anchor),
+                        label: label.map(str::to_string),
+                    });
+                }
+            }
+        }
     }
     edges
 }
@@ -732,6 +779,7 @@ mod tests {
         };
         let summary = render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -766,6 +814,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -794,6 +843,7 @@ mod tests {
         let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -838,6 +888,7 @@ mod tests {
         let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -873,11 +924,12 @@ mod tests {
     }
 
     #[test]
-    fn chapter_emits_cross_language_and_first_word_edges() {
+    fn chapter_emits_cross_language_and_per_sentence_edges() {
         let dir = tempfile::tempdir().unwrap();
         let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -926,21 +978,23 @@ mod tests {
             assert!(e.src_anchor_uuid.is_some());
             assert!(e.dst_anchor_uuid.is_some());
         }
-        // First section's first-word anchors on both sides are the
-        // anchors the bilingual-alignment edge MUST reference.
-        let fw_grc = paragraph_first_word_uuid("1", "1", "1", "grc");
-        let fw_eng = paragraph_first_word_uuid("1", "1", "1", "eng");
+        // First section's sentence-0 anchors on both sides are the
+        // anchors the bilingual-alignment edge MUST reference. tiny()
+        // sections are single-sentence so sent_idx is always 0.
+        let s0_grc = paragraph_sentence_uuid("1", "1", "1", "grc", 0);
+        let s0_eng = paragraph_sentence_uuid("1", "1", "1", "eng", 0);
         assert!(aligns
             .iter()
-            .any(|e| e.src_anchor_uuid.as_deref() == Some(&fw_grc)
-                && e.dst_anchor_uuid.as_deref() == Some(&fw_eng)));
+            .any(|e| e.src_anchor_uuid.as_deref() == Some(&s0_grc)
+                && e.dst_anchor_uuid.as_deref() == Some(&s0_eng)));
     }
 
     #[test]
-    fn chapter_md_wraps_first_word_of_each_section() {
+    fn chapter_md_wraps_each_sentence() {
         let dir = tempfile::tempdir().unwrap();
         render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -953,12 +1007,16 @@ mod tests {
                 .join("rendered_md/perseus/thucydides/histories/book_01/chapter_001_grc.md"),
         )
         .unwrap();
-        let fw1 = paragraph_first_word_uuid("1", "1", "1", "grc");
+        // tiny()'s sections are single-sentence — each section's
+        // whole text is wrapped in one sentence-anchor span (sent
+        // index 0). The outer <div data-section-uuid="…"> from
+        // section_div_open is the section-level anchor, distinct.
+        let s0 = paragraph_sentence_uuid("1", "1", "1", "grc", 0);
         assert!(
             ch_grc.contains(&format!(
-                "<span data-section-uuid=\"{fw1}\">Θουκυδίδης</span>"
+                "<span data-section-uuid=\"{s0}\">Θουκυδίδης Ἀθηναῖος.</span>"
             )),
-            "first-word span not found in:\n{ch_grc}"
+            "sentence span not found in:\n{ch_grc}"
         );
         // The old inline `*Other:* [Thucydides 1.1](/#/chat/…)` line is
         // gone — replaced by an `edges` row at the data layer.
@@ -974,6 +1032,7 @@ mod tests {
         let mut on_doc = |_r: RenderedMarkdown| Ok(());
         let first = render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -995,6 +1054,7 @@ mod tests {
         let mut on_doc2 = |_r: RenderedMarkdown| Ok(());
         let second = render_all(
             &tiny(),
+            &PerseusAlignments::default(),
             dir.path(),
             "perseus",
             &Progress::noop(),
@@ -1005,5 +1065,134 @@ mod tests {
         assert_eq!(first.markdowns_rendered, 3);
         assert_eq!(second.markdowns_rendered, 0);
         assert_eq!(second.markdowns_skipped, 3);
+    }
+
+    /// Exercise the multi-sentence path of `wrap_sentences` +
+    /// `chapter_edges` without needing the embedder. Builds a
+    /// PerseusAlignments by hand: a 1-grc-sentence section paired
+    /// with 2 eng sentences (a 1:2 group), which the Python ref data
+    /// shows happens in ~30% of Thucydides sections.
+    #[test]
+    fn multi_sentence_alignment_emits_cross_product_edges_and_wraps_each_sentence() {
+        use crate::translate::align::{SectionAlignment, SentenceGroup};
+
+        // One section: 1 grc sentence, 2 eng sentences. Build the
+        // ParsedPerseus and the matching alignment side by side.
+        let parsed = ParsedPerseus {
+            books: vec![Book {
+                n: "1".to_string(),
+                chapters: vec![Chapter {
+                    book_n: "1".to_string(),
+                    n: "1".to_string(),
+                    sections: vec![Section {
+                        n: "1".to_string(),
+                        grc: "Πρώτη φράσις τοῦ τμήματος.".to_string(),
+                        eng: "First sentence. Second sentence.".to_string(),
+                    }],
+                }],
+            }],
+        };
+
+        let mut by_section = HashMap::new();
+        by_section.insert(
+            ("1".to_string(), "1".to_string(), "1".to_string()),
+            SectionAlignment {
+                grc_sentences: super::super::align::split::split_grc(
+                    &parsed.books[0].chapters[0].sections[0].grc,
+                ),
+                eng_sentences: super::super::align::split::split_eng(
+                    &parsed.books[0].chapters[0].sections[0].eng,
+                ),
+                groups: vec![SentenceGroup {
+                    grc_indices: vec![0],
+                    eng_indices: vec![0, 1],
+                }],
+            },
+        );
+        let alignments = PerseusAlignments::from_map(by_section);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut emitted: Vec<RenderedMarkdown> = Vec::new();
+        render_all(
+            &parsed,
+            &alignments,
+            dir.path(),
+            "perseus",
+            &Progress::noop(),
+            &HashMap::new(),
+            &mut |r| {
+                emitted.push(r);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        // Edges on the grc side: 1 cross-language doc edge + the 1:2
+        // cross-product = 1*2 = 2 alignment edges, for 3 total.
+        let grc_doc = emitted
+            .iter()
+            .find(|d| d.markdown_uuid == chapter_uuid("1", "1", "grc"))
+            .unwrap();
+        let aligns: Vec<_> = grc_doc
+            .edges
+            .iter()
+            .filter(|e| e.label.as_deref() == Some("bilingual-alignment"))
+            .collect();
+        assert_eq!(aligns.len(), 2, "expected 1×2 cross-product = 2 edges");
+        let g0 = paragraph_sentence_uuid("1", "1", "1", "grc", 0);
+        let e0 = paragraph_sentence_uuid("1", "1", "1", "eng", 0);
+        let e1 = paragraph_sentence_uuid("1", "1", "1", "eng", 1);
+        assert!(aligns
+            .iter()
+            .all(|e| e.src_anchor_uuid.as_deref() == Some(&g0)));
+        let dst_set: std::collections::HashSet<&str> = aligns
+            .iter()
+            .filter_map(|e| e.dst_anchor_uuid.as_deref())
+            .collect();
+        assert!(dst_set.contains(e0.as_str()), "missing edge to eng sent 0");
+        assert!(dst_set.contains(e1.as_str()), "missing edge to eng sent 1");
+
+        // The eng-side rendered markdown should wrap each of its two
+        // sentences in its own span with distinct anchor UUIDs.
+        let eng_md = std::fs::read_to_string(
+            dir.path()
+                .join("rendered_md/perseus/thucydides/histories/book_01/chapter_001_eng.md"),
+        )
+        .unwrap();
+        assert!(
+            eng_md.contains(&format!(
+                "<span data-section-uuid=\"{e0}\">First sentence.</span>"
+            )),
+            "eng sent 0 span missing in:\n{eng_md}"
+        );
+        assert!(
+            eng_md.contains(&format!(
+                "<span data-section-uuid=\"{e1}\">Second sentence.</span>"
+            )),
+            "eng sent 1 span missing in:\n{eng_md}"
+        );
+
+        // And the eng-side edges should mirror the cross-product
+        // (each of the 2 eng sentences pointing back at the 1 grc
+        // sentence) — total 2 bilingual-alignment edges.
+        let eng_doc = emitted
+            .iter()
+            .find(|d| d.markdown_uuid == chapter_uuid("1", "1", "eng"))
+            .unwrap();
+        let eng_aligns: Vec<_> = eng_doc
+            .edges
+            .iter()
+            .filter(|e| e.label.as_deref() == Some("bilingual-alignment"))
+            .collect();
+        assert_eq!(eng_aligns.len(), 2, "expected 2×1 cross-product = 2 edges");
+        assert!(eng_aligns
+            .iter()
+            .all(|e| e.dst_anchor_uuid.as_deref() == Some(&g0)));
+        let src_set: std::collections::HashSet<&str> = eng_aligns
+            .iter()
+            .filter_map(|e| e.src_anchor_uuid.as_deref())
+            .collect();
+        assert!(src_set.contains(e0.as_str()));
+        assert!(src_set.contains(e1.as_str()));
     }
 }
