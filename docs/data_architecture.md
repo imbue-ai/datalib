@@ -12,9 +12,11 @@ Pointers to the things that are **not** in this file:
 
   - The raw store's table-and-blob shape, primary-key rules,
     `sync_runs` bookkeeping: [`backend/etl/DOLTLITE_RAW_PORT_GUIDE.md`](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md).
-    FIXME: Move this doc into //docs/doltlite_patterns.md and make it not a porting guide but a "shape of how we use doltlite"
+    (See [Deferred work](#deferred-work) — this doc should move under
+    `//docs/` and be reframed away from its porting-guide flavor.)
   - Reading the dolt history of a raw store: [`docs/doltlite.md`](doltlite.md).
-    FIXME: Rename this doc to doltlite_tips.md.
+    (See [Deferred work](#deferred-work) — this doc should be renamed
+    `docs/doltlite_tips.md`.)
   - Per-provider auth, API surface, resume strategy: each provider's
     `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
@@ -331,7 +333,6 @@ content-addressable store. Each source has both
 `raw/<name>.doltlite_db` (entities + per-source attachment metadata in
 `blob_refs`) and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed
 by blake3). Full schema + helpers in [port guide §7](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
-FIXME: Again this doc should move into //docs as noted above.
 
 Two reasons the split matters:
 
@@ -878,6 +879,28 @@ The `grid_rows` table (the projection consumed by the UI) lives in
 "doltlite is our storage layer" claim should apply to every store
 the system writes — raw, blob CAS, and the backend index — not just
 to raw. Worth saying explicitly somewhere, probably in [Shape of the system](#shape-of-the-system).
+
+## Deferred work
+
+Edits to this doc and its neighbors that we've agreed to do, but
+haven't yet. Each is intentionally not blocking the audit thread —
+they're listed here so they don't get lost.
+
+  - **Move `frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md` →
+    `docs/doltlite_patterns.md`**, and reframe it from a porting
+    guide into "shape of how we use doltlite." The current doc reads
+    as one-time migration instructions (which JSONL-tree raw stores
+    looked like, the porting checklist, "we tried checking in a
+    `.doltlite_db` once and threw it away"); the durable content
+    inside it — the design rules, the table-and-blob shape, the
+    shared utilities — should be lifted into a stable reference.
+  - **Rename `docs/doltlite.md` → `docs/doltlite_tips.md`** to make
+    its scope (operational tips and dolt-history reading) explicit
+    against the new patterns doc above.
+  - Both of the above require updating inbound links across the
+    repo: this file, signal's `extract/mod.rs`, each provider's
+    `EXTRACT.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
+    and any AGENTS.md / README pointers.
 
 ## What this document does not cover
 
