@@ -21,49 +21,49 @@ those together.
 
 ### Principle gaps in shared code
 
-- **Missing `--retry-failed` / `--no-retry-failed` flag**: The architecture document (§"Retry and fetch durability") mandates `--retry-failed` (default true) + `--no-retry-failed` to control per-row failure retries. The shared `control.rs` exports `ExtractControl { reset_and_redownload, refetch_blobs }` but has **no `retry_failed` field**. The dolt infrastructure (`failed_ids`, `record_object_error`, `ensure_object_row`) is complete in `doltlite_raw.rs`, but the orchestrator doesn't wire a CLI flag into it. Providers cannot honor the retry principle because the orchestrator doesn't request it. **`sync/src/main.rs`**: no `--retry-failed` arg defined; `control.rs` line 14 missing field.
+- P2: We don't need this to exist now, but we need it to be able to exist soon. **Missing `--retry-failed` / `--no-retry-failed` flag**: The architecture document (§"Retry and fetch durability") mandates `--retry-failed` (default true) + `--no-retry-failed` to control per-row failure retries. The shared `control.rs` exports `ExtractControl { reset_and_redownload, refetch_blobs }` but has **no `retry_failed` field**. The dolt infrastructure (`failed_ids`, `record_object_error`, `ensure_object_row`) is complete in `doltlite_raw.rs`, but the orchestrator doesn't wire a CLI flag into it. Providers cannot honor the retry principle because the orchestrator doesn't request it. **`sync/src/main.rs`**: no `--retry-failed` arg defined; `control.rs` line 14 missing field.
 
-- **Single-commit-per-source enforcement absent**: The document mandates "orchestrator wraps each source's extract in exactly one commit" with message shape `extract <name>: <stats>`. This IS implemented (`sync/src/main.rs` line 1841), but the enforcement is asymmetric: if a provider were to call `dolt_commit` internally, nothing prevents it. A shared guard (e.g., `ensure_single_commit_per_extract` in the shared layer) is not articulated. Providers must be trained not to call `commit_run` themselves; no affordance prevents the mistake. **`doltlite_raw.rs` module docs** (lines 1–52) spell out the policy but don't prevent it in code.
+- P3: This doesn't need to be enforced, but it should just be strongly recommended. **Single-commit-per-source enforcement absent**: The document mandates "orchestrator wraps each source's extract in exactly one commit" with message shape `extract <name>: <stats>`. This IS implemented (`sync/src/main.rs` line 1841), but the enforcement is asymmetric: if a provider were to call `dolt_commit` internally, nothing prevents it. A shared guard (e.g., `ensure_single_commit_per_extract` in the shared layer) is not articulated. Providers must be trained not to call `commit_run` themselves; no affordance prevents the mistake. **`doltlite_raw.rs` module docs** (lines 1–52) spell out the policy but don't prevent it in code.
 
-- **`ensure_object_row` available to providers but rarely used**: The shared library exports `ensure_object_row` in `doltlite_raw.rs` (line 567) per the port guide. The principle (§"Retry and fetch durability") is "pre-seed before fetch" for every entity. Audit of provider usage shows it's implemented inconsistently: **Notion** uses it on pages/blocks (clean); **Anthropic/ChatGPT** use it sparingly. Some providers that discover IDs mid-fetch (Slack threads within messages) cannot pre-seed; the framework acknowledges this. No violation detected, but the guarantee is "aspiration" not "always," per the doc's own admission.
+- P2: Let's use this in the places where we can, but it is not mandatory because it's not always possible. **`ensure_object_row` available to providers but rarely used**: The shared library exports `ensure_object_row` in `doltlite_raw.rs` (line 567) per the port guide. The principle (§"Retry and fetch durability") is "pre-seed before fetch" for every entity. Audit of provider usage shows it's implemented inconsistently: **Notion** uses it on pages/blocks (clean); **Anthropic/ChatGPT** use it sparingly. Some providers that discover IDs mid-fetch (Slack threads within messages) cannot pre-seed; the framework acknowledges this. No violation detected, but the guarantee is "aspiration" not "always," per the doc's own admission.
 
-- **`<table>_bookkeeping` helpers exported but responsibility is split**: The shared layer provides `bookkeeping_ddl_for(table)` in `doltlite_raw.rs` (line 161), `record_object_attempt`, `record_object_error`, and `failed_ids`, but **each provider's `extract/db.rs` must manually instantiate** the bookkeeping table in its own DDL block and call the record-* helpers. No macro or centralized builder collapses this boilerplate — a new provider's author must copy the pattern from a template. **Port guide** (§6) mitigates this with the template reference, but it's not as tight as shared code would be.
+- P1: Standardizing this would be very valuable because it would help us eliminate inconsistencies and reduce code. **`<table>_bookkeeping` helpers exported but responsibility is split**: The shared layer provides `bookkeeping_ddl_for(table)` in `doltlite_raw.rs` (line 161), `record_object_attempt`, `record_object_error`, and `failed_ids`, but **each provider's `extract/db.rs` must manually instantiate** the bookkeeping table in its own DDL block and call the record-* helpers. No macro or centralized builder collapses this boilerplate — a new provider's author must copy the pattern from a template. **Port guide** (§6) mitigates this with the template reference, but it's not as tight as shared code would be.
 
-- **No per-source retry policy config in `config.yaml`**: Document §"Retry and fetch durability" states "retry policy is config, not code" with "per-source `sync:` blocks in `config.yaml` should support the same retry knobs as the global default." Inspection of `frankweiler_core::config` (not in audit scope but referenced) reveals no per-source retry-policy fields. Global `--retry-failed` exists in CLI only; no config-file equivalent, no per-source override.
+- P1: Standardizing this config would be valuable. **No per-source retry policy config in `config.yaml`**: Document §"Retry and fetch durability" states "retry policy is config, not code" with "per-source `sync:` blocks in `config.yaml` should support the same retry knobs as the global default." Inspection of `frankweiler_core::config` (not in audit scope but referenced) reveals no per-source retry-policy fields. Global `--retry-failed` exists in CLI only; no config-file equivalent, no per-source override.
 
-- **No `ObsArgs` flattening enforcement**: The document mandates "every binary flattens [`obs::ObsArgs`]" via clap's `#[command(flatten)]`. The sync binary does this (`sync/src/main.rs` line 179), but the shared layer doesn't guard against binaries that forget. A provider's standalone `*_download` binary (e.g., `anthropic_download.rs`) may or may not include it; no compile-time check forces compliance.
+- P2: If we can come up with a better mechanism to ensure compliance, that would be great, but not urgent. **No `ObsArgs` flattening enforcement**: The document mandates "every binary flattens [`obs::ObsArgs`]" via clap's `#[command(flatten)]`. The sync binary does this (`sync/src/main.rs` line 179), but the shared layer doesn't guard against binaries that forget. A provider's standalone `*_download` binary (e.g., `anthropic_download.rs`) may or may not include it; no compile-time check forces compliance.
 
 ### Dead patterns
 
-- **Vestigial `<provider>_download` rust binaries**: The document states (§"Shape of the system", line 46) "there are vestigial `<provider>_download` rust_binary targets that could be revived. Today they aren't on the production path." Each provider crate at `providers/<name>/src/bin/<name>_download.rs` exists: **Anthropic, ChatGPT, Slack, Notion, GitHub, GitLab, Beeper**. These binaries are built but unreferenced in the main sync pipeline. They remain as escape-hatches for single-provider debugging but create confusion about multiple entry points. **No cleanup needed immediately** per the doc's phrasing, but they add surface area to maintain.
+- P1: Let's just stop building these for now. It just creates extra compilation/linking we don't need. **Vestigial `<provider>_download` rust binaries**: The document states (§"Shape of the system", line 46) "there are vestigial `<provider>_download` rust_binary targets that could be revived. Today they aren't on the production path." Each provider crate at `providers/<name>/src/bin/<name>_download.rs` exists: **Anthropic, ChatGPT, Slack, Notion, GitHub, GitLab, Beeper**. These binaries are built but unreferenced in the main sync pipeline. They remain as escape-hatches for single-provider debugging but create confusion about multiple entry points. **No cleanup needed immediately** per the doc's phrasing, but they add surface area to maintain.
 
-- **`endpoint_shapes` remnant**: Document §"Unresolved questions" / "Detecting upstream shape drift" explicitly states `endpoint_shapes` was "deleted; see commit history." The code search confirms zero references in current tree (binary search hit patterns in other files). The concept is genuinely gone, not dead code. No violation.
+- P4: Nothing to do here. **`endpoint_shapes` remnant**: Document §"Unresolved questions" / "Detecting upstream shape drift" explicitly states `endpoint_shapes` was "deleted; see commit history." The code search confirms zero references in current tree (binary search hit patterns in other files). The concept is genuinely gone, not dead code. No violation.
 
 - **JSONL-tree raw-store code likely absent**: The port guide extensively discusses "old JSONL-tree raw-store remnants." Current audit shows all providers (notion, chatgpt, anthropic, slack, github, gitlab, beeper) use doltlite. No JSONL-tree fallback logic detected in shared layer. **Confirmed clean.**
 
-- **`periodize.rs` (line 5435 bytes)**: Module is present but rarely invoked. Appears to be a utility for time-windowing (e.g., Yolink sampling). No evidence it's dead, but it's specialized to one provider and not exported from lib.rs. Not a violation; just narrow scope.
+- P1: I thought we'd probably also use this for beeper and signal when we want to group arbitrarily long message threads. If we don't, we should. **`periodize.rs` (line 5435 bytes)**: Module is present but rarely invoked. Appears to be a utility for time-windowing (e.g., Yolink sampling). No evidence it's dead, but it's specialized to one provider and not exported from lib.rs. Not a violation; just narrow scope.
 
 ### Simplification opportunities
 
-- **Bookkeeping DDL boilerplate**: Every provider repeats the same bookkeeping pattern. A macro like `bookkeeping_tables!(table1, table2, ...)` could auto-generate DDL + the four column constants. **Impact**: ~20 lines per provider → 0 lines of duplication. **Effort**: low. **Precedent**: `BLOB_REFS_DDL`, `SYNC_RUNS_DDL` are already shared constants.
+- P1: Standardizing this would ensure we don't have any drift. **Bookkeeping DDL boilerplate**: Every provider repeats the same bookkeeping pattern. A macro like `bookkeeping_tables!(table1, table2, ...)` could auto-generate DDL + the four column constants. **Impact**: ~20 lines per provider → 0 lines of duplication. **Effort**: low. **Precedent**: `BLOB_REFS_DDL`, `SYNC_RUNS_DDL` are already shared constants.
 
-- **Record-object lifecycle**: Providers today inline `ensure_object_row`, `record_object_attempt`, `record_object_error` calls. A builder struct like `ObjectLifecycle { table, tx, id }.ensure().record(result?)` could reduce callsite boilerplate and enforce the always-paired invariant at the type level. **Effort**: medium. **Risk**: high if any provider has a non-standard lifecycle (unlikely).
+- P2: Seems nice but won't affect the shape of bytes on disk. **Record-object lifecycle**: Providers today inline `ensure_object_row`, `record_object_attempt`, `record_object_error` calls. A builder struct like `ObjectLifecycle { table, tx, id }.ensure().record(result?)` could reduce callsite boilerplate and enforce the always-paired invariant at the type level. **Effort**: medium. **Risk**: high if any provider has a non-standard lifecycle (unlikely).
 
-- **ExtractControl expansion via trait**: Instead of a fixed struct, `ExtractControl` could be trait-based so per-provider subclasses (`SlackControl { ... extra_slack_only_knobs ... }`) don't pollute the union. Today `control` is a catch-all that every provider ignores most of. **Effort**: medium. **Trade-off**: adds indirection vs. type-safe field access.
+- P1: I really would like to clean up how we express per data source configuration and code paths. **ExtractControl expansion via trait**: Instead of a fixed struct, `ExtractControl` could be trait-based so per-provider subclasses (`SlackControl { ... extra_slack_only_knobs ... }`) don't pollute the union. Today `control` is a catch-all that every provider ignores most of. **Effort**: medium. **Trade-off**: adds indirection vs. type-safe field access.
 
-- **Per-source narrative logging**: Duplicate `tracing::info!(source = %name, kind = ..., "extract pre-open: opening ...")` at sync/src/main.rs:1066–1071 and similar in translate phase. A shared `log_phase_step(phase, source, step)` could standardize the narrative. **Effort**: low. **Gain**: consistency + future audit trail unification.
+- P1: Low effort, big win. **Per-source narrative logging**: Duplicate `tracing::info!(source = %name, kind = ..., "extract pre-open: opening ...")` at sync/src/main.rs:1066–1071 and similar in translate phase. A shared `log_phase_step(phase, source, step)` could standardize the narrative. **Effort**: low. **Gain**: consistency + future audit trail unification.
 
 ### Missing shared affordances (unification opportunities)
 
-- **No shared "sync run state machine" struct**: Every phase (extract, translate, load, qmd) tracks its own outcome structs (`PhaseOutcome`, `LoadOutcome`). A unified `RunPhase { name, status, error, stats }` with phase-specific extensions (e.g., `RowCounts { added, modified, removed }`) could reduce the handoff boilerplate at `sync/src/main.rs` lines 1200–1300+. **Precedent**: `FetchSummary` is per-provider; no cross-phase equivalent exists. **Impact**: Makes future status-line rendering, JSON summary generation, and interrupt handling more uniform.
+- P1: This would be really great and may affect the schema of bytes at rest, at least the summary bytes. **No shared "sync run state machine" struct**: Every phase (extract, translate, load, qmd) tracks its own outcome structs (`PhaseOutcome`, `LoadOutcome`). A unified `RunPhase { name, status, error, stats }` with phase-specific extensions (e.g., `RowCounts { added, modified, removed }`) could reduce the handoff boilerplate at `sync/src/main.rs` lines 1200–1300+. **Precedent**: `FetchSummary` is per-provider; no cross-phase equivalent exists. **Impact**: Makes future status-line rendering, JSON summary generation, and interrupt handling more uniform.
 
-- **No shared "blob attachment rendering" in non-CAS paths**: Contacts (signal) stores blobs inline in payloads, not in the CAS. Each provider re-implements the "materialize bytes to disk next to markdown" logic. A shared `materialize_inline_blobs(provider_type, parsed_structure)` could factor out the common file-write choreography. **Effort**: medium. **Trigger**: second provider with inline blobs (none yet planned).
+- P2: Markdown rendering is not our highest priority. **No shared "blob attachment rendering" in non-CAS paths**: Contacts (signal) stores blobs inline in payloads, not in the CAS. Each provider re-implements the "materialize bytes to disk next to markdown" logic. A shared `materialize_inline_blobs(provider_type, parsed_structure)` could factor out the common file-write choreography. **Effort**: medium. **Trigger**: second provider with inline blobs (none yet planned).
 
-- **No `dolt_commit` message template library**: Currently every post-extract commit inlines the message format. If commit messages ever need audit-trail standardization or downstream parsing, a shared builder (e.g., `CommitMessage::extract(name, stats).render()`) would centralize it. **Today**: `extract <name>: <stats>` is tight, inline. **Future-proofing**: low priority but worth noting.
+- P3: We should never be parsing commit messages. That's crazy :)  But unifying the code sounds like a pretty good idea. **No `dolt_commit` message template library**: Currently every post-extract commit inlines the message format. If commit messages ever need audit-trail standardization or downstream parsing, a shared builder (e.g., `CommitMessage::extract(name, stats).render()`) would centralize it. **Today**: `extract <name>: <stats>` is tight, inline. **Future-proofing**: low priority but worth noting.
 
-- **No shared "retry policy" struct**: Each provider's config block mentions retry semantics, but no `RetryPolicy { max_attempts, backoff_ms, give_up_after_days }` struct exists. Per-source retry config (desired per §"Retry and fetch durability") would need one. **Effort**: medium, paired with config.yaml schema evolution. **Blocker**: `--retry-failed` CLI flag not yet wired.
+- P1: Standardizing this feels quite valuable. **No shared "retry policy" struct**: Each provider's config block mentions retry semantics, but no `RetryPolicy { max_attempts, backoff_ms, give_up_after_days }` struct exists. Per-source retry config (desired per §"Retry and fetch durability") would need one. **Effort**: medium, paired with config.yaml schema evolution. **Blocker**: `--retry-failed` CLI flag not yet wired.
 
-- **`ObsArgs` flattening not verified at compile time**: Every binary should flatten it. A procedural macro or lint rule could check — but Rust doesn't expose clap's `#[command]` macro to lint plugins. **Workaround**: training + doc / example in each provider template. **Not blockers**, but inconsistency risk is real for new providers.
+-P1: I don't think I understand this and I don't like the name because I don't know what it means. **`ObsArgs` flattening not verified at compile time**: Every binary should flatten it. A procedural macro or lint rule could check — but Rust doesn't expose clap's `#[command]` macro to lint plugins. **Workaround**: training + doc / example in each provider template. **Not blockers**, but inconsistency risk is real for new providers.
 
 ### Checks: principle enforcement questions
 
@@ -75,7 +75,7 @@ those together.
 
 **Is privacy boundary for spans articulated/enforced?** ✗ **NO**. Document §"Unresolved questions" / "Observability and the privacy boundary" explicitly states this is open. Code audit confirms no redaction layer. OTLP export exists but item contents *could* leak. **Not a violation**; the doc calls it out as deferred. No action needed yet, but it's a known gap.
 
-**Is `journal_mode=DELETE` actually used?** ✓ **ATTEMPTED BUT DOLTLITE REJECTS IT**. Code at `doltlite_raw.rs:256–259` shows the pragma is attempted but doltlite responds with "not configurable on doltlite-format databases." The fallback is implicit: doltlite manages its own chunk-store journal. No WAL sidecars appear on disk. **Principle is upheld; implementation delegated to doltlite internals.** Documented in the code comment.
+P2: Is there code we could delete here? **Is `journal_mode=DELETE` actually used?** ✓ **ATTEMPTED BUT DOLTLITE REJECTS IT**. Code at `doltlite_raw.rs:256–259` shows the pragma is attempted but doltlite responds with "not configurable on doltlite-format databases." The fallback is implicit: doltlite manages its own chunk-store journal. No WAL sidecars appear on disk. **Principle is upheld; implementation delegated to doltlite internals.** Documented in the code comment.
 
 **Are commit messages of shape `extract <name>: <stats>`?** ✓ **YES**. Confirmed at `sync/src/main.rs:1841`: `format!("extract {name}: {stats}")`. Index commits use a different shape (line 911–917) but that's Load, not Extract. **Confirmed clean.**
 
@@ -104,17 +104,20 @@ those together.
   - `upsert_conversation_detail()` calls `dr::record_object_attempt()` on success (`db.rs:301`).
   - But: no dedicated retry-failed walk in the extract loop. Conversations with `last_error IS NOT NULL` are not re-attempted within a run or between runs. The architecture doc (§446-488) calls this "retry-on-by-default"; anthropic does not implement it.
   - No `--retry-failed` flag plumbed to extract; retry logic must live in orchestrator (sync/main.rs), not in provider.
+P2: Building this retry failed mechanism would be useful, but I'm glad we have the state to implement it. 
 
 **404 handling (transient vs deletion): INCOMPLETE** — 404 on a missing conversation is logged but not marked distinctly.
   - Single-conversation mode (`fetch_single()`) treats 404 as "wrong org, continue" (`mod.rs:315-322`), not as "deleted upstream."
   - No `deleted_upstream_at` column on conversations table, so a conversation that was deleted upstream and re-seeded with `payload=NULL` would look indistinguishable from a transient fetch failure.
   - Architecture doc (§497-510) calls for a distinct `deleted_upstream_at` marker; anthropic lacks this.
+P1: Let's actually do this because it affects the schema of the bytes on disk. 
 
 **Timestamp discipline: MOSTLY GOOD** — ISO-8601 with offset for when_ts, microsecond-bump for blocks.
   - Message `when_ts` drawn from `created_at` directly (`grid_rows.rs:131`).
   - Block timestamps synthesized via `bump_micros()` for microsecond ordering (`grid_rows.rs:37-50, 173-176`).
   - But: Chat row `when_ts` uses `created_at` OR `updated_at` fallback with no explicit offset normalization (`grid_rows.rs:230-234`). If an upstream timestamp is naive or bare-Z, it passes through; no validation at translate time to enforce ISO-8601 with explicit offset.
   - No evidence in the codebase of "Strict ISO-8601 with offset, not bare Z or naive" being checked.
+  P3: I don't think we should make up time zones if they weren't given to us. 
 
 **Cursor strategy: IMPLEMENTED — Forward-walk + refresh window.**
   - Listing walk + overlap-forcing most-recent N conversations, then re-fetching missing and stale (`mod.rs:157-265`).
@@ -140,11 +143,13 @@ those together.
 
 **Vestigial single-conversation mode (`--conv-uuid`)** — `fetch_single()` at `mod.rs:279-337` and bin flag at `anthropic_download.rs:50-51`.
   - Useful for manual spot-checks but orthogonal to incremental sync. No tie-in to retry-failed buckets or to prioritizing failed conversations.
+NOTE: We actually want this because it's useful for small tests.
   - If a conversation has `last_error IS NOT NULL`, there's no automatic path to re-fetch it via this flag without manual UUID extraction.
 
 **Export seeding as primary path** — `--export-dir` bootstraps from deprecated bulk-export format.
   - Legacy support is good; doc (EXTRACT.md:8-9) frames it as "existing translator consumes either source indistinguishably."
   - But the path is asymmetric: export can seed users + conversations, live API cannot. A user starting fresh with only live API gets no users until `/api/account` is fetched, and that's late-pipeline (after org listing).
+TO CLARIFY: Is this about ingesting from a flawed data export? Or something else. I don't think I totally understand. 
 
 ---
 
@@ -155,16 +160,20 @@ those together.
   - Orgs: fetched from `/api/organizations` before listing walk (`mod.rs:137-144`). No pre-seed row.
   - Both could be pre-seeded from a prior sync's state (next-run opening the DB sees rows from last run) before any fetch, making error handling uniform across all three tables.
   - Would unify the three table handlers under a common "list, pre-seed, fetch detail, record error" flow.
+CLARIFY: Unifying flows sounds good, but I imagine if someone is using a exported data set that they would not have yet run against the API, And thus these tables would not exist yet. 
 
 **Consolidate error recording paths** — `record_conversation_error()` and `record_blob_error()` both exist but differ in signature and wrapping.
   - Could factor into a shared helper that wraps `dr::record_object_error()` / `blob_cas::record_ref_error()` with consistent transaction handling.
+P1: Unifying this data flow sounds good, especially if we could do it for all of the data sources. 
 
 **Timestamp validation at translate time** — No explicit check that `when_ts` meets the ISO-8601 + explicit-offset requirement.
   - A regex or parser in `grid_rows.rs` could validate each timestamp and log/warn when upstreams violate the discipline.
   - Current approach silently passes through bare-Z or naive timestamps, relying on luck.
+P1: Let's do log warnings about this and make sure that warnings make it all the way through to the synchronization log that we write at the end. 
 
 **Unify `--conv-uuid` into orchestrator retry** — Single-conversation fetch is a manual escape hatch.
   - If the orchestrator's `--retry-failed` implementation were provider-agnostic and learned to fetch specific upstream IDs (not just "retry all"), the anthropic provider would not need a separate `--conv-uuid` flag.
+NOTE: Again, we want to keep this flag, It's useful for testing. 
 
 ---
 
@@ -176,12 +185,14 @@ those together.
    - Anthropic has no Messages or ContentBlocks tables (they're exploded at translate time from `chat_messages` payload).
    - ChatGPT (`providers/chatgpt/src/extract/db.rs`) may differ.
    - Recommend: define a shared `frankweiler_etl::chat_llm` schema crate (users, orgs, conversations) and let each provider extend it with provider-specific columns (e.g. `conversations.model`, `anthropic_project_id`).
+P2 & NOTE: Again, the raw data should be very specific to each provider. It is only once we start translating data that we need a shared schema. And I'm not sure that even needs to be a SQL schema. It might be a native Rust schema for now. Let's wait on this. 
 
 2. **Shared translate shape** — Messages, blocks (thinking, tool_use, tool_result) projected to uniform `GridRow` kinds.
    - Anthropic `grid_rows.rs` produces: Chat, User Input, LLM Response, LLM Thinking, Tool Call.
    - ChatGPT likely produces Message → role (user/assistant) mapping.
    - `section_uuid_for_block()` (`render.rs:68-70`) suggests there's already a shared naming scheme for block anchors.
    - Recommend: extract the GridRow emission loop into `frankweiler_etl::chat_llm::translate` so both providers reuse it, parameterized by provider name and model lookup.
+P2: This sounds like a really good idea. 
 
 3. **Shared sidecar structure** — Identical: markdown with message divs, grid_rows JSON sidecar.
    - Already unified at Load time.
@@ -191,9 +202,11 @@ those together.
    - Anthropic: `blob_refs` keyed by `file_uuid`, downloads via `preview_url` / `document_asset.url`.
    - ChatGPT: likely different field names (e.g. `file_id`).
    - Shared blob CAS is already there; recommend shared `BlobRef` table DDL so cross-source GC works.
+CLARIFY: Where would you put this shared blob ref table? Actually, I don't think it makes sense. Each system will reference blobs in its own scheme. As long as we CAS the blobs, we are okay, right? 
 
 **Retry-on-by-default as orchestrator feature** — Currently absent in anthropic extract; should be shared machinery.
    - Orchestrator should own the `--retry-failed` loop: before any normal fetch, query all providers' `*_bookkeeping` tables and feed failed object IDs back to each provider's extract as a `retry_ids: Vec<String>` in `FetchOptions`.
+   CORRECTION: I don't think this is right. I think it is each individual data source's responsibility to do retry logic. 
    - Anthropic's `fetch()` would then check if it's in a retry phase and skip the listing walk, jumping straight to detail fetches.
    - Eliminates per-provider retry logic; applies uniformly to Slack, GitHub, etc.
 
@@ -244,6 +257,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   - No `last_error` column checked on next run to retry only failed rows.
   - Megabridge doesn't fail gracefully — if a megabridge.db is malformed, the whole enrich_one returns Err and logs a warn (megabridge.rs:167–174), but doesn't record per-row durability.
 - **File:line**: extract/db.rs:316, 351, 404 (unconditional record_object_attempt), megabridge.rs:167
+P3: There's no API to read from, so this doesn't matter as much. We should just make sure we are logging errors so we can deal with them later. 
 
 #### 4. Timestamps lack explicit UTC offset in ISO-8601 output
 - **Violation**: Architecture demands "Strict ISO-8601 with offset, not bare Z or naive."
@@ -254,6 +268,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   - Violates the explicit-offset rule: "A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption."
 - **Status**: All Beeper rows (docs, messages, reactions) affected.
 - **File:line**: translate/render.rs:489–492 (iso_from_ms)
+P1: Let's fix this. 
 
 #### 5. No explicit null-out for entities without time-shape; docheader when_ts ambiguous
 - **Violation**: Architecture says entities without time-shape should "null-out `when_ts` or use the same sentinel everywhere" consistently.
@@ -275,6 +290,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
     - None for reactions (render.rs:717)
   - No Beeper web UI URL constructed (like Slack's "https://…" permalinks).
 - **File:line**: extract/db.rs:112, megabridge.rs:219, render.rs:653, 681, 717
+P3: I think this may actually be hard to do in Beeper, but we should leave ourselves a note to investigate. 
 
 #### 7. No orchestrator commit boundary enforcement (local provider)
 - **Violation**: Architecture demands "Provider never calls dolt_commit; orchestrator wraps each source's extract in exactly one commit."
@@ -291,11 +307,13 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **Justification given**: "synth is only needed when we wire Beeper into the hermetic Bazel genrule path."
 - **Issue**: This is placeholder code that doesn't do anything. Not a violation, but signals incomplete integration.
 - **File:line**: src/synthesize.rs (all of it)
+CLARIFY: Is this synthesize about creating a fixture to play back through the test harness? 
 
 #### 2. Unused sync_runs / sync_scope_state tables
 - **Details**: EXTRACT.md:60–62 states "The shared `sync_runs` / `sync_scope_state` tables that every doltlite raw store carries are present but unused for Beeper, since we don't have a remote endpoint to checkpoint against."
 - **Why**: Beeper has no remote cursor to track, so these bookkeeping tables serve no purpose.
 - **File:line**: EXTRACT.md:60–62
+P2: I'm not sure this is 100% true. We could still record our sync progress and the last timestamp we saw, for example, so that if we could order the input table by time zone, we could work forward from that.  This would be a P1, but beeper is not the highest priority. 
 
 #### 3. `events_orphaned` counter in FetchSummary without retry machinery
 - **Details**: FetchSummary tracks `events_orphaned` (megabridge rows that don't match any index.db row).
@@ -309,18 +327,21 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **Beeper reality**: Index.db columns like `timestamp` are UNIX timestamps in milliseconds from the desktop app's perspective, but the upstream systems (Signal, Slack, Google Chat) may have coarser granularity (second-level).
 - **Simplification**: Store as seconds, convert at render time if needed. Saves precision lost anyway and simplifies the mental model.
 - **File:line**: extract/db.rs:114, translate/parse.rs:46
+P3: CLARIFY: I wonder if this was done to be consistent with other systems. 
 
 #### 2. Remove megabridge pass if index.db becomes authoritative
 - **Details**: Megabridge enrichment (extract/megabridge.rs) only fills `external_event_id` for local bridges.
 - **Beeper's vision**: If the desktop app eventually stores `external_event_id` in index.db (as part of Beeper caching), the megabridge pass becomes obsolete.
 - **For now**: Needed. But flag it as a future simplification.
 - **File:line**: extract/mod.rs:168–172 (megabridge call)
+P4: We invested carefully and the index.db was not complete. 
 
 #### 3. Network filtering could be pushed to SQL
 - **Details**: `account_patterns_for()` and `matches_network()` in extract/index_db.rs do pattern matching in Rust after pulling all threads from the DB.
 - **Simplification**: Use SQL WHERE clause with LIKE or GLOB patterns, pull only matching rows.
 - **Benefit**: Smaller payload from sqlite3 CLI call, cleaner logic.
 - **File:line**: extract/index_db.rs:148–184 (thread row filtering loop)
+P3: Optimizing beepers fetch pattern is not highest priority. CLARIFY: I'm curious why we are even doing this. Is it to only fetch a subset of the data as described in the config? 
 
 ### Cross-source sharing (Slack / Signal family)
 
@@ -339,6 +360,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   - Slack: `kind = "Channel Message"`
   - Beeper: `kind = "Signal Message"` or `kind = "Google Chat Message"`
   - These won't deduplicate or group together in the UI.
+P2: I think this is worth fixing. Let's have all of them just be "Chat Message"
 
 #### 3. `source_label` is composite "Beeper:Signal" by design
 - **Status**: Intentional.
@@ -346,6 +368,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **Rationale given** (render.rs:610–617): Allows `LIKE 'Beeper:%'` to pull everything from Beeper, or `LIKE '%:Signal'` to pull Signal from any source.
 - **Future concern**: Once a direct Signal reader is added (not via Beeper), it would emit `kind = "Signal Message"` and `source_label = "Signal"`, which won't align with Beeper's "Signal Message" + "Beeper:Signal".
 - **File:line**: render.rs:618
+I think this is okay for now. 
 
 #### 4. Sidecar format is shared; fingerprint includes network + room scope
 - **Status**: Compliant.
@@ -368,7 +391,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 ### Recommendations
 
 1. **Urgent**: Fix ISO-8601 timestamps to emit `+00:00` instead of `Z` (render.rs:491, `use_z=true` → `false`).
-2. **Medium**: Construct source_url for messages (e.g., Beeper Texts web UI or upstream link if available); populate for reactions.
+2. P4: I'm not even sure this is possible with Beeper. **Medium**: Construct source_url for messages (e.g., Beeper Texts web UI or upstream link if available); populate for reactions.
 3. **Medium**: Align GridRow.kind taxonomy with Slack/Signal (remove network prefix from kind, keep it in source_label only).
 4. **Nice-to-have**: Durably record per-row errors from megabridge enrichment failures so they can be retried.
 5. **Nice-to-have**: Push network filtering to SQL WHERE clause for cleaner extract logic.
@@ -388,37 +411,45 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **No pre-seeded bookkeeping on conversations.** Architecture demands pre-seed-before-fetch + paired `<table>_bookkeeping` (attempt_count/last_attempt_at/last_error). ChatGPT creates `conversations_bookkeeping` rows in `pre_seed_conversations()` (db.rs:196–200) but only on the *listing* pass, not before the detail fetch. If a detail fetch crashes, a pre-seeded row with `payload IS NULL` won't surface next run to trigger a retry walk. Only subsequent explicit re-fetch via listing will catch it. *Violation*: pre-seed should happen before *any* fetch, including detail.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/db.rs:166–203` (pre_seed only stamped at listing time)
   - Workaround exists but suboptimal: `--retry-failed` will re-walk failed conversations if they're re-listed, but won't catch conversations dropped mid-fetch in a run that got OOM'd.
+P1: This seems worth fixing soon. 
 
 - **404 handling absent.** Architecture specifies 404 → `deleted_upstream_at` marker. No code path records 404s or distinguishes them from transient errors; all failures go to `record_object_error()` identically. A conversation deleted upstream will be retried forever.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:268–272` (Permanent error returns from API but no 404 check)
+P1: We should at least be recording that we are getting 404s so that we don't try to fetch forever. 
 
 - **No explicit retry-on-by-default orchestrator binding.** Architecture says "the orchestrator takes a flag `--retry-failed` (default `true`)." ChatGPT extract has no `--retry-failed` knob wired; the retry logic exists in `db::failed_conversation_ids()` but nothing calls it or exposes the user-facing flag. A second run starts fresh from listing regardless of prior failures.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs` (no attempt to load and re-walk failed conversations)
   - Workaround: `--reset-and-redownload` forces a full re-fetch, but that's all-or-nothing, not incremental retry.
+P2: The most important thing to do is to ensure that we have the right data written to support this feature, which doesn't exist yet. 
 
 ### Dead patterns / cargo-culted code
 
 - **Legacy synthetic keys (`_fetched_at`, `_listing_update_time`) documented but already migrated.** EXTRACT.md (lines 13–16) describes old JSON-tree layout with synthetic keys in payloads. These *were* promoted to real columns (`fetched_at` in bookkeeping, `last_listing_update_time` as a real column), but the doc reads as if the migration is still in flight. The synthesizer (synthesize.rs:48–54) explicitly *strips* these keys on serve, so payloads are wire-faithful. No bug here, but the docs are stale.
   - File: `/frankweiler/backend/etl/providers/chatgpt/EXTRACT.md:13–16` (outdated description of pre-migration state)
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/synthesize.rs:48–54` (correctly strips keys)
+P2: Yes, let's update the docs. 
 
 - **Unused `record_object_error` on fetch failures is asymmetric.** Permanent errors call `db.record_conversation_error(cid, &msg)` (mod.rs:270), but rate-limit give-up (mod.rs:259–266) silently exits without recording anything durable. Next run will re-list and may hit the same rate limit again if it hasn't reset. Should either record the error or auto-pause the run gracefully.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:259–266` (no durable marker on rate-limit giveup)
+P2: I think we should auto pause gracefully. 
 
 ### Simplification opportunities
 
 - **Duplicate timestamp normalization logic across grid_rows and render.** `bump_micros()` (grid_rows.rs:41–55) and `bump_iso()` (render.rs:34–50) are near-identical, both converting bare `Z` to explicit `+00:00` offset and then bumping microseconds. They diverge slightly in output format — one uses `%.6f%:z`, the other uses `chrono::SecondsFormat::AutoSi`. A single shared `TimestampBumper` helper in the translate module would eliminate the divergence.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:41–55`
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:34–50`
+P1: I think we should extract out a timestamp utils crate and use it everywhere we handle timestamps, which I think is in both extract (to populate the DB column) and translate (to render them).
 
 - **Message ordering re-implemented in two places.** `rows_for_conversation()` (grid_rows.rs:74–84) sorts messages by `(create_time, message_id)` for the sidecar. `render_one()` (render.rs:202–227) re-sorts them differently via `current_node` parent-chain walk with a fallback to create_time. Same data, different sort keys, separate code paths. Render's parent-chain walk is intentional (to respect conversation branching), but this should be documented as a deliberate difference, not silently duplicated.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:74–84`
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:202–227`
   - Opportunity: factor the sorting logic into a reusable helper, or document why render's ordering must differ from grid_rows.
+P1: I do think this should probably be unified.  Is message ID a auto increment index? That doesn't seem good. Hopefully we are enumerating the messages as we store them into a database so that we can sort by that enumeration. Maybe that's what message ID is. If so, I think that's what we should always sort them by. 
 
 - **Fingerprint hash recomputes canonical JSON every render.** `fingerprint_for_conversation()` (grid_rows.rs:179–184) calls `canonical_json()` which canonicalizes the entire upstream payload. This happens on every render pass, even if the conversation is marked for skipping. Move the canonicalization to extract time and cache it as a column, so translate can fingerprint-skip in O(1) hash comparison instead of O(payload bytes).
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:179–204`
   - Optimization: add a `fingerprint` TEXT column to `conversations` table, populate at upsert time, skip render entirely if cached fingerprint matches prior.
+P0: This sounds like a generic bookkeeping thing that we might want to investigate having literally everywhere (all the bookkeeping tables) so that we can quickly recognize whether we have already translated a particular version of some entity or not.
 
 ### Cross-source sharing opportunities
 
@@ -428,10 +459,12 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
     - `/frankweiler/backend/etl/providers/chatgpt/src/translate/grid_rows.rs:30–38`
     - `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:1–87` (render layout)
     - (Anthropic equivalent would be in `/providers/anthropic/src/translate/`)
+P1: At translate time, I actually think we should extract a shared Rust data type to encapsulate everything we want to render about any kind of LLM chat (Claude, ChatGPT, Gemini, etc.) and then translate all of the chats into that object and then pass that to a render function that knows how to render it to markdown and turn it into rows for the index.
 
 - **Sidecar schema + grid_rows JSON are re-produced per provider.** ChatGPT emits `Sidecar { header: { markdown_uuid, source_fingerprint, render_version }, rows: Vec<GridRow>, edges: Vec<> }` (render.rs:148–156). Every provider that follows the translate pattern reinvents the same struct. This should be in `frankweiler_etl::sidecar` as the cross-provider contract, not re-declared.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/translate/render.rs:148–156`
   - Current: already uses `frankweiler_etl::sidecar::Sidecar` (import at line 13), so no violation — this is already unified. Good.
+P1: The comment above I think would help fix this.
 
 - **Attachment handling (file_id → signed URL → bytes) mirrors Anthropic.** Both providers:
   1. Scan conversation mapping for attachment refs (ChatGPT: metadata.attachments + asset_pointers; Anthropic likely similar)
@@ -442,10 +475,12 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   6. Record attempt/error in blob_refs_bookkeeping
   - This dance is provably correct but verbose. Extract to a shared `BlobFetcher` helper in `frankweiler_etl::blob_cas` or a new `frankweiler-etl-llm-common` crate.
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:298–391` (fetch_attachments_for + download_one_file)
+P4: I'm not sure different API sources will be able to share the same blob fetching mechanism in general, but we should make sure that they store their blobs in consistent ways. 
 
 - **Account/identity stamping: `me` endpoint → per-row account_id.** ChatGPT upserts `/me` once per run (extract/mod.rs:124–133), then stamps `account_id` on every conversation row. Anthropic does the same. This pattern should be a shared template: "call the identity endpoint, store account metadata, use its id as the shard key for per-account rows."
   - File: `/frankweiler/backend/etl/providers/chatgpt/src/extract/mod.rs:124–133`
   - Opportunity: factor into a `IdentityFetcher` helper that both providers can reuse.
+P4: I'm not sure it matters so much that these are identical because they will have slightly different semantics. 
 
 
 ---
@@ -455,26 +490,33 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 ### Principle violations
 
 - **Photo CAS/blob_refs entanglement (VIOLATION)**: Despite the doc's explicit exemption stating "photo bytes inline in payload as base64 → decoded once at parse → written straight to `blobs/<uid>.<ext>` at render. They never touch `blob_refs` or `cas_objects`", the architecture comment in `extract/db.rs:9-10` correctly notes contacts never populate `blob_refs`, but the render.rs implementation writes photos to a `blobs/` subdirectory at `rendered_md/contacts/<source>/<addressbook>/blobs/<uid>.<ext>` (render.rs:390-396), which deviates from the expected pattern. Photos should be written directly as sibling artifacts, not into a nested `blobs/` folder that suggests secondary organization.
+P1: Actually, I think maybe the best thing would be when we render these photos to just make them inline images since they are relatively small. That seems like simplest thing to me. Does markdown support inline images? 
 
 - **Sidecar header field mismatch (MINOR)**: The doc specifies sidecars carry `document_uuid`, `source_fingerprint`, `render_version` in the header. Contacts render.rs:150-152 emits `markdown_uuid` instead of `document_uuid`. This is inconsistent with the `Sidecar` schema contract in `etl/src/sidecar.rs` (line ~375 of data_arch.md).
+P0: Can we not introduce a shared struct that everyone has to populate for these sidecar fields? It could share the same schema as a sidecar row.
 
 ### Dead patterns
 
 - **Unused blob_refs truncate (CARGO CULT)**: extract/mod.rs:78-83 calls `frankweiler_etl::doltlite_raw::truncate_blob_refs` when `refetch_blobs` is set, with a comment explicitly acknowledging "Contacts doesn't populate `blob_refs` (photos travel inline in the vCard payload)" — this is harmless but unnecessary code that could be gated behind a provider check or removed entirely.
+P2: Yes, I think it is fine that context keeps its blobs in line because they are so small and we can just not invoke these code paths that don't matter. 
 
 - **Unused `payload` fields in accounts/addressbooks tables (MINOR OVERHEAD)**: Both tables (db.rs:64-78) carry a `payload TEXT NULL` column that are populated but never read back by extract or translate. The payload is written (db.rs:164, 213-214) but the sync/reset paths don't query them; keeping them costs storage and serialization for zero reader value.
+WAI: I think this is for consistency. 
 
 ### Simplification opportunities
 
 - **Photo write could fail silently (SILENT ERROR)**: render.rs:118-121 calls `write_photo().ok()` and continues if photo write fails. This matches the stated intent ("skip the embed") but there's no bookkeeping or retry mechanism. A large photo that causes disk-full should ideally record `last_error` so the user knows why the photo is missing on a re-render. Currently it's a log line only, no durable evidence.
 
 - **Etag-walk fallback unimplemented**: extract/mod.rs:226-238 logs a warning and returns `Ok(())` when `sync-collection` is unsupported, silently dropping the addressbook instead of falling back to the ctag-check + etag-walk mentioned in the comment. This treats a 405/501 as a noop rather than degrading to a working sync strategy.
+P3: This sounds like a nice to have improvement.
 
 - **UUID derivation for missing UID is path-dependent**: parse.rs:320-323 synthesizes a UID from `(addressbook, file_stem, block_index)` when the vCard omits one, but extract/mod.rs:263-269 would fail on a missing UID from CardDAV. For consistency, extract should also synthesize the same fallback so a vCard from disk and a vCard fetched over CardDAV land at the same UUID.
+P1: I am not sure these will be stable enough to materialize UIDs. I actually think we should just warn loudly in warnings that make it all the way through to the JSON summary about contacts that do not have UUIDs and not ingest them. If it doesn't have a UUID, it doesn't really have an identity. 
 
 ### Cross-source sharing
 
 - **Contact UUID derivation is stable but source-specific**: translate/mod.rs:40-45 derives contact UUIDs as `uuidv5(CONTACTS_NS, 'contact:{account}:{addressbook}:{uid}')`. The namespace is global (`contacts_uuid_ns()`), making the scheme suitable for deduping contacts across multiple CardDAV sources (e.g., Apple + Fastmail). The implementation is correct, but the doc doesn't surface this design as an example of cross-source dedup strategy.
+P1: This sounds like fallback code that is waiting to bite us.  Let's just error more loudly. 
 
 - **Addressbook UUID groups by `(account, label)` — clean for multi-source merging**: translate/mod.rs:50-55 groups all contacts in an addressbook under a single `conversation_uuid`, keyed on `(account_id, addressbook_label)`. Two sources with addressbooks named "Personal" will have distinct UUIDs (`Personal` under Apple and `Personal` under Fastmail don't collide). This is correct but could be documented as a working multi-account example.
 
@@ -483,12 +525,14 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **Sync-token cursor is fine-grained but fragile**: extract/mod.rs:133 persists one `sync_token` per addressbook (via `db.set_sync_token(book_id, token)`). This is efficient (only re-fetch changed contacts in the addressbook) but if a sync crashes mid-addressbook, the cursor isn't advanced until all contacts in that batch are upserted (extract/mod.rs:242-246). This matches the "cursor only after success" pattern, but there's no pre-seeding or checkpoint for per-contact failures within the batch.
 
 - **No pre-seed before CardDAV fetch**: The doc's "pre-seed before fetch" rule (data_arch.md §452-468) states rows should be created the moment we learn the upstream identifier. Contacts extract does not pre-seed; contacts arrive only after a sync-collection REPORT succeeds. For providers like Anthropic/Notion that list then detail-fetch, pre-seed is natural; for CardDAV, the REPORT returns payloads inline so pre-seed would require two passes. This is justified by the API shape but worth calling out explicitly.
+P4: I think contacts are small enough that we can always just refetch all of them. The cursor thing is probably overkill anyway.
 
 ### Timestamps (when_ts)
 
 - **Correctly nulls when_ts for non-event rows**: render.rs:123 uses `contact.revision` (the vCard `REV:` field) as `when_ts`, falling back to the `now` parameter when absent. The doc (data_arch.md §273-289) explicitly allows `when_ts` null or sentinel for non-event entities like contacts. The fallback to `now` is a sentinel, not ideal (it claims every contact was modified right now), but the design acknowledges the non-event shape.
 
 - **No fallback to vCard creation logic**: vCards don't carry `CREATED:` fields (RFC 6350 omits them), so there's no upstream-provided alternative to `REV:`. The `now` fallback is reasonable, but a smarter fallback (e.g., file mtime for disk imports) isn't implemented. This is not a violation, just incomplete.
+P1: Let's just not make up timestamps, but leave them null.  No fallback.  I think we should probably leave ourselves a note in the data architecture doc about not making up data and not having these fallback paths that mask data incompleteness. 
 
 ### Fingerprint & incremental
 
@@ -514,18 +558,21 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   }
   ```
   The doc specifies `document_uuid`, not `markdown_uuid`. This is a minor naming inconsistency but the field is present and correct in meaning.
+  P0: Yes, like I said, I think we should have a struct that we populate where we can't screw up the fields, and that helps us get this sidecar format correct. We could use the struct both where we create this sidecar and where we consume it. 
 
 - **RenderedMarkdown struct populated correctly**: render.rs:159-168 passes the right fields to `on_doc_complete`: markdown_uuid, source_fingerprint, upstream_cursor (the vCard REV), render_version, and rows. The `upstream_cursor` maps to contact.revision, which is the incremental cursor (each contact's REV field). Correct.
 
 ### Other observations
 
 - **Account identity via URL host (not ideal for multi-account)**: extract/mod.rs:327-338 and lib.rs §22-35 note that latchkey keys credentials by service name, which maps to URL host. Two Fastmail accounts on the same host can't coexist without registering two services with different names. This is a latchkey limitation, not a contacts-provider bug, but the workaround (register `fastmail-contacts-1` + `fastmail-contacts-2`) isn't documented as a standard pattern in contacts.
+P2: I guess let's note this in the documentation.
 
 - **No edge ingestion (ACCEPTED)**: Contacts are not chat; they don't carry threading or back-references. render.rs never emits edges, and the `on_doc_complete` call passes `Vec::new()` for edges (render.rs:167). Correct.
 
 - **GridRow `kind = "Contact"` is stable**: render.rs:364 always sets `kind: "Contact"`, matching the schema (backend/schema/src/generated/grid_rows.rs, likely). Clean.
 
 - **No dedup across sources at extract time**: If the same contact (same UID) lands in two sources (Apple + Fastmail), they get different contact UUIDs due to the account_id in the UUID derivation (translate/mod.rs:40-44). The UI is responsible for dedup/merge. This matches the principle (data_arch.md §645-649: unification happens in GridRow, not in raw). Correct.
+P2: Yes, this is correct. Let's just note it in the documentation.
 
 
 ---
@@ -537,6 +584,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 - **Missing email pre-seeding (§ Retry and fetch durability, "Pre-seed before fetch")**: 
   - `Email/get` responses are ingested directly into the `emails` table via `upsert_email_in()` (db.rs:790+), but there's no prior `ensure_object_row` call on the listing-phase email IDs.
   - `Email/changes` produces lists of `created` / `updated` ids (mod.rs:435-436), then detail-fetches in batches (mod.rs:441-456), then ingests via `ingest_email_list()`. If a detail fetch dies mid-batch, the IDs are lost and we won't retry them on the next run—they're unknown to the bookkeeping system.
+  P0: This sounds important to fix, but unfortunately it is hard to test.
   - **Contrast**: mailboxes follow the pattern correctly (sync_mailboxes → incremental_mailboxes lines 307-364 fetch to_fetch list, then upsert; joined with `upsert_mailbox_in` which calls `dr::record_object_attempt`).
   - **Contrast**: blobs are pre-seeded as stubs when oversize (mod.rs:750-758: `db.pre_seed_blob_stub`) so bookkeeping survives the skip.
   - **Fix**: when `Email/changes` reports `created` list, immediately pre-seed rows with `account_id`, `thread_id`, `blob_id=NULL`, `payload=NULL` before detail-fetching. If the fetch crashes, `payload IS NULL AND attempt_count > 0` rows are visible for retry on the next run.
@@ -545,6 +593,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
   - JMAP `receivedAt` / `sentAt` arrive as ISO-8601 strings per RFC 8621, stored verbatim in the `emails.received_at` / `emails.sent_at` columns (db.rs:208-210, 213-215). No validation that they include explicit offset.
   - At translate time, `when_ts` is set to `em.received_at.clone().unwrap_or_default()` (render.rs:740, 784), which passes through as-is into the `GridRow`. If upstream sends `2024-01-15T10:30:00Z` (bare Z) or naive `2024-01-15T10:30:00` (no offset), it flows downstream uncorrected.
   - **Fix**: validate at extract time that timestamps are RFC 3339 with explicit offset, or normalize `Z` → `+00:00` during `EmailRow::from_payload`.
+  P1: Again, I think we should introduce a timestamp utility crate to help us manage this. What I think the philosophy should be is that we never make up data that wasn't given to us, but I guess we will have to assume sometimes that a timestamp was UTC and able to make it sortable. We should have that assumption happen in exactly one place in the whole code base. 
 
 - **No explicit source_url for Email threads**:
   - Notion, Slack, GitHub, and most chat providers populate `source_url` with the upstream web URL (e.g. `https://app.fastmail.com/mail/<mailbox>/<emailId>`). Email threads set `source_url: None` (render.rs:345, 762, 798).
@@ -581,6 +630,7 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
     - Move thread deduplication (which thread does this email belong to?) into a shared `conversation_threads` table pattern.
     - Unify attachment join shape across chat-human providers (all use `<entity>_attachments` + blobId pointers).
   - **Recommendation**: audit Slack, Beeper, Signal raw schemas side-by-side and propose a `chat_message`, `chat_thread`, `chat_participant_join` template that email, Slack, etc. all use. Will reduce translate complexity and make cross-provider queries cheaper. Lower priority (no blocker), but worth a future phase.
+  P4: Email feels pretty different.
 
 - **Message-ID as upstream identifier is strong**:
   - Email stores JMAP Email `id` as the primary key (PK in the `emails` table). JMAP ids are opaque per-server (e.g., "G5a4f5c6d"). For mbox / Takeout paths, `Message-Id` header is fallback (mbox.rs:27-29). This is correct per the architecture (upstream identifier as PK). If a future provider (e.g., a second email account with different JMAP server) is added, each gets its own `<name>.doltlite_db` per the framework; message-id collisions between accounts are impossible. Clean.
@@ -1172,18 +1222,21 @@ No pre-normalization pollution (good), no checkpoint files (good), proper blob C
 
 - **Sidecar header field name mismatch** (render.rs:238). Architecture specifies `"document_uuid"` in `Sidecar` header (data_architecture.md:375); Signal uses `"markdown_uuid"`. Both are stable UUIDv5 from `(chat_uuid, period_key)`, so semantically equivalent, but violates the cross-provider contract. Impact: load-side sidecar reader will reject or misparse if it enforces the canonical field name.
   - Fix: s/`markdown_uuid`/`document_uuid`/ at render.rs:238.
+P1: Again, a struct used to both write and read this sidecar format would help.
 
 - **Bare `Z` timezone on fallback timestamp** (render.rs:481). Architecture mandates "ISO-8601 with explicit offset" (data_architecture.md:253). `iso_ts(0)` emits `"1970-01-01T00:00:00Z"` — bare `Z` instead of `+00:00`. Real timestamps from `date_sent_ms` are correctly formatted via `Utc.timestamp_millis_opt(...).to_rfc3339_opts(SecondsFormat::Secs, true)` which produces `+00:00`, but the sentinel fallback for empty messages violates the principle. Unlikely to occur in practice (empty buckets are skipped), but sets a bad pattern.
   - Fix: render.rs:481 → `"1970-01-01T00:00:00+00:00"`.
 
 - **Unclear semantics for `--reset-and-redownload` on one-shot import**. Architecture (data_architecture.md:177–195) defines the flag for rebakeable sources: wipe entity tables + cursors, re-fetch from upstream, let `dolt diff` surface gaps. Signal is non-rebakeable — the snapshot is the source-of-truth and won't reappear. Current behavior (extract/mod.rs:94–95): truncate data tables unconditionally, then walk the same snapshot again. This is sound — produces the same dedup results — but the contract and intent are unclear. Documentation says it "forces a full re-import," which for a backup could mean "confirm the on-disk snapshot hasn't changed." Should be explicit about one-shot semantics.
   - Recommendation: add doc comment clarifying that for Signal, `--reset-and-redownload` means "discard prior import, re-ingest the same snapshot, verify idempotence via dolt diff." Unlike API sources, there is no fresh upstream data to pull.
+P3: Time to add this comment. I don't think it's a big deal. 
 
 ### Dead Patterns
 
 - **Vestigial `upstream_cursor` field set to `None`** (render.rs:251). Every `RenderedMarkdown` carries an optional `upstream_cursor` (for forward-walk resumption tracking). Signal sets it to `None` since there's no cursor concept for file-based ingestion. This is correct, but marks Signal as outside the normal flow. Not a bug, but a useful signal that Signal is special.
 
 - **No retry bookkeeping integration in practice**. Architecture (data_architecture.md:446–530) specifies per-row `_bookkeeping` tables with `attempt_count`, `last_error`, `deleted_upstream_at`. Signal creates them (db.rs:68–74 calls `bookkeeping_ddl_for`), and `upsert_*` methods call `record_object_attempt` (e.g., db.rs:137), so the machinery is in place. However, since Signal doesn't have persistent failure modes (can't retry a decryption failure on a re-ingest — either it works or doesn't), the bookkeeping rows accumulate without being re-walked. Not dead code, but unused semantics.
+P2: The way I think cursors should work with Signal is that we should Blake3 hash the entire file we are ingesting. And if we have already ingested it, then just completely skip all of it. And if we haven't, then let's run the ingestion. 
 
 ### Simplification
 
@@ -1210,6 +1263,7 @@ Signal, Slack, and Beeper share the "human chat" GridRow shape and should conver
 - **No pre-seed, no pre-seeding-before-fetch complication**. Architecture (data_architecture.md:454–468) says "pre-seed before fetch" is aspirational for providers with listing-then-detail splits (Notion, Anthropic). Signal doesn't have that — the backup format gives us IDs + content in one frame. Extract walks frames and UPSERTs immediately; no pre-seed step. This is correct and a simplification versus API providers.
 
 - **No complex cursor / resume family patterns**. Signal doesn't have a cursor (it's all-or-nothing per snapshot). The extract flow is trivial: walk snapshot frames, UPSERT into DB, increment counters. No need for refresh windows, time-windowed walks, or per-channel resumption logic that Slack, Anthropic, GitHub all implement. Signal is intentionally the simplest case.
+P2: The way I think cursors should work with Signal is that we should Blake3 hash the entire file we are ingesting. And if we have already ingested it, then just completely skip all of it. And if we haven't, then let's run the ingestion. 
 
 ### File and Line References
 
@@ -1231,26 +1285,36 @@ Signal, Slack, and Beeper share the "human chat" GridRow shape and should conver
 ### Principle violations
 
 - **`MANIFEST_TTL = 6h` on `conversations.list` / `users.list` sweeps breaks "efficiently incremental"** (`src/extract/mod.rs:47, 94-117, 165-182`). A second sync within 6h skips re-walking the upstream listing at all. Even though UPSERT dedup would make a re-walk a no-op, this introduces a stale-data window the principle disallows ("walk what the upstream API forces us to walk, write zero rows"). Fix: drop the TTL or make it opt-in.
+NOTE: The reason we did this is because it's extremely slow to walk these lists. So this is a performance optimization and it should be explicitly allowed.
 - **No pre-seed of message rows before detail fetch** (`src/extract/mod.rs:422-426`). Messages only appear after the API call succeeds; a crash mid-channel leaves no `payload IS NULL` evidence that a known-existed id wasn't fetched. Slack's listing→detail shape can support pre-seed like Notion/Anthropic.
+P2: I do think it would be nice to do this.
 - **No `deleted_upstream_at` for confirmed-deletion (404 on files)** — curl 22/4xx are recorded as transient errors in `extract/api.rs`, so retry will burn quota forever on permanently-gone uploads.
+P2: Also good to have... 
 
 ### Dead patterns / cargo-culted code
 
 - **`thread_root_uuid` backfill loop in `RawDb::open`** (`src/extract/db.rs:747-777`) — migration code for rows written by old versions; if the schema has been stable for months this is dead weight.
+P0: I think we should probably get rid of this at this point. 
 - **JSONL-tree fallback in translate** (`src/translate/mod.rs:205-220`, `read_method_envelopes`) — pre-doltlite raw-store layout, only still wired up for an in-crate fixture render test. Production has been doltlite-only for ages.
+P0: I think it would make sense to get rid of this too. 
 - **`pre_seed_blob_stub`** (`src/extract/api.rs:367`) — called during enumeration but the seeded row is never consulted for skip logic or surfaced to tooling. Either wire it to a retry walk or delete it.
+P2: We should investigate further, but I think this also seems like something that could probably go... 
 
 ### Simplification opportunities
 
 - **Unify the manifest-sweep state**. Three keys in `sync_scope_state` (`channels:archived=…`, `users`, per-channel cursors — `src/extract/db.rs:176-205`) could collapse to one `manifests_as_of` stamp; `reset()`'s `LIKE` pattern gets simpler.
+P0: This affects the bites at rest and we should do it ASAP. 
 - **Hoist rate-limit retry to shared ETL lib**. The `call_slack` backoff loop (`src/extract/api.rs:121-173`) is the same shape as Anthropic/ChatGPT; only the error enum differs.
+P1: Unifying this might reveal other inconsistencies, so we should do it ASAP. 
 - **Share blob pre-seed-before-fetch with other providers**. The seed-loop in `src/extract/api.rs:341-368` generalizes to a shared blob-orchestrator helper, which is also what's needed to fix the missing message pre-seed above.
+P1: When you say it like this, it sounds more interesting. Maybe we should investigate it with higher priority. 
 
 ### Cross-source sharing opportunities
 
 - **`ts_to_iso`** (`src/translate/mod.rs:57-80`) — the F64-precision-safe Unix→ISO-8601-with-`+00:00` conversion is a reference implementation worth lifting into the shared ETL crate. Multiple providers reimplement variants inline.
 - **UUIDv5 recipes**. `slack_message_uuid(team, channel, ts)` (`src/translate/mod.rs:41-55`) plus Anthropic/GitHub/GitLab/Notion equivalents should live in one `frankweiler_schema::uuid_recipes` module so the GridRow doc-comments and runtime code can't drift.
 - **Thread grouping / threaded-render shape** (`src/translate/render.rs:86-91`). Slack groups messages into one doc per thread; Beeper/Signal/Notion threads want the same. A shared `render_threaded_docs` would unify this.
+P2: They are slightly different though, because beeper and signal need to group by timestamp or by time period. Actually, I think once we go to Slack direct messages, we will want something similar in Slack as well. So yes, I agree. I think we should probably try to introduce a generic intermediate chat message type that all chats can be turned in to (at translate time) and then render that. 
 - **Blob materialization next to rendered `.md`** (`src/translate/render.rs:154-155`). ChatGPT, Anthropic, Notion all reimplement the same `BlobReader` → `blobs/` byte-stream step; belongs in a shared `frankweiler_etl::render` helper.
 
 ### Net
@@ -1335,6 +1399,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
 - **Providers**: Slack, Anthropic, ChatGPT, Notion, GitHub, GitLab, Beeper, Signal, Contacts, Perseus, (planned: Gemini, Garmin, IQAir)
 - **Concern**: Every provider re-implements `Uuid::new_v5(NS, format!("{provider}:{scope}:{kind}:{id}"))`. Namespaces are open-coded constants. Recipe strings drift from doc-comments; near-miss collisions (e.g. GitLab note UUID missing `mr_iid` qualifier) silently corrupt cross-source joins.
 - **Proposed shape**: `frankweiler_schema::uuid_recipes` crate exporting one function per (provider, entity) pair — `slack_message_uuid(team, channel, ts)`, `anthropic_message_uuid(org, conv, msg)`, `gitlab_note_uuid(proj, mr_iid, note_id)`, etc. — with namespace constants colocated and snapshot tests pinning every recipe's UUID output across releases. GridRow doc-comments cite the function name, not the recipe string.
+PO: Getting stable identifiers right is incredibly important for the bytes at rest format, but I'm not sure centralizing it is the right idea. I want people to be able to implement their own ingestion and extraction code without having to necessarily register it in some central library. To me, the right thing to do is to just always construct UUIDs via function and put those functions in a known place inside of every data source. 
 - **Called out by**: `slack.md`, `anthropic.md`, `chatgpt.md`, `gitlab.md`, `beeper.md`, `signal.md`, `perseus.md`, `contacts.md`
 
 ### Shared timestamp → ISO-8601 helper
@@ -1346,24 +1411,28 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - `normalize_iso(&str) -> Result<String>` (validates offset, rewrites `Z`→`+00:00`)
   - `bump_micros(&str, n: u32) -> String` (microsecond ordering for synthesized child rows)
 - **Called out by**: `slack.md` (`ts_to_iso` as reference impl), `beeper.md` (use_z bug), `signal.md` (bare-Z sentinel), `chatgpt.md` (duplicated helpers), `anthropic.md`, `notion.md`, `gitlab.md`, `github.md`, `email.md`
+P0: I really like the idea of a shared timestamp handling library where all the timestamp handling funnels through. 
 
 ### Shared retry / backoff machinery
 - **Providers**: Slack, Anthropic, ChatGPT, GitHub, GitLab, Email
 - **Concern**: Per-provider rate-limit + exponential-backoff loops with hardcoded constants (GitHub: `RETRY_MAX=7`, `RETRY_INITIAL_BACKOFF_MS=2000`; Slack identical shape). Architecture demands "retry policy is config, not code" and per-source `config.yaml` knobs; nothing implements it.
 - **Proposed shape**: `frankweiler_etl::retry::{RetryPolicy, retry_with_backoff}` taking a `RetryPolicy { max_attempts, initial_backoff_ms, max_backoff_ms, give_up_after_days }` loaded from per-source `sync:` block. Provider clients (Slack, Anthropic, ChatGPT, GitHub, GitLab) wrap their HTTP call in `retry_with_backoff(&policy, || ...)`. Surface `Retry-After` / `x-ratelimit-reset` parsing in a shared `parse_retry_after` helper.
 - **Called out by**: `slack.md`, `_shared_layer.md`, `github.md`, `chatgpt.md`, `email.md`, `anthropic.md`
+P0: Let's set up a shared retry config that everyone uses to configure their retry in the YAML. And there is a shared implementation that helps track failures and schedule exponential backoff, etc. This is probably a solved problem in some ways. I wonder if we can use a pre-baked solution. 
 
 ### Orchestrator-owned `--retry-failed` loop
 - **Providers**: all incremental-API providers (Slack, Anthropic, ChatGPT, Notion, GitHub, GitLab, Email, Contacts, YoLink)
 - **Concern**: Architecture mandates `--retry-failed` (default true). `failed_ids` infra exists in `doltlite_raw.rs` but no orchestrator CLI wiring, no `ExtractControl.retry_failed` field, no provider uses it. Each provider silently records errors that never get re-walked.
 - **Proposed shape**: Add `retry_failed: bool` to `ExtractControl`; wire `--retry-failed` / `--no-retry-failed` in `sync/src/main.rs`. Before each provider's normal fetch, orchestrator queries `*_bookkeeping` tables for `payload IS NULL OR last_error IS NOT NULL`, feeds the IDs to the provider via `FetchOptions::retry_ids: Vec<String>`. Provider checks the list and jumps straight to detail-fetch for those IDs, skipping listing. Eliminates per-provider retry logic (Anthropic's `--conv-uuid`, etc.).
 - **Called out by**: `_shared_layer.md`, `anthropic.md`, `chatgpt.md`, `email.md`, `beeper.md`, `notion.md`, `github.md`, `yolink.md`
+DO NOT DO THIS: I do not think retry logic belongs in the orchestrator, I think it is an extraction concern. It would be great if the shape of it is typically shared though.
 
 ### Shared `deleted_upstream_at` distinction
 - **Providers**: Slack, Anthropic, ChatGPT, Notion, GitHub, GitLab
 - **Concern**: 404 on a known-existed entity is recorded identically to a transient error; providers retry deleted upstream rows forever. No column distinguishes "confirmed gone" from "couldn't fetch this time."
 - **Proposed shape**: Add `deleted_upstream_at TEXT NULL` to every data table (or to bookkeeping). Shared helper `mark_deleted_upstream(tx, table, id)` in `doltlite_raw.rs`. Shared HTTP error classifier `ErrorClass::{Transient, RateLimit, Deleted(404), Permanent}` consumed by the shared retry layer.
 - **Called out by**: `slack.md`, `anthropic.md`, `chatgpt.md`, `notion.md`, `github.md`, `gitlab.md`
+P2: Yes, I think marking these tombstones would be useful. 
 
 ### Shared bookkeeping / pre-seed helpers
 - **Providers**: all doltlite-backed (Slack, Anthropic, ChatGPT, Notion, GitHub, GitLab, Email, Contacts, Beeper, Signal, YoLink)
@@ -1373,6 +1442,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - `ObjectLifecycle { table, tx, id }` builder with `ensure()` / `record(Result<_, E>)` methods — ensures pre-seed + attempt-or-error always paired.
   - Document blueprint: discovery-listing pass MUST pre-seed all known IDs with `payload=NULL` before detail-fetch (where API shape allows).
 - **Called out by**: `_shared_layer.md`, `notion.md`, `anthropic.md`, `chatgpt.md`, `github.md`, `gitlab.md`, `slack.md`, `email.md`, `yolink.md`, `beeper.md`
+P0: Yes, this sounds like a good way to make sure everything is being consistent everywhere.
 
 ### Chat-human family unification (Slack / Beeper / Signal / Email)
 - **Providers**: Slack, Beeper, Signal, Email (Fastmail JMAP), planned direct Signal/iMessage readers
@@ -1382,6 +1452,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - Shared `chat_message`, `chat_thread`, `chat_participant_join` raw-table template (each provider extends with provider-specific columns).
   - Beeper's `source_label = "Beeper:Signal"` composite documented as the canonical multi-network labeling convention.
 - **Called out by**: `beeper.md` (kind taxonomy mismatch), `signal.md` (Period::All), `email.md` (chat-human family proposal), `slack.md` (shared threaded-render helper)
+P2: Let's save the rendering concerns for later. 
 
 ### LLM-chat family unification (Anthropic / ChatGPT / planned Gemini)
 - **Providers**: Anthropic, ChatGPT, (planned: Gemini, Claude Web)
@@ -1392,6 +1463,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - Shared `IdentityFetcher` helper for `me`/`account` endpoint.
   - Shared block-anchor naming (`section_uuid_for_block`).
 - **Called out by**: `anthropic.md` (raw schema + translate + blob parity), `chatgpt.md` (LlmChatRenderer trait, IdentityFetcher, attachment dance)
+P2: Let's save the rendering concerns for later. 
 
 ### Code-review family unification (GitHub / GitLab)
 - **Providers**: GitHub, GitLab
@@ -1401,6 +1473,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - Document shared family contract: every code-review GridRow MUST carry `git_sha` + `external_id`.
   - Backport GitLab's skipped-unchanged optimization to GitHub.
 - **Called out by**: `github.md`, `gitlab.md`
+P2: Let's save the rendering concerns for later. 
 
 ### Time-series family unification (YoLink / planned Garmin / IQAir)
 - **Providers**: YoLink today; Garmin, IQAir planned
@@ -1429,6 +1502,7 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
 - **Concern**: Architecture spec field is `document_uuid` but multiple providers emit `markdown_uuid` (Signal, Contacts, Anthropic, Notion). ChatGPT correctly uses shared `frankweiler_etl::sidecar::Sidecar`. Field-name drift defeats load-side enforcement.
 - **Proposed shape**: All providers import `frankweiler_etl::sidecar::{Sidecar, SidecarHeader}` (no per-provider struct). Rename `markdown_uuid` → `document_uuid` everywhere. Load-layer reader asserts the canonical field name.
 - **Called out by**: `signal.md`, `contacts.md`, `notion.md`, `chatgpt.md` (already compliant — model citizen)
+P0: Let's do work out a struct that specifies the shape of these rows that we're going to index and use that struct both at write time and at read time. 
 
 ### Shared fingerprint module
 - **Providers**: GitHub, GitLab, Notion, ChatGPT, Anthropic, Slack, Beeper, Signal, Contacts, Perseus
@@ -1455,12 +1529,14 @@ The doc (§627-674, especially §669) lists "time-series sensor data — yolink 
   - `frankweiler_etl::cli::standard_args!()` declarative macro that bundles `ObsArgs` + `ExtractControl` flags; every binary uses it.
   - `frankweiler_etl::commit_guard::ExtractCommitGate` that providers receive in lieu of raw `&mut DoltConn` — only the orchestrator holds the `commit_run` token.
 - **Called out by**: `_shared_layer.md`
+CLARIFY: What is ObsArgs?
 
 ### Shared CLI flags for invalidation semantics
 - **Providers**: all
 - **Concern**: `--reset-and-redownload` means different things for incremental APIs (wipe + re-fetch), one-shot imports (re-ingest same snapshot, Signal), and immutable corpora (no-op or local cleanup, Perseus). Today it's the same flag with silently different behaviors.
 - **Proposed shape**: Split into `--reset-entities` (wipe data tables + cursors), `--refetch-blobs` (already exists), `--reverify-snapshot` (Signal-style re-ingest), and have immutable providers (Perseus) reject the flag with a guidance error.
 - **Called out by**: `perseus.md`, `signal.md`, `_shared_layer.md`, `yolink.md`
+DO NOT DO: It's fine.
 
 ### Shared hierarchical UUID + alignment-edge schema
 - **Providers**: Perseus today; planned TEI / archival / multilingual corpora
