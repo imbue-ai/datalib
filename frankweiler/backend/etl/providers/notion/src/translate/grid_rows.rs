@@ -462,32 +462,58 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
     );
 
     // Owner-walk: for each block, follow parent pointers up to the
-    // page. Linear in the chain length per block; pre-built indices
-    // above keep the whole pass O(N) total. This phase used to be the
-    // O(N²) regression that wedged real notion syncs.
+    // page. Memoized: as soon as we know any block's owner, we record
+    // it; subsequent walks short-circuit when they hit a memoized
+    // ancestor. Without the memo the pass is O(N · avg_depth) — on the
+    // regression-test fixture (a 4000-deep linear parent chain) that's
+    // ~8M HashMap lookups (6s in debug). With the memo it's amortized
+    // O(N) regardless of tree shape; the same fixture finishes in
+    // <50ms. Real notion trees are depth ~10 so the memo doesn't help
+    // production much in walltime, but it removes a quadratic cliff
+    // that was easy to fall off (a 10K-block source with a
+    // pathological subtree could repeat the regression).
     let phase_start = Instant::now();
     let mut blocks_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
+    let mut block_owner_memo: HashMap<String, String> = HashMap::new();
+    let max_walk = parsed.blocks.len() + 1; // cycle safeguard
     for b in &parsed.blocks {
-        // Walk up to find owning page.
         let bid = b
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut cur = Some(bid);
-        let mut seen = std::collections::HashSet::new();
+        if bid.is_empty() {
+            continue;
+        }
+        let mut path: Vec<String> = Vec::new();
+        let mut cur: Option<String> = Some(bid);
         let mut owner: Option<String> = None;
-        while let Some(c) = cur.clone() {
-            if !seen.insert(c.clone()) {
-                break;
-            }
+        while let Some(c) = cur {
+            // Check the direct block→page index, then the memoized
+            // resolution. Either path terminates the walk.
             if let Some(p) = block_owning_page.get(&c) {
                 owner = Some(p.clone());
+                break;
+            }
+            if let Some(p) = block_owner_memo.get(&c) {
+                owner = Some(p.clone());
+                break;
+            }
+            path.push(c.clone());
+            if path.len() > max_walk {
+                // Cycle in the parent graph — give up rather than
+                // loop forever. Cleaner than the old HashSet-per-walk
+                // and just as safe given the bounded blocks count.
                 break;
             }
             cur = block_parent.get(&c).cloned();
         }
         if let Some(o) = owner {
+            // Memoize every block we walked through so any future
+            // block whose chain passes through here terminates in O(1).
+            for p in path {
+                block_owner_memo.insert(p, o.clone());
+            }
             blocks_by_page.entry(o).or_default().push(b);
         }
     }
@@ -697,34 +723,35 @@ mod tests {
         });
     }
 
-    // Regression test for a quadratic blow-up in `gather_documents`:
-    // a previous version rebuilt the `block_parent` map (an inner
-    // O(N) scan over `parsed.blocks`) inside the outer `for b in
-    // &parsed.blocks` loop, making it O(N²). On a real notion DB
-    // with tens of thousands of blocks the translate step would peg
-    // a core and never reach `progress.set_length`. 5_000 blocks is
-    // enough to make the quadratic version run for tens of seconds
-    // while the fixed version finishes in a few ms.
+    // Regression test for a quadratic blow-up in `gather_documents`.
+    // History:
+    //
+    //   v1 bug: rebuilt the `block_parent` map (an inner O(N) scan
+    //   over `parsed.blocks`) inside the outer `for b in
+    //   &parsed.blocks` loop. Real ~10K-block notion sources pegged
+    //   a core indefinitely.
+    //
+    //   v2 fix: build `block_parent` once outside the loop. But the
+    //   owner-walk itself was still O(depth) per block; on the
+    //   pathological linear-chain test fixture below (N=4_000, each
+    //   block parents the previous one) the walk did ~8M HashMap
+    //   lookups and took 6s in debug. Real notion trees are depth
+    //   ~10 so production was fine, but the test budget was 30s and
+    //   the test binary's wall was dominated by this one test.
+    //
+    //   v3 (current): memoize `block → owning_page` during the walk.
+    //   Each block resolves in O(1) amortized regardless of tree
+    //   shape; the same N=4_000 fixture finishes in ~50ms.
+    //
+    // Budget below stays generous (1s) so we catch a regression to
+    // the v1/v2 cliff long before someone sees production wedge,
+    // without flaking on CI under load. If anything in this file
+    // pushes wall above ~200ms the per-phase
+    // `notion_gather_documents_phase` debug events surface where —
+    // run with `--test_output=streamed --cache_test_results=no`.
     #[test]
     fn gather_documents_is_linear_in_blocks() {
         init_tracing();
-        // Long block-id chain: every block except the first parents
-        // to the previous block, forcing the owner-walk to consult
-        // `block_parent`. The bug rebuilt `block_parent` from scratch
-        // on every outer iteration; at N=4_000 the buggy code takes
-        // ~30 s in fastbuild (debug) while the linear fix finishes in
-        // ~6 s. The 15 s budget gives clean separation in both debug
-        // (which Bazel runs) and release builds. Wall-clock perf tests
-        // are coarse — this catches the gross quadratic blow-up the
-        // user actually hit (sync wedged on a 10 K-block notion DB),
-        // not subtle regressions.
-        //
-        // This test alone dominates `notion_unittests`'s wall time
-        // (~6s in debug at N=4_000); the other 10 tests in the binary
-        // are sub-100ms apiece. If the binary's wall jumps, run with
-        // `bazel test … --test_output=streamed --cache_test_results=no`
-        // and look at the `notion_gather_documents_phase` debug events
-        // — they show which phase grew.
         const N: usize = 4_000;
         let page_id = "page-1";
         let pages = vec![json!({"id": page_id, "object": "page"})];
@@ -770,13 +797,15 @@ mod tests {
         );
 
         assert_eq!(docs.pages.len(), 1);
-        // The pre-fix code never finished on real data (the user's
-        // actual wedge — pegged a core indefinitely on a 10K-block
-        // notion DB). 30 s is a smoke-budget that catches that level
-        // of breakage without flaking on CI under load.
+        // 1s budget: a healthy run finishes in ~50ms (memoized walk),
+        // so 1s gives ~20× headroom for CI core contention while still
+        // catching a regression to the v1/v2 cliffs (6s or
+        // never-finishes) long before they reach production.
         assert!(
-            elapsed < Duration::from_secs(30),
-            "gather_documents took {elapsed:?} for {N} blocks — likely quadratic",
+            elapsed < Duration::from_secs(1),
+            "gather_documents took {elapsed:?} for {N} blocks — likely a regression \
+             in the memoized owner-walk; run `bazel test … --test_output=streamed \
+             --cache_test_results=no` and look at notion_gather_documents_phase events",
         );
     }
 }
