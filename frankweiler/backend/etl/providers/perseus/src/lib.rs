@@ -131,15 +131,28 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, lang: &str) -> Stri
         .to_string()
 }
 
-/// Anchor UUID for the first-word span inside one (book, chapter,
-/// section, language). The renderer wraps the first whitespace-
-/// separated token of the section's text in `<span
-/// data-section-uuid="…">` using this value; the bilingual-alignment
-/// `edges` rows reference it as `src_anchor_uuid` / `dst_anchor_uuid`
-/// so the UI can highlight the matching word on the other-language
-/// side. Frozen derivation so re-runs are idempotent.
-pub fn paragraph_first_word_uuid(book_n: &str, ch_n: &str, sec_n: &str, lang: &str) -> String {
-    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:first-word");
+/// Anchor UUID for one sentence within a section. The renderer wraps
+/// each sentence (split by [`crate::translate::align::split`]) in its
+/// own `<span data-section-uuid="…">` using this UUID; the
+/// bilingual-alignment `edges` rows reference these as
+/// `src_anchor_uuid` / `dst_anchor_uuid` so the UI can highlight the
+/// aligned sentence on the other-language side when one is clicked.
+///
+/// `sent_idx` is 0-based, matching the order the splitter emits.
+/// Derivation includes the sentence index so a section with N
+/// sentences gets N distinct anchor UUIDs; reordering / re-splitting
+/// the same section would shift them, which is exactly what we want
+/// — the alignment edges would have to be re-derived alongside.
+pub fn paragraph_sentence_uuid(
+    book_n: &str,
+    ch_n: &str,
+    sec_n: &str,
+    lang: &str,
+    sent_idx: usize,
+) -> String {
+    let name = format!(
+        "{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:sent{sent_idx}"
+    );
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
         .as_hyphenated()
         .to_string()

@@ -2195,11 +2195,23 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::Perseus { .. } => {
-            use frankweiler_etl_perseus::translate::{parse, render};
+            use frankweiler_etl_perseus::translate::{align, parse, render};
             let parsed = parse::parse(&fixture)
                 .with_context(|| format!("perseus parse {}", fixture.display()))?;
+            // Within-section sentence alignment needs the Ancient-
+            // Greek-BERT encoder, which is async (hf-hub fetch +
+            // model load). The translate phase is sync; bridge with
+            // `Handle::current().block_on` — same pattern as the
+            // per-doc apply_one call above. The first run pays the
+            // HF Hub download cost (~440 MB cached under
+            // ~/.cache/huggingface/hub/); subsequent runs read from
+            // cache.
+            let alignments = tokio::runtime::Handle::current()
+                .block_on(align::align_all(&parsed))
+                .context("perseus align_all")?;
             render::render_all(
                 &parsed,
+                &alignments,
                 root,
                 name,
                 progress,

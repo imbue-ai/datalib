@@ -23,5 +23,20 @@ tokio = { workspace = true, features = ["process", "io-util", "time", "rt-multi-
 uuid = { workspace = true, features = ["v5"] }
 tracing = "0.1"
 
+# Sentence-level bilingual alignment uses Ancient-Greek-BERT (BERT-base)
+# loaded via candle-transformers. Pure-Rust inference (no libtorch);
+# weights are pulled lazily from HuggingFace via hf-hub on the first
+# translate run and cached under hf-hub's default location
+# (`~/.cache/huggingface/hub/`).
+#
+# Candle 0.10+ is the first release that builds cleanly against current
+# rand_distr; 0.7 hits a `Distribution<f16>` resolution failure during
+# `cargo build`.
+candle-core = "0.10"
+candle-nn = "0.10"
+candle-transformers = "0.10"
+hf-hub = { version = "0.3", default-features = false, features = ["online", "tokio"] }
+tokenizers = { version = "0.20", default-features = false, features = ["onig", "http"] }
+
 [dev-dependencies]
 tempfile = "3"

@@ -5,6 +5,7 @@
 //! emits one markdown doc per book (`index.md`) and per (chapter ×
 //! language), plus a `.grid_rows.json` sidecar alongside each.
 
+pub mod align;
 pub mod parse;
 pub mod render;
 
@@ -34,5 +35,12 @@ pub const ENG_FILENAME: &str = "tlg0003.tlg001.1st1K-eng1.xml";
 /// title surfaces, not just in `kind`. v12 reduces the book doc to
 /// a pure navigation entry — empty body, no `## Chapters` table —
 /// and replaces the inline chapter cross-links with one `chapter`-
-/// labeled outgoing edge per (chapter, language) pair.
-pub const RENDER_VERSION: u32 = 12;
+/// labeled outgoing edge per (chapter, language) pair. v13 upgrades
+/// the bilingual-alignment edges from section-level placeholders
+/// (first-word ↔ first-word) to per-sentence anchors: each section's
+/// body now contains one `<span data-section-uuid="…">` per sentence
+/// (UUIDs derived via `paragraph_sentence_uuid`), and the edges
+/// table carries one row per aligned (grc-sentence, eng-sentence)
+/// pair — within-section sentence alignment is computed by the
+/// `translate::align` module using Ancient-Greek-BERT.
+pub const RENDER_VERSION: u32 = 13;
