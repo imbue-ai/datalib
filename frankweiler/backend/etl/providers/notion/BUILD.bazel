@@ -52,6 +52,12 @@ rust_test(
     size = "small",
     crate = ":frankweiler_etl_notion",
     edition = "2021",
+    deps = [
+        # Used by `gather_documents_is_linear_in_blocks` to flush the
+        # per-phase `tracing::debug!` events from `gather_documents`
+        # to stderr — see the test's `init_tracing()` helper.
+        "@frankweiler_crates//:tracing-subscriber",
+    ],
 )
 
 rust_test(
