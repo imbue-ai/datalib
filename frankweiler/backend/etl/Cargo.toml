@@ -33,7 +33,7 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
 sqlx = { workspace = true }
 sha2 = "0.10"
-blake3 = "1"
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 tempfile = "3"
 # Bazel runfiles lookup, so the shared `latchkey::ensure_curl_shim`
 # resolver can find our Chrome-impersonating curl shim under
