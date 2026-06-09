@@ -18,7 +18,7 @@ Pointers to the things that are **not** in this file:
   - Per-provider auth, API surface, resume strategy: each provider's
     `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
-## 1. Shape of the system
+## Shape of the system
 
 We have an ETL-shaped architecture that extracts raw data from many
 upstream sources and stores it as **JSON API responses preserved
@@ -34,7 +34,7 @@ payload. On disk, `payload` is stored as JSONB (SQLite 3.45 binary
 JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port
 guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
 in Rust the value round-trips as a text JSON string. JSONB is a storage
-encoding. The principle is wire-fidelity (§2.5).
+encoding. The principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
 
 The pipeline has three stages. All three run **in-process inside
 `frankweiler-sync`** — one binary, one process, one config-driven
@@ -82,9 +82,9 @@ those tools don't, **for a single user on a single laptop**:
 **No cluster, no scheduler service, no DAG server. One config file,
 one orchestrator binary, one local data directory.**
 
-## 2. Operational principles
+## Operational principles
 
-### 2.1 Monitorable
+### Monitorable
 
 The first sync from a given source is often very long (hours to days,
 many GB). Every stage must surface progress in a way the user can
@@ -100,7 +100,7 @@ watch in real time.
     don't get stomped by log lines.
   - `--otlp-endpoint http://host:4317` exports spans + events via OTLP,
     so a single Tempo/Jaeger collector can ingest every stage. (See
-    §15.4 for the privacy contract that constrains what may be in those
+    [the privacy-boundary unresolved question](#observability-and-the-privacy-boundary) for the privacy contract that constrains what may be in those
     spans.)
   - Each stage emits `*_start`, `*_complete`, and per-document
     progress events with a stable provider-prefixed name
@@ -111,7 +111,7 @@ watch in real time.
     every few seconds; an extract that walks 100k items silently for
     an hour is a bug.
 
-### 2.2 Stoppable and resumable
+### Stoppable and resumable
 
 A sync that gets interrupted — ^C, OOM, laptop sleep, upstream 5xx —
 must be able to make forward progress on the next run. We **do not
@@ -125,10 +125,12 @@ The dedup index *is* the resume cursor:
   - There are no separate checkpoint files. The data we already have
     tells us where to resume.
   - If `doltlite_raw::open` finds a dirty working tree from a prior
-    crashed run, it stamps a `rescue:` commit before any DDL (FIXME: define DDL in this doc) — see
+    crashed run, it stamps a `rescue:` commit before any DDL (Data
+    Definition Language — `CREATE TABLE`, `ALTER TABLE`, etc.; the
+    `IF NOT EXISTS` statements every doltlite open runs) — see
     [`docs/doltlite.md`](doltlite.md#rescue-commits-on-every-rust-side-open).
 
-### 2.3 Efficiently incremental
+### Efficiently incremental
 
 A second sync run immediately after a successful one should be cheap:
 walk what the upstream API forces us to walk, write zero rows, leave
@@ -146,9 +148,9 @@ Two layers do the work:
     `markdowns_loaded`.
 
 Different upstreams expose different surfaces for "what changed since
-X", and that drives the cursor pattern (see §5).
+X", and that drives the cursor pattern (see [Cursor / resume strategy](#cursor--resume-strategy)).
 
-### 2.4 Wire-fidelity of the raw store
+### Wire-fidelity of the raw store
 
 The raw store preserves upstream responses as we received them. Two
 load-bearing rules follow:
@@ -170,7 +172,7 @@ into qmd can be recomputed from raw without re-touching the network.
 explicit lever for "force a rebake of all sidecars even when payloads
 are unchanged."
 
-### 2.5 Verifiable via `--reset-and-redownload`
+### Verifiable via `--reset-and-redownload`
 
 A long chain of incremental syncs can in principle silently drop data
 (an upstream that doesn't surface a deletion, a cursor that skipped a
@@ -198,7 +200,7 @@ a cache index over the CAS, and `--reset-and-redownload` is the
 `cas_objects` has no reset path either way. Bytes are byte-stable;
 the only legitimate way to remove them is `blob_cas::gc_orphans()`.
 
-## 3. Object identity: Ship of Theseus on UUIDs
+## Object identity: Ship of Theseus on UUIDs
 
 We lean **heavily** on upstream-provided UUIDs to establish permanent
 object identity.
@@ -235,7 +237,59 @@ object identity.
     autoincrement isn't deterministic across re-ingest; content hashes
     change every time the content does.
 
-## 4. Commit lifecycle (load-bearing rule)
+## Time and ordering discipline
+
+If [Object identity](#object-identity-ship-of-theseus-on-uuids) is "UUIDs give global object identity," this is its temporal
+sibling: **timestamps give global temporal ordering** across every
+provider that has a time-shape to its data. That global ordering is
+what makes the UI's union grid sortable, what makes `before:` /
+`after:` queries mean the same thing across Slack and GitHub and
+Notion, and what lets a sync delta be "what happened in the last
+week" instead of "what happened to be at the top of each provider's
+result list."
+
+The principle: **every event-shaped `GridRow` carries an ISO-8601
+timestamp with explicit offset.** Concretely, in
+`GridRow.when_ts`:
+
+  - **Real upstream timestamp when one exists.** A Slack message's
+    `ts`, a GitHub PR's `created_at`, a Notion page's `last_edited_time`.
+    Preserved as UTC ISO-8601 with the explicit `+00:00` offset.
+  - **Microsecond-bump for synthesized timestamps.** Blocks and
+    sub-items that lack their own timestamp (chat blocks within a
+    message, ChatGPT messages within a conversation that only has a
+    create_time) get a synthesized one by bumping microseconds off
+    the parent's stamp. This keeps within-parent order stable across
+    re-runs and guarantees no collision with real stamps (real
+    timestamps don't carry per-row µs precision from upstream).
+  - **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive
+    timestamp can't be globally sorted alongside a `+02:00` one
+    without a hidden timezone assumption.
+
+### Entities without a time-shape
+
+Some upstream object types genuinely don't have a meaningful
+timestamp:
+
+  - **Contacts (vCards).** A person doesn't have a creation event in
+    the upstream system; they exist. The vCard's `REV` field is
+    sometimes set, but most contacts don't have one.
+  - **Perseus texts and other immutable corpora.** The corpus is
+    upstream-frozen; per-section "timestamps" would be nonsense.
+  - **Workspace/account metadata** (Slack `team`, GitHub `org`):
+    arguably has a creation date, but it isn't shown in any
+    time-ordered view.
+
+For these we accept that `when_ts` is either null or a sentinel
+(e.g., the upstream's earliest reachable date, or null filtered out
+of time-ordered queries). They don't participate in temporal views
+and that's fine — the principle is "**event-shaped** rows get real
+timestamps," not "every row everywhere."
+
+A new provider should decide explicitly which of its row types are
+event-shaped and document the source of `when_ts` for each.
+
+## Commit lifecycle (load-bearing rule)
 
 **Providers do not call `dolt_commit` or `commit_run` themselves.** The
 orchestrator wraps each source's extract in exactly one commit at the
@@ -255,7 +309,7 @@ Two consequences:
 The only other commits allowed in a raw store are `rescue:` commits.
 Anything else is a bug.
 
-## 5. Cursor / resume strategy
+## Cursor / resume strategy
 
 Two patterns in the tree, picked by upstream API shape:
 
@@ -270,7 +324,7 @@ Two patterns in the tree, picked by upstream API shape:
 
 No checkpoint files. The dedup index is the resume cursor.
 
-## 6. Blobs and the CAS split
+## Blobs and the CAS split
 
 Attachment bytes are split out of the entity database into a sibling
 content-addressable store. Each source has both
@@ -301,7 +355,7 @@ are a property of the entity, not a separate resource.
 If a future provider has the same shape, inline-in-payload is fine;
 the shared CAS exists for the fetch-as-separate-resource pattern.
 
-## 7. Translate and downstream stages
+## Translate and downstream stages
 
 After extract, we run translations for display and indexing — render
 to markdown with YAML frontmatter, index the markdown with qmd, derive
@@ -349,7 +403,7 @@ making partial-progress visible to the user than to the same on
 extract; this is an area where the implementation trails the
 principle.
 
-## 8. Auth and credentials
+## Auth and credentials
 
 Two patterns:
 
@@ -366,7 +420,7 @@ Two patterns:
 If you add a new provider with a new auth shape, prefer extending
 latchkey upstream before adding a third pattern.
 
-## 9. Error handling
+## Error handling
 
 Two-axis distinction every provider follows:
 
@@ -382,7 +436,7 @@ Two-axis distinction every provider follows:
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template
 for the second pattern.
 
-## 10. Testing with TNG fixtures
+## Testing with TNG fixtures
 
 We try to have test coverage for as much of the ETL code as possible
 using **checked-in, fictional Star Trek: TNG data sets** as fixtures.
@@ -411,7 +465,7 @@ tests tagged `manual` are the per-provider `*_live` tests, which hit
 real upstream APIs and require latchkey credentials from the host
 machine.
 
-## 11. Adding new sources is meant to be easy
+## Adding new sources is meant to be easy
 
 A new provider is a sibling crate under
 [`frankweiler/backend/etl/providers/`](../frankweiler/backend/etl/providers/),
@@ -453,7 +507,7 @@ Reach for the simplest existing provider that's shaped like yours,
    `*.grid_rows.json` sidecars matching
    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
-   (TNG cast — see §10) and write integration tests next to it.
+   (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Add the new source's `type:` discriminator to the `SourceConfig`
    variants in [`backend/core/src/config.rs`](../frankweiler/backend/core/src/config.rs)
    and wire `extract::fetch(...)` into `sync/src/main.rs`'s per-type
@@ -477,7 +531,7 @@ references when your provider doesn't look like chat:
     bazel test rig. A useful reminder that the framework is valuable
     for more than just incremental delta-fetching.
 
-## 12. Shared schemas across similar sources
+## Shared schemas across similar sources
 
 When several sources are shaped similarly enough (a matter of taste,
 but largely driven by schema and UI overlap), they should be massaged
@@ -526,7 +580,7 @@ family's `GridRow` shape rather than inventing a new `kind` taxonomy.
 A provider that doesn't fit may motivate a new family; opening one
 should be deliberate.
 
-## 13. Schema evolution
+## Schema evolution
 
 The principle we aspire to: **our schema is allowed to evolve, and an
 evolution should never strand existing user data.** A new column on a
@@ -559,13 +613,13 @@ Two halves to this:
 
   - **Upstream schema drift** — Slack adds a field, Notion changes a
     block type, GitHub renames `merged_by`. Because we preserve raw
-    payloads verbatim (§2.4), the new bytes are captured for free —
+    payloads verbatim (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)), the new bytes are captured for free —
     a translate-side bug is the worst case, never data loss. The
     principle: **upstream change should fail loudly at translate
     time, not silently at extract time.** No automated drift detector
-    exists today; see §15.6.
+    exists today; see [Detecting upstream shape drift](#detecting-upstream-shape-drift).
 
-## 14. Operating assumptions
+## Operating assumptions
 
 A few constraints that aren't really "principles we strive for" but
 are load-bearing assumptions the rest of the design rests on:
@@ -591,7 +645,7 @@ are load-bearing assumptions the rest of the design rests on:
     * The stock doltlite CLI, a drop-in replacement for the sqlite CLI.
     * There are python doltlite bindings: https://libraries.io/pypi/doltlite
 
-## 15. Unresolved questions
+## Unresolved questions
 
 These are gaps we noticed while writing this doc — places the
 principles either aren't yet articulated, aren't yet verified to be
@@ -600,14 +654,14 @@ as desired principles where we know what we want, and as open
 questions where we don't. The audit that follows this document will
 measure against these alongside the resolved principles above.
 
-### 15.1 Backup, restore, and portability
+### Backup, restore, and portability
 
 **Desired principle**: the data root is a self-contained, portable
 artifact. `cp -r <data_root>` (or `rsync`) on one machine and dropping
 it on another should reconstitute the system byte-for-byte, with no
 re-fetch, re-render, or re-index step needed.
 
-### 15.2 Removing a source
+### Removing a source
 
 Note: This is not yet handled in a meaningful way.  We haven't decided yet what it should mean.
 
@@ -621,7 +675,7 @@ no top-level "uninstall this source" path. If a user removes Slack
 from their config, what is the expected sequence of operations?
 
 
-### 15.3 Multi-account / multi-instance within a provider type
+### Multi-account / multi-instance within a provider type
 
 **Desired principle**: the framework supports N instances of the same
 provider type (two Slack workspaces, three GitHub orgs, two ChatGPT
@@ -636,7 +690,7 @@ two instances of one provider type? Latchkey is keyed by URL host,
 which collapses two GitHub orgs to one credential slot — is that the
 right shape?
 
-### 15.4 Observability and the privacy boundary
+### Observability and the privacy boundary
 
 **Desired principle**: observability (logs, NDJSON events, OTLP
 spans) carries timing, counters, stable IDs, and error metadata only.
@@ -645,31 +699,29 @@ collector outside their laptop must not thereby leak Slack DM text,
 Signal message bodies, or email contents.
 
 **Open**: this isn't verified. The `--otlp-endpoint` flag is documented
-but the data-stays-local guarantee (§14) is not extended to it. We
+but the data-stays-local guarantee (see [Operating assumptions](#operating-assumptions)) is not extended to it. We
 should audit what `tracing` spans actually carry, redact at the
 source, and state the rule explicitly.
 
-### 15.5 Time and ordering discipline
+### Time and ordering — per-provider consistency
 
-FIXME: Let's elevate this principle higher in the doc.
+The principle is now in [Time and ordering discipline](#time-and-ordering-discipline). The remaining open question is whether
+it's actually honored consistently across the existing providers:
 
-**Desired principle**: every `GridRow` carries a real wall-clock
-timestamp in ISO-8601 with explicit offset, suitable for global sort
-and `before:` / `after:` filtering. Entities that don't have their
-own upstream timestamp (chat blocks, sub-items) synthesize one by
-*bumping microseconds* off the parent's timestamp, so within-parent
-order is stable and so the synthesized stamps never collide with real
-ones.
+  - Does every event-shaped row type emit ISO-8601 with explicit
+    offset, or do some shortcut it with bare `Z` or naive datetimes?
+  - Where we synthesize from a parent timestamp, is the
+    microsecond-bump applied or did some provider just clone the
+    parent stamp (creating ordering ambiguity within a parent)?
+  - For entities without a time-shape (contacts, perseus, workspace
+    metadata), do we consistently null-out `when_ts` or use the same
+    sentinel everywhere?
 
-This is already encoded in `GridRow.when_ts` field docs; lifting it to
-the architecture doc makes it a principle that applies to *new*
-providers, not just a contract documented per-existing-row-type.
+A grep over per-provider `translate/grid_rows.rs` (or equivalent)
+plus a spot-check on the produced `GridRow.when_ts` values in the
+TNG fixture output should be enough to answer this.
 
-**Open**: is the microsecond-bump rule applied consistently across all
-providers today, or have some shortcut it (e.g. used `Z` without
-offset, or shared the parent timestamp without a bump)?
-
-### 15.6 Detecting upstream shape drift
+### Detecting upstream shape drift
 
 **Desired principle**: when an upstream changes the shape of its
 responses (new field, removed field, renamed field, type change), we
@@ -680,7 +732,7 @@ further syncs.
 **Open**: not implemented today, and we don't know yet what we want.
 A previous attempt (`endpoint_shapes`) was deleted; see commit history.
 
-### 15.7 Quantitative bound on "fast incremental"
+### Quantitative bound on "fast incremental"
 
 **Desired principle**: a second sync run immediately after a
 successful one, with no upstream changes, completes in time bounded
@@ -690,7 +742,7 @@ seconds for a small source, low single-digit minutes for a large one
 
 **Open**: we don't currently measure this. We should add a mechanism to roughly compute "sync time / size of sync delta" on each sync for each provider, so that we can get a handle on where the slowness it.
 
-### 15.8 Fixture hygiene
+### Fixture hygiene
 
 **Desired principle**: no real user data, ever, in any checked-in
 fixture or any insta snapshot. TNG is the cover story — Picard,
@@ -702,7 +754,7 @@ convention for the Slack live golden but no project-wide pre-commit
 check for "looks like real data." A regex over names / emails /
 domains / known channel patterns is the obvious low-cost mitigation.
 
-### 15.9 Translate-side partial-progress visibility
+### Translate-side partial-progress visibility
 
 **Desired principle**: a long-running translate pass — first run after
 a big initial extract, or a `RENDER_VERSION` bump that invalidates
@@ -711,10 +763,10 @@ extract is. The user sees "rendered 12,347 / 89,201" with an ETA;
 ^C-then-rerun resumes from 12,347 not 0.
 
 **Open**: the fingerprint-skip *does* give resumability in the steady
-state (§7), but translate-side progress reporting is less developed
+state (see [Translate and downstream stages](#translate-and-downstream-stages)), but translate-side progress reporting is less developed
 than extract-side. Worth measuring.
 
-### 15.10 The fixtures → playback → doltlite chain
+### The fixtures → playback → doltlite chain
 
 **Desired principle**: the artifact a human edits and reviews in PRs
 is always JSON/JSONL — diffable, language-agnostic, no doltlite
@@ -727,15 +779,15 @@ This is stated in [port guide §3](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_
 but it's a project-wide invariant that belongs at the architecture
 level too.
 
-### 15.11 grid_rows itself lives in doltlite
+### grid_rows itself lives in doltlite
 
 The `grid_rows` table (the projection consumed by the UI) lives in
 `<data_root>/backend_index.doltlite_db`, just like raw stores. The
 "doltlite is our storage layer" claim should apply to every store
 the system writes — raw, blob CAS, and the backend index — not just
-to raw. Worth saying explicitly somewhere, probably §1.
+to raw. Worth saying explicitly somewhere, probably in [Shape of the system](#shape-of-the-system).
 
-## 16. What this document does not cover
+## What this document does not cover
 
   - The specific table DDL of any provider — see the port guide and
     each provider's source.
