@@ -70,16 +70,17 @@ format looks like." Load is provider-agnostic and lives at
 [`src/load.rs`](../frankweiler/backend/etl/src/load.rs); a new provider
 needs no Load-side changes.
 
-This is not novel. It's the same shape as many Flume / Apache Beam / Dask /
-Prefect / Airflow pipelines. What we're optimizing for that those
-tools don't is:
+This is not novel. It's the same shape as many Flume / Apache Beam /
+Dask / Prefect / Airflow pipelines. What we're optimizing for that
+those tools don't, **for a single user on a single laptop**:
+
 * Easy to install
 * Easy to configure
 * Easy to run
-* Easy to monitor — for a single user on a single laptop.
+* Easy to monitor
 
-** No cluster, no scheduler service, no DAG server. One config file, one orchestrator
-binary, one local data directory. **
+**No cluster, no scheduler service, no DAG server. One config file,
+one orchestrator binary, one local data directory.**
 
 ## 2. Operational principles
 
@@ -106,9 +107,6 @@ watch in real time.
     (`slack_download_*`, `grid_rows_load_*`, …). The `*Summary`
     structs are `Serialize`, so a web UI can consume the final stats
     line without knowing which provider produced it.
-  - Stages emit a `*_start`, `*_complete`, and per-document progress
-    events with a stable prefix. `*Summary` structs are `Serialize`
-    so a web UI can consume them without knowing the provider.
   - Long-running operations must report something visible at least
     every few seconds; an extract that walks 100k items silently for
     an hour is a bug.
@@ -412,11 +410,6 @@ integration tests — no `manual` tag, no special invocation. The only
 tests tagged `manual` are the per-provider `*_live` tests, which hit
 real upstream APIs and require latchkey credentials from the host
 machine.
-
-When you add a provider, drop sample wire-format data into
-`providers/<name>/tests/fixtures/` and write integration tests next
-to it. Sample data right next to the code under test serves as
-documentation of "what this provider's wire format looks like."
 
 ## 11. Adding new sources is meant to be easy
 
