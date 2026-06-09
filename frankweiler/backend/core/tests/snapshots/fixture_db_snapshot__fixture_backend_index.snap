@@ -361,7 +361,7 @@ expression: snapshot
       "md_path": "rendered_md/signal/signal/chat-100__will-riker__8047c185/2364-04.md",
       "provider": "signal",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "81d9b8798576f08d0ad2271ef44651102d7b87ab15193d724b1b7afc69ff301c",
       "source_fingerprint": "600084907c3d37d9d184c4eca6262395053c26a4740b5abf7221ab56aad44f6b",
       "source_name": "signal",
