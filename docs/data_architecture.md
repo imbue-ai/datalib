@@ -424,17 +424,109 @@ latchkey upstream before adding a third pattern.
 
 Two-axis distinction every provider follows:
 
-  - **Per-item failures are tolerated.** A 4xx on one window / page /
-    blob should not kill the run. Log a `warn!`, increment an error
-    counter, advance the cursor, keep going. The run's `FetchSummary`
+  - **Per-item failures are tolerated.** A transient failure on one
+    window / page / blob — 5xx, network blip, timeout, parse error,
+    transient permission denied, rate-limit response — should not
+    kill the run. Log a `warn!`, increment an error counter, **leave
+    durable evidence in the row** (see [Retry and fetch durability](#retry-and-fetch-durability)
+    below), advance the cursor, keep going. The run's `FetchSummary`
     reports `errors=N`.
-    FIXME: Document what the mechanism to retry these failures should be, especially if continuing drives a time-based cursor past them.
-  - **Auth failures and consecutive-failure budgets are fatal.** A 401
-    / 403 from the auth provider, or N back-to-back per-item failures
-    on the same source, should return `Err` from `fetch(...)`. Even on auth failure, we should still dolt commit noting the problem, then exit non-zero (when other pathways through the pipeline are finished)
+  - **Auth failures and consecutive-failure budgets are fatal.** A
+    workspace-wide 401 / 403 from the auth provider, or N
+    back-to-back per-item failures on the same source, should return
+    `Err` from `fetch(...)`. Even on auth failure, the orchestrator
+    should still `dolt_commit` to record what *did* get pulled before
+    the failure plus a note about the problem, then exit non-zero
+    once other pipeline pathways finish.
 
 The yolink provider's `CONSECUTIVE_FAILURE_BUDGET = 30` is a template
 for the second pattern.
+
+## Retry and fetch durability
+
+The principle: **every failed fetch leaves durable evidence in the
+table** so a later run can find it, retry it, and either resolve it
+or report it still-failed without re-walking the entire upstream API.
+
+Five sub-rules:
+
+  - **Pre-seed before fetch.** Every entity row should be created in
+    the table the moment we *learn the upstream identifier exists*,
+    not when the detail fetch returns. A pre-seeded row carries the
+    PK, the `parent_id` / context needed to redo the fetch, and a
+    `NULL` payload. If the detail fetch then crashes, errors out, or
+    gets killed, the row is still there with `payload IS NULL` and
+    we know to retry it. This is the
+    `dr::ensure_object_row(&mut tx, table, id)` pattern.
+
+    The aspiration is "pre-seed always." Today we do this where the
+    upstream API gives us a clean listing-then-detail split (Notion,
+    Anthropic). For providers whose upstream forces us to discover
+    IDs only inside the same call that fetches their content, we
+    can't pre-seed and have to fall back to "row appears at fetch
+    success."
+
+  - **Always-paired bookkeeping.** Every object table has a sidecar
+    `<table>_bookkeeping` carrying `attempt_count`, `last_attempt_at`,
+    `last_error`. A success bumps `attempt_count` and nulls
+    `last_error`; a failure bumps `attempt_count` and records
+    `last_error`. Either way, the per-row paper trail exists.
+
+  - **Blobs follow the same shape.** `blob_refs` carries a nullable
+    `blake3` (NULL = not yet stored in CAS). The
+    `blob_refs_bookkeeping` sidecar records attempt count and last
+    error. A failed blob fetch leaves a `(ref_id, blake3=NULL,
+    last_error=…)` row that a retry walk picks up.
+
+  - **Retry-on-by-default, with opt-out.** The orchestrator takes a
+    flag — call it `--retry-failed` (default `true`) — that says
+    "before any normal walk, re-fetch every row where
+    `last_error IS NOT NULL` or `payload IS NULL AND attempt_count > 0`,
+    same for `blob_refs`." Pass `--no-retry-failed` to skip the
+    retry pass (useful when the upstream is known-flaky right now and
+    you want a fast incremental).
+
+  - **Retry policy is config, not code.** Per-source `sync:` blocks
+    in `config.yaml` should support the same retry knobs as the
+    global default (max attempts, backoff schedule, "give up after N
+    days") using one shared schema. A user who has one source with
+    chronically flaky auth shouldn't have to mute retry for the
+    whole pipeline.
+
+### Transient vs non-transient
+
+The retry mechanism is for *transient* failures. Some signals deserve
+a different mark:
+
+  - **Confirmed-deletion (404 on a known-existed thing).** The
+    upstream is telling us "this is gone." A retry will only ever
+    return 404 again. The row should carry a distinct
+    `deleted_upstream_at` marker so we don't burn API quota retrying
+    forever, while still preserving the row (and any history) for
+    backpointer / outlink purposes.
+  - **Workspace-wide auth failures.** Per
+    [Error handling](#error-handling) above, these are fatal and
+    bail the run; per-row retry doesn't apply.
+
+### Intra-run backoff
+
+The retry-failed flow above is *between* runs — durable evidence
+survives sync exit. **Within** a single run, transient signals can
+also drive intra-run backoff: Slack's 429 handling implements
+`Retry-After` + exponential backoff before giving up and moving on,
+and that pattern generalizes. Providers should prefer intra-run
+backoff for fast-recoverable failures (rate limits) and fall through
+to the durable-evidence path only for failures that need a fresh run
+to clear.
+
+### Bounded backlog
+
+A pure "leave it in the table forever" policy can grow a permanent
+backlog of e.g. private-channel 403 rows that will never succeed.
+The retry policy's "give up after N days" / "give up after N
+attempts" knob is what bounds this. Beyond that, periodic cleanup
+of rows whose `last_attempt_at` is older than the retention window
+keeps the backlog from growing unboundedly.
 
 ## Testing with TNG fixtures
 
