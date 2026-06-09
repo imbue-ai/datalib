@@ -148,3 +148,23 @@ common --enable_platform_specific_config
 # `//tests/fixtures:ingested_tng`.
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
+
+# `--config=clippy` — run rules_rust's clippy aspect across the build
+# graph. Replaces `cargo clippy --all-targets --all-features --
+# -D warnings` in scripts/pre-commit because the cargo invocation has
+# its own incremental cache (separate from bazel's) and went cold
+# after every bazel build, eating 1–2 minutes per commit. The aspect
+# shares bazel's action cache + BuildBuddy remote cache, so a warm
+# `bazelisk build --config=clippy //...` is sub-second.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+# Auto-discover via the workspace clippy.toml. clippy is picky about
+# the filename (must be `clippy.toml` or `.clippy.toml`); ours lives
+# at frankweiler/backend/clippy.toml and is exported via that
+# package's BUILD.bazel.
+build:clippy --@rules_rust//rust/settings:clippy.toml=//frankweiler/backend:clippy.toml
+# Warnings-as-errors, matching `-D warnings` from the old cargo
+# invocation. `disallowed_macros` was the lint clippy.toml's
+# `disallowed-macros` table relied on being warned (then promoted to
+# error by `-D warnings`) — same here.
+build:clippy --@rules_rust//:clippy_flags=-Dwarnings,-Wclippy::disallowed_macros

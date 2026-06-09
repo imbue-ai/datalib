@@ -21,6 +21,13 @@
 //! N sources run concurrently in tokio tasks. We count user-visible
 //! BUSY errors on inserts and on the dolt_commit.
 
+// Standalone debug/benchmark CLI. Doesn't run under frankweiler-sync,
+// has no indicatif progress bars to corrupt, and emits its results +
+// per-iteration progress directly to stderr. The workspace clippy.toml
+// disallows raw eprintln!/println! because they'd race with the obs
+// IndicatifWriter inside sync; that constraint doesn't apply here.
+#![allow(clippy::disallowed_macros)]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
