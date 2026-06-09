@@ -132,7 +132,9 @@ crate as a template:
     provider crate's tests resolve fixtures via
     `CARGO_MANIFEST_DIR.join("tests/fixtures/...")`, so they're
     standalone.
-  * `bazelisk test //frankweiler/backend/etl/...` runs the unit tests
-    (`:etl_unittests` and each `:<provider>_unittests`). The
-    fixture-backed integration tests are tagged `manual` because the
-    fixture tree isn't in the bazel sandbox runfiles by default.
+  * `bazelisk test //frankweiler/backend/etl/...` runs both the unit
+    tests (`:etl_unittests`, each `:<provider>_unittests`) and the
+    fixture-backed integration tests (`:<provider>_playback_roundtrip`,
+    `:<provider>_render`, `:<provider>_blob_render`, …). The only
+    tests tagged `manual` are the `:<provider>_live` ones, which hit
+    the real upstream API and read latchkey credentials from the host.

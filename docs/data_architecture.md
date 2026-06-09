@@ -334,11 +334,11 @@ like."
 
 Each provider crate owns its own `tests/fixtures/` tree. Tests resolve
 fixtures via `CARGO_MANIFEST_DIR.join("tests/fixtures/...")`, so the
-cargo inner loop is standalone. Bazel runs the unit tests; the
-fixture-backed integration tests are tagged `manual` because the
-fixture tree isn't in the bazel sandbox runfiles by default.
-FIXME: Wait, what?  These fixture-backed tests should not be manual!  When did that change?  We have to fix that!
-Let's address this first!
+cargo inner loop is standalone. **Bazel runs both the unit tests and
+the fixture-backed integration tests** under `bazelisk test //...` —
+no `manual` tag, no special invocation. The only tests tagged
+`manual` are the per-provider `*_live` tests, which hit real upstream
+APIs and require latchkey credentials from the host machine.
 
 When you add a provider, drop sample wire-format data into
 `providers/<name>/tests/fixtures/` and write integration tests next
