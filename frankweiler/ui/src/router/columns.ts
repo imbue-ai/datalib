@@ -8,6 +8,7 @@
 //   /grid:q=treemap&sel=abc                → [grid?q=treemap,sel=abc]
 //   /grid/doc:abc                          → [grid, doc:abc]
 //   /doc:abc/doc:def                       → [doc:abc, doc:def]
+//   /grid/card:q=foo&js=<sha256>           → [grid, card(q=foo,js=hash)]
 //
 // Per-column params are URL-form-encoded: spaces / slashes inside a
 // search query become `+` / `%2F`; the AG Grid column-state blob is
@@ -36,6 +37,17 @@ export type Column =
        * is computed dynamically in that path).
        */
       anchor?: string | null;
+    }
+  | {
+      kind: "card";
+      /** Search query that supplies the card's `rows`. Empty = match-all. */
+      q: string;
+      /**
+       * Content hash of the JS source stored on the backend. Null = a
+       * blank card not yet saved (column opens in edit mode and stays
+       * there until the user clicks Save).
+       */
+      js: string | null;
     };
 
 /** Empty grid column with no state. The natural default. */
@@ -51,6 +63,13 @@ export function encodeColumn(c: Column): string {
     if (c.agCols) sp.set("ag", c.agCols);
     const s = sp.toString();
     return s ? `grid:${s}` : "grid";
+  }
+  if (c.kind === "card") {
+    const sp = new URLSearchParams();
+    if (c.q) sp.set("q", c.q);
+    if (c.js) sp.set("js", c.js);
+    const s = sp.toString();
+    return s ? `card:${s}` : "card";
   }
   // doc UUIDs are URL-safe (hex + hyphens), but defensively encode in
   // case some renderer ever emits a non-UUID markdown id.
@@ -78,6 +97,14 @@ export function decodeColumn(segment: string): Column | null {
       q: sp.get("q") ?? "",
       sel: sp.get("sel"),
       agCols: sp.get("ag"),
+    };
+  }
+  if (kind === "card") {
+    const sp = new URLSearchParams(rest);
+    return {
+      kind: "card",
+      q: sp.get("q") ?? "",
+      js: sp.get("js"),
     };
   }
   if (kind === "doc") {
@@ -128,6 +155,9 @@ export function columnsEqual(a: Column, b: Column): boolean {
   }
   if (a.kind === "doc" && b.kind === "doc") {
     return a.md === b.md && (a.anchor ?? null) === (b.anchor ?? null);
+  }
+  if (a.kind === "card" && b.kind === "card") {
+    return a.q === b.q && a.js === b.js;
   }
   return false;
 }

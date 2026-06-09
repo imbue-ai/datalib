@@ -45,6 +45,16 @@ describe("encodeColumn", () => {
   it("encodes a doc as `doc:<uuid>`", () => {
     expect(encodeColumn({ kind: "doc", md: "abc-123" })).toBe("doc:abc-123");
   });
+
+  it("encodes a bare card as `card`", () => {
+    expect(encodeColumn({ kind: "card", q: "", js: null })).toBe("card");
+  });
+
+  it("encodes a card with q and js hash", () => {
+    expect(
+      encodeColumn({ kind: "card", q: "source:Slack", js: "deadbeef" }),
+    ).toBe("card:q=source%3ASlack&js=deadbeef");
+  });
 });
 
 describe("decodeColumn", () => {
@@ -87,6 +97,18 @@ describe("decodeColumn", () => {
 
   it("decodes `doc:<uuid>`", () => {
     expect(decodeColumn("doc:abc-123")).toEqual({ kind: "doc", md: "abc-123" });
+  });
+
+  it("decodes bare `card` as a blank card", () => {
+    expect(decodeColumn("card")).toEqual({ kind: "card", q: "", js: null });
+  });
+
+  it("decodes `card:q=…&js=…`", () => {
+    expect(decodeColumn("card:q=source%3ASlack&js=deadbeef")).toEqual({
+      kind: "card",
+      q: "source:Slack",
+      js: "deadbeef",
+    });
   });
 
   it("returns null for unknown kinds", () => {
@@ -132,6 +154,19 @@ describe("encodeStack / decodeStack round trip", () => {
         { kind: "doc", md: "def" },
       ],
       path: "/grid:q=treemap&sel=row-1/doc:def",
+    },
+    {
+      name: "grid + card",
+      stack: [
+        emptyGrid(),
+        { kind: "card", q: "source:Slack", js: "deadbeef" },
+      ],
+      path: "/grid/card:q=source%3ASlack&js=deadbeef",
+    },
+    {
+      name: "blank card",
+      stack: [{ kind: "card", q: "", js: null }],
+      path: "/card",
     },
   ];
 
@@ -179,6 +214,21 @@ describe("columnsEqual / stacksEqual", () => {
   it("treats different kinds as unequal", () => {
     expect(
       columnsEqual(emptyGrid(), { kind: "doc", md: "abc" }),
+    ).toBe(false);
+  });
+
+  it("treats matching card state as equal, distinguishing js=null", () => {
+    expect(
+      columnsEqual(
+        { kind: "card", q: "x", js: "h" },
+        { kind: "card", q: "x", js: "h" },
+      ),
+    ).toBe(true);
+    expect(
+      columnsEqual(
+        { kind: "card", q: "x", js: null },
+        { kind: "card", q: "x", js: "h" },
+      ),
     ).toBe(false);
   });
 

@@ -35,6 +35,7 @@ use frankweiler_core::version::git_hash;
 use frankweiler_schema::feedback::FeedbackRow;
 use frankweiler_schema::sync_jobs::SyncJobRow;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -160,6 +161,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/chat/{markdown_uuid}", get(chat))
         .route("/api/asset/{markdown_uuid}/{*rel}", get(asset))
         .route("/api/feedback", post(submit_feedback))
+        .route("/api/card", post(create_card))
+        .route("/api/card/{hash}", get(get_card))
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
@@ -471,6 +474,87 @@ async fn submit_feedback(
             eprintln!("feedback insert failed: {e}");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+/// Body of `POST /api/card`. The user-authored JS source goes in
+/// verbatim; the server hashes it to derive the storage key. Bigger
+/// scripts (single-file Observable-style cells) are fine — the body
+/// is bounded by axum's default body limit.
+#[derive(Debug, Deserialize)]
+pub struct CreateCardRequest {
+    pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateCardResponse {
+    pub hash: String,
+}
+
+/// Content-addressed JS store under `<root>/.frankweiler/cards/<hash>.js`.
+/// Writes are idempotent: identical sources produce the same hash, and
+/// re-POSTing returns the same hash without touching the file.
+async fn create_card(
+    State(s): State<AppState>,
+    Json(req): Json<CreateCardRequest>,
+) -> Result<Json<CreateCardResponse>, StatusCode> {
+    let mut h = Sha256::new();
+    h.update(req.source.as_bytes());
+    let digest = h.finalize();
+    let mut hash = String::with_capacity(64);
+    for b in digest.iter() {
+        hash.push_str(&format!("{b:02x}"));
+    }
+    let dir = s.root.join(".frankweiler/cards");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("create_card: mkdir {}: {e}", dir.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let path = dir.join(format!("{hash}.js"));
+    if !path.exists() {
+        if let Err(e) = std::fs::write(&path, req.source.as_bytes()) {
+            eprintln!("create_card: write {}: {e}", path.display());
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    Ok(Json(CreateCardResponse { hash }))
+}
+
+/// Serve a stored card's JS body. The hash is validated to be 64 hex
+/// chars so the path can't traverse out of the cards directory.
+async fn get_card(
+    State(s): State<AppState>,
+    Path(hash): Path<String>,
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        String,
+    ),
+    StatusCode,
+> {
+    let valid = hash.len() == 64
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !valid {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let path = s
+        .root
+        .join(".frankweiler/cards")
+        .join(format!("{hash}.js"));
+    match std::fs::read_to_string(&path) {
+        Ok(body) => Ok((
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/javascript; charset=utf-8",
+            )],
+            body,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
 
