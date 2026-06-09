@@ -186,6 +186,7 @@ pub fn render_all(
         // commit point — interrupted runs leave the indexer
         // un-notified so the next run re-renders.
         let body = render_thread_md(
+            &tuid,
             thread_id,
             acct,
             emails,
@@ -248,7 +249,9 @@ fn thread_relative_path(account_slug: &str, thread_uuid: &str) -> PathBuf {
 // Markdown rendering
 // ─────────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_thread_md(
+    tuid: &str,
     thread_id: &str,
     account_id: &str,
     emails: &[&LoadedEmail],
@@ -328,7 +331,21 @@ fn render_thread_md(
         out.push_str(&format!("  - {}\n", yaml_str(k)));
     }
     out.push_str("---\n\n");
-    out.push_str(&format!("# {}\n\n", subject));
+    // Shared `Title` so thread pages carry the same
+    // `data-page-title-uuid` hook (copy-page-id button) as every
+    // other provider. JMAP doesn't carry a stable web URL per thread,
+    // so `source_url` is `None`. (For Fastmail-sourced threads the
+    // canonical URL is `https://app.fastmail.com/mail/<mailbox>/
+    // <emailId>.<threadId>?u=…` but the trailing `?u=…` account id
+    // isn't in our extract data, so wiring it up is a follow-up.)
+    out.push_str(
+        &frankweiler_etl::title::Title {
+            text: subject,
+            markdown_uuid: Some(tuid),
+            source_url: None,
+        }
+        .render(),
+    );
 
     for (idx, em) in emails.iter().enumerate() {
         let from = format_addresses(em.payload.get("from"));

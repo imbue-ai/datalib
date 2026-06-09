@@ -254,7 +254,23 @@ fn render_markdown(
         .display_name
         .clone()
         .unwrap_or_else(|| contact.uid.clone());
-    out.push_str(&format!("# {title}\n\n"));
+    // Shared `Title` helper so contact pages carry the same
+    // `data-page-title-uuid` hook the Vue side uses for the
+    // copy-page-id button. CardDAV doesn't carry a web URL per
+    // contact, so `source_url` stays `None`. (For Fastmail-sourced
+    // contacts the canonical web URL would be
+    // `https://app.fastmail.com/contacts/<addressbook>/<contact_id>?u=…`,
+    // but the addressbook + contact ids in the URL are Fastmail's
+    // internal short ids — not the vCard UID we have — so wiring
+    // that up cleanly is a follow-up.)
+    out.push_str(
+        &frankweiler_etl::title::Title {
+            text: &title,
+            markdown_uuid: Some(m_uuid),
+            source_url: None,
+        }
+        .render(),
+    );
 
     if let Some(rel) = photo_rel {
         out.push_str(&format!("![{title}]({rel})\n\n"));

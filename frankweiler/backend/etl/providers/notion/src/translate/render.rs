@@ -1047,9 +1047,23 @@ fn render_thread(
     }
     parts.push("---".into());
     parts.push(String::new());
-    parts.push(format!("# Comment thread on “{page_title_str}”"));
-    parts.push(String::new());
-    parts.push(format!("[View thread on Notion ↗]({thread_url})"));
+    // Shared `Title` helper. `markdown_uuid` is the notion
+    // discussion id (matches `discussion_id:` in the frontmatter and
+    // the grid_row uuid for this thread); `source_url` is the
+    // `notion.so/{page}?d={discussion}#{anchor}` deep link, which
+    // collapses the previously-separate "# Comment thread …" H1 +
+    // "View thread on Notion ↗" bullet into a single block.
+    let title_text = format!("Comment thread on “{page_title_str}”");
+    parts.push(
+        frankweiler_etl::title::Title {
+            text: &title_text,
+            markdown_uuid: Some(discussion_id),
+            source_url: Some(&thread_url),
+        }
+        .render()
+        .trim_end()
+        .to_string(),
+    );
     parts.push(String::new());
     if let Some(pb) = parent_block_id {
         let anchor = format!("../index.md#b-{}", short_id(pb));
