@@ -29,6 +29,7 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
 
 ### P0.1 Per-provider `RAW_SCHEMA.md`
 
+FIXME: Actually I prefer that the load-bearing code self-document.   want the machine-readable schema to BE the documentation, not some markdown.  Put useful comments in the schema, same as I would do in a proto declaration file.
 **Goal**: at `providers/<name>/RAW_SCHEMA.md`, every provider documents:
 
 - the entity tables in `<name>.doltlite_db` (DDL or DDL-equivalent prose)
@@ -62,7 +63,7 @@ provider up to it.
 
 **Today**: providers emit `.grid_rows.json` sidecars whose shape is
 defined in `frankweiler/backend/etl/src/sidecar.rs` (`Sidecar`,
-`Header`), and Load reads them with its own deser path. Slack uses
+`Header`), and Load reads them with its own deserialize path. Slack uses
 `document_uuid` in the header; signal calls it `markdown_uuid`
 (audit: signal). Multiple agents pointed out the field names drift.
 
@@ -70,11 +71,13 @@ defined in `frankweiler/backend/etl/src/sidecar.rs` (`Sidecar`,
 
 - One canonical Rust struct (`Sidecar { header: SidecarHeader, rows:
   Vec<GridRow> }`) defined once.
+- This GridRow struct should match the SQL schema and be translatable to and from the SQL rows.
 - Every provider's translate writes through it; Load reads through it.
 - No string-keyed serde maps anywhere; the schema is checked at compile
   time at both ends.
 - Canonical field names — pick `document_uuid` (per architecture doc),
   rename signal's `markdown_uuid`.
+  FIXME: Actually I think we should standardize on markdown_uuid.  That's what we're indexing is these rendered markdown documents.
 
 **Action**: audit every translate path, route through one
 `emit_sidecar(...)` helper that takes the struct.
@@ -94,10 +97,12 @@ That means we look at the *output* to know if work is needed.
 `_bookkeeping` or on the row), updated when translate emits a sidecar
 for it. Translate's "what's stale" query becomes a SQL join on the
 raw store rather than a filesystem walk of `rendered_md/`.
+NOTE: To be clear, the raw databases don't know anything about translation. They just know the Blake3 checksum of their contents. Separately, in index_rows.doltlite_db, translation knows which Blake3 checksum it last translated. So if it changes, translation knows it needs to work again. 
 
 **Side benefit**: enables per-source "X / Y items translated"
 progress reporting (audit called this out for translate-side
 observability).
+Again, The raw data is agnostic to any sort of translation. There might be multiple translation schemes. It is just that the raw data has fingerprints stored so that we know if it changes. 
 
 **Action**: design the column (single `BLOB` of the fingerprint? or
 per-render `(render_version, fingerprint)` pair?). Add to the
