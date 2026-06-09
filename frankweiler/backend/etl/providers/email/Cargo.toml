@@ -1,0 +1,51 @@
+[package]
+name = "frankweiler-etl-email"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_email"
+path = "src/lib.rs"
+
+# JMAP-specific extract entry point. Lives inside the broader email
+# crate because we expect to add IMAP (and possibly POP/EWS) under
+# the same roof; each transport gets its own `*-download` bin while
+# sharing the translate + render code path.
+[[bin]]
+name = "jmap-download"
+path = "src/bin/jmap_download.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-obs = { path = "../../../obs" }
+frankweiler-schema = { path = "../../../schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
+uuid = { workspace = true, features = ["v5"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tracing = "0.1"
+sqlx = { workspace = true }
+sha2 = "0.10"
+# HTML → Markdown for rendering JMAP `text/html` email bodies. Prefers
+# HTML over `text/plain` when both are present so we get bare-URL
+# auto-linking, inline images via `<img src="cid:…">`, and proper list
+# / blockquote / formatting fidelity for the vast majority of mail
+# that's HTML-typed anyway. We pre-rewrite `cid:<id>` srcs to
+# `blobs/<materialized-filename>` before parsing so the resulting
+# `![](…)` link points at the on-disk byte-for-byte copy.
+html2md = "0.2"
+tempfile = "3"
+# mbox / RFC 5322 parser used by `translate::mbox` to ingest Google
+# Takeout exports (the "All mail Including Spam and Trash.mbox" file)
+# without a JMAP server. Maintained by Stalwart Mail; handles MIME
+# multipart, encoded-words, base64/qp body decoding, attachments.
+mail-parser = "0.10"
+
+[dev-dependencies]
+insta = { version = "1.41", features = ["json", "redactions"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

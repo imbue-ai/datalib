@@ -17,7 +17,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
+use frankweiler_etl::extract_run::ExtractRun;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub use client::{GitLabClient, GitLabError, BASE, PER_PAGE};
@@ -73,7 +75,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
     pub new_mrs: usize,
     pub new_discussions: usize,
@@ -85,33 +87,11 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-fn since_for_scope(
-    state: &HashMap<String, String>,
-    scope: &str,
-    refresh_window_days: u32,
-    full: bool,
-) -> Option<String> {
-    if full {
-        return None;
-    }
-    // `state[scope]` is the cursor: GitLab bumps an MR's `updated_at`
-    // on any change (notes, label edits, state transitions, etc.), so
-    // once a sync has succeeded, `updated_after=<state>` catches every
-    // edit since.
-    //
-    // `refresh_window_days` is a cold-start lookback floor only. Pre-fix
-    // it was structured so every sync re-pulled the full window even
-    // when state was current, which is why operators kept seeing the
-    // same big MR list each run.
-    if let Some(s) = state.get(scope) {
-        return Some(s.clone());
-    }
-    if refresh_window_days == 0 {
-        return None;
-    }
-    let floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
-    Some(floor.to_rfc3339_opts(SecondsFormat::Secs, true))
-}
+// `since_for_scope` was lifted to `frankweiler_etl::scope_state`
+// alongside github's identical (modulo bugs) helper; this provider
+// just re-exports the call site name so the rest of the module
+// doesn't have to change.
+use frankweiler_etl::scope_state::since_for_scope;
 
 pub(crate) fn project_full_path_from_web_url(web_url: &str) -> Option<String> {
     let rest = web_url.strip_prefix("https://gitlab.com/")?;
@@ -271,6 +251,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "gitlab_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "gitlab_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,
@@ -278,7 +264,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "targets": opts.targets,
         "full_sync": opts.full_sync,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let client = GitLabClient::new();
     let mut summary = FetchSummary::default();
@@ -364,15 +350,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.requests = client.request_count();
-    let summary_json = json!({
-        "new_mrs": summary.new_mrs,
-        "new_discussions": summary.new_discussions,
-        "skipped_unchanged_mrs": summary.skipped_unchanged_mrs,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }
@@ -424,68 +402,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn since_full_sync_returns_none() {
-        let state = HashMap::new();
-        assert_eq!(since_for_scope(&state, "created_by_me", 7, true), None);
-    }
-
-    #[test]
-    fn since_no_state_no_window_returns_none() {
-        // Cold start with refresh_window_days=0 → no `updated_after`
-        // filter at all (matches the old behavior for the default config).
-        let state = HashMap::new();
-        assert_eq!(since_for_scope(&state, "created_by_me", 0, false), None);
-    }
-
-    #[test]
-    fn since_no_state_with_window_uses_window_floor() {
-        let state = HashMap::new();
-        let got = since_for_scope(&state, "created_by_me", 7, false)
-            .expect("expected a since on a cold start with a window");
-        // ~7 days ago; just check it parses and is in the past.
-        let parsed = chrono::DateTime::parse_from_rfc3339(&got).expect("rfc3339");
-        let ago = Utc::now().signed_duration_since(parsed.with_timezone(&Utc));
-        assert!(
-            ago >= ChronoDuration::days(6) && ago <= ChronoDuration::days(8),
-            "since={got} ago={ago:?}",
-        );
-    }
-
-    #[test]
-    fn since_uses_state_as_cursor_when_present() {
-        // The fix: a successful sync's timestamp narrows the lookback
-        // on the next run. Pre-fix this was ignored in favor of the
-        // window floor whenever state was within the window.
-        let recent =
-            (Utc::now() - ChronoDuration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mut state = HashMap::new();
-        state.insert("created_by_me".to_string(), recent.clone());
-        let got = since_for_scope(&state, "created_by_me", 7, false).unwrap();
-        assert_eq!(got, recent);
-    }
-
-    #[test]
-    fn since_uses_state_even_when_window_is_zero() {
-        // refresh_window_days = 0 + state present → use state directly.
-        let recent =
-            (Utc::now() - ChronoDuration::hours(2)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mut state = HashMap::new();
-        state.insert("created_by_me".to_string(), recent.clone());
-        let got = since_for_scope(&state, "created_by_me", 0, false).unwrap();
-        assert_eq!(got, recent);
-    }
-
-    #[test]
-    fn since_uses_stale_state_verbatim() {
-        // A months-old state still acts as the cursor — gitlab bumps
-        // `updated_at` on any MR change, so this catches edits since
-        // even if the operator went quiet for a while.
-        let stale =
-            (Utc::now() - ChronoDuration::days(30)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let mut state = HashMap::new();
-        state.insert("created_by_me".to_string(), stale.clone());
-        let got = since_for_scope(&state, "created_by_me", 7, false).unwrap();
-        assert_eq!(got, stale);
-    }
+    // `since_for_scope` policy tests live in
+    // `frankweiler_etl::scope_state` now that the implementation is
+    // shared — gitlab just re-exports the helper.
 }

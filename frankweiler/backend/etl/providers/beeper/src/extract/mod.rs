@@ -21,6 +21,8 @@ pub mod megabridge;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::extract_run::ExtractRun;
+use serde::Serialize;
 use serde_json::json;
 use tracing::{info, instrument};
 
@@ -83,7 +85,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
     pub rooms: usize,
     pub users: usize,
@@ -118,6 +120,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await
             .context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "beeper_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(dst.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let beeper_dir = opts
         .beeper_data_dir
@@ -142,7 +150,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "beeper_data_dir": beeper_dir.display().to_string(),
         "media": opts.media,
     });
-    let run_id = dst.start_run(&run_config).await?;
+    let run = ExtractRun::start(dst.pool(), &run_config).await?;
 
     let mut summary = FetchSummary::default();
     let result = (async {
@@ -188,18 +196,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.blobs = counts.blobs;
     summary.blob_errors = counts.blob_errors;
 
-    let summary_json = json!({
-        "rooms": summary.rooms,
-        "users": summary.users,
-        "events": summary.events,
-        "blobs": summary.blobs,
-        "blob_errors": summary.blob_errors,
-        "events_enriched": summary.events_enriched,
-        "events_orphaned": summary.events_orphaned,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = dst.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
 
     info!(

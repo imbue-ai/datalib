@@ -7,8 +7,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, FixedOffset};
 
-use frankweiler_etl::blob_store::BlobStore;
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
@@ -50,13 +49,7 @@ fn bump_iso(ts: &str) -> String {
     out
 }
 
-fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
-    format!(
-        "<div id=\"m-{msg_uuid}\" data-section-uuid=\"{msg_uuid}\" class=\"msg msg--{provider}\">"
-    )
-}
-
-const MSG_DIV_CLOSE: &str = "</div>";
+use frankweiler_etl::section::{msg_div_open, MSG_DIV_CLOSE};
 
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
@@ -134,7 +127,7 @@ pub fn render_all(
 
         // Changed (or first-time): walk the mapping into messages/parts.
         let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name) else {
+        let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
             progress.inc(1);
             continue;
         };
@@ -192,7 +185,11 @@ fn conv_relative_path(account_id: &str, conv_id: &str) -> std::path::PathBuf {
         .join("index.md")
 }
 
-pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option<Rendered> {
+pub fn render_one(
+    shredded: &ShreddedConversation,
+    _source_name: &str,
+    blobs: &dyn BlobReader,
+) -> Option<Rendered> {
     let conv = &shredded.conv;
     let msgs: Vec<&OAMessageRow> = shredded.messages.iter().collect();
     let msg_by_id: HashMap<&str, &OAMessageRow> =
@@ -361,7 +358,7 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
         }
         if !m.attachments.is_empty() {
             for a in &m.attachments {
-                out.push(attachment_md(a));
+                out.push(attachment_md(a, blobs));
                 out.push(String::new());
             }
         }
@@ -383,59 +380,22 @@ pub fn render_one(shredded: &ShreddedConversation, _source_name: &str) -> Option
     })
 }
 
-/// Write every blob this conversation references into
-/// `<page_dir>/blobs/<filename>`. The markdown emitted by
-/// `attachment_md` uses the same `safe_filename(name, file_id)` rule
-/// so the link target matches what lands on disk.
 fn materialize_conv_blobs(
     shredded: &ShreddedConversation,
-    blobs: &dyn BlobStore,
+    blobs: &dyn BlobReader,
     page_dir: &std::path::Path,
 ) -> std::io::Result<()> {
-    // file_id → first name we saw for it, walking only this
-    // conversation's attachments. Each conversation owns its blobs in
-    // a sibling `blobs/` dir, so there's no need to cross-reference
-    // other conversations.
-    let mut name_by_id: HashMap<&str, Option<&str>> = HashMap::new();
-    for m in &shredded.messages {
-        for a in &m.attachments {
-            name_by_id
-                .entry(a.file_id.as_str())
-                .or_insert(a.name.as_deref());
-        }
-    }
-    if name_by_id.is_empty() {
-        return Ok(());
-    }
     let blobs_dir = page_dir.join("blobs");
-    for (file_id, name) in &name_by_id {
-        let blob = match blobs.read_by_id(file_id) {
-            Ok(Some(b)) => b,
-            Ok(None) => continue,
-            Err(e) => return Err(std::io::Error::other(e)),
-        };
-        let safe = safe_filename(*name, file_id);
-        std::fs::create_dir_all(&blobs_dir)?;
-        std::fs::write(blobs_dir.join(&safe), &blob.bytes)?;
-    }
-    Ok(())
+    blob_cas::materialize_refs(
+        blobs,
+        shredded
+            .messages
+            .iter()
+            .flat_map(|m| m.attachments.iter().map(|a| a.file_id.as_str())),
+        &blobs_dir,
+    )
 }
 
-/// Markdown line for one attachment: `![alt](blobs/<filename>)` for
-/// images, `[\[file\] name](blobs/<filename>)` for everything else.
-/// The link target is relative to the conversation's `index.md` (the
-/// page-dir is `<conv_id>/`, with the blob in `<conv_id>/blobs/`).
-fn attachment_md(a: &OAAttachmentRef) -> String {
-    let safe = safe_filename(a.name.as_deref(), &a.file_id);
-    let alt = a
-        .name
-        .clone()
-        .unwrap_or_else(|| a.file_id.clone())
-        .replace(']', "");
-    let link = format!("blobs/{safe}");
-    if a.is_image {
-        format!("![{alt}]({link})")
-    } else {
-        format!("[\\[file\\] {alt}]({link})")
-    }
+fn attachment_md(a: &OAAttachmentRef, blobs: &dyn BlobReader) -> String {
+    blob_cas::attachment_md(blobs, &a.file_id, a.name.as_deref(), a.is_image)
 }

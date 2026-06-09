@@ -22,14 +22,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Local;
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
-pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
 
 /// Inter-fetch sleep. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop without
@@ -67,7 +69,7 @@ pub struct FetchOptions {
     pub control: frankweiler_etl::control::ExtractControl,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
     pub fetched: usize,
     pub skipped: usize,
@@ -95,13 +97,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "chatgpt_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "chatgpt_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let run_config = json!({
         "max_pages": opts.max_pages,
         "limit": opts.limit,
         "conv_uuids": opts.conv_uuids,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let _started_at = opts
         .fetched_at
@@ -201,6 +209,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stale = stale.len(),
             up_to_date = up_to_date,
         );
+        // Surface the skip count in the summary (the field exists on
+        // FetchSummary but was previously never assigned; without this
+        // the run-2 incrementality snapshot misleadingly showed
+        // `skipped=0` even when most conversations matched their
+        // stored `last_listing_update_time`).
+        summary.skipped += up_to_date;
 
         let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
         opts.progress.set_length(Some(ordered.len() as u64));
@@ -264,19 +278,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let result = work.await;
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
-    let summary_json = json!({
-        "fetched": summary.fetched,
-        "skipped": summary.skipped,
-        "errors": summary.errors,
-        "listing": summary.listing,
-        "new_blobs": summary.new_blobs,
-        "skipped_blobs": summary.skipped_blobs,
-        "failed_blobs": summary.failed_blobs,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }
@@ -400,7 +402,6 @@ async fn download_one_file(
     name: Option<&str>,
     mime: Option<&str>,
 ) -> Result<bool> {
-    let safe = safe_filename(name, file_id);
     // Step 1: metadata fetch.
     let meta = match client
         .get(&format!("/backend-api/files/{file_id}/download"))
@@ -458,7 +459,7 @@ async fn download_one_file(
         warn!(
             event = "chatgpt_media_failed",
             file_id = file_id,
-            name = %safe,
+            name = name.unwrap_or(""),
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
@@ -469,14 +470,18 @@ async fn download_one_file(
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
-    db.upsert_blob_bytes(
-        file_id,
-        "attachment",
-        cid,
-        "attachment",
-        mime,
+    db.store_blob(
+        &RefStub {
+            ref_id: file_id,
+            kind: "attachment",
+            owning_id: cid,
+            slot: "attachment",
+            upstream_uuid: Some(file_id),
+            upstream_name: name,
+            source_url: Some(&signed),
+            content_type: mime,
+        },
         &bytes,
-        Some(&signed),
     )
     .await?;
     Ok(true)

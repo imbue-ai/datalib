@@ -1,0 +1,64 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_etl_yolink",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_yolink",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:csv",
+        "@frankweiler_crates//:md-5",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+    ],
+)
+
+rust_binary(
+    name = "yolink_devices",
+    srcs = ["src/bin/yolink_devices.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+# Unit tests with insta snapshots. The crate_root override mirrors what
+# fixture_db_snapshot_test does so insta's `.snap` lookup keys on the
+# Cargo-style `<crate>__<test>.snap` rather than the Bazel rule name.
+rust_test(
+    name = "yolink_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_yolink",
+    data = glob(["src/snapshots/*.snap"]),
+    edition = "2021",
+    env = {
+        # Insta resolves snapshot paths via CARGO_MANIFEST_DIR by
+        # default; Bazel doesn't surface the source tree, so we point
+        # at the runfiles root explicitly. The snapshot files are
+        # staged under their `src/snapshots/` paths via `data`.
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:tempfile",
+    ],
+)

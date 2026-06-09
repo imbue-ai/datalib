@@ -190,6 +190,50 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_snapshot!("manifest", manifest.join("\n"));
     });
+
+    // ── Second run: incrementality check ──────────────────────────────
+    //
+    // Run the same sync again against the now-populated data_root.
+    // A healthy incremental sync should make a small number of upstream
+    // requests, produce small `deltas` per source, and advance every
+    // `sync_scope_state` scope by the same wall-clock interval. A
+    // regression that broke incrementality (e.g. the gitlab+github
+    // `full_sync: true` override that bit us recently) would show up
+    // here as `requests` and `deltas.<table>.added` ballooning back to
+    // first-run scale.
+    //
+    // Snapshot redactions are tuned for this purpose: timestamps
+    // (`elapsed_ms`, `network_seconds`, cursor `before`/`after`) get
+    // [redacted], but per-source `stats` counts are PRESERVED — those
+    // are precisely the numbers that prove (or break) incrementality.
+    let now2 = "2026-05-21T18:05:00Z";
+    let status2 = Command::new(&bin)
+        .arg("--config")
+        .arg(&cfg_path)
+        .arg("--now")
+        .arg(now2)
+        .status()
+        .expect("spawn sync 2");
+    assert!(status2.success(), "second sync failed: {status2:?}");
+
+    let safe_now2 = now2.replace(':', "-");
+    let summary_path2 = data_root.join(format!("sync_summary_{safe_now2}.json"));
+    assert!(
+        summary_path2.is_file(),
+        "expected second sync summary at {}",
+        summary_path2.display()
+    );
+    let summary_text2 = std::fs::read_to_string(&summary_path2).expect("read summary 2");
+    let mut summary_json2: Value =
+        serde_json::from_str(&summary_text2).expect("parse summary 2 JSON");
+    strip_volatile_for_incrementality(&mut summary_json2);
+    insta::with_settings!({
+        snapshot_path => "snapshots",
+        prepend_module_to_snapshot => false,
+        sort_maps => true,
+    }, {
+        assert_json_snapshot!("sync_summary_run2_incrementality", summary_json2);
+    });
 }
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
@@ -209,6 +253,18 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         if rel
             .components()
             .any(|c| SKIP_PATH_SEGMENTS.contains(&c.as_os_str().to_string_lossy().as_ref()))
+        {
+            continue;
+        }
+        // Doltlite leaves behind sidecar lock files (e.g.
+        // `.foo.doltlite_db-lock`) for in-process flock coordination.
+        // They're ephemeral, content-free, and would clutter goldens
+        // with hidden-dotfile noise. Skip anything whose name ends in
+        // `-lock`.
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.ends_with("-lock"))
         {
             continue;
         }
@@ -565,6 +621,74 @@ fn strip_volatile(v: &mut Value) {
         Value::Array(items) => {
             for item in items.iter_mut() {
                 strip_volatile(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Stricter-on-time-fields, looser-on-stats redaction used for the
+/// run 2 incrementality snapshot. Unlike [`strip_volatile`] this
+/// preserves per-source `stats` counts (since the whole point of the
+/// run 2 snapshot is to assert those counts stayed *small*) while
+/// redacting the per-run jitter fields that can't reproduce
+/// byte-identically (wall-clock timings, cursor advancement
+/// timestamps).
+fn strip_volatile_for_incrementality(v: &mut Value) {
+    // Reuse most of `VOLATILE_KEYS` but drop `stats` (preserved) and
+    // add timing/jitter fields specific to per-source summaries.
+    const RUN2_VOLATILE_KEYS: &[&str] = &[
+        // shared with strip_volatile
+        "_recorded_at",
+        "duration_ms",
+        "_item_hashes",
+        "request_id",
+        "fetched_at",
+        "last_edited_time",
+        "created_time",
+        "cache_ts",
+        "updated",
+        "started_at",
+        "finished_at",
+        "duration_secs",
+        "data_root",
+        "qmd_status",
+        "source_fingerprint",
+        "last_attempt_at",
+        "captured_at",
+        // run-2-specific jitter inside the per-source `stats`:
+        // wall-clock timings + the cursor `before`/`after` ISO
+        // timestamps + network/elapsed jitter. The cursor `scope`
+        // names are NOT redacted — those are the signal proving the
+        // scope advanced.
+        "elapsed_ms",
+        "network_seconds",
+        "before",
+        "after",
+        // The `commit_hash` flips between any two runs even when the
+        // data is byte-identical, since dolt commit hashes include
+        // wall-clock timestamps. The content-equality is already
+        // covered by `deltas` showing few/no rows changed.
+        "commit_hash",
+    ];
+    match v {
+        Value::Object(map) => {
+            for (k, child) in map.iter_mut() {
+                if RUN2_VOLATILE_KEYS.contains(&k.as_str()) {
+                    *child = Value::String(REDACTED.into());
+                    continue;
+                }
+                strip_volatile_for_incrementality(child);
+                if SORTED_ARRAY_KEYS.contains(&k.as_str()) {
+                    if let Value::Array(items) = child {
+                        items.sort_by_key(|a| a.to_string());
+                    }
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                strip_volatile_for_incrementality(item);
             }
         }
         _ => {}

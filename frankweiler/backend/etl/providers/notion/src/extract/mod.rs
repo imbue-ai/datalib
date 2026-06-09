@@ -16,10 +16,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use serde::Serialize;
 use serde_json::{json, Value};
 
-pub use db::{db_path_for, BlobBytes, BlockUpsert, LoadedRaw, PageState, RawDb};
+pub use db::{db_path_for, BlockUpsert, LoadedRaw, PageState, RawDb};
 pub use official::{NotionOfficialClient, NotionOfficialError};
 pub use unofficial::{NotionUnofficialClient, NotionUnofficialError};
 
@@ -81,7 +84,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
     pub new_pages: usize,
     pub upd_pages: usize,
@@ -143,18 +146,17 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
         match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
                 let content_type = resp.header("content-type").map(String::from);
-                if let Err(e) = db
-                    .upsert_blob_bytes(
-                        &blob_id,
-                        kind,
-                        block_id,
-                        "image",
-                        content_type.as_deref(),
-                        &resp.body,
-                        Some(&url),
-                    )
-                    .await
-                {
+                let stub = RefStub {
+                    ref_id: &blob_id,
+                    kind,
+                    owning_id: block_id,
+                    slot: "image",
+                    upstream_uuid: Some(block_id),
+                    upstream_name: None,
+                    source_url: Some(&url),
+                    content_type: content_type.as_deref(),
+                };
+                if let Err(e) = db.store_blob(&stub, &resp.body).await {
                     tracing::warn!(blob = %blob_id, error = %e, "blob upsert failed");
                     summary.failed_blobs += 1;
                 } else {
@@ -424,10 +426,42 @@ async fn mirror_page(
     };
     let page_ms = page_t.elapsed().as_millis() as u64;
     let was_present = page_states.get(pid).map(|s| s.has_payload).unwrap_or(false);
+    let prior_last_edited = page_states
+        .get(pid)
+        .and_then(|s| s.last_edited_time.clone());
     let last_edited = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .map(String::from);
+
+    // Post-detail incrementality skip. BFS-discovered pages don't
+    // come with an `incoming` last_edited_time hint (no list endpoint),
+    // so the pre-fetch skip at the top of this function can't fire
+    // for them. But once the page detail is in hand, we know the
+    // upstream `last_edited_time` — and if it matches what we already
+    // stored, the children/comments/etc. can't have changed either.
+    // Returning a synthetic block array of stored `child_page` ids
+    // keeps BFS recursing into known children (in case a child's own
+    // `last_edited_time` advanced even when the parent's didn't).
+    if was_present && last_edited.is_some() && last_edited == prior_last_edited {
+        summary.skipped_pages += 1;
+        let child_ids = db
+            .stored_child_page_ids(pid)
+            .await
+            .with_context(|| format!("stored child_page ids for {pid}"))?;
+        tracing::Span::current().record("skipped", true);
+        tracing::debug!(
+            page = pid,
+            child_pages = child_ids.len(),
+            page_fetch_ms = page_ms,
+            "page unchanged: skipped block walk; recursing into known children"
+        );
+        return Ok(child_ids
+            .into_iter()
+            .map(|id| serde_json::json!({"type": "child_page", "id": id}))
+            .collect());
+    }
+
     let parent_id = parent_of(&page);
     let payload = serde_json::to_string(&page).ok();
     db.upsert_pages(&[(pid.to_string(), parent_id, last_edited.clone(), payload)])
@@ -591,6 +625,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "notion_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "notion_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
     let run_config = json!({
         "subtree_pages": opts.subtree_pages,
         "inbox": opts.inbox,
@@ -603,7 +643,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "page": opts.page,
         "retry_failed": opts.retry_failed,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let official = NotionOfficialClient::new();
     let mut summary = FetchSummary::default();
@@ -774,23 +814,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.official_requests = official.request_count();
-    let summary_json = json!({
-        "new_pages": summary.new_pages,
-        "upd_pages": summary.upd_pages,
-        "new_blocks": summary.new_blocks,
-        "upd_blocks": summary.upd_blocks,
-        "new_comments": summary.new_comments,
-        "upd_comments": summary.upd_comments,
-        "skipped_pages": summary.skipped_pages,
-        "new_blobs": summary.new_blobs,
-        "skipped_blobs": summary.skipped_blobs,
-        "failed_blobs": summary.failed_blobs,
-        "official_requests": summary.official_requests,
-        "unofficial_requests": summary.unofficial_requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }

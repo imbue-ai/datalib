@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl_perseus::translate::align::PerseusAlignments;
 use frankweiler_etl_perseus::translate::{parse, render};
 use frankweiler_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid};
 
@@ -37,6 +38,7 @@ fn renders_all_books_chapters_and_languages() {
     let mut emitted: Vec<RenderedMarkdown> = Vec::new();
     let summary = render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),
@@ -108,6 +110,7 @@ fn sidecars_carry_stable_uuids_and_provider_metadata() {
     let parsed = parse::parse(&fixture_dir()).unwrap();
     render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),
@@ -160,6 +163,7 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
     let mut emitted: Vec<RenderedMarkdown> = Vec::new();
     render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),
@@ -233,6 +237,7 @@ fn book_index_emits_chapter_edges_to_every_chapter_lang_pair() {
     let mut emitted: Vec<frankweiler_etl::load::RenderedMarkdown> = Vec::new();
     render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),
@@ -285,6 +290,7 @@ fn second_run_is_a_no_op_when_fingerprints_match() {
     let mut prior: HashMap<String, String> = HashMap::new();
     render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),
@@ -299,6 +305,7 @@ fn second_run_is_a_no_op_when_fingerprints_match() {
     // Second pass with those fingerprints — every doc skips.
     let summary = render::render_all(
         &parsed,
+        &PerseusAlignments::default(),
         out.path(),
         "perseus",
         &Progress::noop(),

@@ -17,14 +17,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ClaudeClient, ClaudeError};
-pub use db::{block_on_load_all, db_path_for, BlobBytes, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
@@ -56,7 +58,7 @@ pub struct FetchOptions {
     pub control: frankweiler_etl::control::ExtractControl,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct FetchSummary {
     pub fetched: usize,
     pub skipped: usize,
@@ -85,12 +87,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(event = "anthropic_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        info!(event = "anthropic_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let run_config = json!({
         "overlap": opts.overlap,
         "conv_uuids": opts.conv_uuids,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
     let mut client = ClaudeClient::new();
     let mut summary = FetchSummary::default();
 
@@ -263,20 +271,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     summary.total = summary.fetched + summary.skipped;
     summary.requests = client.requests;
     summary.network_seconds = client.network_seconds;
-    let summary_json = json!({
-        "fetched": summary.fetched,
-        "skipped": summary.skipped,
-        "forbidden_orgs": summary.forbidden_orgs,
-        "errors": summary.errors,
-        "total": summary.total,
-        "new_blobs": summary.new_blobs,
-        "skipped_blobs": summary.skipped_blobs,
-        "failed_blobs": summary.failed_blobs,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }
@@ -470,7 +465,6 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
         format!("{CLAUDE_ORIGIN}{preview_path}")
     };
     let name = file_obj.get("file_name").and_then(|v| v.as_str());
-    let _safe = safe_filename(name, file_uuid); // sanity-check the input shape
     let mime = file_obj
         .get("file_kind")
         .and_then(|v| v.as_str())
@@ -494,14 +488,18 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
             // sensible if a fixture omits the header.
             let header_mime = resp.header("content-type").map(String::from);
             let effective_mime = header_mime.as_deref().or(mime);
-            db.upsert_blob_bytes(
-                file_uuid,
-                "file",
-                conv_uuid,
-                "file",
-                effective_mime,
+            db.store_blob(
+                &RefStub {
+                    ref_id: file_uuid,
+                    kind: "file",
+                    owning_id: conv_uuid,
+                    slot: "file",
+                    upstream_uuid: Some(file_uuid),
+                    upstream_name: name,
+                    source_url: Some(&url),
+                    content_type: effective_mime,
+                },
                 &resp.body,
-                Some(&url),
             )
             .await?;
             Ok(true)

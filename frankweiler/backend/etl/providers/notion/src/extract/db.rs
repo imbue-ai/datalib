@@ -12,18 +12,19 @@
 //! See `DOLTLITE_RAW.md` next to this crate for the design rationale.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{
+    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
+};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-// Re-export shared types so existing imports of
-// `crate::extract::db::{db_path_for, BlobBytes}` keep working with no
-// downstream churn.
-pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
+pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 // ─────────────────────────────────────────────────────────────────────
 // Notion-specific object tables
@@ -95,6 +96,7 @@ fn full_ddl() -> Vec<String> {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 /// `(id, parent_id, last_edited_time, payload_json)` — one row for
@@ -128,11 +130,16 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     /// Wipe every per-row table so the next fetch re-downloads
@@ -140,14 +147,6 @@ impl RawDb {
     /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
-    }
-
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
     }
 
     /// Snapshot every page's last_edited_time + payload-presence flag.
@@ -325,6 +324,33 @@ impl RawDb {
         dr::load_payloads(&self.pool, "pages").await
     }
 
+    /// Stored child-page block ids for `page_id`. Used by the
+    /// "unchanged page" skip path: when a page's `last_edited_time`
+    /// hasn't moved since our last fetch, we elide the block walk —
+    /// but the BFS still needs to recurse into known children in case
+    /// a *child*'s `last_edited_time` advanced even when the parent's
+    /// did not.
+    pub async fn stored_child_page_ids(&self, page_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            "SELECT json_extract(payload, '$.id') AS id \
+             FROM blocks \
+             WHERE page_id = ? \
+               AND json_extract(payload, '$.type') = 'child_page' \
+               AND payload IS NOT NULL",
+        )
+        .bind(page_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("select stored child_page block ids")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            if let Ok(id) = r.try_get::<String, _>("id") {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn load_blocks(&self) -> Result<Vec<(Value, Option<String>)>> {
         // ORDER BY (page_id, page_order) reproduces BFS discovery
         // order from extract/mod.rs::walk_page_blocks; render relies
@@ -372,57 +398,26 @@ impl RawDb {
         Ok(out)
     }
 
-    pub async fn blob_exists(&self, id: &str) -> Result<bool> {
-        dr::blob_exists(&self.pool, id).await
+    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
+        blob_cas::ref_has_hash(&self.pool, ref_id).await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn upsert_blob_bytes(
-        &self,
-        id: &str,
-        kind: &str,
-        owning_id: &str,
-        slot: &str,
-        content_type: Option<&str>,
-        bytes: &[u8],
-        source_url: Option<&str>,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
-        dr::upsert_blob_bytes(
-            &mut tx,
-            id,
-            kind,
-            owning_id,
-            slot,
-            content_type,
-            bytes,
-            source_url,
-        )
-        .await?;
-        tx.commit().await.context("commit blob upsert tx")?;
-        Ok(())
+    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
     }
 
-    pub async fn record_blob_error(&self, id: &str, err: &str) -> Result<()> {
-        // For Notion, blobs hang off block ids and use the `image` slot;
-        // we pass the block id (the prefix before the `:`) as
-        // `owning_id` so a retry has somewhere to look. Best-effort —
-        // the caller may not always have a meaningful block id and we
-        // fall back to using `id` itself for both.
-        let (owning, slot) = id
+    /// Notion blobs are keyed `{block_id}:image`; we derive the
+    /// owning_id and slot from that for the error sidecar so a retry
+    /// path always has somewhere to look.
+    pub async fn record_blob_error(&self, ref_id: &str, err: &str) -> Result<()> {
+        let (owning, slot) = ref_id
             .rsplit_once(':')
             .map(|(o, s)| (o.to_string(), s.to_string()))
-            .unwrap_or_else(|| (id.to_string(), "image".to_string()));
+            .unwrap_or_else(|| (ref_id.to_string(), "image".to_string()));
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        dr::record_blob_error(&mut tx, id, &owning, &slot, err).await?;
+        blob_cas::record_ref_error(&mut tx, ref_id, &owning, &slot, err).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
-    }
-
-    pub async fn load_blobs_by_owner(
-        &self,
-    ) -> Result<std::collections::HashMap<String, BlobBytes>> {
-        dr::load_blobs_by_owner(&self.pool).await
     }
 
     pub async fn record_endpoint_shape(
@@ -446,10 +441,10 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
             let pages = db.load_pages().await?;
             let blocks = db.load_blocks().await?;
             let comments = db.load_comments().await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
-                    db.pool().clone(),
-                ));
+            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
+                db.pool().clone(),
+                db.cas().pool().clone(),
+            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 pages,
                 blocks,
@@ -468,7 +463,7 @@ pub struct LoadedRaw {
     pub pages: Vec<Value>,
     pub blocks: Vec<(Value, Option<String>)>,
     pub comments: Vec<(Value, Option<String>)>,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: Arc<dyn BlobReader>,
 }
 
 impl Default for LoadedRaw {
@@ -477,7 +472,7 @@ impl Default for LoadedRaw {
             pages: Vec::new(),
             blocks: Vec::new(),
             comments: Vec::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }

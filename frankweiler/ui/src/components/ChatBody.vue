@@ -40,6 +40,14 @@ const props = defineProps<{
    * source and destination is visually obvious across columns.
    */
   hoverAnchorUuid?: string | null;
+  /**
+   * The markdown_uuid of the body we're rendering. Used to rewrite
+   * relative image references (`![](blobs/foo.png)`) to backend asset
+   * URLs (`/api/asset/{markdownUuid}/blobs/foo.png`) so the browser
+   * actually fetches them. Optional: when absent, relative refs pass
+   * through unchanged.
+   */
+  markdownUuid?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -74,7 +82,36 @@ const md = new MarkdownIt({
   highlight,
 });
 
-const html = computed(() => md.render(props.body || ""));
+// Rewrite relative image srcs (`blobs/foo.png`, `./x.png`, `subdir/y.gif`)
+// to backend asset URLs. Absolute paths (`/...`) and full URLs
+// (`http://...`, `data:...`, `//cdn/...`) pass through unchanged.
+function isAbsoluteOrUrl(src: string): boolean {
+  return /^([a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(src);
+}
+const defaultImageRender =
+  md.renderer.rules.image ||
+  ((tokens, idx, options, _env, self) =>
+    self.renderToken(tokens, idx, options));
+md.renderer.rules.image = (tokens, idx, options, env, self) => {
+  const token = tokens[idx];
+  const srcIdx = token.attrIndex("src");
+  if (srcIdx >= 0 && token.attrs) {
+    const src = token.attrs[srcIdx][1];
+    const uuid = (env as { markdownUuid?: string | null } | undefined)
+      ?.markdownUuid;
+    if (uuid && src && !isAbsoluteOrUrl(src)) {
+      token.attrs[srcIdx][1] = `/api/asset/${encodeURIComponent(uuid)}/${src
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`;
+    }
+  }
+  return defaultImageRender(tokens, idx, options, env, self);
+};
+
+const html = computed(() =>
+  md.render(props.body || "", { markdownUuid: props.markdownUuid ?? null }),
+);
 const root = ref<HTMLElement | null>(null);
 
 function injectCopyUuidButtons() {

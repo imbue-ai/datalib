@@ -28,7 +28,7 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 use api::{call_slack, SlackCall, SlackError};
 pub use db::{
     block_on_load_all, block_on_load_filtered, block_on_probe_thread_cursors, db_path_for,
-    BlobBytes, LoadedMessage, LoadedRaw, MessageRow, RawDb,
+    LoadedMessage, LoadedRaw, MessageRow, RawDb,
 };
 use frankweiler_etl::events;
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
@@ -633,6 +633,7 @@ impl Default for FetchOptions {
     }
 }
 
+#[derive(serde::Serialize)]
 pub struct FetchSummary {
     pub messages: usize,
     pub replies: usize,
@@ -654,6 +655,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "slack_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "slack_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
 
     let since_dt =
         parse_iso_or_utc_date(&opts.since).with_context(|| format!("--since {:?}", opts.since))?;
@@ -668,7 +675,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "media": opts.media,
         "blob_size_limit_bytes": opts.blob_size_limit_bytes,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = frankweiler_etl::extract_run::ExtractRun::start(db.pool(), &run_config).await?;
 
     let t_scan = std::time::Instant::now();
     let channel_latest_ts = db.latest_ts_by_channel().await?;
@@ -742,7 +749,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             // Per-channel inner bar: starts as a spinner during the
             // list pass (total unknown) and switches to a determinate
             // bar in pass B once `export_channel` calls `set_length`.
-            let inner = opts.progress.child(name);
+            // Prefix with `slack:` so the channel bars are visually
+            // attributed to the slack source — useful when several
+            // providers' inner bars are interleaved by MultiProgress.
+            let inner = opts.progress.child(&format!("slack: {name}"));
             inner.set_message("listing");
             let result = export_channel(
                 &db,
@@ -783,14 +793,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let result = work.await;
-    let summary_json = json!({
-        "messages": grand.messages,
-        "replies": grand.replies,
-        "media": grand.media,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &grand).await;
     result?;
 
     info!(

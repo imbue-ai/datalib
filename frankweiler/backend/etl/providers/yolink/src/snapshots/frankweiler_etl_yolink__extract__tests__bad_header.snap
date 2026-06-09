@@ -1,0 +1,5 @@
+---
+source: etl/providers/yolink/src/extract.rs
+expression: "format!(\"{:#}\", parse(bad_header, \"thsensor\").unwrap_err())"
+---
+missing CSV column "Temperature(℃)" (got StringRecord(["Device Id", "Time", "Temperature(℉)", "Humidity(%RH)"]))

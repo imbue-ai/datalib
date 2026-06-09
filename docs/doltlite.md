@@ -57,9 +57,16 @@ doltlite -readonly raw/slack.doltlite_db "SELECT * FROM dolt_branches;"
 doltlite -readonly raw/slack.doltlite_db "SELECT * FROM dolt_status;"
 ```
 
-Columns are `(table_name, staged, status)`. A non-empty result usually
-means an ETL run died before its `commit_run` call landed; the next
-successful run will fold the dirty rows into its own commit.
+Columns are `(table_name, staged, status)`. A non-empty result used to
+mean "an ETL run died before its `commit_run` call landed, and the
+next successful run will fold the dirty rows into its own commit."
+That implicit folding mixed two runs' work under one `dolt_log` entry,
+so since the change documented in [Operational notes](#operational-notes)
+below, `doltlite_raw::open` now seals any pre-existing dirty tree into
+its own `rescue: ...` commit before doing anything else. A non-empty
+`dolt_status` against a file you opened with the CLI just means an ETL
+run is mid-flight (or recently was) and a rescue would land on the next
+sync.
 
 ### What changed between two commits
 
@@ -166,6 +173,56 @@ The common-use subset:
 | `dolt_blame_<table>` | vtab | per-row `git blame`. |
 | `dolt_conflicts_<table>` | vtab | merge conflicts surviving a `dolt_merge`. |
 | `dolt_commit_ancestors` | vtab | the commit DAG. |
+
+## Operational notes
+
+### `sqlite3_open_v2` is loop-bound — build doltlite at `-O2`
+
+doltlite's open path walks the prolly chunk store's root pages and
+blake3-hashes each one before any query can run. On a multi-GB raw
+store that's a *lot* of tight inner-loop C code. We learned this the
+hard way: a 3.5GB `raw/slack.doltlite_db` took **~60 seconds** to open
+from Rust (sqlx blew its 30s `acquire_timeout`, the translate phase
+died, the UI grid silently went empty), while the upstream CLI on the
+same file opened it in 2.4 seconds.
+
+The diff turned out to be the C compile flags. Bazel's `fastbuild`
+default for `cc_library` is `-O0`, which is a 15-25× hit specifically
+for this workload (prolly-tree page walks + blake3 are pathologically
+sensitive to compiler optimizations). Our `third-party/doltlite/BUILD.bazel`
+now forces `-O2` regardless of `--compilation_mode` — we never step-
+debug doltlite C from Rust anyway, so paying for optimized code under
+fastbuild is a strict win.
+
+Other compile-flag lesson learned along the way: don't add
+`-DSQLITE_DEFAULT_FOREIGN_KEYS=1`. The upstream CLI builds without it,
+and any caller that wants FK enforcement should send
+`PRAGMA foreign_keys = ON` after connect (sqlx already does).
+
+The standalone reproducer lives in `//hack/slack_open_debug/`. It
+times raw `sqlite3_open_v2` (via `extern "C"` against our static
+archive — no libsqlite3-sys, no sqlx) against the same open through
+the sqlx pool, so a future regression in either layer is easy to
+attribute.
+
+### Rescue commits on every Rust-side open
+
+`doltlite_raw::open` now checks `dolt_status` at every open and, if
+non-empty, stamps a `rescue: pre-run snapshot of orphaned working tree`
+commit before applying any DDL. The point isn't recovery — `dolt_log`
+audit-trail hygiene is. Without it, a crashed run's uncommitted rows
+silently fold into the next successful `commit_run`, mixing two runs'
+work under one commit message. With it, each tool entry that finds a
+dirty tree gets a dedicated commit it can be traced to.
+
+`commit_run` is tolerant of "nothing to commit, working tree clean" so
+the trailing orchestrator commit can legitimately find the rescue
+already swept its work (which it will, on a successful single-process
+run where rescue is a no-op).
+
+If you see a stream of `rescue: ...` commits in `dolt_log()`, something
+is crashing mid-batch. Look upstream of the rescue for the actual cause
+(network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 

@@ -12,40 +12,64 @@ fixture trees live under different parent directories so a single
 
 Args (positional):
     1:  path to `frankweiler-sync` binary
-    2:  --now stamp (ISO-8601)
-    3:  data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
+    2:  path to `signal-make-fixture` binary (used to expand the signal
+        TNG JSON spec into an encrypted snapshot dir on the fly)
+    3:  --now stamp (ISO-8601)
+    4:  data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
         directly underneath; YAMLs + playback also stashed here)
-    4:  anthropic_api fixture dir (input)
-    5:  chatgpt_api   fixture dir
-    6:  slack_api     fixture dir
-    7:  github_api    fixture dir
-    8:  gitlab_api    fixture dir
-    9:  notion_web    fixture dir
-    10: beeper_tng    fixture dir (SQL files + media; we materialize a
+    5:  anthropic_api fixture dir (input)
+    6:  chatgpt_api   fixture dir
+    7:  slack_api     fixture dir
+    8:  github_api    fixture dir
+    9:  gitlab_api    fixture dir
+    10: notion_web    fixture dir
+    11: beeper_tng    fixture dir (SQL files + media; we materialize a
                                    BeeperTexts-shaped dir from it)
-    11: carddav_tng   fixture dir (vCard files; translate-only —
+    12: carddav_tng   fixture dir (vCard files; translate-only —
                                     config carries no `sync:` block so
                                     extract is skipped and translate
                                     reads `.vcf` files straight from
                                     `input_path`)
+    13: signal_tng    JSON spec for the TNG signal backup; the path is
+                      to the .json file itself. We run
+                      `signal-make-fixture` against it to materialize
+                      an encrypted snapshot dir for extract to walk.
+                      AEP is the public 64-zero fixture passphrase
+                      (`SIGNAL_PASSPHRASE` env var set below).
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
+# Public fixture AEP — the signal-tng fixture is generated and
+# decrypted with this passphrase. Documented in the signal-backup
+# crate. NOT a secret; the whole point of having a fixed AEP is so
+# the crypto path runs unchanged against synthetic data.
+FIXTURE_SIGNAL_AEP = "0" * 64
+
 
 def main() -> int:
     sync_bin = Path(sys.argv[1]).resolve()
-    now = sys.argv[2]
-    data_root = Path(sys.argv[3]).resolve()
-    anth_fx, cgpt_fx, slack_fx, gh_fx, gl_fx, notion_fx, beeper_fx, carddav_fx = (
-        Path(p).resolve() for p in sys.argv[4:12]
-    )
+    signal_make_fixture_bin = Path(sys.argv[2]).resolve()
+    now = sys.argv[3]
+    data_root = Path(sys.argv[4]).resolve()
+    (
+        anth_fx,
+        cgpt_fx,
+        slack_fx,
+        gh_fx,
+        gl_fx,
+        notion_fx,
+        beeper_fx,
+        carddav_fx,
+        signal_spec,
+    ) = (Path(p).resolve() for p in sys.argv[5:14])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -64,6 +88,14 @@ def main() -> int:
     # build the dbs here once and point `beeper_data_dir` at them
     # in the extract YAML.
     beeper_data_dir = _materialize_beeper_fixture(beeper_fx, workspace / "beeper_data")
+
+    # Signal: expand the JSON spec into an encrypted snapshot dir. The
+    # extractor will scan this dir for `signal-backup-*` subdirs and
+    # pick the newest one — same code path as a real user's
+    # `~/backups/SignalBackups`.
+    signal_snapshot_root = workspace / "signal_snapshots"
+    signal_snapshot_root.mkdir(exist_ok=True)
+    _run([str(signal_make_fixture_bin), str(signal_spec), str(signal_snapshot_root)])
 
     # Synth YAML: each source's input_path points at the checked-in
     # fixture tree. The synth phase reads from those and writes HTTP
@@ -90,7 +122,12 @@ def main() -> int:
                 # phase's `enabled_sources()` set consistent with
                 # extract's, mirroring beeper's pattern.
                 "tng_contacts": ("carddav", carddav_fx),
+                # Signal also has no HTTP synthesizer (its extract
+                # reads a local file tree). Listing it for symmetry —
+                # the synth pass writes zero playback fixtures.
+                "signal": ("signal_backup", signal_snapshot_root),
             },
+            signal_snapshot_root=signal_snapshot_root,
         )
     )
 
@@ -124,9 +161,15 @@ def main() -> int:
                 # translate then reads vCards straight from
                 # `input_path`.
                 "tng_contacts": ("carddav", carddav_fx),
+                # Signal extract walks `snapshot_dir` (set in
+                # `_yaml` below), not `input_path`; we still set
+                # input_path to the per-source raw subdir so the
+                # extractor's doltlite raw store lands there.
+                "signal": ("signal_backup", raw_root / "signal"),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
+            signal_snapshot_root=signal_snapshot_root,
         )
     )
 
@@ -153,6 +196,10 @@ def main() -> int:
     )
 
     print(f"[run_sync_pipeline] extract+translate → {data_root}", flush=True)
+    # Inject the public fixture AEP so the signal extractor can decrypt
+    # the snapshot we generated above. Everything else inherits the
+    # genrule's env.
+    extract_env = {**os.environ, "SIGNAL_PASSPHRASE": FIXTURE_SIGNAL_AEP}
     _run(
         [
             str(sync_bin),
@@ -162,7 +209,8 @@ def main() -> int:
             now,
             "--playback-root",
             str(playback),
-        ]
+        ],
+        env=extract_env,
     )
     return 0
 
@@ -172,6 +220,7 @@ def _yaml(
     sources: dict[str, tuple[str, Path]],
     notion_seed: str | None = None,
     beeper_data_dir: Path | None = None,
+    signal_snapshot_root: Path | None = None,
 ) -> str:
     """Render a minimal YAML covering every fixture source.
 
@@ -218,6 +267,16 @@ def _yaml(
             # `input_path`. This is the same shape claude_export
             # uses for "drop a fixture, render it" sources.
             pass
+        elif type_str == "signal_backup":
+            # The signal extractor needs `snapshot_dir` (where the
+            # `signal-backup-*` subdirs live) in addition to the raw
+            # store under `input_path`. AEP comes from the
+            # SIGNAL_PASSPHRASE env var injected by main().
+            if signal_snapshot_root is not None:
+                lines.append("    sync:")
+                lines.append(f"      snapshot_dir: {signal_snapshot_root}")
+            else:
+                lines.append("    sync: {}")
         elif type_str != "claude_export":
             lines.append("    sync: {}")
     return "\n".join(lines) + "\n"
@@ -293,9 +352,9 @@ def _first_notion_page_id(notion_fx: Path) -> str | None:
     return None
 
 
-def _run(argv: list[str]) -> None:
+def _run(argv: list[str], env: dict[str, str] | None = None) -> None:
     print("[run_sync_pipeline] $", " ".join(argv), flush=True)
-    subprocess.run(argv, check=True)
+    subprocess.run(argv, check=True, env=env)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,6 @@
 pub mod parse;
 pub mod render;
 
-use anyhow::Result;
 use uuid::Uuid;
 
 /// v5 namespace for every UUID this provider mints. Distinct from
@@ -70,48 +69,10 @@ pub fn beeper_markdown_uuid(room_uuid: &str, period_key: &str) -> String {
 // Period
 // ─────────────────────────────────────────────────────────────────────
 
-/// How we bucket a room's events into rendered documents. Each
-/// variant ultimately becomes a SQLite `strftime` format string
-/// that maps a UTC timestamp to the period's textual key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Period {
-    Month,
-    Day,
-    Year,
-    All,
-}
-
-impl Period {
-    pub fn from_config(s: Option<&str>) -> Result<Self> {
-        Ok(match s.unwrap_or("month").to_ascii_lowercase().as_str() {
-            "month" => Period::Month,
-            "day" => Period::Day,
-            "year" => Period::Year,
-            "all" => Period::All,
-            other => anyhow::bail!(
-                "unknown beeper period {other:?}; expected one of: month, day, year, all"
-            ),
-        })
-    }
-
-    /// SQLite format string passed to `strftime(<fmt>, ts/1000,
-    /// 'unixepoch')`. For `All`, we use a literal so every row
-    /// buckets together.
-    pub fn strftime_fmt(self) -> &'static str {
-        match self {
-            Period::Month => "%Y-%m",
-            Period::Day => "%Y-%m-%d",
-            Period::Year => "%Y",
-            // Sentinel — every row in a single bucket. We map this
-            // to a constant key at SELECT time.
-            Period::All => "%Y-%m-%dT%H:%M:%S",
-        }
-    }
-
-    pub fn key_for_all() -> &'static str {
-        "all"
-    }
-}
+// The period-bucketing knob is shared with the other chat providers
+// (signal, whatsapp, googlechat, …) and lives in `frankweiler_etl`.
+// Re-export at the old path so existing call sites keep compiling.
+pub use frankweiler_etl::periodize::Period;
 
 // ─────────────────────────────────────────────────────────────────────
 // Public re-exports for the sync orchestrator

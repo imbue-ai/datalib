@@ -20,8 +20,11 @@ frankweiler-etl-contacts = { path = "../etl/providers/contacts" }
 frankweiler-etl-slack = { path = "../etl/providers/slack" }
 frankweiler-etl-github = { path = "../etl/providers/github" }
 frankweiler-etl-gitlab = { path = "../etl/providers/gitlab" }
+frankweiler-etl-email = { path = "../etl/providers/email" }
 frankweiler-etl-notion = { path = "../etl/providers/notion" }
 frankweiler-etl-perseus = { path = "../etl/providers/perseus" }
+frankweiler-etl-signal = { path = "../etl/providers/signal" }
+frankweiler-etl-yolink = { path = "../etl/providers/yolink" }
 anyhow = { workspace = true }
 clap = { version = "4.5", features = ["derive", "env"] }
 indicatif = "0.18"

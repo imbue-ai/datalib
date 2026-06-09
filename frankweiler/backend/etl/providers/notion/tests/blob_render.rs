@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use frankweiler_etl_notion::extract::db::BlobBytes;
+use frankweiler_etl::blob_cas::{BlobView, InMemoryBlobReader};
 use frankweiler_etl_notion::translate::parse::ParsedNotionOfficial;
 use frankweiler_etl_notion::translate::render::render_notion_official;
 use serde_json::{json, Value};
@@ -42,18 +42,18 @@ fn image_blob_lands_next_to_markdown() {
         }
     });
 
-    let mut blobs_by_owner: HashMap<String, BlobBytes> = HashMap::new();
-    blobs_by_owner.insert(
-        bid.to_string(),
-        BlobBytes {
-            id: format!("{bid}:image"),
-            owning_id: bid.to_string(),
-            slot: "image".into(),
-            content_type: Some("image/png".into()),
-            bytes: bytes.clone(),
-            source_url: Some("https://s3.notion-static.com/foo/test.png?expiry=123".into()),
-        },
-    );
+    let mut reader = InMemoryBlobReader::new();
+    let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+    reader.insert(BlobView {
+        ref_id: format!("{bid}:image"),
+        owning_id: bid.to_string(),
+        slot: "image".into(),
+        blake3: blake3.clone(),
+        content_type: Some("image/png".into()),
+        upstream_name: None,
+        source_url: Some("https://s3.notion-static.com/foo/test.png?expiry=123".into()),
+        bytes: bytes.clone(),
+    });
 
     let parsed = ParsedNotionOfficial {
         pages: vec![page],
@@ -62,9 +62,7 @@ fn image_blob_lands_next_to_markdown() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: std::sync::Arc::new(
-            frankweiler_etl::blob_store::InMemoryBlobStore::from_owner_map(blobs_by_owner),
-        ),
+        blobs: reader.into_handle(),
     };
 
     let summary = render_notion_official(
@@ -89,7 +87,10 @@ fn image_blob_lands_next_to_markdown() {
         "expected relative blob link, got:\n{md}"
     );
 
-    let blob_path = page_dir.join("blobs").join(format!("{bid}.png"));
+    // Hash-based filename via BlobView::rendered_filename: first 16
+    // hex chars of blake3 + content-type extension.
+    let short = &blake3[..16];
+    let blob_path = page_dir.join("blobs").join(format!("{short}.png"));
     let on_disk = fs::read(&blob_path).expect("blob file exists");
     assert_eq!(on_disk, bytes);
 }
@@ -129,7 +130,7 @@ fn missing_blob_falls_back_to_upstream_url() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        blobs: InMemoryBlobReader::empty_handle(),
     };
 
     render_notion_official(
@@ -226,7 +227,7 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        blobs: InMemoryBlobReader::empty_handle(),
     };
 
     render_notion_official(
@@ -315,7 +316,7 @@ fn incremental_renders_only_changed_page() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        blobs: InMemoryBlobReader::empty_handle(),
     };
 
     let mut priors: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -361,7 +362,7 @@ fn incremental_renders_only_changed_page() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+        blobs: InMemoryBlobReader::empty_handle(),
     };
 
     // ── pass 2: render with v1 priors; only page B should fire. ─────

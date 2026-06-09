@@ -20,7 +20,7 @@ rust_binary(
     # like http's /api/version still rely on CARGO_PKG_VERSION. Must match
     # [workspace.package].version in frankweiler/backend/Cargo.toml; the
     # //frankweiler/backend:version_consistency_test asserts that.
-    version = "0.5.3",
+    version = "0.6.2",
     # Stamp the binary with STABLE_GIT_HASH from tools/workspace_status.sh
     # so `frankweiler-sync --version` reports the commit it was built from.
     # `stamp = -1` defers to the --stamp flag (forced on by .bazelrc), and
@@ -40,9 +40,12 @@ rust_binary(
         "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
         "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
         "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",
+        "//frankweiler/backend/etl/providers/email:frankweiler_etl_email",
         "//frankweiler/backend/etl/providers/notion:frankweiler_etl_notion",
         "//frankweiler/backend/etl/providers/perseus:frankweiler_etl_perseus",
+        "//frankweiler/backend/etl/providers/signal:frankweiler_etl_signal",
         "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",
+        "//frankweiler/backend/etl/providers/yolink:frankweiler_etl_yolink",
         "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",

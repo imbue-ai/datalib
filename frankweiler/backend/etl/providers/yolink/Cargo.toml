@@ -1,0 +1,29 @@
+[package]
+name = "frankweiler-etl-yolink"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_yolink"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-core = { path = "../../../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["process", "fs", "io-util", "time", "rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
+tracing = "0.1"
+csv = "1"
+md-5 = "0.10"
+clap = { version = "4.5", features = ["derive", "env"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+insta = { version = "1.41", features = ["yaml"] }

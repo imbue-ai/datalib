@@ -41,6 +41,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -133,6 +134,7 @@ fn full_ddl() -> Vec<String> {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 /// Distinct-row counts of every object table this provider
@@ -212,11 +214,16 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     /// Wipe every per-row table so the next fetch re-downloads
@@ -224,14 +231,6 @@ impl RawDb {
     /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
-    }
-
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
     }
 
     /// Distinct-row counts read straight from the destination DB
@@ -252,20 +251,20 @@ impl RawDb {
         let rooms = one(&self.pool, "rooms").await? as usize;
         let users = one(&self.pool, "users").await? as usize;
         let events = one(&self.pool, "events").await? as usize;
-        let blobs = sqlx::query("SELECT COUNT(*) AS n FROM blobs WHERE bytes IS NOT NULL")
+        let blobs = sqlx::query("SELECT COUNT(*) AS n FROM blob_refs WHERE blake3 IS NOT NULL")
             .fetch_one(&self.pool)
             .await
             .context("count blobs with bytes")?
             .try_get::<i64, _>("n")
             .unwrap_or(0) as usize;
-        // `last_error` now lives on the bookkeeping sidecar — join in.
-        let blob_errors =
-            sqlx::query("SELECT COUNT(*) AS n FROM blobs_bookkeeping WHERE last_error IS NOT NULL")
-                .fetch_one(&self.pool)
-                .await
-                .context("count blobs with errors")?
-                .try_get::<i64, _>("n")
-                .unwrap_or(0) as usize;
+        let blob_errors = sqlx::query(
+            "SELECT COUNT(*) AS n FROM blob_refs_bookkeeping WHERE last_error IS NOT NULL",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("count blobs with errors")?
+        .try_get::<i64, _>("n")
+        .unwrap_or(0) as usize;
         Ok(RowCounts {
             rooms,
             users,

@@ -1,0 +1,160 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in JSON fixtures used by render + playback tests.
+filegroup(
+    name = "fixtures",
+    srcs = glob(
+        ["tests/fixtures/**/*"],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_email",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_email",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:html2md",
+        "@frankweiler_crates//:mail-parser",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+# Extract step — JMAP session, state-token-incremental sync of mailboxes,
+# emails, threads, attachments + .eml bytes into one .doltlite_db.
+rust_binary(
+    name = "jmap_download",
+    srcs = ["src/bin/jmap_download.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_email",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "jmap_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_email",
+    edition = "2021",
+)
+
+rust_test(
+    name = "jmap_render",
+    srcs = ["tests/jmap_render.rs"],
+    crate_root = "tests/jmap_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":fixtures"],
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":frankweiler_etl_email",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "jmap_mbox",
+    srcs = ["tests/jmap_mbox.rs"],
+    crate_root = "tests/jmap_mbox.rs",
+    data = [":fixtures"],
+    edition = "2021",
+    env = {
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":frankweiler_etl_email",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+rust_test(
+    name = "jmap_playback_roundtrip",
+    srcs = ["tests/playback_roundtrip.rs"],
+    crate_root = "tests/playback_roundtrip.rs",
+    data = [":fixtures"],
+    edition = "2021",
+    env = {
+        "JMAP_FIXTURE_DIR": "frankweiler/backend/etl/providers/email/tests/fixtures",
+    },
+    deps = [
+        ":frankweiler_etl_email",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+# Live test — talks to api.fastmail.com via latchkey. Manual.
+rust_test(
+    name = "jmap_live",
+    srcs = ["tests/jmap_live.rs"],
+    crate_root = "tests/jmap_live.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
+    edition = "2021",
+    env = {
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    tags = [
+        "external",
+        "manual",
+        "no-sandbox",
+    ],
+    deps = [
+        ":frankweiler_etl_email",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "jmap_render.update",
+    test = ":jmap_render",
+)
+
+insta_update(
+    name = "jmap_live.update",
+    test = ":jmap_live",
+    test_args = ["--ignored"],
+)

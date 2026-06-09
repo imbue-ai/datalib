@@ -20,8 +20,9 @@
 //! structured data; structured fields come from `grid_rows`.
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, Response, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
@@ -79,6 +80,13 @@ pub struct SearchResponse {
     pub rows: Vec<SearchRow>,
     pub columns: Vec<ColumnSpec>,
     pub total_estimated: u64,
+    /// Backend-side errors the user should know about even though we
+    /// returned 200 + rows. Populated when a degraded path ran (qmd
+    /// fallback) or when a swallowed error would otherwise leave the
+    /// UI staring at an empty grid with no signal. The UI surfaces
+    /// these as toasts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -151,6 +159,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
         .route("/api/chat/{markdown_uuid}", get(chat))
+        .route("/api/asset/{markdown_uuid}/{*rel}", get(asset))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/card", post(create_card))
         .route("/api/card/{hash}", get(get_card))
@@ -205,14 +214,34 @@ async fn search_handler(
     //      the error in `query_echo.qmd_error` and fall back to repo.search
     //      (SQL substring LIKE) so the UI isn't dead.
     let mut qmd_error: Option<String> = None;
+    let mut errors: Vec<String> = Vec::new();
+    // Run repo.search but collect any error instead of swallowing it.
+    // The previous `unwrap_or_default()` hid schema mismatches and
+    // connection failures behind an empty grid with no signal.
     let rows = if parsed.free_text.is_empty() {
-        s.repo.search(&parsed, limit).await.unwrap_or_default()
+        match s.repo.search(&parsed, limit).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                let msg = format!("structured search: {e}");
+                eprintln!("search: {msg}");
+                errors.push(msg);
+                Vec::new()
+            }
+        }
     } else {
         match run_qmd_search(&s.root, &s.repo, s.qmd_daemon.as_ref(), &parsed, limit).await {
             Ok(rows) => rows,
             Err(e) => {
                 qmd_error = Some(format!("{e:#}"));
-                s.repo.search(&parsed, limit).await.unwrap_or_default()
+                match s.repo.search(&parsed, limit).await {
+                    Ok(rows) => rows,
+                    Err(e2) => {
+                        let msg = format!("LIKE fallback: {e2}");
+                        eprintln!("search: {msg}");
+                        errors.push(msg);
+                        Vec::new()
+                    }
+                }
             }
         }
     };
@@ -234,6 +263,7 @@ async fn search_handler(
         rows,
         columns: default_columns(),
         total_estimated: total,
+        errors,
     })
 }
 
@@ -363,6 +393,44 @@ async fn chat(
         body,
         outgoing_edges,
     }))
+}
+
+/// Serve a file living next to (or under) a rendered markdown. Relative
+/// `![](blobs/foo.png)` references in the markdown body become
+/// `/api/asset/{markdown_uuid}/blobs/foo.png` once the UI rewrites them;
+/// this handler resolves them by looking up the markdown's on-disk path
+/// and joining `rel` against its parent directory.
+///
+/// Path-traversal guard: canonicalize both the parent dir and the target,
+/// reject the request if the target escapes the parent.
+async fn asset(
+    State(s): State<AppState>,
+    Path((markdown_uuid, rel)): Path<(String, String)>,
+) -> Result<Response<Body>, StatusCode> {
+    let md_path = s
+        .repo
+        .qmd_path_for_markdown(&markdown_uuid)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let parent = md_path.parent().ok_or(StatusCode::NOT_FOUND)?.to_path_buf();
+    let target = parent.join(&rel);
+    let parent_canon = parent
+        .canonicalize()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let target_canon = target.canonicalize().map_err(|_| StatusCode::NOT_FOUND)?;
+    if !target_canon.starts_with(&parent_canon) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let bytes = std::fs::read(&target_canon).map_err(|_| StatusCode::NOT_FOUND)?;
+    let mime = mime_guess::from_path(&target_canon)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string();
+    Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .body(Body::from(bytes))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn submit_feedback(

@@ -105,14 +105,14 @@ RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 # binary observes — drift here would be confusing without buying
 # anything. The `libdoltlite-dev` headers we don't want (no compilation
 # happens in this image); the `doltlite` CLI package pulls in its
-# `libdoltlite0 (= 0.11.5)` runtime as a hard dep, which is unavoidable
+# `libdoltlite0 (= 0.11.8)` runtime as a hard dep, which is unavoidable
 # even though our binary doesn't dynamic-link against it (the .so just
 # sits there serving the CLI). Adds ~31 MB to the image — small price
 # for a real debug shell against the prolly store.
 #
 # public-release assets are reachable anonymously, so curl is fine here
 # (no gh CLI dep just for this step).
-ARG DOLTLITE_CLI_VERSION=0.11.5
+ARG DOLTLITE_CLI_VERSION=0.11.8
 RUN arch="$(dpkg --print-architecture)" \
     && base="https://github.com/dolthub/doltlite/releases/download/v${DOLTLITE_CLI_VERSION}" \
     && curl --proto '=https' --tlsv1.2 -fL --retry 5 --retry-delay 4 \

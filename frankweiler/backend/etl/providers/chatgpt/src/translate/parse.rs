@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use super::sentinels::clean_text;
 use crate::extract::db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw};
 
 #[derive(Debug, Clone)]
@@ -116,7 +117,7 @@ pub struct ParsedChatGPTApi {
     /// `file_id`. Render materializes these onto disk in a `blobs/`
     /// directory next to each rendered `.md` so the sibling-relative
     /// link resolves.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
 }
 
 impl Default for ParsedChatGPTApi {
@@ -124,7 +125,7 @@ impl Default for ParsedChatGPTApi {
         Self {
             accounts: Vec::new(),
             conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -166,7 +167,7 @@ fn synthesize_text(content: Option<&Value>) -> String {
                     }
                 }
             }
-            out.join("\n")
+            clean_text(&out.join("\n"))
         }
         Some("code") | Some("execution_output") => content
             .get("text")
@@ -190,18 +191,17 @@ fn synthesize_text(content: Option<&Value>) -> String {
                     }
                 }
             }
-            out.join("\n\n")
+            clean_text(&out.join("\n\n"))
         }
-        Some("reasoning_recap") => content
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        Some("model_editable_context") => content
-            .get("model_set_context")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        Some("reasoning_recap") => {
+            clean_text(content.get("content").and_then(Value::as_str).unwrap_or(""))
+        }
+        Some("model_editable_context") => clean_text(
+            content
+                .get("model_set_context")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        ),
         _ => String::new(),
     }
 }
@@ -290,7 +290,7 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
                             part_index: i,
                             kind: "text".into(),
                             language: None,
-                            text: Some(s.to_string()),
+                            text: Some(clean_text(s)),
                             raw_json: Value::Object(raw),
                         });
                     } else {
@@ -312,7 +312,7 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
                             part_index: i,
                             kind: "text".into(),
                             language: None,
-                            text: Some(txt),
+                            text: Some(clean_text(&txt)),
                             raw_json: raw,
                         });
                     }
@@ -374,24 +374,20 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
                         part_index: i,
                         kind: "thoughts".into(),
                         language: None,
-                        text: Some(bits.join("\n\n")),
+                        text: Some(clean_text(&bits.join("\n\n"))),
                         raw_json: t.clone(),
                     });
                 }
             }
         }
         Some("reasoning_recap") => {
-            let text = content
-                .get("content")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+            let text = content.get("content").and_then(Value::as_str).unwrap_or("");
             rows.push(OAContentPartRow {
                 message_id: message_id.into(),
                 part_index: 0,
                 kind: "reasoning_recap".into(),
                 language: None,
-                text: Some(text),
+                text: Some(clean_text(text)),
                 raw_json: Value::Object(content.clone()),
             });
         }
@@ -401,13 +397,12 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
                 part_index: 0,
                 kind: "model_editable_context".into(),
                 language: None,
-                text: Some(
+                text: Some(clean_text(
                     content
                         .get("model_set_context")
                         .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                ),
+                        .unwrap_or(""),
+                )),
                 raw_json: Value::Object(content.clone()),
             });
         }

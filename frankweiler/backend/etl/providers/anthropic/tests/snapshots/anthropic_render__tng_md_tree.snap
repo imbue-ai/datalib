@@ -1,5 +1,5 @@
 ---
-source: frankweiler/backend/etl/providers/anthropic/tests/anthropic_render.rs
+source: etl/providers/anthropic/tests/anthropic_render.rs
 expression: bundle
 ---
 === rendered_md/anthropic/00000001-1701-4d00-8000-000000000001/0aa00000-1701-4d00-8000-0000000000aa/llm_chats/c0000003-1701-4d00-8000-00000000c003/index.md ===
@@ -198,7 +198,7 @@ What's wrong with this medical-tricorder readout?
 
 **Attachments:**
 
-- ![tricorder-readout.png](blobs/tricorder-readout.png)
+- *[attachment not yet fetched: tricorder-readout.png]*
 
 </div>
 
