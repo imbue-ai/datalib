@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the CardDAV provider.
 //!
-//! Shared bookkeeping tables (`blob_refs`, `endpoint_shapes`,
-//! `sync_runs`) plus the open/blob plumbing live in
+//! Shared bookkeeping tables (`blob_refs`, `sync_runs`) plus the
+//! open/blob plumbing live in
 //! [`frankweiler_etl::doltlite_raw`]. The primary-key policy that
 //! governs every object table here is documented in that module's
 //! header — read it before adding new tables.

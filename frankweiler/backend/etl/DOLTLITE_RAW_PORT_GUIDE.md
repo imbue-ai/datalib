@@ -33,7 +33,7 @@ to this:
 
 **That's it.** A single sqlite file is the entire output of the
 download. No `raw/<name>/` dir, no `raw/<name>/blobs/` dir. Object
-payloads, sync-run logs, endpoint shapes, AND blob bytes all live in
+payloads, sync-run logs, AND blob bytes all live in
 tables inside that one `.doltlite_db`.
 
 Blob bytes get materialized to disk **next to the rendered markdown**
@@ -197,9 +197,9 @@ assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
 This guards against an accidental `jsonb()` removal that would
 silently fall back to text storage with no other visible difference.
 
-**Don't wrap** `sync_runs.config|summary` or
-`endpoint_shapes.example_*` — those are tiny single-row bookkeeping
-where ad-hoc `sqlite3 ... SELECT ...` ergonomics matter more than
+**Don't wrap** `sync_runs.config|summary` — those are tiny single-row
+bookkeeping where ad-hoc `sqlite3 ... SELECT ...` ergonomics matter
+more than
 binary-format parse perf.
 
 Reads via `dr::load_payloads()` already unwrap with `json(...)`; if
@@ -269,11 +269,10 @@ Don't re-implement these in your provider:
 | Blob reader impls | `SqliteBlobReader::new(refs_pool, cas_pool)` / `InMemoryBlobReader` |
 | Universal markdown link | `blob_cas::attachment_md(reader, ref_id, display, is_image)` |
 | Universal file write | `blob_cas::materialize_refs(reader, ref_ids, &blobs_dir)` |
-| Endpoint shape stamping | `dr::record_endpoint_shape()` |
 
 The shared module ships shared DDL constants too — `BLOB_REFS_DDL`
-(+ its indexes), `SYNC_RUNS_DDL`, `ENDPOINT_SHAPES_DDL` — appended to
-your provider's DDL inside `open()`. The CAS file gets `CAS_OBJECTS_DDL`
+(+ its indexes), `SYNC_RUNS_DDL` — appended to your provider's DDL
+inside `open()`. The CAS file gets `CAS_OBJECTS_DDL`
 applied by `BlobCas::open()`.
 
 Your `extract/db.rs` should be a thin provider-specific layer (see

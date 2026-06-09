@@ -11,7 +11,7 @@
 //! actual upstream change rather than churn introduced by our
 //! normalizer's evolution.
 //!
-//! Shared bookkeeping tables (`blobs`, `endpoint_shapes`, `sync_runs`)
+//! Shared bookkeeping tables (`blobs`, `sync_runs`)
 //! and open/blob plumbing live in [`frankweiler_etl::doltlite_raw`].
 
 use std::collections::HashMap;

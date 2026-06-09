@@ -562,9 +562,8 @@ Two halves to this:
     payloads verbatim (§2.4), the new bytes are captured for free —
     a translate-side bug is the worst case, never data loss. The
     principle: **upstream change should fail loudly at translate
-    time, not silently at extract time.** `endpoint_shapes` stamping
-    exists to support this; whether it actually surfaces drift to
-    the user is an open question (§16).
+    time, not silently at extract time.** No automated drift detector
+    exists today; see §15.6.
 
 ## 14. Operating assumptions
 
@@ -678,14 +677,8 @@ detect it as part of a sync run and surface it to the user with
 enough context to decide whether to ignore, file a bug, or block
 further syncs.
 
-The `endpoint_shapes` table exists for this — extract stamps one
-example payload per endpoint per run.
-
-**Open**: nothing currently *reads* `endpoint_shapes` to compare
-across runs and alert on drift. The mechanism is in place; the
-detection-and-alerting policy is not.
-
-FIXME: Hmm, I don't remember asking for this mechanism.  I think we should delete this "endpoint_shapes" thing, both from this doc, and from the codebase as well.
+**Open**: not implemented today, and we don't know yet what we want.
+A previous attempt (`endpoint_shapes`) was deleted; see commit history.
 
 ### 15.7 Quantitative bound on "fast incremental"
 

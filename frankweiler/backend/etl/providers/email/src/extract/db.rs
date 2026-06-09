@@ -1,8 +1,8 @@
 //! Doltlite-backed raw store for the JMAP provider.
 //!
 //! Single sqlite file at `<data_root>/raw/<name>.doltlite_db`. Shared
-//! bookkeeping (`blobs`, `endpoint_shapes`, `sync_runs`,
-//! `sync_scope_state`) and the open / blob plumbing live in
+//! bookkeeping (`blobs`, `sync_runs`, `sync_scope_state`) and the
+//! open / blob plumbing live in
 //! [`frankweiler_etl::doltlite_raw`].
 //!
 //! Object tables (each carries a `<table>_bookkeeping` sidecar):

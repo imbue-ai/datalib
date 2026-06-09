@@ -156,9 +156,8 @@ struct Args {
     /// re-fetched on the wire. Use `--refetch-blobs` to invalidate
     /// the blob cache index when you actually want the bytes re-pulled.
     ///
-    /// Whole-table bookkeeping (sync_runs, endpoint_shapes,
-    /// sync_scope_state) is preserved — that's audit log + API
-    /// discovery metadata + resume cursor, not row content.
+    /// Whole-table bookkeeping (sync_runs, sync_scope_state) is
+    /// preserved — that's audit log + resume cursor, not row content.
     #[arg(long)]
     reset_and_redownload: bool,
 

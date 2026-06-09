@@ -3,7 +3,7 @@
 //! Replaces the per-entity JSONL trees with a single sqlx-managed
 //! sqlite (eventually doltlite) file at `<data_root>/raw/<name>.doltlite_db`.
 //! Schema is owned by this provider; the shared bookkeeping tables
-//! (`blobs`, `endpoint_shapes`, `sync_runs`) and the open / start_run
+//! (`blobs`, `sync_runs`) and the open / start_run
 //! / blob plumbing live in [`frankweiler_etl::doltlite_raw`].
 //!
 //! See the module docs in `frankweiler_etl::doltlite_raw` for the
@@ -30,7 +30,7 @@ pub use frankweiler_etl::doltlite_raw::db_path_for;
 // Notion-specific object tables
 // ─────────────────────────────────────────────────────────────────────
 //
-// The shared module owns `blobs`, `endpoint_shapes`, and `sync_runs`.
+// The shared module owns `blobs` and `sync_runs`.
 // Everything below is Notion-specific. PK policy: upstream Notion
 // UUIDs; see `frankweiler_etl::doltlite_raw` module docs.
 /// Data tables — what `dolt diff` should see across re-fetches.
@@ -418,15 +418,6 @@ impl RawDb {
         blob_cas::record_ref_error(&mut tx, ref_id, &owning, &slot, err).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
-    }
-
-    pub async fn record_endpoint_shape(
-        &self,
-        endpoint: &str,
-        headers: &Value,
-        envelope_skeleton: &Value,
-    ) -> Result<()> {
-        dr::record_endpoint_shape(&self.pool, endpoint, headers, envelope_skeleton).await
     }
 }
 

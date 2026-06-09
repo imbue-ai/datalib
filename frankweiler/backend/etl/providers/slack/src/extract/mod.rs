@@ -3,7 +3,7 @@
 //! Captures Slack data into a single doltlite db at
 //! `<data_root>/raw/<name>.doltlite_db` — one row per workspace
 //! (`auth.test`), user, channel, message, and reply page, plus the
-//! shared `blobs` / `sync_runs` / `endpoint_shapes` tables. See `db.rs`
+//! shared `blobs` / `sync_runs` tables. See `db.rs`
 //! for the table layout and the rationale for keying messages by
 //! `slack_message_uuid(team_id, channel_id, ts)`.
 //!

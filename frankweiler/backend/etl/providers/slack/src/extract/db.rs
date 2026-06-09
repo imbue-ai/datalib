@@ -2,7 +2,7 @@
 //!
 //! Replaces the JSONL tree of `raw_api/<method>/run-*.jsonl` with a
 //! single sqlite file at `<data_root>/raw/<name>.doltlite_db`. Shared
-//! bookkeeping tables (`blobs`, `endpoint_shapes`, `sync_runs`) and the
+//! bookkeeping tables (`blobs`, `sync_runs`) and the
 //! open / blob plumbing live in [`frankweiler_etl::doltlite_raw`]; the
 //! primary-key policy that governs every object table here is
 //! documented there.

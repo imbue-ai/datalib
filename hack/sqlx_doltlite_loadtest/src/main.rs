@@ -5,7 +5,7 @@
 //!
 //!   1. Opens a SqlitePool (max_connections=1) on its own .doltlite_db,
 //!      runs the same SHARED_DDL the real RawDb runs (sync_runs, blobs,
-//!      endpoint_shapes, etc. plus provider tables + bookkeeping).
+//!      plus provider tables + bookkeeping).
 //!   2. Inserts a sync_runs row via pool.begin()+execute+tx.commit (like
 //!      doltlite_raw::start_run).
 //!   3. Loops over N synthetic "items". For each:
@@ -108,12 +108,6 @@ const SHARED_DDL: &[&str] = &[
         config TEXT NOT NULL,
         status TEXT NOT NULL,
         summary TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS endpoint_shapes (
-        endpoint TEXT PRIMARY KEY,
-        example_headers TEXT NULL,
-        example_envelope_skeleton TEXT NULL,
-        captured_at TEXT NOT NULL
     )",
     "CREATE TABLE IF NOT EXISTS blobs (
         id TEXT PRIMARY KEY,

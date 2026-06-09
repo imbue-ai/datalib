@@ -2,7 +2,7 @@
 //!
 //! Every provider that ports its raw download to doltlite (notion,
 //! chatgpt, anthropic, …) ends up needing the same bookkeeping:
-//! identical `blob_refs` / `endpoint_shapes` / `sync_runs` tables,
+//! identical `blob_refs` / `sync_runs` tables,
 //! identical "open this file with `journal_mode=DELETE`" boilerplate,
 //! identical bookkeeping columns on every object table
 //! (`payload TEXT NULL`, `fetched_at`, `attempt_count`, …), and the
@@ -65,7 +65,7 @@
 //! inside the JSON document. `sqlite3` ad-hoc queries should select
 //! `json(payload)` rather than the raw column.
 //!
-//! `sync_runs.config` / `summary` and `endpoint_shapes.example_*`
+//! `sync_runs.config` / `summary`
 //! stay as plain TEXT — they're tiny single-row bookkeeping where
 //! debug-friendly `sqlite3` SELECT matters more than parse perf.
 //!
@@ -186,16 +186,6 @@ pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     summary TEXT NULL
 )";
 
-/// Last captured wire-shape for each endpoint we've talked to. PK is
-/// the endpoint identifier itself (e.g. `GET /v1/blocks/{id}/children`);
-/// re-running stamps over the same row.
-pub const ENDPOINT_SHAPES_DDL: &str = "CREATE TABLE IF NOT EXISTS endpoint_shapes (
-    endpoint TEXT PRIMARY KEY,
-    example_headers TEXT NULL,
-    example_envelope_skeleton TEXT NULL,
-    captured_at TEXT NOT NULL
-)";
-
 /// Per-scope incremental-sync cursor table. Used by providers (github,
 /// gitlab) whose discovery is keyed by a search scope ("author:@me",
 /// "assigned_to_me", …) and which want to narrow each subsequent run
@@ -212,7 +202,6 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 /// provider-specific table list inside [`open`].
 pub const SHARED_DDL: &[&str] = &[
     SYNC_RUNS_DDL,
-    ENDPOINT_SHAPES_DDL,
     crate::blob_cas::BLOB_REFS_DDL,
     crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
     crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
@@ -244,7 +233,7 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 /// Open (or create) the doltlite file and apply DDL idempotently.
 ///
 /// `extra_ddl` carries the provider-specific tables (and indexes). The
-/// shared blobs / endpoint_shapes / sync_runs are appended after.
+/// shared blobs / sync_runs are appended after.
 ///
 /// The connection is configured for our raw-store use:
 ///   - `journal_mode=DELETE`: single writer, single reader → no WAL
@@ -511,10 +500,9 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 ///   - each `<table>_bookkeeping` paired sidecar
 ///   - the shared `blobs` table and `blobs_bookkeeping` sidecar
 ///
-/// Whole-table bookkeeping (`sync_runs`, `endpoint_shapes`,
-/// `sync_scope_state`) is preserved — that's audit log + API
-/// discovery metadata + resume cursor, none of which is "content"
-/// the reset is trying to re-pull.
+/// Whole-table bookkeeping (`sync_runs`, `sync_scope_state`) is
+/// preserved — that's audit log + resume cursor, neither of which is
+/// "content" the reset is trying to re-pull.
 ///
 /// Tables names are interpolated into SQL; callers must pass
 /// trusted identifiers, not user input.
@@ -758,40 +746,6 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// endpoint_shapes
-// ─────────────────────────────────────────────────────────────────────
-
-/// Record (or refresh) the wire-shape skeleton for one endpoint.
-/// Caller is responsible for blanking out data fields in
-/// `envelope_skeleton`.
-pub async fn record_endpoint_shape(
-    pool: &SqlitePool,
-    endpoint: &str,
-    headers: &Value,
-    envelope_skeleton: &Value,
-) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    let h = serde_json::to_string(headers).unwrap_or_else(|_| "{}".into());
-    let e = serde_json::to_string(envelope_skeleton).unwrap_or_else(|_| "{}".into());
-    sqlx::query(
-        "INSERT INTO endpoint_shapes (endpoint, example_headers, example_envelope_skeleton, captured_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(endpoint) DO UPDATE SET
-            example_headers = excluded.example_headers,
-            example_envelope_skeleton = excluded.example_envelope_skeleton,
-            captured_at = excluded.captured_at",
-    )
-    .bind(endpoint)
-    .bind(&h)
-    .bind(&e)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .context("upsert endpoint_shapes")?;
-    Ok(())
-}
-
 #[cfg(test)]
 // Test diagnostics + intentional probe-failure prints under stock
 // libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
@@ -830,10 +784,6 @@ mod tests {
             .await
             .unwrap();
         sqlx::query("SELECT COUNT(*) FROM blob_refs")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM endpoint_shapes")
             .fetch_one(&pool)
             .await
             .unwrap();

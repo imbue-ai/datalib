@@ -3,7 +3,7 @@
 //! Replaces the JSON tree of `me.json` + `conversations.json` +
 //! `conversations/<id>.json` with a single sqlite file at
 //! `<data_root>/raw/<name>.doltlite_db`. Shared bookkeeping tables
-//! (`blobs`, `endpoint_shapes`, `sync_runs`) and open/blob plumbing
+//! (`blobs`, `sync_runs`) and open/blob plumbing
 //! live in [`frankweiler_etl::doltlite_raw`]; the primary-key policy
 //! that governs every object table here is documented there.
 //!
