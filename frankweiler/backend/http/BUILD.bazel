@@ -32,6 +32,7 @@ rust_library(
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:sha2",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tower-http",
         "@frankweiler_crates//:uuid",
@@ -58,6 +59,21 @@ rust_test(
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tower",
+    ],
+)
+
+rust_test(
+    name = "card_endpoint_test",
+    srcs = ["tests/card_endpoint.rs"],
+    edition = "2021",
+    deps = [
+        ":frankweiler_http",
+        "//frankweiler/backend/core:frankweiler_core",
+        "@frankweiler_crates//:axum",
+        "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tower",

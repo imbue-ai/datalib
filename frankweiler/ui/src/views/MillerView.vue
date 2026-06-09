@@ -19,6 +19,7 @@ import { useRoute, useRouter } from "vue-router";
 import { type SearchRow } from "@/api";
 import GridColumn from "@/components/GridColumn.vue";
 import DocColumn from "@/components/DocColumn.vue";
+import CardColumn from "@/components/CardColumn.vue";
 import {
   type Column,
   emptyGrid,
@@ -48,6 +49,7 @@ function initialColumns(): Column[] {
 const DEFAULT_WIDTH: Record<Column["kind"], number> = {
   grid: 720,
   doc: 560,
+  card: 560,
 };
 const MIN_WIDTH = 240;
 const widths = ref<(number | null)[]>(columns.value.map(() => null));
@@ -158,6 +160,47 @@ function pushColumn(parentIndex: number, md: string, anchor: string | null) {
   syncUrl();
 }
 
+// "+ Card" rail on the right edge of column `parentIndex`: truncate
+// any deeper columns and push a fresh card. The seed query is whatever
+// the parent column knows about — grid and card own a `q`; doc columns
+// don't carry one and the card starts blank.
+function pushCard(parentIndex: number) {
+  const parent = columns.value[parentIndex];
+  if (!parent) return;
+  const q =
+    parent.kind === "grid" || parent.kind === "card" ? parent.q : "";
+  const next = columns.value.slice(0, parentIndex + 1);
+  next.push({ kind: "card", q, js: null });
+  columns.value = next;
+  syncUrl();
+}
+
+function onUpdateCardQ(index: number, q: string) {
+  updateColumn(index, (c) => {
+    if (c.kind !== "card") return c;
+    if (c.q === q) return c;
+    return { ...c, q };
+  });
+}
+
+function onUpdateCardJs(index: number, js: string | null) {
+  updateColumn(index, (c) => {
+    if (c.kind !== "card") return c;
+    if (c.js === js) return c;
+    return { ...c, js };
+  });
+}
+
+// Pop the rightmost column. Disabled in the template when only one
+// column remains — the path watcher would re-seed `[emptyGrid()]` from
+// the empty path, which is technically benign but reads as a "delete
+// resets to grid" surprise, so we just don't offer the button there.
+function popRightmostColumn() {
+  if (columns.value.length <= 1) return;
+  columns.value = columns.value.slice(0, -1);
+  syncUrl();
+}
+
 function onSelectRow(index: number, row: SearchRow, restoring: boolean) {
   selectedGridRow.value = row;
   const sel = row.uuid;
@@ -248,12 +291,36 @@ watch(
     <section
       v-for="(col, i) in renderedColumns"
       :key="
-        col.kind === 'grid' ? `grid:${i}` : `doc:${i}:${col.md}`
+        col.kind === 'grid'
+          ? `grid:${i}`
+          : col.kind === 'card'
+            ? `card:${i}`
+            : `doc:${i}:${col.md}`
       "
       class="col"
-      :class="col.kind === 'grid' ? 'col--grid' : 'col--doc'"
+      :class="
+        col.kind === 'grid'
+          ? 'col--grid'
+          : col.kind === 'card'
+            ? 'col--card'
+            : 'col--doc'
+      "
       :style="{ flexBasis: widthFor(i) + 'px' }"
     >
+      <div
+        v-if="i === renderedColumns.length - 1 && renderedColumns.length > 1"
+        class="col-actions-bar"
+      >
+        <button
+          type="button"
+          class="col-delete-btn"
+          title="Remove this column"
+          data-testid="delete-column"
+          @click="popRightmostColumn"
+        >
+          × Delete
+        </button>
+      </div>
       <GridColumn
         v-if="col.kind === 'grid'"
         :q="col.q"
@@ -262,6 +329,13 @@ watch(
         @select-row="(row, restoring) => onSelectRow(i, row, restoring)"
         @update:q="(q) => onUpdateQ(i, q)"
         @update:ag-cols="(c) => onUpdateAgCols(i, c)"
+      />
+      <CardColumn
+        v-else-if="col.kind === 'card'"
+        :q="col.q"
+        :js="col.js"
+        @update:q="(q) => onUpdateCardQ(i, q)"
+        @update:js="(js) => onUpdateCardJs(i, js)"
       />
       <DocColumn
         v-else
@@ -279,6 +353,16 @@ watch(
         @pointerdown="(e) => onResizeStart(i, e)"
       />
     </section>
+    <button
+      v-if="columns.length > 0"
+      type="button"
+      class="col-add-card"
+      title="Add a card column"
+      data-testid="add-card"
+      @click="pushCard(columns.length - 1)"
+    >
+      + Card
+    </button>
   </div>
 </template>
 
@@ -334,5 +418,57 @@ watch(
 .col-resize:hover::before,
 .col-resize:active::before {
   border-color: var(--fw-fg, #888);
+}
+/* Thin actions strip at the top of the rightmost column. Hosts the
+   delete button. Sits above whichever column-type component this is,
+   which means we never have to teach grid/card/doc about it. */
+.col-actions-bar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--fw-border);
+  background: var(--fw-card-bg);
+}
+.col-delete-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  color: var(--fw-muted);
+  background: var(--fw-input-bg);
+  border: 1px solid var(--fw-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.col-delete-btn:hover {
+  color: #e35d6a;
+  border-color: #e35d6a;
+  background: var(--fw-hover);
+}
+
+/* Placeholder for the next column. Rendered once, immediately to the
+   right of the rightmost column — clicking it materializes a card
+   column there. Dashed border + muted text reads as "drop a column
+   here" rather than as a normal control. Width matches the card
+   column default so the layout doesn't jump when the user clicks. */
+.col-add-card {
+  flex: 0 0 auto;
+  width: 240px;
+  margin: 0.5rem 1rem 0.5rem 0.5rem;
+  padding: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  color: var(--fw-muted);
+  background: transparent;
+  border: 2px dashed var(--fw-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.col-add-card:hover {
+  color: var(--fw-fg);
+  border-color: var(--fw-fg);
+  background: var(--fw-hover);
 }
 </style>
