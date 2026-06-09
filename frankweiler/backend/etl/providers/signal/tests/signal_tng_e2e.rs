@@ -176,9 +176,13 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     assert_eq!(rendered_docs.len(), 1, "expected one rendered doc");
     let doc = &rendered_docs[0];
     let md = std::fs::read_to_string(&doc.md_path)?;
+    // Signal uses the shared `Title` helper, which renders an
+    // HTML-in-markdown `<h1 class="page-title">` block (not a
+    // markdown `# …` line) so the Vue side can hook a copy-id button
+    // off `data-page-title-uuid`.
     assert!(
-        md.contains("# Signal · Will Riker"),
-        "title heading present"
+        md.contains("class=\"page-title\"") && md.contains("Signal · Will Riker"),
+        "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
     assert!(md.contains("_Me_:"), "outgoing author labelled as Me");

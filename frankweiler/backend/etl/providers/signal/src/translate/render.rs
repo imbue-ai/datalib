@@ -28,6 +28,7 @@ use frankweiler_etl::blob_cas;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::section_attrs;
+use frankweiler_etl::title::Title;
 use frankweiler_schema::grid_rows::GridRow;
 use sha2::{Digest, Sha256};
 
@@ -311,7 +312,19 @@ fn render_markdown(
     ));
     s.push_str(&format!("source_fingerprint: {fingerprint}\n"));
     s.push_str("---\n\n");
-    s.push_str(&format!("# {title}\n\n"));
+    // Use the shared `Title` helper so signal pages carry the same
+    // `class="page-title" data-page-title-uuid="…"` hook the Vue side
+    // keys the "copy page ID" button off. Signal Android backups don't
+    // expose a per-thread web URL, so `source_url` stays `None` —
+    // produces an H1 with the copy-id hook and no outbound ↗ arrow.
+    s.push_str(
+        &Title {
+            text: title,
+            markdown_uuid: Some(markdown_uuid),
+            source_url: None,
+        }
+        .render(),
+    );
 
     if doc.items.is_empty() {
         s.push_str("_(no messages)_\n");
