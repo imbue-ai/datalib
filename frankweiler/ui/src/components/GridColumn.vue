@@ -209,7 +209,7 @@ const FILTER_COLUMNS: Record<
   project: { key: "project", header: "Project", uuidCol: "project" },
   conversation_name: {
     key: "convo",
-    header: "Conversation",
+    header: "Title",
     uuidCol: "conversation_uuid",
   },
 };

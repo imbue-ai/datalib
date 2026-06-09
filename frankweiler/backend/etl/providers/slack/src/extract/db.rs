@@ -37,9 +37,12 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{
+    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
+};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
+pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 use crate::translate::{slack_message_uuid, slack_thread_uuid};
 
@@ -109,6 +112,7 @@ fn full_ddl() -> Vec<String> {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 /// One row of input for [`RawDb::upsert_message`]. Carries the upstream
@@ -136,11 +140,16 @@ impl RawDb {
         // every row has a non-NULL thread_root_uuid, the SELECT below
         // returns no rows and the loop exits without writing.
         backfill_thread_root_uuid(&pool).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     /// Wipe every per-row table so the next fetch re-downloads
@@ -197,14 +206,6 @@ impl RawDb {
         .await
         .context("record manifest sweep marker")?;
         Ok(())
-    }
-
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
     }
 
     // ── workspace ───────────────────────────────────────────────────
@@ -493,20 +494,17 @@ impl RawDb {
         Ok(out)
     }
 
-    // ── blobs (delegates) ───────────────────────────────────────────
+    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
 
-    pub async fn blob_exists(&self, id: &str) -> Result<bool> {
-        dr::blob_exists(&self.pool, id).await
+    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
+        blob_cas::ref_has_hash(&self.pool, ref_id).await
     }
 
-    /// Snapshot of every blob id that already has bytes stored. Loaded
-    /// once at run start so the per-file `download_one_file` short-circuit
-    /// is a `HashSet` hit instead of a SQLite round trip on the
-    /// single shared pool connection — the per-file SELECT was queuing
-    /// behind preceding multi-MB `upsert_blob_bytes` commits and showing
-    /// up as multi-second "slow statement" warns.
+    /// Snapshot every ref_id that already has a hash attached. Loaded
+    /// once at run start so the per-file `download_one_file` skip-check
+    /// is a HashSet hit instead of a SQLite round trip.
     pub async fn loaded_blob_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM blobs WHERE bytes IS NOT NULL")
+        let rows = sqlx::query("SELECT id FROM blob_refs WHERE blake3 IS NOT NULL")
             .fetch_all(&self.pool)
             .await
             .context("load blob ids with bytes")?;
@@ -521,68 +519,45 @@ impl RawDb {
 
     pub async fn pre_seed_blob_stub(
         &self,
-        id: &str,
+        ref_id: &str,
         owning_id: &str,
         content_type: Option<&str>,
         source_url: Option<&str>,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin blob stub tx")?;
-        dr::pre_seed_blob_stub(
+        blob_cas::pre_seed_ref(
             &mut tx,
-            id,
-            "file",
-            owning_id,
-            "file",
-            content_type,
-            source_url,
+            &RefStub {
+                ref_id,
+                kind: "file",
+                owning_id,
+                slot: "file",
+                upstream_uuid: Some(ref_id),
+                upstream_name: None,
+                source_url,
+                content_type,
+            },
         )
         .await?;
         tx.commit().await.context("commit blob stub tx")?;
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn upsert_blob_bytes(
-        &self,
-        id: &str,
-        kind: &str,
-        owning_id: &str,
-        slot: &str,
-        content_type: Option<&str>,
-        bytes: &[u8],
-        source_url: Option<&str>,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
-        dr::upsert_blob_bytes(
-            &mut tx,
-            id,
-            kind,
-            owning_id,
-            slot,
-            content_type,
-            bytes,
-            source_url,
-        )
-        .await?;
-        tx.commit().await.context("commit blob upsert tx")?;
-        Ok(())
+    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
     }
 
     pub async fn record_blob_error(
         &self,
-        id: &str,
+        ref_id: &str,
         owning_id: &str,
         slot: &str,
         err: &str,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
-    }
-
-    pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {
-        dr::load_blobs_by_id(&self.pool).await
     }
 }
 
@@ -746,7 +721,7 @@ pub struct LoadedRaw {
     pub users: Vec<Value>,
     pub channels: Vec<Value>,
     pub messages: Vec<LoadedMessage>,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: std::sync::Arc<dyn BlobReader>,
 }
 
 impl Default for LoadedRaw {
@@ -756,7 +731,7 @@ impl Default for LoadedRaw {
             users: Vec::new(),
             channels: Vec::new(),
             messages: Vec::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -869,10 +844,10 @@ pub fn block_on_load_filtered(
             let users = db.load_users().await?;
             let channels = db.load_channels().await?;
             let messages = load_messages_for_threads(&db.pool, &uuids).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
-                    db.pool().clone(),
-                ));
+            let blobs: std::sync::Arc<dyn BlobReader> = std::sync::Arc::new(SqliteBlobReader::new(
+                db.pool().clone(),
+                db.cas().pool().clone(),
+            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 workspace,
                 users,
@@ -945,10 +920,10 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
-                    db.pool().clone(),
-                ));
+            let blobs: std::sync::Arc<dyn BlobReader> = std::sync::Arc::new(SqliteBlobReader::new(
+                db.pool().clone(),
+                db.cas().pool().clone(),
+            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 workspace: db.load_workspace().await?,
                 users: db.load_users().await?,

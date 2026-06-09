@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
@@ -243,7 +243,7 @@ pub async fn download_one_file(
         }
     }
 
-    let name = safe_filename(file_obj.get("name").and_then(|v| v.as_str()), file_id);
+    let name = file_obj.get("name").and_then(|v| v.as_str());
     let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
 
     // Tempfile + `latchkey curl -o` matches the chatgpt/anthropic pattern.
@@ -273,7 +273,7 @@ pub async fn download_one_file(
         warn!(
             event = "slack_media_failed",
             file_id = file_id,
-            name = %name,
+            name = name.unwrap_or(""),
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
@@ -285,8 +285,20 @@ pub async fn download_one_file(
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
     let len = bytes.len() as u64;
-    db.upsert_blob_bytes(file_id, "file", channel_id, "file", mime, &bytes, Some(url))
-        .await?;
+    db.store_blob(
+        &RefStub {
+            ref_id: file_id,
+            kind: "file",
+            owning_id: channel_id,
+            slot: "file",
+            upstream_uuid: Some(file_id),
+            upstream_name: name,
+            source_url: Some(url),
+            content_type: mime,
+        },
+        &bytes,
+    )
+    .await?;
     have_blob.insert(file_id.to_string());
     events::item_fetched(url, len, 0);
     debug!(

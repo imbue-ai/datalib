@@ -19,7 +19,13 @@ use super::parse::{OAConversationRow, OAMessageRow, ShreddedConversation};
 ///
 /// Bumped from 1 to 2 when `data-msg-index` was dropped in favor of
 /// `data-section-uuid` on the per-message wrapper div.
-pub const RENDER_VERSION: u32 = 2;
+///
+/// Bumped from 2 to 3 when assistant text started getting
+/// sentinel-cleaned (U+E200/E201/E202 wrappers stripped or rewritten
+/// into markdown links) and attachment link targets started
+/// percent-encoding spaces/parens so images with spaces in their
+/// names actually resolve.
+pub const RENDER_VERSION: u32 = 3;
 
 fn kind_for_role_and_type(role: Option<&str>, content_type: Option<&str>) -> &'static str {
     match role.unwrap_or("").to_ascii_lowercase().as_str() {

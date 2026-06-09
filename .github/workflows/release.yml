@@ -397,12 +397,19 @@ jobs:
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          # `scope=docker-publish` makes the cache persist across
+          # tag pushes. Without an explicit scope, type=gha defaults
+          # to the workflow ref, so a tag push (refs/tags/v0.6.x)
+          # gets a per-tag scope — i.e. every release starts cold and
+          # re-runs the 2.25 GB `qmd pull` plus all the apt / node /
+          # latchkey / doltlite-CLI layers from scratch. Mirrors the
+          # devcontainer block below (which already does this right).
           docker buildx build \
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
-              --cache-from type=gha \
-              --cache-to type=gha,mode=max \
+              --cache-from type=gha,scope=docker-publish \
+              --cache-to type=gha,mode=max,scope=docker-publish \
               --push \
               ctx
 

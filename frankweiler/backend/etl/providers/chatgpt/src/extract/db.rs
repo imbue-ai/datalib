@@ -17,15 +17,19 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{
+    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
+};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
+pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 /// Data tables — what `dolt diff` should see across re-fetches.
 /// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
@@ -81,6 +85,7 @@ pub struct ConversationDetail {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    cas: BlobCas,
 }
 
 impl RawDb {
@@ -88,11 +93,16 @@ impl RawDb {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        Ok(Self { pool })
+        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        Ok(Self { pool, cas })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn cas(&self) -> &BlobCas {
+        &self.cas
     }
 
     /// Wipe every per-row table so the next fetch re-downloads
@@ -100,14 +110,6 @@ impl RawDb {
     /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
-    }
-
-    pub async fn start_run(&self, config: &Value) -> Result<i64> {
-        dr::start_run(&self.pool, config).await
-    }
-
-    pub async fn finish_run(&self, run_id: i64, status: &str, summary: &Value) -> Result<()> {
-        dr::finish_run(&self.pool, run_id, status, summary).await
     }
 
     // ── `me` ────────────────────────────────────────────────────────
@@ -327,54 +329,29 @@ impl RawDb {
         Ok(out)
     }
 
-    // ── blobs (delegates to shared) ─────────────────────────────────
+    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
 
-    pub async fn blob_exists(&self, id: &str) -> Result<bool> {
-        dr::blob_exists(&self.pool, id).await
+    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
+        blob_cas::ref_has_hash(&self.pool, ref_id).await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn upsert_blob_bytes(
-        &self,
-        id: &str,
-        kind: &str,
-        owning_id: &str,
-        slot: &str,
-        content_type: Option<&str>,
-        bytes: &[u8],
-        source_url: Option<&str>,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob upsert tx")?;
-        dr::upsert_blob_bytes(
-            &mut tx,
-            id,
-            kind,
-            owning_id,
-            slot,
-            content_type,
-            bytes,
-            source_url,
-        )
-        .await?;
-        tx.commit().await.context("commit blob upsert tx")?;
-        Ok(())
+    /// Stash fetched bytes into the CAS and attach the resulting hash
+    /// to the named ref. One call per successful download.
+    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
     }
 
     pub async fn record_blob_error(
         &self,
-        id: &str,
+        ref_id: &str,
         owning_id: &str,
         slot: &str,
         err: &str,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        dr::record_blob_error(&mut tx, id, owning_id, slot, err).await?;
+        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
-    }
-
-    pub async fn load_blobs_by_id(&self) -> Result<HashMap<String, BlobBytes>> {
-        dr::load_blobs_by_id(&self.pool).await
     }
 }
 
@@ -396,7 +373,7 @@ pub struct LoadedConversation {
 pub struct LoadedRaw {
     pub me: Option<Value>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: Arc<dyn BlobReader>,
 }
 
 impl Default for LoadedRaw {
@@ -404,7 +381,7 @@ impl Default for LoadedRaw {
         Self {
             me: None,
             conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -417,10 +394,10 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore> =
-                std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
-                    db.pool().clone(),
-                ));
+            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
+                db.pool().clone(),
+                db.cas().pool().clone(),
+            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 me: db.load_me().await?,
                 conversations: db.load_conversations().await?,

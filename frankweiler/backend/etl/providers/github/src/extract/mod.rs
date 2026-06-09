@@ -19,7 +19,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
+use frankweiler_etl::extract_run::ExtractRun;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub use client::{GitHubClient, GitHubError, BASE, PER_PAGE};
@@ -83,7 +85,7 @@ impl Default for FetchOptions {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, Serialize)]
 pub struct FetchSummary {
     pub new_prs: usize,
     pub new_issue_comments: usize,
@@ -92,30 +94,24 @@ pub struct FetchSummary {
     pub requests: u64,
 }
 
-/// Pick the `since` ISO date for a search scope. We use the *minimum* of
-/// (state.scopes[scope], now - refresh_window) so we never narrow tighter
-/// than the safety window — that catches edits to old PRs that wouldn't
-/// otherwise show up in a `last_seen_at`-based filter.
+/// Pick the `since` date for a GitHub search scope.
+///
+/// Thin wrapper around the canonical
+/// [`frankweiler_etl::scope_state::since_for_scope`] that truncates
+/// the returned RFC 3339 timestamp to `YYYY-MM-DD` (what GitHub's
+/// `updated:>=` syntax expects). Behavior is otherwise identical to
+/// gitlab's: state is the cursor; window is a cold-start floor.
 fn since_for_scope(
     state: &HashMap<String, String>,
     scope: &str,
     refresh_window_days: u32,
     full: bool,
 ) -> Option<String> {
-    if full || refresh_window_days == 0 {
-        return None;
-    }
-    let window_floor = Utc::now() - ChronoDuration::days(refresh_window_days as i64);
-    let from_state = state.get(scope).and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|d| d.with_timezone(&Utc))
-    });
-    let since = match from_state {
-        Some(s) if s < window_floor => s,
-        _ => window_floor,
-    };
-    Some(since.date_naive().to_string())
+    let raw =
+        frankweiler_etl::scope_state::since_for_scope(state, scope, refresh_window_days, full)?;
+    // Truncate to YYYY-MM-DD. The raw string is RFC 3339 in seconds
+    // precision, so a 10-char prefix is the date portion.
+    Some(raw.get(..10).unwrap_or(&raw).to_string())
 }
 
 async fn fetch_self(client: &GitHubClient, db: &RawDb) -> Result<()> {
@@ -234,6 +230,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "github_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
+    if opts.control.refetch_blobs {
+        tracing::info!(event = "github_refetch_blobs");
+        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+            .await
+            .context("truncate blob_refs before refetch")?;
+    }
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,
@@ -241,7 +243,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         "targets": opts.targets,
         "full_sync": opts.full_sync,
     });
-    let run_id = db.start_run(&run_config).await?;
+    let run = ExtractRun::start(db.pool(), &run_config).await?;
 
     let client = GitHubClient::new();
     let mut summary = FetchSummary::default();
@@ -292,16 +294,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let result = work.await;
     summary.requests = client.request_count();
-    let summary_json = json!({
-        "new_prs": summary.new_prs,
-        "new_issue_comments": summary.new_issue_comments,
-        "new_reviews": summary.new_reviews,
-        "new_review_comments": summary.new_review_comments,
-        "requests": summary.requests,
-        "error": result.as_ref().err().map(|e| e.to_string()),
-    });
-    let status = if result.is_ok() { "ok" } else { "error" };
-    let _ = db.finish_run(run_id, status, &summary_json).await;
+    run.finish(&result, &summary).await;
     result?;
     Ok(summary)
 }

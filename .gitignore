@@ -20,3 +20,8 @@ test-results/
 # See the `try-import` line at the bottom of `.bazelrc` for the
 # expected contents.
 .bazelrc.user
+
+# Per-user direnv secrets: API keys, UAC credentials, etc. Sourced by
+# the dev shell via `direnv`/`set -a; source .envrc.private`. Anything
+# that should ship in the repo belongs in `.envrc` (committed), not here.
+.envrc.private

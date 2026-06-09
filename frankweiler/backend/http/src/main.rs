@@ -27,7 +27,7 @@
 
 use clap::Parser;
 use frankweiler_core::dolt_repo::DoltRepo;
-use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
+use frankweiler_core::qmd::{qmd_cache_home, QmdDaemon, QmdDaemonConfig};
 use frankweiler_core::repo::DynRepo;
 use frankweiler_http::{router, AppState};
 use std::path::PathBuf;
@@ -91,12 +91,16 @@ async fn main() -> anyhow::Result<()> {
     let daemon = QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))
         .map_err(|e| anyhow::anyhow!("qmd daemon: cannot start ({e:#})"))?;
     let daemon = Arc::new(daemon);
-    eprintln!("qmd daemon: warming up…");
-    let warm = daemon.clone();
-    match tokio::task::spawn_blocking(move || warm.warm_up()).await {
-        Ok(Ok(())) => eprintln!("qmd daemon: ready"),
-        Ok(Err(e)) => return Err(anyhow::anyhow!("qmd daemon: warmup failed ({e:#})")),
-        Err(e) => return Err(anyhow::anyhow!("qmd daemon: warmup task panicked ({e})")),
+    // `qmd pull` ensures embedding + query-expansion + reranker models are
+    // on disk before the first user query, so we don't pay a multi-hundred-
+    // MB huggingface download on the interactive path. Cache-checked, so
+    // a re-run on a warm box is free.
+    eprintln!("qmd: pulling models…");
+    let pull_cfg = daemon.config().clone();
+    match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
+        Ok(Ok(())) => eprintln!("qmd: models ready"),
+        Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
+        Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
     }
     let qmd_daemon = Some(daemon);
     let state = AppState {
@@ -105,6 +109,24 @@ async fn main() -> anyhow::Result<()> {
         qmd_daemon,
     };
     axum::serve(listener, router(state)).await?;
+    Ok(())
+}
+
+/// Shell out to `npx -y @tobilu/qmd@<ver> pull` with the daemon's
+/// cache-home env, so any models qmd needs land in the same XDG cache
+/// the daemon itself spawns against later.
+fn run_qmd_pull(cfg: &QmdDaemonConfig) -> anyhow::Result<()> {
+    let pkg = format!("@tobilu/qmd@{}", cfg.qmd_version);
+    let status = std::process::Command::new("npx")
+        .arg("-y")
+        .arg(&pkg)
+        .arg("pull")
+        .env("XDG_CACHE_HOME", qmd_cache_home(&cfg.qmd_root))
+        .status()
+        .map_err(|e| anyhow::anyhow!("spawn npx (is Node.js installed?): {e}"))?;
+    if !status.success() {
+        anyhow::bail!("qmd pull exited with {status}");
+    }
     Ok(())
 }
 

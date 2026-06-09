@@ -1,0 +1,47 @@
+[package]
+name = "frankweiler-signal-backup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_signal_backup"
+path = "src/lib.rs"
+
+[[bin]]
+name = "signal-make-fixture"
+path = "src/bin/signal_make_fixture.rs"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+# Pulled in so crate_universe materializes the
+# `protoc-gen-prost__protoc-gen-prost` binary target consumed by
+# `//tools/prost_toolchain`. Not referenced from Rust code in this
+# crate; cargo-bazel rejects a `crate.annotation` for a crate that
+# isn't in any Cargo.toml's resolved graph, so we declare it here.
+protoc-gen-prost = { workspace = true }
+hkdf = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+subtle = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+ctr = { workspace = true }
+cipher = { workspace = true }
+flate2 = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+# Cargo-only proto codegen. Under Bazel this script never runs (see
+# `gen_build_script = "off"` on this crate in MODULE.bazel); under
+# cargo it produces the prost-generated modules `src/proto.rs`
+# `include!`s when `#[cfg(not(bazel_prost))]`.
+[build-dependencies]
+prost-build = "0.13"
+protobuf-src = "2"

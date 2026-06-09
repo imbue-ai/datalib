@@ -59,9 +59,7 @@ struct DaemonState {
 impl QmdDaemon {
     /// Build a daemon handle. The child isn't spawned yet — that
     /// happens on the first query so we don't pay startup cost when
-    /// nobody is searching. Callers who want predictable first-query
-    /// latency (e.g. e2e tests that race against qmd's cold start)
-    /// should follow up with [`QmdDaemon::warm_up`].
+    /// nobody is searching.
     pub fn new(cfg: QmdDaemonConfig) -> Result<Self> {
         let idx = qmd_index_path(&cfg.qmd_root);
         if !idx.exists() {
@@ -79,27 +77,6 @@ impl QmdDaemon {
                 next_id: 0,
             }),
         })
-    }
-
-    /// Force the child to spawn, the MCP handshake to complete, and a
-    /// throwaway query to run end-to-end so the model + index are
-    /// loaded. Once this returns successfully, the first user-driven
-    /// `search()` is a hot call.
-    ///
-    /// We use a search rather than `tools/list` because qmd 2.1.0 loads
-    /// its model + index lazily on the first `query`, not on
-    /// `initialize`. Without a real query during warmup, the first
-    /// real query still pays the cold-start cost.
-    ///
-    /// On failure the daemon is torn down and the error returned —
-    /// callers may still proceed; the lazy path will retry on the next
-    /// search.
-    pub fn warm_up(&self) -> Result<()> {
-        // A query string nothing in our corpus matches, with limit=1.
-        // We don't care about the result, only that qmd responded with
-        // a well-formed `structuredContent.results` envelope.
-        let _ = self.search(QueryMode::Hybrid, "_qmd_warmup_zzy_", 1)?;
-        Ok(())
     }
 
     pub fn config(&self) -> &QmdDaemonConfig {

@@ -22,6 +22,7 @@ rust_library(
         "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/schema:frankweiler_schema",
         "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:blake3",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:runfiles",
@@ -45,12 +46,13 @@ rust_binary(
     name = "latchkey_curl_shim",
     srcs = ["src/bin/latchkey_curl_shim.rs"],
     edition = "2021",
-    # Stamp the binary with FRANKWEILER_VERSION (git describe slug) so
-    # `latchkey-curl-shim --version` reports the commit it was built from
-    # in the same format as `frankweiler-sync --version`. Mirrors
-    # //frankweiler/backend/sync:frankweiler_sync_bin.
-    rustc_env_files = ["rustc_env.txt"],
-    stamp = -1,
+    # Intentionally NOT stamped. The shim ships in the runfiles of
+    # `frankweiler_etl` (see `data = [":latchkey_curl_shim"]` above), so
+    # any consumer of that library — every etl/providers/* test — picks
+    # it up as a runfile. Stamping it makes every git commit invalidate
+    # those test actions via the stable-status.txt input. Its `--version`
+    # is informational (the shim isn't a release artifact); the
+    # user-facing stamp lives on //frankweiler/backend/sync:frankweiler_sync_bin.
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "@frankweiler_crates//:tokio",

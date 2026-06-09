@@ -181,9 +181,15 @@ fn output_paths(
         .join("contacts")
         .join(source_name)
         .join(&contact.addressbook);
+    // `uid` is `addressbook:stem:block_index`; the colons are fine in
+    // the DB primary key but bazel rejects them in label paths
+    // (`:` is the package/target separator), so we substitute them
+    // for the on-disk filename only. The grid-row + sidecar still
+    // carry the canonical `uid` unchanged.
+    let safe_uid = contact.uid.replace(':', "_");
     let stem = format!(
         "{}__{}",
-        &contact.uid,
+        safe_uid,
         slugify(contact.display_name.as_deref().unwrap_or(&contact.uid))
     );
     let md_path = page_dir.join(format!("{stem}.md"));
@@ -248,54 +254,77 @@ fn render_markdown(
         .display_name
         .clone()
         .unwrap_or_else(|| contact.uid.clone());
-    out.push_str(&format!("# {title}\n\n"));
+    // Shared `Title` helper so contact pages carry the same
+    // `data-page-title-uuid` hook the Vue side uses for the
+    // copy-page-id button. CardDAV doesn't carry a web URL per
+    // contact, so `source_url` stays `None`. (For Fastmail-sourced
+    // contacts the canonical web URL would be
+    // `https://app.fastmail.com/contacts/<addressbook>/<contact_id>?u=…`,
+    // but the addressbook + contact ids in the URL are Fastmail's
+    // internal short ids — not the vCard UID we have — so wiring
+    // that up cleanly is a follow-up.)
+    out.push_str(
+        &frankweiler_etl::title::Title {
+            text: &title,
+            markdown_uuid: Some(m_uuid),
+            source_url: None,
+        }
+        .render(),
+    );
 
     if let Some(rel) = photo_rel {
         out.push_str(&format!("![{title}]({rel})\n\n"));
     }
-    if let Some(org) = &contact.org {
-        out.push_str(&format!("**{}**", org.replace(';', " — ")));
-        if let Some(t) = &contact.title {
-            out.push_str(&format!(" — {t}"));
-        }
-        out.push_str("\n\n");
-    } else if let Some(t) = &contact.title {
-        out.push_str(&format!("**{t}**\n\n"));
-    }
 
-    if !contact.emails.is_empty() {
-        out.push_str("## Emails\n\n");
-        for e in &contact.emails {
-            out.push_str(&format!("- {}{}\n", label_prefix(&e.type_label()), e.value));
-        }
-        out.push('\n');
+    let mut rows: Vec<(String, String)> = Vec::new();
+    if let Some(org) = &contact.org {
+        rows.push(("Org".to_string(), org.replace(';', " — ")));
     }
-    if !contact.phones.is_empty() {
-        out.push_str("## Phones\n\n");
-        for p in &contact.phones {
-            out.push_str(&format!("- {}{}\n", label_prefix(&p.type_label()), p.value));
-        }
-        out.push('\n');
+    if let Some(t) = &contact.title {
+        rows.push(("Title".to_string(), t.clone()));
     }
-    if !contact.addresses.is_empty() {
-        out.push_str("## Addresses\n\n");
-        for a in &contact.addresses {
-            // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
-            let pretty = a.value.replace(';', ", ");
-            out.push_str(&format!("- {}{}\n", label_prefix(&a.type_label()), pretty));
-        }
-        out.push('\n');
+    for e in &contact.emails {
+        rows.push((field_label("Email", &e.type_label()), e.value.clone()));
+    }
+    for p in &contact.phones {
+        rows.push((field_label("Phone", &p.type_label()), p.value.clone()));
+    }
+    for a in &contact.addresses {
+        // ADR is `;`-separated: PO box; ext; street; locality; region; postcode; country
+        let pretty = a.value.replace(';', ", ");
+        rows.push((field_label("Address", &a.type_label()), pretty));
     }
     if let Some(n) = &contact.note {
-        out.push_str("## Notes\n\n");
-        out.push_str(n);
-        out.push_str("\n\n");
+        rows.push(("Note".to_string(), n.replace('\n', " <br> ")));
     }
     if let Some(url) = &contact.photo_url {
-        out.push_str(&format!("Photo: <{url}>\n\n"));
+        rows.push(("Photo URL".to_string(), format!("<{url}>")));
+    }
+
+    if !rows.is_empty() {
+        out.push_str("| Field | Value |\n");
+        out.push_str("| --- | --- |\n");
+        for (k, v) in rows {
+            out.push_str(&format!("| {} | {} |\n", k, escape_table_cell(&v)));
+        }
+        out.push('\n');
     }
 
     out
+}
+
+fn field_label(base: &str, type_label: &Option<String>) -> String {
+    match type_label {
+        Some(s) if !s.is_empty() => format!("{base} ({s})"),
+        _ => base.to_string(),
+    }
+}
+
+fn escape_table_cell(s: &str) -> String {
+    // Pipes break table cells; backslash-escape them. Collapse newlines
+    // (which also break cells) into spaces — multi-line values like
+    // notes are pre-flattened by the caller, this is the safety net.
+    s.replace('|', "\\|").replace('\n', " ")
 }
 
 fn build_grid_row(
@@ -375,13 +404,6 @@ fn ext_for(content_type: &str) -> &'static str {
         "image/webp" => "webp",
         "image/heic" => "heic",
         _ => "bin",
-    }
-}
-
-fn label_prefix(t: &Option<String>) -> String {
-    match t {
-        Some(s) if !s.is_empty() => format!("**{s}**: "),
-        _ => String::new(),
     }
 }
 

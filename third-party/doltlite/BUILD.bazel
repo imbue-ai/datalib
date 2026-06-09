@@ -63,7 +63,7 @@ cc_library(
         # at the top of doltlite.c, but we set them explicitly so the
         # intent is visible at this layer too.
         "-DDOLTLITE_PROLLY=1",
-        "-DDOLTLITE_VERSION=\\\"0.11.5\\\"",
+        "-DDOLTLITE_VERSION=\\\"0.11.9\\\"",
         "-DSQLITE_CORE",
         # SQLite vtable extensions doltlite enables by default; we
         # repeat them here so the amalgamation's extension init code
@@ -82,8 +82,24 @@ cc_library(
         # for nullability inference. They're only defined when SQLite
         # is built with this flag.
         "-DSQLITE_ENABLE_COLUMN_METADATA",
+        # Force `-O2` regardless of bazel's compilation_mode. doltlite's
+        # open path (prolly-chunk walk + blake3 hashing across every
+        # page on the file's root tree) is unusually loop-bound: at
+        # `-O0` (fastbuild default), `sqlite3_open_v2` against a 3.5GB
+        # raw slack store takes ~60s; at `-O2` it takes ~4s. We never
+        # step-debug doltlite from Rust anyway — it's third-party
+        # amalgamated C — so paying for an optimized build under
+        # fastbuild is a strict win. See hack/slack_open_debug for the
+        # A/B that established this.
+        "-O2",
         "-DSQLITE_THREADSAFE=1",
-        "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+        # NOTE: do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1` here.
+        # Empirically (see hack/slack_open_debug) that flag made
+        # `sqlite3_open_v2` on a multi-GB doltlite store take ~60s
+        # vs ~2s for the upstream CLI binary, which omits it. Callers
+        # that want FK enforcement (we do) should send
+        # `PRAGMA foreign_keys = ON` after connect — sqlx does this
+        # automatically.
         # Silence the noisier doltlite/SQLite build warnings — they
         # live in upstream-shaped code we don't own.
         "-Wno-unused-but-set-variable",

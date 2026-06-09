@@ -146,7 +146,7 @@ pub struct TranslatedSlack {
     /// Streaming handle: render fetches one blob's bytes on demand by
     /// `file_id` (Slack's upstream id). Materialized next to each
     /// thread's `index.md` so the `blobs/<filename>` link resolves.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
 }
 
 impl Default for TranslatedSlack {
@@ -156,7 +156,7 @@ impl Default for TranslatedSlack {
             users: BTreeMap::new(),
             channels: BTreeMap::new(),
             messages: BTreeMap::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -693,8 +693,9 @@ mod tests {
             users: db.load_users().await.unwrap(),
             channels: db.load_channels().await.unwrap(),
             messages: db.load_messages().await.unwrap(),
-            blobs: std::sync::Arc::new(frankweiler_etl::blob_store::SqliteBlobStore::new(
+            blobs: std::sync::Arc::new(frankweiler_etl::blob_cas::SqliteBlobReader::new(
                 db.pool().clone(),
+                db.cas().pool().clone(),
             )),
         };
         // Sanity: each loaded message's thread_ts is None.

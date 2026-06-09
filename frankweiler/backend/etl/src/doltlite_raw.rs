@@ -2,7 +2,7 @@
 //!
 //! Every provider that ports its raw download to doltlite (notion,
 //! chatgpt, anthropic, …) ends up needing the same bookkeeping:
-//! identical `blobs` / `endpoint_shapes` / `sync_runs` tables,
+//! identical `blob_refs` / `endpoint_shapes` / `sync_runs` tables,
 //! identical "open this file with `journal_mode=DELETE`" boilerplate,
 //! identical bookkeeping columns on every object table
 //! (`payload TEXT NULL`, `fetched_at`, `attempt_count`, …), and the
@@ -103,6 +103,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -195,34 +196,6 @@ pub const ENDPOINT_SHAPES_DDL: &str = "CREATE TABLE IF NOT EXISTS endpoint_shape
     captured_at TEXT NOT NULL
 )";
 
-/// Per-blob storage. PK is the upstream-stable identifier for the
-/// file (e.g. `file_upload_id`); fall back to `{owning_id}:{slot}` when
-/// none exists. NEVER key by `sha256(content)` — the PK must be known
-/// BEFORE we fetch so failed-fetch rows can attach to the right slot.
-/// `kind` is an open-ended provider-defined label; we used to check
-/// it with `CHECK(kind IN ('uploaded','external','notion_hosted'))`
-/// but every provider has its own vocabulary so the check is gone.
-pub const BLOBS_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL,
-    owning_id TEXT NOT NULL,
-    slot TEXT NOT NULL,
-    content_type TEXT NULL,
-    sha256 TEXT NULL,
-    bytes BLOB NULL,
-    source_url TEXT NULL
-)";
-
-/// Sidecar bookkeeping for `blobs`. Same shape as every other
-/// object-table sidecar — see [`bookkeeping_ddl_for`].
-pub const BLOBS_BOOKKEEPING_DDL: &str = "CREATE TABLE IF NOT EXISTS blobs_bookkeeping (
-    id TEXT PRIMARY KEY,
-    fetched_at TEXT NULL,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at TEXT NULL,
-    last_error TEXT NULL
-)";
-
 /// Per-scope incremental-sync cursor table. Used by providers (github,
 /// gitlab) whose discovery is keyed by a search scope ("author:@me",
 /// "assigned_to_me", …) and which want to narrow each subsequent run
@@ -240,8 +213,10 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 pub const SHARED_DDL: &[&str] = &[
     SYNC_RUNS_DDL,
     ENDPOINT_SHAPES_DDL,
-    BLOBS_DDL,
-    BLOBS_BOOKKEEPING_DDL,
+    crate::blob_cas::BLOB_REFS_DDL,
+    crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
+    crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
+    crate::blob_cas::BLOB_REFS_BOOKKEEPING_DDL,
     SYNC_SCOPE_STATE_DDL,
 ];
 
@@ -278,6 +253,13 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 ///   - `synchronous=Normal`: durability isn't critical; the upstream
 ///     API is the source of truth and we can always re-fetch.
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
+    // Logged at every call so stray second-pool opens against an
+    // already-open file are visible — max_connections=1 means a second
+    // pool will surface as "database is locked" on dolt_commit, and
+    // without this log it's hard to attribute. The elapsed time on
+    // success also makes slow opens visible during long startup phases.
+    let started = std::time::Instant::now();
+    tracing::info!(path = %db_path.display(), "doltlite_raw::open: opening sqlite pool");
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
@@ -297,11 +279,34 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
     // module's docs for the full story. Multiple pool connections
     // produce silent dolt_log dropouts and `commit conflict` errors
     // on interleaved writes.
+    //
+    // `acquire_timeout` is bumped well past sqlx's 30s default: cold
+    // opens of multi-GB raw stores spend most of their time inside
+    // `sqlite3_open_v2` (blake3-hashing the prolly root pages), and we
+    // saw legitimate 4–10s opens against `slack.doltlite_db` even with
+    // the `-O2` doltlite static archive. A 30s ceiling was tight
+    // enough that a transient slowness manifested as a hard timeout
+    // and 0-row sync. 5min is "obviously something else is wrong"
+    // territory.
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .acquire_timeout(Duration::from_secs(300))
         .connect_with(opts)
         .await
         .context("open sqlite pool")?;
+    // Rescue commit. If a prior run crashed mid-batch we'd inherit a
+    // pile of uncommitted rows in `dolt_status`; the orchestrator's
+    // "next run picks it up" recovery only kicks in if subsequent
+    // writes actually succeed, and `dolt_log` ends up with the
+    // crashed-run state silently folded into a much-later commit
+    // (mixing audit-trail concerns). Seal it into its own commit at
+    // the start of every open so each tool entry sees a clean tree.
+    //
+    // No-op when the status is already clean (which is the common
+    // path). Failure to take the rescue is not fatal — the orchestrator
+    // will fall back to the implicit "next commit folds it in"
+    // behavior, which is what we had before.
+    rescue_dirty_working_tree(&pool, db_path).await;
     for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
         sqlx::query(stmt).execute(&pool).await.with_context(|| {
             format!(
@@ -310,7 +315,75 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
             )
         })?;
     }
+    tracing::info!(
+        path = %db_path.display(),
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "doltlite_raw::open: pool ready"
+    );
     Ok(pool)
+}
+
+/// Stamp a dolt commit of any orphaned working-tree changes inherited
+/// from a crashed prior run. The reasons we want this at every open:
+///
+/// 1. **Clean audit trail.** Without this, the next successful
+///    `dolt_commit()` silently folds the crashed-run rows into its
+///    own changelog entry, mixing two different runs' work under one
+///    `dolt_log` message.
+/// 2. **Health check.** A dirty tree at open is a signal worth logging
+///    even when we can rescue it — it means somebody crashed.
+///
+/// We catch and swallow errors: even a stock-libsqlite3 build (no
+/// doltlite extensions) lands here in CI, where `dolt_status` doesn't
+/// exist and `dolt_commit()` is a missing function. Logging at warn is
+/// enough — the caller still gets a usable pool.
+async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
+    // First: is there anything dirty? `dolt_status` is a vtab; on
+    // stock SQLite it errors with "no such table".
+    let dirty: std::result::Result<i64, sqlx::Error> =
+        sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+            .fetch_one(pool)
+            .await;
+    let count = match dirty {
+        Ok(n) => n,
+        Err(e) => {
+            // Differentiate "no doltlite extensions" (silent) from
+            // "real error" (warn). The former shows up as a missing-
+            // table error; everything else is interesting.
+            let msg = e.to_string();
+            if !msg.contains("no such table") {
+                tracing::warn!(
+                    path = %db_path.display(),
+                    error = %e,
+                    "rescue_dirty_working_tree: probe failed"
+                );
+            }
+            return;
+        }
+    };
+    if count == 0 {
+        return;
+    }
+    let msg = format!(
+        "rescue: pre-run snapshot of orphaned working tree ({count} dirty entries) at {}",
+        Utc::now().to_rfc3339()
+    );
+    tracing::warn!(
+        path = %db_path.display(),
+        dirty_entries = count,
+        "rescue_dirty_working_tree: prior run left {count} dirty entries; sealing into its own commit",
+    );
+    if let Err(e) = sqlx::query("SELECT dolt_commit('-Am', ?)")
+        .bind(&msg)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(
+            path = %db_path.display(),
+            error = %e,
+            "rescue_dirty_working_tree: dolt_commit failed; the next ETL commit will fold the dirty rows in implicitly"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -409,12 +482,21 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
-    let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', ?)")
+    // `dolt_commit` errors with "nothing to commit, working tree clean"
+    // when there's nothing dirty. That used to be a hard fail; with the
+    // rescue commit in `open()` it's a legitimate post-condition (rescue
+    // may have already swept everything into its own commit, leaving
+    // the orchestrator's trailing commit nothing to do). Treat it as
+    // Ok(None) so the caller can keep going.
+    match sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
         .bind(msg)
         .fetch_optional(pool)
         .await
-        .context("dolt_commit")?;
-    Ok(hash)
+    {
+        Ok(opt) => Ok(opt.flatten()),
+        Err(e) if e.to_string().contains("nothing to commit") => Ok(None),
+        Err(e) => Err(anyhow::Error::new(e).context("dolt_commit")),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -449,13 +531,28 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
                 .with_context(|| format!("truncate {sql}"))?;
         }
     }
-    for sql in ["DELETE FROM blobs", "DELETE FROM blobs_bookkeeping"] {
+    tx.commit().await.context("commit truncate tx")?;
+    Ok(())
+}
+
+/// Wipe `blob_refs` + `blob_refs_bookkeeping`. NOT called by
+/// [`truncate_data_tables`] (entity reset preserves the ref index so
+/// the next extract skips re-fetching bytes we already have in the
+/// sibling CAS). Use this when the user explicitly asks to invalidate
+/// the cache key — driven by `--refetch-blobs` at the CLI.
+///
+/// The sibling `cas_objects` file is never touched: bytes are
+/// byte-stable; only the
+/// [`crate::blob_cas::gc_orphans`] sweep should delete from it.
+pub async fn truncate_blob_refs(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin().await.context("begin truncate blob_refs tx")?;
+    for sql in ["DELETE FROM blob_refs", "DELETE FROM blob_refs_bookkeeping"] {
         sqlx::query(sql)
             .execute(&mut *tx)
             .await
             .with_context(|| format!("truncate {sql}"))?;
     }
-    tx.commit().await.context("commit truncate tx")?;
+    tx.commit().await.context("commit truncate blob_refs tx")?;
     Ok(())
 }
 
@@ -695,193 +792,6 @@ pub async fn record_endpoint_shape(
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// blobs
-// ─────────────────────────────────────────────────────────────────────
-
-/// Bytes for one blob, paired with the metadata downstream renderers
-/// need to write it back to disk and link to it.
-#[derive(Debug, Clone)]
-pub struct BlobBytes {
-    pub id: String,
-    pub owning_id: String,
-    pub slot: String,
-    pub content_type: Option<String>,
-    pub bytes: Vec<u8>,
-    pub source_url: Option<String>,
-}
-
-/// True iff a blob row with this id already has its bytes stored.
-/// Used to short-circuit refetch: once we have a copy we trust it
-/// (signed URLs rotate; bytes don't).
-pub async fn blob_exists(pool: &SqlitePool, id: &str) -> Result<bool> {
-    let row = sqlx::query("SELECT 1 FROM blobs WHERE id = ? AND bytes IS NOT NULL LIMIT 1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .context("blob_exists")?;
-    Ok(row.is_some())
-}
-
-/// Pre-seed a blob row before its bytes have been fetched, AND
-/// its matching bookkeeping sidecar row. Lets the caller record
-/// "we know this file exists" as soon as the listing reveals it,
-/// so a Ctrl-C / network failure leaves behind enough state to
-/// count "known but undownloaded" in tooling. INSERT OR IGNORE on
-/// both tables so an existing row with bytes (or an error history)
-/// is never clobbered.
-///
-/// Takes a transaction so data and sidecar inserts are atomic.
-pub async fn pre_seed_blob_stub(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    kind: &str,
-    owning_id: &str,
-    slot: &str,
-    content_type: Option<&str>,
-    source_url: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot, content_type, source_url)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(id)
-    .bind(kind)
-    .bind(owning_id)
-    .bind(slot)
-    .bind(content_type)
-    .bind(source_url)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("pre_seed_blob_stub data {id}"))?;
-    sqlx::query("INSERT OR IGNORE INTO blobs_bookkeeping (id) VALUES (?)")
-        .bind(id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("pre_seed_blob_stub bookkeeping {id}"))?;
-    Ok(())
-}
-
-/// Insert (or refresh) a blob row with its bytes, plus a
-/// success entry in `blobs_bookkeeping`. Both writes in one
-/// transaction.
-#[allow(clippy::too_many_arguments)]
-pub async fn upsert_blob_bytes(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    kind: &str,
-    owning_id: &str,
-    slot: &str,
-    content_type: Option<&str>,
-    bytes: &[u8],
-    source_url: Option<&str>,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO blobs (id, kind, owning_id, slot, content_type, bytes, source_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            owning_id = excluded.owning_id,
-            slot = excluded.slot,
-            content_type = COALESCE(excluded.content_type, blobs.content_type),
-            bytes = excluded.bytes,
-            source_url = COALESCE(excluded.source_url, blobs.source_url)",
-    )
-    .bind(id)
-    .bind(kind)
-    .bind(owning_id)
-    .bind(slot)
-    .bind(content_type)
-    .bind(bytes)
-    .bind(source_url)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("upsert_blob_bytes data {id}"))?;
-    record_object_attempt(tx, "blobs", id, None).await
-}
-
-/// Record a blob fetch failure. We need *some* values for the NOT
-/// NULL columns even on first failure; callers pass `owning_id` and
-/// `slot` so the row carries useful context for a later retry. `kind`
-/// defaults to `"unknown"` since the caller often doesn't yet know
-/// whether the file is external / uploaded / hosted.
-///
-/// Inserts the (stub) blobs row if absent, then records the
-/// failure attempt in `blobs_bookkeeping`. Both atomic.
-pub async fn record_blob_error(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    id: &str,
-    owning_id: &str,
-    slot: &str,
-    err: &str,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blobs (id, kind, owning_id, slot)
-         VALUES (?, 'unknown', ?, ?)",
-    )
-    .bind(id)
-    .bind(owning_id)
-    .bind(slot)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("record_blob_error data {id}"))?;
-    record_object_attempt(tx, "blobs", id, Some(err)).await
-}
-
-/// Load every blob row's bytes keyed by `owning_id`. When a single
-/// owner has multiple blobs (e.g. one message with three attachments),
-/// only the lexically-last `id` wins — fine for Notion (one blob per
-/// block) but providers with multi-blob owners should use
-/// [`load_blobs_by_id`] instead.
-pub async fn load_blobs_by_owner(pool: &SqlitePool) -> Result<HashMap<String, BlobBytes>> {
-    let by_id = load_blobs_by_id(pool).await?;
-    let mut out: HashMap<String, BlobBytes> = HashMap::with_capacity(by_id.len());
-    for (_id, b) in by_id {
-        out.insert(b.owning_id.clone(), b);
-    }
-    Ok(out)
-}
-
-/// Load every blob row keyed by blob `id`. Use this when one `owning_id`
-/// may carry many blobs (chatgpt/anthropic conversations have many
-/// attachments per conversation).
-pub async fn load_blobs_by_id(pool: &SqlitePool) -> Result<HashMap<String, BlobBytes>> {
-    let rows = sqlx::query(
-        "SELECT id, owning_id, slot, content_type, bytes, source_url \
-         FROM blobs WHERE bytes IS NOT NULL ORDER BY id",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load_blobs_by_id")?;
-    let mut out: HashMap<String, BlobBytes> = HashMap::with_capacity(rows.len());
-    for r in rows {
-        let id: String = match r.try_get("id") {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let bytes: Vec<u8> = match r.try_get("bytes") {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let owning_id: String = r.try_get("owning_id").unwrap_or_default();
-        let slot: String = r.try_get("slot").unwrap_or_default();
-        let content_type: Option<String> = r.try_get("content_type").ok();
-        let source_url: Option<String> = r.try_get("source_url").ok();
-        out.insert(
-            id.clone(),
-            BlobBytes {
-                id,
-                owning_id,
-                slot,
-                content_type,
-                bytes,
-                source_url,
-            },
-        );
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 // Test diagnostics + intentional probe-failure prints under stock
 // libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
@@ -919,7 +829,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM blobs")
+        sqlx::query("SELECT COUNT(*) FROM blob_refs")
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -1093,25 +1003,37 @@ mod tests {
             pool.close().await;
         }
 
-        // Phase 2: reopen via the orchestrator's hook and commit.
+        // Phase 2: reopen via the orchestrator's hook and commit. Under
+        // the rescue-commit-on-open policy in `open()`, phase 1's
+        // orphaned writes are already sealed by the time `commit_run`
+        // runs here, so the orchestrator's trailing commit is a no-op
+        // (returns None). This is the documented post-condition: a
+        // crashed run produces a `rescue: ...` commit in dolt_log, and
+        // the next run's trailing commit_run is allowed to find
+        // nothing dirty.
         let msg = "extract source: rows=1 commit_run_at_path test";
-        let hash = commit_run_at_path(&db, msg)
+        let trailing = commit_run_at_path(&db, msg)
             .await
-            .expect("commit_run_at_path ok")
-            .expect("doltlite linked but commit hash was None");
+            .expect("commit_run_at_path ok");
+        assert!(
+            trailing.is_none(),
+            "trailing commit should be a no-op after rescue swept the orphaned writes; got {trailing:?}"
+        );
 
-        // Phase 3: verify the commit is durable by reopening AGAIN
-        // and querying dolt_log. This is the load-bearing assertion —
-        // proves the commit actually persisted to disk, not just that
-        // commit_run returned a hash.
+        // Phase 3: verify the rescue commit is durable by reopening
+        // AGAIN and querying dolt_log. This is the load-bearing
+        // assertion — proves the orphaned writes were sealed by the
+        // rescue at phase 2's open(), not lost.
         let verify = open_test(&db).await;
-        let logged_msg: String =
-            sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
-                .bind(&hash)
-                .fetch_one(&verify)
+        let logged: Vec<String> =
+            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date DESC")
+                .fetch_all(&verify)
                 .await
                 .expect("dolt_log lookup after reopen");
-        assert_eq!(logged_msg, msg, "dolt_log message mismatch after reopen");
+        assert!(
+            logged.iter().any(|m| m.starts_with("rescue: ")),
+            "expected a rescue commit in dolt_log; got {logged:?}"
+        );
 
         // No-op path: pointing at a never-created file should NOT
         // create one and should NOT error.
@@ -1164,42 +1086,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(attempts, 2);
-    }
-
-    #[tokio::test]
-    async fn blob_roundtrip() {
-        let d = tempdir().unwrap();
-        let pool = open_test(&d.path().join("b.doltlite_db")).await;
-        let mut tx = pool.begin().await.unwrap();
-        upsert_blob_bytes(
-            &mut tx,
-            "id1",
-            "external",
-            "owner1",
-            "image",
-            Some("image/png"),
-            b"hello",
-            Some("https://x.test/i.png"),
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
-        assert!(blob_exists(&pool, "id1").await.unwrap());
-        let by_owner = load_blobs_by_owner(&pool).await.unwrap();
-        assert_eq!(by_owner["owner1"].bytes, b"hello".to_vec());
-        let by_id = load_blobs_by_id(&pool).await.unwrap();
-        assert_eq!(by_id["id1"].owning_id, "owner1");
-
-        // Sidecar should reflect one successful attempt.
-        let row: (Option<String>, i64, Option<String>) = sqlx::query_as(
-            "SELECT fetched_at, attempt_count, last_error FROM blobs_bookkeeping WHERE id = 'id1'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(row.0.is_some(), "fetched_at should be set on success");
-        assert_eq!(row.1, 1);
-        assert!(row.2.is_none(), "last_error should be cleared on success");
     }
 
     /// Regression guard for the "always pool size 1 against

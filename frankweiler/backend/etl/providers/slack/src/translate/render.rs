@@ -29,9 +29,10 @@ use frankweiler_schema::grid_rows::GridRow;
 
 use std::collections::HashMap;
 
-use frankweiler_etl::blobs::safe_filename;
+use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::section::msg_div_open;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
 
@@ -138,6 +139,7 @@ pub fn render_all(
             &user_labels,
             source_name,
             &md_rel,
+            t.blobs.as_ref(),
         );
 
         let page_dir = md_path
@@ -149,7 +151,7 @@ pub fn render_all(
         // the md body, then the sidecar. The callback is invoked last,
         // so if any earlier step fails the indexer never sees the new
         // fingerprint — next run re-tries the whole doc.
-        materialize_thread_blobs(t, &msgs, page_dir)
+        materialize_thread_blobs(t.blobs.as_ref(), &msgs, page_dir)
             .with_context(|| format!("materialize blobs for {}", thread_uuid))?;
 
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
@@ -250,6 +252,7 @@ fn render_thread_md(
     user_labels: &BTreeMap<String, String>,
     source_name: &str,
     md_rel_path: &Path,
+    blobs: &dyn BlobReader,
 ) -> String {
     let title = thread_title(&root.text, user_labels);
     let team_id = &root.team_id;
@@ -293,17 +296,11 @@ fn render_thread_md(
             .and_then(|u| user_labels.get(u).cloned())
             .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
         let link = slack_link(team_id, channel_id, &m.ts, Some(&root.ts));
-        // Same per-section wrapper shape as the Anthropic / ChatGPT
-        // renderers: `id="m-{uuid}"` for in-page anchors, and
-        // `data-section-uuid` as the single key the UI uses to find /
-        // highlight a section. The old `data-msg-uuid` /
-        // `data-msg-index` / `data-provider` attributes were redundant
-        // with the id + the class — dropping them keeps the wire
-        // format consistent across providers.
-        p.push(format!(
-            r#"<div id="m-{0}" data-section-uuid="{0}" class="msg msg--slack">"#,
-            m.uuid(),
-        ));
+        // Standard `<div>` wrapper via `section::msg_div_open` — same
+        // shape every other provider emits. The `data-section-uuid`
+        // matches the grid_row.uuid so row→preview navigation can
+        // resolve.
+        p.push(msg_div_open(&m.uuid(), "slack"));
         p.push(String::new());
         p.push(format!("## {author}"));
         p.push(String::new());
@@ -329,8 +326,9 @@ fn render_thread_md(
                 .or_else(|| f.name.clone())
                 .unwrap_or_else(|| "file".into())
                 .replace(']', "");
-            let link = file_link(source_name, md_rel_path, &f)
+            let link = file_link(blobs, &f)
                 .unwrap_or_else(|| f.url.clone().unwrap_or_else(|| "about:blank".to_string()));
+            let _ = (source_name, md_rel_path);
             if f.is_image {
                 p.push(format!("![{alt}]({link})"));
             } else {
@@ -498,28 +496,24 @@ fn files(raw: &Value) -> Vec<FileRef> {
 
 /// Relative link from a thread's `index.md` to its locally-staged copy
 /// of `f`. The page-dir layout puts blobs at `<page_dir>/blobs/<file>`,
-/// so the link target is just `blobs/<safe_filename>`. Files without
-/// an `id` or that the downloader skips (external / tombstone) return
-/// `None` so the caller can fall back to the `url_private` URL.
-fn file_link(_source_name: &str, _md_rel_path: &Path, f: &FileRef) -> Option<String> {
+/// so the link target is `blobs/<short-b3>.<ext>` (the universal CAS
+/// filename). Returns `None` for externals or files whose bytes aren't
+/// in the CAS yet, so the caller can fall back to the upstream URL.
+fn file_link(blobs: &dyn BlobReader, f: &FileRef) -> Option<String> {
     if f.external {
         return None;
     }
     let id = f.id.as_deref()?;
-    let name = safe_filename(f.name.as_deref(), id);
-    Some(format!("blobs/{name}"))
+    let view = blobs.read_by_ref_id(id).ok().flatten()?;
+    Some(format!("blobs/{}", view.rendered_filename()))
 }
 
 /// Write every blob this thread references into `<page_dir>/blobs/`.
-/// The filename matches what `file_link` puts in the markdown
-/// (`safe_filename(name, file_id)`), so the rendered link resolves.
-/// Blobs referenced only by other threads are skipped — they live
-/// next to *their* `index.md`.
-///
-/// Streams the bytes one blob at a time via [`BlobStore`] so peak RSS
-/// stays at a single attachment regardless of how many the source has.
+/// Filenames come from `BlobView::rendered_filename` so they match the
+/// link target `file_link` produces. Streams one blob at a time via
+/// [`BlobReader`] so peak RSS stays at a single attachment.
 fn materialize_thread_blobs(
-    t: &super::TranslatedSlack,
+    blobs: &dyn BlobReader,
     msgs: &[&super::Message],
     page_dir: &Path,
 ) -> Result<()> {
@@ -531,42 +525,9 @@ fn materialize_thread_blobs(
             }
         }
     }
-    if wanted.is_empty() {
-        return Ok(());
-    }
     let blobs_dir = page_dir.join("blobs");
-    for file_id in &wanted {
-        let Some(blob) = t
-            .blobs
-            .read_by_id(file_id)
-            .with_context(|| format!("read blob {file_id}"))?
-        else {
-            continue;
-        };
-        let name = name_for_blob(msgs, file_id);
-        let safe = safe_filename(name.as_deref(), file_id);
-        fs::create_dir_all(&blobs_dir)
-            .with_context(|| format!("mkdir -p {}", blobs_dir.display()))?;
-        fs::write(blobs_dir.join(&safe), &blob.bytes)
-            .with_context(|| format!("write blob {}/{}", blobs_dir.display(), safe))?;
-    }
-    Ok(())
-}
-
-/// First-found `files[].name` for `file_id` across the messages we're
-/// about to render. Returns `None` if no reference carries a name (then
-/// the blob is written under its `file_id` via `safe_filename`).
-fn name_for_blob(msgs: &[&super::Message], file_id: &str) -> Option<String> {
-    for m in msgs {
-        for f in files(&m.raw_json) {
-            if f.id.as_deref() == Some(file_id) {
-                if let Some(n) = f.name {
-                    return Some(n);
-                }
-            }
-        }
-    }
-    None
+    blob_cas::materialize_refs(blobs, wanted.iter().map(String::as_str), &blobs_dir)
+        .map_err(anyhow::Error::from)
 }
 
 /// `[(name, count), ...]` in source order, summing user lists.

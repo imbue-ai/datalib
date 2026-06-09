@@ -1,0 +1,140 @@
+From 1000000000000000001@xxx Mon Jan 05 09:00:00 +0000 2026
+X-GM-THRID: 1000000000000000001
+X-Gmail-Labels: Inbox,Starred,Important
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <briefing-001@enterprise.starfleet>
+From: Starfleet Command <command@starfleet.gov>
+To: Jean-Luc Picard <picard@enterprise.starfleet>
+Cc: William Riker <riker@enterprise.starfleet>
+Subject: Mission Briefing — Sector 001
+Date: Mon, 5 Jan 2026 09:00:00 +0000
+Mime-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Captain Picard,
+
+You are hereby ordered to proceed at maximum warp to the Romulan Neutral
+Zone. Investigate reports of unusual subspace activity near outpost 23.
+
+Per General Order 12, you have full discretion. Make it so.
+
+— Admiral Hayes
+
+From 1000000000000000001@xxx Mon Jan 05 10:30:00 +0000 2026
+X-GM-THRID: 1000000000000000001
+X-Gmail-Labels: Inbox,Sent
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <briefing-002@enterprise.starfleet>
+In-Reply-To: <briefing-001@enterprise.starfleet>
+References: <briefing-001@enterprise.starfleet>
+From: Jean-Luc Picard <picard@enterprise.starfleet>
+To: William Riker <riker@enterprise.starfleet>
+Subject: Re: Mission Briefing — Sector 001
+Date: Mon, 5 Jan 2026 10:30:00 +0000
+Mime-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Number One,
+
+Set a course for the Neutral Zone, warp 9. Brief the senior staff at
+1400 hours. I want Mr. Data running long-range scans the moment we
+cross into the buffer region.
+
+Engage.
+
+— Picard
+
+From 1000000000000000001@xxx Mon Jan 05 11:15:00 +0000 2026
+X-GM-THRID: 1000000000000000001
+X-Gmail-Labels: Inbox,Unread
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <briefing-003@enterprise.starfleet>
+In-Reply-To: <briefing-002@enterprise.starfleet>
+References: <briefing-001@enterprise.starfleet> <briefing-002@enterprise.starfleet>
+From: Geordi La Forge <laforge@enterprise.starfleet>
+To: Jean-Luc Picard <picard@enterprise.starfleet>
+Cc: William Riker <riker@enterprise.starfleet>
+Subject: Re: Mission Briefing — Sector 001
+Date: Mon, 5 Jan 2026 11:15:00 +0000
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="boundary-warp9"
+
+--boundary-warp9
+Content-Type: text/plain; charset=utf-8
+
+Captain,
+
+Warp core diagnostics attached. We can sustain warp 9 for approximately
+twelve hours before we need to drop out for a coolant cycle. I would
+recommend a brief stop at Starbase 173 if the mission allows.
+
+— Geordi
+
+--boundary-warp9
+Content-Type: text/plain; charset=utf-8; name="warp_diagnostics.txt"
+Content-Disposition: attachment; filename="warp_diagnostics.txt"
+
+WARP CORE DIAGNOSTIC REPORT
+Stardate: 80123.4
+Plasma flow:     nominal
+Dilithium chamber: 99.7% efficiency
+Sustained warp 9: ~12 hours
+Recommended action: scheduled coolant cycle at Starbase 173
+
+--boundary-warp9--
+
+From 2000000000000000002@xxx Tue Jan 06 08:00:00 +0000 2026
+X-GM-THRID: 2000000000000000002
+X-Gmail-Labels: Inbox,Category Promotions
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <risa-promo-001@risa.tourism>
+From: Risa Tourism Board <hello@risa.tourism>
+To: Jean-Luc Picard <picard@enterprise.starfleet>
+Subject: Your shore leave awaits!
+Date: Tue, 6 Jan 2026 08:00:00 +0000
+Mime-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary-risa"
+
+--boundary-risa
+Content-Type: text/plain; charset=utf-8
+
+Greetings Captain Picard!
+
+Risa is the jewel of the Alpha Quadrant. Book your next shore leave
+today and save 30%. Visit https://risa.tourism/shore-leave to redeem.
+
+— The Risa Tourism Board
+
+--boundary-risa
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<h1>Greetings Captain Picard!</h1>
+<p>Risa is the <strong>jewel of the Alpha Quadrant</strong>.
+Book your next shore leave today and save 30%.</p>
+<p><a href="https://risa.tourism/shore-leave">Redeem your offer</a></p>
+<p>— The Risa Tourism Board</p>
+</body></html>
+
+--boundary-risa--
+
+From 3000000000000000003@xxx Wed Jan 07 14:00:00 +0000 2026
+X-GM-THRID: 3000000000000000003
+X-Gmail-Labels: Sent,Important
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <log-001@enterprise.starfleet>
+From: Jean-Luc Picard <picard@enterprise.starfleet>
+To: Starfleet Command <command@starfleet.gov>
+Subject: Captain's Log — Stardate 80124.1
+Date: Wed, 7 Jan 2026 14:00:00 +0000
+Mime-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Captain's log, stardate 80124.1. The Enterprise has arrived at the
+Neutral Zone. Long-range scans have detected three Romulan warbirds
+holding position at the edge of sensor range. I have ordered yellow
+alert and dispatched a coded message to Starfleet Command.
+
+We continue our investigation.
+
+— Picard

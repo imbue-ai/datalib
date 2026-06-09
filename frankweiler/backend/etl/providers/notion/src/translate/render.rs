@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_store::BlobStore;
+use frankweiler_etl::blob_cas::BlobReader;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
@@ -855,40 +855,6 @@ fn write_text_trim(path: &Path, parts: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Derive an on-disk filename for a blob in a page's `blobs/` dir.
-/// Strips query strings from signed URLs and falls back to a
-/// content-type guess (and finally `.bin`) when there's no usable
-/// extension on the URL.
-fn blob_filename(block_id: &str, source_url: Option<&str>, content_type: Option<&str>) -> String {
-    fn ext_from_url(u: &str) -> Option<String> {
-        let no_query = u.split('?').next().unwrap_or(u);
-        let last_seg = no_query.rsplit('/').next().unwrap_or("");
-        let dot = last_seg.rfind('.')?;
-        let ext = &last_seg[dot + 1..];
-        if ext.is_empty() || ext.len() > 8 || !ext.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return None;
-        }
-        Some(ext.to_lowercase())
-    }
-    fn ext_from_ct(ct: &str) -> Option<&'static str> {
-        match ct.split(';').next().unwrap_or("").trim() {
-            "image/png" => Some("png"),
-            "image/jpeg" | "image/jpg" => Some("jpg"),
-            "image/gif" => Some("gif"),
-            "image/webp" => Some("webp"),
-            "image/svg+xml" => Some("svg"),
-            "image/bmp" => Some("bmp"),
-            _ => None,
-        }
-    }
-    let ext = source_url
-        .and_then(ext_from_url)
-        .or_else(|| content_type.and_then(ext_from_ct).map(String::from))
-        .unwrap_or_else(|| "bin".into());
-    // block_id is a Notion UUID, safe as a filename without escaping.
-    format!("{block_id}.{ext}")
-}
-
 #[allow(clippy::too_many_arguments)]
 fn render_one_page(
     page: &Value,
@@ -897,7 +863,7 @@ fn render_one_page(
     page_titles: &HashMap<String, String>,
     media_urls: &HashMap<String, String>,
     bookmark_titles: &HashMap<String, String>,
-    blobs: &dyn BlobStore,
+    blobs: &dyn BlobReader,
     pages_root: &Path,
 ) -> Result<PathBuf> {
     let pid = page.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -952,10 +918,10 @@ fn render_one_page(
     parts.push(String::new());
 
     // Materialize every blob that hangs off a block on this page.
-    // Files land in `<page_dir>/blobs/<block_id>.<ext>`; the relative
+    // Files land in `<page_dir>/blobs/<short-b3>.<ext>`; the relative
     // path `blobs/<file>` is the one we splice into the markdown.
     //
-    // Streams from the [`BlobStore`] one block at a time — peak RSS
+    // Streams from the [`BlobReader`] one block at a time — peak RSS
     // stays at a single attachment instead of holding the whole
     // page's blob set in memory.
     let mut local_blob_paths: HashMap<String, String> = HashMap::new();
@@ -972,8 +938,7 @@ fn render_one_page(
                 fs::create_dir_all(&blobs_dir)?;
                 created_dir = true;
             }
-            let filename =
-                blob_filename(&owner, b.source_url.as_deref(), b.content_type.as_deref());
+            let filename = b.rendered_filename();
             let target = blobs_dir.join(&filename);
             // Trust our copy: write only if the file isn't already
             // present with the same length. Lets `notion-translate`
@@ -1082,9 +1047,23 @@ fn render_thread(
     }
     parts.push("---".into());
     parts.push(String::new());
-    parts.push(format!("# Comment thread on “{page_title_str}”"));
-    parts.push(String::new());
-    parts.push(format!("[View thread on Notion ↗]({thread_url})"));
+    // Shared `Title` helper. `markdown_uuid` is the notion
+    // discussion id (matches `discussion_id:` in the frontmatter and
+    // the grid_row uuid for this thread); `source_url` is the
+    // `notion.so/{page}?d={discussion}#{anchor}` deep link, which
+    // collapses the previously-separate "# Comment thread …" H1 +
+    // "View thread on Notion ↗" bullet into a single block.
+    let title_text = format!("Comment thread on “{page_title_str}”");
+    parts.push(
+        frankweiler_etl::title::Title {
+            text: &title_text,
+            markdown_uuid: Some(discussion_id),
+            source_url: Some(&thread_url),
+        }
+        .render()
+        .trim_end()
+        .to_string(),
+    );
     parts.push(String::new());
     if let Some(pb) = parent_block_id {
         let anchor = format!("../index.md#b-{}", short_id(pb));

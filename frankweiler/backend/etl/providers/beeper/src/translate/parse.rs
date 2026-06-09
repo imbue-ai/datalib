@@ -73,6 +73,8 @@ pub struct Blob {
     pub content_type: Option<String>,
     pub byte_len: Option<i64>,
     pub source_url: Option<String>,
+    /// blake3 hex of the CAS object holding the bytes, when fetched.
+    pub blake3: Option<String>,
     /// Whether the bytes are actually populated (vs metadata-only).
     pub has_bytes: bool,
 }
@@ -196,22 +198,27 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
 
     // ── blobs by owning event uuid ─────────────────────────────────
     let blob_rows = sqlx::query(
-        "SELECT id, owning_id, slot, content_type, length(bytes) AS bytelen,
-                source_url, bytes IS NOT NULL AS has_bytes
-         FROM blobs",
+        "SELECT id, owning_id, slot, content_type, source_url, blake3
+         FROM blob_refs",
     )
     .fetch_all(&pool)
     .await
-    .context("read blobs")?;
+    .context("read blob_refs")?;
     let mut blobs_by_owner: HashMap<String, Vec<Blob>> = HashMap::new();
     for r in &blob_rows {
+        let blake3: Option<String> = r.try_get("blake3")?;
+        let has_bytes = blake3.is_some();
         let blob = Blob {
             blob_id: r.try_get("id")?,
             slot: r.try_get("slot")?,
             content_type: r.try_get("content_type")?,
-            byte_len: r.try_get("bytelen")?,
+            // byte_len now lives on cas_objects (sibling file); we
+            // don't surface it here to keep parse synchronous and
+            // single-pool. Render falls back to "size unknown".
+            byte_len: None,
             source_url: r.try_get("source_url")?,
-            has_bytes: r.try_get::<i64, _>("has_bytes")? != 0,
+            blake3,
+            has_bytes,
         };
         let owner: String = r.try_get("owning_id")?;
         blobs_by_owner.entry(owner).or_default().push(blob);

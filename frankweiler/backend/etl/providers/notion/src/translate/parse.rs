@@ -35,7 +35,7 @@ pub struct ParsedNotionOfficial {
     /// convention — one blob per image/file block). Render fetches
     /// each block's bytes on demand via `read_by_owner` and writes
     /// them next to the rendered markdown.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_store::BlobStore>,
+    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
 }
 
 impl Default for ParsedNotionOfficial {
@@ -47,7 +47,7 @@ impl Default for ParsedNotionOfficial {
             user_names: HashMap::new(),
             media_urls: HashMap::new(),
             bookmark_titles: HashMap::new(),
-            blobs: frankweiler_etl::blob_store::InMemoryBlobStore::empty_handle(),
+            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
         }
     }
 }

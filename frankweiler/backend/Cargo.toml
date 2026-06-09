@@ -12,16 +12,20 @@ members = [
     "etl/providers/contacts",
     "etl/providers/github",
     "etl/providers/gitlab",
+    "etl/providers/email",
     "etl/providers/notion",
     "etl/providers/perseus",
+    "etl/providers/signal",
     "etl/providers/slack",
+    "etl/providers/yolink",
     "qmd_indexer",
+    "signal-backup",
     "sync",
     "tauri-backend",
 ]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.6.2"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -75,3 +79,21 @@ sqlx = { version = "0.8", default-features = false, features = [
 ] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 async-trait = "0.1"
+# Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
+# (see //tools/prost_toolchain), so we don't depend on `prost-build`
+# here — only the runtime. `protoc-gen-prost` is pulled in via the
+# toolchain wiring, not as a direct crate dep.
+prost = "0.13"
+prost-types = "0.13"
+protoc-gen-prost = "0.4"
+# Crypto + compression for the Signal backup container. Versions
+# chosen to satisfy the 7-day burn-in policy as of 2026-06-08.
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+subtle = "2.6"
+aes = "0.8"
+cbc = { version = "0.1", features = ["std"] }
+ctr = "0.9"
+cipher = { version = "0.4", features = ["block-padding"] }
+flate2 = "1.0"

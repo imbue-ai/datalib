@@ -40,9 +40,23 @@ impl IndicatifSink {
 
 impl ProgressSink for IndicatifSink {
     fn set_length(&self, total: Option<u64>) {
+        // Also swap the template. Without this, indicatif's
+        // length-unset state renders `{len}` in lockstep with `{pos}`
+        // (visually "1185/1185, 1241/1241, ..."), which is misleading —
+        // the bar implies it knows the total when it really doesn't.
+        // Switch to a spinner-only template until a real total arrives,
+        // and switch back when the caller learns it.
         match total {
-            Some(t) => self.bar.set_length(t),
-            None => self.bar.unset_length(),
+            Some(t) => {
+                self.bar.set_length(t);
+                self.bar
+                    .set_style(determinate_style(self.depth, self.prefix_width()));
+            }
+            None => {
+                self.bar.unset_length();
+                self.bar
+                    .set_style(spinner_style(self.depth, self.prefix_width()));
+            }
         }
     }
     fn inc(&self, delta: u64) {
@@ -62,6 +76,12 @@ impl ProgressSink for IndicatifSink {
             multi: self.multi.clone(),
             depth,
         })
+    }
+}
+
+impl IndicatifSink {
+    fn prefix_width(&self) -> usize {
+        prefix_width_at_depth(self.depth)
     }
 }
 
@@ -91,33 +111,64 @@ pub fn make_bar_at_depth(
     prefix: impl Into<String>,
     depth: usize,
 ) -> ProgressBar {
-    const PREFIX_COL_WIDTH: usize = 14;
-    const INDENT_PER_DEPTH: usize = 2;
-
     let bar = multi.add(ProgressBar::new_spinner());
-    // Bound depth so the prefix field never shrinks below a usable
-    // width even if some caller spawns deeply nested children.
-    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
-    let prefix_width = PREFIX_COL_WIDTH - indent;
-    // For nested bars, replace the final two indent columns with a
-    // tree marker ("↳ ") so the parent/child relationship reads at a
-    // glance. Column count is unchanged — "↳ " renders as two cells.
-    let leading = if depth == 0 {
-        String::new()
-    } else {
-        let mut s = " ".repeat(indent.saturating_sub(2));
-        s.push_str("↳ ");
-        s
-    };
-    let template = format!(
-        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}}/{{len:5}} [{{wide_bar}}] {{per_sec:>10}} {{msg}}"
-    );
-    bar.set_style(
-        ProgressStyle::with_template(&template)
-            .unwrap()
-            .progress_chars("=> "),
-    );
+    let prefix_width = prefix_width_at_depth(depth);
+    // Start in spinner mode — `set_length(Some(_))` flips to the
+    // determinate template later if/when the caller learns the total.
+    bar.set_style(spinner_style(depth, prefix_width));
     bar.set_prefix(prefix.into());
     bar.enable_steady_tick(std::time::Duration::from_millis(120));
     bar
+}
+
+// `prefix:>14` columns + a 2-cell indent per nesting depth. Bound the
+// indent so the prefix field never shrinks below a usable width even
+// if a caller spawns deeply nested children.
+const PREFIX_COL_WIDTH: usize = 14;
+const INDENT_PER_DEPTH: usize = 2;
+
+fn prefix_width_at_depth(depth: usize) -> usize {
+    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
+    PREFIX_COL_WIDTH - indent
+}
+
+fn leading_at_depth(depth: usize) -> String {
+    if depth == 0 {
+        return String::new();
+    }
+    let indent = (depth * INDENT_PER_DEPTH).min(PREFIX_COL_WIDTH.saturating_sub(4));
+    // Replace the final two indent columns with a tree marker ("↳ ")
+    // so the parent/child relationship reads at a glance. Column count
+    // is unchanged — "↳ " renders as two cells.
+    let mut s = " ".repeat(indent.saturating_sub(2));
+    s.push_str("↳ ");
+    s
+}
+
+/// Determinate-style template — used once a real `set_length(Some(_))`
+/// arrives. Renders the standard `{pos}/{len} [bar]` shape with
+/// throughput + message tail.
+fn determinate_style(depth: usize, prefix_width: usize) -> ProgressStyle {
+    let leading = leading_at_depth(depth);
+    let template = format!(
+        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}}/{{len:5}} [{{wide_bar}}] {{per_sec:>10}} {{msg}}"
+    );
+    ProgressStyle::with_template(&template)
+        .unwrap()
+        .progress_chars("=> ")
+}
+
+/// Spinner-style template — used when the total is unknown. Shows the
+/// running position and the message tail but no `{len}` field, because
+/// indicatif renders `{len}` against a length-unset bar in a way that
+/// visually mirrors `{pos}` (looks like "1185/1185" and updates in
+/// lockstep), implying a known total when there is none. We elide
+/// `{wide_bar}` for the same reason: a determinate bar against an
+/// unknown total is misleading.
+fn spinner_style(depth: usize, prefix_width: usize) -> ProgressStyle {
+    let leading = leading_at_depth(depth);
+    let template = format!(
+        "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}} {{per_sec:>10}} {{msg}}"
+    );
+    ProgressStyle::with_template(&template).unwrap()
 }

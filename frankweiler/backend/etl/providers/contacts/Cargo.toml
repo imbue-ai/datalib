@@ -29,8 +29,10 @@ tracing = "0.1"
 # practice a quirky WebDAV server zoo.
 quick-xml = "0.36"
 # Lightweight base64 codec — vCard `PHOTO` properties inline binary
-# data as base64 in line-folded text. We decode + store the bytes in
-# the shared `blobs` table.
+# data as base64 in line-folded text. We decode + carry the bytes
+# inside `ContactPhoto`, written to `blobs/<uid>.<ext>` at render
+# time. (vCard photos travel with the entity, so they don't go
+# through the shared `blob_cas` CAS the way fetched attachments do.)
 base64 = "0.22"
 
 [dev-dependencies]

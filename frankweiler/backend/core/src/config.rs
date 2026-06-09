@@ -285,6 +285,134 @@ pub struct BeeperSync {
     pub period: Option<String>,
 }
 
+/// Tunables for the email provider. Today this is JMAP-backed
+/// (Fastmail / any RFC 8620 + RFC 8621 server) when `sync:` is
+/// present, and Google Takeout mbox-backed when it's omitted —
+/// both paths live in `frankweiler_etl_jmap`. Named `EmailSync`
+/// rather than `JmapApiSync` because the source variant covers
+/// more than the JMAP API surface.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct EmailSync {
+    /// JMAP server hostname. Session discovered at
+    /// `https://<hostname>/.well-known/jmap`. Examples:
+    ///   - `api.fastmail.com`
+    ///   - `mail.example.com` (any RFC 8620 server)
+    pub hostname: String,
+    /// JMAP account id. Defaults to the session's
+    /// `primaryAccounts['urn:ietf:params:jmap:mail']`.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Restrict the sync to these JMAP Mailbox ids. Empty = every
+    /// mailbox the account exposes.
+    #[serde(default)]
+    pub only_mailbox_ids: Vec<String>,
+    /// Force full Email/query enumeration even if an `Email/changes`
+    /// state token is stored. Defaults to false (incremental).
+    #[serde(default)]
+    pub full_resync: bool,
+}
+
+/// Tunables for the Yolink provider (per-device CSV downloads from
+/// `us.yosmart.com/download/...` — see `frankweiler_etl_yolink`).
+///
+/// Each device is identified by two opaque 32-hex IDs:
+///
+/// - `family_device_id` — the first path segment of the download URL;
+///   visible in any URL the YoLink/Safehous app generates for this
+///   device and stable over time.
+/// - `device_udid` — the second secret used in the MD5 signing of
+///   the per-window URL (`md5(family_device_id + start_ms + end_ms +
+///   device_udid)`). Same value the official `Home.getDeviceList` API
+///   returns as `deviceUDID`.
+///
+/// REDACT: both values are device-history-read secrets — they let
+/// anyone with the pair pull all CSV history for the device, forever
+/// (no rotation path). Scrub from any committed/public configs.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct YolinkSync {
+    /// Re-fetch overlap (minutes). On resume, the run's start
+    /// cursor is `last_observed - overlap` (so samples that landed
+    /// just past the previous run's tail get a second shot).
+    /// During a run, each fetch covers `window_days + overlap`
+    /// (the trailing edge of one window reaches into the leading
+    /// edge of the next). Both paths dedupe via the readings PK.
+    /// Default 5.
+    #[serde(default)]
+    pub overlap_minutes: Option<i64>,
+    /// Stride (days) between successive window-starts. Each
+    /// in-run cursor lands on `start + n*window_days`, so all
+    /// devices sharing a `start:` hit identical (start_ms, end_ms)
+    /// pairs each run — useful for any future per-window response
+    /// caching, and for keeping the `dolt log` history aligned.
+    /// The actual HTTP request covers `[cursor, cursor + stride +
+    /// overlap]`. Default 7.
+    #[serde(default)]
+    pub window_days: Option<i64>,
+    /// Devices to fetch. Each entry's `name` is the row key in the
+    /// raw DB, so renaming one re-keys its history — keep it stable.
+    #[serde(default)]
+    pub devices: Vec<YolinkDevice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct YolinkDevice {
+    /// Stable label; becomes the PK in `yolink_devices` and the FK
+    /// from `yolink_readings`. Pick something human-readable
+    /// (`basement_freezer`, `main_fridge`); changing it later
+    /// orphans prior history.
+    pub name: String,
+    /// `temperature_humidity` (Temperature(℃), Humidity(%RH)
+    /// columns) or `watermeter` (Water Meter(GAL), Water
+    /// Consumption(GAL)). Drives the column-header check in the
+    /// CSV parser; also stored verbatim in the `yolink_devices`
+    /// table so what the user typed is what `dolt diff` shows.
+    pub kind: String,
+    /// Earliest timepoint to ever pull, as `YYYY-MM-DD`. First fetch
+    /// walks forward from here in `window_days` chunks. Picked once
+    /// when you start collecting; the watermark in the DB takes over
+    /// after that.
+    pub start: String,
+    /// First URL path segment — the `<32hex>` in
+    /// `https://us.yosmart.com/download/<32hex>/...`. The downloader
+    /// uses this verbatim and also feeds it into the MD5 that signs
+    /// the per-window URL.
+    pub family_device_id: String,
+    /// Per-device UUID returned by the YoLink open API as `deviceUDID`.
+    /// Mixed into the MD5 signature. REDACT before publishing.
+    pub device_udid: String,
+}
+
+/// Signal-Android directory-format backup. The provider walks the
+/// newest `signal-backup-*` subdir under the source's `input_path`,
+/// decrypts it using the AEP read from `$aep_env_var` at extract time,
+/// and UPSERTs frames into a doltlite raw store. No network; no
+/// credentials in this struct — the secret lives in the user's shell
+/// (or .envrc.private).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SignalSync {
+    /// Directory containing one or more `signal-backup-*` snapshot
+    /// subdirs (Signal Android's "Save backup" target). The newest is
+    /// ingested. Required; the source's `input_path` is reserved for
+    /// the raw doltlite store and defaults to `${data_root}/raw/<name>`.
+    pub snapshot_dir: PathBuf,
+    /// Env var holding the AEP (Account Entropy Pool). Defaults to
+    /// `SIGNAL_PASSPHRASE` when omitted. Overridable so a multi-account
+    /// setup can scope per-account secrets at the shell layer.
+    #[serde(default)]
+    pub aep_env_var: Option<String>,
+    /// Period-bucketing knob for the rendered markdown tree —
+    /// `month` (default), `day`, `year`, or `all`. Shared across
+    /// every chat provider via `frankweiler_etl::periodize::Period`;
+    /// signal accepts the same strings beeper does so a unified
+    /// config can tune both at once.
+    #[serde(default)]
+    pub period: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionApiSync {
@@ -342,6 +470,16 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<NotionApiSync>,
     },
+    /// Email source. `sync:` present → JMAP server (Fastmail etc.);
+    /// `sync:` absent → translate-only mode against an `.mbox` at
+    /// `input_path` (e.g. a Google Takeout export). Both paths
+    /// share `frankweiler_etl_jmap`.
+    Email {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<EmailSync>,
+    },
     Beeper {
         #[serde(flatten)]
         common: SourceCommon,
@@ -364,6 +502,24 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<PerseusSync>,
     },
+    /// Yolink time-series sensors (water meter, temperature/humidity
+    /// fridge & freezer sensors). The `sync:` block names a list of
+    /// devices with captured download URLs; the extractor walks each
+    /// device's time-window in forward steps from `start`. No
+    /// translate / render path yet — extract-only.
+    Yolink {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<YolinkSync>,
+    },
+    /// Signal Android directory-format backup. Extract-only for now.
+    SignalBackup {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<SignalSync>,
+    },
 }
 
 impl SourceConfig {
@@ -376,9 +532,12 @@ impl SourceConfig {
             | SourceConfig::GithubApi { common, .. }
             | SourceConfig::GitlabApi { common, .. }
             | SourceConfig::NotionApi { common, .. }
+            | SourceConfig::Email { common, .. }
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
-            | SourceConfig::Perseus { common, .. } => common,
+            | SourceConfig::Perseus { common, .. }
+            | SourceConfig::Yolink { common, .. }
+            | SourceConfig::SignalBackup { common, .. } => common,
         }
     }
 
@@ -401,9 +560,12 @@ impl SourceConfig {
             SourceConfig::GithubApi { .. } => "github_api",
             SourceConfig::GitlabApi { .. } => "gitlab_api",
             SourceConfig::NotionApi { .. } => "notion_api",
+            SourceConfig::Email { .. } => "email",
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
             SourceConfig::Perseus { .. } => "perseus",
+            SourceConfig::Yolink { .. } => "yolink",
+            SourceConfig::SignalBackup { .. } => "signal_backup",
         }
     }
 
@@ -418,9 +580,12 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
+            SourceConfig::Email { sync, .. } => sync.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
+            SourceConfig::Yolink { sync, .. } => sync.is_some(),
+            SourceConfig::SignalBackup { sync, .. } => sync.is_some(),
         }
     }
 
@@ -549,6 +714,20 @@ pub enum ConfigError {
     NotionSyncEmpty(String),
     #[error("source name must be non-empty")]
     EmptySourceName,
+    #[error("yolink source {0:?} sync: must list at least one device")]
+    YolinkNoDevices(String),
+    #[error("yolink source {0:?} has duplicate device names: {1:?}")]
+    YolinkDuplicateDeviceNames(String, Vec<String>),
+    #[error(
+        "yolink source {0:?} device {1:?}: kind must be 'thsensor' or 'watermeter', got {2:?}"
+    )]
+    YolinkBadDeviceKind(String, String, String),
+    #[error("yolink source {0:?} device {1:?}: start must be YYYY-MM-DD, got {2:?}")]
+    YolinkBadDeviceStart(String, String, String),
+    #[error(
+        "yolink source {0:?} device {1:?}: {2} must be 32 lowercase-hex characters, got {3:?}"
+    )]
+    YolinkBadDeviceHex(String, String, &'static str, String),
 }
 
 impl Config {
@@ -584,6 +763,62 @@ impl Config {
                 let subtrees_on = sync.subtrees.as_ref().is_some_and(|t| !t.pages.is_empty());
                 if !inbox_on && !subtrees_on {
                     return Err(ConfigError::NotionSyncEmpty(name.into()));
+                }
+            }
+            if let SourceConfig::Yolink {
+                sync: Some(sync), ..
+            } = s
+            {
+                if sync.devices.is_empty() {
+                    return Err(ConfigError::YolinkNoDevices(name.into()));
+                }
+                let mut dev_names: Vec<&str> =
+                    sync.devices.iter().map(|d| d.name.as_str()).collect();
+                dev_names.sort_unstable();
+                let dupes: Vec<String> = dev_names
+                    .windows(2)
+                    .filter(|w| w[0] == w[1])
+                    .map(|w| w[0].to_string())
+                    .collect();
+                if !dupes.is_empty() {
+                    let mut d = dupes;
+                    d.dedup();
+                    return Err(ConfigError::YolinkDuplicateDeviceNames(name.into(), d));
+                }
+                for d in &sync.devices {
+                    match d.kind.as_str() {
+                        "temperature_humidity" | "watermeter" => {}
+                        other => {
+                            return Err(ConfigError::YolinkBadDeviceKind(
+                                name.into(),
+                                d.name.clone(),
+                                other.into(),
+                            ))
+                        }
+                    }
+                    if !is_yyyy_mm_dd(&d.start) {
+                        return Err(ConfigError::YolinkBadDeviceStart(
+                            name.into(),
+                            d.name.clone(),
+                            d.start.clone(),
+                        ));
+                    }
+                    if !is_hex32(&d.family_device_id) {
+                        return Err(ConfigError::YolinkBadDeviceHex(
+                            name.into(),
+                            d.name.clone(),
+                            "family_device_id",
+                            d.family_device_id.clone(),
+                        ));
+                    }
+                    if !is_hex32(&d.device_udid) {
+                        return Err(ConfigError::YolinkBadDeviceHex(
+                            name.into(),
+                            d.name.clone(),
+                            "device_udid",
+                            d.device_udid.clone(),
+                        ));
+                    }
                 }
             }
             names.push(name);
@@ -644,6 +879,28 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
     cfg.validate()?;
     Ok(cfg)
+}
+
+/// Cheap `YYYY-MM-DD` shape check. Doesn't validate that the date
+/// is real (Feb 30 etc.) — the extractor's `NaiveDate::parse_from_str`
+/// catches that and surfaces a richer error at runtime. We just want
+/// to bounce obvious typos at config-load time.
+fn is_yyyy_mm_dd(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 10 {
+        return false;
+    }
+    bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[..4].iter().all(|b| b.is_ascii_digit())
+        && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+        && bytes[8..10].iter().all(|b| b.is_ascii_digit())
+}
+
+fn is_hex32(s: &str) -> bool {
+    s.len() == 32
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn expand_tilde(s: &str) -> PathBuf {
@@ -801,6 +1058,103 @@ sources:
         assert!(matches!(
             load_config(Some(&cfg_path)),
             Err(ConfigError::DuplicateSourceNames(_))
+        ));
+    }
+
+    #[test]
+    fn loads_yolink_source() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: yolink
+    type: yolink
+    sync:
+      window_days: 7
+      devices:
+        - name: water_valve
+          kind: watermeter
+          start: '2026-04-05'
+          family_device_id: '00112233445566778899aabbccddeeff'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
+        - name: basement_freezer
+          kind: temperature_humidity
+          start: '2026-04-05'
+          family_device_id: '0123456789abcdef0123456789abcdef'
+          device_udid: 'fedcba9876543210fedcba9876543210'
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let yl = cfg.sources.iter().find(|s| s.name() == "yolink").unwrap();
+        assert!(yl.is_managed());
+        if let SourceConfig::Yolink { sync, .. } = yl {
+            let sync = sync.as_ref().unwrap();
+            assert_eq!(sync.window_days, Some(7));
+            assert_eq!(sync.devices.len(), 2);
+            assert_eq!(sync.devices[0].name, "water_valve");
+            assert_eq!(sync.devices[0].kind, "watermeter");
+        } else {
+            panic!("expected Yolink");
+        }
+    }
+
+    #[test]
+    fn rejects_yolink_bad_kind() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: yolink
+    type: yolink
+    sync:
+      devices:
+        - name: x
+          kind: door_sensor
+          start: '2026-04-05'
+          family_device_id: '00112233445566778899aabbccddeeff'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::YolinkBadDeviceKind(_, _, _))
+        ));
+    }
+
+    #[test]
+    fn rejects_yolink_bad_hex_id() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: yolink
+    type: yolink
+    sync:
+      devices:
+        - name: x
+          kind: temperature_humidity
+          start: '2026-04-05'
+          family_device_id: 'not-hex'
+          device_udid: 'ffeeddccbbaa99887766554433221100'
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::YolinkBadDeviceHex(_, _, "family_device_id", _))
+        ));
+    }
+
+    #[test]
+    fn rejects_yolink_empty_devices() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: yolink
+    type: yolink
+    sync:
+      devices: []
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::YolinkNoDevices(_))
         ));
     }
 

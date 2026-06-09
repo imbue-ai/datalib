@@ -207,16 +207,36 @@ you write a custom SELECT that returns `payload`, wrap it manually.
 
 ### 7. Blobs
 
-Use the shared `blobs` table (full DDL in `doltlite_raw::BLOBS_DDL`).
-PK is the upstream-stable blob identifier when present
-(e.g. ChatGPT's `file_id`, Anthropic's `file_uuid`, Slack's
-`F0...`); fall back to `{owning_id}:{slot}` when no upstream id
-exists (Notion image blocks). NOT `sha256(content)` — the PK must be
-known before fetching so error rows can attach to the right slot.
+Bytes live in a **sibling CAS file** — `<name>.blobs.doltlite_db` —
+not in the entity db. The CAS holds a single `cas_objects` table keyed
+by blake3 hash. The entity db carries `blob_refs` (PK = upstream-stable
+id, fallback `{owning_id}:{slot}`) with a nullable `blake3` column
+pointing into the CAS. See `frankweiler_etl::blob_cas` for the full
+shape; full DDL in the `BLOB_REFS_DDL` / `CAS_OBJECTS_DDL` constants.
 
-Trust-our-copy refetch policy: skip if `bytes IS NOT NULL`. Signed
-URLs rotate; bytes don't. Handled by
-`doltlite_raw::blob_exists()`.
+Open the CAS alongside the entity db in `RawDb::open`:
+
+```rust
+let pool = dr::open(db_path, DDL).await?;
+let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+```
+
+Trust-our-copy refetch policy: skip if `blake3 IS NOT NULL`. Handled
+by `blob_cas::ref_has_hash()` (exposed as `db.blob_exists()` in your
+provider's RawDb).
+
+Write path: one call covers both pre-seed-then-fetch and
+fetch-and-store. Build a `RefStub` with the upstream metadata and
+either call `db.pre_seed_blob_stub` (no bytes yet) or `db.store_blob`
+(post-download). `store_blob` does both the CAS `put` and the
+`blob_refs` `attach_hash` in two steps; cross-file atomicity isn't
+guaranteed, but the `gc_orphans` sweep reconciles any orphan CAS
+rows. Failed fetches go through `db.record_blob_error`.
+
+Read path: `LoadedRaw.blobs` is an `Arc<dyn BlobReader>`. Construct
+it from the per-source pools in `block_on_load_all` via
+`Arc::new(SqliteBlobReader::new(db.pool().clone(), db.cas().pool().clone()))`.
+For unit tests, use `InMemoryBlobReader::new()` + `insert(BlobView { … })`.
 
 ### 8. sync_runs (log table)
 
@@ -242,13 +262,19 @@ Don't re-implement these in your provider:
 | Record fetch error (alias) | `dr::record_object_error(&mut tx, table, id, err)` |
 | Retry list | `dr::failed_ids(table)` |
 | Read JSON payloads | `dr::load_payloads(table)` |
-| Blob CRUD (all take `&mut tx`) | `dr::blob_exists` / `dr::upsert_blob_bytes` / `dr::record_blob_error` / `dr::load_blobs_by_id` / `dr::load_blobs_by_owner` |
+| Blob write (pre-seed) | `blob_cas::pre_seed_ref(&mut tx, &RefStub { ... })` |
+| Blob write (fetched bytes) | `cas.put(bytes, ct)` + `blob_cas::attach_hash(&mut tx, stub, &hash)`, wrapped as `blob_cas::store_bytes(entity_pool, cas, stub, bytes)` |
+| Blob error | `blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err)` |
+| Blob read trait | `blob_cas::BlobReader` (`read_by_ref_id` / `read_by_owner` / `read_by_hash`) |
+| Blob reader impls | `SqliteBlobReader::new(refs_pool, cas_pool)` / `InMemoryBlobReader` |
+| Universal markdown link | `blob_cas::attachment_md(reader, ref_id, display, is_image)` |
+| Universal file write | `blob_cas::materialize_refs(reader, ref_ids, &blobs_dir)` |
 | Endpoint shape stamping | `dr::record_endpoint_shape()` |
-| `BlobBytes` type | `dr::BlobBytes` (re-export from your db.rs) |
 
-The shared module ships shared DDL constants too — `BLOBS_DDL`,
-`SYNC_RUNS_DDL`, `ENDPOINT_SHAPES_DDL` — appended to your provider's
-DDL inside `open()`.
+The shared module ships shared DDL constants too — `BLOB_REFS_DDL`
+(+ its indexes), `SYNC_RUNS_DDL`, `ENDPOINT_SHAPES_DDL` — appended to
+your provider's DDL inside `open()`. The CAS file gets `CAS_OBJECTS_DDL`
+applied by `BlobCas::open()`.
 
 Your `extract/db.rs` should be a thin provider-specific layer (see
 `notion/src/extract/db.rs` as the canonical template — ~440 lines
@@ -264,8 +290,11 @@ plumbing delegated).
 1. **`src/extract/db.rs`** — provider-specific tables only. Shape:
 
    ```rust
+   use frankweiler_etl::blob_cas::{
+       self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
+   };
    use frankweiler_etl::doltlite_raw::{self as dr};
-   pub use frankweiler_etl::doltlite_raw::{db_path_for, BlobBytes};
+   pub use frankweiler_etl::doltlite_raw::db_path_for;
 
    const DDL: &[&str] = &[
        "CREATE TABLE IF NOT EXISTS <entity> ( ... )",
@@ -273,16 +302,21 @@ plumbing delegated).
        // ... your provider-specific tables ...
    ];
 
-   pub struct RawDb { pool: SqlitePool }
+   pub struct RawDb { pool: SqlitePool, cas: BlobCas }
 
    impl RawDb {
        pub async fn open(p: &Path) -> Result<Self> {
-           Ok(Self { pool: dr::open(p, DDL).await? })
+           let pool = dr::open(p, DDL).await?;
+           let cas = BlobCas::open(&blob_cas::cas_path_for(p)).await?;
+           Ok(Self { pool, cas })
+       }
+       pub fn cas(&self) -> &BlobCas { &self.cas }
+       pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
+           blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
        }
        // Provider-specific upserts + state-check methods.
        // - Wrap payload binds in `jsonb(?)` (see §6a).
        // - Wrap payload SELECTs in `json(payload) AS payload`.
-       // Blob / sync_runs methods delegate to `dr::*`.
    }
 
    pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
@@ -303,11 +337,11 @@ plumbing delegated).
 
 3. **`src/extract/api.rs`** — transport-only. Move any
    `download_one_file` / `download_attachments_for_conversation`
-   helpers out: they now write directly to the DB via
-   `db.upsert_blob_bytes()` rather than the filesystem. Pattern:
-   tempfile + `latchkey curl -fSL -o tmpfile signed_url`, then
-   `fs::read(tmp.path())` and upsert. Errors call
-   `db.record_blob_error()`.
+   helpers out: they now write into the CAS via
+   `db.store_blob(&RefStub { ... }, &bytes)` rather than the
+   filesystem. Pattern: tempfile + `latchkey curl -fSL -o tmpfile
+   signed_url`, then `fs::read(tmp.path())` and `store_blob`. Errors
+   call `db.record_blob_error()`.
 
 4. **`src/translate/parse.rs`** — dispatch on path:
 
@@ -329,24 +363,27 @@ plumbing delegated).
    works. Factor shared row-walking logic so both readers produce
    byte-identical output.
 
-   Add a `blobs_by_id: HashMap<String, BlobBytes>` field to the
-   `Parsed*` struct.
+   Add a `blobs: Arc<dyn frankweiler_etl::blob_cas::BlobReader>` field
+   to the `Parsed*` struct. Default to
+   `InMemoryBlobReader::empty_handle()`.
 
 5. **`src/translate/render.rs`** — restructure to **page-dir layout**:
 
    - `Rendered::relative_path()` returns `<entity_id>/index.md` (NOT
      `<entity_id>.md`). One directory per renderable entity.
-   - Add a per-entity `materialize_conv_blobs()` helper that writes
-     each blob's bytes into `<page_dir>/blobs/<safe_filename>`.
-     Filter the blobs to just those this entity references — other
-     entities' blobs live next to their own `index.md`.
-   - `attachment_md()` emits a relative `blobs/<safe_filename>` link
-     (NOT a path through `raw/<src>/blobs/...`).
+   - Materializer is a single call to
+     `blob_cas::materialize_refs(reader, ref_ids_iter, &page_dir.join("blobs"))`.
+     Filenames come from `BlobView::rendered_filename`
+     (`<short-b3>.<ext>`) so collisions and "what extension?" go away.
+   - Attachment-link emitter uses the universal helper
+     `blob_cas::attachment_md(reader, ref_id, display, is_image)` for
+     the image-or-file shape. Providers with a non-standard
+     decoration around the link build it themselves and call
+     `view.rendered_filename()` directly.
    - Inside `render_all()`, the per-entity loop becomes:
-     `mkdir(page_dir)` → `materialize_conv_blobs(parsed, entity,
-     &name_by_id, page_dir)` → write `index.md` → write
-     `index.grid_rows.json` (use `abs.with_extension("grid_rows.json")`
-     on `<page_dir>/index.md`).
+     `mkdir(page_dir)` → `materialize_conv_blobs(...)` → write
+     `index.md` → write `index.grid_rows.json` (use
+     `abs.with_extension("grid_rows.json")` on `<page_dir>/index.md`).
 
    The rendered markdown's blob links change shape vs. the
    pre-doltlite era (no more `../../../raw/<src>/blobs/...`); that's

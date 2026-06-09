@@ -56,8 +56,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, NotionApiSync, PerseusSync, SlackApiSync, SourceConfig,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
+    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
+    SourceConfig, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -142,18 +143,38 @@ struct Args {
     #[arg(long, default_value_t = true)]
     deterministic: bool,
 
-    /// Wipe every enabled source's raw doltlite DB before the run and
-    /// re-download every row from upstream. The resulting `dolt diff`
-    /// between the pre-reset and post-reset commits then shows only
+    /// Wipe every enabled source's per-entity tables (and their
+    /// `_bookkeeping` sidecars) before the run, and re-download every
+    /// entity row from upstream. The resulting `dolt diff` between
+    /// the pre-reset and post-reset commits then shows only
     /// upstream-content changes (because the bookkeeping sidecars
     /// are not part of the data diff), which is how we verify our
     /// PK design is stable across re-fetches.
+    ///
+    /// **`blob_refs` is preserved** so attachments whose bytes are
+    /// already in the per-source CAS file are skip-checked instead of
+    /// re-fetched on the wire. Use `--refetch-blobs` to invalidate
+    /// the blob cache index when you actually want the bytes re-pulled.
     ///
     /// Whole-table bookkeeping (sync_runs, endpoint_shapes,
     /// sync_scope_state) is preserved — that's audit log + API
     /// discovery metadata + resume cursor, not row content.
     #[arg(long)]
     reset_and_redownload: bool,
+
+    /// Wipe `blob_refs` + `blob_refs_bookkeeping` for every enabled
+    /// source before the run, so each attachment is re-fetched on the
+    /// wire even when its bytes are already in the sibling CAS file.
+    /// The CAS itself is never truncated — re-fetched bytes hash to
+    /// the same blake3 and `INSERT OR IGNORE` is a no-op, so this
+    /// costs network IO but not disk.
+    ///
+    /// Orthogonal to `--reset-and-redownload`: pass both for a full
+    /// reset; pass `--reset-and-redownload` alone for the common
+    /// "check for entity gaps without burning bandwidth on blobs"
+    /// case.
+    #[arg(long)]
+    refetch_blobs: bool,
 
     #[command(flatten)]
     obs: frankweiler_obs::ObsArgs,
@@ -381,6 +402,7 @@ fn extract_provider_type(s: &str) -> Option<&'static str> {
         "type=github_api",
         "type=gitlab_api",
         "type=notion_api",
+        "type=email",
         "type=beeper",
     ] {
         if s.contains(marker) {
@@ -492,6 +514,25 @@ notion integration token expired or missing.
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
             .into(),
+        "email" => "\
+Email source: JMAP (Fastmail / generic) auth missing or expired.
+
+  1. Create an API token at https://app.fastmail.com/settings/security/tokens
+     with the 'Read-only access to mail' scope; copy it to the clipboard.
+  2. Register the two host services and attach the token to both
+     (Fastmail serves blob bytes from a separate host):
+       latchkey services register fastmail \\
+           --base-api-url=\"https://api.fastmail.com/\"
+       latchkey services register fastmail-content \\
+           --base-api-url=\"https://www.fastmailusercontent.com/\"
+       latchkey auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
+       latchkey auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
+  3. Smoke-test:
+       latchkey curl -sSL https://api.fastmail.com/.well-known/jmap \\
+           | jq .primaryAccounts
+
+See frankweiler/backend/etl/providers/jmap/EXTRACT.md for details."
+            .into(),
         "beeper" => "\
 beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
 
@@ -596,11 +637,18 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         };
         let control = frankweiler_etl::control::ExtractControl {
             reset_and_redownload: args.reset_and_redownload,
+            refetch_blobs: args.refetch_blobs,
         };
         if control.reset_and_redownload {
             status_line!(
                 "[frankweiler-sync] extract: --reset-and-redownload — wiping every source's \
-                 data + bookkeeping tables before fetch"
+                 entity tables before fetch (blob_refs preserved, see --refetch-blobs)"
+            );
+        }
+        if control.refetch_blobs {
+            status_line!(
+                "[frankweiler-sync] extract: --refetch-blobs — wiping every source's \
+                 blob_refs before fetch; CAS bytes survive but every attachment re-downloads"
             );
         }
         let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control, ctrlc).await;
@@ -1012,6 +1060,16 @@ async fn run_extract_phase(
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
         let path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
+        // Per-source narration: without this the pre-open loop runs
+        // silently and a stall on any one source looks like the whole
+        // sync hung. `doltlite_raw::open` logs its own start/finish too,
+        // but only the orchestrator knows the source name.
+        tracing::info!(
+            source = %plan.name,
+            kind = plan.type_str,
+            path = %path.display(),
+            "extract pre-open: opening writable doltlite pool"
+        );
         match open_extract_db(&plan.kind, &path).await {
             Ok(Some(db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
@@ -1026,9 +1084,12 @@ async fn run_extract_phase(
                 opened.push(plan);
             }
             Err(e) => {
-                status_line!(
-                    "[frankweiler-sync] extract pre-open FAILED for {}: {e:#}",
-                    plan.name
+                tracing::error!(
+                    source = %plan.name,
+                    kind = plan.type_str,
+                    path = %path.display(),
+                    error = %format!("{e:#}"),
+                    "extract pre-open FAILED"
                 );
                 outcomes.push(PhaseOutcome::err(
                     &plan.name,
@@ -1067,17 +1128,19 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
-            let mp = multi.clone();
             set.spawn(async move {
-                mp.println(format!("[extract] start {name} ({type_str})"))
-                    .ok();
+                tracing::info!(source = %name, kind = type_str, "extract: start");
                 let r = plan
                     .run()
                     .await
                     .with_context(|| format!("extract {name} (type={type_str})"));
                 match &r {
-                    Ok(s) => mp.println(format!("[extract] done  {name}: {s}")).ok(),
-                    Err(e) => mp.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+                    Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                    Err(e) => tracing::error!(
+                        source = %name,
+                        error = %format!("{e:#}"),
+                        "extract: FAIL"
+                    ),
                 };
                 (name, type_str, r)
             });
@@ -1100,14 +1163,18 @@ async fn run_extract_phase(
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
-            multi.println(format!("[extract] {name} ({type_str})")).ok();
+            tracing::info!(source = %name, kind = type_str, "extract: start");
             let r = plan
                 .run()
                 .await
                 .with_context(|| format!("extract {name} (type={type_str})"));
             match &r {
-                Ok(s) => multi.println(format!("[extract] done  {name}: {s}")).ok(),
-                Err(e) => multi.println(format!("[extract] FAIL  {name}: {e:#}")).ok(),
+                Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                Err(e) => tracing::error!(
+                    source = %name,
+                    error = %format!("{e:#}"),
+                    "extract: FAIL"
+                ),
             };
             outcomes.push(summary::outcome_from(&name, type_str, r));
         }
@@ -1168,6 +1235,9 @@ enum DbHandle {
     Notion(frankweiler_etl_notion::extract::RawDb),
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
+    Jmap(frankweiler_etl_email::extract::RawDb),
+    Yolink(frankweiler_etl_yolink::extract::RawDb),
+    Signal(frankweiler_etl_signal::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1181,6 +1251,9 @@ impl DbHandle {
             DbHandle::Notion(d) => d.pool(),
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
+            DbHandle::Jmap(d) => d.pool(),
+            DbHandle::Yolink(d) => d.pool(),
+            DbHandle::Signal(d) => d.pool(),
         }
     }
 }
@@ -1219,6 +1292,15 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Carddav { .. } => {
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
+        ExtractKind::Jmap { .. } => {
+            DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Yolink { .. } => {
+            DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
+        }
+        ExtractKind::Signal { .. } => {
+            DbHandle::Signal(frankweiler_etl_signal::extract::RawDb::open(path).await?)
+        }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1253,6 +1335,17 @@ enum ExtractKind {
     },
     Perseus {
         sync: PerseusSync,
+    },
+    Jmap {
+        sync: EmailSync,
+        blob_size_limit_bytes: Option<u64>,
+    },
+    Yolink {
+        sync: YolinkSync,
+    },
+    Signal {
+        sync: SignalSync,
+        snapshot_root: PathBuf,
     },
 }
 
@@ -1301,7 +1394,37 @@ impl ExtractPlan {
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
             },
+            SourceConfig::Yolink { sync, .. } => ExtractKind::Yolink {
+                sync: sync.clone().unwrap_or_default(),
+            },
+            SourceConfig::SignalBackup { sync, .. } => {
+                let sync = sync.clone().ok_or_else(|| {
+                    anyhow::anyhow!("signal_backup source {name} missing sync.snapshot_dir")
+                });
+                match sync {
+                    Ok(sync) => {
+                        let snapshot_root = sync.snapshot_dir.clone();
+                        ExtractKind::Signal {
+                            sync,
+                            snapshot_root,
+                        }
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
             SourceConfig::ClaudeExport { .. } => return None,
+            SourceConfig::Email { sync, .. } => {
+                let sync = sync
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("email source {name} missing sync: block"));
+                match sync {
+                    Ok(sync) => ExtractKind::Jmap {
+                        sync,
+                        blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
+                    },
+                    Err(e) => return Some(Err(e)),
+                }
+            }
         };
         Some(Ok(Self {
             name,
@@ -1422,7 +1545,12 @@ impl ExtractPlan {
                     frankweiler_etl_github::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
                         db: Some(db),
-                        full_sync: true,
+                        // Same fix as gitlab below: don't force full_sync,
+                        // so discovery narrows via saved `sync_scope_state`.
+                        // Unlike gitlab, github's per-PR loop has no skip
+                        // optimization yet, so every discovered PR still
+                        // gets four API calls — but narrowing keeps the
+                        // discovered set small to begin with.
                         refresh_window_days: sync
                             .refresh_window_days
                             .map(|v| v.max(0) as u32)
@@ -1454,7 +1582,14 @@ impl ExtractPlan {
                     frankweiler_etl_gitlab::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
                         db: Some(db),
-                        full_sync: true,
+                        // full_sync stays false (FetchOptions default) so the
+                        // gitlab provider honors saved `sync_scope_state` and
+                        // narrows discovery via `updated_after`. The previous
+                        // unconditional `true` here disabled the entire
+                        // incremental path — every run re-discovered and
+                        // re-fetched every MR in the user's scope. The
+                        // `--reset-and-redownload` flag still forces a clean
+                        // re-pull via `db.reset()` when actually needed.
                         refresh_window_days: sync
                             .refresh_window_days
                             .map(|v| v.max(0) as u32)
@@ -1545,6 +1680,29 @@ impl ExtractPlan {
                     s.fetched, s.skipped, s.bytes, s.requests,
                 )
             }),
+            (ExtractKind::Yolink { sync }, Some(DbHandle::Yolink(db))) => {
+                frankweiler_etl_yolink::extract::fetch(
+                    frankweiler_etl_yolink::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        sync: sync.clone(),
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "devices={} windows={} touched={} unchanged={} errors={} requests={}",
+                        s.devices,
+                        s.windows,
+                        s.readings_touched,
+                        s.readings_unchanged,
+                        s.errors,
+                        s.requests,
+                    )
+                })
+            }
             (
                 ExtractKind::Notion {
                     sync,
@@ -1601,7 +1759,66 @@ impl ExtractPlan {
                     )
                 })
             }
+            (
+                ExtractKind::Signal {
+                    sync,
+                    snapshot_root,
+                },
+                Some(DbHandle::Signal(db)),
+            ) => frankweiler_etl_signal::extract::fetch(
+                frankweiler_etl_signal::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    snapshot_root,
+                    // Default: `<snapshot_root>/files/XX/<name>` —
+                    // the layout Signal Android produces. Override
+                    // via a future SignalSync knob if it matters.
+                    files_root: None,
+                    aep_env_var: sync.aep_env_var.clone(),
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "recipients={} chats={} chat_items={} media_files={} snapshot={}",
+                    s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
+                )
+            }),
             // The open phase pairs each ExtractKind with the
+            (
+                ExtractKind::Jmap {
+                    sync,
+                    blob_size_limit_bytes,
+                },
+                Some(DbHandle::Jmap(db)),
+            ) => frankweiler_etl_email::extract::fetch(
+                frankweiler_etl_email::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    hostname: sync.hostname.clone(),
+                    account_id: sync.account_id.clone(),
+                    full_resync: sync.full_resync,
+                    only_mailbox_ids: sync.only_mailbox_ids.clone(),
+                    blob_size_limit_bytes,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
+                    s.mailboxes_upserted,
+                    s.emails_upserted,
+                    s.emails_destroyed,
+                    s.threads_upserted,
+                    s.blobs_downloaded,
+                    s.blobs_oversize,
+                    s.blobs_errored,
+                )
+            }),
             // matching DbHandle variant, so any mismatch here would
             // be a bug in `open_extract_db`. We don't try to recover.
             _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
@@ -1623,11 +1840,38 @@ impl ExtractPlan {
         let commit_outcome: Result<String> = match (&pool, &result) {
             (Some(pool), Ok(stats)) => {
                 let msg = format!("extract {name}: {stats}");
-                match frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await {
-                    Ok(Some(h)) => Ok(format!("{stats} commit={h}")),
-                    Ok(None) => Ok(stats.clone()),
+                // Timing the commit makes "database is locked" episodes
+                // legible: a 2+s elapsed before failure points at pool
+                // contention rather than dolt internals.
+                tracing::info!(source = %name, "extract commit: starting dolt_commit");
+                let started = std::time::Instant::now();
+                let outcome = frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await;
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                match outcome {
+                    Ok(Some(h)) => {
+                        tracing::info!(
+                            source = %name,
+                            commit = %h,
+                            elapsed_ms,
+                            "extract commit: done"
+                        );
+                        Ok(format!("{stats} commit={h}"))
+                    }
+                    Ok(None) => {
+                        tracing::info!(
+                            source = %name,
+                            elapsed_ms,
+                            "extract commit: skipped (no dolt extensions)"
+                        );
+                        Ok(stats.clone())
+                    }
                     Err(e) => {
-                        status_line!("[frankweiler-sync] extract commit failed for {name}: {e:#}");
+                        tracing::error!(
+                            source = %name,
+                            elapsed_ms,
+                            error = %format!("{e:#}"),
+                            "extract commit FAILED"
+                        );
                         Ok(stats.clone())
                     }
                 }
@@ -1694,6 +1938,26 @@ fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
 // ─────────────────────────────────────────────────────────────────────
 // Translate phase
 // ─────────────────────────────────────────────────────────────────────
+
+/// True when `fixture` looks like a Google Takeout mbox drop:
+/// either a single `.mbox` file or a directory containing at least
+/// one. Lets the jmap translate path fall back to file-mode without
+/// a doltlite raw db.
+fn is_mbox_input(fixture: &Path) -> bool {
+    if fixture.is_file() {
+        return fixture.extension().and_then(|s| s.to_str()) == Some("mbox");
+    }
+    let Ok(entries) = fs::read_dir(fixture) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mbox") {
+            return true;
+        }
+    }
+    false
+}
 
 /// Translate one source's `input_path` into the workspace's
 /// `rendered_md/` + sidecar tree. ClaudeExport shares the anthropic
@@ -1885,6 +2149,51 @@ fn translate_source(
             .context("carddav render_all")
             .map(|_| ())
         }
+        SourceConfig::Email { sync, .. } => {
+            use frankweiler_etl_email::extract::block_on_load_all;
+            use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
+            use frankweiler_etl_email::translate::mbox;
+            use frankweiler_etl_email::translate::render::render_all;
+
+            // Two-mode dispatch, parallel to how contacts picks
+            // between a server-backed doltlite db and a translate-only
+            // .vcf input_path:
+            //
+            //  1. doltlite db exists at `fixture` → server-extracted
+            //     run; load via block_on_load_all.
+            //  2. else `fixture` is an .mbox file or a directory
+            //     containing one → file-backed Google Takeout mode;
+            //     parse via translate::mbox::parse.
+            //  3. else nothing staged yet → skip (matches the
+            //     translate-only contacts shape for an empty
+            //     input_path).
+            let db = jmap_db_path_for(&fixture);
+            let parsed = if db.exists() {
+                block_on_load_all(&db)
+                    .with_context(|| format!("jmap block_on_load_all {}", db.display()))?
+            } else if is_mbox_input(&fixture) {
+                let account_override = sync.as_ref().and_then(|s| s.account_id.as_deref());
+                mbox::parse(&fixture, account_override)
+                    .with_context(|| format!("jmap mbox parse {}", fixture.display()))?
+            } else {
+                status_line!(
+                    "[translate] {name} (jmap): no raw db at {} and no .mbox under {} — skipping",
+                    db.display(),
+                    fixture.display(),
+                );
+                return Ok(());
+            };
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("jmap render_all")
+            .map(|_| ())
+        }
         SourceConfig::Perseus { .. } => {
             use frankweiler_etl_perseus::translate::{align, parse, render};
             let parsed = parse::parse(&fixture)
@@ -1911,6 +2220,32 @@ fn translate_source(
             )
             .context("perseus render_all")
             .map(|_| ())
+        }
+        SourceConfig::SignalBackup { sync, .. } => {
+            use frankweiler_etl_signal::translate::{parse, render_all, Period};
+            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
+                .context("parse signal period")?;
+            let parsed = parse(&fixture, period)
+                .with_context(|| format!("signal parse {}", fixture.display()))?;
+            render_all(
+                &parsed,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("signal render_all")
+            .map(|_| ())
+        }
+        SourceConfig::Yolink { .. } => {
+            // Extract-only provider. Time-series viz lives outside
+            // the rendered_md tree; the readings sit in the source's
+            // doltlite for direct query (sqlite3 / dolt log) without
+            // a markdown intermediary. Skip translate quietly so a
+            // mixed config doesn't error out.
+            status_line!("[translate] {name} (yolink): skipped (extract-only, no render path)");
+            Ok(())
         }
     }
 }
@@ -1948,11 +2283,39 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
+            SourceConfig::Email { .. } => {
+                // No synthesizer yet — JMAP playback fixtures are a
+                // follow-up. Skip quietly.
+                status_line!(
+                    "[synth] {} (email): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
             SourceConfig::Perseus { .. } => {
                 // Perseus has no extract phase (no HTTP playback to
                 // synthesize against), so synth is a no-op.
                 status_line!(
                     "[synth] {} (perseus): skipped (translate-only, no extract)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::SignalBackup { .. } => {
+                // No playback synthesizer yet — Signal extract is
+                // local-file-only, no HTTP to play back.
+                status_line!(
+                    "[synth] {} (signal_backup): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Yolink { .. } => {
+                // No playback synthesizer for yolink yet — would need
+                // to capture per-window CSV bodies into a fixture
+                // tree. Skip quietly so a mixed config doesn't error.
+                status_line!(
+                    "[synth] {} (yolink): skipped (no synthesizer yet)",
                     src.name()
                 );
                 continue;

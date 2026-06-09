@@ -5,6 +5,7 @@
 // embedded backend.
 
 import type { FeedbackContext } from "./feedback/context";
+import { pushToast } from "./toasts";
 
 export type SearchRow = {
   uuid: string;
@@ -54,6 +55,11 @@ export type SearchResponse = {
   rows: SearchRow[];
   columns: { field: string; header: string; default_visible: boolean }[];
   total_estimated: number;
+  // Backend-side errors that don't fail the response — e.g. the
+  // structured-search SQL errored and we returned zero rows rather than
+  // surface a 500. `api.ts` raises each as a toast so the user sees
+  // them; the field is omitted when empty (serde `skip_serializing_if`).
+  errors?: string[];
 };
 
 // QMDs are write-only output. The backend ships the body verbatim
@@ -112,8 +118,28 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(url, { signal });
-  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  let r: Response;
+  try {
+    r = await fetch(url, { signal });
+  } catch (e) {
+    // Network error / aborted before headers. Don't toast on abort
+    // (caller-initiated cancellation, e.g. debounced search supersession).
+    if ((e as { name?: string }).name !== "AbortError") {
+      pushToast(`${url}: ${(e as Error).message}`);
+    }
+    throw e;
+  }
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = (await r.text()).trim();
+    } catch {
+      // ignore
+    }
+    const msg = detail ? `${url} → ${r.status}: ${detail}` : `${url} → ${r.status}`;
+    pushToast(msg);
+    throw new Error(msg);
+  }
   return (await r.json()) as T;
 }
 
@@ -121,13 +147,24 @@ export function fetchHealth(signal?: AbortSignal): Promise<Health> {
   return getJson<Health>("/api/health", signal);
 }
 
-export function fetchSearch(
+export async function fetchSearch(
   q: string,
   limit = 200,
   signal?: AbortSignal,
 ): Promise<SearchResponse> {
   const params = new URLSearchParams({ q, limit: String(limit) });
-  return getJson<SearchResponse>(`/api/search?${params.toString()}`, signal);
+  const r = await getJson<SearchResponse>(
+    `/api/search?${params.toString()}`,
+    signal,
+  );
+  // Backend returned 200 but is telling us something went sideways
+  // (schema mismatch, fallback path errored, etc.). Surface each entry
+  // as its own toast — the dedupe window in `pushToast` keeps repeated
+  // keystroke-driven searches from spamming the tray.
+  if (r.errors && r.errors.length > 0) {
+    for (const e of r.errors) pushToast(e);
+  }
+  return r;
 }
 
 export function fetchChat(
