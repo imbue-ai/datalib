@@ -32,6 +32,7 @@ use std::collections::HashMap;
 use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::section::msg_div_open;
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
 
@@ -295,17 +296,11 @@ fn render_thread_md(
             .and_then(|u| user_labels.get(u).cloned())
             .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
         let link = slack_link(team_id, channel_id, &m.ts, Some(&root.ts));
-        // Same per-section wrapper shape as the Anthropic / ChatGPT
-        // renderers: `id="m-{uuid}"` for in-page anchors, and
-        // `data-section-uuid` as the single key the UI uses to find /
-        // highlight a section. The old `data-msg-uuid` /
-        // `data-msg-index` / `data-provider` attributes were redundant
-        // with the id + the class — dropping them keeps the wire
-        // format consistent across providers.
-        p.push(format!(
-            r#"<div id="m-{0}" data-section-uuid="{0}" class="msg msg--slack">"#,
-            m.uuid(),
-        ));
+        // Standard `<div>` wrapper via `section::msg_div_open` — same
+        // shape every other provider emits. The `data-section-uuid`
+        // matches the grid_row.uuid so row→preview navigation can
+        // resolve.
+        p.push(msg_div_open(&m.uuid(), "slack"));
         p.push(String::new());
         p.push(format!("## {author}"));
         p.push(String::new());

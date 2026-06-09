@@ -31,6 +31,7 @@ pub mod periodize;
 pub mod progress;
 pub mod raw_store;
 pub mod scope_state;
+pub mod section;
 pub mod sidecar;
 pub mod synthesize;
 pub mod title;

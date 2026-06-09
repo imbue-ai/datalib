@@ -49,13 +49,7 @@ fn bump_iso(ts: &str) -> String {
     out
 }
 
-fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
-    format!(
-        "<div id=\"m-{msg_uuid}\" data-section-uuid=\"{msg_uuid}\" class=\"msg msg--{provider}\">"
-    )
-}
-
-const MSG_DIV_CLOSE: &str = "</div>";
+use frankweiler_etl::section::{msg_div_open, MSG_DIV_CLOSE};
 
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();

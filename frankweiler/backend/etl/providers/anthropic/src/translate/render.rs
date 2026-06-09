@@ -65,28 +65,23 @@ pub(crate) fn bump_iso(ts: &str) -> String {
     out
 }
 
-/// Open tag for a per-message section. The UI keys selection /
-/// scroll-to / copy-uuid off `data-section-uuid` — that's the single
-/// source of truth shared with the grid row's `uuid` column, so it
-/// can't drift the way the old `data-msg-index` did.
-pub(crate) fn msg_div_open(msg_uuid: &str, provider: &str) -> String {
-    format!(
-        "<div id=\"m-{msg_uuid}\" data-section-uuid=\"{msg_uuid}\" class=\"msg msg--{provider}\">"
-    )
-}
+pub(crate) use frankweiler_etl::section::{msg_div_open, MSG_DIV_CLOSE};
 
 /// Open tag for a per-block section nested inside a message
 /// (`tool_use`, `tool_result`, `thinking`). The section's id and
 /// `data-section-uuid` always match the grid row uuid the translator
 /// emits — see `grid_rows::rows_for_conversation` and the
 /// `tu-`/`tr-`/`th-` prefix convention there.
+///
+/// Distinct from `section::msg_div_open` because anthropic's per-block
+/// sections use the row uuid verbatim as the element id (no `m-`
+/// prefix), and tag with `msg--block msg--{block_kind}` for the nested
+/// styling.
 pub(crate) fn block_div_open(section_uuid: &str, block_kind: &str) -> String {
     format!(
         "<div id=\"{section_uuid}\" data-section-uuid=\"{section_uuid}\" class=\"msg msg--block msg--{block_kind}\">"
     )
 }
-
-pub(crate) const MSG_DIV_CLOSE: &str = "</div>";
 
 /// JSON dumped the way Python emits with `indent=2, ensure_ascii=False, sort_keys=True`.
 /// serde_json::to_string_pretty with a BTreeMap-backed Value matches when keys

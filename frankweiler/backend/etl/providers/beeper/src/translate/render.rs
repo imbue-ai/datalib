@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::section::{msg_div_open, section_attrs};
 use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
 use frankweiler_schema::grid_rows::GridRow;
@@ -285,10 +286,8 @@ fn render_markdown(
         // highlight (or even scroll to) the message a clicked row
         // points at, and the row looks like data loss. The grid row
         // uuid is `m.event_uuid` (see `rows_for_doc`); same here.
-        out.push_str(&format!(
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--beeper\">\n\n",
-            uuid = m.event_uuid,
-        ));
+        out.push_str(&msg_div_open(&m.event_uuid, "beeper"));
+        out.push_str("\n\n");
 
         // HIDDEN events are surfaced as a single italic line — the
         // desktop app suppresses them, but they're real history
@@ -359,10 +358,8 @@ fn render_markdown(
             for (emoji, reactors) in groups {
                 for r in reactors {
                     let who = r.sender_label.as_deref().unwrap_or("?");
-                    out.push_str(&format!(
-                        "- <span data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
-                        uuid = r.event_uuid,
-                    ));
+                    let attrs = section_attrs(&r.event_uuid);
+                    out.push_str(&format!("- <span {attrs}>{emoji} {who}</span>\n"));
                 }
             }
         }
