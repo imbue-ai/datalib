@@ -1,23 +1,6 @@
-# ~/.config/frankweiler/config.yaml -- or anywhere you look.
 data_root: ~/mixed_up_files  # Where the downloaded data gets written.
 
-dolt:
-  port: 3306
-
 sources:
-  - name: anthropic-api
-    type: claude_api
-    sync: {}
-      # overlap: 50              # re-fetch the N most-recently-updated
-      # refresh_window_days: 7   # treat anything older than this as cold
-
-  - name: slack
-    type: slack_api
-    sync:
-      media: true
-      channels:
-        - "project-data-liberation"
-
   # Google Takeout Gmail export. `sync:` is intentionally omitted —
   # that puts the email provider in translate-only mbox mode, reading
   # the file at `input_path` instead of talking to a JMAP server.
@@ -25,3 +8,27 @@ sources:
   - name: gmail-takeout
     type: email
     input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+
+  # Slack workspace mirror. Credentials come from `latchkey` at runtime
+  # (see the "Register Slack with latchkey" section in the first-time
+  # user guide). `channels:` restricts the sync to the listed channels;
+  # omit it (or set `all_channels: true`) to mirror every channel the
+  # account can see. `media: true` pulls file attachments into blobs.
+  - name: slack
+    type: slack_api
+    blob_size_limit_bytes: 1000000  # 1 MB — skip larger file uploads
+    sync:
+      media: true
+      channels:
+        - "project-data-liberation"
+
+  # Anthropic / claude.ai conversation mirror. Credentials come from
+  # `latchkey` at runtime (see the "Register Claude web with latchkey"
+  # section in the first-time user guide). Bare `sync: {}` fetches
+  # every conversation across every org the account can see; uncomment
+  # the knobs below to bound the work on incremental re-runs.
+  - name: anthropic-api
+    type: claude_api
+    sync: {}
+      # overlap: 50              # re-fetch the N most-recently-updated
+      # refresh_window_days: 7   # treat anything older than this as cold
