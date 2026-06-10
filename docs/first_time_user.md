@@ -27,11 +27,11 @@ gh auth login
 
 Make a "data root", for example here: `~/mixed_up_files`.  This is where the tools will download your data.
 
-You don't have to, but you can also download the tools directly into this directory as well.
-Doing so is convenient for this demo:
+The tools can run from anywhere, but for now, you can just download them
+directly into the data_root directory as well.
 
 ```sh
-# Our playground
+# Make the data_root as our playground.
 mkdir -p ~/mixed_up_files && cd ~/mixed_up_files
 
 gh release download --repo imbue-ai/mixed_up_files --clobber --pattern '*.tar.gz' -D /tmp \
