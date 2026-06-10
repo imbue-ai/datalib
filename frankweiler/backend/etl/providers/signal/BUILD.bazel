@@ -24,6 +24,7 @@ rust_library(
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/signal-backup:frankweiler_signal_backup",
         "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:blake3",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:prost",
         "@frankweiler_crates//:serde",

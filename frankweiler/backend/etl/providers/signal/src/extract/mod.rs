@@ -11,6 +11,7 @@
 //! pass it through the [`Snapshot::open`] derivation, and drop it.
 
 pub mod db;
+pub mod schema_raw;
 
 use std::path::{Path, PathBuf};
 
@@ -84,6 +85,12 @@ pub struct FetchSummary {
     /// log lines; details land on `blob_refs_bookkeeping.last_error`.
     pub blob_errors: usize,
     pub snapshot: String,
+    /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
+    pub snapshot_blake3: String,
+    /// True when fetch short-circuited because this snapshot was
+    /// already recorded in `ingested_backups`. When true, all other
+    /// counters are zero.
+    pub already_ingested: bool,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -129,6 +136,33 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
+    // Resume cursor: hash the snapshot's three files before we do any
+    // crypto work. If we've already ingested these bytes, return
+    // early with a marker summary.
+    let snapshot_dir_for_hash = snapshot_dir.clone();
+    let (snapshot_blake3, total_byte_size) =
+        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
+            .await
+            .context("join snapshot hash task")?
+            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
+    if db.snapshot_already_ingested(&snapshot_blake3).await? {
+        info!(
+            event = "signal_snapshot_already_ingested",
+            snapshot = %snapshot_dir.display(),
+            blake3 = %snapshot_blake3,
+            note = "skipping decrypt + walk; pass --reset-and-redownload to re-ingest",
+        );
+        return Ok(FetchSummary {
+            snapshot: snapshot_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            snapshot_blake3,
+            already_ingested: true,
+            ..Default::default()
+        });
+    }
+
     // Heavy crypto work — gunzip + AES on tens of MB — runs in a
     // blocking thread so we don't block the tokio runtime.
     let snap = {
@@ -145,6 +179,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        snapshot_blake3: snapshot_blake3.clone(),
         ..Default::default()
     };
 
@@ -178,7 +213,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let chat_id = ci.chat_id.to_string();
                 let author_id = ci.author_id.to_string();
                 let date_sent = ci.date_sent as i64;
-                let pk = format!("{chat_id}#{author_id}#{date_sent}");
+                let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
                 db.upsert_chat_item(&pk, &chat_id, &author_id, date_sent, &raw)
                     .await?;
                 summary.chat_items += 1;
@@ -200,7 +235,46 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
 
+    db.record_snapshot_ingested(
+        &snapshot_blake3,
+        &snapshot_dir.to_string_lossy(),
+        total_byte_size,
+    )
+    .await
+    .context("record snapshot in ingested_backups")?;
+
     Ok(summary)
+}
+
+/// Hash the three on-disk files of a Signal snapshot directory
+/// (`metadata || main || files`) into a single Blake3 hex string,
+/// alongside the total byte count.
+///
+/// See `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC` for the canonical
+/// statement of the recipe. Streams each file in 64 KiB chunks so we
+/// don't materialize the whole thing in memory — `main` can be tens
+/// of MB.
+fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
+    use std::io::Read;
+    let mut hasher = blake3::Hasher::new();
+    let mut total: u64 = 0;
+    for name in ["metadata", "main", "files"] {
+        let path = snapshot_dir.join(name);
+        let mut f = std::fs::File::open(&path)
+            .with_context(|| format!("open {} for hashing", path.display()))?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = f
+                .read(&mut buf)
+                .with_context(|| format!("read {}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+            total += n as u64;
+        }
+    }
+    Ok((hasher.finalize().to_hex().to_string(), total))
 }
 
 /// Decrypt one `MessageAttachment`'s bytes out of the shared
