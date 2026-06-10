@@ -9,8 +9,8 @@
 > <span style="color:red">**Please think at least 3x before running an agent on this
 > data, then think again. Make sure you understand the full implications of the
 > [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
-> Most of the data accumulated by these tools should be considered both Private
-> Data and Untrusted Content.**</span>
+> Most of the data accumulated by these tools should be considered both <span style="color:red">**Private
+> Data**</span> and <span style="color:red">**Untrusted Content**</span>.**</span>
 >
 > <span style="color:red">**Also remember that most agentic harnesses are effectively
 > (!!!) EXFILTRATION SCRIPTS (!!!), and running them on your private data will
