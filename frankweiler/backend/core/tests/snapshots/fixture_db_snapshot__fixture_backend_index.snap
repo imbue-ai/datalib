@@ -374,7 +374,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "frankweiler-sync: markdowns_loaded=26 markdowns_total=26 rows_inserted=90 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,signal]"
+      "message": "frankweiler-sync: markdowns_loaded=26 markdowns_total=26 rows_inserted=90 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,signal,whatsapp]"
     }
   ],
   "grid_rows": [

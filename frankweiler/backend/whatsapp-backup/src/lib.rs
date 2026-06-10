@@ -36,10 +36,12 @@
 mod crypto;
 mod header;
 mod key;
+mod write;
 
 pub use crypto::{decrypt_crypt15, DecryptError};
 pub use header::{parse_header, BackupHeader, HeaderError};
 pub use key::derive_backup_encryption_key;
+pub use write::encrypt_to_crypt15;
 
 use std::path::Path;
 

@@ -444,6 +444,25 @@ pub struct SignalSync {
     pub period: Option<String>,
 }
 
+/// WhatsApp Android crypt15 backup. Points at the `WhatsApp/` directory
+/// the user pulls off their phone (containing `Databases/msgstore.db.crypt15`
+/// and a sibling `Media/` tree of plaintext attachments). The 32-byte
+/// root key is hex-encoded in the env var named by `key_env_var`
+/// (defaults to `WHATSAPP_BACKUP_DECRYPTION_KEY`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WhatsAppSync {
+    /// Directory containing `Databases/msgstore.db.crypt15` and the
+    /// `Media/` tree. Required; the source's `input_path` is reserved
+    /// for the raw doltlite store and defaults to
+    /// `${data_root}/raw/<name>`.
+    pub backup_dir: PathBuf,
+    /// Env var holding the 32-byte root key as 64 hex chars. Defaults
+    /// to `WHATSAPP_BACKUP_DECRYPTION_KEY`.
+    #[serde(default)]
+    pub key_env_var: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct NotionApiSync {
@@ -551,6 +570,21 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<SignalSync>,
     },
+    /// WhatsApp Android crypt15 backup. Extract-only for now —
+    /// translate/render lands in a follow-up. Mirrors a curated
+    /// subset of `msgstore.db` into `wa_*` tables in the raw store.
+    ///
+    /// The explicit `rename` overrides `serde`'s `snake_case` derivation,
+    /// which would otherwise produce `whats_app_backup` from
+    /// `WhatsAppBackup` (because PascalCase "WhatsApp" has two
+    /// capitalized segments).
+    #[serde(rename = "whatsapp_backup")]
+    WhatsAppBackup {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<WhatsAppSync>,
+    },
 }
 
 impl SourceConfig {
@@ -568,7 +602,8 @@ impl SourceConfig {
             | SourceConfig::Carddav { common, .. }
             | SourceConfig::Perseus { common, .. }
             | SourceConfig::Yolink { common, .. }
-            | SourceConfig::SignalBackup { common, .. } => common,
+            | SourceConfig::SignalBackup { common, .. }
+            | SourceConfig::WhatsAppBackup { common, .. } => common,
         }
     }
 
@@ -597,6 +632,7 @@ impl SourceConfig {
             SourceConfig::Perseus { .. } => "perseus",
             SourceConfig::Yolink { .. } => "yolink",
             SourceConfig::SignalBackup { .. } => "signal_backup",
+            SourceConfig::WhatsAppBackup { .. } => "whatsapp_backup",
         }
     }
 
@@ -617,6 +653,7 @@ impl SourceConfig {
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
             SourceConfig::SignalBackup { sync, .. } => sync.is_some(),
+            SourceConfig::WhatsAppBackup { sync, .. } => sync.is_some(),
         }
     }
 

@@ -1,0 +1,68 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Checked-in TNG-themed fixture spec consumed by the unified
+# //tests/fixtures:ingested_tng genrule. Mirror of the signal pattern:
+# run_sync_pipeline.py runs `whatsapp_make_fixture` against this spec
+# at genrule-time to materialize an encrypted backup dir before
+# invoking the extractor.
+filegroup(
+    name = "tng_fixture",
+    srcs = ["tests/fixtures/whatsapp_tng/tng.json"],
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_whatsapp",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_etl_whatsapp",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/whatsapp-backup:frankweiler_whatsapp_backup",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:walkdir",
+    ],
+)
+
+rust_binary(
+    name = "whatsapp_make_fixture",
+    srcs = ["src/bin/whatsapp_make_fixture.rs"],
+    edition = "2021",
+    # Consumed by //tests/fixtures:ingested_tng outside the //frankweiler
+    # tree; mirrors signal_make_fixture's visibility.
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frankweiler_etl_whatsapp",
+        "//frankweiler/backend/whatsapp-backup:frankweiler_whatsapp_backup",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "whatsapp_etl_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_whatsapp",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)

@@ -14,28 +14,36 @@ Args (positional):
     1:  path to `frankweiler-sync` binary
     2:  path to `signal-make-fixture` binary (used to expand the signal
         TNG JSON spec into an encrypted snapshot dir on the fly)
-    3:  --now stamp (ISO-8601)
-    4:  data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
+    3:  path to `whatsapp-make-fixture` binary (same idea for the
+        WhatsApp TNG spec — produces a `WhatsApp/` backup dir with
+        `Databases/msgstore.db.crypt15` + `Media/`)
+    4:  --now stamp (ISO-8601)
+    5:  data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
         directly underneath; YAMLs + playback also stashed here)
-    5:  anthropic_api fixture dir (input)
-    6:  chatgpt_api   fixture dir
-    7:  slack_api     fixture dir
-    8:  github_api    fixture dir
-    9:  gitlab_api    fixture dir
-    10: notion_web    fixture dir
-    11: beeper_tng    fixture dir (SQL files + media; we materialize a
+    6:  anthropic_api fixture dir (input)
+    7:  chatgpt_api   fixture dir
+    8:  slack_api     fixture dir
+    9:  github_api    fixture dir
+    10: gitlab_api    fixture dir
+    11: notion_web    fixture dir
+    12: beeper_tng    fixture dir (SQL files + media; we materialize a
                                    BeeperTexts-shaped dir from it)
-    12: carddav_tng   fixture dir (vCard files; translate-only —
+    13: carddav_tng   fixture dir (vCard files; translate-only —
                                     config carries no `sync:` block so
                                     extract is skipped and translate
                                     reads `.vcf` files straight from
                                     `input_path`)
-    13: signal_tng    JSON spec for the TNG signal backup; the path is
+    14: signal_tng    JSON spec for the TNG signal backup; the path is
                       to the .json file itself. We run
                       `signal-make-fixture` against it to materialize
                       an encrypted snapshot dir for extract to walk.
                       AEP is the public 64-zero fixture passphrase
                       (`SIGNAL_PASSPHRASE` env var set below).
+    15: whatsapp_tng  JSON spec for the TNG WhatsApp backup. Same
+                      idea: we expand to a `WhatsApp/` backup dir
+                      under the workspace, with root key = 64 zeros
+                      (`WHATSAPP_BACKUP_DECRYPTION_KEY` env var
+                      set below).
 """
 
 from __future__ import annotations
@@ -53,12 +61,19 @@ from pathlib import Path
 # the crypto path runs unchanged against synthetic data.
 FIXTURE_SIGNAL_AEP = "0" * 64
 
+# Public fixture root key for WhatsApp — 64 zeros, same idea as
+# `FIXTURE_SIGNAL_AEP`. The whatsapp-make-fixture binary defaults
+# to this; we set the env var here so the extract path doesn't
+# need any special wiring.
+FIXTURE_WHATSAPP_KEY = "0" * 64
+
 
 def main() -> int:
     sync_bin = Path(sys.argv[1]).resolve()
     signal_make_fixture_bin = Path(sys.argv[2]).resolve()
-    now = sys.argv[3]
-    data_root = Path(sys.argv[4]).resolve()
+    whatsapp_make_fixture_bin = Path(sys.argv[3]).resolve()
+    now = sys.argv[4]
+    data_root = Path(sys.argv[5]).resolve()
     (
         anth_fx,
         cgpt_fx,
@@ -69,7 +84,8 @@ def main() -> int:
         beeper_fx,
         carddav_fx,
         signal_spec,
-    ) = (Path(p).resolve() for p in sys.argv[5:14])
+        whatsapp_spec,
+    ) = (Path(p).resolve() for p in sys.argv[6:16])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -96,6 +112,15 @@ def main() -> int:
     signal_snapshot_root = workspace / "signal_snapshots"
     signal_snapshot_root.mkdir(exist_ok=True)
     _run([str(signal_make_fixture_bin), str(signal_spec), str(signal_snapshot_root)])
+
+    # WhatsApp: same idea — expand the spec into a `WhatsApp/` backup
+    # dir under the workspace. The extractor's `WhatsAppSync.backup_dir`
+    # points here directly (no scan-for-newest as with Signal — there's
+    # only the single dir).
+    whatsapp_root = workspace / "whatsapp_backup"
+    whatsapp_root.mkdir(exist_ok=True)
+    _run([str(whatsapp_make_fixture_bin), str(whatsapp_spec), str(whatsapp_root)])
+    whatsapp_dir = whatsapp_root / "WhatsApp"
 
     # Synth YAML: each source's input_path points at the checked-in
     # fixture tree. The synth phase reads from those and writes HTTP
@@ -126,8 +151,12 @@ def main() -> int:
                 # reads a local file tree). Listing it for symmetry —
                 # the synth pass writes zero playback fixtures.
                 "signal": ("signal_backup", signal_snapshot_root),
+                # WhatsApp same pattern: no synthesizer; included so
+                # `enabled_sources()` is consistent across phases.
+                "whatsapp": ("whatsapp_backup", whatsapp_dir),
             },
             signal_snapshot_root=signal_snapshot_root,
+            whatsapp_dir=whatsapp_dir,
         )
     )
 
@@ -166,10 +195,14 @@ def main() -> int:
                 # input_path to the per-source raw subdir so the
                 # extractor's doltlite raw store lands there.
                 "signal": ("signal_backup", raw_root / "signal"),
+                # WhatsApp extract reads `backup_dir` (set in `_yaml`
+                # below); input_path is where the `wa_*` mirror lands.
+                "whatsapp": ("whatsapp_backup", raw_root / "whatsapp"),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
             signal_snapshot_root=signal_snapshot_root,
+            whatsapp_dir=whatsapp_dir,
         )
     )
 
@@ -199,7 +232,11 @@ def main() -> int:
     # Inject the public fixture AEP so the signal extractor can decrypt
     # the snapshot we generated above. Everything else inherits the
     # genrule's env.
-    extract_env = {**os.environ, "SIGNAL_PASSPHRASE": FIXTURE_SIGNAL_AEP}
+    extract_env = {
+        **os.environ,
+        "SIGNAL_PASSPHRASE": FIXTURE_SIGNAL_AEP,
+        "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
+    }
     extract_argv = [
         str(sync_bin),
         "--config",
@@ -225,6 +262,7 @@ def _yaml(
     notion_seed: str | None = None,
     beeper_data_dir: Path | None = None,
     signal_snapshot_root: Path | None = None,
+    whatsapp_dir: Path | None = None,
 ) -> str:
     """Render a minimal YAML covering every fixture source.
 
@@ -279,6 +317,16 @@ def _yaml(
             if signal_snapshot_root is not None:
                 lines.append("    sync:")
                 lines.append(f"      snapshot_dir: {signal_snapshot_root}")
+            else:
+                lines.append("    sync: {}")
+        elif type_str == "whatsapp_backup":
+            # WhatsApp extractor needs `backup_dir` (the dir containing
+            # `Databases/msgstore.db.crypt15` + `Media/`). Root key
+            # comes from the WHATSAPP_BACKUP_DECRYPTION_KEY env var
+            # injected by main().
+            if whatsapp_dir is not None:
+                lines.append("    sync:")
+                lines.append(f"      backup_dir: {whatsapp_dir}")
             else:
                 lines.append("    sync: {}")
         elif type_str != "claude_export":

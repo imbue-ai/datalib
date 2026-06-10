@@ -44,6 +44,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/beeper:tng_fixture",
         "//frankweiler/backend/etl/providers/contacts:tng_fixture",
         "//frankweiler/backend/etl/providers/signal:tng_fixture",
+        "//frankweiler/backend/etl/providers/whatsapp:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -70,6 +71,10 @@ genrule(
         # snapshot dir on the fly. Lives in the signal-backup library
         # crate; see that crate's BUILD.bazel.
         "//frankweiler/backend/signal-backup:signal_make_fixture",
+        # Same idea for WhatsApp: spec → encrypted msgstore.db.crypt15 +
+        # plaintext Media/. Root key defaults to 64 zeros, like the
+        # signal fixture AEP.
+        "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "run_sync_pipeline.py",
         "tar_qmd.py",
     ],
@@ -78,6 +83,7 @@ genrule(
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
             "$(execpath //frankweiler/backend/signal-backup:signal_make_fixture)",
+            "$(execpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
             "'2369-04-15T00:00:00+00:00'",
             "$(RULEDIR)/sync_workspace",
             "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
@@ -101,6 +107,8 @@ genrule(
             # it to produce the encrypted snapshot dir before invoking
             # extract.
             "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+            # WhatsApp: same shape as signal.
+            "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
@@ -134,6 +142,7 @@ py_test(
         "$(rootpath run_sync_pipeline.py)",
         "$(rootpath //frankweiler/backend/sync:frankweiler_sync_bin)",
         "$(rootpath //frankweiler/backend/signal-backup:signal_make_fixture)",
+        "$(rootpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
         "2369-04-15T00:00:00+00:00",
         # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
@@ -146,12 +155,14 @@ py_test(
         "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
         "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+        "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
     ],
     data = [
         "run_sync_pipeline.py",
         ":source_json",
         "//frankweiler/backend/sync:frankweiler_sync_bin",
         "//frankweiler/backend/signal-backup:signal_make_fixture",
+        "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
     ],
 )
 

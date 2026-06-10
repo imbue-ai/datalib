@@ -112,3 +112,7 @@ ghash = "0.5"
 # WhatsApp provider walks the Media/ tree to register attachment
 # files in `wa_media_files`. Used by `etl/providers/whatsapp` only.
 walkdir = "2"
+# MD5 for the trailing integrity checksum the crypt15 *file* format
+# stamps after the GCM tag. Not cryptographic; only used by the
+# fixture-generation encrypt path.
+md-5 = "0.10"

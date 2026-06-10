@@ -58,7 +58,7 @@ use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
     GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
-    SourceConfig, YolinkSync,
+    SourceConfig, WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -1263,6 +1263,7 @@ enum DbHandle {
     Jmap(frankweiler_etl_email::extract::RawDb),
     Yolink(frankweiler_etl_yolink::extract::RawDb),
     Signal(frankweiler_etl_signal::extract::RawDb),
+    WhatsApp(frankweiler_etl_whatsapp::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1279,6 +1280,7 @@ impl DbHandle {
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
+            DbHandle::WhatsApp(d) => d.pool(),
         }
     }
 
@@ -1339,6 +1341,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Signal { .. } => {
             DbHandle::Signal(frankweiler_etl_signal::extract::RawDb::open(path).await?)
         }
+        ExtractKind::WhatsApp { .. } => {
+            DbHandle::WhatsApp(frankweiler_etl_whatsapp::extract::RawDb::open(path).await?)
+        }
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1384,6 +1389,10 @@ enum ExtractKind {
     Signal {
         sync: SignalSync,
         snapshot_root: PathBuf,
+    },
+    WhatsApp {
+        sync: WhatsAppSync,
+        backup_dir: PathBuf,
     },
 }
 
@@ -1446,6 +1455,18 @@ impl ExtractPlan {
                             sync,
                             snapshot_root,
                         }
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            SourceConfig::WhatsAppBackup { sync, .. } => {
+                let sync = sync.clone().ok_or_else(|| {
+                    anyhow::anyhow!("whatsapp_backup source {name} missing sync.backup_dir")
+                });
+                match sync {
+                    Ok(sync) => {
+                        let backup_dir = sync.backup_dir.clone();
+                        ExtractKind::WhatsApp { sync, backup_dir }
                     }
                     Err(e) => return Some(Err(e)),
                 }
@@ -1837,6 +1858,40 @@ impl ExtractPlan {
                     s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
                 )
             }),
+            (
+                ExtractKind::WhatsApp { sync, backup_dir },
+                Some(DbHandle::WhatsApp(db)),
+            ) => {
+                let env_var = sync
+                    .key_env_var
+                    .clone()
+                    .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
+                let key_hex = std::env::var(&env_var).with_context(|| {
+                    format!("read WhatsApp root key from env var `{env_var}`")
+                });
+                match key_hex.and_then(|h| frankweiler_whatsapp_backup::decode_hex_key(&h)) {
+                    Ok(root_key) => frankweiler_etl_whatsapp::extract::fetch(
+                        &backup_dir,
+                        &root_key,
+                        &db,
+                    )
+                    .await
+                    .map(|s| {
+                        format!(
+                            "jids={} chats={} messages={} message_text={} message_media={} \
+                             reactions={} media_files={}",
+                            s.jids,
+                            s.chats,
+                            s.messages,
+                            s.message_text,
+                            s.message_media,
+                            s.message_add_on_reaction,
+                            s.media_files,
+                        )
+                    }),
+                    Err(e) => Err(e),
+                }
+            }
             // The open phase pairs each ExtractKind with the
             (
                 ExtractKind::Jmap {
@@ -2296,6 +2351,15 @@ fn translate_source(
             status_line!("[translate] {name} (yolink): skipped (extract-only, no render path)");
             Ok(())
         }
+        SourceConfig::WhatsAppBackup { .. } => {
+            // Extract-only for now — translate (render to QMD + grid_rows)
+            // lands in a follow-up. The verbatim `wa_*` mirror sits in
+            // the raw store as the durable artifact.
+            status_line!(
+                "[translate] {name} (whatsapp_backup): skipped (extract-only, no render path yet)"
+            );
+            Ok(())
+        }
     }
 }
 
@@ -2365,6 +2429,15 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // tree. Skip quietly so a mixed config doesn't error.
                 status_line!(
                     "[synth] {} (yolink): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::WhatsAppBackup { .. } => {
+                // WhatsApp extract is local-file-only (decrypt + mirror);
+                // no HTTP playback. Skip synth the same way Signal does.
+                status_line!(
+                    "[synth] {} (whatsapp_backup): skipped (no synthesizer)",
                     src.name()
                 );
                 continue;

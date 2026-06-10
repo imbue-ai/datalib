@@ -44,6 +44,27 @@ pub struct IngestSummary {
     pub committed: bool,
 }
 
+/// Thin wrapper over the doltlite raw-store pool, mirroring the
+/// `RawDb` pattern every other provider uses. Lets the sync
+/// orchestrator open the pool once at the start of an extract run
+/// (so SIGINT can flush in-flight stores) and pass the same handle
+/// into `ingest`.
+#[derive(Clone, Debug)]
+pub struct RawDb {
+    pool: SqlitePool,
+}
+
+impl RawDb {
+    pub async fn open(db_path: &Path) -> Result<Self> {
+        let pool = doltlite_raw::open(db_path, ALL_DDL).await?;
+        Ok(Self { pool })
+    }
+
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+}
+
 /// Full pipeline: decrypt, mirror, commit.
 ///
 /// `backup_dir` must contain `Databases/msgstore.db.crypt15`. If a
@@ -57,10 +78,25 @@ pub async fn ingest(
     root_key: &[u8; 32],
     target_db_path: &Path,
 ) -> Result<IngestSummary> {
+    let db = RawDb::open(target_db_path).await?;
+    fetch(backup_dir, root_key, &db).await
+}
+
+/// Variant of [`ingest`] that takes an already-open [`RawDb`]. Used by
+/// the sync orchestrator, which opens the pool up front (so SIGINT can
+/// flush) and threads it through.
+pub async fn fetch(backup_dir: &Path, root_key: &[u8; 32], db: &RawDb) -> Result<IngestSummary> {
+    fetch_with_pool(backup_dir, root_key, db.pool().clone()).await
+}
+
+async fn fetch_with_pool(
+    backup_dir: &Path,
+    root_key: &[u8; 32],
+    dst_pool: SqlitePool,
+) -> Result<IngestSummary> {
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(
         crypt_path = %crypt_path.display(),
-        target = %target_db_path.display(),
         "whatsapp::ingest start"
     );
 
@@ -81,7 +117,6 @@ pub async fn ingest(
     drop(plaintext);
 
     let src_pool = open_source_sqlite(tmp.path()).await?;
-    let dst_pool = doltlite_raw::open(target_db_path, ALL_DDL).await?;
 
     truncate_wa_tables(&dst_pool).await?;
 
@@ -840,7 +875,14 @@ mod tests {
         let summary = ingest(&backup_dir, &root, &target)
             .await
             .expect("ingest ok");
-        eprintln!("summary: {summary:?}");
+        // Test-only diagnostic. `disallowed-macros` would forbid this
+        // in production code; the integration test is `#[ignore]`'d so
+        // it never runs without `--nocapture`, and the user explicitly
+        // wants the summary on the terminal when they invoke it.
+        #[allow(clippy::disallowed_macros)]
+        {
+            eprintln!("summary: {summary:?}");
+        }
         assert!(summary.jids > 0);
         assert!(summary.chats > 0);
         assert!(summary.messages > 0);

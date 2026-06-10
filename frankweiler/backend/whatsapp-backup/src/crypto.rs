@@ -54,8 +54,7 @@ pub fn decrypt_crypt15(
     let aes = Aes256::new(GenericArray::from_slice(key));
 
     // GHASH subkey H = E_K(0^128).
-    let mut h = [0u8; 16];
-    aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+    let h = compute_h(&aes);
 
     // J0 = GHASH(H, IV || 0^s || len(IV)_bits_64_BE), per NIST SP 800-38D §7.1.
     let j0 = compute_j0(&h, iv);
@@ -100,10 +99,19 @@ pub fn decrypt_crypt15(
     }
 }
 
+/// GHASH subkey H = E_K(0^128). Both encrypt and decrypt need this;
+/// exposing it here lets the encrypt path in `write.rs` reuse it
+/// instead of recomputing.
+pub(crate) fn compute_h(aes: &Aes256) -> [u8; 16] {
+    let mut h = [0u8; 16];
+    aes.encrypt_block(GenericArray::from_mut_slice(&mut h));
+    h
+}
+
 /// J0 per NIST SP 800-38D §7.1: when `len(IV) != 96` bits,
 /// `J0 = GHASH(H, IV || 0^s || len(IV)_bits_64_BE)` where `s` zero-pads
 /// `IV` to a 128-bit boundary and an extra 64 bits.
-fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
+pub(crate) fn compute_j0(h: &[u8; 16], iv: &[u8]) -> [u8; 16] {
     let mut ghash = GHash::new(GenericArray::from_slice(h));
     // Pad IV to a multiple of 16 bytes.
     update_padded(&mut ghash, iv);
