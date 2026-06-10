@@ -1,4 +1,4 @@
-# Porject Data Liberation ✊ - First-time user guide
+# Project Data Liberation ✊ - First-time user guide
 
 > Codenames in this project (`frankweiler`, etc.) are inspired by
 > [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
@@ -67,7 +67,41 @@ with `npx`).
 
 ### Option: Download some Google Takeout
 
-FIXME: Add instructions about how to go to Google Takeout and request a download of email, Gchat, Maps History, YouTube History, etc. 
+Google Takeout (<https://takeout.google.com>) lets you export your own
+data out of Google's silos. Useful targets for this project:
+
+- **Mail** — exports as a single `.mbox` (one file for "All mail
+  Including Spam and Trash"). The email source below ingests this
+  directly; no credentials needed.
+- **Chat**, **Maps (Your Timeline)**, **YouTube history** — also
+  exportable; not wired into the sample config yet but live on disk
+  the same way once you've unpacked them.
+
+Steps:
+
+1. Go to <https://takeout.google.com>, **Deselect all**, then tick
+   just the products you want. For Mail, expand the row and confirm
+   **"Include all messages in Mail"** (or pick specific labels).
+2. Choose **Export once**, **.zip**, and the largest split size you're
+   comfortable with. Submit the request.
+3. Google emails you a download link when it's ready (minutes to
+   hours, depending on mailbox size). Download the archive(s) and
+   unpack them somewhere stable — these instructions assume
+   `~/backups/Takeout/`:
+
+   ```sh
+   mkdir -p ~/backups
+   unzip ~/Downloads/takeout-*.zip -d ~/backups/
+   ```
+
+   After unpacking, your Gmail mbox should live at:
+
+   ```
+   ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+   ```
+
+   The sample config in the next step has an `email` source stanza
+   that points at exactly that path.
 
 
 ### Option: Register Slack with latchkey (easy, supported flow)
@@ -117,8 +151,9 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config.yaml)
 into your working dir.
 
-This config only enables the Slack and the Claude API source, so it's the minimum
-needed to mirror those your conversations.
+This config enables the Slack source, the Claude API source, and an
+email source that reads a Google Takeout `.mbox` from disk — enough to
+mirror your conversations and your Gmail archive.
 
 Credentials are not in the config — downloaders that need them use `latchkey` at runtime.
 
@@ -158,20 +193,28 @@ and should be faster.
 **On disk afterwards** (with `data_root: ~/mixed_up_files`):
 
 ```
-FIXME: Look at current correct shape under: ~/mixed_up_files.thad_dev_7
 ~/mixed_up_files/
-├── raw/anthropic-api/
-├── rendered_md/               # one .qmd per conversation
-├── backend_index.doltlite_db  # doltlite SQL store (grid rows + audit log)
-└── .frankweiler/qmd/
-    ├── index.sqlite           # search index hit by hybrid / vector queries
-    └── models -> ~/.cache/qmd/models
+├── raw/                            # one doltlite file per source
+│   ├── claude_web.doltlite_db
+│   ├── slack.doltlite_db
+│   ├── fastmail.doltlite_db        # (mbox source lands here too)
+│   └── …
+├── rendered_md/                    # one .md per conversation, bucketed by provider
+│   ├── anthropic/
+│   ├── slack/
+│   ├── jmap/                       # email (JMAP + mbox both render here)
+│   └── …
+├── backend_index.doltlite_db       # doltlite SQL store (grid rows + audit log)
+├── qmd/
+│   ├── index.sqlite                # search index hit by hybrid / vector queries
+│   └── models -> ~/.cache/qmd/models
+└── sync_summary_<timestamp>.json   # one per run
 ```
 
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 
-## 6. Browse the result
+## 5. Browse the result
 
 `frankweiler-http` is the single-binary search backend with the web UI
 embedded — point it at your data root and it serves everything:
@@ -185,13 +228,13 @@ your default browser. Pass `--no-open` if you'd rather click in
 yourself, and set `FRANKWEILER_BIND=127.0.0.1:<port>` to override the
 listen address.
 
-## 7. Re-syncing
+## 6. Re-syncing
 
 Re-run `frankweiler-sync` whenever you want to pull new conversations.
 The downloader is incremental and the qmd index is content-hashed, so
 re-runs against an unchanged corpus are relatively fast no-ops.
 
-## 8. Querying the index directly with qmd
+## 7. Querying the index directly with qmd
 
 To find relevant markdown content, you can also query the search index directly from the command line by
 pointing `qmd` at the sqlite file under your data root via the

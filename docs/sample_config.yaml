@@ -17,3 +17,11 @@ sources:
       media: true
       channels:
         - "project-data-liberation"
+
+  # Google Takeout Gmail export. `sync:` is intentionally omitted —
+  # that puts the email provider in translate-only mbox mode, reading
+  # the file at `input_path` instead of talking to a JMAP server.
+  # Point this at the .mbox unpacked from your Takeout zip.
+  - name: gmail-takeout
+    type: email
+    input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
