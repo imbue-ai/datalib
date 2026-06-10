@@ -284,7 +284,8 @@ impl SyncSummary {
 
 #[allow(non_snake_case)]
 fn Utc_now_rfc3339() -> String {
-    chrono::Utc::now().to_rfc3339()
+    // Misnomer kept for backwards compat; emits local-tz offset, not UTC.
+    frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339()
 }
 
 /// Heuristic mapping of an anyhow chain text to an [`ErrorKind`].

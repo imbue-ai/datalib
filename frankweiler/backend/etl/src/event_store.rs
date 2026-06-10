@@ -24,7 +24,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::Local;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -56,10 +55,11 @@ pub fn append_jsonl(path: &Path, records: &[Value]) -> Result<()> {
     Ok(())
 }
 
-/// Current local-time ISO-8601 with offset, matching Python's
-/// `datetime.now().astimezone().isoformat()` shape.
+/// Current local-time ISO-8601 with explicit offset, matching Python's
+/// `datetime.now().astimezone().isoformat()` shape. Funnels through
+/// `frankweiler-time` so the local-offset policy lives in one place.
 pub fn now_iso() -> String {
-    Local::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
+    frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros()
 }
 
 /// Wrap an upstream payload with its denormalized key + a `_recorded_at`

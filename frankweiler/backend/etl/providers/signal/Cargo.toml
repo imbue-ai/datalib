@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
+frankweiler-time = { path = "../../../time" }
 frankweiler-signal-backup = { path = "../../../signal-backup" }
 prost = { workspace = true }
 serde = { workspace = true }

@@ -245,6 +245,7 @@ crate.from_cargo(
         "//frankweiler/backend/core:Cargo.toml",
         "//frankweiler/backend/http:Cargo.toml",
         "//frankweiler/backend/obs:Cargo.toml",
+        "//frankweiler/backend/time:Cargo.toml",
         "//frankweiler/backend/etl:Cargo.toml",
         "//frankweiler/backend/etl/providers/anthropic:Cargo.toml",
         "//frankweiler/backend/etl/providers/chatgpt:Cargo.toml",

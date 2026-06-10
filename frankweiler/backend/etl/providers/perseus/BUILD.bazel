@@ -22,6 +22,7 @@ rust_library(
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         # Sentence-level alignment via Ancient-Greek-BERT runs through
         # candle-transformers; weights are pulled lazily by hf-hub and

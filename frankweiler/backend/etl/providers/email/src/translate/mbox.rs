@@ -397,10 +397,12 @@ impl Accumulator {
             bytes: raw.to_vec(),
         });
 
-        // Date → ISO 8601.
+        // Date → ISO 8601 with explicit offset, via frankweiler-time so
+        // the byte format follows the workspace rule.
         let received_at = msg
             .date()
-            .map(|d| d.to_rfc3339())
+            .and_then(|d| frankweiler_time::parse_strict(&d.to_rfc3339()).ok())
+            .map(|t| t.to_rfc3339())
             .or_else(|| header_text(msg.header("Date")?));
         let sent_at = received_at.clone();
 

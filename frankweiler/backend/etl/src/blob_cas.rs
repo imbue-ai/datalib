@@ -143,7 +143,7 @@ impl BlobCas {
     /// bytes from different ref slots collapse to one row.
     pub async fn put(&self, bytes: &[u8], content_type: Option<&str>) -> Result<String> {
         let hash = blake3_hex(bytes);
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         sqlx::query(
             "INSERT OR IGNORE INTO cas_objects \
              (blake3, byte_len, content_type, bytes, first_seen_at) \

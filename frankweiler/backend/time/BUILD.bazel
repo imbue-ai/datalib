@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Shared timestamp utilities. Every `now()` and every inbound-string
+# parse in the workspace funnels through here so the architectural
+# rules ("local-tz offset, not UTC", "never fabricate") live in one
+# place. See `src/lib.rs` and `docs/data_architecture_plan.md` §P0.5.
+rust_library(
+    name = "frankweiler_time",
+    srcs = ["src/lib.rs"],
+    crate_name = "frankweiler_time",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "time_unittests",
+    size = "small",
+    crate = ":frankweiler_time",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:serde_json",
+    ],
+)

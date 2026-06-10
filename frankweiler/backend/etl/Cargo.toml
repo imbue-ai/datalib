@@ -23,6 +23,7 @@ path = "src/bin/latchkey_curl_shim.rs"
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-obs = { path = "../obs" }
+frankweiler-time = { path = "../time" }
 frankweiler-schema = { path = "../schema" }
 frankweiler-index-lib = { path = "../index_lib" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }

@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::{DateTime, NaiveDate, TimeZone, Utc};
+use chrono::{NaiveDate, TimeZone, Utc};
 use md5::{Digest, Md5};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
@@ -95,8 +95,9 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
         let Some(ts) = rec.get(time_idx) else {
             continue;
         };
-        let ts_ms = DateTime::parse_from_str(ts, "%Y/%m/%d %H:%M:%S%z")
+        let ts_ms = frankweiler_time::parse_custom_strftime(ts, "%Y/%m/%d %H:%M:%S%z")
             .with_context(|| format!("row {}: bad ts {ts:?}", i + 2))?
+            .inner()
             .timestamp_millis();
         for ((_, metric, suffix), &idx) in cols.iter().zip(&val_idxs) {
             let Some(raw) = rec.get(idx).filter(|s| !s.is_empty()) else {

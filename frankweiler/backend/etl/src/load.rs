@@ -675,7 +675,7 @@ async fn apply_markdown(
 
     let rendered_at = now_override
         .map(str::to_string)
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+        .unwrap_or_else(|| frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339());
     upsert_markdown(conn, md, qmd_path, &rendered_at)
         .await
         .context("upsert markdowns")?;

@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use frankweiler_time::IsoOffsetTimestamp;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
@@ -484,9 +484,17 @@ fn human_bytes(n: i64) -> String {
 /// queries behave consistently with the other providers' index
 /// rows.
 fn iso_from_ms(ms: i64) -> String {
-    DateTime::<Utc>::from_timestamp_millis(ms)
-        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .unwrap_or_else(|| format!("@{ms}ms"))
+    IsoOffsetTimestamp::from_unix_millis(ms)
+        .map(|t| t.to_rfc3339_millis())
+        .unwrap_or_else(|| {
+            // Out-of-range epoch ms is unreachable in practice (chrono
+            // covers ±580B years); preserve the audit-friendly marker
+            // so a corrupt row is loudly visible in `when_ts` instead
+            // of pretending to be a real time. See data_architecture.md
+            // "no fabricated timestamps".
+            tracing::warn!(ms, "iso_from_ms: epoch-ms out of chrono range");
+            format!("@{ms}ms")
+        })
 }
 
 /// Human-friendly timestamp for rendering inside the markdown
@@ -494,8 +502,11 @@ fn iso_from_ms(ms: i64) -> String {
 /// skim than a full RFC-3339 string when a person is reading the
 /// transcript.
 fn display_ts(ms: i64) -> String {
-    DateTime::<Utc>::from_timestamp_millis(ms)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+    // Human-display rendering of an upstream epoch-ms value. Funnels
+    // through `frankweiler-time` so the interpretation rule lives in
+    // one place; the strftime is local to this human-display callsite.
+    IsoOffsetTimestamp::from_unix_millis(ms)
+        .map(|t| t.inner().format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("@{ms}ms"))
 }
 

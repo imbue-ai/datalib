@@ -30,7 +30,7 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
 
 ## P0 — bytes-at-rest shape and visibility
 
-### P0.1 Self-documenting schema source-of-truth per provider
+### P0.1 Self-documenting schema source-of-truth per provider ✅
 
 **Goal**: every provider has **two** declarations-only Rust files
 at fixed paths:
@@ -105,7 +105,7 @@ the unifications land.
 the model already), nail down what shared helpers go in and what
 stays per-provider, then bring each provider up to the convention.
 
-### P0.2 Shared `Sidecar` / `GridRow` struct, used at read AND write
+### P0.2 Shared `Sidecar` / `GridRow` struct, used at read AND write ✅
 
 > Cross-cutting comment from Thad: "Let's do work out a struct that
 > specifies the shape of these rows that we're going to index and use
@@ -184,7 +184,7 @@ exactly), add the column to the bookkeeping DDL helper (P1.1), design
 the translation-state table schema in the backend index, retrofit one
 provider as the reference. Migrate the rest one at a time.
 
-### P0.4 PK / UUID recipes — homed in the schema files (no `uuid.rs`)
+### P0.4 PK / UUID recipes — homed in the schema files (no `uuid.rs`) ✅
 
 > Thad: "Getting stable identifiers right is incredibly important for
 > the bytes at rest format, but I'm not sure centralizing it is the

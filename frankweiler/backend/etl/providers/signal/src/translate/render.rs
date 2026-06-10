@@ -23,7 +23,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, TimeZone, Utc};
 use frankweiler_etl::blob_cas;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
@@ -31,6 +30,7 @@ use frankweiler_etl::section::section_attrs;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
+use frankweiler_time::IsoOffsetTimestamp;
 use sha2::{Digest, Sha256};
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
@@ -474,10 +474,20 @@ fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {
 }
 
 fn iso_ts(date_sent_ms: i64) -> String {
-    Utc.timestamp_millis_opt(date_sent_ms)
-        .single()
-        .map(|t| t.to_rfc3339_opts(SecondsFormat::Secs, true))
-        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+    IsoOffsetTimestamp::from_unix_millis(date_sent_ms)
+        .map(|t| t.to_rfc3339_secs())
+        .unwrap_or_else(|| {
+            // Out-of-range epoch ms (chrono covers ±580B years) is
+            // unreachable in practice for Signal payloads. Preserve a
+            // sortable epoch as the visible-broken fallback — and warn
+            // loudly so the row gets noticed. See data_architecture.md
+            // "no fabricated timestamps".
+            tracing::warn!(
+                date_sent_ms,
+                "signal::iso_ts: date_sent_ms out of chrono range; fallback used"
+            );
+            "1970-01-01T00:00:00+00:00".to_string()
+        })
 }
 
 fn compute_fingerprint(doc: &DocBucket) -> String {

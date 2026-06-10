@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use chrono::Local;
+use frankweiler_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 
 /// One source's tape. Cheap to clone via `Arc` if you need to share it
@@ -46,7 +46,7 @@ impl EventTape {
     /// after every line so a `tail -f` watcher sees rows promptly.
     pub fn append(&self, table: &str, id: &str, payload: &Value) -> Result<()> {
         let line = json!({
-            "_recorded_at": Local::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, false),
+            "_recorded_at": IsoOffsetTimestamp::now_local().to_rfc3339_micros(),
             "table": table,
             "id": id,
             "payload": payload,

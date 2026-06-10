@@ -14,6 +14,7 @@ rust_library(
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:csv",
@@ -33,8 +34,8 @@ rust_binary(
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
-        "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tokio",

@@ -15,6 +15,7 @@ path = "src/bin/github_download.rs"
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }
+frankweiler-time = { path = "../../../time" }
 frankweiler-schema = { path = "../../../schema" }
 frankweiler-index-lib = { path = "../../../index_lib" }
 serde = { workspace = true }

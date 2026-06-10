@@ -448,7 +448,7 @@ async fn submit_feedback(
     // client so each row carries a server-vouched provenance and so
     // `feedback_uuid` collisions are impossible from the wire.
     let feedback_uuid = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Local::now().to_rfc3339();
+    let created_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let app_version = env!("CARGO_PKG_VERSION").to_string();
     let git_hash_str = git_hash().to_string();
     let row = FeedbackRow {

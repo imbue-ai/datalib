@@ -61,8 +61,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
 use clap::{Parser, ValueEnum};
+use frankweiler_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -150,7 +150,10 @@ async fn exchange_token(uaid: &str, secret: &str) -> Result<String> {
 }
 
 async fn list_devices(token: &str) -> Result<Vec<Value>> {
-    let now = Utc::now().timestamp();
+    // `time` and `msgid` are Unix seconds for the YoLink API's
+    // request envelope. Funnel through `frankweiler-time` so even
+    // the binary's two-line `now()` honors the workspace policy.
+    let now = IsoOffsetTimestamp::now_local().inner().timestamp();
     let body = json!({
         "method": "Home.getDeviceList",
         "time": now,

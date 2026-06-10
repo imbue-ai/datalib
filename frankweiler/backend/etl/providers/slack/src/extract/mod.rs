@@ -805,13 +805,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(grand)
 }
 
+/// Parse a `--since` CLI value. Accepts either RFC 3339 with explicit
+/// offset (e.g. `2026-01-15T08:00:00-08:00`), or a bare ISO date
+/// (`2026-01-15`) interpreted as midnight UTC of that day. Both shapes
+/// funnel through `frankweiler-time` so the policy lives in one place.
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
-    if let Ok(d) = DateTime::parse_from_rfc3339(s) {
-        return Ok(d.with_timezone(&Utc));
-    }
-    let naive = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").context("expected ISO date")?;
-    let ndt = naive
-        .and_hms_opt(0, 0, 0)
-        .context("invalid date components")?;
-    Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
+    let t = frankweiler_time::parse_strict(s)
+        .or_else(|_| frankweiler_time::parse_yyyy_mm_dd_assumed_utc(s))
+        .with_context(|| format!("expected RFC 3339 or YYYY-MM-DD, got {s:?}"))?;
+    Ok(t.inner().with_timezone(&Utc))
 }

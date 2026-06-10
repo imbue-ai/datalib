@@ -238,7 +238,7 @@ fn params_to_value(params: &BTreeMap<String, String>) -> Value {
 }
 
 fn now_iso() -> String {
-    Local::now().to_rfc3339()
+    frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339()
 }
 
 /// Sortable, filesystem-safe run stamp. Millisecond precision so two

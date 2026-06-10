@@ -40,8 +40,25 @@ use super::RENDER_VERSION;
 
 /// Synthetic `when_ts` base. Drives the grid's global sort so default
 /// ordering yields reading order (Book 1 Chapter 1 first).
+///
+/// **Known violation of "no fabricated timestamps"**: Perseus is an
+/// immutable upstream corpus with no per-section timestamps to
+/// preserve, so we synthesize a deterministic ordering stamp. The
+/// architecturally honest answer is `when_ts: null` plus a corpus-
+/// specific ordering field — see `data_architecture.md` "Entities
+/// without a time-shape". Filed for follow-up; the current behavior
+/// keeps the union grid sortable while we figure out the corpus
+/// story.
 fn ts_base() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
+}
+
+/// Format a synthesized timestamp through `frankweiler-time` so the
+/// byte format stays consistent with every other when_ts in the
+/// workspace (explicit offset, no bare `Z`). The fabrication itself
+/// is documented on [`ts_base`].
+fn render_synth_ts(ts: DateTime<Utc>) -> String {
+    frankweiler_time::IsoOffsetTimestamp::from(ts).to_rfc3339()
 }
 
 #[derive(Debug, Default, Clone)]
@@ -287,8 +304,7 @@ fn lang_label(lang: &str) -> &'static str {
 fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
     let bi: i64 = book_n.parse().unwrap_or(0);
     let offset = bi * 10_000 + ch_n;
-    let ts = ts_base() + Duration::seconds(offset);
-    ts.to_rfc3339()
+    render_synth_ts(ts_base() + Duration::seconds(offset))
 }
 
 /// Bake one section into the chapter md as an HTML-wrapped div the
@@ -553,7 +569,7 @@ fn section_grid_row(
         let ci_i64: i64 = ci as i64;
         let chapter_secs = bi as i64 * 10_000 + ci_i64;
         let ts = ts_base() + Duration::seconds(chapter_secs) + Duration::milliseconds(idx + 1);
-        ts.to_rfc3339()
+        render_synth_ts(ts)
     };
     GridRow {
         uuid: sec_uuid.to_string(),

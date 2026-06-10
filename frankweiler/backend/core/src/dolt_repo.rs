@@ -443,7 +443,7 @@ impl MirrorRepo for DoltRepo {
         source_name: Option<&str>,
     ) -> Result<SyncJobRow, RepoError> {
         let id = uuid::Uuid::new_v4().to_string();
-        let created_at = chrono::Local::now().to_rfc3339();
+        let created_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let row = SyncJobRow {
             id: id.clone(),
             source_name: source_name.map(|s| s.to_string()),

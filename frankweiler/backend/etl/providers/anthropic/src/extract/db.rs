@@ -19,7 +19,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -93,7 +92,7 @@ impl RawDb {
     /// returns).
     pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin user tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         upsert_user_in(&mut tx, payload, &now).await?;
         tx.commit().await.context("commit user tx")?;
         Ok(())
@@ -106,7 +105,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin users batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for payload in payloads {
             upsert_user_in(&mut tx, payload, &now).await?;
         }
@@ -140,7 +139,7 @@ impl RawDb {
 
     pub async fn upsert_org(&self, payload: &Value) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin org tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         upsert_org_in(&mut tx, payload, &now).await?;
         tx.commit().await.context("commit org tx")?;
         Ok(())
@@ -153,7 +152,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin orgs batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for payload in payloads {
             upsert_org_in(&mut tx, payload, &now).await?;
         }

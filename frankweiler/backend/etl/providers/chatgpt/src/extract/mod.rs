@@ -22,10 +22,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::Local;
 use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
+use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
@@ -115,7 +115,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let _started_at = opts
         .fetched_at
         .clone()
-        .unwrap_or_else(|| Local::now().to_rfc3339());
+        .unwrap_or_else(|| IsoOffsetTimestamp::now_local().to_rfc3339());
 
     let mut client = ChatGPTClient::new();
     let mut summary = FetchSummary::default();

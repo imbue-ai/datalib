@@ -145,8 +145,9 @@ impl RawDb {
         let s: String = row
             .try_get("last_seen_at")
             .context("read manifest sweep timestamp")?;
-        let dt = chrono::DateTime::parse_from_rfc3339(&s)
+        let dt = frankweiler_time::parse_strict(&s)
             .with_context(|| format!("parse manifest sweep timestamp {s:?}"))?
+            .inner()
             .with_timezone(&Utc);
         Ok(Some(Utc::now() - dt))
     }
@@ -156,7 +157,7 @@ impl RawDb {
     /// sweep doesn't poison the TTL check.
     pub async fn record_manifest_sweep(&self, key: &str) -> Result<()> {
         let scope = format!("slack:sweep:{key}");
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         sqlx::query(
             "INSERT INTO sync_scope_state (scope, last_seen_at) VALUES (?, ?) \
              ON CONFLICT(scope) DO UPDATE SET last_seen_at = excluded.last_seen_at",
@@ -245,7 +246,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin users batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for payload in payloads {
             upsert_user_in(&mut tx, payload, &now).await?;
         }
@@ -276,7 +277,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin channels batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for payload in payloads {
             upsert_channel_in(&mut tx, payload, &now).await?;
         }
@@ -337,7 +338,7 @@ impl RawDb {
             return Ok(());
         }
         let mut tx = self.pool.begin().await.context("begin messages batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for row in rows {
             upsert_message_in(&mut tx, row, &now).await?;
         }

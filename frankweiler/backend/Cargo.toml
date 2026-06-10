@@ -6,6 +6,7 @@ members = [
     "core",
     "http",
     "obs",
+    "time",
     "etl",
     "etl/providers/anthropic",
     "etl/providers/beeper",

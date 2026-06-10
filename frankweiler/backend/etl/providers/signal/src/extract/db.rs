@@ -29,7 +29,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
+use frankweiler_time::IsoOffsetTimestamp;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -99,7 +99,7 @@ impl RawDb {
         snapshot_dir: &str,
         total_byte_size: u64,
     ) -> Result<()> {
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        let now = IsoOffsetTimestamp::now_local().to_rfc3339_secs();
         sqlx::query(
             "INSERT OR IGNORE INTO ingested_backups
                  (blake3, snapshot_dir, total_byte_size, ingested_at)

@@ -106,7 +106,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
@@ -355,7 +354,7 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
     }
     let msg = format!(
         "rescue: pre-run snapshot of orphaned working tree ({count} dirty entries) at {}",
-        Utc::now().to_rfc3339()
+        frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339()
     );
     tracing::warn!(
         path = %db_path.display(),
@@ -381,7 +380,7 @@ async fn rescue_dirty_working_tree(pool: &SqlitePool, db_path: &Path) {
 
 /// Record the start of a sync run; returns the new `run_id`.
 pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
-    let now = Utc::now().to_rfc3339();
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let cfg = serde_json::to_string(config).context("serialize run config")?;
     let row = sqlx::query(
         "INSERT INTO sync_runs (started_at, config, status) VALUES (?, ?, 'running') RETURNING run_id",
@@ -403,7 +402,7 @@ pub async fn finish_run(
     status: &str,
     summary: &Value,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let s = serde_json::to_string(summary).context("serialize run summary")?;
     sqlx::query("UPDATE sync_runs SET finished_at = ?, status = ?, summary = ? WHERE run_id = ?")
         .bind(&now)
@@ -614,7 +613,7 @@ pub async fn record_object_attempt(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt data stub {table}={id}"))?;
-    let now = Utc::now().to_rfc3339();
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let sql = match result {
         None => format!(
             "INSERT INTO {table}_bookkeeping (id, fetched_at, attempt_count, last_attempt_at, last_error)

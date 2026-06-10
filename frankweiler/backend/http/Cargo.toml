@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 frankweiler-core = { path = "../core" }
 frankweiler-schema = { path = "../schema" }
+frankweiler-time = { path = "../time" }
 clap = { version = "4.5", features = ["derive"] }
 mime_guess = "2"
 # `debug-embed` forces the proc macro to bake bytes into the binary

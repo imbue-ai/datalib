@@ -14,7 +14,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -166,7 +165,7 @@ impl RawDb {
 
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin discussion tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
         tx.commit().await.context("commit discussion tx")?;
         Ok(())
@@ -185,7 +184,7 @@ impl RawDb {
             .begin()
             .await
             .context("begin discussions batch tx")?;
-        let now = Utc::now().to_rfc3339();
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         for payload in payloads {
             upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
         }

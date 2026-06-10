@@ -24,6 +24,7 @@ rust_library(
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:chrono",

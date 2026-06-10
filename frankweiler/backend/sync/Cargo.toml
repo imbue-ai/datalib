@@ -12,6 +12,7 @@ path = "src/main.rs"
 frankweiler-core = { path = "../core" }
 frankweiler-etl = { path = "../etl" }
 frankweiler-obs = { path = "../obs" }
+frankweiler-time = { path = "../time" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 frankweiler-etl-anthropic = { path = "../etl/providers/anthropic" }
 frankweiler-etl-beeper = { path = "../etl/providers/beeper" }

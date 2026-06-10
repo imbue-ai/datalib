@@ -5,7 +5,6 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, FixedOffset};
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
@@ -47,17 +46,11 @@ fn yaml_scalar_raw(s: &str) -> String {
 }
 
 pub(crate) fn bump_iso(ts: &str) -> String {
-    let parse_input = if let Some(prefix) = ts.strip_suffix('Z') {
-        format!("{prefix}+00:00")
-    } else {
-        ts.to_string()
-    };
-    let Ok(dt) = DateTime::<FixedOffset>::parse_from_rfc3339(&parse_input) else {
+    let Some(mut out) = frankweiler_time::bump_micros_str(ts, 1) else {
         return ts.to_string();
     };
-    let bumped = dt + chrono::Duration::microseconds(1);
-    // Match Python isoformat: "+00:00" suffix; chrono RFC3339 emits the same.
-    let mut out = bumped.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false);
+    // Preserve a `Z` suffix on input (Python parity — UI loads the
+    // rendered .md verbatim, so byte-stability matters).
     if ts.ends_with('Z') && out.ends_with("+00:00") {
         out.truncate(out.len() - 6);
         out.push('Z');

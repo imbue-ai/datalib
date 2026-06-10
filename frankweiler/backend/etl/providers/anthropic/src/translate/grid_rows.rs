@@ -5,7 +5,6 @@
 
 use std::hash::{Hash, Hasher};
 
-use chrono::{DateTime, FixedOffset};
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
@@ -35,19 +34,7 @@ fn kind_for_block(block_type: &str) -> &'static str {
 }
 
 fn bump_micros(ts: &str, n: i64) -> String {
-    if ts.is_empty() {
-        return ts.into();
-    }
-    let normalized = if let Some(prefix) = ts.strip_suffix('Z') {
-        format!("{prefix}+00:00")
-    } else {
-        ts.to_string()
-    };
-    let Ok(dt) = DateTime::<FixedOffset>::parse_from_rfc3339(&normalized) else {
-        return ts.into();
-    };
-    let bumped = dt + chrono::Duration::microseconds(n);
-    bumped.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
+    frankweiler_time::bump_micros_str(ts, n).unwrap_or_else(|| ts.into())
 }
 
 fn qmd_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> String {

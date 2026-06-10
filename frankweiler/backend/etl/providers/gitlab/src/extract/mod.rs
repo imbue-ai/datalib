@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
 use frankweiler_etl::extract_run::ExtractRun;
+use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -178,7 +178,7 @@ async fn discover_mrs(
         }
         new_state.insert(
             scope.clone(),
-            Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+            IsoOffsetTimestamp::now_local().to_rfc3339_secs(),
         );
         tracing::info!(scope, count = results.len(), "scope done");
     }

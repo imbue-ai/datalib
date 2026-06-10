@@ -76,8 +76,7 @@ verbatim** in versioned doltlite tables, with attachment **BLOBs in a
 content-addressable store** (also doltlite, but a separate sibling
 database per source).
 
-The raw store is **not** pure JSON-document storage. Each entity table
-has typed columns for the fields we need to query or index (`id`,
+Each entity table has typed columns for the fields we need to query or index (`id`,
 `parent_id`, ordering columns, timestamps, foreign keys to other
 entities) plus a `payload` column that holds the raw upstream wire
 payload. On disk, `payload` is stored as JSONB (SQLite 3.45 binary
@@ -392,7 +391,8 @@ timestamp with explicit offset.** Concretely, in
 
   - **Real upstream timestamp when one exists.** A Slack message's
     `ts`, a GitHub PR's `created_at`, a Notion page's `last_edited_time`.
-    Preserved as UTC ISO-8601 with the explicit `+00:00` offset.
+    Preserved with the explicit offset upstream gave us (typically
+    `+00:00` for APIs that hand back UTC).
   - **Microsecond-bump for synthesized timestamps.** Blocks and
     sub-items that lack their own timestamp (chat blocks within a
     message, ChatGPT messages within a conversation that only has a
@@ -403,6 +403,46 @@ timestamp with explicit offset.** Concretely, in
   - **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive
     timestamp can't be globally sorted alongside a `+02:00` one
     without a hidden timezone assumption.
+
+### Single source of truth: `frankweiler-time`
+
+Every `now()` call and every inbound RFC 3339 parse in the workspace
+funnels through the `frankweiler-time` crate
+(`frankweiler/backend/time/`). The crate exposes:
+
+  - `IsoOffsetTimestamp::now_local()` — the canonical "now," returning
+    the wall clock with the **generating system's local-tz offset**
+    (e.g. `2026-06-10T14:23:00-07:00`). An offset-bearing timestamp is
+    strictly more information than the same instant in UTC: you can
+    recover UTC from `-07:00`, but you can't recover the originating
+    offset once it's been normalized away. This is the policy for
+    every generated `fetched_at` / `created_at` / run-marker stamp.
+  - `parse_strict(s)` — accepts only strings that already carry an
+    explicit offset. Most parse callsites should use this.
+  - `parse_with_assumed_utc(s)` — **the single function in the whole
+    repo** where "the upstream string lacked an offset, assume UTC"
+    is allowed. Reach for it only after auditing an upstream feed and
+    confirming naive-means-UTC. Any other fallback (local time,
+    midnight, run start, epoch) is fabrication.
+  - `IsoOffsetTimestamp::bump_micros(n)` / `bump_micros_str(s, n)` —
+    the canonical sub-item synthesized-stamp recipe.
+
+### No fabricated timestamps
+
+A logical corollary of the broader "[don't make up data](#wire-fidelity-of-the-raw-store)"
+principle, called out here because timestamps are the easiest place
+to accidentally violate it:
+
+  - When upstream gives us no timestamp and we can't pick one up
+    from a parent (no `bump_micros` source), `when_ts` is **null**.
+    Not "epoch," not "now," not "midnight UTC of the row's date."
+  - When upstream's timestamp string is naive and we haven't audited
+    that feed, parsing returns an error — surfaced as a warning in
+    the per-run summary, not silently rescued.
+  - Fallback paths that synthesize a value when upstream is silent
+    are anti-patterns even when they "look plausible." They mask
+    incompleteness in ways the consumer can't tell apart from real
+    data.
 
 ### Entities without a time-shape
 

@@ -573,9 +573,9 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     // phase sees the same timestamp for the duration of the run.
     // Local TZ + offset (e.g. `2026-05-28T14:23:45-07:00`) so the
     // timestamp is meaningful when a human reads it.
-    let now = args.now.unwrap_or_else(|| {
-        chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
-    });
+    let now = args
+        .now
+        .unwrap_or_else(|| frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
 
     let cfg = load_config(args.config.as_deref()).context("load config")?;
     status_line!(
@@ -2187,7 +2187,7 @@ fn translate_source(
             use frankweiler_etl_contacts::translate::{parse, render};
             let parsed = parse::parse(&fixture)
                 .with_context(|| format!("carddav parse {}", fixture.display()))?;
-            let now = chrono::Utc::now().to_rfc3339();
+            let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
             render::render_all(
                 &parsed,
                 root,
