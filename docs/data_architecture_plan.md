@@ -184,7 +184,7 @@ exactly), add the column to the bookkeeping DDL helper (P1.1), design
 the translation-state table schema in the backend index, retrofit one
 provider as the reference. Migrate the rest one at a time.
 
-### P0.4 UUID recipes — standard module location, not central registry
+### P0.4 PK / UUID recipes — homed in the schema files (no `uuid.rs`)
 
 > Thad: "Getting stable identifiers right is incredibly important for
 > the bytes at rest format, but I'm not sure centralizing it is the
@@ -194,24 +194,40 @@ provider as the reference. Migrate the rest one at a time.
 > construct UUIDs via function and put those functions in a known
 > place inside of every data source."
 
-**Goal**: each provider has `providers/<name>/src/uuid.rs` (or
-equivalent fixed path) that exports a function per UUIDv5 recipe used
-in that provider. Nothing else may construct provider-scoped UUIDs.
+**Convention that landed (during P0.1 rollout)** — recipes live
+**inside the schema file they key into**, not a separate `uuid.rs`:
 
-**Today**: recipes are inlined at the callsite in `translate/...` for
-most providers; the `GridRow` rustdoc comments document them but the
-runtime can drift.
+- **Raw-store synthesized PK recipes** (signal's
+  `chat_item_id_recipe`, yolink's `reading_id_recipe`, github's
+  `pr_pk`, gitlab's `mr_pk_recipe` + `discussion_pk_recipe`) live in
+  `providers/<name>/src/extract/schema_raw.rs` — next to the DDL
+  constant that says "this column is the PK". Both writer (extract)
+  and reader (translate, dedup-key formatters in synthesize, etc.)
+  import the same `pub fn` so the recipe can't drift between sides.
+- **Translate-side GridRow UUIDv5 recipes** (e.g. beeper's
+  `beeper_room_uuid` / `beeper_event_uuid`, github/gitlab grid-uuid
+  fns) live in `providers/<name>/src/translate/...` — they target a
+  different namespace (cross-provider grid identity) than raw-store
+  PKs, so co-locating them with the raw schema would conflate two
+  concerns. When `schema_translate.rs` exists for a provider, that's
+  their natural home; until then they stay in the translate module
+  that emits them.
+- Providers whose entities use native upstream UUIDs (anthropic,
+  notion, chatgpt) have no recipes to declare; their `schema_raw.rs`
+  module rustdoc notes this explicitly so a reader doesn't go
+  hunting for missing recipe functions.
 
-**Action**:
+**Why this beats `providers/<name>/src/uuid.rs`**: a separate
+`uuid.rs` would have one foot in extract and one in translate, with
+no way to say which side owned it. Co-locating each recipe with the
+schema it keys into puts the recipe's contract — "what PK does this
+column hold" or "what UUID does this `GridRow` field hold" — within
+one rustdoc-hop of the recipe function itself.
 
-- Define the convention (file path, naming: `slack_message_uuid(...)`,
-  etc.).
-- Move existing recipes there per provider.
-- Reference the recipe function from the schema-source-of-truth file
-  (P0.1) so reading the schema answers "where does this UUID come
-  from?" without leaving the file.
-- The GridRow doc-comments still describe the recipe but become a
-  pointer to the function, not a re-statement.
+**Status**: convention adopted across all 9 providers landed so
+far (anthropic, chatgpt, signal, contacts, yolink, github, gitlab,
+notion, beeper). No drift between writer and reader callsites
+where recipes were lifted.
 
 ### P0.5 Shared timestamp utility crate; no fabricated timestamps
 
@@ -466,10 +482,13 @@ Worth resolving before we touch the code they refer to:
 - **No raw-store schema unification across providers.** Each provider
   keeps its own raw tables; unification happens at translate, into
   GridRow / shared intermediate types only.
-- **No central UUID registry.** Standardized *location*
-  (`providers/<name>/src/uuid.rs`) — not a shared `uuid_recipes`
-  crate. (Thad: "Getting stable identifiers right is incredibly
+- **No central UUID registry.** Recipes live in the schema file
+  they key into (`extract/schema_raw.rs` for raw-store PKs;
+  `translate/...` for GridRow grid-uuids) — not a shared
+  `uuid_recipes` crate, not a separate `providers/<name>/src/uuid.rs`
+  file. (Thad: "Getting stable identifiers right is incredibly
   important ... but I'm not sure centralizing it is the right idea.")
+  See P0.4.
 - **No `endpoint_shapes` revival.** It's gone; the audit confirmed
   no stragglers.
 - **No fabricated timestamps as silent fallback.** Null is the
@@ -484,9 +503,11 @@ Worth resolving before we touch the code they refer to:
 
 1. **Week 1**: P0.1 (schema-source-of-truth shape + first 2 providers
    as the reference), P0.7 (vestigial cleanup), open-question
-   resolution.
-2. **Week 2**: P0.5 (timestamp crate), P0.4 (UUID recipe convention),
-   P0.1 propagation to the rest of the providers.
+   resolution. **(P0.4 lands incidentally during this — recipes get
+   lifted into `schema_raw.rs` as part of each provider's P0.1
+   conversion.)**
+2. **Week 2**: P0.5 (timestamp crate), P0.1 propagation to the rest
+   of the providers.
 3. **Week 3**: P0.2 (sidecar struct), P0.3 (translated_fingerprint
    column), P1.1 (bookkeeping DDL helper).
 4. **Week 4**: P0.6 (retry config + reference impl in one provider).
