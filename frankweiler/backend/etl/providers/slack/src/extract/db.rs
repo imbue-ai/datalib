@@ -44,70 +44,9 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-use crate::translate::{slack_message_uuid, slack_thread_uuid};
-
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &[
-    "workspaces",
-    "users",
-    "channels",
-    "messages",
-    "replies_pages",
-];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY,
-        team_name TEXT NULL,
-        team_url TEXT NULL,
-        self_user_id TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        team_id TEXT NULL,
-        name TEXT NULL,
-        real_name TEXT NULL,
-        display_name TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS channels (
-        id TEXT PRIMARY KEY,
-        name TEXT NULL,
-        is_member INTEGER NULL,
-        is_archived INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        team_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        ts TEXT NOT NULL,
-        thread_ts TEXT NULL,
-        thread_root_uuid TEXT NULL,
-        is_thread_root INTEGER NULL,
-        user_id TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS messages_by_channel_ts ON messages(channel_id, ts)",
-    "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)",
-    "CREATE TABLE IF NOT EXISTS replies_pages (
-        id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        thread_ts TEXT NOT NULL,
-        latest_reply TEXT NULL
-    )",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
+use super::schema_raw::{
+    full_ddl, replies_page_id_recipe, slack_message_uuid, slack_thread_uuid, DATA_TABLES,
+};
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -450,7 +389,7 @@ impl RawDb {
         thread_ts: &str,
         latest_reply: Option<&str>,
     ) -> Result<()> {
-        let id = format!("{channel_id}:{thread_ts}");
+        let id = replies_page_id_recipe(channel_id, thread_ts);
         let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
         sqlx::query(
             "INSERT INTO replies_pages

@@ -15,6 +15,7 @@
 
 pub mod api;
 pub mod db;
+pub mod schema_raw;
 pub mod shapes;
 
 use std::collections::{BTreeMap, HashSet};

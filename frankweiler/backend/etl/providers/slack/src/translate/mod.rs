@@ -25,34 +25,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json::Value;
-use uuid::Uuid;
 
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::extract::db::{block_on_load_all, db_path_for, LoadedMessage, LoadedRaw};
 use super::extract::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
-/// Shared namespace for v5-derived Slack UUIDs. Must match the Python
-/// constant in `src/ingest/providers/slack/parse.py`.
-const SLACK_UUID_NS: Uuid = Uuid::from_bytes([
-    0xa8, 0x9c, 0x7c, 0x4f, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a,
-]);
-
-pub fn slack_message_uuid(team_id: &str, channel_id: &str, ts: &str) -> String {
-    Uuid::new_v5(
-        &SLACK_UUID_NS,
-        format!("slack:msg:{team_id}:{channel_id}:{ts}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn slack_thread_uuid(team_id: &str, channel_id: &str, thread_ts: &str) -> String {
-    Uuid::new_v5(
-        &SLACK_UUID_NS,
-        format!("slack:thread:{team_id}:{channel_id}:{thread_ts}").as_bytes(),
-    )
-    .to_string()
-}
+// UUIDv5 recipes for Slack message and thread ids live in
+// `extract::schema_raw` (per data_architecture_plan §P0.4: raw-store
+// PK recipes are homed in the schema file they key into). Re-export
+// here so existing `crate::translate::slack_message_uuid` callers
+// outside this crate keep resolving.
+pub use super::extract::schema_raw::{slack_message_uuid, slack_thread_uuid};
 
 /// Render Slack `ts` (unix seconds + fractional, UTC) as ISO-8601 with
 /// microsecond precision and `+00:00` offset — matches Python's
