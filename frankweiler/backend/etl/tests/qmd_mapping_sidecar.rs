@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use frankweiler_core::qmd::mapping::norm_path;
 use frankweiler_core::qmd::runner::parse_stdout;
 use frankweiler_core::qmd::{GridIndex, GridRowRef, QmdHit};
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_index_lib::{Sidecar, SidecarHeader};
 use frankweiler_schema::grid_rows::GridRow;
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-schema = { path = "../../../schema" }
+frankweiler-index-lib = { path = "../../../index_lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

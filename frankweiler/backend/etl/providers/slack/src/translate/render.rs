@@ -33,8 +33,8 @@ use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::msg_div_open;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
 use super::{slack_link, Message, TranslatedSlack};
@@ -155,17 +155,14 @@ pub fn render_all(
             .with_context(|| format!("materialize blobs for {}", thread_uuid))?;
 
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                markdown_uuid: thread_uuid.clone(),
-                source_fingerprint: fingerprint.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: rows.clone(),
-            edges: Vec::new(),
-        };
-        let sj = serde_json::to_string_pretty(&sidecar)?;
-        fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
+        emit_sidecar(
+            &json_path,
+            &thread_uuid,
+            &fingerprint,
+            RENDER_VERSION,
+            &rows,
+            &[],
+        )?;
 
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: thread_uuid.clone(),

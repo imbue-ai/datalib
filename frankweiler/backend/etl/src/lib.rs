@@ -2,9 +2,11 @@
 //! code lives in sibling crates named `frankweiler-etl-<provider>`
 //! (e.g. [`frankweiler_etl_slack`]). The framework provides:
 //!
-//! - [`sidecar`] — the cross-provider Translate→Load contract.
 //! - [`load`] — the provider-agnostic Load step; ships as the
-//!   `grid-rows-load` binary.
+//!   `grid-rows-load` binary. The cross-provider Translate→Load
+//!   wire contract (sidecar shape, `emit_sidecar` helper) now lives
+//!   in the standalone `frankweiler-index-lib` crate; load just
+//!   reads through it.
 //! - [`events`] — stable structured event vocabulary used by every
 //!   Extract/Translate step. Initialization of the tracing subscriber
 //!   that consumes these events lives in the shared `frankweiler_obs`
@@ -32,6 +34,5 @@ pub mod progress;
 pub mod raw_store;
 pub mod scope_state;
 pub mod section;
-pub mod sidecar;
 pub mod synthesize;
 pub mod title;

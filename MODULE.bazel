@@ -241,6 +241,7 @@ crate.from_cargo(
     manifests = [
         "//frankweiler/backend:Cargo.toml",
         "//frankweiler/backend/schema:Cargo.toml",
+        "//frankweiler/backend/index_lib:Cargo.toml",
         "//frankweiler/backend/core:Cargo.toml",
         "//frankweiler/backend/http:Cargo.toml",
         "//frankweiler/backend/obs:Cargo.toml",

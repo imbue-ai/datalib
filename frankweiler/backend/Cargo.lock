@@ -1324,6 +1324,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-qmd-indexer",
  "frankweiler-schema",
@@ -1348,6 +1349,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1371,6 +1373,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1392,6 +1395,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1415,6 +1419,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "quick-xml",
  "serde",
@@ -1435,6 +1440,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "html2md",
@@ -1459,6 +1465,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1483,6 +1490,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1507,6 +1515,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1533,6 +1542,7 @@ dependencies = [
  "candle-transformers",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "hf-hub",
  "quick-xml",
@@ -1553,6 +1563,7 @@ dependencies = [
  "blake3",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "frankweiler-signal-backup",
  "prost",
@@ -1576,6 +1587,7 @@ dependencies = [
  "clap",
  "emojis",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1635,6 +1647,17 @@ dependencies = [
  "tower-http",
  "uuid",
  "webbrowser",
+]
+
+[[package]]
+name = "frankweiler-index-lib"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-schema",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

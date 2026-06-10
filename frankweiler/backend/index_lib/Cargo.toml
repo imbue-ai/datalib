@@ -1,0 +1,18 @@
+[package]
+name = "frankweiler-index-lib"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_index_lib"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-schema = { path = "../schema" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

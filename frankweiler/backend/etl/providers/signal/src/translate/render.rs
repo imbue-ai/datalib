@@ -29,6 +29,7 @@ use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::section_attrs;
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use sha2::{Digest, Sha256};
 
@@ -233,16 +234,14 @@ fn render_one(
         messages_rendered += 1;
     }
 
-    let sidecar = serde_json::json!({
-        "header": {
-            "markdown_uuid": markdown_uuid,
-            "source_fingerprint": fingerprint,
-            "render_version": RENDER_VERSION,
-        },
-        "rows": &rows,
-    });
-    fs::write(&json_path, serde_json::to_string_pretty(&sidecar)?)
-        .with_context(|| format!("write {}", json_path.display()))?;
+    emit_sidecar(
+        &json_path,
+        &markdown_uuid,
+        &fingerprint,
+        RENDER_VERSION,
+        &rows,
+        &[],
+    )?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),
