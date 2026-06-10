@@ -11,9 +11,12 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
    sidecar JSON, UUID recipes — gets done **before** translate-side
    polish or rendering improvements. We can rewrite renderers any
    time; we cannot rewrite years of accumulated raw stores.
-2. **"Show me your tables"** — every provider should have an obvious,
-   standard place where its current raw schema is written down so we
-   can compare them at a glance without reading any code.
+2. **"Show me your tables"** — every provider has a single
+   well-known schema file (load-bearing code, not parallel
+   documentation) at the same fixed path, with rich inline comments
+   in the spirit of a proto declaration. Reading 12 files side-by-side
+   answers "what does the world look like?" without anyone writing
+   a separate doc.
 3. **Don't make up data.** A new principle to add to
    `data_architecture.md`: we never synthesize values (timestamps,
    identifiers, content) that weren't given to us. Fallback paths that
@@ -27,31 +30,54 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
 
 ## P0 — bytes-at-rest shape and visibility
 
-### P0.1 Per-provider `RAW_SCHEMA.md`
+### P0.1 Self-documenting schema source-of-truth per provider
 
-FIXME: Actually I prefer that the load-bearing code self-document.   want the machine-readable schema to BE the documentation, not some markdown.  Put useful comments in the schema, same as I would do in a proto declaration file.
-**Goal**: at `providers/<name>/RAW_SCHEMA.md`, every provider documents:
+**Goal**: every provider has **`providers/<name>/src/schema.rs`** —
+a single Rust file that holds the load-bearing schema declaration
+plus the helpers that operate on it. Rich rustdoc comments serve the
+"proto-style declaration" role. (Same pattern Thad used in Python
+with pydantic `schema.py`.) Concretely:
 
-- the entity tables in `<name>.doltlite_db` (DDL or DDL-equivalent prose)
-- the `_bookkeeping` sidecar tables
-- the `blob_refs` shape (or "n/a")
-- the UUID recipe used for each entity (link to the recipe function)
-- the column where `when_ts` comes from, per entity type
-- any schema migration code that's still load-bearing (and a note when
-  each migration becomes safe to delete)
+- `const <TABLE>_DDL: &str = "CREATE TABLE IF NOT EXISTS ...";` per
+  entity, bookkeeping, and `blob_refs` table — with a `///` block
+  above each explaining upstream provenance, the PK choice, what
+  each column is for, where `when_ts` comes from, and a pointer to
+  the UUID recipe function.
+- `const ALL_DDL: &[&str] = &[...];` — the list `RawDb::open`
+  iterates, replacing today's inline DDL in each provider's
+  `extract/db.rs`.
+- Public helper functions that operate over the schema —
+  `ensure_<entity>_row(tx, id, parent)`, etc. — sit here so they're
+  one open-file away from the DDL they correspond to. This is where
+  generic shared helpers (`bookkeeping_ddl_for(...)`, the bookkeeping
+  DDL macro from P1.1, etc.) get composed in.
+- Migration constants/functions co-located, with a doc-comment on
+  each that says when it becomes safe to delete.
+- Everything else in the provider (`extract::*`, `translate::*`,
+  `render`) imports from `schema::*` rather than defining schema
+  bits inline.
 
-For programmatically-generated DDL, the doc captures the *result*, not
-the generator — the goal is "I can read these 12 files side by side
-and see the shape of the world."
+No parallel `RAW_SCHEMA.md`. The load-bearing code *is* the
+documentation; the "show me your tables" guarantee comes from
+opening 12 `schema.rs` files at the same fixed path and seeing the
+same shape.
 
-**Why now**: this is the cheapest, highest-leverage P0. Doing it
-**before** the schema unifications below will (a) surface
-inconsistencies we don't yet know about and (b) give us a stable
-artifact to diff against as the unifications land.
+**Why Rust over a `.sql` or proto file**: helpers want to live next
+to the DDL they refer to (UUID recipes, `ensure_object_row`
+wrappers, parameter-binding helpers, shared bookkeeping
+composition). A second-language source-of-truth forces those into
+a different location and loses the proximity. `rustdoc` on `const`
+DDL strings gives us the same comment richness as proto without a
+second toolchain.
 
-**Action**: define the template (probably worked out on `notion` or
-`anthropic` first since they're closest to the model), then bring each
-provider up to it.
+**Why now**: cheapest, highest-leverage P0. Doing it **before** the
+schema unifications below will (a) surface inconsistencies we don't
+yet know about and (b) give us a stable artifact to diff against as
+the unifications land.
+
+**Action**: prototype on `notion` or `anthropic` first (closest to
+the model already), nail down what shared helpers go in and what
+stays per-provider, then bring each provider up to the convention.
 
 ### P0.2 Shared `Sidecar` / `GridRow` struct, used at read AND write
 
@@ -71,42 +97,66 @@ defined in `frankweiler/backend/etl/src/sidecar.rs` (`Sidecar`,
 
 - One canonical Rust struct (`Sidecar { header: SidecarHeader, rows:
   Vec<GridRow> }`) defined once.
-- This GridRow struct should match the SQL schema and be translatable to and from the SQL rows.
+- The GridRow struct matches the SQL schema in `backend_index.doltlite_db`
+  and round-trips cleanly to and from the SQL rows.
 - Every provider's translate writes through it; Load reads through it.
 - No string-keyed serde maps anywhere; the schema is checked at compile
   time at both ends.
-- Canonical field names — pick `document_uuid` (per architecture doc),
-  rename signal's `markdown_uuid`.
-  FIXME: Actually I think we should standardize on markdown_uuid.  That's what we're indexing is these rendered markdown documents.
+- Canonical field name: **`markdown_uuid`**. The thing we're indexing
+  is the rendered markdown documents — name it for what it is. Updates
+  needed: anywhere currently using `document_uuid` (architecture doc,
+  Slack, etc.) flips to `markdown_uuid`. (Audit's "signal uses
+  `markdown_uuid` instead of canonical `document_uuid`" finding gets
+  inverted — signal was right.)
 
 **Action**: audit every translate path, route through one
 `emit_sidecar(...)` helper that takes the struct.
 
-### P0.3 `translated_fingerprint` bookkeeping column on every entity table
+### P0.3 Content fingerprint in raw; translation state in the backend index
 
-> Thad: "I think this might be a generic bookkeeping thing that we
-> might want to investigate having literally everywhere (all the
-> bookkeeping tables) so that we can quickly recognize whether we have
-> already translated a particular version of some entity or not."
+**Important correction to the original framing**: the raw stores must
+stay agnostic to translation. There can be multiple translation
+schemes over time. The raw store's job is only to record, for each
+entity, a stable **Blake3 fingerprint of its content** — so anyone
+downstream can tell whether the content changed. Translation
+bookkeeping ("which fingerprint did I last translate, and into what")
+lives separately, in `backend_index.doltlite_db`.
 
-**Today**: translate-side dedup happens at the sidecar level — if the
-existing `.md` already has the matching `source_fingerprint`, skip.
-That means we look at the *output* to know if work is needed.
+Two halves:
 
-**Goal**: each entity row carries a `translated_fingerprint` (in
-`_bookkeeping` or on the row), updated when translate emits a sidecar
-for it. Translate's "what's stale" query becomes a SQL join on the
-raw store rather than a filesystem walk of `rendered_md/`.
-NOTE: To be clear, the raw databases don't know anything about translation. They just know the Blake3 checksum of their contents. Separately, in index_rows.doltlite_db, translation knows which Blake3 checksum it last translated. So if it changes, translation knows it needs to work again. 
+**P0.3a — `content_fingerprint` column on every raw entity row.**
 
-**Side benefit**: enables per-source "X / Y items translated"
-progress reporting (audit called this out for translate-side
-observability).
-Again, The raw data is agnostic to any sort of translation. There might be multiple translation schemes. It is just that the raw data has fingerprints stored so that we know if it changes. 
+- Blake3 of the canonical bytes of the row's content (typically the
+  upstream `payload`, possibly including a few stable bookkeeping
+  fields — to be designed).
+- Updated by extract on every UPSERT. Cheap to compute, byte-stable
+  across re-fetches when the upstream hasn't changed.
+- Cargo-cult-friendly: same column shape on every entity table; lands
+  in the shared bookkeeping DDL helper (P1.1).
+- Replaces the per-provider `source_fingerprint` schemes that
+  currently get re-computed at translate time and stored in the
+  sidecar header. Translate just reads the column.
 
-**Action**: design the column (single `BLOB` of the fingerprint? or
-per-render `(render_version, fingerprint)` pair?). Add to the
-bookkeeping DDL macro from P1. Migrate providers one at a time.
+**P0.3b — translation-state table in `backend_index.doltlite_db`.**
+
+- Keyed by `(provider, entity_uuid, translation_scheme, render_version)`.
+- Stores the `content_fingerprint` that was last translated under
+  that scheme + version.
+- Translate's "what's stale" query becomes: left-join raw entity
+  rows against this table; rows where the raw fingerprint differs
+  (or no row exists yet) need work.
+- Naturally supports multiple translation schemes coexisting (today
+  we have one — markdown + GridRow — but the door's open).
+
+**Side benefit**: per-source "X / Y items translated" progress
+reporting becomes a SQL count, not a filesystem walk of
+`rendered_md/`. (The audit called this out as a translate-side
+observability gap.)
+
+**Action**: design the `content_fingerprint` recipe (input bytes
+exactly), add the column to the bookkeeping DDL helper (P1.1), design
+the translation-state table schema in the backend index, retrofit one
+provider as the reference. Migrate the rest one at a time.
 
 ### P0.4 UUID recipes — standard module location, not central registry
 
@@ -131,8 +181,9 @@ runtime can drift.
 - Define the convention (file path, naming: `slack_message_uuid(...)`,
   etc.).
 - Move existing recipes there per provider.
-- Document each recipe in `RAW_SCHEMA.md` (P0.1) so the bytes-at-rest
-  audit shows them.
+- Reference the recipe function from the schema-source-of-truth file
+  (P0.1) so reading the schema answers "where does this UUID come
+  from?" without leaving the file.
 - The GridRow doc-comments still describe the recipe but become a
   pointer to the function, not a re-statement.
 
@@ -405,8 +456,9 @@ Worth resolving before we touch the code they refer to:
 
 ## Proposed sequencing
 
-1. **Week 1**: P0.1 (`RAW_SCHEMA.md` template + first 2 providers),
-   P0.7 (vestigial cleanup), open-question resolution.
+1. **Week 1**: P0.1 (schema-source-of-truth shape + first 2 providers
+   as the reference), P0.7 (vestigial cleanup), open-question
+   resolution.
 2. **Week 2**: P0.5 (timestamp crate), P0.4 (UUID recipe convention),
    P0.1 propagation to the rest of the providers.
 3. **Week 3**: P0.2 (sidecar struct), P0.3 (translated_fingerprint
