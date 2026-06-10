@@ -27,6 +27,11 @@ const router = createRouter({
       component: () => import("@/views/PreferencesView.vue"),
     },
     {
+      path: "/v2",
+      name: "v2",
+      component: () => import("@/v2/MillerViewV2.vue"),
+    },
+    {
       path: "/:stack(.*)*",
       name: "miller",
       component: () => import("@/views/MillerView.vue"),
