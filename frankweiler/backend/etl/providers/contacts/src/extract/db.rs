@@ -53,53 +53,9 @@ use sqlx::Row;
 
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{full_ddl, DATA_TABLES};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
-
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        server_url TEXT NULL,
-        principal_href TEXT NULL,
-        addressbook_home_set TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS addressbooks (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        href TEXT NOT NULL,
-        display_name TEXT NULL,
-        description TEXT NULL,
-        ctag TEXT NULL,
-        sync_token TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS addressbooks_by_account ON addressbooks(account_id)",
-    "CREATE TABLE IF NOT EXISTS contacts (
-        id TEXT PRIMARY KEY,
-        addressbook_id TEXT NOT NULL,
-        uid TEXT NULL,
-        href TEXT NOT NULL,
-        etag TEXT NULL,
-        display_name TEXT NULL,
-        revision TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS contacts_by_addressbook ON contacts(addressbook_id)",
-    "CREATE INDEX IF NOT EXISTS contacts_by_href ON contacts(addressbook_id, href)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {

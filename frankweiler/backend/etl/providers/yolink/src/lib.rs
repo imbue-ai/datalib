@@ -4,7 +4,7 @@
 //! values land as auditable diffs in `dolt log`.
 //!
 //! No translate / render path — the readings table is queried
-//! directly by downstream tools. See `extract.rs` for the full
+//! directly by downstream tools. See `extract/mod.rs` for the full
 //! story (it's short).
 
 pub mod extract;

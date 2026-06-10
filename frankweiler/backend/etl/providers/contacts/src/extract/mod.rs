@@ -16,6 +16,7 @@
 
 pub mod api;
 pub mod db;
+pub mod schema_raw;
 
 pub use db::{db_path_for, RawDb};
 
