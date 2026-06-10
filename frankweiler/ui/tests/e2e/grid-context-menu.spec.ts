@@ -1,17 +1,12 @@
 import { test, expect } from "@playwright/test";
 
-// Bug: right-clicking on an AG Grid row pops the *browser's* native context
-// menu on top of our custom `.ctx-menu`. The handler in GridColumn.vue
-// (`onCellContextMenu`) does call `me.preventDefault()` on the original
-// MouseEvent, but AG Grid dispatches `cellContextMenu` from inside its own
-// listener — by the time our handler runs, the contextmenu event has
-// already bubbled past `document` / `window` without `defaultPrevented`,
-// so the UA goes ahead and shows its menu.
-//
-// This test pins the contract: when a user right-clicks a row, the
-// contextmenu event must be `defaultPrevented` by the time it reaches
-// `window` (otherwise the native menu wins). We do *not* fix the bug
-// here — only reproduce it.
+// Pin the contract: a right-click on a grid row opens the AG Grid
+// Enterprise context menu (.ag-menu) — with our custom items prepended
+// to AG Grid's defaults — and the underlying contextmenu event is
+// `defaultPrevented` by the time it reaches `window`, so the browser's
+// native menu never shows over the grid's. AG Grid handles the
+// preventDefault via `preventDefaultOnContextMenu: true` set in
+// GridColumn.vue's gridOptions.
 
 test("right-click on a grid row suppresses the native browser menu", async ({
   page,
@@ -42,7 +37,7 @@ test("right-click on a grid row suppresses the native browser menu", async ({
     // Bubble-phase listener on window fires *last* in the event flow —
     // same point at which the UA decides whether to render the native
     // menu. If `defaultPrevented` is false here, the browser shows its
-    // own context menu on top of our custom `.ctx-menu`.
+    // own context menu on top of AG Grid's `.ag-menu`.
     window.addEventListener(
       "contextmenu",
       (ev) => {
@@ -55,8 +50,8 @@ test("right-click on a grid row suppresses the native browser menu", async ({
 
   await firstRow.click({ button: "right" });
 
-  // Custom menu should appear.
-  await expect(page.locator(".ctx-menu")).toBeVisible({ timeout: 5_000 });
+  // AG Grid Enterprise menu should appear.
+  await expect(page.locator(".ag-menu")).toBeVisible({ timeout: 5_000 });
 
   const { fired, prevented } = await page.evaluate(() => {
     const w = window as unknown as {
@@ -68,6 +63,6 @@ test("right-click on a grid row suppresses the native browser menu", async ({
   expect(fired, "contextmenu event must have fired on window").toBe(true);
   expect(
     prevented,
-    "contextmenu must be defaultPrevented before reaching window — otherwise the browser shows its native menu over our custom one",
+    "contextmenu must be defaultPrevented before reaching window — otherwise the browser shows its native menu over AG Grid's",
   ).toBe(true);
 });
