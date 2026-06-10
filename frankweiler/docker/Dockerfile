@@ -80,16 +80,15 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && rm -rf /var/lib/apt/lists/* \
     && node --version && npm --version && npx --version
 
-# Pinned latchkey. Bumping: follow the 7-day burn-in policy in README.md
-# (no version newer than 7 days at the time of the bump). Latest at pin
-# time (2026-06-04) that satisfied the burn-in was 2.12.2 (2026-05-28).
+# Pinned latchkey. The 7-day burn-in policy in README.md does NOT apply
+# here: latchkey is a first-party Imbue dependency, so just track latest.
 #
 # No `latchkey --version` smoke here: that command initializes the
 # keyring lazily, and inside a minimal Ubuntu image there's no Secret
 # Service running, so latchkey exits non-zero with "No encryption key
 # available." The entrypoint script (frankweiler-entrypoint.sh) handles
 # this at runtime by setting `LATCHKEY_ENCRYPTION_KEY` before exec.
-ARG LATCHKEY_VERSION=2.12.2
+ARG LATCHKEY_VERSION=2.16.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}"
 
 # Doltlite CLI — the SQLite-shell analogue for poking at the doltlite

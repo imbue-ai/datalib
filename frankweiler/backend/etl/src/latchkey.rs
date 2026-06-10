@@ -201,7 +201,7 @@ pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
     let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
     let mut cmd = std::process::Command::new(npx);
-    cmd.arg("-y").arg("latchkey@2.12.0");
+    cmd.arg("-y").arg("latchkey@2.16.0");
     cmd
 }
 
@@ -210,7 +210,7 @@ pub fn latchkey_tokio_command() -> tokio::process::Command {
     warn_if_missing();
     let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
     let mut cmd = tokio::process::Command::new(npx);
-    cmd.arg("-y").arg("latchkey@2.12.0");
+    cmd.arg("-y").arg("latchkey@2.16.0");
     cmd
 }
 
