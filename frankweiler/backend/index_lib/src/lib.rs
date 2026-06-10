@@ -133,7 +133,7 @@ mod tests {
             provider: "test".into(),
             kind: "Test".into(),
             source_label: "Test".into(),
-            when_ts: "2026-01-01T00:00:00+00:00".into(),
+            when_ts: Some("2026-01-01T00:00:00+00:00".into()),
             author: None,
             account: None,
             project: None,

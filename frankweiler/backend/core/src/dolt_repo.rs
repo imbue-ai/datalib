@@ -174,7 +174,7 @@ impl MirrorRepo for DoltRepo {
             let uuid: String = r.try_get("uuid").unwrap_or_default();
             let kind: String = r.try_get("kind").unwrap_or_default();
             let source_label: String = r.try_get("source_label").unwrap_or_default();
-            let when_ts: String = r.try_get("when_ts").unwrap_or_default();
+            let when_ts: Option<String> = r.try_get("when_ts").ok();
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();
@@ -342,7 +342,7 @@ impl MirrorRepo for DoltRepo {
             let uuid: String = r.try_get("uuid").unwrap_or_default();
             let kind: String = r.try_get("kind").unwrap_or_default();
             let source_label: String = r.try_get("source_label").unwrap_or_default();
-            let when_ts: String = r.try_get("when_ts").unwrap_or_default();
+            let when_ts: Option<String> = r.try_get("when_ts").ok();
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();

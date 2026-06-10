@@ -15,7 +15,11 @@ pub struct SearchRow {
     pub message_index: Option<usize>,
     pub snippet: String,
     pub sender: String,
-    pub when: String,
+    /// Null when the row has no source-side timestamp (e.g. contacts
+    /// without a `REV:` field, or any row whose underlying entity isn't
+    /// event-shaped). See data_architecture_ingestion.md §"Entities
+    /// without a time-shape".
+    pub when: Option<String>,
     pub conversation_name: String,
     pub project: String,
     pub account: String,

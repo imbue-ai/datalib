@@ -2187,12 +2187,10 @@ fn translate_source(
             use frankweiler_etl_contacts::translate::{parse, render};
             let parsed = parse::parse(&fixture)
                 .with_context(|| format!("carddav parse {}", fixture.display()))?;
-            let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
             render::render_all(
                 &parsed,
                 root,
                 name,
-                &now,
                 progress,
                 prior_fingerprints,
                 on_doc_complete,

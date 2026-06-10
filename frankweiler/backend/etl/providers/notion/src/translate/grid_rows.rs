@@ -189,12 +189,11 @@ fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> 
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let when_ts = page
+    let when_ts: Option<String> = page
         .get("last_edited_time")
         .and_then(|v| v.as_str())
         .or_else(|| page.get("created_time").and_then(|v| v.as_str()))
-        .unwrap_or("")
-        .to_string();
+        .map(str::to_string);
     let author_id = page
         .get("last_edited_by")
         .or_else(|| page.get("created_by"))
@@ -265,8 +264,7 @@ fn thread_rows(
         when_ts: first
             .get("created_time")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .into(),
+            .map(str::to_string),
         author: short_author(first_author_id, user_names),
         account: None,
         org_uuid: None,
@@ -301,8 +299,7 @@ fn thread_rows(
             when_ts: c
                 .get("created_time")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .into(),
+                .map(str::to_string),
             author: short_author(author_id, user_names),
             account: None,
             org_uuid: None,

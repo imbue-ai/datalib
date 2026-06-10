@@ -394,7 +394,7 @@ pub fn compute_row_set_hash(rows: &[GridRow]) -> String {
     for r in sorted {
         push(&mut h, Some(&r.uuid));
         push(&mut h, Some(&r.kind));
-        push(&mut h, Some(&r.when_ts));
+        push(&mut h, r.when_ts.as_deref());
         push(&mut h, r.author.as_deref());
         push_i(&mut h, r.message_index);
         push(&mut h, Some(&r.text));
@@ -710,8 +710,7 @@ async fn upsert_markdown(
     let timestamps: Vec<&str> = md
         .rows
         .iter()
-        .map(|r| r.when_ts.as_str())
-        .filter(|s| !s.is_empty())
+        .filter_map(|r| r.when_ts.as_deref())
         .collect();
     let created_at = timestamps.iter().min().copied();
     let updated_at = timestamps.iter().max().copied();
@@ -852,7 +851,7 @@ mod write_lock_tests {
             provider: "anthropic".into(),
             kind: "Chat".into(),
             source_label: "Claude".into(),
-            when_ts: "2026-06-02T20:00:00+00:00".into(),
+            when_ts: Some("2026-06-02T20:00:00+00:00".into()),
             author: None,
             account: Some("acct-test".into()),
             project: None,

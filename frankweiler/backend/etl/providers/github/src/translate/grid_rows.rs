@@ -164,11 +164,7 @@ pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Vec<GridRow>
         provider: "github".into(),
         kind: "GitHub PR".into(),
         source_label: "GitHub".into(),
-        when_ts: pr
-            .updated_at
-            .clone()
-            .or_else(|| pr.created_at.clone())
-            .unwrap_or_default(),
+        when_ts: pr.updated_at.clone().or_else(|| pr.created_at.clone()),
         author: pr.user_login.clone(),
         account: None,
         org_uuid: None,
@@ -200,7 +196,7 @@ pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Vec<GridRow>
             provider: "github".into(),
             kind: c.kind.into(),
             source_label: "GitHub".into(),
-            when_ts: c.created_at.clone(),
+            when_ts: Some(c.created_at.clone()),
             author: c.user_login.clone(),
             account: None,
             org_uuid: None,

@@ -17,7 +17,10 @@ export type SearchRow = {
   message_index: number | null;
   snippet: string;
   sender: string;
-  when: string;
+  // Null when the row has no source-side timestamp (e.g. contacts
+  // without a `REV:` field, or any row whose underlying entity isn't
+  // event-shaped). AG Grid renders null as an empty cell.
+  when: string | null;
   conversation_name: string;
   project: string;
   account: string;

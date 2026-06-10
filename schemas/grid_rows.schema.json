@@ -14,7 +14,6 @@
         "provider",
         "kind",
         "source_label",
-        "when_ts",
         "conversation_uuid",
         "entire_chat",
         "text"
@@ -96,10 +95,10 @@
           }
         },
         "when_ts": {
-          "type": "string",
+          "type": ["string", "null"],
           "x-sql-type": "VARCHAR(40)",
           "format": "date-time",
-          "description": "ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable.",
+          "description": "ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable. Nullable: some entities aren't event-shaped (e.g. contacts without a `REV:` field) and we never fabricate a stamp — null means 'no source-side timestamp exists' (see data_architecture_ingestion.md §\"Entities without a time-shape\" and the no-fabricated-timestamps principle). Null rows are excluded by before:/after: filters (SQL `<`/`>` against NULL). Default sort follows the SQL engine's NULL ordering (MySQL/SQLite: NULLs first under ASC); the UI may override.",
           "x-mapping": {
             "anthropic.chat":    "IFNULL(created_at, updated_at)",
             "anthropic.message": "messages.created_at",

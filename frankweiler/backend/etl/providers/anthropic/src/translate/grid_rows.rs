@@ -115,7 +115,7 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
             provider: "anthropic".into(),
             kind: kind.into(),
             source_label: "Claude".into(),
-            when_ts: m.created_at.clone().unwrap_or_default(),
+            when_ts: m.created_at.clone(),
             author,
             account: Some(conv.account_uuid.clone()),
             org_uuid: conv.org_uuid.clone(),
@@ -152,15 +152,14 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
                     btext = t.into();
                 }
             }
-            let row_when = b
+            let row_when: Option<String> = b
                 .start_timestamp
                 .clone()
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| {
-                    bump_micros(
-                        m.created_at.as_deref().unwrap_or(""),
-                        (b.block_index + 1) as i64,
-                    )
+                .or_else(|| {
+                    m.created_at
+                        .as_deref()
+                        .map(|t| bump_micros(t, (b.block_index + 1) as i64))
                 });
             let row_author = if !model.is_empty() {
                 model.clone()
@@ -214,11 +213,7 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
 }
 
 fn chat_row(conv: &ConversationRow) -> GridRow {
-    let when = conv
-        .created_at
-        .clone()
-        .or_else(|| conv.updated_at.clone())
-        .unwrap_or_default();
+    let when = conv.created_at.clone().or_else(|| conv.updated_at.clone());
     let text = conv
         .summary
         .clone()

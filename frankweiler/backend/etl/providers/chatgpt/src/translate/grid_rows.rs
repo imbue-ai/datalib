@@ -73,11 +73,10 @@ pub fn rows_for_conversation(shredded: &ShreddedConversation) -> Vec<GridRow> {
     let conv_time = conv
         .create_time
         .clone()
-        .or_else(|| conv.update_time.clone())
-        .unwrap_or_default();
+        .or_else(|| conv.update_time.clone());
 
     for (idx, m) in msgs.iter().enumerate() {
-        rows.push(message_row(conv, m, idx, &conv_time));
+        rows.push(message_row(conv, m, idx, conv_time.as_deref()));
     }
     rows
 }
@@ -86,8 +85,7 @@ fn chat_row(conv: &OAConversationRow) -> GridRow {
     let when = conv
         .create_time
         .clone()
-        .or_else(|| conv.update_time.clone())
-        .unwrap_or_default();
+        .or_else(|| conv.update_time.clone());
     GridRow {
         uuid: conv.conversation_id.clone(),
         provider: "openai".into(),
@@ -116,17 +114,22 @@ fn chat_row(conv: &OAConversationRow) -> GridRow {
     }
 }
 
-fn message_row(conv: &OAConversationRow, m: &OAMessageRow, idx: usize, conv_time: &str) -> GridRow {
+fn message_row(
+    conv: &OAConversationRow,
+    m: &OAMessageRow,
+    idx: usize,
+    conv_time: Option<&str>,
+) -> GridRow {
     let kind = kind_for_role_and_type(m.role.as_deref(), m.content_type.as_deref());
     let author = match kind {
         "User Input" => conv.account_id.clone(),
         "LLM Response" | "LLM Thinking" => m.model_slug.clone().or_else(|| m.role.clone()),
         _ => m.role.clone(),
     };
-    let when = m
+    let when: Option<String> = m
         .create_time
         .clone()
-        .unwrap_or_else(|| bump_micros(conv_time, (idx + 1) as i64));
+        .or_else(|| conv_time.map(|t| bump_micros(t, (idx + 1) as i64)));
     GridRow {
         uuid: m.message_id.clone(),
         provider: "openai".into(),

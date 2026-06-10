@@ -69,7 +69,7 @@ pub struct GridRow {
     ///   gitlab: 'GitLab'
     ///   notion: 'Notion'
     pub source_label: String,
-    /// ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable.
+    /// ISO-8601 timestamp with explicit offset, used for global sort and before:/after: filters. Synthesized for blocks/messages without their own timestamp by bumping microseconds off the parent's timestamp so within-conversation order stays stable. Nullable: some entities aren't event-shaped (e.g. contacts without a `REV:` field) and we never fabricate a stamp — null means 'no source-side timestamp exists' (see data_architecture_ingestion.md §"Entities without a time-shape" and the no-fabricated-timestamps principle). Null rows are excluded by before:/after: filters (SQL `<`/`>` against NULL). Default sort follows the SQL engine's NULL ordering (MySQL/SQLite: NULLs first under ASC); the UI may override.
     ///
     /// Per-provider mapping:
     ///   anthropic.chat: IFNULL(created_at, updated_at)
@@ -86,7 +86,7 @@ pub struct GridRow {
     ///   notion.heading: parent_page.last_edited_time (headings inherit page's last_edited_time)
     ///   notion.thread: first comment.created_time
     ///   notion.comment: comment.created_time
-    pub when_ts: String,
+    pub when_ts: Option<String>,
     /// Display name of the message author. For LLM responses this is typically the model slug; for user inputs, the account; for Slack, the user real_name.
     ///
     /// Per-provider mapping:
@@ -256,7 +256,7 @@ pub const DDL: &[(&str, &str)] = &[
     provider VARCHAR(32) NOT NULL,
     kind VARCHAR(32) NOT NULL,
     source_label VARCHAR(32) NOT NULL,
-    when_ts VARCHAR(40) NOT NULL,
+    when_ts VARCHAR(40),
     author VARCHAR(255),
     account VARCHAR(96),
     project VARCHAR(96),

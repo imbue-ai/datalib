@@ -36,7 +36,7 @@ fn row(uuid: &str, kind: &str, qmd_path: &str, provider: &str) -> GridRow {
         provider: provider.into(),
         kind: kind.into(),
         source_label: provider.into(),
-        when_ts: "2369-04-14T10:00:00+00:00".into(),
+        when_ts: Some("2369-04-14T10:00:00+00:00".into()),
         author: None,
         account: None,
         project: None,

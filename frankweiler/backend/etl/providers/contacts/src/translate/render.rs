@@ -39,13 +39,15 @@ pub struct RenderSummary {
 
 /// Translate entry point. Matches the shape of beeper's `render_all`
 /// so the sync runner's translate match-arm wires up the same way.
-/// The `now` stamp is used as a fallback `when_ts` for vCards
-/// without `REV:`.
+///
+/// Contacts are not event-shaped — vCards without a `REV:` field have
+/// no source-side timestamp, and we never fabricate one (see
+/// data_architecture_ingestion.md §"Entities without a time-shape").
+/// Such rows emit `when_ts: None` (the GridRow column is `Option<String>`).
 pub fn render_all(
     parsed: &ParsedContacts,
     out_dir: &Path,
     source_name: &str,
-    now: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -61,7 +63,6 @@ pub fn render_all(
             contact,
             out_dir,
             source_name,
-            now,
             prior_fingerprints,
             on_doc_complete,
         ) {
@@ -95,7 +96,6 @@ fn render_one(
     contact: &ParsedContact,
     out_dir: &Path,
     source_name: &str,
-    now: &str,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderOutcome> {
@@ -121,22 +121,18 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    // Contacts are not event-shaped (see data_architecture_ingestion.md §"Entities
-    // without a time-shape"). When the vCard carries `REV:` we use it;
-    // otherwise `when_ts` is the empty string — *never* the run's
-    // wallclock or any other fabricated stamp. (Schema requires a
-    // non-null String here today; migrating GridRow.when_ts to
-    // Option<String> is the follow-up that makes this honest at the
-    // type level.)
-    let _ = now; // kept in the signature for symmetry with other providers
-    let when_ts = contact.revision.clone().unwrap_or_default();
+    // Contacts are not event-shaped: when the vCard carries `REV:` we
+    // use it, otherwise `when_ts` is None. We never fabricate a
+    // wallclock stamp (see data_architecture_ingestion.md §"Entities
+    // without a time-shape").
+    let when_ts: Option<&str> = contact.revision.as_deref();
 
     let md = render_markdown(
         contact,
         source_name,
         &m_uuid,
         &fingerprint,
-        &when_ts,
+        when_ts,
         photo_rel.as_deref(),
     );
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
@@ -147,7 +143,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let row = build_grid_row(contact, source_name, &m_uuid, &a_uuid, &when_ts, &md_rel);
+    let row = build_grid_row(contact, source_name, &m_uuid, &a_uuid, when_ts, &md_rel);
 
     // Sidecar `.grid_rows.json` next to the markdown so an
     // ad-hoc inspector can read both at once. The orchestrator
@@ -230,7 +226,7 @@ fn render_markdown(
     source_name: &str,
     m_uuid: &str,
     fingerprint: &str,
-    when_ts: &str,
+    when_ts: Option<&str>,
     photo_rel: Option<&str>,
 ) -> String {
     let mut out = String::with_capacity(2048);
@@ -248,11 +244,10 @@ fn render_markdown(
     if let Some(dn) = &contact.display_name {
         out.push_str(&format!("title: {}\n", yaml_safe(dn)));
     }
-    // Omit `when_ts:` entirely when we don't have one. YAML treats the
-    // absent key and a key with empty value the same on parse, but
-    // omitting reads as honest in the rendered markdown.
-    if !when_ts.is_empty() {
-        out.push_str(&format!("when_ts: {when_ts}\n"));
+    // Omit `when_ts:` entirely when we don't have one. The grid row
+    // emits `None` to match.
+    if let Some(ts) = when_ts {
+        out.push_str(&format!("when_ts: {ts}\n"));
     }
     out.push_str("---\n\n");
 
@@ -338,7 +333,7 @@ fn build_grid_row(
     source_name: &str,
     m_uuid: &str,
     a_uuid: &str,
-    when_ts: &str,
+    when_ts: Option<&str>,
     md_rel: &str,
 ) -> GridRow {
     let title = contact
@@ -369,7 +364,7 @@ fn build_grid_row(
         provider: "contacts".to_string(),
         kind: "Contact".to_string(),
         source_label: humanize_source_label(source_name),
-        when_ts: when_ts.to_string(),
+        when_ts: when_ts.map(str::to_string),
         author: Some(title.clone()),
         account: Some(source_name.to_string()),
         org_uuid: None,

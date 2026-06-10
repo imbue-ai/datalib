@@ -124,11 +124,7 @@ pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
         provider: "gitlab".into(),
         kind: "GitLab MR".into(),
         source_label: "GitLab".into(),
-        when_ts: mr
-            .updated_at
-            .clone()
-            .or_else(|| mr.created_at.clone())
-            .unwrap_or_default(),
+        when_ts: mr.updated_at.clone().or_else(|| mr.created_at.clone()),
         author: mr.author_username.clone(),
         account: None,
         org_uuid: None,
@@ -160,7 +156,7 @@ pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
             provider: "gitlab".into(),
             kind: n.kind.into(),
             source_label: "GitLab".into(),
-            when_ts: n.created_at.clone(),
+            when_ts: Some(n.created_at.clone()),
             author: n.author_username.clone(),
             account: None,
             org_uuid: None,
