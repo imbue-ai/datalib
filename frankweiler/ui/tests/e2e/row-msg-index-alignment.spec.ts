@@ -1,22 +1,23 @@
 import { test, expect } from "@playwright/test";
+import { clickRowByUuid } from "./grid-helpers";
 
 // Regression test for the off-by-one bug: clicking a grid row in the
-// message list highlighted a *different* message in the preview pane
+// message list highlighted a *different* message in the document pane
 // than the one the row pointed at. Repro fixture is "Sonnet on a Cat
 // Named Spot", where the underlying ChatGPT payload has a leading
 // system / model_editable_context message that the renderer filters
-// out — but grid_rows used to count it, so `data-msg-index` and
+// out — but grid_rows used to count it, so the rendered index and
 // `message_index` were off by one.
 //
-// The fix removed `data-msg-index` entirely and keys selection off
-// `data-section-uuid` (== the row's `uuid`). The invariant: whichever
-// section ends up with `.selected`, its `data-section-uuid` must equal
-// the clicked row's `uuid`.
+// Selection is keyed off `data-section-uuid` (== the row's `uuid`):
+// the grid opens `documentView(markdown_uuid, row.uuid)` and the doc
+// card highlights the section whose `data-section-uuid` matches. The
+// invariant: whichever section ends up with `.selected`, its
+// `data-section-uuid` must equal the clicked row's `uuid`.
 //
 // This test is independent of the specific fixture conversation — it
 // scans every non-Chat row whose corresponding section actually exists
-// in the rendered body. Any future drift between grid row uuids and
-// renderer section uuids breaks this test.
+// in the rendered body, sampling one row per conversation.
 
 type Row = {
   uuid: string;
@@ -37,20 +38,19 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as { rows: Row[] };
 
-  // Find a (uuid, conv) pair where the rendered body actually contains
-  // a `data-section-uuid="{uuid}"`. That filters out rows whose
-  // underlying message the renderer dropped (system /
-  // model_editable_context) — there's no section to highlight for
-  // those, so they aren't a meaningful click target.
   await page.goto("/");
   await page
     .locator('.ag-center-cols-container [role="row"]')
     .first()
     .waitFor({ timeout: 10_000 });
 
-  // Build the set of (row, body) we'll exercise: every non-Chat row
-  // whose rendered section actually exists in the conversation body.
-  // Cache chat bodies by conversation so we don't refetch per row.
+  // Build the set of rows we'll exercise: every non-Chat row whose
+  // rendered section actually exists in the conversation body (the
+  // renderer drops some messages — system / model_editable_context —
+  // and those have no section to highlight). Cache chat bodies by
+  // conversation so we don't refetch per row; sample one row per
+  // conversation so a fixture with thousands of messages still
+  // finishes in reasonable time.
   const bodyCache = new Map<string, string>();
   async function bodyFor(conv: string): Promise<string | null> {
     const cached = bodyCache.get(conv);
@@ -65,11 +65,6 @@ test("clicked grid row highlights the section with the matching uuid", async ({
     return j.body;
   }
 
-  // Sample one row per conversation so a fixture with thousands of
-  // messages still finishes in reasonable time. Picking the first
-  // surviving message_index per conversation is enough — the bug
-  // manifests on *any* conversation whose renderer drops a message
-  // the grid_rows row counter still saw.
   const candidates: Row[] = [];
   const seenConvs = new Set<string>();
   for (const r of data.rows) {
@@ -88,7 +83,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   ).toBeGreaterThan(0);
 
   // Click each candidate row and record any mismatch between the
-  // clicked row's uuid and the highlighted section's DOM id. Collecting
+  // clicked row's uuid and the highlighted section's uuid. Collecting
   // all of them (instead of bailing on the first) makes the failure
   // message useful for diagnosing how widespread the misalignment is.
   type Mismatch = {
@@ -100,41 +95,15 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   const mismatches: Mismatch[] = [];
 
   for (const pick of candidates) {
-    const rowIndex = await page.evaluate(
-      ({ uuid }) => {
-        type Node = {
-          rowIndex: number | null;
-          data?: { uuid: string };
-        };
-        const w = window as unknown as {
-          __fwGridApi?: {
-            forEachNode: (cb: (n: Node) => void) => void;
-            ensureNodeVisible: (n: Node, pos: "middle") => void;
-          };
-        };
-        const api = w.__fwGridApi!;
-        let found: number | null = null;
-        api.forEachNode((node) => {
-          if (node.data && node.data.uuid === uuid) {
-            api.ensureNodeVisible(node, "middle");
-            found = node.rowIndex;
-          }
-        });
-        return found;
-      },
-      { uuid: pick.uuid },
-    );
-    expect(rowIndex, `node for uuid=${pick.uuid} found in grid`).not.toBeNull();
-    await page
-      .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
-      .click();
+    await clickRowByUuid(page, pick.uuid);
 
-    // Wait for the preview to switch to the clicked row's markdown.
-    // The preview pane is shared across clicks, so a stale selection
-    // from the previous click can mask the new state if we don't gate
-    // on the markdown attribute first.
+    // Each click opens a fresh documentView card; gate on the card
+    // for the clicked row's markdown being in place before reading
+    // the selection.
     await page
-      .locator(`.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`)
+      .locator(
+        `.chat-preview[data-markdown-uuid="${pick.markdown_uuid ?? pick.uuid}"]`,
+      )
       .waitFor({ timeout: 10_000 });
     // Allow applySelection's nextTick + scrollTop write to settle.
     // We can't gate on `.msg.selected` existing — a row whose section
@@ -160,13 +129,10 @@ test("clicked grid row highlights the section with the matching uuid", async ({
 
   expect(
     mismatches,
-    `clicked rows whose highlight landed on the wrong section:\n` +
-      mismatches
-        .map(
-          (m) =>
-            `  row uuid=${m.uuid} (conv=${m.conv} message_index=${m.messageIndex}) ` +
-            `→ highlighted ${m.selectedId}`,
-        )
-        .join("\n"),
+    `every clicked row must highlight the section with its own uuid; mismatches: ${JSON.stringify(
+      mismatches,
+      null,
+      2,
+    )}`,
   ).toEqual([]);
 });

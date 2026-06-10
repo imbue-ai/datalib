@@ -1,5 +1,5 @@
 // Detect clicks on internal `/chat/<uuid>` anchor links in rendered
-// markdown bodies. The single caller today is `DocColumn`, but the
+// markdown bodies. The single caller today is `DocCard`, but the
 // helper lives in its own module so any future consumer (e.g. a
 // non-Miller standalone view) can share the modifier-click bailout
 // and `<a>` traversal without re-deriving them.

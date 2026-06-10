@@ -1,95 +1,105 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
+// Document card: fetches /api/chat/{markdownUuid} and renders it via
+// ChatBody. Fully determined by its props (which come from the card
+// source, e.g. `documentView("md-uuid", "section-uuid")`):
+// - navigation (edge clicks, inline /chat/<uuid> links) opens a new
+//   column via ctx.host.openColumn — never a bus message;
+// - hovering an edge source advertises the destination on the bus
+//   (`edge.hover`); every doc card subscribes and puts a transient
+//   highlight on the target span when the destination is its own doc.
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { fetchChat, type ChatResponse, type EdgeOut } from "@/api";
-import ChatBody from "./ChatBody.vue";
-import FeedbackButton from "./FeedbackButton.vue";
-import FeedbackModal from "./FeedbackModal.vue";
+import ChatBody from "./ChatBody.ce.vue";
+import FeedbackButton from "@/components/FeedbackButton.ce.vue";
+import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
   buildContext,
   capturePreviewSelection,
   messageAncestor,
   type FeedbackContext,
 } from "@/feedback/context";
-import { chatHrefFromClick } from "@/router/chat_link";
-import { encodeStack } from "@/router/columns";
+import { chatHrefFromClick } from "./chatLink";
+import {
+  TOPIC_EDGE_HOVER,
+  type CardCtx,
+  type EdgeHoverPayload,
+} from "./types";
 
 const props = defineProps<{
-  // Addresses one rendered `.md` file — the file the preview pane
-  // should fetch and display. Same value `/api/chat/{markdown_uuid}`
-  // takes.
+  ctx: CardCtx;
+  // Addresses one rendered `.md` file — the file this card fetches
+  // and displays. Same value `/api/chat/{markdown_uuid}` takes.
   markdownUuid: string | null;
-  // The clicked grid row's uuid (= the message UUID for message rows,
-  // the prefixed `tu-…`/`tr-…`/`th-…` for block rows, null for
-  // conversation-level rows). The renderer emits each section with a
-  // matching `data-section-uuid` attribute, so the UI just needs to
-  // forward this prop and ChatBody does an exact-string lookup.
-  selectedSectionUuid: string | null;
-  /**
-   * When the user hovers an edge-source elsewhere whose destination
-   * is THIS doc as a whole (no anchor), the parent passes true so
-   * we can outline the whole column. Distinct from `hoverAnchor`,
-   * which lights up an inline span instead.
-   */
-  isHoverTarget?: boolean;
-  /**
-   * Anchor uuid inside this doc to highlight as the in-flight edge
-   * hover destination. Null when no hover is active or the hovered
-   * edge's destination is in a different column.
-   */
-  hoverAnchor?: string | null;
+  // Section uuid inside the doc to highlight and scroll to. Matches
+  // the renderer-emitted `data-section-uuid` attributes.
+  sectionUuid: string | null;
 }>();
 
-// Miller columns: when the body contains a markdown link to another
-// chat (`href="/chat/<uuid>"`), intercept the click and emit so the
-// parent MillerView can push a new column to the right instead of
-// performing a full-page navigation. `open-chat` carries an optional
-// anchor so edge-driven navigation (with a known destination span)
-// scrolls + highlights on the other side; grid-driven navigation
-// passes anchor=null because the grid row's `uuid` already drives
-// selection.
-const emit = defineEmits<{
-  (e: "open-chat", markdownUuid: string, anchor: string | null): void;
-  /**
-   * Forwarded from `ChatBody` (for inline span sources) and from the
-   * doc-level destinations list (for whole-doc sources). MillerView
-   * uses the payload to decide which sibling column to outline /
-   * span-highlight while the hover is active. Null on hover-out.
-   */
-  (
-    e: "hover-edge",
-    target: { md: string; anchor: string | null } | null,
-  ): void;
-}>();
+function docSource(md: string, anchor: string | null): string {
+  const args = [md, anchor].map((a) => JSON.stringify(a)).join(", ");
+  return `documentView(${args})`;
+}
+
+function openDoc(md: string, anchor: string | null) {
+  props.ctx.host.openColumn(docSource(md, anchor));
+}
 
 function onBodyClick(ev: MouseEvent) {
   const uuid = chatHrefFromClick(ev);
   if (!uuid) return;
   ev.preventDefault();
-  emit("open-chat", uuid, null);
+  openDoc(uuid, null);
 }
 
 function onOpenEdge(edge: EdgeOut) {
   // Falsy → "whole-doc destination", don't seed a highlight target.
-  // See the `docLevelOutgoing` comment for the null/"" tolerance
-  // rationale.
-  emit("open-chat", edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
+  openDoc(edge.dst_markdown_uuid, edge.dst_anchor_uuid || null);
+}
+
+function publishHover(target: { md: string; anchor: string | null } | null) {
+  const payload: EdgeHoverPayload = target
+    ? { markdownUuid: target.md, sectionUuid: target.anchor }
+    : null;
+  props.ctx.bus.publish(TOPIC_EDGE_HOVER, payload, {
+    from: props.ctx.cardId,
+  });
 }
 
 function onHoverEdge(target: { md: string; anchor: string | null } | null) {
-  emit("hover-edge", target);
+  publishHover(target);
 }
 
 function onDocLevelHover(edge: EdgeOut) {
-  emit("hover-edge", {
+  publishHover({
     md: edge.dst_markdown_uuid,
     anchor: edge.dst_anchor_uuid || null,
   });
 }
 
 function onDocLevelLeave() {
-  emit("hover-edge", null);
+  publishHover(null);
 }
+
+// Incoming edge-hover highlight: any doc card (including this one)
+// may advertise a hovered edge; when its destination anchor lives in
+// our doc, light the span up. Whole-doc destinations (null anchor)
+// are deliberately not surfaced.
+const hoverAnchor = ref<string | null>(null);
+
+function isEdgeHoverTarget(p: unknown): p is NonNullable<EdgeHoverPayload> {
+  if (!p || typeof p !== "object") return false;
+  const o = p as Record<string, unknown>;
+  return typeof o.markdownUuid === "string" && "sectionUuid" in o;
+}
+
+const unsubHover = props.ctx.bus.subscribe(TOPIC_EDGE_HOVER, (payload) => {
+  const t = isEdgeHoverTarget(payload) ? payload : null;
+  hoverAnchor.value =
+    t && props.markdownUuid && t.markdownUuid === props.markdownUuid
+      ? t.sectionUuid
+      : null;
+});
+onBeforeUnmount(unsubHover);
 
 // Doc-level outgoing edges (whole-doc source) drive the
 // "destinations" list at the top of the preview. Span-level edges
@@ -299,7 +309,6 @@ watch(
 <template>
   <section
     class="chat-preview"
-    :class="{ 'is-hover-target': isHoverTarget }"
     :data-markdown-uuid="chat?.markdown_uuid ?? null"
     @contextmenu="onPaneContextMenu"
   >
@@ -313,26 +322,15 @@ watch(
         <!-- Title block (with copy-id button and source-URL arrow) is
              rendered inline at the top of the body by the cross-provider
              `Title` helper. The header here only carries the
-             non-title chrome: feedback button, "view this column alone"
-             link, and timestamps. -->
+             non-title chrome: feedback button and timestamps. The
+             "open this column alone" affordance lives in the host's
+             column chrome. -->
         <p class="meta">
           <FeedbackButton
             :entity-uuid="chat.markdown_uuid"
             entity-kind="conversation"
             label="Conversation"
           />
-          ·
-          <!-- Standalone view: opens this single column on its own
-               page in a new tab. The URL is a one-column stack
-               (`/doc:<uuid>`), which the same MillerView renders. -->
-          <RouterLink
-            :to="
-              encodeStack([{ kind: 'doc', md: chat.markdown_uuid }])
-            "
-            target="_blank"
-            rel="noopener"
-            >view this column alone ↗</RouterLink
-          >
           <span v-if="chat.created_at"> · {{ chat.created_at }}</span>
         </p>
       </header>
@@ -346,12 +344,7 @@ watch(
                and finally the bare uuid. When BOTH label and title
                are set we show "label (title)" — label first, since
                that's what the producer chose to lead with, with the
-               title in parens as supplementary context.
-
-               Hover handlers mirror ChatBody's inline-span behavior:
-               while the cursor sits on the link, MillerView gets a
-               `hover-edge` so it can outline / span-highlight the
-               destination column. -->
+               title in parens as supplementary context. -->
           <a
             class="edge-source-link"
             :href="`/#/chat/${e.dst_markdown_uuid}`"
@@ -372,9 +365,9 @@ watch(
         <ChatBody
           :body="chat.body"
           :markdown-uuid="chat.markdown_uuid"
-          :selected-section-uuid="selectedSectionUuid"
+          :selected-section-uuid="sectionUuid"
           :outgoing-edges="chat.outgoing_edges"
-          :hover-anchor-uuid="hoverAnchor ?? null"
+          :hover-anchor-uuid="hoverAnchor"
           @open-edge="onOpenEdge"
           @hover-edge="onHoverEdge"
         />
@@ -411,16 +404,6 @@ watch(
   overflow-y: auto;
   padding: 0.75rem 1rem;
   box-sizing: border-box;
-  /* Reserve the border width so the hover state doesn't reflow the
-     column when it gets outlined. `outline` would skip layout but
-     also fail to track the rounded scroll container's edges; a
-     transparent border that swaps color on `.is-hover-target` is
-     visually cleaner. */
-  border: 2px solid transparent;
-}
-.chat-preview.is-hover-target {
-  border-color: rgba(99, 102, 241, 0.6);
-  border-radius: 4px;
 }
 .chat-header h2 {
   margin: 0 0 0.25rem;
@@ -459,10 +442,10 @@ watch(
   margin-right: 0.4rem;
 }
 .edge-source-link {
-  /* Match the inline span styling in `ChatBody.vue`: dotted muted
+  /* Match the inline span styling in `ChatBody.ce.vue`: dotted muted
      underline so it reads as a link without the "external blue"
      baggage, and the same hover fill so source and destination
-     (lit up via `.is-hover-target` / `.hover-dst`) share a color. */
+     (lit up via `.hover-dst`) share a color. */
   color: inherit;
   text-decoration: underline;
   text-decoration-style: dotted;
@@ -513,8 +496,9 @@ watch(
 </style>
 
 <style>
-/* Global markdown styling — :deep() doesn't reach v-html descendants
-   reliably across Vue versions, so scope by class instead. */
+/* Markdown styling for the v-html body. Unscoped so the rules reach
+   inside `v-html`; still shadow-local since this lands in the card's
+   shadow root. */
 .markdown-body {
   font-size: 0.9rem;
   line-height: 1.45;

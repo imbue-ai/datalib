@@ -10,8 +10,7 @@ import type { CardRender } from "./types";
 export function compileCardSource(source: string): CardRender {
   const names = Object.keys(viewLibs) as (keyof typeof viewLibs)[];
   // `new Function` (not eval) so the source only sees the factory
-  // names we pass in, plus globals — same trust model as the v1
-  // CardColumn sandbox, minus the iframe.
+  // names we pass in, plus globals.
   const factory = new Function(
     ...names,
     `"use strict"; return (${source});`,

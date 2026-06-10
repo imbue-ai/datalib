@@ -7,8 +7,8 @@
 // changes we tear the old card down and run the new one; on unmount
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
-import { compileCardSource } from "./cardSource";
-import type { CardCtx, Teardown } from "./types";
+import { compileCardSource } from "@/cards/cardSource";
+import type { CardCtx, Teardown } from "@/cards/types";
 
 const props = defineProps<{
   source: string;
@@ -35,6 +35,14 @@ function runCard() {
   if (!root) return;
   tearDownCard();
   root.replaceChildren();
+  if (props.source.trim() === "") {
+    const div = document.createElement("div");
+    div.style.cssText =
+      "opacity:.45;padding:12px;font:12px ui-monospace,monospace";
+    div.textContent = "empty card — type source above and press Enter";
+    root.appendChild(div);
+    return;
+  }
   try {
     const render = compileCardSource(props.source);
     teardown.value = render(root, props.ctx);
@@ -69,9 +77,11 @@ onBeforeUnmount(tearDownCard);
 </template>
 
 <style scoped>
+/* Height comes from the parent (flex sizing on .miller-col-card) — a
+   height: 100% here would resolve against the whole column including
+   its chrome bar and overflow the column by that much. */
 .shadow-card-host {
   width: 100%;
-  height: 100%;
   overflow: hidden;
   box-sizing: border-box;
 }

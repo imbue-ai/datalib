@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatHrefFromClick } from "../src/router/chat_link";
+import { chatHrefFromClick } from "../src/cards/chatLink";
 
 // Forge a MouseEvent-shaped object whose `target` is an `<a>` carrying
 // the given href (or an arbitrary descendant of it). jsdom's

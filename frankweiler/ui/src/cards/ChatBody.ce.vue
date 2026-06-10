@@ -11,10 +11,13 @@
 // for block rows it's the prefixed form (`tu-…`/`tr-…`/`th-…`) the
 // renderer emits.
 
+// NOTE: no side-effect CSS imports here — this component renders
+// inside a shadow root, so document-head styles don't reach it. The
+// highlight.js stylesheet is injected by documentView's vueCard call
+// (imported with `?inline`).
 import { ref, computed, watch, nextTick, onMounted } from "vue";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
-import "highlight.js/styles/github-dark.css";
 import type { EdgeOut } from "@/api";
 
 const props = defineProps<{

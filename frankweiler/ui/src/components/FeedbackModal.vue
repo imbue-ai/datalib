@@ -83,7 +83,7 @@ async function onSubmit() {
     successUuid.value = resp.feedback_uuid;
     emit("submitted", resp.feedback_uuid);
     // Brief confirmation, then auto-close. 1.2s matches the toast feel
-    // already used elsewhere (CopyUuidButton's "Copied!" flash).
+    // already used elsewhere (the copy-uuid buttons' "Copied!" flash).
     setTimeout(() => emit("close"), 1200);
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : String(e);

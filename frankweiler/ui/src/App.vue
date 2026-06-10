@@ -137,7 +137,19 @@ a {
 }
 
 .frankweiler-shell {
+  /* Viewport-pinned flex column: the header takes its natural height
+     and the routed view flexes into the rest, so full-height views
+     (MillerView) reach the bottom without guessing the chrome height.
+     min-height (not height) so taller views (sync, prefs) still
+     scroll the page normally. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  box-sizing: border-box;
   padding: 1rem;
+}
+.fw-header {
+  flex: 0 0 auto;
 }
 
 .fw-header {
