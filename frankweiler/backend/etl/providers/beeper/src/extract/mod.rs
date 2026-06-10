@@ -17,6 +17,7 @@
 pub mod db;
 pub mod index_db;
 pub mod megabridge;
+pub mod schema_raw;
 
 use std::path::{Path, PathBuf};
 

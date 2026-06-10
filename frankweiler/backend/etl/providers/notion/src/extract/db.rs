@@ -26,71 +26,7 @@ use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-// ─────────────────────────────────────────────────────────────────────
-// Notion-specific object tables
-// ─────────────────────────────────────────────────────────────────────
-//
-// The shared module owns `blobs` and `sync_runs`.
-// Everything below is Notion-specific. PK policy: upstream Notion
-// UUIDs; see `frankweiler_etl::doltlite_raw` module docs.
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &["pages", "blocks", "databases", "users", "comments"];
-
-const DDL_DATA: &[&str] = &[
-    // pages — PK is the Notion page UUID.
-    "CREATE TABLE IF NOT EXISTS pages (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT NULL,
-        last_edited_time TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS pages_last_edited ON pages(last_edited_time)",
-    // blocks — PK is the Notion block UUID. `page_order` is the
-    // 0-based index of this block within its owning page's BFS walk;
-    // render uses it to lay out sections / toggles. We do NOT use
-    // page_order as part of the PK (it's local ordering metadata, not
-    // upstream identity; the same block may re-arrange upstream and we
-    // want the row at the same PK with the column updating).
-    "CREATE TABLE IF NOT EXISTS blocks (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT NULL,
-        page_id TEXT NULL,
-        page_order INTEGER NULL,
-        last_edited_time TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS blocks_page ON blocks(page_id, page_order)",
-    // databases — PK is the Notion database UUID.
-    "CREATE TABLE IF NOT EXISTS databases (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT NULL,
-        last_edited_time TEXT NULL,
-        payload TEXT NULL
-    )",
-    // users — PK is the Notion user UUID.
-    "CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        payload TEXT NULL
-    )",
-    // comments — PK is the Notion comment UUID.
-    "CREATE TABLE IF NOT EXISTS comments (
-        id TEXT PRIMARY KEY,
-        parent_id TEXT NOT NULL,
-        page_id TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS comments_page ON comments(page_id)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
+use super::schema_raw::{full_ddl, DATA_TABLES};
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
 #[derive(Clone, Debug)]
