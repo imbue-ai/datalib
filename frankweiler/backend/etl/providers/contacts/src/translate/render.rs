@@ -120,7 +120,15 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    let when_ts = contact.revision.clone().unwrap_or_else(|| now.to_string());
+    // Contacts are not event-shaped (see data_architecture.md §"Entities
+    // without a time-shape"). When the vCard carries `REV:` we use it;
+    // otherwise `when_ts` is the empty string — *never* the run's
+    // wallclock or any other fabricated stamp. (Schema requires a
+    // non-null String here today; migrating GridRow.when_ts to
+    // Option<String> is the follow-up that makes this honest at the
+    // type level.)
+    let _ = now; // kept in the signature for symmetry with other providers
+    let when_ts = contact.revision.clone().unwrap_or_default();
 
     let md = render_markdown(
         contact,
@@ -247,7 +255,12 @@ fn render_markdown(
     if let Some(dn) = &contact.display_name {
         out.push_str(&format!("title: {}\n", yaml_safe(dn)));
     }
-    out.push_str(&format!("when_ts: {when_ts}\n"));
+    // Omit `when_ts:` entirely when we don't have one. YAML treats the
+    // absent key and a key with empty value the same on parse, but
+    // omitting reads as honest in the rendered markdown.
+    if !when_ts.is_empty() {
+        out.push_str(&format!("when_ts: {when_ts}\n"));
+    }
     out.push_str("---\n\n");
 
     let title = contact
