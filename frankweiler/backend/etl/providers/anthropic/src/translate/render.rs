@@ -655,16 +655,66 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
 }
 
 fn attachment_ref_id(at: &AttachmentRow) -> Option<&str> {
+    // Only items from `chat_messages[*].files[]` (kind="file") name
+    // a downloadable resource the blob CAS should materialize.
+    // `kind="attachment"` items come from `chat_messages[*].attachments[]`
+    // and only carry text Claude pre-extracted from the upload — there
+    // is no binary upstream to fetch (see attachment_md below).
+    if at.kind != "file" {
+        return None;
+    }
     attachment_meta(at).0
 }
 
 fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
     let (id, name, is_image) = attachment_meta(at);
     let label = name.unwrap_or("(unnamed)");
+
+    // Claude's `chat_messages[*].attachments[]` slot is fundamentally
+    // text — the API carries the bytes Claude extracted from a user
+    // upload (the binary itself is not retained), surfaced as
+    // `extracted_content`. Render that text inline rather than
+    // pretending there's a blob to link to. We deliberately do NOT
+    // route these through `blob_cas::attachment_md` (which would
+    // produce a misleading "not yet fetched" placeholder).
+    if at.kind == "attachment" {
+        let extracted = at
+            .raw_json
+            .as_object()
+            .and_then(|o| o.get("extracted_content"))
+            .and_then(Value::as_str);
+        return render_extracted_attachment(label, extracted);
+    }
+
+    // `files[]` items: real downloadable attachments. Hand off to the
+    // shared CAS-backed renderer which handles image vs file, and
+    // emits the durable "not yet fetched" placeholder when the bytes
+    // genuinely aren't in the CAS yet.
     let Some(id) = id else {
         return format!("[{}] {}", at.kind, label);
     };
     blob_cas::attachment_md(blobs, id, Some(label), is_image)
+}
+
+/// Render a Claude-`attachments[]` text item inline. Format:
+///
+/// ```text
+/// **[attachment: <filename>]**
+/// > line 1
+/// > line 2
+/// ```
+///
+/// Empty / missing `extracted_content` falls back to a short marker
+/// so the conversation history still records that an attachment
+/// existed.
+fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
+    let header_label = if label.is_empty() { "(unnamed)" } else { label };
+    let body = extracted.unwrap_or("").trim();
+    if body.is_empty() {
+        return format!("**[attachment: {header_label}]** *(no extracted content)*");
+    }
+    let quoted: String = body.lines().map(|l| format!("> {l}\n")).collect();
+    format!("**[attachment: {header_label}]**\n{quoted}")
 }
 
 fn capitalize(s: &str) -> String {
