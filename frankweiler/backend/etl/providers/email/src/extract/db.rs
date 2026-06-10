@@ -1,37 +1,13 @@
-//! Doltlite-backed raw store for the JMAP provider.
+//! Data-manipulation surface for the JMAP raw store: open, UPSERTs,
+//! SELECTs, `RawDb::reset`, and the state-token plumbing.
 //!
 //! Single sqlite file at `<data_root>/raw/<name>.doltlite_db`. Shared
 //! bookkeeping (`blobs`, `sync_runs`, `sync_scope_state`) and the
 //! open / blob plumbing live in
-//! [`frankweiler_etl::doltlite_raw`].
-//!
-//! Object tables (each carries a `<table>_bookkeeping` sidecar):
-//!
-//! - `accounts` — PK is JMAP `accountId`.
-//! - `mailboxes` — PK is JMAP Mailbox `id`. Fastmail uses mailboxes as
-//!   both folders and labels; this table is the source of truth for
-//!   label names.
-//! - `threads` — PK is JMAP Thread `id`.
-//! - `emails` — PK is JMAP Email `id`. The full `Email/get` response is
-//!   stored as JSONB in `payload`; a handful of fields are promoted to
-//!   typed columns for cheap querying. The `.eml` RFC5322 source for
-//!   the message lives in the shared `blobs` table keyed by
-//!   `Email.blobId`.
-//!
-//! Join tables (no bookkeeping — owned by their parent email's
-//! transaction):
-//!
-//! - `email_mailboxes` — `(email_id, mailbox_id)`. Refreshed
-//!   delete-then-insert per email on every email upsert.
-//! - `email_keywords` — `(email_id, keyword)`. Same refresh shape.
-//! - `email_attachments` — `(email_id, part_id)` with promoted
-//!   columns and a `blob_id` pointer into `blobs`. Refreshed
-//!   delete-then-insert per email.
-//!
-//! Hard-delete semantics: when JMAP reports an email `destroyed`, we
-//! DELETE the row + its joins + its bookkeeping. We do NOT delete blobs
-//! (other emails may reference the same `.eml` blob or attachment).
-//! Doltlite's history retains the prior state.
+//! [`frankweiler_etl::doltlite_raw`]. The table shape — DDL,
+//! column-by-column semantics, the entity-vs-join family split, and
+//! the blob-CAS bridge — lives next door in
+//! [`super::schema_raw`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -47,100 +23,12 @@ use frankweiler_etl::blob_cas::{
 };
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
+// Re-exported so existing `crate::extract::db::BLOB_KIND_*` callsites
+// keep resolving without a churn pass across the module.
+pub use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
-
-/// Object tables — wiped by [`RawDb::reset`].
-const DATA_TABLES: &[&str] = &["accounts", "mailboxes", "threads", "emails"];
-
-/// Join tables — also wiped by [`RawDb::reset`] but don't get
-/// bookkeeping sidecars (they live and die with their parent email's
-/// upsert transaction).
-const JOIN_TABLES: &[&str] = &["email_mailboxes", "email_keywords", "email_attachments"];
-
-/// Blob kinds we write into the shared `blobs` table.
-pub const BLOB_KIND_EML: &str = "email";
-pub const BLOB_KIND_ATTACHMENT: &str = "attachment";
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS accounts (
-        id TEXT PRIMARY KEY,
-        name TEXT NULL,
-        is_personal INTEGER NULL,
-        is_read_only INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS mailboxes (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        name TEXT NULL,
-        parent_id TEXT NULL,
-        role TEXT NULL,
-        sort_order INTEGER NULL,
-        total_emails INTEGER NULL,
-        unread_emails INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS mailboxes_by_account ON mailboxes(account_id)",
-    "CREATE TABLE IF NOT EXISTS threads (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        email_count INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS threads_by_account ON threads(account_id)",
-    "CREATE TABLE IF NOT EXISTS emails (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
-        thread_id TEXT NOT NULL,
-        blob_id TEXT NOT NULL,
-        message_id TEXT NULL,
-        received_at TEXT NULL,
-        sent_at TEXT NULL,
-        size INTEGER NULL,
-        subject TEXT NULL,
-        from_json TEXT NULL,
-        has_attachment INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS emails_by_thread ON emails(thread_id)",
-    "CREATE INDEX IF NOT EXISTS emails_by_account_received \
-        ON emails(account_id, received_at)",
-    "CREATE TABLE IF NOT EXISTS email_mailboxes (
-        email_id TEXT NOT NULL,
-        mailbox_id TEXT NOT NULL,
-        PRIMARY KEY (email_id, mailbox_id)
-    )",
-    "CREATE INDEX IF NOT EXISTS email_mailboxes_by_mailbox \
-        ON email_mailboxes(mailbox_id)",
-    "CREATE TABLE IF NOT EXISTS email_keywords (
-        email_id TEXT NOT NULL,
-        keyword TEXT NOT NULL,
-        PRIMARY KEY (email_id, keyword)
-    )",
-    "CREATE INDEX IF NOT EXISTS email_keywords_by_keyword \
-        ON email_keywords(keyword)",
-    "CREATE TABLE IF NOT EXISTS email_attachments (
-        email_id TEXT NOT NULL,
-        part_id TEXT NOT NULL,
-        blob_id TEXT NOT NULL,
-        name TEXT NULL,
-        type TEXT NULL,
-        size INTEGER NULL,
-        disposition TEXT NULL,
-        cid TEXT NULL,
-        PRIMARY KEY (email_id, part_id)
-    )",
-    "CREATE INDEX IF NOT EXISTS email_attachments_by_blob \
-        ON email_attachments(blob_id)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
 
 // ─────────────────────────────────────────────────────────────────────
 // State-token namespacing

@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod db;
+pub mod schema_raw;
 pub mod session;
 
 use std::collections::{BTreeMap, HashSet};
