@@ -134,6 +134,23 @@ get the same value from `frankweiler/backend/core/build.rs`. Read-back
 of feedback rows is out of scope — query the doltlite_db directly with
 any SQLite-shaped client.
 
+## Inspecting `backend_index.doltlite_db` from Python
+
+Stdlib `sqlite3` won't open the file on its own — doltlite extends
+SQLite with custom functions (`dolt_commit`, `dolt_log`, …) and a
+virtual-table layer, so a bare `sqlite3.connect(path)` errors out on
+any non-trivial query. This applies to **every** table in the db
+(`grid_rows`, the per-provider raw tables, `feedback`, …), not just
+feedback.
+
+Use the [`doltlite`](https://pypi.org/project/doltlite/0.11.8/) PyPI
+package (pin `0.11.8`), which exposes the extension through the stdlib
+`sqlite3` module so you keep normal cursors / `Row` / `with` semantics
+— consult its PyPI page for the exact connect call. It's an inspection
+tool, not a runtime dep; reach for it via
+`uv run --with doltlite==0.11.8 python …` for one-off scripts rather
+than adding it to `pyproject.toml`.
+
 ## Git: prefer merges over rebases
 
 When integrating remote changes into a local branch (e.g. `git pull` after
