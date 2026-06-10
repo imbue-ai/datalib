@@ -1615,6 +1615,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-whatsapp"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-etl",
+ "frankweiler-whatsapp-backup",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "frankweiler-etl-yolink"
 version = "0.7.0"
 dependencies = [

@@ -25,6 +25,7 @@ members = [
     "sync",
     "tauri-backend",
     "whatsapp-backup",
+    "etl/providers/whatsapp",
 ]
 
 [workspace.package]
@@ -108,3 +109,6 @@ flate2 = "1.0"
 # that pycryptodome (and WhatsApp Android) actually use — verified
 # empirically against a real msgstore.db.crypt15 backup.
 ghash = "0.5"
+# WhatsApp provider walks the Media/ tree to register attachment
+# files in `wa_media_files`. Used by `etl/providers/whatsapp` only.
+walkdir = "2"
