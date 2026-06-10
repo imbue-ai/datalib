@@ -29,37 +29,9 @@ use frankweiler_etl::blob_cas::{
 };
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{full_ddl, DATA_TABLES};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
-
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &["me", "conversations"];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS me (
-        id TEXT PRIMARY KEY,
-        email TEXT NULL,
-        name TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,
-        title TEXT NULL,
-        update_time TEXT NULL,
-        last_listing_update_time TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS conversations_update ON conversations(update_time)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
 
 /// One row's worth of "what does the listing pass know about this
 /// conversation right now". Used to decide whether to short-circuit a
