@@ -200,18 +200,22 @@ def main() -> int:
     # the snapshot we generated above. Everything else inherits the
     # genrule's env.
     extract_env = {**os.environ, "SIGNAL_PASSPHRASE": FIXTURE_SIGNAL_AEP}
-    _run(
-        [
-            str(sync_bin),
-            "--config",
-            str(extract_yaml),
-            "--now",
-            now,
-            "--playback-root",
-            str(playback),
-        ],
-        env=extract_env,
-    )
+    extract_argv = [
+        str(sync_bin),
+        "--config",
+        str(extract_yaml),
+        "--now",
+        now,
+        "--playback-root",
+        str(playback),
+    ]
+    # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
+    # ingested_tng_test's multi-run case to exercise the
+    # --reset-and-redownload code path without changing the positional
+    # arg signature.
+    if os.environ.get("INGESTED_TNG_RESET") == "1":
+        extract_argv.append("--reset-and-redownload")
+    _run(extract_argv, env=extract_env)
     return 0
 
 
