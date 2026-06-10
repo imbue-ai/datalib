@@ -480,7 +480,7 @@ fn iso_ts(date_sent_ms: i64) -> String {
             // Out-of-range epoch ms (chrono covers ±580B years) is
             // unreachable in practice for Signal payloads. Preserve a
             // sortable epoch as the visible-broken fallback — and warn
-            // loudly so the row gets noticed. See data_architecture.md
+            // loudly so the row gets noticed. See data_architecture_ingestion.md
             // "no fabricated timestamps".
             tracing::warn!(
                 date_sent_ms,

@@ -1,7 +1,22 @@
-# Data architecture
+# Data architecture: ingestion
 
 This document describes the principles we are striving towards for the
-data layer of this project.
+**ingestion (extract) side** of the data layer of this project — how
+raw data lands on disk from upstream sources, what shape it has at
+rest, and the operational properties (monitorable, stoppable,
+resumable, incrementally cheap, verifiable) the extract stage aims
+for.
+
+The downstream stages — translate, load, indexing, annotation, and
+the UI's consumption of `grid_rows` — are mostly the subject of a
+separate document, *Data Architecture: Translation, Indexing,
+Annotation, and UI* (not yet written). Where understanding extract
+requires referring to a downstream concept (e.g. the sidecar contract
+that translate emits, the `GridRow` projection the UI reads), this
+document touches on it briefly. The bulk of the downstream-leaning
+material that used to live here has been pulled into [Downstream
+stages — pointer to the companion doc](#downstream-stages--pointer-to-the-companion-doc)
+near the end, pending the split.
 
 It is aspirational as much as descriptive: not every provider or stage
 fully honors every principle today, but a new provider, table, or
@@ -534,54 +549,6 @@ are a property of the entity, not a separate resource.
 If a future provider has the same shape, inline-in-payload is fine;
 the shared CAS exists for the fetch-as-separate-resource pattern.
 
-## Translate and downstream stages
-
-After extract, we run translations for display and indexing — render
-to markdown with YAML frontmatter, index the markdown with qmd, derive
-`grid_rows` for the UI.
-
-The cross-provider contract is the **sidecar**: for every rendered
-document, Translate emits two co-located files —
-
-  - `<id>.md` — human-readable, with YAML frontmatter.
-  - `<id>.grid_rows.json` — the
-    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs):
-
-    ```jsonc
-    {
-      "header": {
-        "document_uuid": "…",       // primary key for the document
-        "source_fingerprint": "…",  // hash of upstream payload
-        "render_version": 1         // renderer-side schema stamp
-      },
-      "rows": [GridRow, …]
-    }
-    ```
-
-Load reads the sidecar tree — **it never re-parses markdown**. The
-markdown is for humans; the JSON sidecar is the machine-readable
-projection.
-
-This part of the pipeline aspires to the same properties as extract:
-
-  - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Load reads `(qmd_path, source_fingerprint)` from
-    `markdowns_loaded` and skips unchanged sidecars.
-  - **Resumable in the steady state**: a translate pass that gets
-    re-run after producing N of M sidecars will skip those N via the
-    fingerprint check and continue from where it stopped. We do not,
-    however, guarantee crash-mid-write atomicity per file; a partial
-    `.md` left by a SIGKILL during a write may have a fingerprint that
-    no longer matches the file body and will be regenerated next run.
-    That's good enough for our use case but is not a separately
-    engineered property.
-
-Less attention has been paid to translate-side observability and to
-making partial-progress visible to the user than to the same on
-extract; this is an area where the implementation trails the
-principle.
-
 ## Auth and credentials
 
 Two patterns:
@@ -848,55 +815,6 @@ references when your provider doesn't look like chat:
     bazel test rig. A useful reminder that the framework is valuable
     for more than just incremental delta-fetching.
 
-## Shared schemas across similar sources
-
-When several sources are shaped similarly enough (a matter of taste,
-but largely driven by schema and UI overlap), they should be massaged
-into a **shared canonical schema** so the rest of the pipeline (search,
-display, threading, attachments, exports) shares code paths and stays
-consistent.
-
-Where unification actually happens **today**: the `GridRow` projection
-([`schemas/grid_rows.yaml`](../schemas/grid_rows.yaml), codegen'd into
-the Rust struct at `frankweiler/backend/schema/src/generated/grid_rows.rs`).
-Every searchable entity from every provider collapses into rows of one
-schema with `provider` + `kind` discriminators. The grid backend
-reads it with a single query and renders it without knowing which
-provider produced any given row.
-
-Unification should **never** happen in the raw store.
-For example, Slack, Beeper, Signal, Anthropic, ChatGPT each have their own raw tables and even separate doltlite 
- DBs (`slack_messages`, `beeper_messages`, …)
-
- However, once we start translating data, we should aspire to share as much as possible.
- For example, we should translate raw data into unified schemas where appropriate, then send
- that unified data through common code paths for interpretation, rendering, and indexing.
-
-Examples where schema and data handling should be unified:
-
-  1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
-     channels/DMs between humans with attachments and threading."
-     Unified at `GridRow`; per-provider raw + render.
-  2. **Chat (LLM)** — Claude, ChatGPT, Gemini (planned). Same chat
-     shape but with assistant turns, thinking, and tool-use surfaced.
-     Unified at `GridRow` via `kind = 'User Input' | 'LLM Response' |
-     'LLM Thinking' | 'Tool Call'`.
-  3. **Code review threads** — GitHub PR discussions, GitLab MR
-     discussions. Threaded inline comments on diffs. Unified at
-     `GridRow`; `git_sha` and `external_id` columns are specifically
-     there to serve this family.
-  4. **Document-comment threads** — Notion. Very similar in shape to
-     (3); may eventually share more than just `GridRow` projection.
-  5. **Time-series sensor data** — yolink today; Garmin fitness and
-     IQ Air air quality planned. Per-device samples over time with a
-     small fixed set of value channels. Not yet projected to
-     `GridRow`; this family hasn't picked its shared schema yet.
-
-A new provider that fits a family should at minimum project to the
-family's `GridRow` shape rather than inventing a new `kind` taxonomy.
-A provider that doesn't fit may motivate a new family; opening one
-should be deliberate.
-
 ## Schema evolution
 
 The principle we aspire to: **our schema is allowed to evolve, and an
@@ -961,6 +879,111 @@ are load-bearing assumptions the rest of the design rests on:
     There are several options to read/write doltlite files outside of Rust:
     * The stock doltlite CLI, a drop-in replacement for the sqlite CLI.
     * There are python doltlite bindings: https://libraries.io/pypi/doltlite
+
+## Downstream stages — pointer to the companion doc
+
+The material in this section is here as a placeholder for what will
+move into the companion document *Data Architecture: Translation,
+Indexing, Annotation, and UI*. It's included so this ingestion-focused
+doc can still hand a reader enough of the downstream picture to
+understand the contracts extract has to honor.
+
+### Translate and downstream stages
+
+After extract, we run translations for display and indexing — render
+to markdown with YAML frontmatter, index the markdown with qmd, derive
+`grid_rows` for the UI.
+
+The cross-provider contract is the **sidecar**: for every rendered
+document, Translate emits two co-located files —
+
+  - `<id>.md` — human-readable, with YAML frontmatter.
+  - `<id>.grid_rows.json` — the
+    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs):
+
+    ```jsonc
+    {
+      "header": {
+        "document_uuid": "…",       // primary key for the document
+        "source_fingerprint": "…",  // hash of upstream payload
+        "render_version": 1         // renderer-side schema stamp
+      },
+      "rows": [GridRow, …]
+    }
+    ```
+
+Load reads the sidecar tree — **it never re-parses markdown**. The
+markdown is for humans; the JSON sidecar is the machine-readable
+projection.
+
+This part of the pipeline aspires to the same properties as extract:
+
+  - **Monitorable**: same `obs` flags, same progress-bar contract.
+  - **Incremental**: the sidecar `source_fingerprint` short-circuits
+    re-render. Load reads `(qmd_path, source_fingerprint)` from
+    `markdowns_loaded` and skips unchanged sidecars.
+  - **Resumable in the steady state**: a translate pass that gets
+    re-run after producing N of M sidecars will skip those N via the
+    fingerprint check and continue from where it stopped. We do not,
+    however, guarantee crash-mid-write atomicity per file; a partial
+    `.md` left by a SIGKILL during a write may have a fingerprint that
+    no longer matches the file body and will be regenerated next run.
+    That's good enough for our use case but is not a separately
+    engineered property.
+
+Less attention has been paid to translate-side observability and to
+making partial-progress visible to the user than to the same on
+extract; this is an area where the implementation trails the
+principle.
+
+### Shared schemas across similar sources
+
+When several sources are shaped similarly enough (a matter of taste,
+but largely driven by schema and UI overlap), they should be massaged
+into a **shared canonical schema** so the rest of the pipeline (search,
+display, threading, attachments, exports) shares code paths and stays
+consistent.
+
+Where unification actually happens **today**: the `GridRow` projection
+([`schemas/grid_rows.yaml`](../schemas/grid_rows.yaml), codegen'd into
+the Rust struct at `frankweiler/backend/schema/src/generated/grid_rows.rs`).
+Every searchable entity from every provider collapses into rows of one
+schema with `provider` + `kind` discriminators. The grid backend
+reads it with a single query and renders it without knowing which
+provider produced any given row.
+
+Unification should **never** happen in the raw store.
+For example, Slack, Beeper, Signal, Anthropic, ChatGPT each have their own raw tables and even separate doltlite 
+ DBs (`slack_messages`, `beeper_messages`, …)
+
+ However, once we start translating data, we should aspire to share as much as possible.
+ For example, we should translate raw data into unified schemas where appropriate, then send
+ that unified data through common code paths for interpretation, rendering, and indexing.
+
+Examples where schema and data handling should be unified:
+
+  1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
+     channels/DMs between humans with attachments and threading."
+     Unified at `GridRow`; per-provider raw + render.
+  2. **Chat (LLM)** — Claude, ChatGPT, Gemini (planned). Same chat
+     shape but with assistant turns, thinking, and tool-use surfaced.
+     Unified at `GridRow` via `kind = 'User Input' | 'LLM Response' |
+     'LLM Thinking' | 'Tool Call'`.
+  3. **Code review threads** — GitHub PR discussions, GitLab MR
+     discussions. Threaded inline comments on diffs. Unified at
+     `GridRow`; `git_sha` and `external_id` columns are specifically
+     there to serve this family.
+  4. **Document-comment threads** — Notion. Very similar in shape to
+     (3); may eventually share more than just `GridRow` projection.
+  5. **Time-series sensor data** — yolink today; Garmin fitness and
+     IQ Air air quality planned. Per-device samples over time with a
+     small fixed set of value channels. Not yet projected to
+     `GridRow`; this family hasn't picked its shared schema yet.
+
+A new provider that fits a family should at minimum project to the
+family's `GridRow` shape rather than inventing a new `kind` taxonomy.
+A provider that doesn't fit may motivate a new family; opening one
+should be deliberate.
 
 ## Unresolved questions
 

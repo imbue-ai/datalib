@@ -490,7 +490,7 @@ fn iso_from_ms(ms: i64) -> String {
             // Out-of-range epoch ms is unreachable in practice (chrono
             // covers ±580B years); preserve the audit-friendly marker
             // so a corrupt row is loudly visible in `when_ts` instead
-            // of pretending to be a real time. See data_architecture.md
+            // of pretending to be a real time. See data_architecture_ingestion.md
             // "no fabricated timestamps".
             tracing::warn!(ms, "iso_from_ms: epoch-ms out of chrono range");
             format!("@{ms}ms")

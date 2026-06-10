@@ -652,7 +652,7 @@ pub async fn record_object_attempt(
 /// table-specific `INSERT … ON CONFLICT(id) DO UPDATE` has run inside
 /// `tx`. It exists so a provider author thinks about "write one event
 /// to the raw storage layer" as one operation, not three steps that
-/// have to be kept in lockstep — see `docs/data_architecture.md`
+/// have to be kept in lockstep — see `docs/data_architecture_ingestion.md`
 /// § "Wire-event tape (JSONL)" for why doltlite and the tape are both
 /// parts of "the raw storage layer."
 ///

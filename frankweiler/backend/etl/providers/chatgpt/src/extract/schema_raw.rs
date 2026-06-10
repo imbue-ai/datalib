@@ -1,7 +1,7 @@
 //! Raw-store schema for the ChatGPT provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture.md`](../../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
@@ -11,7 +11,7 @@
 //! demoted bookkeeping column — it used to be stuffed into the JSON
 //! payload as a synthetic `_listing_update_time` key, but promoting
 //! it out keeps the payload byte-for-byte identical to the live API
-//! (see [`docs/data_architecture.md`] §"Wire-fidelity of the raw
+//! (see [`docs/data_architecture_ingestion.md`] §"Wire-fidelity of the raw
 //! store").
 
 use frankweiler_etl::doltlite_raw as dr;

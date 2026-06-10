@@ -1,7 +1,7 @@
 //! Raw-store schema for the YoLink provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture.md`](../../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!

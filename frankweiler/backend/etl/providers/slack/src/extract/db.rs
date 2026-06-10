@@ -55,7 +55,7 @@ pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
     /// Optional plain-text mirror of every upsert. See
-    /// `docs/data_architecture.md` § "Wire-event tape (JSONL)".
+    /// `docs/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
     /// `None` = tape disabled (the default); cloned `RawDb`s share the
     /// same tape via `Arc`.
     tape: Option<Arc<EventTape>>,

@@ -1,7 +1,7 @@
 //! Raw-store schema for the CardDAV (contacts) provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture.md`](../../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
@@ -9,13 +9,13 @@
 //!
 //! - **Not event-shaped.** A contact is a thing, not an event, so
 //!   nothing here declares a `when_ts` column. Per
-//!   [`docs/data_architecture.md`] §"Entities without a time-shape",
+//!   [`docs/data_architecture_ingestion.md`] §"Entities without a time-shape",
 //!   the translate side either leaves `GridRow.when_ts` empty or
 //!   sources it from the vCard `REV:` field (`revision` column) when
 //!   needed.
 //!
 //! - **Inline photos, no `blob_refs`.** Per
-//!   [`docs/data_architecture.md`] §"Why contacts doesn't
+//!   [`docs/data_architecture_ingestion.md`] §"Why contacts doesn't
 //!   participate", vCard `PHOTO` bytes ride inline (base64) inside the
 //!   payload column rather than being lifted into the shared CAS.
 //!   There is no contacts-specific blob table declared here, and the

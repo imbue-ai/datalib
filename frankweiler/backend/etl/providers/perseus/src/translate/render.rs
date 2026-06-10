@@ -45,7 +45,7 @@ use super::RENDER_VERSION;
 /// immutable upstream corpus with no per-section timestamps to
 /// preserve, so we synthesize a deterministic ordering stamp. The
 /// architecturally honest answer is `when_ts: null` plus a corpus-
-/// specific ordering field — see `data_architecture.md` "Entities
+/// specific ordering field — see `data_architecture_ingestion.md` "Entities
 /// without a time-shape". Filed for follow-up; the current behavior
 /// keeps the union grid sortable while we figure out the corpus
 /// story.

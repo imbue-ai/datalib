@@ -1,6 +1,6 @@
 //! Append-only JSONL mirror of every upsert that hits the raw store.
 //!
-//! See `docs/data_architecture.md` § "Wire-event tape (JSONL)" for the
+//! See `docs/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" for the
 //! principle. This module is the plumbing: a small handle that owns a
 //! directory and lazily opens one append-mode file per entity table.
 //!

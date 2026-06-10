@@ -1,7 +1,7 @@
 # Data architecture plan of attack
 
 Plan derived from the audit ([`data_architecture_audit.md`](data_architecture_audit.md))
-and Thad's inline comments on it. Companion to [`data_architecture.md`](data_architecture.md)
+and Thad's inline comments on it. Companion to [`data_architecture_ingestion.md`](data_architecture_ingestion.md)
 (the principles) and the audit (the findings).
 
 ## Guiding priorities
@@ -18,7 +18,7 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
    answers "what does the world look like?" without anyone writing
    a separate doc.
 3. **Don't make up data.** A new principle to add to
-   `data_architecture.md`: we never synthesize values (timestamps,
+   `data_architecture_ingestion.md`: we never synthesize values (timestamps,
    identifiers, content) that weren't given to us. Fallback paths that
    silently fabricate data mask incompleteness — they get replaced
    with loud warnings that surface in the per-run JSON summary.
@@ -259,7 +259,7 @@ called out beeper, signal, email).
 **Action**: stand up the crate; require it in extract + translate;
 forbid `chrono::DateTime::to_rfc3339` and similar shortcuts via a
 clippy / module-private discipline. Add the "no fabricated timestamp"
-rule to `data_architecture.md`.
+rule to `data_architecture_ingestion.md`.
 
 ### P0.6 Shared retry config schema (extract-side impl)
 
@@ -465,7 +465,7 @@ Worth resolving before we touch the code they refer to:
    re-reading in context; resolve when we get to the email schema.
 3. **"Where would the shared blob_refs table go?"** — Thad's answer
    is: it doesn't. Per-provider blob_refs, shared CAS via blake3 is
-   enough. Make that explicit in `data_architecture.md`.
+   enough. Make that explicit in `data_architecture_ingestion.md`.
 4. **Synthesize-for-test-fixtures vs synthesize-for-runtime** —
    resolve in context as part of P1.5.
 5. **Beeper fetch-pattern intent** — "is it to only fetch a subset

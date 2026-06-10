@@ -1,14 +1,14 @@
 //! Raw-store schema for the Notion provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture.md`](../../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! Notion-specific notes:
 //!
 //! - **Notion is the doc's canonical pre-seed-before-fetch example.**
-//!   See `docs/data_architecture.md` §"Retry and fetch durability":
+//!   See `docs/data_architecture_ingestion.md` §"Retry and fetch durability":
 //!   discovery (search / list / BFS-from-parent) surfaces a page id
 //!   well before the detail GET runs, so the writer calls
 //!   `dr::ensure_object_row(&mut tx, "pages", id)` on the bookkeeping
@@ -28,7 +28,7 @@
 //!   source for `GridRow.when_ts` on the translate side. Sub-items
 //!   without their own timestamp (e.g. comments, which have only a
 //!   `created_time`) get a µs-bump off their parent per
-//!   `docs/data_architecture.md` §"Object identity".
+//!   `docs/data_architecture_ingestion.md` §"Object identity".
 //! - **`page_order` is local ordering, not identity.** `blocks.page_order`
 //!   is the 0-based index from the BFS walk in `extract::mod::walk_page_blocks`;
 //!   render uses it to lay out sections / toggles. It is **not** part of
@@ -178,7 +178,7 @@ pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
 ///
 /// Comments only have a `created_time` upstream; sub-items lacking their
 /// own `last_edited_time` get a µs-bump off their parent on the
-/// translate side per `docs/data_architecture.md` §"Object identity".
+/// translate side per `docs/data_architecture_ingestion.md` §"Object identity".
 pub const COMMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS comments (
     id TEXT PRIMARY KEY,
     parent_id TEXT NOT NULL,

@@ -121,7 +121,7 @@ fn render_one(
     };
     let photo_written = photo_rel.is_some();
 
-    // Contacts are not event-shaped (see data_architecture.md §"Entities
+    // Contacts are not event-shaped (see data_architecture_ingestion.md §"Entities
     // without a time-shape"). When the vCard carries `REV:` we use it;
     // otherwise `when_ts` is the empty string — *never* the run's
     // wallclock or any other fabricated stamp. (Schema requires a

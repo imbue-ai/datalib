@@ -101,7 +101,7 @@ const REDACTED: &str = "[redacted]";
 /// the workspace. Don't belong in a committed golden.
 ///
 /// `events/` is the per-source JSONL wire-event tape (see
-/// `docs/data_architecture.md` § "Wire-event tape (JSONL)"). Every line
+/// `docs/data_architecture_ingestion.md` § "Wire-event tape (JSONL)"). Every line
 /// carries a wall-clock `_recorded_at`, so the files are non-deterministic
 /// across runs and would dominate a diff with churn that says nothing
 /// about extract correctness.

@@ -20,7 +20,7 @@
 //!
 //! See [`docs/data_architecture_plan.md`](../../../../docs/data_architecture_plan.md)
 //! §P0.5 for the architectural backstory, and
-//! [`docs/data_architecture.md`](../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../docs/data_architecture_ingestion.md)
 //! for the "no fabricated values" principle.
 
 use chrono::{DateTime, FixedOffset, Local, NaiveDate, SecondsFormat, TimeZone, Utc};

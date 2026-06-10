@@ -1,7 +1,7 @@
 //! Raw-store schema for the Slack provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture.md`](../../../../../docs/data_architecture.md)
+//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
@@ -21,7 +21,7 @@
 //! - **Event-shaped.** Slack messages carry an upstream `ts` field
 //!   (unix-seconds-with-fraction, UTC); that's the event timestamp.
 //!   `workspaces` / `users` / `channels` are not event-shaped (see
-//!   [`docs/data_architecture.md`] §"Entities without a
+//!   [`docs/data_architecture_ingestion.md`] §"Entities without a
 //!   time-shape").
 //!
 //! - **`replies_pages` is a bookkeeping table**, not an entity: one

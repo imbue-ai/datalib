@@ -1,6 +1,6 @@
 # Data Architecture Audit
 
-Audit of the ETL codebase against [`data_architecture.md`](data_architecture.md),
+Audit of the ETL codebase against [`data_architecture_ingestion.md`](data_architecture_ingestion.md),
 produced 2026-06-09.
 
 For each provider plus the shared/orchestrator layer, four buckets are
@@ -636,7 +636,7 @@ P2: Yes, this is correct. Let's just note it in the documentation.
   - Email stores JMAP Email `id` as the primary key (PK in the `emails` table). JMAP ids are opaque per-server (e.g., "G5a4f5c6d"). For mbox / Takeout paths, `Message-Id` header is fallback (mbox.rs:27-29). This is correct per the architecture (upstream identifier as PK). If a future provider (e.g., a second email account with different JMAP server) is added, each gets its own `<name>.doltlite_db` per the framework; message-id collisions between accounts are impossible. Clean.
 
 - **Sidecar JSON contract is well-formed**:
-  - `Sidecar` emits `header: { markdown_uuid, source_fingerprint, render_version }` + `rows: [GridRow, …]` + `edges: []` (render.rs:207-215). Matches the spec in data_architecture.md § Translate and downstream stages. No deviation, no cargo, good.
+  - `Sidecar` emits `header: { markdown_uuid, source_fingerprint, render_version }` + `rows: [GridRow, …]` + `edges: []` (render.rs:207-215). Matches the spec in data_architecture_ingestion.md § Translate and downstream stages. No deviation, no cargo, good.
 
 - **Attachment handling is CAS-aligned**:
   - Attachments live in `blobs` table (CAS) keyed by blake3 hash. Email rows reference them via `email_attachments.blob_id` (foreign key into `blobs.id`). This matches the blob-split pattern in the port guide § 7. Good.
@@ -984,7 +984,7 @@ P2: Yes, this is correct. Let's just note it in the documentation.
 ### Cross-source sharing with GitHub
 
 **Code-review-thread family alignment**
-- Both GitLab MRs and GitHub PRs are code-review threads; architecture doc explicitly names them (data_architecture.md:661-663)
+- Both GitLab MRs and GitHub PRs are code-review threads; architecture doc explicitly names them (data_architecture_ingestion.md:661-663)
 - Both have `git_sha` + `external_id` fields in GridRow
 - **Alignment**: both correctly populate these:
   - GitLab: `git_sha: mr.head_sha` and `external_id: mr.mr_iid` (grid_rows.rs:150-151)
@@ -1075,9 +1075,9 @@ P2: Yes, this is correct. Let's just note it in the documentation.
 
 - **GridRow `when_ts` consistency** — Notion's pages/comments use raw upstream `last_edited_time` / `created_time` ISO-8601 strings. **Slack message timestamps (`ts`) are Unix seconds** (a different provider; not directly relevant here). **GitHub uses `created_at` / `updated_at` ISO-8601**. For cross-provider temporal views to work, all three need the same offset normalization. Notion's code assumes `Z`; **a grep over translate/grid_rows.rs shows no explicit offset validation or rewriting**. Other providers (slack, github, etc.) may have the same gap. This is a project-wide issue, not Notion-specific, but Notion is a data point.
 
-- **Fingerprint schema** — translate/grid_rows.rs:356,369 hash RENDER_VERSION + canonical JSON of upstream payloads. ThreadDocument fingerprints over comments only (369), PageDocument over page+blocks+comments (356). This mirrors translate/render.rs:1198-1307 fingerprint skip checks. **Matches the sidecar contract** (docs/data_architecture.md §Translate and downstream stages). **No deviation**, cross-source patterns are consistent.
+- **Fingerprint schema** — translate/grid_rows.rs:356,369 hash RENDER_VERSION + canonical JSON of upstream payloads. ThreadDocument fingerprints over comments only (369), PageDocument over page+blocks+comments (356). This mirrors translate/render.rs:1198-1307 fingerprint skip checks. **Matches the sidecar contract** (docs/data_architecture_ingestion.md §Translate and downstream stages). **No deviation**, cross-source patterns are consistent.
 
-- **Sidecar emission** — render.rs:1223-1234,1330-1341 emit `*.grid_rows.json` with `Sidecar { header: SidecarHeader { markdown_uuid, source_fingerprint, render_version }, rows, edges }`. **Matches the canonical contract** (data_architecture.md, Sidecar struct). No provider-specific quirks.
+- **Sidecar emission** — render.rs:1223-1234,1330-1341 emit `*.grid_rows.json` with `Sidecar { header: SidecarHeader { markdown_uuid, source_fingerprint, render_version }, rows, edges }`. **Matches the canonical contract** (data_architecture_ingestion.md, Sidecar struct). No provider-specific quirks.
 
 ---
 
@@ -1220,14 +1220,14 @@ P2: Yes, this is correct. Let's just note it in the documentation.
 
 ### Principle Violations
 
-- **Sidecar header field name mismatch** (render.rs:238). Architecture specifies `"document_uuid"` in `Sidecar` header (data_architecture.md:375); Signal uses `"markdown_uuid"`. Both are stable UUIDv5 from `(chat_uuid, period_key)`, so semantically equivalent, but violates the cross-provider contract. Impact: load-side sidecar reader will reject or misparse if it enforces the canonical field name.
+- **Sidecar header field name mismatch** (render.rs:238). Architecture specifies `"document_uuid"` in `Sidecar` header (data_architecture_ingestion.md:375); Signal uses `"markdown_uuid"`. Both are stable UUIDv5 from `(chat_uuid, period_key)`, so semantically equivalent, but violates the cross-provider contract. Impact: load-side sidecar reader will reject or misparse if it enforces the canonical field name.
   - Fix: s/`markdown_uuid`/`document_uuid`/ at render.rs:238.
 P1: Again, a struct used to both write and read this sidecar format would help.
 
-- **Bare `Z` timezone on fallback timestamp** (render.rs:481). Architecture mandates "ISO-8601 with explicit offset" (data_architecture.md:253). `iso_ts(0)` emits `"1970-01-01T00:00:00Z"` — bare `Z` instead of `+00:00`. Real timestamps from `date_sent_ms` are correctly formatted via `Utc.timestamp_millis_opt(...).to_rfc3339_opts(SecondsFormat::Secs, true)` which produces `+00:00`, but the sentinel fallback for empty messages violates the principle. Unlikely to occur in practice (empty buckets are skipped), but sets a bad pattern.
+- **Bare `Z` timezone on fallback timestamp** (render.rs:481). Architecture mandates "ISO-8601 with explicit offset" (data_architecture_ingestion.md:253). `iso_ts(0)` emits `"1970-01-01T00:00:00Z"` — bare `Z` instead of `+00:00`. Real timestamps from `date_sent_ms` are correctly formatted via `Utc.timestamp_millis_opt(...).to_rfc3339_opts(SecondsFormat::Secs, true)` which produces `+00:00`, but the sentinel fallback for empty messages violates the principle. Unlikely to occur in practice (empty buckets are skipped), but sets a bad pattern.
   - Fix: render.rs:481 → `"1970-01-01T00:00:00+00:00"`.
 
-- **Unclear semantics for `--reset-and-redownload` on one-shot import**. Architecture (data_architecture.md:177–195) defines the flag for rebakeable sources: wipe entity tables + cursors, re-fetch from upstream, let `dolt diff` surface gaps. Signal is non-rebakeable — the snapshot is the source-of-truth and won't reappear. Current behavior (extract/mod.rs:94–95): truncate data tables unconditionally, then walk the same snapshot again. This is sound — produces the same dedup results — but the contract and intent are unclear. Documentation says it "forces a full re-import," which for a backup could mean "confirm the on-disk snapshot hasn't changed." Should be explicit about one-shot semantics.
+- **Unclear semantics for `--reset-and-redownload` on one-shot import**. Architecture (data_architecture_ingestion.md:177–195) defines the flag for rebakeable sources: wipe entity tables + cursors, re-fetch from upstream, let `dolt diff` surface gaps. Signal is non-rebakeable — the snapshot is the source-of-truth and won't reappear. Current behavior (extract/mod.rs:94–95): truncate data tables unconditionally, then walk the same snapshot again. This is sound — produces the same dedup results — but the contract and intent are unclear. Documentation says it "forces a full re-import," which for a backup could mean "confirm the on-disk snapshot hasn't changed." Should be explicit about one-shot semantics.
   - Recommendation: add doc comment clarifying that for Signal, `--reset-and-redownload` means "discard prior import, re-ingest the same snapshot, verify idempotence via dolt diff." Unlike API sources, there is no fresh upstream data to pull.
 P3: Time to add this comment. I don't think it's a big deal. 
 
@@ -1235,7 +1235,7 @@ P3: Time to add this comment. I don't think it's a big deal.
 
 - **Vestigial `upstream_cursor` field set to `None`** (render.rs:251). Every `RenderedMarkdown` carries an optional `upstream_cursor` (for forward-walk resumption tracking). Signal sets it to `None` since there's no cursor concept for file-based ingestion. This is correct, but marks Signal as outside the normal flow. Not a bug, but a useful signal that Signal is special.
 
-- **No retry bookkeeping integration in practice**. Architecture (data_architecture.md:446–530) specifies per-row `_bookkeeping` tables with `attempt_count`, `last_error`, `deleted_upstream_at`. Signal creates them (db.rs:68–74 calls `bookkeeping_ddl_for`), and `upsert_*` methods call `record_object_attempt` (e.g., db.rs:137), so the machinery is in place. However, since Signal doesn't have persistent failure modes (can't retry a decryption failure on a re-ingest — either it works or doesn't), the bookkeeping rows accumulate without being re-walked. Not dead code, but unused semantics.
+- **No retry bookkeeping integration in practice**. Architecture (data_architecture_ingestion.md:446–530) specifies per-row `_bookkeeping` tables with `attempt_count`, `last_error`, `deleted_upstream_at`. Signal creates them (db.rs:68–74 calls `bookkeeping_ddl_for`), and `upsert_*` methods call `record_object_attempt` (e.g., db.rs:137), so the machinery is in place. However, since Signal doesn't have persistent failure modes (can't retry a decryption failure on a re-ingest — either it works or doesn't), the bookkeeping rows accumulate without being re-walked. Not dead code, but unused semantics.
 P2: The way I think cursors should work with Signal is that we should Blake3 hash the entire file we are ingesting. And if we have already ingested it, then just completely skip all of it. And if we haven't, then let's run the ingestion. 
 
 ### Simplification
@@ -1260,7 +1260,7 @@ Signal, Slack, and Beeper share the "human chat" GridRow shape and should conver
 
 - **Attachment handling via shared CAS**. Extract ingests attachments into the sibling `*.blobs.doltlite_db` via `blob_cas::store_bytes` (extract/mod.rs:304), keyed on `media_name` (SHA256-derived, deterministic from plaintext hash + local key). Render materializes them via `blob_cas::materialize_refs` (render.rs:170). This is the standard pattern every other provider uses; Signal is fully integrated.
 
-- **No pre-seed, no pre-seeding-before-fetch complication**. Architecture (data_architecture.md:454–468) says "pre-seed before fetch" is aspirational for providers with listing-then-detail splits (Notion, Anthropic). Signal doesn't have that — the backup format gives us IDs + content in one frame. Extract walks frames and UPSERTs immediately; no pre-seed step. This is correct and a simplification versus API providers.
+- **No pre-seed, no pre-seeding-before-fetch complication**. Architecture (data_architecture_ingestion.md:454–468) says "pre-seed before fetch" is aspirational for providers with listing-then-detail splits (Notion, Anthropic). Signal doesn't have that — the backup format gives us IDs + content in one frame. Extract walks frames and UPSERTs immediately; no pre-seed step. This is correct and a simplification versus API providers.
 
 - **No complex cursor / resume family patterns**. Signal doesn't have a cursor (it's all-or-nothing per snapshot). The extract flow is trivial: walk snapshot frames, UPSERT into DB, increment counters. No need for refresh windows, time-windowed walks, or per-channel resumption logic that Slack, Anthropic, GitHub all implement. Signal is intentionally the simplest case.
 P2: The way I think cursors should work with Signal is that we should Blake3 hash the entire file we are ingesting. And if we have already ingested it, then just completely skip all of it. And if we haven't, then let's run the ingestion. 
