@@ -131,9 +131,11 @@ sh_test(
         "$(rootpath //frankweiler/backend/sync:frankweiler_sync_bin)",
         "$(rootpath //frankweiler/backend/signal-backup:signal_make_fixture)",
         "2369-04-15T00:00:00+00:00",
+        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
         "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
         "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
         "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+        # FIXME: move these into their provider specific directories.
         "tests/fixtures/github_api",
         "tests/fixtures/gitlab_api",
         "tests/fixtures/notion_web",
