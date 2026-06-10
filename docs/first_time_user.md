@@ -1,5 +1,22 @@
 # Project Data Liberation ✊ - First-time user guide
 
+> 🛑 **<span style="color:red">WITH GREAT POWER COMES GREAT RESPONSIBILITY</span>** 🛑
+>
+> <span style="color:red">**These tools allow you to accumulate a lot of high-value
+> data into a single place. Hopefully, the computer where you run these tools is a
+> safe place to store this data.**</span>
+>
+> <span style="color:red">**Please think at least 3x before running an agent on this
+> data, then think again. Make sure you understand the full implications of the
+> [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/).
+> Most of the data accumulated by these tools should be considered both Private
+> Data and Untrusted Content.**</span>
+>
+> <span style="color:red">**Also remember that most agentic harnesses are effectively
+> (!!!) EXFILTRATION SCRIPTS (!!!), and running them on your private data will
+> upload it to a third party where you have very little control over what happens
+> with it next.**</span>
+
 > Codenames in this project (`frankweiler`, etc.) are inspired by
 > [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
 
