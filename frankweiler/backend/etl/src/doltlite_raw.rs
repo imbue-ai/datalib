@@ -645,6 +645,71 @@ pub async fn record_object_attempt(
     Ok(())
 }
 
+/// Persist a successful upsert into the raw storage layer: stamp
+/// per-row bookkeeping, commit the transaction, and (if a tape is
+/// attached) mirror the row as one JSONL line.
+///
+/// This is the single chokepoint a provider should call once its
+/// table-specific `INSERT … ON CONFLICT(id) DO UPDATE` has run inside
+/// `tx`. It exists so a provider author thinks about "write one event
+/// to the raw storage layer" as one operation, not three steps that
+/// have to be kept in lockstep — see `docs/data_architecture.md`
+/// § "Wire-event tape (JSONL)" for why doltlite and the tape are both
+/// parts of "the raw storage layer."
+///
+/// Semantics:
+/// - [`record_object_attempt`] runs for `(table, id)` inside `tx`.
+/// - `tx` is committed.
+/// - If `tape` is `Some`, the tape append fires AFTER the commit
+///   succeeds, so a rolled-back tx never leaves an orphan tape line
+///   describing a row that didn't land in doltlite.
+/// - Tape append errors are logged at `error!` level but do not fail
+///   the upsert. The doltlite row is already committed and is the
+///   source of truth; the tape is a write-only mirror, so failing the
+///   caller would be lying about whether the data landed. But a tape
+///   failure here is anomalous (the directory is local, the file is
+///   ours, there's no contention) — when it happens, we want it loud
+///   and visible in logs so it gets investigated.
+pub async fn write_event_to_raw_storage_layer(
+    tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    table: &str,
+    id: &str,
+    payload: &serde_json::Value,
+) -> Result<()> {
+    write_events_to_raw_storage_layer(tx, tape, &[(table, id, payload)]).await
+}
+
+/// Batch sibling of [`write_event_to_raw_storage_layer`]. Use this
+/// when one transaction covers many rows (e.g. one history / replies
+/// page upserted in a single `fsync`).
+pub async fn write_events_to_raw_storage_layer(
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    events: &[(&str, &str, &serde_json::Value)],
+) -> Result<()> {
+    for (table, id, _) in events {
+        record_object_attempt(&mut tx, table, id, None).await?;
+    }
+    tx.commit()
+        .await
+        .context("commit write_events_to_raw_storage_layer tx")?;
+    if let Some(t) = tape {
+        for (table, id, payload) in events {
+            if let Err(e) = t.append(table, id, payload) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = *table,
+                    id = *id,
+                    error = %format!("{e:#}"),
+                    "event tape append failed after doltlite commit; row IS persisted, tape is missing a line — investigate"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.

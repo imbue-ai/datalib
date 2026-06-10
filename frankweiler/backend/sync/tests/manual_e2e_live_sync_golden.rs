@@ -99,7 +99,13 @@ const REDACTED: &str = "[redacted]";
 /// Path components whose entire contents we deliberately omit. Slack's
 /// workspace-wide listings: every channel the user is in, every user in
 /// the workspace. Don't belong in a committed golden.
-const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list"];
+///
+/// `events/` is the per-source JSONL wire-event tape (see
+/// `docs/data_architecture.md` § "Wire-event tape (JSONL)"). Every line
+/// carries a wall-clock `_recorded_at`, so the files are non-deterministic
+/// across runs and would dominate a diff with churn that says nothing
+/// about extract correctness.
+const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "events"];
 
 fn workspace_root() -> PathBuf {
     // CARGO_MANIFEST_DIR is .../frankweiler/backend/sync

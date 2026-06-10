@@ -1084,11 +1084,19 @@ async fn run_extract_phase(
             "extract pre-open: opening writable doltlite pool"
         );
         match open_extract_db(&plan.kind, &path).await {
-            Ok(Some(db)) => {
+            Ok(Some(mut db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
                     name: plan.name.clone(),
                     pool: db.pool().clone(),
                 });
+                if let Some(tape) = plan.event_tape.clone() {
+                    tracing::info!(
+                        source = %plan.name,
+                        events_dir = %tape.dir().display(),
+                        "event tape enabled — mirroring upserts to JSONL"
+                    );
+                    db.attach_event_tape(tape);
+                }
                 plan.db = Some(db);
                 opened.push(plan);
             }
@@ -1233,6 +1241,10 @@ struct ExtractPlan {
     /// during the brief window between `for_source` and the open
     /// pass; by the time `run()` is invoked this is always `Some`.
     db: Option<DbHandle>,
+    /// Plain-text JSONL mirror of every upsert. `Some` when the
+    /// source (or the global default) has `event_tape: { enabled: true }`.
+    /// Attached to the provider's `RawDb` after `open_extract_db`.
+    event_tape: Option<Arc<frankweiler_etl::event_tape::EventTape>>,
 }
 
 /// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
@@ -1267,6 +1279,19 @@ impl DbHandle {
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
+        }
+    }
+
+    /// Attach a JSONL event tape to the inner `RawDb`. Today only the
+    /// slack provider's `RawDb` supports this; the rest are no-ops
+    /// until they grow the same hook (see `docs/data_architecture.md`
+    /// § "Wire-event tape (JSONL)").
+    fn attach_event_tape(&mut self, tape: Arc<frankweiler_etl::event_tape::EventTape>) {
+        match self {
+            DbHandle::Slack(d) => d.attach_event_tape(tape),
+            _ => {
+                // Other providers: tape not wired through yet.
+            }
         }
     }
 }
@@ -1439,6 +1464,18 @@ impl ExtractPlan {
                 }
             }
         };
+        // Opt-out: tape is on unless the source (or the global) explicitly
+        // sets `event_tape: { enabled: false }`. None → default → enabled.
+        let event_tape = src
+            .resolved_shared(cfg)
+            .event_tape
+            .unwrap_or_default()
+            .enabled
+            .then(|| {
+                Arc::new(frankweiler_etl::event_tape::EventTape::new(
+                    out_dir.join("events"),
+                ))
+            });
         Some(Ok(Self {
             name,
             type_str,
@@ -1448,6 +1485,7 @@ impl ExtractPlan {
             kind,
             control: control.clone(),
             db: None,
+            event_tape,
         }))
     }
 

@@ -38,6 +38,30 @@ pub struct SharedConfig {
     /// gate against.
     #[serde(default)]
     pub blob_size_limit_bytes: Option<u64>,
+    /// Append a JSONL line per upsert into
+    /// `<data_root>/raw/<name>/events/<table>.jsonl`. Write-only mirror
+    /// of the raw store, never read by the pipeline. See
+    /// `docs/data_architecture.md` § "Wire-event tape (JSONL)".
+    #[serde(default)]
+    pub event_tape: Option<EventTapeConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventTapeConfig {
+    /// Tape is on unless explicitly disabled. See
+    /// `docs/data_architecture.md` § "Wire-event tape (JSONL)" — the
+    /// tape is a plain-text mirror of the raw store, intended to be
+    /// always present so a human can `tail -f` the wire payload off
+    /// any source without opening doltlite.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for EventTapeConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 impl SharedConfig {
@@ -46,6 +70,10 @@ impl SharedConfig {
     pub fn merge(&self, source: &SharedConfig) -> SharedConfig {
         SharedConfig {
             blob_size_limit_bytes: source.blob_size_limit_bytes.or(self.blob_size_limit_bytes),
+            event_tape: source
+                .event_tape
+                .clone()
+                .or_else(|| self.event_tape.clone()),
         }
     }
 }
@@ -91,6 +119,8 @@ pub struct SourceCommon {
     // nested flatten in serde). Resolved via `SourceConfig::resolved_shared`.
     #[serde(default)]
     pub blob_size_limit_bytes: Option<u64>,
+    #[serde(default)]
+    pub event_tape: Option<EventTapeConfig>,
 }
 
 impl SourceCommon {
@@ -99,6 +129,7 @@ impl SourceCommon {
     fn shared_override(&self) -> SharedConfig {
         SharedConfig {
             blob_size_limit_bytes: self.blob_size_limit_bytes,
+            event_tape: self.event_tape.clone(),
         }
     }
 }

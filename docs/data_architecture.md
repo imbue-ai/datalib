@@ -20,6 +20,54 @@ Pointers to the things that are **not** in this file:
   - Per-provider auth, API surface, resume strategy: each provider's
     `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
+## Wire-event tape (JSONL)
+
+Doltlite is our primary store, but doltlite is also a binary file you
+need a tool to open. So alongside the doltlite raw store, every
+extract also writes a **plain-text, append-only JSONL log of what
+came off the wire**.
+
+This is the simplest view of the raw data: one event per line, in
+the order the extractor saw it. No schema, no migrations — just a
+tape you can `tail -f`, `grep`, `jq`, or open in any editor.
+
+The doltlite store is what the stateful, incremental, version-controllable pipeline reads; the JSONL tape is
+what a human reads when they want to see what the upstream actually
+sent us, with no tooling in the way.
+
+Layout — one directory per source, one file per entity table:
+
+```
+<data_root>/raw/<name>/events/
+  <table>.jsonl          # one line per upsert
+  blob_refs.jsonl
+```
+
+Each line is a small JSON object:
+
+```jsonc
+{
+  "_recorded_at": "2026-06-10T14:22:31.041203-07:00",
+  "table": "messages",
+  "id": "C0123:1717982351.000200",
+  "payload": { ... }     // the wire bytes
+}
+```
+
+Three rules:
+
+  - **The pipeline never reads it.** Translate, load, resume, retry —
+    all of those go through doltlite. The JSONL is a write-only
+    mirror. Deleting the `events/` directory does not break anything.
+  - **One stream per table, not two.** The Python original had
+    `created/` and `updated/` directories; every new row went into
+    both. We collapse to a single append: every upsert, every time.
+    First-seen is recoverable from it with `awk` if anyone wants it.
+  - **Same bytes as the upsert.** We tap right next to the
+    `ON CONFLICT(id) DO UPDATE`, so the tape carries the same
+    wire-fidelity payload that the doltlite row gets. No second
+    parse, no second normalize.
+
 ## Shape of the system
 
 We have an ETL-shaped architecture that extracts raw data from many
