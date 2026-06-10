@@ -10,6 +10,7 @@
 pub mod api;
 pub mod db;
 pub mod normalize;
+pub mod schema_raw;
 
 use std::collections::HashSet;
 use std::fs;

@@ -32,43 +32,69 @@ and Thad's inline comments on it. Companion to [`data_architecture.md`](data_arc
 
 ### P0.1 Self-documenting schema source-of-truth per provider
 
-**Goal**: every provider has **`providers/<name>/src/schema.rs`** —
-a single Rust file that holds the load-bearing schema declaration
-plus the helpers that operate on it. Rich rustdoc comments serve the
-"proto-style declaration" role. (Same pattern Thad used in Python
-with pydantic `schema.py`.) Concretely:
+**Goal**: every provider has **two** declarations-only Rust files
+at fixed paths:
+
+- **`providers/<name>/src/schema_raw.rs`** — describes what comes
+  off the wire from this upstream provider and how it's persisted in
+  the raw doltlite store.
+- **`providers/<name>/src/schema_translate.rs`** — describes the
+  normalized representation(s) translate emits. There may be more
+  than one of these (the `_translate` suffix can be pluralized or
+  split — e.g. `schema_translate_chat.rs` once we have a shared
+  chat schema) since one provider may project into multiple
+  downstream schemas. These will often derive from shared cross-
+  provider abstractions (generic chat schema, code-review-thread
+  schema, time-series schema). **Most of these declarations are
+  serde-shaped Rust types, not SQL DDL** — the translate output is
+  in-memory normalized values plus sidecar JSON. (Whatever SQL
+  schema the `grid_rows` projection table uses is owned by Load,
+  not by per-provider translate.)
+
+Both files are **proto / pydantic-flavored**: types, enums, DDL
+constants, and trivial schema-local helpers (e.g. an enum
+`Display`). **No data-manipulation code.** `ensure_<entity>_row`,
+parameter-binding, UPSERT builders, etc. stay in
+`extract/db.rs` / `translate/...` and *import* from these schema
+modules. The schema files should remain a very light dependency
+that can be read top-to-bottom in one sitting.
+
+Concretely, `schema_raw.rs` contains:
 
 - `const <TABLE>_DDL: &str = "CREATE TABLE IF NOT EXISTS ...";` per
   entity, bookkeeping, and `blob_refs` table — with a `///` block
   above each explaining upstream provenance, the PK choice, what
   each column is for, where `when_ts` comes from, and a pointer to
   the UUID recipe function.
-- `const ALL_DDL: &[&str] = &[...];` — the list `RawDb::open`
+- `pub const ALL_DDL: &[&str] = &[...];` — the list `RawDb::open`
   iterates, replacing today's inline DDL in each provider's
   `extract/db.rs`.
-- Public helper functions that operate over the schema —
-  `ensure_<entity>_row(tx, id, parent)`, etc. — sit here so they're
-  one open-file away from the DDL they correspond to. This is where
-  generic shared helpers (`bookkeeping_ddl_for(...)`, the bookkeeping
-  DDL macro from P1.1, etc.) get composed in.
-- Migration constants/functions co-located, with a doc-comment on
-  each that says when it becomes safe to delete.
-- Everything else in the provider (`extract::*`, `translate::*`,
-  `render`) imports from `schema::*` rather than defining schema
-  bits inline.
+- Enums for upstream-shaped enumerations (e.g. message types) where
+  it makes the wire shape clearer.
+- Schema-evolution migration **constants** (DDL strings) co-located,
+  each with a doc-comment noting when it becomes safe to delete.
+  The migration *runner* code lives in `extract/db.rs`.
+
+`schema_translate.rs` contains the analogous declarations for the
+normalized translate-side representation, but in **serde form**:
+the Rust types (with `Serialize` / `Deserialize`) that represent the
+provider's normalized rows / messages / threads / etc., the
+sidecar header type when the provider needs a custom one, and
+re-exports of the shared cross-provider types it conforms to (e.g.
+the eventual `LlmChatTurn` from P1.4 or `ChatMessage` from P1.5).
+Again, declarations only — no manipulation code.
 
 No parallel `RAW_SCHEMA.md`. The load-bearing code *is* the
 documentation; the "show me your tables" guarantee comes from
-opening 12 `schema.rs` files at the same fixed path and seeing the
+opening 12 × 2 schema files at the same fixed paths and seeing the
 same shape.
 
-**Why Rust over a `.sql` or proto file**: helpers want to live next
-to the DDL they refer to (UUID recipes, `ensure_object_row`
-wrappers, parameter-binding helpers, shared bookkeeping
-composition). A second-language source-of-truth forces those into
-a different location and loses the proximity. `rustdoc` on `const`
-DDL strings gives us the same comment richness as proto without a
-second toolchain.
+**Why Rust over a `.sql` or proto file**: `rustdoc` on `const` DDL
+strings gives us the same comment richness as proto without a
+second toolchain, the `extract/db.rs` import side gets type-safe
+constants instead of stringly-named SQL files, and shared
+abstractions for `schema_translate.rs` (chat, code-review, time-
+series) want to be Rust types anyway.
 
 **Why now**: cheapest, highest-leverage P0. Doing it **before** the
 schema unifications below will (a) surface inconsistencies we don't
