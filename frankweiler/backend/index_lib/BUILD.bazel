@@ -1,0 +1,36 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# Shared "index" layer: the cross-provider Translate → Load contract.
+# Every provider's translate emits sidecars through `emit_sidecar`;
+# Load reads them back as `Sidecar`. Re-exports `GridRow` / `EdgeRow`
+# from `frankweiler-schema` so providers have a single import for
+# everything the index layer expects from them.
+#
+# Deliberately tiny and dependency-light — kept off the heavy etl
+# crate so per-provider translate code can depend on the index
+# surface without pulling in tokio/sqlx/etc.
+rust_library(
+    name = "frankweiler_index_lib",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_index_lib",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "index_lib_unittests",
+    size = "small",
+    crate = ":frankweiler_index_lib",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)

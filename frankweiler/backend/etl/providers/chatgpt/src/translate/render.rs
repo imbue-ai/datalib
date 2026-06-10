@@ -10,8 +10,8 @@ use chrono::{DateTime, FixedOffset};
 use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{shred, OAAttachmentRef, OAMessageRow, ParsedChatGPTApi, ShreddedConversation};
@@ -145,18 +145,16 @@ pub fn render_all(
         std::fs::write(&abs, &r.body)?;
 
         let rows = rows_for_conversation(&shredded);
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                markdown_uuid: conv_id.clone(),
-                source_fingerprint: fingerprint.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: rows.clone(),
-            edges: Vec::new(),
-        };
         let sidecar_abs = abs.with_extension("grid_rows.json");
-        let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
-        std::fs::write(&sidecar_abs, sidecar_json)?;
+        emit_sidecar(
+            &sidecar_abs,
+            conv_id,
+            &fingerprint,
+            RENDER_VERSION,
+            &rows,
+            &[],
+        )
+        .map_err(std::io::Error::other)?;
 
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: conv_id.clone(),

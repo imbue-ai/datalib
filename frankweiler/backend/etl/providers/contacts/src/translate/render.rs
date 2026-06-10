@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::parse::{ContactPhoto, ParsedContact, ParsedContacts};
@@ -153,16 +154,8 @@ fn render_one(
     // already commits `rows` into the doltlite grid_rows table via
     // `on_doc_complete`; this sidecar mirrors what every other
     // provider writes for symmetry.
-    let sidecar = serde_json::json!({
-        "header": {
-            "markdown_uuid": m_uuid,
-            "source_fingerprint": fingerprint,
-            "render_version": RENDER_VERSION,
-        },
-        "rows": [&row],
-    });
-    fs::write(&json_path, serde_json::to_string_pretty(&sidecar)?)
-        .with_context(|| format!("write {}", json_path.display()))?;
+    let rows = std::slice::from_ref(&row);
+    emit_sidecar(&json_path, &m_uuid, &fingerprint, RENDER_VERSION, rows, &[])?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: m_uuid.clone(),

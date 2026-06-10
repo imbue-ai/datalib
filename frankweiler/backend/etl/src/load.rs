@@ -46,7 +46,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 use tokio::sync::Mutex;
 
-use crate::sidecar::Sidecar;
+use frankweiler_index_lib::Sidecar;
 
 /// Serializes concurrent writers against one doltlite index pool AND
 /// optionally batches all writes into one big transaction — with

@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::{msg_div_open, section_attrs};
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 
 use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Room};
@@ -135,17 +135,14 @@ fn render_one(
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel);
-    let sidecar = Sidecar {
-        header: SidecarHeader {
-            markdown_uuid: markdown_uuid.clone(),
-            source_fingerprint: fingerprint.clone(),
-            render_version: RENDER_VERSION,
-        },
-        rows: rows.clone(),
-        edges: Vec::new(),
-    };
-    let sj = serde_json::to_string_pretty(&sidecar).context("serialize beeper sidecar")?;
-    fs::write(&json_path, sj).with_context(|| format!("write {}", json_path.display()))?;
+    emit_sidecar(
+        &json_path,
+        &markdown_uuid,
+        &fingerprint,
+        RENDER_VERSION,
+        &rows,
+        &[],
+    )?;
 
     on_doc_complete(RenderedMarkdown {
         markdown_uuid: markdown_uuid.clone(),

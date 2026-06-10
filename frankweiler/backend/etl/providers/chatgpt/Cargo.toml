@@ -16,6 +16,7 @@ path = "src/bin/chatgpt_download.rs"
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }
 frankweiler-schema = { path = "../../../schema" }
+frankweiler-index-lib = { path = "../../../index_lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

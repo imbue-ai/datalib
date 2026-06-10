@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -260,18 +260,15 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
     let rows = rows_for_mr(mr, notes);
-    let sidecar = Sidecar {
-        header: SidecarHeader {
-            markdown_uuid: mr.uuid.clone(),
-            source_fingerprint: fingerprint_for_mr(mr, notes),
-            render_version: RENDER_VERSION,
-        },
-        rows,
-        edges: Vec::new(),
-    };
     let sidecar_path = md_path.with_extension("grid_rows.json");
-    fs::write(&sidecar_path, serde_json::to_string_pretty(&sidecar)?)
-        .with_context(|| format!("write {}", sidecar_path.display()))?;
+    emit_sidecar(
+        &sidecar_path,
+        &mr.uuid,
+        &fingerprint_for_mr(mr, notes),
+        RENDER_VERSION,
+        &rows,
+        &[],
+    )?;
 
     Ok(md_path)
 }

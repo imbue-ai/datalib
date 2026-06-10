@@ -21,6 +21,7 @@ rust_library(
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/signal-backup:frankweiler_signal_backup",
         "@frankweiler_crates//:anyhow",
