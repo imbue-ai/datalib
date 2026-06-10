@@ -2,7 +2,7 @@
 //!
 //! Replaces the JSONL tree of `raw_api/<method>/run-*.jsonl` with a
 //! single sqlite file at `<data_root>/raw/<name>.doltlite_db`. Shared
-//! bookkeeping tables (`blobs`, `endpoint_shapes`, `sync_runs`) and the
+//! bookkeeping tables (`blobs`, `sync_runs`) and the
 //! open / blob plumbing live in [`frankweiler_etl::doltlite_raw`]; the
 //! primary-key policy that governs every object table here is
 //! documented there.
@@ -30,10 +30,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -41,78 +42,23 @@ use frankweiler_etl::blob_cas::{
     self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
 };
 use frankweiler_etl::doltlite_raw::{self as dr};
+use frankweiler_etl::event_tape::EventTape;
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-use crate::translate::{slack_message_uuid, slack_thread_uuid};
-
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &[
-    "workspaces",
-    "users",
-    "channels",
-    "messages",
-    "replies_pages",
-];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY,
-        team_name TEXT NULL,
-        team_url TEXT NULL,
-        self_user_id TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        team_id TEXT NULL,
-        name TEXT NULL,
-        real_name TEXT NULL,
-        display_name TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS channels (
-        id TEXT PRIMARY KEY,
-        name TEXT NULL,
-        is_member INTEGER NULL,
-        is_archived INTEGER NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        team_id TEXT NOT NULL,
-        channel_id TEXT NOT NULL,
-        ts TEXT NOT NULL,
-        thread_ts TEXT NULL,
-        thread_root_uuid TEXT NULL,
-        is_thread_root INTEGER NULL,
-        user_id TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS messages_by_channel_ts ON messages(channel_id, ts)",
-    "CREATE INDEX IF NOT EXISTS messages_by_thread ON messages(thread_root_uuid)",
-    "CREATE TABLE IF NOT EXISTS replies_pages (
-        id TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        thread_ts TEXT NOT NULL,
-        latest_reply TEXT NULL
-    )",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
+use super::schema_raw::{
+    full_ddl, replies_page_id_recipe, slack_message_uuid, slack_thread_uuid, DATA_TABLES,
+};
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
     cas: BlobCas,
+    /// Optional plain-text mirror of every upsert. See
+    /// `docs/data_architecture.md` § "Wire-event tape (JSONL)".
+    /// `None` = tape disabled (the default); cloned `RawDb`s share the
+    /// same tape via `Arc`.
+    tape: Option<Arc<EventTape>>,
 }
 
 /// One row of input for [`RawDb::upsert_message`]. Carries the upstream
@@ -141,7 +87,11 @@ impl RawDb {
         // returns no rows and the loop exits without writing.
         backfill_thread_root_uuid(&pool).await?;
         let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
-        Ok(Self { pool, cas })
+        Ok(Self {
+            pool,
+            cas,
+            tape: None,
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -150,6 +100,17 @@ impl RawDb {
 
     pub fn cas(&self) -> &BlobCas {
         &self.cas
+    }
+
+    /// Attach a JSONL event tape. Every upsert is mirrored as one line
+    /// in `<tape.dir>/<table>.jsonl` in addition to landing in doltlite.
+    /// The tape is shared by clones of this `RawDb`.
+    pub fn attach_event_tape(&mut self, tape: Arc<EventTape>) {
+        self.tape = Some(tape);
+    }
+
+    fn tape_ref(&self) -> Option<&EventTape> {
+        self.tape.as_deref()
     }
 
     /// Wipe every per-row table so the next fetch re-downloads
@@ -238,9 +199,8 @@ impl RawDb {
         .execute(&mut *tx)
         .await
         .context("upsert workspace")?;
-        dr::record_object_attempt(&mut tx, "workspaces", team_id, None).await?;
-        tx.commit().await.context("commit workspace tx")?;
-        Ok(())
+        dr::write_event_to_raw_storage_layer(tx, self.tape_ref(), "workspaces", team_id, payload)
+            .await
     }
 
     /// Return the cached workspace `team_id` (the most-recently-seen
@@ -274,11 +234,7 @@ impl RawDb {
     // ── users ───────────────────────────────────────────────────────
 
     pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin user tx")?;
-        let now = Utc::now().to_rfc3339();
-        upsert_user_in(&mut tx, payload, &now).await?;
-        tx.commit().await.context("commit user tx")?;
-        Ok(())
+        self.upsert_users(std::slice::from_ref(payload)).await
     }
 
     /// Upsert a whole `users.list` page in a single transaction. One
@@ -293,8 +249,15 @@ impl RawDb {
         for payload in payloads {
             upsert_user_in(&mut tx, payload, &now).await?;
         }
-        tx.commit().await.context("commit users batch tx")?;
-        Ok(())
+        let events: Vec<(&str, &str, &Value)> = payloads
+            .iter()
+            .filter_map(|p| {
+                p.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| ("users", id, p))
+            })
+            .collect();
+        dr::write_events_to_raw_storage_layer(tx, self.tape_ref(), &events).await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
@@ -304,11 +267,7 @@ impl RawDb {
     // ── channels ────────────────────────────────────────────────────
 
     pub async fn upsert_channel(&self, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin channel tx")?;
-        let now = Utc::now().to_rfc3339();
-        upsert_channel_in(&mut tx, payload, &now).await?;
-        tx.commit().await.context("commit channel tx")?;
-        Ok(())
+        self.upsert_channels(std::slice::from_ref(payload)).await
     }
 
     /// Upsert a whole `conversations.list` page in a single transaction.
@@ -321,8 +280,15 @@ impl RawDb {
         for payload in payloads {
             upsert_channel_in(&mut tx, payload, &now).await?;
         }
-        tx.commit().await.context("commit channels batch tx")?;
-        Ok(())
+        let events: Vec<(&str, &str, &Value)> = payloads
+            .iter()
+            .filter_map(|p| {
+                p.get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| ("channels", id, p))
+            })
+            .collect();
+        dr::write_events_to_raw_storage_layer(tx, self.tape_ref(), &events).await
     }
 
     pub async fn load_channels(&self) -> Result<Vec<Value>> {
@@ -362,11 +328,7 @@ impl RawDb {
     // ── messages ────────────────────────────────────────────────────
 
     pub async fn upsert_message(&self, row: &MessageRow) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin message tx")?;
-        let now = Utc::now().to_rfc3339();
-        upsert_message_in(&mut tx, row, &now).await?;
-        tx.commit().await.context("commit message tx")?;
-        Ok(())
+        self.upsert_messages(std::slice::from_ref(row)).await
     }
 
     /// Upsert a whole history / replies page in a single transaction.
@@ -379,8 +341,16 @@ impl RawDb {
         for row in rows {
             upsert_message_in(&mut tx, row, &now).await?;
         }
-        tx.commit().await.context("commit messages batch tx")?;
-        Ok(())
+        let ids: Vec<String> = rows
+            .iter()
+            .map(|r| slack_message_uuid(&r.team_id, &r.channel_id, &r.ts))
+            .collect();
+        let events: Vec<(&str, &str, &Value)> = ids
+            .iter()
+            .zip(rows.iter())
+            .map(|(id, r)| ("messages", id.as_str(), &r.payload))
+            .collect();
+        dr::write_events_to_raw_storage_layer(tx, self.tape_ref(), &events).await
     }
 
     /// All persisted messages, in `(channel_id, ts)` order so the
@@ -450,7 +420,7 @@ impl RawDb {
         thread_ts: &str,
         latest_reply: Option<&str>,
     ) -> Result<()> {
-        let id = format!("{channel_id}:{thread_ts}");
+        let id = replies_page_id_recipe(channel_id, thread_ts);
         let mut tx = self.pool.begin().await.context("begin replies_page tx")?;
         sqlx::query(
             "INSERT INTO replies_pages
@@ -466,9 +436,13 @@ impl RawDb {
         .execute(&mut *tx)
         .await
         .with_context(|| format!("upsert replies_page {id}"))?;
-        dr::record_object_attempt(&mut tx, "replies_pages", &id, None).await?;
-        tx.commit().await.context("commit replies_page tx")?;
-        Ok(())
+        let payload = json!({
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,
+            "latest_reply": latest_reply,
+        });
+        dr::write_event_to_raw_storage_layer(tx, self.tape_ref(), "replies_pages", &id, &payload)
+            .await
     }
 
     /// `(channel_id, thread_ts) → latest_reply` for every thread we've
@@ -608,7 +582,7 @@ async fn upsert_user_in(
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert user {id}"))?;
-    dr::record_object_attempt(tx, "users", id, None).await
+    Ok(())
 }
 
 async fn upsert_channel_in(
@@ -642,7 +616,7 @@ async fn upsert_channel_in(
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert channel {id}"))?;
-    dr::record_object_attempt(tx, "channels", id, None).await
+    Ok(())
 }
 
 async fn upsert_message_in(
@@ -693,7 +667,7 @@ async fn upsert_message_in(
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert message {id}"))?;
-    dr::record_object_attempt(tx, "messages", &id, None).await
+    Ok(())
 }
 
 /// One row's worth of loaded message data — payload plus the columns
@@ -939,6 +913,57 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn event_tape_mirrors_upserts_to_jsonl() {
+        let d = tempfile::tempdir().unwrap();
+        let tape_dir = d.path().join("events");
+        let tape = std::sync::Arc::new(EventTape::new(tape_dir.clone()));
+        let mut db = RawDb::open(&d.path().join("s.doltlite_db")).await.unwrap();
+        db.attach_event_tape(tape);
+
+        db.upsert_workspace(&json!({"team_id": "T1", "team": "Enterprise"}))
+            .await
+            .unwrap();
+        db.upsert_users(&[
+            json!({"id": "U1", "name": "picard"}),
+            json!({"id": "U2", "name": "riker"}),
+        ])
+        .await
+        .unwrap();
+        db.upsert_channel(&json!({"id": "C1", "name": "bridge"}))
+            .await
+            .unwrap();
+        db.upsert_message(&MessageRow {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            ts: "1700000000.000100".into(),
+            thread_ts: None,
+            is_thread_root: true,
+            user_id: Some("U1".into()),
+            payload: json!({"ts": "1700000000.000100", "text": "make it so"}),
+        })
+        .await
+        .unwrap();
+
+        let workspaces = std::fs::read_to_string(tape_dir.join("workspaces.jsonl")).unwrap();
+        assert_eq!(workspaces.lines().count(), 1);
+        let line: Value = serde_json::from_str(workspaces.lines().next().unwrap()).unwrap();
+        assert_eq!(line["table"], "workspaces");
+        assert_eq!(line["id"], "T1");
+        assert_eq!(line["payload"]["team"], "Enterprise");
+
+        let users = std::fs::read_to_string(tape_dir.join("users.jsonl")).unwrap();
+        assert_eq!(users.lines().count(), 2);
+
+        let channels = std::fs::read_to_string(tape_dir.join("channels.jsonl")).unwrap();
+        assert_eq!(channels.lines().count(), 1);
+
+        let messages = std::fs::read_to_string(tape_dir.join("messages.jsonl")).unwrap();
+        assert_eq!(messages.lines().count(), 1);
+        let m: Value = serde_json::from_str(messages.lines().next().unwrap()).unwrap();
+        assert_eq!(m["payload"]["text"], "make it so");
+    }
 
     #[tokio::test]
     async fn workspace_round_trips() {

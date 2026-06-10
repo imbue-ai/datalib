@@ -16,6 +16,7 @@ path = "src/bin/notion_download.rs"
 frankweiler-etl = { path = "../.." }
 frankweiler-obs = { path = "../../../obs" }
 frankweiler-schema = { path = "../../../schema" }
+frankweiler-index-lib = { path = "../../../index_lib" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
@@ -33,3 +34,8 @@ tempfile = "3"
 [dev-dependencies]
 insta = { version = "1.41", features = ["json", "redactions"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Stderr subscriber used by `gather_documents_is_linear_in_blocks` to
+# surface per-phase timing from `gather_documents` — the slow test in
+# this binary, dominates `notion_unittests` wall time. See the test's
+# `init_tracing()` helper.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

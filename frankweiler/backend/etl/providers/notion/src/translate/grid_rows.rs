@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
@@ -396,16 +397,43 @@ pub struct ThreadDocument {
 }
 
 pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
+    // Phase-by-phase timing for `notion_unittests`'s
+    // `gather_documents_is_linear_in_blocks` regression test (and any
+    // real sync where this function appears in a flame graph). Each
+    // phase emits a single `tracing::debug!` event with the elapsed
+    // wall time. Production sync runs with the default INFO filter
+    // see nothing; the unit test enables a stderr subscriber so the
+    // breakdown shows up alongside the assertion.
+    let total_start = Instant::now();
+    let phase_start = Instant::now();
+
     let page_titles = build_page_titles(&parsed.pages, &parsed.blocks);
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "build_page_titles",
+        pages = parsed.pages.len(),
+        blocks = parsed.blocks.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
     let mut pages: Vec<PageDocument> = Vec::new();
 
     // Group blocks by their owning page (for fingerprint stability — we
     // include every block whose tree roots at this page).
+    let phase_start = Instant::now();
     let block_owning_page = block_to_page_id(&parsed.blocks);
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "block_to_page_id",
+        blocks = parsed.blocks.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
     // Build the block→parent-block index once; the previous version
     // rebuilt this map inside the outer loop, making the whole pass
     // O(N²) over `parsed.blocks` and pegging a core on real notion
     // sources (~10K blocks).
+    let phase_start = Instant::now();
     let mut block_parent: HashMap<String, String> = HashMap::new();
     for bb in &parsed.blocks {
         let par = bb.get("parent");
@@ -425,31 +453,79 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             }
         }
     }
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "build_block_parent",
+        blocks = parsed.blocks.len(),
+        parent_edges = block_parent.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
+    // Owner-walk: for each block, follow parent pointers up to the
+    // page. Memoized: as soon as we know any block's owner, we record
+    // it; subsequent walks short-circuit when they hit a memoized
+    // ancestor. Without the memo the pass is O(N · avg_depth) — on the
+    // regression-test fixture (a 4000-deep linear parent chain) that's
+    // ~8M HashMap lookups (6s in debug). With the memo it's amortized
+    // O(N) regardless of tree shape; the same fixture finishes in
+    // <50ms. Real notion trees are depth ~10 so the memo doesn't help
+    // production much in walltime, but it removes a quadratic cliff
+    // that was easy to fall off (a 10K-block source with a
+    // pathological subtree could repeat the regression).
+    let phase_start = Instant::now();
     let mut blocks_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
+    let mut block_owner_memo: HashMap<String, String> = HashMap::new();
+    let max_walk = parsed.blocks.len() + 1; // cycle safeguard
     for b in &parsed.blocks {
-        // Walk up to find owning page.
         let bid = b
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut cur = Some(bid);
-        let mut seen = std::collections::HashSet::new();
+        if bid.is_empty() {
+            continue;
+        }
+        let mut path: Vec<String> = Vec::new();
+        let mut cur: Option<String> = Some(bid);
         let mut owner: Option<String> = None;
-        while let Some(c) = cur.clone() {
-            if !seen.insert(c.clone()) {
-                break;
-            }
+        while let Some(c) = cur {
+            // Check the direct block→page index, then the memoized
+            // resolution. Either path terminates the walk.
             if let Some(p) = block_owning_page.get(&c) {
                 owner = Some(p.clone());
+                break;
+            }
+            if let Some(p) = block_owner_memo.get(&c) {
+                owner = Some(p.clone());
+                break;
+            }
+            path.push(c.clone());
+            if path.len() > max_walk {
+                // Cycle in the parent graph — give up rather than
+                // loop forever. Cleaner than the old HashSet-per-walk
+                // and just as safe given the bounded blocks count.
                 break;
             }
             cur = block_parent.get(&c).cloned();
         }
         if let Some(o) = owner {
+            // Memoize every block we walked through so any future
+            // block whose chain passes through here terminates in O(1).
+            for p in path {
+                block_owner_memo.insert(p, o.clone());
+            }
             blocks_by_page.entry(o).or_default().push(b);
         }
     }
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "walk_blocks_to_owner",
+        blocks = parsed.blocks.len(),
+        pages_with_blocks = blocks_by_page.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
+    let phase_start = Instant::now();
     for vec in blocks_by_page.values_mut() {
         vec.sort_by(|a, b| {
             let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -458,13 +534,28 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
         });
     }
 
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "sort_blocks_per_page",
+        pages_with_blocks = blocks_by_page.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
     // Group comments by owning page (for fingerprint stability).
+    let phase_start = Instant::now();
     let mut comments_by_page: HashMap<String, Vec<&Value>> = HashMap::new();
     for c in &parsed.comments {
         if let Some(pid) = resolve_comment_page_id(c, &parsed.blocks, &block_owning_page) {
             comments_by_page.entry(pid).or_default().push(c);
         }
     }
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "comments_by_page",
+        comments = parsed.comments.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+    let phase_start = Instant::now();
     for vec in comments_by_page.values_mut() {
         vec.sort_by(|a, b| {
             let ai = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -473,6 +564,13 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
         });
     }
 
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "sort_comments_per_page",
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
+    let phase_start = Instant::now();
     for page in &parsed.pages {
         let pid = page
             .get("id")
@@ -499,8 +597,15 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             source_fingerprint: fp,
         });
     }
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "page_documents",
+        pages = pages.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
 
     // Discussions.
+    let phase_start = Instant::now();
     let mut by_disc: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for c in &parsed.comments {
         let did = c
@@ -565,6 +670,23 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
         });
     }
 
+    tracing::debug!(
+        event = "notion_gather_documents_phase",
+        phase = "thread_documents",
+        threads = threads.len(),
+        elapsed_ms = phase_start.elapsed().as_millis() as u64,
+    );
+
+    tracing::debug!(
+        event = "notion_gather_documents_total",
+        pages_in = parsed.pages.len(),
+        blocks_in = parsed.blocks.len(),
+        comments_in = parsed.comments.len(),
+        pages_out = pages.len(),
+        threads_out = threads.len(),
+        elapsed_ms = total_start.elapsed().as_millis() as u64,
+    );
+
     DocumentRows { pages, threads }
 }
 
@@ -579,28 +701,57 @@ fn _slugify_smoke(s: &str) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::time::{Duration, Instant};
+    use std::sync::Once;
+    use std::time::Duration;
 
-    // Regression test for a quadratic blow-up in `gather_documents`:
-    // a previous version rebuilt the `block_parent` map (an inner
-    // O(N) scan over `parsed.blocks`) inside the outer `for b in
-    // &parsed.blocks` loop, making it O(N²). On a real notion DB
-    // with tens of thousands of blocks the translate step would peg
-    // a core and never reach `progress.set_length`. 5_000 blocks is
-    // enough to make the quadratic version run for tens of seconds
-    // while the fixed version finishes in a few ms.
+    // Diagnostic output: when this test ever blows its time budget (or
+    // anyone wonders why `notion_unittests` takes >5s wall), running
+    // with `--test-output=streamed` shows the per-phase breakdown
+    // emitted by `gather_documents`. The slowest test in this file
+    // dominates the binary's wall time — see the comment block on
+    // `gather_documents_is_linear_in_blocks` below.
+    static INIT_TRACING: Once = Once::new();
+    fn init_tracing() {
+        INIT_TRACING.call_once(|| {
+            // Best-effort — if a global subscriber is already set, do
+            // nothing (avoids the "panic" on double-set when an
+            // outer test harness already initialized one).
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(std::io::stderr)
+                .try_init();
+        });
+    }
+
+    // Regression test for a quadratic blow-up in `gather_documents`.
+    // History:
+    //
+    //   v1 bug: rebuilt the `block_parent` map (an inner O(N) scan
+    //   over `parsed.blocks`) inside the outer `for b in
+    //   &parsed.blocks` loop. Real ~10K-block notion sources pegged
+    //   a core indefinitely.
+    //
+    //   v2 fix: build `block_parent` once outside the loop. But the
+    //   owner-walk itself was still O(depth) per block; on the
+    //   pathological linear-chain test fixture below (N=4_000, each
+    //   block parents the previous one) the walk did ~8M HashMap
+    //   lookups and took 6s in debug. Real notion trees are depth
+    //   ~10 so production was fine, but the test budget was 30s and
+    //   the test binary's wall was dominated by this one test.
+    //
+    //   v3 (current): memoize `block → owning_page` during the walk.
+    //   Each block resolves in O(1) amortized regardless of tree
+    //   shape; the same N=4_000 fixture finishes in ~50ms.
+    //
+    // Budget below stays generous (1s) so we catch a regression to
+    // the v1/v2 cliff long before someone sees production wedge,
+    // without flaking on CI under load. If anything in this file
+    // pushes wall above ~200ms the per-phase
+    // `notion_gather_documents_phase` debug events surface where —
+    // run with `--test_output=streamed --cache_test_results=no`.
     #[test]
     fn gather_documents_is_linear_in_blocks() {
-        // Long block-id chain: every block except the first parents
-        // to the previous block, forcing the owner-walk to consult
-        // `block_parent`. The bug rebuilt `block_parent` from scratch
-        // on every outer iteration; at N=4_000 the buggy code takes
-        // ~30 s in fastbuild (debug) while the linear fix finishes in
-        // ~6 s. The 15 s budget gives clean separation in both debug
-        // (which Bazel runs) and release builds. Wall-clock perf tests
-        // are coarse — this catches the gross quadratic blow-up the
-        // user actually hit (sync wedged on a 10 K-block notion DB),
-        // not subtle regressions.
+        init_tracing();
         const N: usize = 4_000;
         let page_id = "page-1";
         let pages = vec![json!({"id": page_id, "object": "page"})];
@@ -633,15 +784,28 @@ mod tests {
         let start = Instant::now();
         let docs = gather_documents(&parsed);
         let elapsed = start.elapsed();
+        // Surface the wall time on stderr so `bazel test
+        // --test_output=streamed` shows it next to the
+        // `notion_gather_documents_phase` events from inside the
+        // function — at a glance you can tell which phase grew when
+        // the binary's total wall time creeps up.
+        tracing::info!(
+            event = "gather_documents_is_linear_in_blocks",
+            n = N,
+            elapsed_ms = elapsed.as_millis() as u64,
+            "smoke regression for the quadratic block_parent rebuild",
+        );
 
         assert_eq!(docs.pages.len(), 1);
-        // The pre-fix code never finished on real data (the user's
-        // actual wedge — pegged a core indefinitely on a 10K-block
-        // notion DB). 30 s is a smoke-budget that catches that level
-        // of breakage without flaking on CI under load.
+        // 1s budget: a healthy run finishes in ~50ms (memoized walk),
+        // so 1s gives ~20× headroom for CI core contention while still
+        // catching a regression to the v1/v2 cliffs (6s or
+        // never-finishes) long before they reach production.
         assert!(
-            elapsed < Duration::from_secs(30),
-            "gather_documents took {elapsed:?} for {N} blocks — likely quadratic",
+            elapsed < Duration::from_secs(1),
+            "gather_documents took {elapsed:?} for {N} blocks — likely a regression \
+             in the memoized owner-walk; run `bazel test … --test_output=streamed \
+             --cache_test_results=no` and look at notion_gather_documents_phase events",
         );
     }
 }

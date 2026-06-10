@@ -24,6 +24,7 @@ path = "src/bin/latchkey_curl_shim.rs"
 frankweiler-core = { path = "../core" }
 frankweiler-obs = { path = "../obs" }
 frankweiler-schema = { path = "../schema" }
+frankweiler-index-lib = { path = "../index_lib" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 serde = { workspace = true }
 serde_json = { workspace = true }

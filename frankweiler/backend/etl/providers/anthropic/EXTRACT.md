@@ -73,6 +73,43 @@ latchkey auth set claude-ai -H "Cookie: cf_clearance=$(pbpaste)"
 `403` on the listing endpoint is treated as "no chat permission for
 this org" — we count it and continue rather than abort.
 
+## Attachments: `files[]` vs `attachments[]`
+
+Each message in a conversation has **two** distinct attachment
+slots, which Claude exposes as separate JSON arrays. They look
+similar but they are not interchangeable, and the bytes-at-rest
+treatment differs.
+
+| Slot                              | What it carries                                                                                              | Extract action                                                                  | Translate rendering                                                  |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------|----------------------------------------------------------------------|
+| `chat_messages[*].files[]`        | Downloadable upload — image / PDF / etc. Has `file_uuid`, `file_name`, `preview_url`, `document_asset.url`. | Walk via `fetch_files_for` → `download_one_file` → blob CAS (`db.store_blob`). | `blob_cas::attachment_md` → `![alt](blobs/<hash>.<ext>)` for images, `[\[file\] alt](blobs/<hash>.<ext>)` otherwise. |
+| `chat_messages[*].attachments[]`  | **Text** Claude pre-extracted from a user upload. Carries `id`, `file_name`, `file_type`, `file_size`, and `extracted_content`. **No `preview_url`** — the binary is not retained server-side. | **Skipped.** There is no resource to fetch.                                     | `render_extracted_attachment` → inline blockquote with a `**[attachment: <name>]**` header.                          |
+
+This split was confirmed by querying a live raw store with the
+doltlite CLI: every "attachment-not-yet-fetched" placeholder in the
+old goldens turned out to be an `attachments[]` item with
+non-empty `extracted_content` and no download URL — exactly what
+the schema docs describe but easy to miss in code review.
+
+**Why extract doesn't pre-seed `blob_refs` rows for
+`attachments[]`**: `blob_refs` is a cache index over the CAS (see
+[`docs/data_architecture.md`](../../../../docs/data_architecture.md)
+§"Blobs and the CAS split"). The `attachments[]` content lives
+inline in `conversations.payload` as `extracted_content`; there's
+no separate fetch, no skip-check semantics, and no bytes to land
+in the CAS. Same shape as contacts photos
+(§"Why contacts doesn't participate"). The id is per-message
+slot bookkeeping, not a cache key.
+
+**Future-work note**: if Claude ever starts retaining the original
+binaries for `attachments[]` items (i.e. a download URL appears in
+the payload), the durable-evidence pattern would have us pre-seed
+a `blob_refs` row per attachments[] id with `blake3=NULL` and
+`last_error="no_download_url"`, so a later "rescan when bytes
+become available" pass has something to walk. Until then,
+recording these in `blob_refs` would muddy the cache-index
+semantics for zero benefit.
+
 ## Resume + prioritization
 
 There is no checkpoint file. On each run the downloader classifies

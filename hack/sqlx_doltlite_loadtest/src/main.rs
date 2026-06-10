@@ -5,7 +5,7 @@
 //!
 //!   1. Opens a SqlitePool (max_connections=1) on its own .doltlite_db,
 //!      runs the same SHARED_DDL the real RawDb runs (sync_runs, blobs,
-//!      endpoint_shapes, etc. plus provider tables + bookkeeping).
+//!      plus provider tables + bookkeeping).
 //!   2. Inserts a sync_runs row via pool.begin()+execute+tx.commit (like
 //!      doltlite_raw::start_run).
 //!   3. Loops over N synthetic "items". For each:
@@ -20,6 +20,13 @@
 //!
 //! N sources run concurrently in tokio tasks. We count user-visible
 //! BUSY errors on inserts and on the dolt_commit.
+
+// Standalone debug/benchmark CLI. Doesn't run under frankweiler-sync,
+// has no indicatif progress bars to corrupt, and emits its results +
+// per-iteration progress directly to stderr. The workspace clippy.toml
+// disallows raw eprintln!/println! because they'd race with the obs
+// IndicatifWriter inside sync; that constraint doesn't apply here.
+#![allow(clippy::disallowed_macros)]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,12 +115,6 @@ const SHARED_DDL: &[&str] = &[
         config TEXT NOT NULL,
         status TEXT NOT NULL,
         summary TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS endpoint_shapes (
-        endpoint TEXT PRIMARY KEY,
-        example_headers TEXT NULL,
-        example_envelope_skeleton TEXT NULL,
-        captured_at TEXT NOT NULL
     )",
     "CREATE TABLE IF NOT EXISTS blobs (
         id TEXT PRIMARY KEY,

@@ -88,17 +88,31 @@ use frankweiler_obs::status_line;
 // `FRANKWEILER_VERSION` is the output of `git describe --tags --always
 // --dirty` at build time, set by either
 //   - Bazel: rustc_env.txt resolves {STABLE_GIT_DESCRIBE} from
-//     tools/workspace_status.sh; or
+//     tools/workspace_status.sh — *only when stamping is on* (i.e.
+//     `--config=release`). Day-to-day dev builds have stamping off
+//     so the action cache doesn't invalidate on every commit; in
+//     that case rules_rust passes the literal placeholder
+//     `{STABLE_GIT_DESCRIBE}` through to rustc.
 //   - cargo: build.rs runs the same `git describe` (falls back to
 //     "unknown" outside a git checkout).
-// Both paths guarantee the env is set, so `env!` (compile-time) works
-// without needing `option_env!` + a fallback const. Exact-tag commits
-// render as "v0.1.2"; mid-development commits as "v0.1.2-3-gabc123d".
+// `FRANKWEILER_VERSION_RESOLVED` strips the unsubstituted-placeholder
+// state down to "dev" so the user-facing `--version` output reads
+// either a real `git describe` string, "unknown", or "dev". Exact-tag
+// commits render as "v0.1.2"; mid-development commits as
+// "v0.1.2-3-gabc123d".
+const FRANKWEILER_VERSION_RESOLVED: &str = {
+    let raw = env!("FRANKWEILER_VERSION");
+    if !raw.is_empty() && raw.as_bytes()[0] == b'{' {
+        "dev"
+    } else {
+        raw
+    }
+};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
-    version = env!("FRANKWEILER_VERSION"),
+    version = FRANKWEILER_VERSION_RESOLVED,
     about = "Config-driven ETL: extract every enabled source, translate, load into Dolt at <data_root>/dolt_db/ + rendered_md/ + qmd/index.sqlite"
 )]
 struct Args {
@@ -156,9 +170,8 @@ struct Args {
     /// re-fetched on the wire. Use `--refetch-blobs` to invalidate
     /// the blob cache index when you actually want the bytes re-pulled.
     ///
-    /// Whole-table bookkeeping (sync_runs, endpoint_shapes,
-    /// sync_scope_state) is preserved — that's audit log + API
-    /// discovery metadata + resume cursor, not row content.
+    /// Whole-table bookkeeping (sync_runs, sync_scope_state) is
+    /// preserved — that's audit log + resume cursor, not row content.
     #[arg(long)]
     reset_and_redownload: bool,
 
@@ -1071,11 +1084,19 @@ async fn run_extract_phase(
             "extract pre-open: opening writable doltlite pool"
         );
         match open_extract_db(&plan.kind, &path).await {
-            Ok(Some(db)) => {
+            Ok(Some(mut db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
                     name: plan.name.clone(),
                     pool: db.pool().clone(),
                 });
+                if let Some(tape) = plan.event_tape.clone() {
+                    tracing::info!(
+                        source = %plan.name,
+                        events_dir = %tape.dir().display(),
+                        "event tape enabled — mirroring upserts to JSONL"
+                    );
+                    db.attach_event_tape(tape);
+                }
                 plan.db = Some(db);
                 opened.push(plan);
             }
@@ -1220,6 +1241,10 @@ struct ExtractPlan {
     /// during the brief window between `for_source` and the open
     /// pass; by the time `run()` is invoked this is always `Some`.
     db: Option<DbHandle>,
+    /// Plain-text JSONL mirror of every upsert. `Some` when the
+    /// source (or the global default) has `event_tape: { enabled: true }`.
+    /// Attached to the provider's `RawDb` after `open_extract_db`.
+    event_tape: Option<Arc<frankweiler_etl::event_tape::EventTape>>,
 }
 
 /// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
@@ -1254,6 +1279,19 @@ impl DbHandle {
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
+        }
+    }
+
+    /// Attach a JSONL event tape to the inner `RawDb`. Today only the
+    /// slack provider's `RawDb` supports this; the rest are no-ops
+    /// until they grow the same hook (see `docs/data_architecture.md`
+    /// § "Wire-event tape (JSONL)").
+    fn attach_event_tape(&mut self, tape: Arc<frankweiler_etl::event_tape::EventTape>) {
+        match self {
+            DbHandle::Slack(d) => d.attach_event_tape(tape),
+            _ => {
+                // Other providers: tape not wired through yet.
+            }
         }
     }
 }
@@ -1426,6 +1464,18 @@ impl ExtractPlan {
                 }
             }
         };
+        // Opt-out: tape is on unless the source (or the global) explicitly
+        // sets `event_tape: { enabled: false }`. None → default → enabled.
+        let event_tape = src
+            .resolved_shared(cfg)
+            .event_tape
+            .unwrap_or_default()
+            .enabled
+            .then(|| {
+                Arc::new(frankweiler_etl::event_tape::EventTape::new(
+                    out_dir.join("events"),
+                ))
+            });
         Some(Ok(Self {
             name,
             type_str,
@@ -1435,6 +1485,7 @@ impl ExtractPlan {
             kind,
             control: control.clone(),
             db: None,
+            event_tape,
         }))
     }
 

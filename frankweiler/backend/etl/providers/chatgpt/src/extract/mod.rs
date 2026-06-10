@@ -16,6 +16,7 @@
 
 pub mod api;
 pub mod db;
+pub mod schema_raw;
 
 use std::path::PathBuf;
 use std::time::Duration;

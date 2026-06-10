@@ -176,6 +176,16 @@ iteration, but don't call the tree green based on one of those. If you
 report "build green" without having run `bazelisk test //...`, say what
 you actually ran instead.
 
+**Coverage** uses `bazelisk coverage` with a one-shot wrapper that
+captures Rust-subprocess hit counts too — see
+[`docs/coverage.md`](docs/coverage.md). The short form:
+
+```bash
+tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
+  //frankweiler/backend/sync:frankweiler_sync_bin \
+  //frankweiler/backend/signal-backup:signal_make_fixture
+```
+
 **Default to `bazelisk test //...` for any "are tests passing?" question.**
 It's the source of truth: it runs Rust, cross-language goldens, and the
 Playwright e2e suite in one shot, the same way CI does. Bazel's action

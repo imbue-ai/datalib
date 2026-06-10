@@ -2,7 +2,7 @@
 //!
 //! Every provider that ports its raw download to doltlite (notion,
 //! chatgpt, anthropic, …) ends up needing the same bookkeeping:
-//! identical `blob_refs` / `endpoint_shapes` / `sync_runs` tables,
+//! identical `blob_refs` / `sync_runs` tables,
 //! identical "open this file with `journal_mode=DELETE`" boilerplate,
 //! identical bookkeeping columns on every object table
 //! (`payload TEXT NULL`, `fetched_at`, `attempt_count`, …), and the
@@ -65,7 +65,7 @@
 //! inside the JSON document. `sqlite3` ad-hoc queries should select
 //! `json(payload)` rather than the raw column.
 //!
-//! `sync_runs.config` / `summary` and `endpoint_shapes.example_*`
+//! `sync_runs.config` / `summary`
 //! stay as plain TEXT — they're tiny single-row bookkeeping where
 //! debug-friendly `sqlite3` SELECT matters more than parse perf.
 //!
@@ -186,16 +186,6 @@ pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
     summary TEXT NULL
 )";
 
-/// Last captured wire-shape for each endpoint we've talked to. PK is
-/// the endpoint identifier itself (e.g. `GET /v1/blocks/{id}/children`);
-/// re-running stamps over the same row.
-pub const ENDPOINT_SHAPES_DDL: &str = "CREATE TABLE IF NOT EXISTS endpoint_shapes (
-    endpoint TEXT PRIMARY KEY,
-    example_headers TEXT NULL,
-    example_envelope_skeleton TEXT NULL,
-    captured_at TEXT NOT NULL
-)";
-
 /// Per-scope incremental-sync cursor table. Used by providers (github,
 /// gitlab) whose discovery is keyed by a search scope ("author:@me",
 /// "assigned_to_me", …) and which want to narrow each subsequent run
@@ -212,7 +202,6 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 /// provider-specific table list inside [`open`].
 pub const SHARED_DDL: &[&str] = &[
     SYNC_RUNS_DDL,
-    ENDPOINT_SHAPES_DDL,
     crate::blob_cas::BLOB_REFS_DDL,
     crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
     crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
@@ -244,7 +233,7 @@ pub fn db_path_for(p: &Path) -> PathBuf {
 /// Open (or create) the doltlite file and apply DDL idempotently.
 ///
 /// `extra_ddl` carries the provider-specific tables (and indexes). The
-/// shared blobs / endpoint_shapes / sync_runs are appended after.
+/// shared blobs / sync_runs are appended after.
 ///
 /// The connection is configured for our raw-store use:
 ///   - `journal_mode=DELETE`: single writer, single reader → no WAL
@@ -511,10 +500,9 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 ///   - each `<table>_bookkeeping` paired sidecar
 ///   - the shared `blobs` table and `blobs_bookkeeping` sidecar
 ///
-/// Whole-table bookkeeping (`sync_runs`, `endpoint_shapes`,
-/// `sync_scope_state`) is preserved — that's audit log + API
-/// discovery metadata + resume cursor, none of which is "content"
-/// the reset is trying to re-pull.
+/// Whole-table bookkeeping (`sync_runs`, `sync_scope_state`) is
+/// preserved — that's audit log + resume cursor, neither of which is
+/// "content" the reset is trying to re-pull.
 ///
 /// Tables names are interpolated into SQL; callers must pass
 /// trusted identifiers, not user input.
@@ -657,6 +645,71 @@ pub async fn record_object_attempt(
     Ok(())
 }
 
+/// Persist a successful upsert into the raw storage layer: stamp
+/// per-row bookkeeping, commit the transaction, and (if a tape is
+/// attached) mirror the row as one JSONL line.
+///
+/// This is the single chokepoint a provider should call once its
+/// table-specific `INSERT … ON CONFLICT(id) DO UPDATE` has run inside
+/// `tx`. It exists so a provider author thinks about "write one event
+/// to the raw storage layer" as one operation, not three steps that
+/// have to be kept in lockstep — see `docs/data_architecture.md`
+/// § "Wire-event tape (JSONL)" for why doltlite and the tape are both
+/// parts of "the raw storage layer."
+///
+/// Semantics:
+/// - [`record_object_attempt`] runs for `(table, id)` inside `tx`.
+/// - `tx` is committed.
+/// - If `tape` is `Some`, the tape append fires AFTER the commit
+///   succeeds, so a rolled-back tx never leaves an orphan tape line
+///   describing a row that didn't land in doltlite.
+/// - Tape append errors are logged at `error!` level but do not fail
+///   the upsert. The doltlite row is already committed and is the
+///   source of truth; the tape is a write-only mirror, so failing the
+///   caller would be lying about whether the data landed. But a tape
+///   failure here is anomalous (the directory is local, the file is
+///   ours, there's no contention) — when it happens, we want it loud
+///   and visible in logs so it gets investigated.
+pub async fn write_event_to_raw_storage_layer(
+    tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    table: &str,
+    id: &str,
+    payload: &serde_json::Value,
+) -> Result<()> {
+    write_events_to_raw_storage_layer(tx, tape, &[(table, id, payload)]).await
+}
+
+/// Batch sibling of [`write_event_to_raw_storage_layer`]. Use this
+/// when one transaction covers many rows (e.g. one history / replies
+/// page upserted in a single `fsync`).
+pub async fn write_events_to_raw_storage_layer(
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    events: &[(&str, &str, &serde_json::Value)],
+) -> Result<()> {
+    for (table, id, _) in events {
+        record_object_attempt(&mut tx, table, id, None).await?;
+    }
+    tx.commit()
+        .await
+        .context("commit write_events_to_raw_storage_layer tx")?;
+    if let Some(t) = tape {
+        for (table, id, payload) in events {
+            if let Err(e) = t.append(table, id, payload) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = *table,
+                    id = *id,
+                    error = %format!("{e:#}"),
+                    "event tape append failed after doltlite commit; row IS persisted, tape is missing a line — investigate"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.
@@ -758,40 +811,6 @@ pub async fn upsert_scope_state(pool: &SqlitePool, scope: &str, last_seen_at: &s
     Ok(())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// endpoint_shapes
-// ─────────────────────────────────────────────────────────────────────
-
-/// Record (or refresh) the wire-shape skeleton for one endpoint.
-/// Caller is responsible for blanking out data fields in
-/// `envelope_skeleton`.
-pub async fn record_endpoint_shape(
-    pool: &SqlitePool,
-    endpoint: &str,
-    headers: &Value,
-    envelope_skeleton: &Value,
-) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
-    let h = serde_json::to_string(headers).unwrap_or_else(|_| "{}".into());
-    let e = serde_json::to_string(envelope_skeleton).unwrap_or_else(|_| "{}".into());
-    sqlx::query(
-        "INSERT INTO endpoint_shapes (endpoint, example_headers, example_envelope_skeleton, captured_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(endpoint) DO UPDATE SET
-            example_headers = excluded.example_headers,
-            example_envelope_skeleton = excluded.example_envelope_skeleton,
-            captured_at = excluded.captured_at",
-    )
-    .bind(endpoint)
-    .bind(&h)
-    .bind(&e)
-    .bind(&now)
-    .execute(pool)
-    .await
-    .context("upsert endpoint_shapes")?;
-    Ok(())
-}
-
 #[cfg(test)]
 // Test diagnostics + intentional probe-failure prints under stock
 // libsqlite3 (no doltlite). cargo-test captures stderr; no MP in scope.
@@ -830,10 +849,6 @@ mod tests {
             .await
             .unwrap();
         sqlx::query("SELECT COUNT(*) FROM blob_refs")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM endpoint_shapes")
             .fetch_one(&pool)
             .await
             .unwrap();

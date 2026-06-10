@@ -10,6 +10,8 @@
 //! rejected, not coerced. The point is to notice unit flips
 //! instead of corrupting history.
 
+pub mod schema_raw;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -25,6 +27,8 @@ use frankweiler_core::config::{YolinkDevice, YolinkSync};
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::doltlite_raw as dr;
 use frankweiler_etl::progress::Progress;
+
+use schema_raw::{full_ddl, reading_id_recipe, DATA_TABLES};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -122,25 +126,6 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
 
 // ── doltlite store ──────────────────────────────────────────────────
 
-const DDL: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS yolink_devices (
-        id TEXT PRIMARY KEY,
-        family_device_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        start_ms INTEGER NOT NULL,
-        last_ts_ms INTEGER NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS yolink_readings (
-        id TEXT PRIMARY KEY,
-        device_name TEXT NOT NULL,
-        ts_ms INTEGER NOT NULL,
-        metric TEXT NOT NULL,
-        value REAL NOT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS yolink_readings_by_device_ts
-        ON yolink_readings(device_name, ts_ms)",
-];
-
 /// Thin wrapper around the doltlite pool — open + reset is all the
 /// sync runner consumes externally. Everything else stays inline in
 /// [`fetch`].
@@ -151,22 +136,22 @@ pub struct RawDb {
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
-        let pool = dr::open(db_path, DDL).await?;
+        let owned = full_ddl();
+        let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let pool = dr::open(db_path, &slices).await?;
         Ok(Self { pool })
     }
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
     pub async fn reset(&self) -> Result<()> {
-        for sql in ["DELETE FROM yolink_devices", "DELETE FROM yolink_readings"] {
-            sqlx::query(sql).execute(&self.pool).await?;
+        for table in DATA_TABLES {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
-}
-
-fn reading_pk(device: &str, ts_ms: i64, metric: &str) -> String {
-    format!("{device}#{ts_ms}#{metric}")
 }
 
 /// UPSERT one window's worth of readings. Returns
@@ -189,7 +174,7 @@ async fn upsert_readings(
              ON CONFLICT(id) DO UPDATE SET value = excluded.value
                 WHERE yolink_readings.value <> excluded.value",
         )
-        .bind(reading_pk(device, r.ts_ms, r.metric))
+        .bind(reading_id_recipe(device, r.ts_ms, r.metric))
         .bind(device)
         .bind(r.ts_ms)
         .bind(r.metric)

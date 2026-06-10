@@ -55,6 +55,9 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "frankweiler/backend/etl/providers/github:github_live": (
         "manual live test, latchkey needs host keychain"
     ),
+    "frankweiler/backend/etl/providers/email:jmap_live": (
+        "manual live test, latchkey needs host keychain"
+    ),
     "frankweiler/backend/etl/providers/gitlab:gitlab_live": (
         "manual live test, latchkey needs host keychain"
     ),

@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1317,13 +1317,14 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "blake3",
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-qmd-indexer",
  "frankweiler-schema",
@@ -1342,12 +1343,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-anthropic"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1365,12 +1367,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-beeper"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1386,12 +1389,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-chatgpt"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1409,12 +1413,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-contacts"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "quick-xml",
  "serde",
@@ -1429,12 +1434,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-email"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "html2md",
@@ -1453,12 +1459,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-github"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1477,12 +1484,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-gitlab"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1501,12 +1509,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-notion"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1519,12 +1528,13 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
 [[package]]
 name = "frankweiler-etl-perseus"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1532,6 +1542,7 @@ dependencies = [
  "candle-transformers",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "hf-hub",
  "quick-xml",
@@ -1546,11 +1557,13 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-signal"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "chrono",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-schema",
  "frankweiler-signal-backup",
  "prost",
@@ -1567,13 +1580,14 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-slack"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
  "clap",
  "emojis",
  "frankweiler-etl",
+ "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",
  "insta",
@@ -1591,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-yolink"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1612,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-http"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -1636,8 +1650,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-index-lib"
+version = "0.7.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-schema",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "frankweiler-obs"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1653,7 +1678,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-qmd-indexer"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "frankweiler-obs",
@@ -1661,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-schema"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1669,7 +1694,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-signal-backup"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -1694,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-sync"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1728,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",

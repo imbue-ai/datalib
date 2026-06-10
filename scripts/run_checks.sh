@@ -75,30 +75,41 @@ fi
 
 # --- Rust (frankweiler/backend) ---
 #
-# We run `cargo fmt --check` only — `cargo clippy` is intentionally
-# skipped here. Reason: under Bazel, `libsqlite3-sys` is statically
-# linked against the doltlite amalgamation built by
-# `//third-party/doltlite:sqlite3` (see MODULE.bazel's
-# `crate.annotation` for the wiring). Cargo can't see that annotation,
-# so a plain `cargo clippy` either fails outright (no system
-# libsqlite3) or links against a system sqlite that lacks symbols
-# doltlite ships (sqlite3_load_extension, sqlite3_unlock_notify), and
-# spits out misleading errors.
+# `cargo fmt --check` is plain cargo (formatter only, no compilation,
+# so the doltlite vs system-libsqlite3 link problem doesn't apply).
 #
-# Correctness lints already run inside Bazel: every `rust_library` /
-# `rust_binary` rule invokes rustc with `--cap-lints=allow` lifted at
-# the crate level by default, and the build itself fails on the
-# warnings rustc raises. Anything clippy would catch above and beyond
-# that is an inner-loop developer concern, not a CI gate.
-#
-# To run clippy locally, set up a working libsqlite3 for cargo
-# (`brew install sqlite` plus the env vars in
-# frankweiler/backend/.cargo/config.toml) and invoke
-# `cd frankweiler/backend && cargo clippy --all-targets --all-features`
-# by hand.
+# Clippy used to be skipped here entirely because `cargo clippy`
+# couldn't link against our bazel-built doltlite amalgamation. We now
+# run clippy through bazel's `rust_clippy_aspect` instead, which
+# inherits the same doltlite linkage as a normal `bazelisk build` —
+# no cargo-side workaround needed. See .bazelrc's `--config=clippy`
+# block for flag wiring.
 if [ -d frankweiler/backend ]; then
     echo "[rust] cargo fmt --check"
     (cd frankweiler/backend && cargo fmt --all -- --check)
+
+    # Clippy is run via bazel's `rust_clippy_aspect`. We only invoke
+    # it when this script is run interactively
+    # (`bazel run :precommit`), not as a `bazel test` fixture.
+    #
+    # Why: `bazel test :precommit_test` holds the bazel server lock
+    # for the duration of the test. If we shelled out to
+    # `bazelisk build --config=clippy //...` here, the inner
+    # bazelisk would block forever waiting for the same lock — the
+    # test would never finish. (Observed: "Testing
+    # //:precommit_test; 137s … local" hanging indefinitely.)
+    #
+    # `bazel run :precommit` releases the lock before exec'ing the
+    # script, so the interactive path runs clippy as expected.
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+        echo "[rust] bazelisk build --config=clippy //..."
+        bazelisk build --config=clippy //...
+    else
+        echo "[rust] skipping bazelisk clippy under \`bazel test\`" \
+             "(would deadlock on the bazel server lock — run" \
+             "\`bazel run //:precommit\` or" \
+             "\`bazel build --config=clippy //...\` directly)"
+    fi
 fi
 
 echo "All pre-commit checks passed."

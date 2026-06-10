@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
+use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -204,19 +204,8 @@ pub fn render_all(
             &parsed.joins,
             &mailbox_name,
         );
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                markdown_uuid: tuid.clone(),
-                source_fingerprint: fp.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: rows.clone(),
-            edges: Vec::new(),
-        };
         let sidecar_path = abs.with_extension("grid_rows.json");
-        let sidecar_json = serde_json::to_string_pretty(&sidecar).context("serialize sidecar")?;
-        fs::write(&sidecar_path, sidecar_json)
-            .with_context(|| format!("write {}", sidecar_path.display()))?;
+        emit_sidecar(&sidecar_path, &tuid, &fp, RENDER_VERSION, &rows, &[])?;
 
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: tuid.clone(),

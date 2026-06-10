@@ -29,49 +29,16 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use chrono::{SecondsFormat, Utc};
 use sqlx::sqlite::SqlitePool;
+use sqlx::Row;
 
 use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{full_ddl, DATA_TABLES};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
-
-const DATA_TABLES: &[&str] = &["account", "recipients", "chats", "chat_items"];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS account (
-        id TEXT PRIMARY KEY,
-        payload BLOB NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS recipients (
-        id TEXT PRIMARY KEY,
-        identifier TEXT NULL,
-        display_name TEXT NULL,
-        payload BLOB NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
-        recipient_id TEXT NOT NULL,
-        payload BLOB NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS chats_by_recipient ON chats(recipient_id)",
-    "CREATE TABLE IF NOT EXISTS chat_items (
-        id TEXT PRIMARY KEY,
-        chat_id TEXT NOT NULL,
-        author_id TEXT NOT NULL,
-        date_sent INTEGER NOT NULL,
-        payload BLOB NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS chat_items_by_chat ON chat_items(chat_id, date_sent)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -98,7 +65,72 @@ impl RawDb {
 
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await?;
+        // The resume cursor isn't a "data table" (no bookkeeping
+        // sidecar, no upstream id) so it's not in DATA_TABLES; wipe
+        // it explicitly so --reset-and-redownload re-ingests the
+        // current snapshot.
+        sqlx::query("DELETE FROM ingested_backups")
+            .execute(&self.pool)
+            .await
+            .context("truncate ingested_backups")?;
         Ok(())
+    }
+
+    // ── ingested_backups (resume cursor) ────────────────────────────
+
+    /// Returns true if a row with this snapshot Blake3 already
+    /// exists. Callers use this to short-circuit before the
+    /// expensive decrypt + walk.
+    pub async fn snapshot_already_ingested(&self, blake3_hex: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE blake3 = ? LIMIT 1")
+            .bind(blake3_hex)
+            .fetch_optional(&self.pool)
+            .await
+            .context("snapshot_already_ingested")?;
+        Ok(row.is_some())
+    }
+
+    /// Record a successful ingestion. Idempotent (`INSERT OR IGNORE`)
+    /// so re-running after a partial-then-recovered ingest doesn't
+    /// fail loudly.
+    pub async fn record_snapshot_ingested(
+        &self,
+        blake3_hex: &str,
+        snapshot_dir: &str,
+        total_byte_size: u64,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+        sqlx::query(
+            "INSERT OR IGNORE INTO ingested_backups
+                 (blake3, snapshot_dir, total_byte_size, ingested_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(blake3_hex)
+        .bind(snapshot_dir)
+        .bind(total_byte_size as i64)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .context("record_snapshot_ingested")?;
+        Ok(())
+    }
+
+    /// Returns the most recently-recorded (snapshot_dir, blake3),
+    /// for logging "we ingested X previously" lines. Returns `None`
+    /// on a fresh DB.
+    pub async fn last_ingested_snapshot(&self) -> Result<Option<(String, String)>> {
+        let row = sqlx::query(
+            "SELECT snapshot_dir, blake3 FROM ingested_backups
+             ORDER BY ingested_at DESC LIMIT 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("last_ingested_snapshot")?;
+        Ok(row.and_then(|r| {
+            let d: Option<String> = r.try_get("snapshot_dir").ok();
+            let b: String = r.try_get("blake3").ok()?;
+            Some((d.unwrap_or_default(), b))
+        }))
     }
 
     // ── blobs (delegate to shared `blob_cas`) ───────────────────────

@@ -20,11 +20,10 @@ pub struct ExtractControl {
     /// one shows only upstream-content changes — because the
     /// bookkeeping sidecars are not part of the data diff.
     ///
-    /// `sync_runs` / `endpoint_shapes` / `sync_scope_state` are NOT
-    /// truncated — they're whole-table bookkeeping (audit log,
-    /// API discovery metadata, and resume cursor), not per-row
-    /// content, and preserving them across resets is useful for
-    /// debugging.
+    /// `sync_runs` / `sync_scope_state` are NOT truncated — they're
+    /// whole-table bookkeeping (audit log and resume cursor), not
+    /// per-row content, and preserving them across resets is useful
+    /// for debugging.
     ///
     /// `blob_refs` is NOT truncated either: the per-source CAS
     /// retains the bytes across this reset, and `blob_refs.blake3`

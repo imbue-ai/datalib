@@ -1,7 +1,10 @@
 # Clippy config for the frankweiler Rust workspace.
 #
 # Anything here that fires becomes a hard error in pre-commit, which
-# runs `cargo clippy --all-targets --all-features -- -D warnings`.
+# runs `bazelisk build --config=clippy //...`. The .bazelrc block for
+# that config wires in `-D warnings` so any clippy::* the build
+# emits — including the `disallowed-methods` / `disallowed-macros`
+# below — fails the build.
 
 # Keep progress-bar rendering coordinated with the tracing writer.
 #

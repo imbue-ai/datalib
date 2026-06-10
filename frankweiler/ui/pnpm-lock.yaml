@@ -11,6 +11,9 @@ importers:
       ag-grid-community:
         specifier: 35.2.1
         version: 35.2.1
+      ag-grid-enterprise:
+        specifier: 35.2.1
+        version: 35.2.1
       ag-grid-vue3:
         specifier: 35.2.1
         version: 35.2.1(vue@3.5.34(typescript@6.0.3))
@@ -584,11 +587,26 @@ packages:
     resolution: {integrity: sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
+  ag-charts-community@13.2.1:
+    resolution: {integrity: sha512-A+DCiesRp6WQ5R5e3x9bLh50IWCachVF6gkz6Dz4icMcq6WL5JNKL+xZEzrKYl+kuD8Y8728xmVm/H53o9Nayw==}
+
+  ag-charts-core@13.2.1:
+    resolution: {integrity: sha512-Y7rk3kF+fA6bUMjU+vIzG5rRBd+8EKjyIjzNR2uV1+HyrlnOn6b7Eb9HPkDUoosWHhz+UNCOW/lYDzPP6mivHQ==}
+
+  ag-charts-enterprise@13.2.1:
+    resolution: {integrity: sha512-QiNuNUu3o5qWUz9cPLuKr9r9k2YsO8Nwp4qJGR0s76WT6AeCmqKa12cSJrvIpwvPdjZ3PVlwsMA8s8EZ4dqrXA==}
+
+  ag-charts-locale@13.2.1:
+    resolution: {integrity: sha512-lwwV/l/O187R4DYUfjm6p8LijITe46IlDz8nOxNQNJAOpkzs+cWmjSxfNiM1BMVCWTcMdah/AKN+6iihbDa8IA==}
+
   ag-charts-types@13.2.1:
     resolution: {integrity: sha512-r7veb3QqJtIKlXmeUsLR4/oDPwmHxFI2tmbZra/203mdaz3uwQUrrgYNg628nrK+7L2YxXnwGc6L05tWjLLjNQ==}
 
   ag-grid-community@35.2.1:
     resolution: {integrity: sha512-ycmGI+1EbUT7i3eg/Kgi1owwnkdHXRufo10Xm6cfSsVPM3TMpvlbLgi28KIPt9DGHZWHq9fOBn7nxMNdv1Yaow==}
+
+  ag-grid-enterprise@35.2.1:
+    resolution: {integrity: sha512-nLl06cc7/THzf7mGZt7PotdeaBN74X3K9g2looyvJEymrOOJfjrLePrV4aNNhz/WZnATkbyblm5DM/qv3BeHKA==}
 
   ag-grid-vue3@35.2.1:
     resolution: {integrity: sha512-6QYw9QF9UKKiq+FKSehU33ABEtrNuKkqdrLO0SXtRD03u0ETlq/VYavfcB64hj9hvdjJJ9/PD0+vd0MyQWCtyA==}
@@ -1589,11 +1607,39 @@ snapshots:
 
   abbrev@2.0.0: {}
 
+  ag-charts-community@13.2.1:
+    dependencies:
+      ag-charts-core: 13.2.1
+      ag-charts-locale: 13.2.1
+      ag-charts-types: 13.2.1
+    optional: true
+
+  ag-charts-core@13.2.1:
+    dependencies:
+      ag-charts-types: 13.2.1
+    optional: true
+
+  ag-charts-enterprise@13.2.1:
+    dependencies:
+      ag-charts-community: 13.2.1
+      ag-charts-core: 13.2.1
+    optional: true
+
+  ag-charts-locale@13.2.1:
+    optional: true
+
   ag-charts-types@13.2.1: {}
 
   ag-grid-community@35.2.1:
     dependencies:
       ag-charts-types: 13.2.1
+
+  ag-grid-enterprise@35.2.1:
+    dependencies:
+      ag-grid-community: 35.2.1
+    optionalDependencies:
+      ag-charts-community: 13.2.1
+      ag-charts-enterprise: 13.2.1
 
   ag-grid-vue3@35.2.1(vue@3.5.34(typescript@6.0.3)):
     dependencies:

@@ -21,7 +21,11 @@ import {
   type CellContextMenuEvent,
   type IRowNode,
   type GetRowIdParams,
+  type MenuItemDef,
+  type DefaultMenuItem,
+  type GetContextMenuItemsParams,
 } from "ag-grid-community";
+import { AllEnterpriseModule } from "ag-grid-enterprise";
 import {
   fetchAccounts,
   fetchHealth,
@@ -49,7 +53,7 @@ const SOURCE_ICONS: Record<string, string> = {
   Notion: notionIconUrl,
 };
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
 
 const gridTheme = themeQuartz.withPart(colorSchemeVariable);
 
@@ -150,15 +154,11 @@ function resolveTargetRows(
   return [anchor.data];
 }
 
-// Context menu state
-const contextMenuVisible = ref(false);
-const contextMenuPos = ref({ x: 0, y: 0 });
-const contextMenuTargets = ref<SearchRow[]>([]);
-// The DOM element under the right-click. Stashed so a follow-up
-// "Feedback…" click can reconstruct the breadcrumb pointing at the
-// exact cell the user was looking at — the context menu itself sits
-// above the grid, so re-deriving from a later event would point at the
-// menu, not the cell.
+// The DOM element under the most recent right-click. Stashed in
+// `onCellContextMenu` so a follow-up "Feedback…" menu action can
+// reconstruct the breadcrumb pointing at the exact cell the user was
+// looking at — AG Grid's `getContextMenuItems` callback doesn't get
+// the originating MouseEvent, so we capture it on the side.
 const contextAnchorEl = ref<Element | null>(null);
 // Column id (e.g. "author") + raw cell value snapshot for the feedback
 // payload. Captured at right-click time so the modal sees what the user
@@ -170,9 +170,9 @@ const contextCellInfo = ref<{ column: string; cellValue: string } | null>(null);
 const feedbackOpen = ref(false);
 const feedbackContext = ref<FeedbackContext | null>(null);
 const feedbackSurfaceLabel = ref("");
-// Filter context: which column the user right-clicked on, and the raw
-// cell value to filter by. Null when the right-click happened on a
-// non-filterable column (Time, Contents) or a row with no value there.
+// Filter context for a right-clicked cell — built on the fly inside
+// `getContextMenuItems`. Null for non-filterable columns (Time,
+// Contents) or rows with no value in the clicked column.
 type FilterCtx = {
   // Query-language key (e.g. "source", "channel"); maps to a backend Field.
   key: string;
@@ -181,14 +181,6 @@ type FilterCtx = {
   // Raw value to filter by (UUIDs for author/account, not display labels).
   value: string;
 };
-const contextFilter = ref<FilterCtx | null>(null);
-
-// Optional "Filter by Notion Page" menu entry, populated when the right-
-// clicked row has a non-empty `notion_page_uuid`. Lets users zoom into all
-// rows on a single Notion page from any cell of any row on that page —
-// useful because the page UUID isn't always the same as conversation_uuid
-// (e.g. comment threads use the discussion UUID for that column).
-const contextNotionPage = ref<FilterCtx | null>(null);
 
 // Map AG Grid colId → query-language key + header. Keep in sync with
 // `column_for_field` in backend/core/src/db.rs.
@@ -214,57 +206,6 @@ const FILTER_COLUMNS: Record<
   },
 };
 
-function closeContextMenu() {
-  contextMenuVisible.value = false;
-  contextMenuTargets.value = [];
-  contextFilter.value = null;
-  contextNotionPage.value = null;
-  contextAnchorEl.value = null;
-  contextCellInfo.value = null;
-}
-
-function openFeedbackForCell() {
-  const targets = contextMenuTargets.value;
-  const info = contextCellInfo.value;
-  if (targets.length === 0 || !info) {
-    closeContextMenu();
-    return;
-  }
-  const rowUuids = targets.map((r) => r.uuid);
-  feedbackContext.value = buildContext({
-    surface: "grid_cell",
-    anchor: contextAnchorEl.value,
-    targetUuids: rowUuids,
-    payload: {
-      column: info.column,
-      row_uuids: rowUuids,
-      cell_value: info.cellValue || null,
-    },
-  });
-  feedbackSurfaceLabel.value = `Grid cell · ${info.column}${
-    targets.length > 1 ? ` · ${targets.length} rows` : ""
-  }`;
-  feedbackOpen.value = true;
-  closeContextMenu();
-}
-
-// Wrapper-level contextmenu handler. We don't intercept right-clicks
-// on column headers anymore — those used to open the feedback modal,
-// which was both surprising and missed the standard "filter / hide
-// column" affordances users expect from a header right-click. For
-// headers we let AG Grid's own handling (or the browser's native
-// menu) take over; only row/cell right-clicks get our custom menu
-// (the cellContextMenu event AG Grid emits asynchronously), so we
-// preventDefault on non-header targets to make sure the native menu
-// doesn't race ahead of it.
-function onGridWrapContextMenu(ev: MouseEvent) {
-  if (!(ev.target instanceof Element)) return;
-  if (ev.target.closest(".ag-header-cell")) return;
-  // Cell or row body — suppress the UA's native menu synchronously
-  // during bubble so AG Grid's cellContextMenu dispatch lands first.
-  ev.preventDefault();
-}
-
 function openFeedbackForSearchBar(ev: MouseEvent) {
   ev.preventDefault();
   const anchor = ev.target instanceof Element ? ev.target : null;
@@ -280,25 +221,6 @@ function openFeedbackForSearchBar(ev: MouseEvent) {
   });
   feedbackSurfaceLabel.value = "Search bar";
   feedbackOpen.value = true;
-}
-
-function openFeedbackForRow() {
-  const targets = contextMenuTargets.value;
-  if (targets.length === 0) {
-    closeContextMenu();
-    return;
-  }
-  const rowUuids = targets.map((r) => r.uuid);
-  feedbackContext.value = buildContext({
-    surface: "grid_row",
-    anchor: contextAnchorEl.value,
-    targetUuids: rowUuids,
-    payload: { row_uuids: rowUuids },
-  });
-  feedbackSurfaceLabel.value =
-    targets.length === 1 ? "Grid row" : `Grid rows · ${targets.length}`;
-  feedbackOpen.value = true;
-  closeContextMenu();
 }
 
 /// Quote a value for the search bar. Quotes when it contains whitespace,
@@ -359,33 +281,8 @@ function formatSlugUuid(slug: string, uuid: string): string {
   return s.length === 0 ? uuid : `${s}-${uuid}`;
 }
 
-function applyContextFilter(exclude: boolean) {
-  const ctx = contextFilter.value;
-  if (!ctx) return;
-  appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, exclude));
-  closeContextMenu();
-}
-
-function applyNotionPageFilter(exclude: boolean) {
-  const ctx = contextNotionPage.value;
-  if (!ctx) return;
-  appendFilterToQuery(formatFilterToken(ctx.key, ctx.value, exclude));
-  closeContextMenu();
-}
-
-const slackLinkTargets = computed(() =>
-  contextMenuTargets.value.filter((r) => r.slack_link),
-);
-
-function openTargetsInSlack() {
-  for (const r of slackLinkTargets.value) {
-    window.open(r.slack_link, "_blank", "noopener");
-  }
-  closeContextMenu();
-}
-
-async function copyTargetUuids() {
-  const text = contextMenuTargets.value.map((r) => r.uuid).join(",");
+async function copyUuids(targets: SearchRow[]) {
+  const text = targets.map((r) => r.uuid).join(",");
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -397,7 +294,31 @@ async function copyTargetUuids() {
     document.execCommand("copy");
     document.body.removeChild(ta);
   }
-  closeContextMenu();
+}
+
+// Build a FilterCtx for the cell at `colId` on the given row, or null
+// when the column is non-filterable or has no value to filter by.
+// Mirrors the per-column logic from the old DOM-menu builder.
+function buildFilterCtx(colId: string, data: SearchRow): FilterCtx | null {
+  const meta = FILTER_COLUMNS[colId];
+  if (!meta) return null;
+  const row = data as Record<string, unknown>;
+  const cellRaw = row[colId];
+  if (meta.uuidCol) {
+    const uuid = row[meta.uuidCol as string];
+    if (typeof uuid !== "string" || uuid.length === 0) return null;
+    let displayLabel = "";
+    if (colId === "author" || colId === "account") {
+      displayLabel = accounts.value[uuid]?.label ?? "";
+    } else if (colId === "conversation_name") {
+      displayLabel = typeof cellRaw === "string" ? cellRaw : "";
+    }
+    return { key: meta.key, header: meta.header, value: formatSlugUuid(displayLabel, uuid) };
+  }
+  if (typeof cellRaw === "string" && cellRaw.length > 0) {
+    return { key: meta.key, header: meta.header, value: cellRaw };
+  }
+  return null;
 }
 
 // Emit the current AG Grid column state to the parent. Called from
@@ -771,11 +692,151 @@ const defaultColDef: ColDef = {
   resizable: true,
   sortable: true,
   filter: true,
+  enableRowGroup: true,
 };
 
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
+  // Enterprise: drag-to-group panel above the grid + columns tool panel on
+  // the right. Both are pure UI affordances over existing column state, so
+  // they cost nothing when unused.
+  rowGroupPanelShow: "always",
+  sideBar: "columns",
+  // `preventDefaultOnContextMenu: true` makes AG Grid call
+  // preventDefault() synchronously on the contextmenu event, which is
+  // what the grid-context-menu e2e test pins (so the browser's native
+  // menu never shows over the grid's). Our app-specific entries are
+  // prepended to AG Grid's defaults via `getContextMenuItems` below.
+  preventDefaultOnContextMenu: true,
+  getContextMenuItems: (
+    params: GetContextMenuItemsParams<SearchRow>,
+  ): (MenuItemDef<SearchRow> | DefaultMenuItem)[] => {
+    const defaults = params.defaultItems ?? [];
+    if (!gridApi) return defaults;
+    const node = params.node as IRowNode<SearchRow> | null;
+    if (!node?.data) return defaults;
+    const targets = resolveTargetRows(gridApi, node);
+    if (targets.length === 0) return defaults;
+    const rowUuids = targets.map((r) => r.uuid);
+    const colId = params.column?.getColId() ?? "";
+    const filterCtx = buildFilterCtx(colId, node.data);
+    const notionCtx: FilterCtx | null = node.data.notion_page_uuid
+      ? {
+          key: "notion_page",
+          header: "Notion Page",
+          value: formatSlugUuid(
+            node.data.conversation_uuid === node.data.notion_page_uuid
+              ? node.data.conversation_name
+              : "",
+            node.data.notion_page_uuid,
+          ),
+        }
+      : null;
+    const slackTargets = targets.filter((r) => r.slack_link);
+    // Anchor + cell info come from onCellContextMenu (it fires before
+    // getContextMenuItems on the same right-click). Snapshot now so
+    // each item action closes over the right values even if the user
+    // dismisses and re-opens the menu before clicking.
+    const anchor = contextAnchorEl.value;
+    const cellInfo = contextCellInfo.value;
+    const plural = targets.length === 1 ? "" : "s";
+
+    const items: (MenuItemDef<SearchRow> | DefaultMenuItem)[] = [];
+    if (filterCtx) {
+      items.push(
+        {
+          name: `Keep only ${filterCtx.header}=${filterCtx.value}`,
+          action: () =>
+            appendFilterToQuery(
+              formatFilterToken(filterCtx.key, filterCtx.value, false),
+            ),
+        },
+        {
+          name: `Exclude all ${filterCtx.header}=${filterCtx.value}`,
+          action: () =>
+            appendFilterToQuery(
+              formatFilterToken(filterCtx.key, filterCtx.value, true),
+            ),
+        },
+        "separator",
+      );
+    }
+    if (notionCtx) {
+      items.push(
+        {
+          name: `Keep only Notion Page=${notionCtx.value}`,
+          action: () =>
+            appendFilterToQuery(
+              formatFilterToken(notionCtx.key, notionCtx.value, false),
+            ),
+        },
+        {
+          name: `Exclude all Notion Page=${notionCtx.value}`,
+          action: () =>
+            appendFilterToQuery(
+              formatFilterToken(notionCtx.key, notionCtx.value, true),
+            ),
+        },
+        "separator",
+      );
+    }
+    items.push({
+      name: `Copy UUID${plural}`,
+      action: () => {
+        void copyUuids(targets);
+      },
+    });
+    if (slackTargets.length > 0) {
+      items.push({
+        name: `Open in Slack${
+          slackTargets.length === 1 ? "" : ` (${slackTargets.length})`
+        }`,
+        action: () => {
+          for (const r of slackTargets) {
+            window.open(r.slack_link, "_blank", "noopener");
+          }
+        },
+      });
+    }
+    if (cellInfo) {
+      items.push({
+        name: "Feedback on this cell…",
+        action: () => {
+          feedbackContext.value = buildContext({
+            surface: "grid_cell",
+            anchor,
+            targetUuids: rowUuids,
+            payload: {
+              column: cellInfo.column,
+              row_uuids: rowUuids,
+              cell_value: cellInfo.cellValue || null,
+            },
+          });
+          feedbackSurfaceLabel.value = `Grid cell · ${cellInfo.column}${
+            targets.length > 1 ? ` · ${targets.length} rows` : ""
+          }`;
+          feedbackOpen.value = true;
+        },
+      });
+    }
+    items.push({
+      name: `Feedback on row${plural}…`,
+      action: () => {
+        feedbackContext.value = buildContext({
+          surface: "grid_row",
+          anchor,
+          targetUuids: rowUuids,
+          payload: { row_uuids: rowUuids },
+        });
+        feedbackSurfaceLabel.value =
+          targets.length === 1 ? "Grid row" : `Grid rows · ${targets.length}`;
+        feedbackOpen.value = true;
+      },
+    });
+    if (defaults.length > 0) items.push("separator", ...defaults);
+    return items;
+  },
   // Tall enough for two lines of clamped snippet text plus padding.
   rowHeight: 52,
   // Single-row selection drives the right preview pane. Cell text
@@ -824,83 +885,23 @@ const gridOptions: GridOptions<SearchRow> = {
   },
   onCellContextMenu: (e: CellContextMenuEvent<SearchRow>) => {
     if (!gridApi) return;
-    const targets = resolveTargetRows(gridApi, e.node);
-    if (targets.length === 0) return;
     const me = e.event as MouseEvent | null;
-    if (me) {
-      me.preventDefault();
-      contextMenuPos.value = { x: me.clientX, y: me.clientY };
-      contextAnchorEl.value =
-        me.target instanceof Element ? me.target : null;
-    }
+    contextAnchorEl.value =
+      me?.target instanceof Element ? me.target : null;
+    // Snapshot the cell value for the eventual "Feedback…" action. The
+    // `e.value` here is the displayed value (post-valueFormatter), which
+    // is closer to what the user actually sees (e.g. author UUID → label)
+    // than the raw row field.
+    const colId = e.column?.getColId() ?? "";
+    const v = e.value;
+    const cellRendered =
+      typeof v === "string" ? v : v == null ? "" : String(v);
+    contextCellInfo.value = { column: colId, cellValue: cellRendered };
     // Lightroom: right-clicking an unselected row narrows selection to it.
-    if (!e.node.isSelected()) {
+    if (e.node && !e.node.isSelected()) {
       gridApi.deselectAll();
       e.node.setSelected(true);
     }
-    contextMenuTargets.value = targets;
-    // Capture which column was clicked so we can offer "Keep only" /
-    // "Exclude" entries for filterable columns. For UUID-bearing columns
-    // (author / account / project / convo) the emitted token follows the
-    // Notion URL pattern `slug-uuid` — the slug is non-load-bearing display,
-    // the trailing UUID is what the backend filters on. Slug comes from the
-    // human-readable display of the cell; UUID from the row's `uuidCol`.
-    const colId = e.column?.getColId() ?? "";
-    const meta = FILTER_COLUMNS[colId];
-    contextFilter.value = null;
-    // Snapshot the cell value for "Feedback…". valueFormatter result is
-    // closer to what the user actually sees (e.g. author UUID → label)
-    // than the raw row field, so prefer it when available.
-    let cellRendered: string;
-    try {
-      const fmt = e.value;
-      cellRendered =
-        typeof fmt === "string"
-          ? fmt
-          : fmt == null
-            ? ""
-            : String(fmt);
-    } catch {
-      cellRendered = "";
-    }
-    contextCellInfo.value = { column: colId, cellValue: cellRendered };
-    if (meta && e.data) {
-      const cellRaw = (e.data as Record<string, unknown>)[colId];
-      if (meta.uuidCol) {
-        const uuid = (e.data as Record<string, unknown>)[meta.uuidCol];
-        if (typeof uuid === "string" && uuid.length > 0) {
-          // For author/account, the cell raw IS the UUID; display the label
-          // from accounts.json. For convo, the cell raw is the conversation
-          // name. For project, no display label source — slug stays empty.
-          let displayLabel = "";
-          if (colId === "author" || colId === "account") {
-            displayLabel = accounts.value[uuid]?.label ?? "";
-          } else if (colId === "conversation_name") {
-            displayLabel = typeof cellRaw === "string" ? cellRaw : "";
-          }
-          const value = formatSlugUuid(displayLabel, uuid);
-          contextFilter.value = { key: meta.key, header: meta.header, value };
-        }
-      } else if (typeof cellRaw === "string" && cellRaw.length > 0) {
-        contextFilter.value = { key: meta.key, header: meta.header, value: cellRaw };
-      }
-    }
-    // Independent of the per-column filter: if this row belongs to a Notion
-    // page, offer a "Filter by Notion Page" entry. The slug comes from
-    // conversation_name when that row's conversation_uuid equals the page
-    // uuid (i.e. the row is the page itself); otherwise we have no clean
-    // display label and emit just the UUID.
-    if (e.data && e.data.notion_page_uuid) {
-      const pageUuid = e.data.notion_page_uuid;
-      const slug =
-        e.data.conversation_uuid === pageUuid ? e.data.conversation_name : "";
-      contextNotionPage.value = {
-        key: "notion_page",
-        header: "Notion Page",
-        value: formatSlugUuid(slug, pageUuid),
-      };
-    }
-    contextMenuVisible.value = true;
   },
   // Any change a user can make to columns gets reflected in the URL.
   onColumnVisible: () => emitAgCols(),
@@ -981,7 +982,7 @@ watch(
 
     <p v-if="error" class="error">error: {{ error }}</p>
 
-    <div class="grid-wrap" @contextmenu="onGridWrapContextMenu">
+    <div class="grid-wrap">
       <AgGridVue
         class="grid"
         :class="{ 'grid--loading': loading }"
@@ -998,58 +999,6 @@ watch(
     <p v-if="!loading && rows.length === 0 && !error" class="empty">
       no matches.
     </p>
-
-    <div
-      v-if="contextMenuVisible"
-      class="ctx-overlay"
-      @click="closeContextMenu"
-      @contextmenu.prevent="closeContextMenu"
-    >
-      <div
-        class="ctx-menu"
-        :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
-        @click.stop
-      >
-        <div class="ctx-header">
-          Targeting {{ contextMenuTargets.length }} row{{ contextMenuTargets.length === 1 ? '' : 's' }}
-        </div>
-        <template v-if="contextFilter">
-          <div class="ctx-item" @click="applyContextFilter(false)">
-            Keep only {{ contextFilter.header }}={{ contextFilter.value }}
-          </div>
-          <div class="ctx-item" @click="applyContextFilter(true)">
-            Exclude all {{ contextFilter.header }}={{ contextFilter.value }}
-          </div>
-          <div class="ctx-divider" />
-        </template>
-        <template v-if="contextNotionPage">
-          <div class="ctx-item" @click="applyNotionPageFilter(false)">
-            Keep only Notion Page={{ contextNotionPage.value }}
-          </div>
-          <div class="ctx-item" @click="applyNotionPageFilter(true)">
-            Exclude all Notion Page={{ contextNotionPage.value }}
-          </div>
-          <div class="ctx-divider" />
-        </template>
-        <div class="ctx-item" @click="copyTargetUuids">
-          Copy UUID{{ contextMenuTargets.length === 1 ? '' : 's' }}
-        </div>
-        <div
-          v-if="slackLinkTargets.length > 0"
-          class="ctx-item"
-          @click="openTargetsInSlack"
-        >
-          Open in Slack{{ slackLinkTargets.length === 1 ? '' : ` (${slackLinkTargets.length})` }}
-        </div>
-        <div class="ctx-divider" />
-        <div v-if="contextCellInfo" class="ctx-item" @click="openFeedbackForCell">
-          Feedback on this cell…
-        </div>
-        <div class="ctx-item" @click="openFeedbackForRow">
-          Feedback on row{{ contextMenuTargets.length === 1 ? '' : 's' }}…
-        </div>
-      </div>
-    </div>
 
     <FeedbackModal
       :open="feedbackOpen"
@@ -1173,48 +1122,6 @@ watch(
 }
 @keyframes fw-spin {
   to { transform: rotate(360deg); }
-}
-.ctx-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1500;
-  background: transparent;
-}
-.ctx-menu {
-  position: fixed;
-  background: var(--fw-input-bg, #fff);
-  color: var(--fw-fg, #000);
-  border: 1px solid var(--fw-border, #ccc);
-  border-radius: 4px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
-  min-width: 180px;
-  padding: 4px 0;
-  z-index: 1501;
-  font-size: 14px;
-}
-.ctx-header {
-  padding: 6px 12px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--fw-fg-muted, #888);
-  border-bottom: 1px solid var(--fw-border, #ccc);
-  margin-bottom: 2px;
-  user-select: none;
-}
-.ctx-item {
-  padding: 8px 16px;
-  cursor: pointer;
-  user-select: none;
-}
-.ctx-item:hover {
-  background: var(--fw-accent, #eee);
-}
-.ctx-divider {
-  height: 1px;
-  background: var(--fw-border, #ccc);
-  margin: 4px 0;
 }
 </style>
 

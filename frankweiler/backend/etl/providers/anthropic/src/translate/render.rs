@@ -12,8 +12,8 @@ use serde_json::{json, Value};
 use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 
 use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
 use super::parse::{
@@ -433,18 +433,16 @@ pub fn render_all(
         std::fs::write(&abs, &r.body)?;
 
         let rows = rows_for_conversation(&shredded);
-        let sidecar = Sidecar {
-            header: SidecarHeader {
-                markdown_uuid: conv_uuid.clone(),
-                source_fingerprint: fingerprint.clone(),
-                render_version: RENDER_VERSION,
-            },
-            rows: rows.clone(),
-            edges: Vec::new(),
-        };
         let sidecar_abs = abs.with_extension("grid_rows.json");
-        let sidecar_json = serde_json::to_string_pretty(&sidecar).map_err(std::io::Error::other)?;
-        std::fs::write(&sidecar_abs, sidecar_json)?;
+        emit_sidecar(
+            &sidecar_abs,
+            &conv_uuid,
+            &fingerprint,
+            RENDER_VERSION,
+            &rows,
+            &[],
+        )
+        .map_err(std::io::Error::other)?;
 
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: conv_uuid.clone(),
@@ -655,16 +653,66 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
 }
 
 fn attachment_ref_id(at: &AttachmentRow) -> Option<&str> {
+    // Only items from `chat_messages[*].files[]` (kind="file") name
+    // a downloadable resource the blob CAS should materialize.
+    // `kind="attachment"` items come from `chat_messages[*].attachments[]`
+    // and only carry text Claude pre-extracted from the upload — there
+    // is no binary upstream to fetch (see attachment_md below).
+    if at.kind != "file" {
+        return None;
+    }
     attachment_meta(at).0
 }
 
 fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
     let (id, name, is_image) = attachment_meta(at);
     let label = name.unwrap_or("(unnamed)");
+
+    // Claude's `chat_messages[*].attachments[]` slot is fundamentally
+    // text — the API carries the bytes Claude extracted from a user
+    // upload (the binary itself is not retained), surfaced as
+    // `extracted_content`. Render that text inline rather than
+    // pretending there's a blob to link to. We deliberately do NOT
+    // route these through `blob_cas::attachment_md` (which would
+    // produce a misleading "not yet fetched" placeholder).
+    if at.kind == "attachment" {
+        let extracted = at
+            .raw_json
+            .as_object()
+            .and_then(|o| o.get("extracted_content"))
+            .and_then(Value::as_str);
+        return render_extracted_attachment(label, extracted);
+    }
+
+    // `files[]` items: real downloadable attachments. Hand off to the
+    // shared CAS-backed renderer which handles image vs file, and
+    // emits the durable "not yet fetched" placeholder when the bytes
+    // genuinely aren't in the CAS yet.
     let Some(id) = id else {
         return format!("[{}] {}", at.kind, label);
     };
     blob_cas::attachment_md(blobs, id, Some(label), is_image)
+}
+
+/// Render a Claude-`attachments[]` text item inline. Format:
+///
+/// ```text
+/// **[attachment: <filename>]**
+/// > line 1
+/// > line 2
+/// ```
+///
+/// Empty / missing `extracted_content` falls back to a short marker
+/// so the conversation history still records that an attachment
+/// existed.
+fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
+    let header_label = if label.is_empty() { "(unnamed)" } else { label };
+    let body = extracted.unwrap_or("").trim();
+    if body.is_empty() {
+        return format!("**[attachment: {header_label}]** *(no extracted content)*");
+    }
+    let quoted: String = body.lines().map(|l| format!("> {l}\n")).collect();
+    format!("**[attachment: {header_label}]**\n{quoted}")
 }
 
 fn capitalize(s: &str) -> String {

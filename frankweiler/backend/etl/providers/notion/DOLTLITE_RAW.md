@@ -71,16 +71,6 @@ All object tables share the same bookkeeping columns:
 `id` is `file_upload_id` when Notion supplies one (`kind = 'uploaded'`),
 otherwise the synthetic key `{owning_id}:{slot}`.
 
-### `endpoint_shapes`
-    endpoint                  TEXT PRIMARY KEY  -- e.g. 'GET /v1/blocks/{id}/children'
-    example_headers           JSON              -- captured headers
-    example_envelope_skeleton JSON              -- response shape with data fields emptied
-    captured_at               TIMESTAMP
-
-Captured once per endpoint, payload fields blanked. **Not** used for test
-playback — fixtures continue to be synthesized as today. This table just
-documents the wire shape.
-
 ### `sync_runs`
     run_id       INTEGER PRIMARY KEY AUTOINCREMENT
     started_at   TIMESTAMP NOT NULL
@@ -132,7 +122,6 @@ picks them up exactly like any other unfetched row.
 
 - Synthesize / translate stages still consume "raw" data — they will read from
   the doltlite DB instead of JSONL.
-- Test fixtures are still synthesized, not played back from `endpoint_shapes`.
 
 ## Open follow-ups (after Notion lands)
 

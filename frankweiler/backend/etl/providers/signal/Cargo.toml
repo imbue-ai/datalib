@@ -21,8 +21,10 @@ sqlx = { workspace = true }
 tracing = "0.1"
 chrono = { workspace = true }
 sha2 = { workspace = true }
+blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
 uuid = { workspace = true }
 frankweiler-schema = { path = "../../../schema" }
+frankweiler-index-lib = { path = "../../../index_lib" }
 
 [dev-dependencies]
 tempfile = "3"

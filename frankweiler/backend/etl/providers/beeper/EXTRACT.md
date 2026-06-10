@@ -57,10 +57,9 @@ writes a single doltlite file at
   downloaded by the desktop app yet (cache miss) produce a
   metadata-only row with `last_error` set.
 
-The shared `sync_runs` / `endpoint_shapes` / `sync_scope_state`
-tables that every doltlite raw store carries are present but
-unused for Beeper, since we don't have a remote endpoint to
-checkpoint against.
+The shared `sync_runs` / `sync_scope_state` tables that every
+doltlite raw store carries are present but unused for Beeper, since
+we don't have a remote endpoint to checkpoint against.
 
 ## Three Beeper runtimes — only one currently covered
 

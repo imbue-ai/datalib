@@ -11,7 +11,7 @@
 //! actual upstream change rather than churn introduced by our
 //! normalizer's evolution.
 //!
-//! Shared bookkeeping tables (`blobs`, `endpoint_shapes`, `sync_runs`)
+//! Shared bookkeeping tables (`blobs`, `sync_runs`)
 //! and open/blob plumbing live in [`frankweiler_etl::doltlite_raw`].
 
 use std::collections::HashMap;
@@ -29,54 +29,9 @@ use frankweiler_etl::blob_cas::{
 };
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{full_ddl, DATA_TABLES, MIGRATION_CONVERSATIONS_ADD_ORG_NAME};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
-
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns (fetched_at, attempt_count, last_attempt_at,
-/// last_error) live in sidecar `<table>_bookkeeping` tables added
-/// to the DDL list via `dr::bookkeeping_ddl_for(...)`.
-const DATA_TABLES: &[&str] = &["users", "orgs", "conversations"];
-
-const DDL_DATA: &[&str] = &[
-    // users — PK is the Anthropic user UUID. Carries the `users.json`
-    // entries from the bulk export plus anything synthesized from
-    // `/api/account` when no export is available.
-    "CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        email TEXT NULL,
-        full_name TEXT NULL,
-        payload TEXT NULL
-    )",
-    // orgs — PK is the Anthropic organization UUID.
-    "CREATE TABLE IF NOT EXISTS orgs (
-        id TEXT PRIMARY KEY,
-        name TEXT NULL,
-        payload TEXT NULL
-    )",
-    // conversations — PK is the Anthropic conversation UUID. We store
-    // the raw `/api/.../chat_conversations/{uuid}` payload here, NOT
-    // the normalized export shape. `org_uuid` is the owning
-    // organization (needed at read time to re-build the export-shape
-    // `_source` block).
-    "CREATE TABLE IF NOT EXISTS conversations (
-        id TEXT PRIMARY KEY,
-        org_uuid TEXT NULL,
-        org_name TEXT NULL,
-        name TEXT NULL,
-        updated_at TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS conversations_org ON conversations(org_uuid)",
-    "CREATE INDEX IF NOT EXISTS conversations_updated ON conversations(updated_at)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -109,7 +64,7 @@ impl RawDb {
         // Idempotent migration for pre-org_name DBs. SQLite rejects the
         // ADD COLUMN with "duplicate column" once it's been applied; we
         // swallow that since the CREATE TABLE above already declares it.
-        let _ = sqlx::query("ALTER TABLE conversations ADD COLUMN org_name TEXT")
+        let _ = sqlx::query(MIGRATION_CONVERSATIONS_ADD_ORG_NAME)
             .execute(&pool)
             .await;
         let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;

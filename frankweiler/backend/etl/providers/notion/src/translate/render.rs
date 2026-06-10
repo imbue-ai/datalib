@@ -21,8 +21,8 @@ use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::BlobReader;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl::sidecar::{Sidecar, SidecarHeader};
 use frankweiler_etl::title::Title;
+use frankweiler_index_lib::emit_sidecar;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
@@ -1220,18 +1220,15 @@ pub fn render_notion_official(
         // Sidecar + callback only fire if gather_documents knew about
         // this page (it should, for any page that produced rows).
         if let Some(pd) = page_doc_by_uuid.get(&pid) {
-            let sidecar = Sidecar {
-                header: SidecarHeader {
-                    markdown_uuid: pd.page_uuid.clone(),
-                    source_fingerprint: pd.source_fingerprint.clone(),
-                    render_version: RENDER_VERSION,
-                },
-                rows: pd.rows.clone(),
-                edges: Vec::new(),
-            };
             let sidecar_path = target.with_extension("grid_rows.json");
-            let json = serde_json::to_string_pretty(&sidecar)?;
-            fs::write(&sidecar_path, json)?;
+            emit_sidecar(
+                &sidecar_path,
+                &pd.page_uuid,
+                &pd.source_fingerprint,
+                RENDER_VERSION,
+                &pd.rows,
+                &[],
+            )?;
 
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: pd.page_uuid.clone(),
@@ -1327,18 +1324,15 @@ pub fn render_notion_official(
         };
 
         if let Some(td) = thread_doc_by_uuid.get(&disc_id) {
-            let sidecar = Sidecar {
-                header: SidecarHeader {
-                    markdown_uuid: td.discussion_uuid.clone(),
-                    source_fingerprint: td.source_fingerprint.clone(),
-                    render_version: RENDER_VERSION,
-                },
-                rows: td.rows.clone(),
-                edges: Vec::new(),
-            };
             let sidecar_path = p.with_extension("grid_rows.json");
-            let json = serde_json::to_string_pretty(&sidecar)?;
-            fs::write(&sidecar_path, json)?;
+            emit_sidecar(
+                &sidecar_path,
+                &td.discussion_uuid,
+                &td.source_fingerprint,
+                RENDER_VERSION,
+                &td.rows,
+                &[],
+            )?;
 
             on_doc_complete(RenderedMarkdown {
                 markdown_uuid: td.discussion_uuid.clone(),

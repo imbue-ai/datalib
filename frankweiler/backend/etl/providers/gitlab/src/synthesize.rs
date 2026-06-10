@@ -24,6 +24,7 @@ use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
+use crate::extract::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
 use crate::extract::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
 
 pub struct GitlabSynth {
@@ -86,7 +87,7 @@ impl Synthesizer for GitlabSynth {
         // MRs, grouped by (project_full_path, iid).
         let mrs = load_latest_by_key(&self.api_dir, ENTITY_MR, |r| {
             mr_proj_iid(r)
-                .map(|(p, n)| format!("{p}!{n}"))
+                .map(|(p, n)| mr_pk_recipe(&p, n as u32))
                 .unwrap_or_default()
         })?;
         let mut mr_by_key: BTreeMap<(String, u64), Value> = BTreeMap::new();
@@ -140,7 +141,7 @@ impl Synthesizer for GitlabSynth {
                 .get("discussion_id")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            format!("{proj}!{iid}#{id}")
+            discussion_pk_recipe(proj, iid as u32, id)
         })?;
         let mut disc_by_mr: BTreeMap<(String, u64), Vec<Value>> = BTreeMap::new();
         for rec in discussions.into_values() {

@@ -219,7 +219,8 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
         let payload: Vec<u8> = r.try_get("payload")?;
-        let item_pk = format!("{chat_id}#{author_id}#{date_sent}");
+        let item_pk =
+            crate::extract::schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
         let (text, outgoing, attachments) = decode_chat_item(&payload);
         let period_key = period.key_for_ms(date_sent);
         let key = (chat_id.clone(), period_key.clone());

@@ -3,6 +3,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 exports_files([
     "Cargo.toml",
     "Cargo.lock",
+    # Wired into `bazelisk build --config=clippy` via .bazelrc — see
+    # `--@rules_rust//rust/settings:clippy.toml=//frankweiler/backend:clippy.toml`.
+    "clippy.toml",
 ])
 
 # Enforces that frankweiler/backend/sync/BUILD.bazel's `rust_binary

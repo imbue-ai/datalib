@@ -1,3 +1,4 @@
+load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 # Surface this BUILD file as a data target so //tools:qmd_version_pins_test
@@ -111,6 +112,47 @@ genrule(
         ]),
     ]),
     visibility = ["//visibility:public"],
+)
+
+# py_test that drives the same `run_sync_pipeline.py` invocation as
+# :ingested_tng. Three reasons it exists:
+#
+#   1. Plain `bazelisk test //...` exercises the end-to-end pipeline
+#      (the genrule isn't a test, so it didn't before).
+#   2. `bazelisk coverage` collects coverage on `frankweiler_sync_bin`
+#      and `signal_make_fixture` through this test's `data` deps —
+#      rules_rust's coverage transition propagates through `data`,
+#      not just `deps`. See //docs/coverage.md for the full workflow.
+#   3. The test runs the pipeline THREE times against one data root
+#      (fresh / steady-state / --reset-and-redownload) to exercise
+#      signal's `ingested_backups` Blake3 resume cursor and the
+#      reset-clears-cursor path.
+py_test(
+    name = "ingested_tng_test",
+    srcs = ["ingested_tng_test.py"],
+    args = [
+        "$(rootpath run_sync_pipeline.py)",
+        "$(rootpath //frankweiler/backend/sync:frankweiler_sync_bin)",
+        "$(rootpath //frankweiler/backend/signal-backup:signal_make_fixture)",
+        "2369-04-15T00:00:00+00:00",
+        # FIXME: the lists below is a mishmash of paths.  We should standardize, likely inside the provider-specific directories.
+        "frankweiler/backend/etl/providers/anthropic/tests/fixtures/anthropic_api",
+        "frankweiler/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
+        "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
+        # FIXME: move these into their provider specific directories.
+        "tests/fixtures/github_api",
+        "tests/fixtures/gitlab_api",
+        "tests/fixtures/notion_web",
+        "frankweiler/backend/etl/providers/beeper/tests/fixtures/beeper_tng",
+        "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
+        "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
+    ],
+    data = [
+        "run_sync_pipeline.py",
+        ":source_json",
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "//frankweiler/backend/signal-backup:signal_make_fixture",
+    ],
 )
 
 # Build a QMD (BM25 + embeddings) index over the rendered TNG markdown tree

@@ -11,6 +11,7 @@
 
 pub mod client;
 pub mod db;
+pub mod schema_raw;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

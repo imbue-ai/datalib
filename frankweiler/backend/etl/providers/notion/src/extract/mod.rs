@@ -9,6 +9,7 @@
 
 pub mod db;
 pub mod official;
+pub mod schema_raw;
 pub mod unofficial;
 
 use std::collections::{HashMap, HashSet, VecDeque};

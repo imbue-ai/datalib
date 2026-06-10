@@ -65,11 +65,26 @@ build --action_env=HOME
 # Linux. See the libsqlite3-sys annotation comment.
 build --action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
 
-# Stamp builds with the git hash via tools/workspace_status.sh. Consumers
-# read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
-# lives in frankweiler_core::version::git_hash() (cargo builds use build.rs).
+# Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
+# STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation
+# has fresh values; the script itself is sub-second.
 build --workspace_status_command=tools/workspace_status.sh
-build --stamp
+
+# Stamping (`--stamp`) is OFF by default and ON only for release
+# builds (`--config=release`).
+#
+# When `--stamp` is on, every action that consumes workspace status —
+# in this repo, just `frankweiler_sync_bin`'s rustc_env_files
+# substitution of {STABLE_GIT_HASH} / {STABLE_GIT_DESCRIBE} — picks
+# up the new git SHA on every commit, which invalidates its action
+# cache key. Result: every commit forced a rebuild of the sync
+# binary even when no rust changed.
+#
+# We don't care about a stamped binary for day-to-day work — the
+# `frankweiler-sync --version` output reads "unknown" off the
+# `option_env!` fallback in version.rs, which is fine for dev. When
+# building a release artifact, pass `--config=release` to opt back in.
+build:release --stamp
 
 # Shared content-addressed cache across checkouts. Bazel's action cache lives
 # in the per-workspace output base (`_bazel_<user>/<md5-of-workspace-path>/`),
@@ -148,3 +163,40 @@ common --enable_platform_specific_config
 # `//tests/fixtures:ingested_tng`.
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
+
+# `--config=clippy` — run rules_rust's clippy aspect across the build
+# graph. Replaces `cargo clippy --all-targets --all-features --
+# -D warnings` in scripts/pre-commit because the cargo invocation has
+# its own incremental cache (separate from bazel's) and went cold
+# after every bazel build, eating 1–2 minutes per commit. The aspect
+# shares bazel's action cache + BuildBuddy remote cache, so a warm
+# `bazelisk build --config=clippy //...` is sub-second.
+# Clippy aspect activation lives on `build:clippy` — only here do
+# we ask bazel to actually run the lint aspect and surface its
+# outputs.
+build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
+build:clippy --output_groups=+clippy_checks
+
+# Clippy *configuration* (the .toml file + flags) is set on plain
+# `build` so it has the same constant value on every command. These
+# are Starlark build settings that ride with the analysis cache;
+# leaving them only under `build:clippy` made every alternation
+# between `bazel build --config=clippy //...` (pre-commit hook)
+# and a bare `bazel test //...` flip the values and discard the
+# analysis cache — see https://github.com/imbue-ai/mixed_up_files/issues/30.
+#
+# Setting them globally is a no-op for non-clippy actions: without
+# the aspect activation above, the clippy aspect never runs, so no
+# action reads these settings. The compile actions for rust_library
+# / rust_binary don't depend on them.
+#
+# Auto-discover via the workspace clippy.toml. clippy is picky about
+# the filename (must be `clippy.toml` or `.clippy.toml`); ours lives
+# at frankweiler/backend/clippy.toml and is exported via that
+# package's BUILD.bazel.
+build --@rules_rust//rust/settings:clippy.toml=//frankweiler/backend:clippy.toml
+# Warnings-as-errors, matching `-D warnings` from the old cargo
+# invocation. `disallowed_macros` was the lint clippy.toml's
+# `disallowed-macros` table relied on being warned (then promoted to
+# error by `-D warnings`) — same here.
+build --@rules_rust//:clippy_flags=-Dwarnings,-Wclippy::disallowed_macros

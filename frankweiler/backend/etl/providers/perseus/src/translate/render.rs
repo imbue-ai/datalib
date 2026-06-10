@@ -26,6 +26,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::edges::EdgeRow;
 use frankweiler_schema::grid_rows::GridRow;
 
@@ -136,7 +137,14 @@ fn render_book(
     let row = book_grid_row(book, &m_uuid);
     let rows = vec![row];
     let edges = book_edges(book, &m_uuid);
-    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
+    emit_sidecar(
+        &sidecar_path,
+        &m_uuid,
+        &fingerprint,
+        RENDER_VERSION,
+        &rows,
+        &edges,
+    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -205,7 +213,14 @@ fn render_chapter(
         idx += 1;
     }
     let edges = chapter_edges(book, chapter, lang, &m_uuid, alignments);
-    write_sidecar(&sidecar_path, &m_uuid, &fingerprint, &rows, &edges)?;
+    emit_sidecar(
+        &sidecar_path,
+        &m_uuid,
+        &fingerprint,
+        RENDER_VERSION,
+        &rows,
+        &edges,
+    )?;
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
@@ -579,33 +594,6 @@ fn section_grid_row(
         // scroll-and-highlight; see SearchView.vue::openRow.
         markdown_uuid: Some(ch_uuid.to_string()),
     }
-}
-
-fn write_sidecar(
-    path: &Path,
-    markdown_uuid: &str,
-    fingerprint: &str,
-    rows: &[GridRow],
-    edges: &[EdgeRow],
-) -> Result<()> {
-    let mut payload = serde_json::json!({
-        "header": {
-            "markdown_uuid": markdown_uuid,
-            "source_fingerprint": fingerprint,
-            "render_version": RENDER_VERSION,
-        },
-        "rows": rows,
-    });
-    // Match `Sidecar`'s `skip_serializing_if = "Vec::is_empty"` so docs
-    // that have no edges (e.g. the per-book index.md) produce
-    // byte-identical sidecars to the pre-edges era. Only emit the
-    // field when at least one edge originates from this markdown.
-    if !edges.is_empty() {
-        payload["edges"] = serde_json::to_value(edges)?;
-    }
-    fs::write(path, serde_json::to_string_pretty(&payload)?)
-        .with_context(|| format!("write {}", path.display()))?;
-    Ok(())
 }
 
 /// Edges originating from one book's index doc. The book is a
