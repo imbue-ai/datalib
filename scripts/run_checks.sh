@@ -88,8 +88,28 @@ if [ -d frankweiler/backend ]; then
     echo "[rust] cargo fmt --check"
     (cd frankweiler/backend && cargo fmt --all -- --check)
 
-    echo "[rust] bazelisk build --config=clippy //..."
-    bazelisk build --config=clippy //...
+    # Clippy is run via bazel's `rust_clippy_aspect`. We only invoke
+    # it when this script is run interactively
+    # (`bazel run :precommit`), not as a `bazel test` fixture.
+    #
+    # Why: `bazel test :precommit_test` holds the bazel server lock
+    # for the duration of the test. If we shelled out to
+    # `bazelisk build --config=clippy //...` here, the inner
+    # bazelisk would block forever waiting for the same lock — the
+    # test would never finish. (Observed: "Testing
+    # //:precommit_test; 137s … local" hanging indefinitely.)
+    #
+    # `bazel run :precommit` releases the lock before exec'ing the
+    # script, so the interactive path runs clippy as expected.
+    if [[ -n "${BUILD_WORKSPACE_DIRECTORY:-}" ]]; then
+        echo "[rust] bazelisk build --config=clippy //..."
+        bazelisk build --config=clippy //...
+    else
+        echo "[rust] skipping bazelisk clippy under \`bazel test\`" \
+             "(would deadlock on the bazel server lock — run" \
+             "\`bazel run //:precommit\` or" \
+             "\`bazel build --config=clippy //...\` directly)"
+    fi
 fi
 
 echo "All pre-commit checks passed."
