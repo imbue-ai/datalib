@@ -229,7 +229,7 @@ far (anthropic, chatgpt, signal, contacts, yolink, github, gitlab,
 notion, beeper). No drift between writer and reader callsites
 where recipes were lifted.
 
-### P0.5 Shared timestamp utility crate; no fabricated timestamps
+### P0.5 Shared timestamp utility crate; no fabricated timestamps ✅
 
 > Thad: "I really like the idea of a shared timestamp handling library
 > where all the timestamp handling funnels through" — and elsewhere:
@@ -260,6 +260,21 @@ called out beeper, signal, email).
 forbid `chrono::DateTime::to_rfc3339` and similar shortcuts via a
 clippy / module-private discipline. Add the "no fabricated timestamp"
 rule to `data_architecture_ingestion.md`.
+
+**Landed**: `frankweiler-time` (`frankweiler/backend/time/`) owns
+`now_local`, `parse_strict`, `parse_with_assumed_utc`, `bump_micros`
+and friends; every `chrono::{Utc,Local}::now().to_rfc3339*` callsite
+in the workspace funnels through it (251981f). The "no fabricated
+timestamps" principle lives in `data_architecture_ingestion.md`.
+`GridRow.when_ts` is now `Option<String>` end-to-end (schema,
+generated Rust, all 10 producers, load.rs, dolt_repo, SearchRow,
+api.ts) — null when there's no source-side stamp, so the principle
+holds at the type level. Contacts without `REV:` and any other
+non-event-shaped rows now emit `null`, never a wallclock sentinel.
+Two known fabricators remain and are documented as such: perseus's
+`synth_when_ts` (immutable corpus, pending the corpus-vs-event
+story) and the beeper / signal `iso_from_ms` fallback paths (now
+`tracing::warn!` loudly per 251981f).
 
 ### P0.6 Shared retry config schema (extract-side impl)
 
