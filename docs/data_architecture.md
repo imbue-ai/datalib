@@ -648,6 +648,52 @@ tests tagged `manual` are the per-provider `*_live` tests, which hit
 real upstream APIs and require latchkey credentials from the host
 machine.
 
+### The live-golden e2e test
+
+The TNG fixtures catch code-level regressions; the **live-golden
+e2e** catches what happens against the actual world. The target is
+[`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
+(tagged `manual` + `external` + `no-sandbox`; runs the full sync
+pipeline against `configs/thad_tiny.yaml`, every source, against
+live upstreams using host-side latchkey credentials). It snapshots
+three things into `frankweiler/backend/sync/tests/snapshots/`:
+
+  - `sync_summary.snap` — the per-source `FetchSummary` JSON the
+    orchestrator emits at end of run.
+  - `manifest.snap` — the file-tree manifest of `raw/` +
+    `rendered_md/`. Catches additions or removals of entire files
+    without having to diff every per-file snapshot.
+  - Per-file snapshots of every `.doltlite_db`, every rendered `.md`,
+    every `.grid_rows.json` sidecar, and every blob materialized
+    under `blobs/`. The doltlite-db snaps are byte-count summaries
+    (always change on re-fetch); the rest are content snapshots.
+
+Why this is uniquely useful:
+
+  - It's the only test that catches **render-side drift against real
+    payloads** — upstream shape changes, schema-projection bugs,
+    timestamp-fabrication bugs (see the contacts `when_ts` story
+    above), attachment-handling gaps (e.g. attachment slots that
+    extract isn't walking), etc.
+  - The diff is human-readable. `git diff
+    frankweiler/backend/sync/tests/snapshots/` after an update is the
+    same shape as a code review.
+  - After any change to extract schema, translate render, or the
+    sidecar contract, refresh the goldens with:
+    ```sh
+    bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
+    ```
+    and review the diff before committing. Treat each cluster of
+    changes as a finding: deliberate (commit), accidental
+    (investigate), or noise (block on a fix).
+
+The trade-off is that the goldens necessarily capture **real user
+data** — they live inside private workspaces. Acceptable here
+because the data root is single-user / single-laptop and the
+snapshots stay in a private repo; see the
+[fixture-hygiene unresolved question](#fixture-hygiene) for the
+public-facing version of this problem.
+
 ## Adding new sources is meant to be easy
 
 A new provider is a sibling crate under
