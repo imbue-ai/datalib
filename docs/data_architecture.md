@@ -108,6 +108,58 @@ convention across the tree is in
 [`docs/data_architecture_plan.md`](data_architecture_plan.md)
 §P0.1.
 
+### Layering of concerns: extract is downstream-agnostic
+
+The per-stage modules within a provider crate form a strict layer
+with a single allowed dependency direction:
+
+```
+load   ← translate   ← extract   ← upstream
+       (provider-agnostic)
+```
+
+  - **`extract`** owns the bytes-at-rest. It knows how to fetch from
+    upstream and persist into `<data_root>/raw/<name>.doltlite_db`,
+    and nothing else. It must NOT depend on `translate`,
+    `render`, `frankweiler_schema::grid_rows::GridRow`, sidecar
+    types, or the qmd index. The per-provider `schema_raw.rs`
+    rustdoc deliberately avoids describing how translate consumes
+    the tables — downstream stages are not extract's concern.
+  - **`translate`** depends on `extract` (it reads the raw store
+    and projects to the normalized POD + sidecar shape).
+    `extract::schema_raw` is part of the contract translate
+    consumes.
+  - **`load`** is provider-agnostic; it lives at
+    [`src/load.rs`](../frankweiler/backend/etl/src/load.rs) in the
+    shared `frankweiler_etl` crate and depends on no provider's
+    extract or translate. Its input contract is the sidecar tree.
+
+Why the discipline matters:
+
+  - Extract is its own deliverable. A user can run extract, stop,
+    inspect the raw store, and have something useful — even if
+    translate has bugs or hasn't been written yet.
+  - Translate can be re-implemented, replaced, or extended (e.g.
+    additional `schema_translate_<family>.rs` projections) without
+    touching extract.
+  - Disabling a translate path or render version for one provider
+    doesn't disturb that provider's extract.
+
+The reverse-direction slip (extract reaching into translate) is the
+more common one. We caught a real instance during the
+`schema_raw.rs` rollout where slack's `extract/db.rs` was importing
+`slack_message_uuid` from `crate::translate` — the UUIDv5 recipe
+for the messages table PK had landed on the wrong side of the
+layer. Moving it into `extract/schema_raw.rs` reversed the import
+direction.
+
+**Aspirationally enforced by bazel target visibility** — extract
+targets should declare `visibility = [":__pkg__", "//.../translate:__pkg__"]`
+or similar so a translate module accidentally added as an extract
+dep fails at the bazel-graph level rather than at link time. Today
+this is enforced by code review and the schema_raw convention; we
+should land the visibility tightening as a follow-up.
+
 This is not novel. It's the same shape as many Flume / Apache Beam /
 Dask / Prefect / Airflow pipelines. What we're optimizing for that
 those tools don't, **for a single user on a single laptop**:
