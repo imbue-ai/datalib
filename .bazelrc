@@ -65,11 +65,26 @@ build --action_env=HOME
 # Linux. See the libsqlite3-sys annotation comment.
 build --action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
 
-# Stamp builds with the git hash via tools/workspace_status.sh. Consumers
-# read STABLE_GIT_HASH from bazel-out/stable-status.txt; rust-side surfacing
-# lives in frankweiler_core::version::git_hash() (cargo builds use build.rs).
+# Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
+# STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation
+# has fresh values; the script itself is sub-second.
 build --workspace_status_command=tools/workspace_status.sh
-build --stamp
+
+# Stamping (`--stamp`) is OFF by default and ON only for release
+# builds (`--config=release`).
+#
+# When `--stamp` is on, every action that consumes workspace status —
+# in this repo, just `frankweiler_sync_bin`'s rustc_env_files
+# substitution of {STABLE_GIT_HASH} / {STABLE_GIT_DESCRIBE} — picks
+# up the new git SHA on every commit, which invalidates its action
+# cache key. Result: every commit forced a rebuild of the sync
+# binary even when no rust changed.
+#
+# We don't care about a stamped binary for day-to-day work — the
+# `frankweiler-sync --version` output reads "unknown" off the
+# `option_env!` fallback in version.rs, which is fine for dev. When
+# building a release artifact, pass `--config=release` to opt back in.
+build:release --stamp
 
 # Shared content-addressed cache across checkouts. Bazel's action cache lives
 # in the per-workspace output base (`_bazel_<user>/<md5-of-workspace-path>/`),

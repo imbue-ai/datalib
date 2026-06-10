@@ -88,17 +88,31 @@ use frankweiler_obs::status_line;
 // `FRANKWEILER_VERSION` is the output of `git describe --tags --always
 // --dirty` at build time, set by either
 //   - Bazel: rustc_env.txt resolves {STABLE_GIT_DESCRIBE} from
-//     tools/workspace_status.sh; or
+//     tools/workspace_status.sh — *only when stamping is on* (i.e.
+//     `--config=release`). Day-to-day dev builds have stamping off
+//     so the action cache doesn't invalidate on every commit; in
+//     that case rules_rust passes the literal placeholder
+//     `{STABLE_GIT_DESCRIBE}` through to rustc.
 //   - cargo: build.rs runs the same `git describe` (falls back to
 //     "unknown" outside a git checkout).
-// Both paths guarantee the env is set, so `env!` (compile-time) works
-// without needing `option_env!` + a fallback const. Exact-tag commits
-// render as "v0.1.2"; mid-development commits as "v0.1.2-3-gabc123d".
+// `FRANKWEILER_VERSION_RESOLVED` strips the unsubstituted-placeholder
+// state down to "dev" so the user-facing `--version` output reads
+// either a real `git describe` string, "unknown", or "dev". Exact-tag
+// commits render as "v0.1.2"; mid-development commits as
+// "v0.1.2-3-gabc123d".
+const FRANKWEILER_VERSION_RESOLVED: &str = {
+    let raw = env!("FRANKWEILER_VERSION");
+    if !raw.is_empty() && raw.as_bytes()[0] == b'{' {
+        "dev"
+    } else {
+        raw
+    }
+};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "frankweiler-sync",
-    version = env!("FRANKWEILER_VERSION"),
+    version = FRANKWEILER_VERSION_RESOLVED,
     about = "Config-driven ETL: extract every enabled source, translate, load into Dolt at <data_root>/dolt_db/ + rendered_md/ + qmd/index.sqlite"
 )]
 struct Args {
