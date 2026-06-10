@@ -1,5 +1,7 @@
 # Project Data Liberation ✊ - First-time user guide
 
+Liberate your data from silos. Run SOTA AI and data tools on it, on your own terms.
+
 > 🛑 **<span style="color:red">WITH GREAT POWER COMES GREAT RESPONSIBILITY</span>** 🛑
 >
 > <span style="color:red">**These tools allow you to accumulate a lot of high-value
@@ -17,10 +19,8 @@
 > upload it to a third party where you have very little control over what happens
 > with it next.**</span>
 
-> Codenames in this project (`frankweiler`, etc.) are inspired by
-> [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
-
-Liberate your data from silos. Run SOTA AI and data tools on it, on your own terms.
+Codenames in this project (`frankweiler`, etc.) are inspired by
+[_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
 
 ## 0. Setup pre-reqs
 
