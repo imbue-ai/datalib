@@ -3,19 +3,12 @@
 //! Replaces the event-store tree of `<entity>/{created,updated}/events.jsonl`
 //! files with a single sqlite database at
 //! `<data_root>/raw/<name>.doltlite_db`. Shared bookkeeping tables
-//! (`blobs`, `sync_runs`) and the open / blob
-//! plumbing live in [`frankweiler_etl::doltlite_raw`]; the primary-key
-//! policy that governs every object table here is documented there.
-//!
-//! Tables:
-//! - `self_identity` — PK is the upstream GitLab user id (stringified).
-//! - `merge_requests` — PK is `"<project_full_path>!<mr_iid>"`. Both
-//!   parts are upstream-stable and known before the detail fetch
-//!   (discovery surfaces them from the search results).
-//! - `discussions` — PK is `"<project_full_path>!<mr_iid>#<discussion_id>"`.
-//!   GitLab's discussion id is a hex string scoped to the project — we
-//!   include the MR scope to keep the PK construction trivial and avoid
-//!   surprises around bare discussion id collisions across projects.
+//! (`blobs`, `sync_runs`) and the open / blob plumbing live in
+//! [`frankweiler_etl::doltlite_raw`]; the primary-key policy that
+//! governs every object table here is documented there. The schema
+//! itself — DDL constants, table list, PK recipes — lives in the
+//! sibling [`super::schema_raw`] module; this file is the manipulation
+//! layer.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -28,62 +21,16 @@ use sqlx::Row;
 
 use frankweiler_etl::doltlite_raw::{self as dr};
 
+use super::schema_raw::{discussion_pk_recipe, full_ddl, mr_pk_recipe, DATA_TABLES};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-/// Data tables — what `dolt diff` should see across re-fetches.
-/// Bookkeeping columns live in `<table>_bookkeeping` sidecars added
-/// via `dr::bookkeeping_ddl_for(...)` below.
-const DATA_TABLES: &[&str] = &["self_identity", "merge_requests", "discussions"];
-
-const DDL_DATA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS self_identity (
-        id TEXT PRIMARY KEY,
-        username TEXT NULL,
-        web_url TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE TABLE IF NOT EXISTS merge_requests (
-        id TEXT PRIMARY KEY,
-        project_full_path TEXT NOT NULL,
-        mr_iid INTEGER NOT NULL,
-        state TEXT NULL,
-        web_url TEXT NULL,
-        head_sha TEXT NULL,
-        base_sha TEXT NULL,
-        start_sha TEXT NULL,
-        source_branch TEXT NULL,
-        target_branch TEXT NULL,
-        updated_at TEXT NULL,
-        merged_at TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS merge_requests_by_proj ON merge_requests(project_full_path, mr_iid)",
-    "CREATE TABLE IF NOT EXISTS discussions (
-        id TEXT PRIMARY KEY,
-        project_full_path TEXT NOT NULL,
-        mr_iid INTEGER NOT NULL,
-        discussion_id TEXT NOT NULL,
-        individual_note INTEGER NULL,
-        max_note_updated_at TEXT NULL,
-        payload TEXT NULL
-    )",
-    "CREATE INDEX IF NOT EXISTS discussions_by_mr ON discussions(project_full_path, mr_iid)",
-];
-
-fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = DDL_DATA.iter().map(|s| (*s).to_string()).collect();
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
-}
-
 pub fn mr_pk(proj: &str, iid: u32) -> String {
-    format!("{proj}!{iid}")
+    mr_pk_recipe(proj, iid)
 }
 
 pub fn discussion_pk(proj: &str, iid: u32, discussion_id: &str) -> String {
-    format!("{proj}!{iid}#{discussion_id}")
+    discussion_pk_recipe(proj, iid, discussion_id)
 }
 
 #[derive(Clone, Debug)]
