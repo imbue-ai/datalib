@@ -72,6 +72,42 @@ format looks like." Load is provider-agnostic and lives at
 [`src/load.rs`](../frankweiler/backend/etl/src/load.rs); a new provider
 needs no Load-side changes.
 
+### Per-provider schema layout
+
+Within each provider crate the bytes-at-rest schema is its own
+file, deliberately declarations-only:
+
+  - **`providers/<name>/src/extract/schema_raw.rs`** — the
+    raw-store schema. DDL constants (one per table / index /
+    bookkeeping sidecar), schema-evolution migration constants
+    co-located with the table they touch, any synthesized-PK
+    recipe functions, and a tiny `full_ddl()` composer that
+    splices in `dr::bookkeeping_ddl_for(table)` for each entity.
+    **No manipulation code** — `RawDb`, UPSERTs, SELECTs,
+    parameter binding stay in `extract/db.rs` and import the
+    constants and helpers from `schema_raw`. The convention is
+    proto/pydantic-flavored: opening 12 `schema_raw.rs` files at
+    the same fixed path is meant to answer "what does the world
+    look like at rest?" without opening anything else.
+  - **`providers/<name>/src/translate/schema_translate.rs`**
+    (aspirational, landing per provider) — the normalized
+    representation translate emits. Mostly serde-shaped Rust
+    types, not SQL DDL: the in-memory POD form before it's
+    shredded into sidecar rows. One provider may have multiple
+    `schema_translate_<family>.rs` files when it projects into
+    more than one normalized shape. Where a shape is shared
+    across providers (chat-human, code-review, time-series, …)
+    the canonical type lives in a shared crate and the
+    per-provider file re-exports.
+
+The "show me your tables" framing: reading the same two file
+paths inside every provider tells you what each one stores and
+what it emits, with the wire-fidelity columns, PK recipes, and
+denormalized fields visible inline. The plan landing this
+convention across the tree is in
+[`docs/data_architecture_plan.md`](data_architecture_plan.md)
+§P0.1.
+
 This is not novel. It's the same shape as many Flume / Apache Beam /
 Dask / Prefect / Airflow pipelines. What we're optimizing for that
 those tools don't, **for a single user on a single laptop**:
@@ -282,11 +318,13 @@ timestamp:
     arguably has a creation date, but it isn't shown in any
     time-ordered view.
 
-For these we accept that `when_ts` is either null or a sentinel
-(e.g., the upstream's earliest reachable date, or null filtered out
-of time-ordered queries). They don't participate in temporal views
-and that's fine — the principle is "**event-shaped** rows get real
-timestamps," not "every row everywhere."
+For these we accept that `when_ts` is **null**. They don't
+participate in temporal views and that's fine — the principle is
+"**event-shaped** rows get real timestamps," not "every row
+everywhere." Synthesizing a placeholder (the upstream's earliest
+reachable date, an epoch fallback, etc.) would be making up data
+we don't have; null is the honest answer and the consumer query
+filters it out of time-ordered views.
 
 A new provider should decide explicitly which of its row types are
 event-shaped and document the source of `when_ts` for each.
@@ -807,8 +845,8 @@ it's actually honored consistently across the existing providers:
     microsecond-bump applied or did some provider just clone the
     parent stamp (creating ordering ambiguity within a parent)?
   - For entities without a time-shape (contacts, perseus, workspace
-    metadata), do we consistently null-out `when_ts` or use the same
-    sentinel everywhere?
+    metadata), do we consistently null-out `when_ts` everywhere, or
+    do any providers still fabricate a placeholder?
 
 A grep over per-provider `translate/grid_rows.rs` (or equivalent)
 plus a spot-check on the produced `GridRow.when_ts` values in the
