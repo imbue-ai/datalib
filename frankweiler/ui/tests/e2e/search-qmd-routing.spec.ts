@@ -12,8 +12,30 @@ import { test, expect } from "@playwright/test";
 //   * `qmd:"text"` predicate → hybrid (same as bare; explicit form).
 //   * `qmd_vsearch:"text"` → vector-only mode.
 //
-// We assert via the row count alone — qmd's hybrid ranking is not pinned
-// to specific UUIDs, so we don't check identities.
+// We type into the grid's search bar (the v1 `/#/search?q=…` deeplink
+// form is gone; the query lives in the grid card's state now) and
+// gate on the Score column appearing — qmd-routed results carry
+// scores, LIKE-fallback rows don't, so the header showing up is the
+// signal that the query actually routed through qmd.
+
+async function qmdSearch(
+  page: import("@playwright/test").Page,
+  q: string,
+  timeout: number,
+) {
+  await page.goto("/");
+  await page
+    .locator('.ag-center-cols-container [role="row"]')
+    .first()
+    .waitFor({ timeout: 10_000 });
+  await page.getByTestId("search-input").fill(q);
+  await expect(
+    page.locator('.ag-header-cell[col-id="score"]'),
+  ).toBeVisible({ timeout });
+  await expect(
+    page.locator('.ag-center-cols-container [role="row"]').first(),
+  ).toBeVisible({ timeout: 30_000 });
+}
 
 test.describe("free-text search routes through qmd", () => {
   // The first qmd call in this session pays for npx package fetch + model
@@ -24,28 +46,16 @@ test.describe("free-text search routes through qmd", () => {
   test("bare 'grey earl' returns rows (qmd hybrid; was zero under LIKE)", async ({
     page,
   }) => {
-    await page.goto("/#/search?q=grey%20earl");
-    const firstDataRow = page
-      .locator('.ag-center-cols-container [role="row"]')
-      .first();
-    await expect(firstDataRow).toBeVisible({ timeout: 90_000 });
+    await qmdSearch(page, "grey earl", 90_000);
   });
 
-  test("explicit qmd:\"...\" predicate also returns rows", async ({ page }) => {
-    await page.goto('/#/search?q=qmd%3A%22earl%20grey%22');
-    const firstDataRow = page
-      .locator('.ag-center-cols-container [role="row"]')
-      .first();
-    await expect(firstDataRow).toBeVisible({ timeout: 30_000 });
+  test('explicit qmd:"..." predicate also returns rows', async ({ page }) => {
+    await qmdSearch(page, 'qmd:"earl grey"', 30_000);
   });
 
-  test("qmd_vsearch:\"...\" predicate routes to vector-only mode", async ({
+  test('qmd_vsearch:"..." predicate routes to vector-only mode', async ({
     page,
   }) => {
-    await page.goto('/#/search?q=qmd_vsearch%3A%22earl%20grey%22');
-    const firstDataRow = page
-      .locator('.ag-center-cols-container [role="row"]')
-      .first();
-    await expect(firstDataRow).toBeVisible({ timeout: 30_000 });
+    await qmdSearch(page, 'qmd_vsearch:"earl grey"', 30_000);
   });
 });

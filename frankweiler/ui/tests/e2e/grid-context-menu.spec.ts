@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 // `defaultPrevented` by the time it reaches `window`, so the browser's
 // native menu never shows over the grid's. AG Grid handles the
 // preventDefault via `preventDefaultOnContextMenu: true` set in
-// GridColumn.vue's gridOptions.
+// GridCard.ce.vue's gridOptions.
 
 test("right-click on a grid row suppresses the native browser menu", async ({
   page,

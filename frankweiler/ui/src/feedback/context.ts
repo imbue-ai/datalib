@@ -184,7 +184,7 @@ export function messageAncestor(el: Element | null | undefined): string | null {
 }
 
 /** Walk up looking for an element carrying `data-markdown-uuid`. The
- *  DocColumn sets this on its root so any descendant can find the
+ *  DocCard sets this on its root so any descendant can find the
  *  markdown without prop-drilling. */
 export function conversationAncestor(messageUuid: string | Element): string | null {
   // Allow callers to hand either an element or a message UUID. Looking up

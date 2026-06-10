@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
+import { clickRowByUuid } from "./grid-helpers";
 
-// The focused message in the preview pane gets a visible
+// The focused message in the document pane gets a visible
 // "highlight window" — an accent-colored outline on all four
 // sides — so the user can tell at a glance which message they
-// clicked. This styling was lost in the QMD-rewrite (`3a4674a`)
-// and restored alongside the scroll-on-row-click fix; this test
-// pins the outline so it doesn't silently regress again.
+// clicked. This styling was lost once before (QMD rewrite) and
+// restored; this test pins the outline so it doesn't silently
+// regress again.
 
 test("selected message has a visible accent-colored outline", async ({
   page,
@@ -38,39 +39,8 @@ test("selected message has a visible accent-colored outline", async ({
   // (conversation_uuid, message_index=0) — one per period. Matching
   // by uuid guarantees we click exactly the row whose uuid we then
   // assert against.
-  const rowIndex = await page.evaluate(
-    ({ uuid }) => {
-      type Node = {
-        rowIndex: number | null;
-        data?: { uuid: string };
-      };
-      const w = window as unknown as {
-        __fwGridApi?: {
-          forEachNode: (cb: (n: Node) => void) => void;
-          ensureNodeVisible: (n: Node, pos: "middle") => void;
-        };
-      };
-      const api = w.__fwGridApi!;
-      let found: number | null = null;
-      api.forEachNode((node) => {
-        if (node.data && node.data.uuid === uuid) {
-          api.ensureNodeVisible(node, "middle");
-          found = node.rowIndex;
-        }
-      });
-      return found;
-    },
-    { uuid: pick!.uuid },
-  );
-  expect(rowIndex).not.toBeNull();
+  await clickRowByUuid(page, pick!.uuid);
 
-  await page
-    .locator(`.ag-center-cols-container [role="row"][row-index="${rowIndex}"]`)
-    .click();
-
-  // Renderer keys sections by `data-section-uuid`; for a message row
-  // the row's `uuid` is exactly the value we expect on the highlighted
-  // section.
   const selected = page.locator(
     `.chat-preview [data-section-uuid="${pick!.uuid}"].selected`,
   );
