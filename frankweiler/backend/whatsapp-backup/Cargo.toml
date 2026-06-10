@@ -1,0 +1,25 @@
+[package]
+name = "frankweiler-whatsapp-backup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_whatsapp_backup"
+path = "src/lib.rs"
+
+[dependencies]
+aes = { workspace = true }
+ctr = { workspace = true }
+cipher = { workspace = true }
+ghash = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+flate2 = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+hex = "0.4"

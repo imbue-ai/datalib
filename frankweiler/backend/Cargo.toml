@@ -24,6 +24,7 @@ members = [
     "signal-backup",
     "sync",
     "tauri-backend",
+    "whatsapp-backup",
 ]
 
 [workspace.package]
@@ -99,3 +100,11 @@ cbc = { version = "0.1", features = ["std"] }
 ctr = "0.9"
 cipher = { version = "0.4", features = ["block-padding"] }
 flate2 = "1.0"
+# GHASH (the universal hash inside GCM) and AES-CTR primitives,
+# composed by `frankweiler-whatsapp-backup` into a hand-rolled
+# GCM decrypt. We can't use the `aes-gcm` crate here: WhatsApp's
+# crypt15 uses a 16-byte IV, and `aes-gcm` 0.10's `AesGcm<_, U16>`
+# does not produce the NIST-spec J0 = GHASH(H, IV || 0^s || lenBits)
+# that pycryptodome (and WhatsApp Android) actually use — verified
+# empirically against a real msgstore.db.crypt15 backup.
+ghash = "0.5"
