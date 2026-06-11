@@ -231,8 +231,46 @@ jobs:
       - name: Run version-consistency test
         run: bazel test //frankweiler/backend:version_consistency_test -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
+      # On tag pushes, build with `--config=release` so `--stamp` is on
+      # and the binary's `--version` reports the real `git describe`
+      # output (e.g. `v0.8.0`) instead of falling back to the literal
+      # `"dev"` that an unstamped build produces. Main-branch warm-cache
+      # runs deliberately omit `--config=release`: stamping invalidates
+      # the action cache on every commit, which would defeat the cache
+      # the warmup exists to populate. The post-build version assertion
+      # below catches any future regression where a tag build slips
+      # through without stamping.
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
+        env:
+          STAMP_FLAG: ${{ github.ref_type == 'tag' && '--config=release' || '' }}
+        run: bazel build //frankweiler/backend:dist -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }} $STAMP_FLAG
+
+      # Defense against the v0.7.0 / v0.8.0 incident where the dist
+      # build went out unstamped and `frankweiler-sync --version`
+      # printed `frankweiler-sync dev` in the published tarball. Run
+      # the freshly-built binary on the host (matrix runner is the
+      # same triple as the artifact) and require it to report exactly
+      # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
+      # suffix, or a mismatched tag — fails the release before any
+      # tarball is staged.
+      - name: Assert release binary reports tag version
+        if: github.ref_type == 'tag'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          actual="$(./bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin --version)"
+          echo "frankweiler-sync --version => ${actual}"
+          expected="frankweiler-sync ${REF_NAME}"
+          if [[ "${actual}" != "${expected}" ]]; then
+              echo "ERROR: release binary version mismatch." >&2
+              echo "  expected: ${expected}" >&2
+              echo "  actual:   ${actual}" >&2
+              echo "Likely cause: build-stamping was off for the dist build" >&2
+              echo "(see .bazelrc 'build:release --stamp' and the STAMP_FLAG" >&2
+              echo "computation above)." >&2
+              exit 1
+          fi
 
       # NOTE: the full `bazel test //...` step previously lived here
       # but was removed because rules_rust's ExtractCargoTomlEnvVars
