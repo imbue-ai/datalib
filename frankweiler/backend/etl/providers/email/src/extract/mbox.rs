@@ -53,7 +53,10 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use frankweiler_etl::blob_cas::blake3_hex;
+use frankweiler_etl::blob_cas::{blake3_hex, CasInsert};
+use frankweiler_etl::bulk::{
+    bulk_upsert_bookkeeping, push_placeholder_list, push_placeholders, SQL_CHUNK,
+};
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
 use mail_parser::{Address, HeaderValue, MessageParser, MimeHeaders, PartType};
@@ -77,11 +80,6 @@ use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
 /// transactions per batch instead of ~7 per email — at 17k emails
 /// that's ~30 transactions instead of ~120k.
 const FLUSH_BATCH: usize = 2000;
-
-/// Rows per multi-row `INSERT` statement. Well under SQLite's default
-/// 32k parameter ceiling for the widest row shape (`emails`, 11 cols
-/// → 4400 binds per statement at this chunk size).
-const SQL_CHUNK: usize = 400;
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -568,7 +566,13 @@ impl PendingBatch {
 /// Flush one accumulated `PendingBatch` to disk: chunked multi-row
 /// `INSERT`s inside a single entity-pool transaction (emails + join
 /// tables + blob_refs + bookkeeping) plus a single CAS-pool
-/// transaction (cas_objects).
+/// transaction via [`frankweiler_etl::blob_cas::BlobCas::put_many`].
+///
+/// No JSONL wire-tape: mbox is a file on disk, not a wire — there
+/// are no upstream events to mirror. The
+/// [`frankweiler_etl::doltlite_raw::bulk_upsert_events`] chokepoint
+/// is for the wire-shaped path (future JMAP migration); mbox just
+/// calls [`bulk_upsert_bookkeeping`] directly.
 async fn flush_batch(
     db: &RawDb,
     batch: &mut PendingBatch,
@@ -581,18 +585,38 @@ async fn flush_batch(
 
     let mut etx = db.pool().begin().await.context("begin entity tx")?;
     bulk_insert_emails(&mut etx, &batch.emails).await?;
-    bulk_insert_emails_bookkeeping(&mut etx, &batch.emails, &now).await?;
     bulk_insert_email_mailboxes(&mut etx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut etx, &batch.emails).await?;
     bulk_insert_email_attachments(&mut etx, &batch.emails).await?;
     bulk_insert_blob_refs(&mut etx, &batch.cas_objects).await?;
-    bulk_insert_blob_refs_bookkeeping(&mut etx, &batch.cas_objects, &now).await?;
+    bulk_upsert_bookkeeping(
+        &mut etx,
+        "emails",
+        batch.emails.iter().map(|e| e.id.as_str()),
+        &now,
+    )
+    .await?;
+    bulk_upsert_bookkeeping(
+        &mut etx,
+        "blob_refs",
+        batch.cas_objects.iter().map(|c| c.ref_id.as_str()),
+        &now,
+    )
+    .await?;
     etx.commit().await.context("commit entity tx")?;
 
+    // CAS pool: one chunked multi-row INSERT OR IGNORE per put_many.
     if !batch.cas_objects.is_empty() {
-        let mut ctx = db.cas().pool().begin().await.context("begin cas tx")?;
-        bulk_insert_cas_objects(&mut ctx, &batch.cas_objects, &now).await?;
-        ctx.commit().await.context("commit cas tx")?;
+        let cas_items: Vec<CasInsert<'_>> = batch
+            .cas_objects
+            .iter()
+            .map(|c| CasInsert {
+                blake3: &c.blake3,
+                bytes: &c.bytes,
+                content_type: c.content_type.as_deref(),
+            })
+            .collect();
+        db.cas().put_many(&cas_items).await?;
     }
 
     summary.emails_upserted += batch.emails.len();
@@ -633,7 +657,13 @@ async fn flush_account_and_lookups(
     .execute(&mut *tx)
     .await
     .context("insert account")?;
-    bulk_insert_bookkeeping_for_ids(&mut tx, "accounts", std::iter::once(account_id), &now).await?;
+    frankweiler_etl::bulk::bulk_upsert_bookkeeping(
+        &mut tx,
+        "accounts",
+        std::iter::once(account_id),
+        &now,
+    )
+    .await?;
 
     // Mailboxes.
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
@@ -657,7 +687,7 @@ async fn flush_account_and_lookups(
         })
         .collect();
     bulk_insert_mailboxes(&mut tx, account_id, &mailbox_specs).await?;
-    bulk_insert_bookkeeping_for_ids(
+    frankweiler_etl::bulk::bulk_upsert_bookkeeping(
         &mut tx,
         "mailboxes",
         mailbox_specs.iter().map(|(id, _, _, _)| id.as_str()),
@@ -680,7 +710,7 @@ async fn flush_account_and_lookups(
         thread_specs.push((tid.clone(), count, payload));
     }
     bulk_insert_threads(&mut tx, account_id, &thread_specs).await?;
-    bulk_insert_bookkeeping_for_ids(
+    frankweiler_etl::bulk::bulk_upsert_bookkeeping(
         &mut tx,
         "threads",
         thread_specs.iter().map(|(id, _, _)| id.as_str()),
@@ -734,14 +764,6 @@ async fn bulk_insert_emails(tx: &mut Transaction<'_, Sqlite>, rows: &[EmailRow])
         q.execute(&mut **tx).await.context("bulk insert emails")?;
     }
     Ok(())
-}
-
-async fn bulk_insert_emails_bookkeeping(
-    tx: &mut Transaction<'_, Sqlite>,
-    rows: &[EmailRow],
-    now: &str,
-) -> Result<()> {
-    bulk_insert_bookkeeping_for_ids(tx, "emails", rows.iter().map(|r| r.id.as_str()), now).await
 }
 
 async fn bulk_insert_email_mailboxes(
@@ -931,42 +953,6 @@ async fn bulk_insert_blob_refs(
     Ok(())
 }
 
-async fn bulk_insert_blob_refs_bookkeeping(
-    tx: &mut Transaction<'_, Sqlite>,
-    refs: &[PendingCas],
-    now: &str,
-) -> Result<()> {
-    bulk_insert_bookkeeping_for_ids(tx, "blob_refs", refs.iter().map(|r| r.ref_id.as_str()), now)
-        .await
-}
-
-async fn bulk_insert_cas_objects(
-    tx: &mut Transaction<'_, Sqlite>,
-    rows: &[PendingCas],
-    now: &str,
-) -> Result<()> {
-    for chunk in rows.chunks(SQL_CHUNK) {
-        let mut sql = String::from(
-            "INSERT OR IGNORE INTO cas_objects \
-             (blake3, byte_len, content_type, bytes, first_seen_at) VALUES ",
-        );
-        push_placeholders(&mut sql, chunk.len(), 5);
-        let mut q = sqlx::query(&sql);
-        for r in chunk {
-            q = q
-                .bind(&r.blake3)
-                .bind(r.bytes.len() as i64)
-                .bind(r.content_type.as_deref())
-                .bind(&r.bytes[..])
-                .bind(now);
-        }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk insert cas_objects")?;
-    }
-    Ok(())
-}
-
 async fn bulk_insert_mailboxes(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
@@ -1028,77 +1014,6 @@ async fn bulk_insert_threads(
         q.execute(&mut **tx).await.context("bulk insert threads")?;
     }
     Ok(())
-}
-
-async fn bulk_insert_bookkeeping_for_ids<'a, I>(
-    tx: &mut Transaction<'_, Sqlite>,
-    table: &str,
-    ids: I,
-    now: &str,
-) -> Result<()>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let ids: Vec<&str> = ids.into_iter().collect();
-    if ids.is_empty() {
-        return Ok(());
-    }
-    let bk_table = format!("{table}_bookkeeping");
-    for chunk in ids.chunks(SQL_CHUNK) {
-        let mut sql = format!(
-            "INSERT INTO {bk_table} (id, fetched_at, attempt_count, last_attempt_at, last_error) VALUES "
-        );
-        push_placeholders(&mut sql, chunk.len(), 5);
-        sql.push_str(&format!(
-            " ON CONFLICT(id) DO UPDATE SET
-                fetched_at = excluded.fetched_at,
-                attempt_count = {bk_table}.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_error = NULL"
-        ));
-        let mut q = sqlx::query(&sql);
-        for id in chunk {
-            q = q
-                .bind(*id)
-                .bind(now)
-                .bind(1_i64)
-                .bind(now)
-                .bind::<Option<&str>>(None);
-        }
-        q.execute(&mut **tx)
-            .await
-            .with_context(|| format!("bulk insert {bk_table}"))?;
-    }
-    Ok(())
-}
-
-/// Push `count` copies of `(?, ?, …)` separated by commas. Each tuple
-/// has `cols` placeholders.
-fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
-    for i in 0..count {
-        if i > 0 {
-            sql.push(',');
-        }
-        sql.push('(');
-        for j in 0..cols {
-            if j > 0 {
-                sql.push(',');
-            }
-            sql.push('?');
-        }
-        sql.push(')');
-    }
-}
-
-/// Push `count` comma-separated `?` placeholders (no surrounding
-/// parens). Used for `WHERE id IN (?, ?, …)` lists.
-fn push_placeholder_list(sql: &mut String, count: usize) {
-    for i in 0..count {
-        if i > 0 {
-            sql.push(',');
-        }
-        sql.push('?');
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

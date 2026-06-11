@@ -709,6 +709,75 @@ pub async fn write_events_to_raw_storage_layer(
     Ok(())
 }
 
+// `EventBatch` is the per-table batch shape — defined in
+// `crate::bulk` because it is a load-bearing primitive of the bulk
+// write path. The tape side (`EventTape::append_batch`) is a
+// best-effort sidecar that uses the same struct. Re-exported here
+// because providers reach for it next to the chokepoint.
+pub use crate::bulk::EventBatch;
+
+/// Chokepoint for the **successful bulk write** path against an
+/// event-shaped table (i.e. one whose rows came off a wire and have
+/// a meaningful payload to mirror). The provider has already issued
+/// its chunked multi-row entity-table UPSERTs inside `tx`; this call:
+///
+///   1. stamps `<table>_bookkeeping` for every id (via
+///      [`crate::bulk::bulk_upsert_bookkeeping`]) in the same tx,
+///      one bookkeeping batch per `EventBatch`;
+///   2. commits `tx`;
+///   3. after the commit succeeds, appends one JSONL line per row to
+///      the tape (if attached), one
+///      [`crate::event_tape::EventTape::append_batch`] call per batch.
+///
+/// Post-commit tape errors log at `error!` but do not fail the call.
+/// The doltlite rows are already persisted and are the source of
+/// truth; the tape is a write-only mirror, so failing the caller
+/// would be lying about whether the data landed (same contract as
+/// [`write_events_to_raw_storage_layer`]).
+///
+/// Not the right tool for non-event tables (blob_refs, sidecars,
+/// file-imported data with no wire) — those want
+/// [`crate::bulk::bulk_upsert_bookkeeping`] called directly inside
+/// the caller's tx, with no tape.
+///
+/// See `docs/data_architecture_ingestion.md` § "Bulk-upsert as the
+/// standard write path" for why this is the standard chokepoint for
+/// wire-event extracts.
+pub async fn bulk_upsert_events(
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    batches: &[EventBatch<'_>],
+    now: &str,
+) -> Result<()> {
+    for b in batches {
+        crate::bulk::bulk_upsert_bookkeeping(
+            &mut tx,
+            b.table,
+            b.rows.iter().map(|(id, _)| *id),
+            now,
+        )
+        .await?;
+    }
+    tx.commit().await.context("commit bulk_upsert_events tx")?;
+    if let Some(t) = tape {
+        for b in batches {
+            if b.rows.is_empty() {
+                continue;
+            }
+            if let Err(e) = t.append_batch(b) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = b.table,
+                    count = b.rows.len(),
+                    error = %format!("{e:#}"),
+                    "event tape append_batch failed after doltlite commit; rows ARE persisted, tape is missing lines — investigate"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.

@@ -83,6 +83,21 @@ Three rules:
     wire-fidelity payload that the doltlite row gets. No second
     parse, no second normalize.
 
+> **Status (2026-06):** **Slack** wires the tape end-to-end today
+> via the per-row `write_event(s)_to_raw_storage_layer` chokepoints
+> in `slack/src/extract/db.rs`, attached by `sync` at run start;
+> see `sync/src/main.rs::attach_event_tape`. Every other provider's
+> extract path runs without tape integration — its
+> `attach_event_tape` dispatch is a documented no-op. The bulk
+> chokepoint (see [Bulk-upsert as the standard write
+> path](#bulk-upsert-as-the-standard-write-path)) is also a tape
+> chokepoint, so wire-shaped providers that adopt the bulk helper
+> automatically get the tape. Note the corollary: providers whose
+> rows do **not** come off a wire (e.g. mbox file imports) should
+> bypass the chokepoint entirely and call
+> `bulk_upsert_bookkeeping` directly — there is no upstream event
+> to mirror.
+
 ## Shape of the system
 
 We have an ETL-shaped architecture that extracts raw data from many
@@ -91,14 +106,26 @@ verbatim** in versioned doltlite tables, with attachment **BLOBs in a
 content-addressable store** (also doltlite, but a separate sibling
 database per source).
 
-Each entity table has typed columns for the fields we need to query or index (`id`,
-`parent_id`, ordering columns, timestamps, foreign keys to other
-entities) plus a `payload` column that holds the raw upstream wire
-payload. On disk, `payload` is stored as JSONB (SQLite 3.45 binary
-JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port
+Each entity table has a `payload` column that holds the raw upstream
+wire payload, plus a small number of typed columns the writer needs to
+populate at insert time (synthesized-PK components, FKs into parent
+tables that aren't in the payload, namespace discriminators). On disk,
+`payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)`
+on write and `json(payload)` on read; see [port
 guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
 in Rust the value round-trips as a text JSON string. JSONB is a storage
 encoding. The principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+
+**Fields that are derivable from the payload** (e.g. `updated_at`,
+`state`, `name`, `html_url`, `display_name`) — even when we want to
+query or index them — should **not** be duplicated as stored columns.
+Use either a `CREATE INDEX … ON t(payload->>'$.path')` expression
+index, or a `VIRTUAL` generated column plus an index over it. Both
+produce COVERING index plans in DoltLite v0.11.9; the VIRTUAL+index
+variant additionally restores `SELECT col FROM t` ergonomics. Either
+way, `ALTER TABLE ADD COLUMN … VIRTUAL` (or a new expression index)
+is a no-refetch additive change against existing user data. See
+[Schema evolution](#schema-evolution).
 
 The pipeline has three stages. All three run **in-process inside
 `frankweiler-sync`** — one binary, one process, one config-driven
@@ -169,6 +196,36 @@ denormalized fields visible inline. The plan landing this
 convention across the tree is in
 [`docs/data_architecture_plan.md`](data_architecture_plan.md)
 §P0.1.
+
+#### Events vs bookkeeping: where each column lives
+
+Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`.
+The split is load-bearing — three buckets to think about when adding
+a column:
+
+  1. **Upstream payload data** (a Slack `text`, a GitHub `state`, a
+     Notion `last_edited_time`) → lives inside `payload`. If we need
+     to query or index it, use a VIRTUAL generated column + index or
+     an expression index over `payload->>'$.path'`. Do **not** copy it
+     into a stored column.
+  2. **Writer-supplied identity / joins** (synthesized-PK
+     components, FK references to parent entities the walker knows
+     but the payload doesn't, namespace discriminators like beeper's
+     `source`/`network`) → stored typed columns on `<t>`. These are
+     the only typed columns the entity table should grow.
+  3. **Writer-supplied per-row state** (`fetched_at`, `attempt_count`,
+     `last_attempt_at`, `last_error`, per-row cursors like CardDAV
+     `etag`, ChatGPT `last_listing_update_time`, YoLink
+     `last_ts_ms`, server-supplied freshness markers like
+     `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
+
+The reason the split matters: bookkeeping changes on every
+attempt regardless of upstream change. Storing it on the entity
+table makes every `dolt diff` noisy, defeats the wire-fidelity
+property of `payload`, and forces re-renders of unchanged
+content downstream. Keeping it on the sidecar means `<t>`
+mutates only when upstream actually changed, and the sidecar
+churn stays out of any cross-stage fingerprint.
 
 ### Layering of concerns: extract is downstream-agnostic
 
@@ -503,6 +560,61 @@ Two consequences:
 
 The only other commits allowed in a raw store are `rescue:` commits.
 Anything else is a bug.
+
+## Bulk-upsert as the standard write path
+
+Every extract is shaped the same at the bottom: for some entity
+table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with
+N rows on `<t>_bookkeeping` for `(id, fetched_at, attempt_count,
+last_error)`, and (if the source produced blobs) M rows on the CAS
+of `(blake3, byte_len, content_type, bytes)`. Doltlite charges a
+prolly-tree manifest mutation per `BEGIN … COMMIT`, so the right
+shape is **one entity-pool tx + one CAS-pool tx per batch**, each
+containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE`
+statements. Email's mbox extractor proved this in practice: 25k
+emails dropped from many minutes to ~75 seconds at FLUSH_BATCH=2000.
+
+The principle: **every provider's extract uses shared
+chunked-multi-row helpers for the entity-table UPSERT, the
+`<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs
+are an anti-pattern outside ad-hoc maintenance code.
+
+The shared pieces, all in `frankweiler_etl`:
+
+  - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` /
+    `bulk::push_placeholder_list`** — chunking utilities the
+    provider's per-table multi-row `INSERT` builders use.
+  - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the
+    generic `<t>_bookkeeping` UPSERT. Call this directly inside
+    the provider's tx after the entity UPSERT.
+  - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id,
+    &payload)])` shape that load-bearing batch primitives share.
+  - **`blob_cas::BlobCas::put_many`** — chunked multi-row
+    `INSERT OR IGNORE` over `cas_objects`, one tx per call.
+  - **`doltlite_raw::bulk_upsert_events(tx, tape, &[EventBatch], now)`**
+    — the **wire-event** chokepoint. For tables whose rows came off
+    an actual wire and have a meaningful payload to mirror to
+    [the JSONL tape](#wire-event-tape-jsonl): caller has already
+    issued its multi-row entity UPSERTs inside `tx`; this call
+    stamps `<t>_bookkeeping` for every batch in the same tx, commits,
+    and (if a tape is attached) appends one JSONL line per row via
+    `EventTape::append_batch`. Tape errors log but don't fail the
+    upsert — doltlite is the source of truth.
+
+The chokepoint is the right tool **only for tables whose rows came
+off a wire**. For everything else — `blob_refs`, sidecars,
+file-imported entities like mbox where there is no upstream
+"event" — call `bulk_upsert_bookkeeping` directly inside the same
+tx and skip the tape. Synthesizing a fake wire payload just to feed
+the chokepoint would be making up data we don't have.
+
+The per-table entity UPSERT itself stays in the provider because each
+table's column list and `ON CONFLICT` clause varies (see [Events vs
+bookkeeping](#events-vs-bookkeeping-where-each-column-lives) for
+which extras live on the entity table vs the bookkeeping sidecar
+vs as VIRTUAL+index over payload). What these shared helpers own is
+the cross-provider boilerplate — chunked SQL, bookkeeping, commit,
+and (for the wire-event subset) the tape mirror.
 
 ## Cursor / resume strategy
 
@@ -845,6 +957,18 @@ Two halves to this:
     new tables, new fields) are no-downtime, no-refetch.**
     Subtractive changes (renames, removals, type changes) get an
     explicit, named migration step. We aren't there yet.
+
+    The pattern that gets us closest, today: when the new "column"
+    is derivable from the payload (which is most of them — see
+    [Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives)),
+    add it as a `VIRTUAL` generated column over `payload->>'$.path'`
+    plus an index, or as a bare expression index. Both work in
+    DoltLite v0.11.9, both produce COVERING index plans, and
+    `ALTER TABLE ADD COLUMN … VIRTUAL` applies to existing rows
+    with no refetch and no payload rewrite. Reserve real stored
+    columns for the small set of writer-supplied fields that
+    genuinely aren't in the payload (synthesized PKs, FKs, namespace
+    discriminators).
 
   - **Upstream schema drift** — Slack adds a field, Notion changes a
     block type, GitHub renames `merged_by`. Because we preserve raw

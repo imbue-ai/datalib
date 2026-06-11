@@ -20,6 +20,7 @@
 //! subsequent runs.
 
 pub mod blob_cas;
+pub mod bulk;
 pub mod control;
 pub mod doltlite_raw;
 pub mod event_store;

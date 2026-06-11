@@ -106,6 +106,18 @@ pub struct CasObject {
     pub bytes: Vec<u8>,
 }
 
+/// One pre-hashed entry to bulk-insert via [`BlobCas::put_many`]. The
+/// caller is responsible for computing `blake3` (use [`blake3_hex`])
+/// before calling; this struct exists so put_many doesn't have to
+/// re-hash the same bytes the caller has already hashed for its own
+/// `blob_refs` row.
+#[derive(Debug, Clone, Copy)]
+pub struct CasInsert<'a> {
+    pub blake3: &'a str,
+    pub bytes: &'a [u8],
+    pub content_type: Option<&'a str>,
+}
+
 /// Per-source CAS handle. Single sqlx pool of size 1, same as every
 /// other doltlite store in this codebase.
 #[derive(Clone, Debug)]
@@ -158,6 +170,45 @@ impl BlobCas {
         .await
         .context("cas put")?;
         Ok(hash)
+    }
+
+    /// Bulk-insert pre-hashed bytes in a single transaction, using
+    /// chunked multi-row `INSERT OR IGNORE` (one prolly-tree manifest
+    /// mutation per chunk's `COMMIT` instead of one per blob).
+    ///
+    /// The caller must precompute the blake3 hex hash of each item
+    /// (use [`blake3_hex`]) — `put_many` does not re-hash.
+    ///
+    /// See `docs/data_architecture_ingestion.md` § "Bulk-upsert as
+    /// the standard write path" for why CAS writes share the same
+    /// batching shape as entity writes. No-op if `items` is empty.
+    pub async fn put_many(&self, items: &[CasInsert<'_>]) -> Result<()> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin cas put_many tx")?;
+        for chunk in items.chunks(crate::bulk::SQL_CHUNK) {
+            let mut sql = String::from(
+                "INSERT OR IGNORE INTO cas_objects \
+                 (blake3, byte_len, content_type, bytes, first_seen_at) VALUES ",
+            );
+            crate::bulk::push_placeholders(&mut sql, chunk.len(), 5);
+            let mut q = sqlx::query(&sql);
+            for it in chunk {
+                q = q
+                    .bind(it.blake3)
+                    .bind(it.bytes.len() as i64)
+                    .bind(it.content_type)
+                    .bind(it.bytes)
+                    .bind(&now);
+            }
+            q.execute(&mut *tx)
+                .await
+                .context("bulk insert cas_objects")?;
+        }
+        tx.commit().await.context("commit cas put_many tx")?;
+        Ok(())
     }
 
     pub async fn get(&self, blake3_hash: &str) -> Result<Option<CasObject>> {
