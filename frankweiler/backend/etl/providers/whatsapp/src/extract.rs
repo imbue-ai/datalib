@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
+use frankweiler_etl::blob_cas::{self, blake3_hex, BlobCas, CasInsert};
 use frankweiler_etl::doltlite_raw;
 use frankweiler_whatsapp_backup::decrypt_file;
 
@@ -761,9 +761,9 @@ async fn mirror_message_add_on_reaction(
 }
 
 /// Walk `media_root`, register every regular file in `wa_media_files`,
-/// and put its bytes into the sibling blob_cas keyed by sha256 as
-/// `blob_refs.ref_id`. Translate later resolves attachments through
-/// the same ref_id via `SqliteBlobReader::read_by_ref_id`.
+/// and put its bytes into the sibling blob_cas keyed by blake3. Translate
+/// resolves attachments by joining `wa_message_media.file_path` →
+/// `wa_media_files.sha256` → `wa_media_files.blake3` → `cas_objects.bytes`.
 ///
 /// Skips dot-prefixed dirs (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`,
 /// …) — those are local WhatsApp scratch state, not message media.
@@ -778,10 +778,15 @@ async fn mirror_media_files(
     // pool so we don't starve the sqlx async runtime.
     let entries: Vec<MediaEntry> =
         tokio::task::spawn_blocking(move || scan_media(&media_root_owned)).await??;
-    let cas_path = blob_cas::cas_path_for(target_db_path);
-    let cas = BlobCas::open(&cas_path)
-        .await
-        .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
+
+    // Precompute blake3 for every file; cheap relative to the disk read
+    // we already paid for, and lets us batch the CAS insert + the
+    // metadata UPDATE.
+    let blake3s: Vec<String> = entries.iter().map(|e| blake3_hex(&e.content)).collect();
+
+    // Insert metadata rows with blake3 = NULL up front. Drop-and-rebuild
+    // truncates this table on every run, so we don't risk clobbering
+    // a previously-good blake3.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
     let mut n = 0u64;
     for e in &entries {
@@ -799,31 +804,44 @@ async fn mirror_media_files(
         .context("insert wa_media_files")?;
         n += 1;
     }
-    // Commit the metadata rows before doing the (potentially long) CAS
-    // writes so a SIGINT mid-put still leaves a consistent metadata
-    // table; orphan ref_ids in blob_refs get swept by `gc_orphans` on a
-    // later run.
     tx.commit().await.context("commit wa_media_files tx")?;
 
-    // CAS put per file. `store_bytes` is one transaction per file, which
-    // is fine for the typical 5-50 attachment range; bulk backups with
-    // 1000s of files would benefit from batching but aren't the common
-    // case.
-    for e in &entries {
-        let stub = RefStub {
-            ref_id: &e.sha256,
-            kind: "whatsapp_media",
-            owning_id: &e.relative_path,
-            slot: "content",
-            upstream_uuid: None,
-            upstream_name: e.relative_path.rsplit('/').next(),
-            source_url: None,
+    // Bulk CAS put — one transaction for the whole batch.
+    let cas_path = blob_cas::cas_path_for(target_db_path);
+    let cas = BlobCas::open(&cas_path)
+        .await
+        .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
+    let cas_inserts: Vec<CasInsert<'_>> = entries
+        .iter()
+        .zip(blake3s.iter())
+        .map(|(e, b)| CasInsert {
+            blake3: b.as_str(),
+            bytes: &e.content,
             content_type: e.mime_type.as_deref(),
-        };
-        blob_cas::store_bytes(dst, &cas, &stub, &e.content)
+        })
+        .collect();
+    cas.put_many(&cas_inserts)
+        .await
+        .context("blob_cas put_many wa_media_files")?;
+
+    // Stamp blake3 onto each metadata row now that the bytes are
+    // durable in the CAS.
+    let mut tx = dst
+        .begin()
+        .await
+        .context("begin wa_media_files blake3 tx")?;
+    for (e, b) in entries.iter().zip(blake3s.iter()) {
+        sqlx::query("UPDATE wa_media_files SET blake3 = ? WHERE sha256 = ?")
+            .bind(b)
+            .bind(&e.sha256)
+            .execute(&mut *tx)
             .await
-            .with_context(|| format!("blob_cas put {}", e.relative_path))?;
+            .with_context(|| format!("update wa_media_files.blake3 for {}", e.sha256))?;
     }
+    tx.commit()
+        .await
+        .context("commit wa_media_files blake3 tx")?;
+
     summary.media_files = n;
     Ok(())
 }

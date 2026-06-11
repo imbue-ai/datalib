@@ -229,18 +229,18 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Catalog of plaintext media files from the source backup. Actual
-/// bytes live in the shared `blob_refs` + sibling CAS file (managed by
-/// `frankweiler_etl::blob_cas` — the same store signal/beeper use);
-/// `wa_media_files.sha256` is the `blob_refs.ref_id` for that lookup.
-/// Re-renders work even after the user deletes the original `Media/`
-/// folder because the bytes live in the raw store.
+/// Catalog of plaintext media files from the source backup. Bytes
+/// live in the sibling CAS file (managed by `frankweiler_etl::blob_cas`);
+/// `wa_media_files.blake3` is the CAS key. `sha256` stays as the
+/// upstream identifier (matches `wa_message_media.file_hash`).
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     sha256 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     mtime_unix INTEGER,
-    mime_type TEXT
+    mime_type TEXT,
+    blake3 TEXT NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
 );";
 
 /// All DDL statements in dependency-safe creation order.
