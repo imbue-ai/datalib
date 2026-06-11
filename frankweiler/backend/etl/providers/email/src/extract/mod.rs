@@ -46,17 +46,30 @@ use schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
 /// Bulk-upsert one account row. Wraps the generic
 /// `bulk_upsert_in_tx<AccountRow>` so call sites don't have to spell
 /// out the row construction + tx ceremony.
-async fn upsert_account(db: &RawDb, id: &str, payload: &Value) -> Result<()> {
+///
+/// `now` is the timestamp this fetch run stamps into every
+/// `<table>_bookkeeping.fetched_at` it touches — see [`fetch`] for
+/// where it's computed. Passing it down (rather than calling
+/// `IsoOffsetTimestamp::now_local()` per upsert) gives a single
+/// consistent "this run touched the row at" value across every
+/// table written in one sync, and keeps the bookkeeping sidecars'
+/// semantics honest: their stamp means "the sync that wrote this,"
+/// not "the millisecond the upsert query ran."
+async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Result<()> {
     let row = AccountRow::from_payload(id, payload)?;
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin account tx")?;
-    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
+    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), now).await?;
     tx.commit().await.context("commit account tx")?;
     Ok(())
 }
 
 /// Bulk-upsert a `Mailbox/get` `list` array under one account.
-async fn upsert_mailboxes(db: &RawDb, account_id: &str, payloads: &[Value]) -> Result<()> {
+async fn upsert_mailboxes(
+    db: &RawDb,
+    now: &str,
+    account_id: &str,
+    payloads: &[Value],
+) -> Result<()> {
     if payloads.is_empty() {
         return Ok(());
     }
@@ -64,33 +77,34 @@ async fn upsert_mailboxes(db: &RawDb, account_id: &str, payloads: &[Value]) -> R
         .iter()
         .map(|p| MailboxRow::from_payload(account_id, p))
         .collect::<Result<Vec<_>>>()?;
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin mailboxes tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
     tx.commit().await.context("commit mailboxes tx")?;
     Ok(())
 }
 
-/// Bulk-upsert one thread row.
-async fn upsert_thread(db: &RawDb, id: &str, account_id: &str, payload: &Value) -> Result<()> {
-    let row = ThreadRow::from_payload(id, account_id, payload)?;
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
-    let mut tx = db.pool().begin().await.context("begin thread tx")?;
-    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
-    tx.commit().await.context("commit thread tx")?;
+/// Bulk-upsert a batch of thread rows. Callers accumulate
+/// `Vec<ThreadRow>` across whatever JMAP `Thread/get` page boundary
+/// they're walking and flush once per batch — no per-row tx.
+async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool().begin().await.context("begin threads tx")?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
+    tx.commit().await.context("commit threads tx")?;
     Ok(())
 }
 
 /// Bulk-upsert a batch of emails: the envelope rows go through
 /// `bulk_upsert_in_tx`, and each row's join tables get refreshed
 /// (delete-then-insert) inside the same transaction.
-async fn upsert_emails(db: &RawDb, rows: &[EmailRow]) -> Result<()> {
+async fn upsert_emails(db: &RawDb, now: &str, rows: &[EmailRow]) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
-    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin emails tx")?;
-    bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
     for row in rows {
         refresh_email_joins(&mut tx, row).await?;
     }
@@ -249,6 +263,14 @@ async fn run_sync(
         ..Default::default()
     };
 
+    // One timestamp per fetch run, threaded into every
+    // `bulk_upsert_in_tx` call below. Goes into the bookkeeping
+    // sidecars' `fetched_at` / `last_attempt_at` columns; the value
+    // means "the sync that wrote this row," not "the millisecond the
+    // UPSERT query ran" — so consistency across tables matters more
+    // than sub-second freshness.
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+
     // Persist the account row.
     let account_payload = session
         .accounts
@@ -256,7 +278,7 @@ async fn run_sync(
         .find(|(k, _)| k == account_id)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| json!({}));
-    upsert_account(db, account_id, &account_payload).await?;
+    upsert_account(db, &now, account_id, &account_payload).await?;
 
     let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_ids.is_empty() {
         None
@@ -266,13 +288,14 @@ async fn run_sync(
 
     // ── mailboxes ───────────────────────────────────────────────────
     opts.progress.set_message("email: mailboxes");
-    sync_mailboxes(db, session, account_id, opts, &mut summary).await?;
+    sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
     opts.progress.inc(1);
 
     // ── emails (+ collect threadIds) ────────────────────────────────
     opts.progress.set_message("email: emails");
     let touched_threads = sync_emails(
         db,
+        &now,
         session,
         account_id,
         opts,
@@ -284,7 +307,15 @@ async fn run_sync(
 
     // ── threads ─────────────────────────────────────────────────────
     opts.progress.set_message("email: threads");
-    sync_threads(db, session, account_id, &touched_threads, &mut summary).await?;
+    sync_threads(
+        db,
+        &now,
+        session,
+        account_id,
+        &touched_threads,
+        &mut summary,
+    )
+    .await?;
     opts.progress.inc(1);
 
     // ── blobs ───────────────────────────────────────────────────────
@@ -311,6 +342,7 @@ async fn run_sync(
 
 async fn sync_mailboxes(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -323,7 +355,7 @@ async fn sync_mailboxes(
     };
 
     if let Some(since) = stored {
-        match incremental_mailboxes(db, session, account_id, &since, summary).await {
+        match incremental_mailboxes(db, now, session, account_id, &since, summary).await {
             Ok(()) => return Ok(()),
             Err(e) => warn!(
                 event = "jmap_mailbox_changes_fallback",
@@ -346,7 +378,7 @@ async fn sync_mailboxes(
         .cloned()
         .unwrap_or_default();
     summary.mailboxes_upserted += list.len();
-    upsert_mailboxes(db, account_id, &list).await?;
+    upsert_mailboxes(db, now, account_id, &list).await?;
     if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
         db.save_state(account_id, "Mailbox", state).await?;
     }
@@ -355,6 +387,7 @@ async fn sync_mailboxes(
 
 async fn incremental_mailboxes(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -386,7 +419,7 @@ async fn incremental_mailboxes(
                 .cloned()
                 .unwrap_or_default();
             summary.mailboxes_upserted += list.len();
-            upsert_mailboxes(db, account_id, &list).await?;
+            upsert_mailboxes(db, now, account_id, &list).await?;
         }
 
         if !destroyed.is_empty() {
@@ -418,6 +451,7 @@ async fn incremental_mailboxes(
 
 async fn sync_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -434,6 +468,7 @@ async fn sync_emails(
     if let Some(since) = stored {
         match incremental_emails(
             db,
+            now,
             session,
             account_id,
             &since,
@@ -454,6 +489,7 @@ async fn sync_emails(
 
     full_enumerate_emails(
         db,
+        now,
         session,
         account_id,
         mailbox_filter,
@@ -464,8 +500,10 @@ async fn sync_emails(
     Ok(touched_threads)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn incremental_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -496,6 +534,7 @@ async fn incremental_emails(
                 .unwrap_or_default();
             ingest_email_list(
                 db,
+                now,
                 account_id,
                 list,
                 mailbox_filter,
@@ -528,8 +567,10 @@ async fn incremental_emails(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn full_enumerate_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     mailbox_filter: Option<&HashSet<String>>,
@@ -568,15 +609,15 @@ async fn full_enumerate_emails(
             .get("queryState")
             .and_then(|v| v.as_str())
             .map(String::from);
-        if let (Some(stored), Some(now)) = (&query_state, &page_state) {
-            if stored != now {
+        if let (Some(stored), Some(current)) = (&query_state, &page_state) {
+            if stored != current {
                 // Result set shifted underneath us; restart from page 0.
                 warn!(
                     event = "jmap_email_query_state_shift",
                     "queryState changed mid-pagination; restarting"
                 );
                 position = 0;
-                query_state = Some(now.clone());
+                query_state = Some(current.clone());
                 continue;
             }
         } else if query_state.is_none() {
@@ -606,6 +647,7 @@ async fn full_enumerate_emails(
                 .unwrap_or_default();
             ingest_email_list(
                 db,
+                now,
                 account_id,
                 list,
                 mailbox_filter,
@@ -648,8 +690,10 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ingest_email_list(
     db: &RawDb,
+    now: &str,
     account_id: &str,
     list: Vec<Value>,
     mailbox_filter: Option<&HashSet<String>>,
@@ -673,7 +717,7 @@ async fn ingest_email_list(
         return Ok(());
     }
     summary.emails_upserted += rows.len();
-    upsert_emails(db, &rows).await
+    upsert_emails(db, now, &rows).await
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -682,6 +726,7 @@ async fn ingest_email_list(
 
 async fn sync_threads(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     touched: &HashSet<String>,
@@ -703,13 +748,19 @@ async fn sync_threads(
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        for thread in list {
+        // Build the whole batch's worth of rows up front, then bulk-
+        // upsert in one tx. The per-thread `upsert_thread` call this
+        // replaced opened a fresh transaction per row, which made a
+        // 200-thread sync 200 sequential commits.
+        let mut rows: Vec<ThreadRow> = Vec::with_capacity(list.len());
+        for thread in &list {
             let Some(id) = thread.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            upsert_thread(db, id, account_id, &thread).await?;
-            summary.threads_upserted += 1;
+            rows.push(ThreadRow::from_payload(id, account_id, thread)?);
         }
+        summary.threads_upserted += rows.len();
+        upsert_threads(db, now, &rows).await?;
         if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
             db.save_state(account_id, "Thread", state).await?;
         }
