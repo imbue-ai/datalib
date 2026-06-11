@@ -169,6 +169,58 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     )
 }
 
+/// Build a `CREATE TABLE` statement for an event-shaped raw table
+/// that stores its upstream wire bytes as a `payload` blob with a
+/// Blake3 content fingerprint. Every such table shares the same
+/// shape — the `id`/`payload`/`payload_blake3` triad at the top, the
+/// entity's promoted columns in the middle, and the
+/// length-of-blake3-hex CHECK constraint at the end:
+///
+/// ```sql
+/// CREATE TABLE IF NOT EXISTS <table> (
+///     id             TEXT PRIMARY KEY,
+///     payload        TEXT NULL,
+///     payload_blake3 TEXT NULL,
+///     <promoted columns>,
+///     CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
+/// )
+/// ```
+///
+/// The CHECK lands at the end because SQLite's `column-def-list`
+/// grammar requires all column-defs to precede any table-constraints —
+/// table-constraints can't interleave with columns. See
+/// <https://sqlite.org/lang_createtable.html>.
+///
+/// Callers pass `promoted_columns` as one column-declaration per slice
+/// entry, *without* commas — the helper joins them and handles the
+/// splicing around the triad and CHECK so individual call sites can't
+/// drift on the comma/newline convention. Pass `&[]` when the entity
+/// has no promoted columns (`account`'s single-row case).
+///
+/// Signal is the first provider on this pattern — see
+/// `frankweiler_etl_signal::extract::schema_raw`. The other providers
+/// (anthropic, chatgpt, slack, github, gitlab, notion, beeper, email,
+/// contacts) still store `payload TEXT NULL` only and will adopt this
+/// shape as they grow the bucket-fingerprint translate path. Centralizing
+/// it here means a future tweak (e.g. swapping Blake3-hex for
+/// Blake3-binary, or making `payload` NOT NULL) lands in one place
+/// instead of N.
+pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
+    let promoted_block = if promoted_columns.is_empty() {
+        String::new()
+    } else {
+        format!(",\n    {}", promoted_columns.join(",\n    "))
+    };
+    format!(
+        "CREATE TABLE IF NOT EXISTS {table} (
+    id             TEXT PRIMARY KEY,
+    payload        TEXT NULL,
+    payload_blake3 TEXT NULL{promoted_block},
+    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
+)"
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Shared DDL
 // ─────────────────────────────────────────────────────────────────────

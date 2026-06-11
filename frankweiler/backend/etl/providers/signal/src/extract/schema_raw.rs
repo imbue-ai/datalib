@@ -33,7 +33,7 @@
 //! ## Row structs and the bulk-upsert path
 //!
 //! Each entity table has a Rust row struct declared right after its
-//! `_DDL` constant (`AccountRow`, `RecipientRow`, `ChatRow`,
+//! `_ddl()` function (`AccountRow`, `RecipientRow`, `ChatRow`,
 //! `ChatItemRow`, `ChatItemAttachmentRow`). Each impls
 //! [`frankweiler_etl::bulk::BulkUpsertable`], so the generic
 //! [`frankweiler_etl::bulk::bulk_upsert_in_tx`] helper writes them
@@ -112,14 +112,11 @@ pub const DATA_TABLES: &[&str] = &[
 ///   dependent document needs to re-render without reading the
 ///   payload itself. See `super::super::translate::parse`.
 /// - `payload` — JSONB of the `Frame::Account` message.
-pub const ACCOUNT_DDL: &str = "CREATE TABLE IF NOT EXISTS account (
-    id             TEXT PRIMARY KEY,
-    payload_blake3 TEXT NULL,
-    payload        TEXT NULL,
-    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
-)";
+pub fn account_ddl() -> String {
+    dr::wire_payload_table_ddl("account", &[])
+}
 
-/// Row to upsert into [`ACCOUNT_DDL`]. `id` is always the literal
+/// Row to upsert into [`account_ddl`]. `id` is always the literal
 /// `"self"`. The `payload` is the JSON-serialized `Frame::Account`.
 /// `payload_blake3` is blake3 hex of the payload bytes — computed
 /// once by the extract path right before the bulk upsert.
@@ -158,19 +155,17 @@ impl BulkUpsertable for AccountRow {
 ///   indexer joins avoid cracking the protobuf payload open.
 /// - `display_name` — promoted from the payload for the same reason.
 /// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`ACCOUNT_DDL`] doc comment for the bucket-fingerprint
+///   [`account_ddl`] doc comment for the bucket-fingerprint
 ///   rationale.
 /// - `payload` — JSONB of the `Frame::Recipient` message.
-pub const RECIPIENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS recipients (
-    id             TEXT PRIMARY KEY,
-    identifier     TEXT NULL,
-    display_name   TEXT NULL,
-    payload_blake3 TEXT NULL,
-    payload        TEXT NULL,
-    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
-)";
+pub fn recipients_ddl() -> String {
+    dr::wire_payload_table_ddl(
+        "recipients",
+        &["identifier     TEXT NULL", "display_name   TEXT NULL"],
+    )
+}
 
-/// Row to upsert into [`RECIPIENTS_DDL`].
+/// Row to upsert into [`recipients_ddl`].
 #[derive(Debug, Clone)]
 pub struct RecipientRow {
     pub id: String,
@@ -205,21 +200,17 @@ impl BulkUpsertable for RecipientRow {
 /// Columns:
 /// - `id` — the in-backup `chat_id` (`uint64` upstream),
 ///   stringified. Primary key.
-/// - `recipient_id` — promoted FK into [`RECIPIENTS_DDL`]; joins
+/// - `recipient_id` — promoted FK into [`recipients_ddl`]; joins
 ///   `chats` to its peer / group without cracking the payload.
 /// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`ACCOUNT_DDL`] doc comment for the bucket-fingerprint
+///   [`account_ddl`] doc comment for the bucket-fingerprint
 ///   rationale.
 /// - `payload` — JSONB of the `Frame::Chat` message.
-pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
-    id             TEXT PRIMARY KEY,
-    recipient_id   TEXT NOT NULL,
-    payload_blake3 TEXT NULL,
-    payload        TEXT NULL,
-    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
-)";
+pub fn chats_ddl() -> String {
+    dr::wire_payload_table_ddl("chats", &["recipient_id   TEXT NOT NULL"])
+}
 
-/// Row to upsert into [`CHATS_DDL`].
+/// Row to upsert into [`chats_ddl`].
 #[derive(Debug, Clone)]
 pub struct ChatRow {
     pub id: String,
@@ -255,8 +246,8 @@ impl BulkUpsertable for ChatRow {
 /// Columns:
 /// - `id` — synthesized composite PK
 ///   (`"{chat_id}#{author_id}#{date_sent}"`). Primary key.
-/// - `chat_id` — promoted FK into [`CHATS_DDL`].
-/// - `author_id` — promoted FK into [`RECIPIENTS_DDL`].
+/// - `chat_id` — promoted FK into [`chats_ddl`].
+/// - `author_id` — promoted FK into [`recipients_ddl`].
 /// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
 ///   The closest thing this provider has to an event-shaped
 ///   timestamp; sourced into `GridRow.when_ts` by translate.
@@ -265,17 +256,18 @@ impl BulkUpsertable for ChatRow {
 ///   per-document bucket fingerprint to decide whether re-rendering
 ///   is needed.
 /// - `payload` — JSONB of the `Frame::ChatItem` message.
-pub const CHAT_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS chat_items (
-    id             TEXT PRIMARY KEY,
-    chat_id        TEXT NOT NULL,
-    author_id      TEXT NOT NULL,
-    date_sent      INTEGER NOT NULL,
-    payload_blake3 TEXT NULL,
-    payload        TEXT NULL,
-    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
-)";
+pub fn chat_items_ddl() -> String {
+    dr::wire_payload_table_ddl(
+        "chat_items",
+        &[
+            "chat_id        TEXT NOT NULL",
+            "author_id      TEXT NOT NULL",
+            "date_sent      INTEGER NOT NULL",
+        ],
+    )
+}
 
-/// Row to upsert into [`CHAT_ITEMS_DDL`].
+/// Row to upsert into [`chat_items_ddl`].
 #[derive(Debug, Clone)]
 pub struct ChatItemRow {
     pub id: String,
@@ -339,7 +331,7 @@ pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
 ///   recipe Signal uses for chat_items (composite-key flattened to
 ///   a string), so the bookkeeping sidecar's uniform
 ///   `id TEXT PRIMARY KEY` shape holds without change.
-/// - `chat_item_id` — FK into [`CHAT_ITEMS_DDL`]. Explicit (not
+/// - `chat_item_id` — FK into [`chat_items_ddl`]. Explicit (not
 ///   reverse-parsed from the synthesized PK) so render can fetch
 ///   "every attachment of this chat_item" in one indexed SELECT
 ///   instead of either scanning the table or parsing PKs. Paired
@@ -513,7 +505,7 @@ pub fn snapshot_fingerprint(snapshot_dir: &std::path::Path) -> anyhow::Result<St
     Ok(parts.join(":"))
 }
 
-/// Recipe for the synthesized [`CHAT_ITEMS_DDL`] primary key.
+/// Recipe for the synthesized [`chat_items_ddl`] primary key.
 ///
 /// Signal's backup format does not carry a per-item id. We hand-roll
 /// a composite PK from `(chat_id, author_id, date_sent)` — the only
@@ -540,11 +532,11 @@ pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> St
 /// repo-wide bookkeeping macro) is deferred to P1.1.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
-        ACCOUNT_DDL.to_string(),
-        RECIPIENTS_DDL.to_string(),
-        CHATS_DDL.to_string(),
+        account_ddl(),
+        recipients_ddl(),
+        chats_ddl(),
         CHATS_BY_RECIPIENT_INDEX_DDL.to_string(),
-        CHAT_ITEMS_DDL.to_string(),
+        chat_items_ddl(),
         CHAT_ITEMS_BY_CHAT_INDEX_DDL.to_string(),
         CHAT_ITEM_ATTACHMENTS_DDL.to_string(),
         CHAT_ITEM_ATTACHMENTS_BY_CHAT_ITEM_INDEX_DDL.to_string(),
