@@ -141,7 +141,7 @@ where
 /// Row-struct contract that lets the generic [`bulk_upsert_in_tx`]
 /// helper write a batch into a table.
 ///
-/// **The universal entity-table shape.** Every raw entity table is
+/// **The universal entity-table shape.** Most raw entity tables are
 /// `(id, …typed_columns, payload)`:
 ///
 ///   - `id` — TEXT primary key, the upstream identifier (or a
@@ -155,6 +155,12 @@ where
 ///     necessary (see `docs/data_architecture_ingestion.md`
 ///     §"Wire-fidelity of the raw store").
 ///
+/// **Some tables have no payload column** — N:M edge / attachment
+/// tables in particular (e.g. Signal's `chat_item_attachments`)
+/// just record the join. Set [`Self::PAYLOAD_COLUMN`] to `None` for
+/// those; the helper will emit a payload-less INSERT and
+/// `bind_into` should not bind anything past the typed columns.
+///
 /// **Where impls live.** By convention, the row struct and its
 /// `BulkUpsertable` impl live in the provider's `schema_raw.rs`,
 /// right next to the matching `CREATE TABLE` DDL constant, so that
@@ -164,10 +170,11 @@ where
 /// **Required correspondence.** [`Self::TYPED_COLUMNS`] must list
 /// the non-PK, non-payload columns in the same order as
 /// [`Self::bind_into`] binds them, and that order must match the
-/// DDL's column declarations between `id` and the payload column.
-/// [`Self::bind_into`] binds id first, then each typed column in
-/// order, then the payload as a JSON text string. Mismatch →
-/// mis-binding at runtime.
+/// DDL's column declarations between `id` and the payload column
+/// (if any). [`Self::bind_into`] binds id first, then each typed
+/// column in order, then the payload as a JSON text string (when
+/// [`Self::PAYLOAD_COLUMN`] is `Some`). Mismatch → mis-binding at
+/// runtime.
 ///
 /// **One writer per row.** Per
 /// `docs/data_architecture_ingestion.md` §"One writer per row," the
@@ -180,13 +187,15 @@ pub trait BulkUpsertable: Sync {
 
     /// Non-PK, non-payload columns, in bind order. These bind as
     /// plain `?`. Empty slice for tables that are just `(id, payload)`
-    /// (e.g. Signal's `account`).
+    /// (e.g. Signal's `account`) or just `(id)` plus typed columns
+    /// with no payload (e.g. `chat_item_attachments`).
     const TYPED_COLUMNS: &'static [&'static str];
 
-    /// JSON payload column name. Bound as `jsonb(?)`. Almost always
-    /// `"payload"`; the associated const lets a provider with a
-    /// non-standard name (if one ever exists) override it.
-    const PAYLOAD_COLUMN: &'static str = "payload";
+    /// JSON payload column name, bound as `jsonb(?)`. Almost always
+    /// `Some("payload")`. Set to `None` for tables that have no
+    /// payload column (e.g. attachment / N:M edge tables that just
+    /// record a join).
+    const PAYLOAD_COLUMN: Option<&'static str> = Some("payload");
 
     /// PK value for this row. The PK column is always named `id` in
     /// every raw entity table (see
@@ -194,10 +203,10 @@ pub trait BulkUpsertable: Sync {
     fn id(&self) -> &str;
 
     /// Bind the id, then each value in [`Self::TYPED_COLUMNS`] order,
-    /// then the payload as a JSON text string. The helper has
-    /// already emitted matching placeholders (`?` for id and typed
-    /// columns, `jsonb(?)` for payload); this method just calls
-    /// `q.bind(...)` once per column.
+    /// then (if [`Self::PAYLOAD_COLUMN`] is `Some`) the payload as a
+    /// JSON text string. The helper has already emitted matching
+    /// placeholders (`?` for id and typed columns, `jsonb(?)` for
+    /// payload); this method just calls `q.bind(...)` once per column.
     fn bind_into<'q>(
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments<'q>>,
@@ -228,9 +237,8 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
         return Ok(());
     }
     let table = T::TABLE;
-    let payload_col = T::PAYLOAD_COLUMN;
 
-    // Column lists: typed columns first, then payload at the end.
+    // Column lists: typed columns first, then (optionally) payload.
     let mut cols_csv = String::new();
     for (i, c) in T::TYPED_COLUMNS.iter().enumerate() {
         if i > 0 {
@@ -238,10 +246,12 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
         }
         cols_csv.push_str(c);
     }
-    if !T::TYPED_COLUMNS.is_empty() {
-        cols_csv.push_str(", ");
+    if let Some(payload_col) = T::PAYLOAD_COLUMN {
+        if !T::TYPED_COLUMNS.is_empty() {
+            cols_csv.push_str(", ");
+        }
+        cols_csv.push_str(payload_col);
     }
-    cols_csv.push_str(payload_col);
 
     // ON CONFLICT SET clause — every non-id col gets excluded.<col>
     // per §"One writer per row" in the ingestion doc.
@@ -252,18 +262,23 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
         }
         set_csv.push_str(&format!("{c} = excluded.{c}"));
     }
-    if !set_csv.is_empty() {
-        set_csv.push_str(", ");
+    if let Some(payload_col) = T::PAYLOAD_COLUMN {
+        if !set_csv.is_empty() {
+            set_csv.push_str(", ");
+        }
+        set_csv.push_str(&format!("{payload_col} = excluded.{payload_col}"));
     }
-    set_csv.push_str(&format!("{payload_col} = excluded.{payload_col}"));
 
-    // VALUES tuple: id and typed columns as plain `?`, payload as
-    // `jsonb(?)`.
+    // VALUES tuple: id and typed columns as plain `?`, payload (if
+    // present) as `jsonb(?)`.
     let mut tuple = String::from("(?");
     for _ in T::TYPED_COLUMNS {
         tuple.push_str(",?");
     }
-    tuple.push_str(",jsonb(?))");
+    if T::PAYLOAD_COLUMN.is_some() {
+        tuple.push_str(",jsonb(?)");
+    }
+    tuple.push(')');
 
     for chunk in rows.chunks(SQL_CHUNK) {
         let mut sql = format!("INSERT INTO {table} (id, {cols_csv}) VALUES ");

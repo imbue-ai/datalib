@@ -14,10 +14,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader, SqliteBlobReader};
+use frankweiler_etl::blob_cas::{self, BlobReader, BlobView, InMemoryBlobReader};
 use frankweiler_etl::periodize::Period;
 use frankweiler_signal_backup::backup;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 #[derive(Clone)]
@@ -140,10 +140,13 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
 
     // Sibling CAS file holds attachment bytes; render fetches them on
-    // demand via the SqliteBlobReader. When the file doesn't exist
-    // (e.g. extract ran before this branch landed, or never stored
-    // anything), fall back to an empty in-memory reader so render
-    // can still emit "(attachment not yet fetched)" placeholders.
+    // demand via `SignalBlobReader`, which joins
+    // `chat_item_attachments` (entity db) to `cas_objects` (CAS db)
+    // on blake3 — see the struct's doc for the full lookup chain.
+    // When the CAS file doesn't exist (e.g. extract ran before any
+    // attachments landed), fall back to an empty in-memory reader so
+    // render can still emit "(attachment not yet fetched)"
+    // placeholders.
     let cas_path = blob_cas::cas_path_for(db_path);
     let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
@@ -153,7 +156,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
             .connect_with(cas_opts)
             .await
             .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
-        Arc::new(SqliteBlobReader::new(pool.clone(), cas_pool))
+        Arc::new(SignalBlobReader::new(pool.clone(), cas_pool))
     } else {
         InMemoryBlobReader::empty_handle()
     };
@@ -316,4 +319,89 @@ fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAtta
         file_name: ptr.file_name.clone(),
         is_image,
     })
+}
+
+/// Signal-specific [`BlobReader`].
+///
+/// **Lookup chain.** `read_by_ref_id(ref_id)`:
+///
+/// 1. `SELECT blake3 FROM chat_item_attachments WHERE ref_id = ?
+///    AND blake3 IS NOT NULL LIMIT 1` — resolve Signal's media_name
+///    to the CAS content hash, dedupe-aware across chat_items that
+///    share the same `media_name`.
+/// 2. `SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?`
+///    — load the decrypted bytes and (universal-across-providers)
+///    content_type that the CAS stored at extract time.
+///
+/// `upstream_name` / `source_url` on the returned [`BlobView`] are
+/// always `None` — Signal's translate already pulls those from the
+/// `chat_items.payload` (the `FilePointer` proto fields) and passes
+/// them explicitly through [`blob_cas::attachment_md`], so the
+/// BlobView never needs to carry them.
+///
+/// `read_by_owner` and `read_by_hash` are unused by Signal's render
+/// path; they return `Ok(None)`. If a future caller needs them,
+/// extend; today silently-empty is the right behavior.
+pub struct SignalBlobReader {
+    refs_pool: SqlitePool,
+    cas_pool: SqlitePool,
+}
+
+impl SignalBlobReader {
+    pub fn new(refs_pool: SqlitePool, cas_pool: SqlitePool) -> Self {
+        Self {
+            refs_pool,
+            cas_pool,
+        }
+    }
+
+    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
+    }
+
+    async fn read_by_ref_id_async(&self, ref_id: &str) -> Result<Option<BlobView>> {
+        let blake3: Option<String> = sqlx::query_scalar(
+            "SELECT blake3 FROM chat_item_attachments \
+             WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
+        )
+        .bind(ref_id)
+        .fetch_optional(&self.refs_pool)
+        .await
+        .with_context(|| format!("lookup chat_item_attachments by ref_id {ref_id}"))?;
+        let Some(blake3) = blake3 else {
+            return Ok(None);
+        };
+        let row = sqlx::query("SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?")
+            .bind(&blake3)
+            .fetch_optional(&self.cas_pool)
+            .await
+            .with_context(|| format!("lookup cas_objects by blake3 {blake3}"))?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let bytes: Vec<u8> = row.try_get("bytes").unwrap_or_default();
+        let content_type: Option<String> = row.try_get("content_type").ok();
+        Ok(Some(BlobView {
+            ref_id: ref_id.to_string(),
+            owning_id: String::new(),
+            slot: String::new(),
+            blake3,
+            content_type,
+            upstream_name: None,
+            source_url: None,
+            bytes,
+        }))
+    }
+}
+
+impl BlobReader for SignalBlobReader {
+    fn read_by_ref_id(&self, ref_id: &str) -> Result<Option<BlobView>> {
+        self.block_on(self.read_by_ref_id_async(ref_id))
+    }
+    fn read_by_owner(&self, _owning_id: &str) -> Result<Option<BlobView>> {
+        Ok(None)
+    }
+    fn read_by_hash(&self, _blake3_hash: &str) -> Result<Option<BlobView>> {
+        Ok(None)
+    }
 }

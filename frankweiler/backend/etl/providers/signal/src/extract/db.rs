@@ -1,38 +1,16 @@
-//! Doltlite-backed raw store for the Signal provider.
+//! Open + non-DDL data-manipulation for the Signal raw store.
 //!
-//! Four object tables, keyed by Signal's natural ids so re-fetches
-//! across snapshots dedupe cleanly:
+//! [`RawDb`] owns the entity-db pool and the sibling CAS handle.
+//! The schema itself — every table DDL, every row struct + its
+//! `BulkUpsertable` impl, the resume cursor, and the per-table
+//! commentary — lives next door in [`super::schema_raw`].
 //!
-//!   * `account`    — one row, `id = 'self'`. The account proto frame.
-//!   * `recipients` — PK = the in-backup `recipient_id` (`uint64`).
-//!     Promoted columns: `identifier` (e164 / aci hex), `display_name`.
-//!   * `chats`      — PK = `chat_id`. `recipient_id` promoted for joins.
-//!   * `chat_items` — PK = `"{chat_id}#{author_id}#{date_sent}"`.
-//!     Promoted columns let SQL queries filter/sort without cracking
-//!     the protobuf payload open.
-//!
-//! Every `payload` column stores the upstream `Frame::*` message
-//! as JSONB. The transcoding from prost wire bytes to JSON is
-//! lossless (see `tools/prost_toolchain/BUILD.bazel` for how the
-//! prost types get serde derives), so `dolt diff` between two
-//! snapshots still reflects only what changed in Signal's
-//! wire-format frames. See `docs/data_architecture_ingestion.md`
-//! §"Wire-fidelity of the raw store" for the principle.
-//!
-//! Row structs (`AccountRow`, `RecipientRow`, `ChatRow`,
-//! `ChatItemRow`) live in `schema_raw.rs` next to their DDL
-//! constants, and each impls `BulkUpsertable` so the generic
-//! `frankweiler_etl::bulk::bulk_upsert_in_tx` helper writes them
-//! all through the same chunked multi-row UPSERT.
-//!
-//! Attachment bytes (when an Extract enhancement starts harvesting
-//! `Frame::Attachment` from the snapshot's `files/` tree) belong in
-//! the sibling per-source CAS file managed by
-//! [`frankweiler_etl::blob_cas`], with `blob_refs` rows in this entity
-//! db pointing into it. The CAS handle is opened in [`RawDb::open`]
-//! and exposed via [`RawDb::cas`] so that future code has the plumbing
-//! ready — the same shape every other media-bearing provider
-//! (slack, beeper, anthropic, chatgpt, notion, email) follows.
+//! What's here is the small set of things `schema_raw` can't be:
+//! `RawDb::open`, `reset`, the resume-cursor read/write methods
+//! (`snapshot_already_ingested`, `record_snapshot_ingested`,
+//! `last_ingested_snapshot`). Entity-table writes go through the
+//! generic `frankweiler_etl::bulk::bulk_upsert_in_tx<T>` helper
+//! from the caller (`super::mod`); they don't live on `RawDb`.
 
 use std::path::Path;
 
@@ -41,7 +19,7 @@ use frankweiler_time::IsoOffsetTimestamp;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
+use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES};
@@ -142,28 +120,5 @@ impl RawDb {
             let b: String = r.try_get("blake3").ok()?;
             Some((d.unwrap_or_default(), b))
         }))
-    }
-
-    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
-
-    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
-        blob_cas::ref_has_hash(&self.pool, ref_id).await
-    }
-
-    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
-    }
-
-    pub async fn record_blob_error(
-        &self,
-        ref_id: &str,
-        owning_id: &str,
-        slot: &str,
-        err: &str,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
-        tx.commit().await.context("commit blob error tx")?;
-        Ok(())
     }
 }
