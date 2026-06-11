@@ -54,21 +54,29 @@ jobs:
           # always fall back to a bare sha.
           fetch-depth: 0
 
-      # We still use bazel-contrib/setup-bazel to install bazelisk on
-      # PATH, but with all four GHA cache layers disabled — the action
-      # cache, repository cache, and external-repo cache all flow
-      # through BuildBuddy now. Leaving the GHA cache on alongside
-      # BuildBuddy would double-bookkeep without speeding anything up,
-      # and previously caused "Lost inputs no longer available
-      # remotely" failures against rules_rust's
-      # ExtractCargoTomlEnvVars actions (see the test.yml header for
-      # the same bug). If BuildBuddy is ever down or unavailable, the
-      # build still runs — just without remote caching.
+      # BuildBuddy serves the remote action cache (the big win — skips
+      # the multi-minute boring-sys2 / tokio / wreq compiles), but
+      # BuildBuddy is action-cache-only: it doesn't cover the
+      # bazelisk binary download, the `http_archive` tarball downloads
+      # (rules_rust source, protobuf, etc.), or crate_universe's
+      # external-repo resolution. Those are local-to-runner concerns.
+      #
+      # We keep `repository-cache` on so the crate_universe + rules
+      # tarballs persist across runs (saves the ~1–3 min network-bound
+      # fetch on a cold runner). The other three layers stay off:
+      #   * disk-cache duplicates BuildBuddy's action cache and
+      #     previously caused "Lost inputs no longer available
+      #     remotely" failures against rules_rust's
+      #     ExtractCargoTomlEnvVars actions (see test.yml header).
+      #   * external-cache caches the materialized `external/`
+      #     workspaces — small win and historically the flakiest layer.
+      #   * bazelisk-cache saves a ~20s binary download, not worth
+      #     a slot in the 10 GB-per-repo actions/cache quota.
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: false
+          repository-cache: true
           external-cache: false
 
       # Install the Linux-only build dependencies the macOS runner gets
