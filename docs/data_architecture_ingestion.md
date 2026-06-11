@@ -384,6 +384,17 @@ human-readable and inspectable. Concretely:
     promoting the *semantic* content (typed columns, JSONB payloads)
     into the entity tables.
 
+The rationale we keep coming back to: **if all we wanted was a copy
+of the upstream bytes, we'd just use `cp`.** The user already has
+those bytes on their disk for every file-imported source, and we
+can re-fetch them for live sources by hitting the API again. The
+raw store earns its keep by being *queryable and human-inspectable*
+in a way the original bytes aren't — JSONB rows, typed columns,
+predictable structure across providers. That's the criterion for
+"is this decoding step OK to do at extract time?" If the alternative
+to decoding is asking the user to install a special tool just to
+see what's in their own data, the decoding belongs in extract.
+
 Two load-bearing rules follow:
 
   - **Normalize at translate time, not extract time.** A lesson
