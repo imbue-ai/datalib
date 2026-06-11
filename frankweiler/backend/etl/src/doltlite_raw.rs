@@ -169,6 +169,44 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     )
 }
 
+/// The three columns every wire-payload entity table requires:
+/// `id` PK, the `payload` JSONB blob holding the upstream wire bytes,
+/// and `payload_blake3` (blake3 hex of those bytes) used as the
+/// per-row content fingerprint. Embed this struct as the **first**
+/// field of any row type that maps to a wire-payload table; the
+/// `#[derive(WirePayloadRow)]` macro (in `frankweiler-etl-macros`)
+/// recognizes it by *type*, not by field name, so a rename or typo
+/// is a compile error rather than a runtime SQL mismatch.
+///
+/// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
+/// or — for the canonical path — the derive macro, which generates
+/// the DDL straight off the row struct's field list.
+#[derive(Debug, Clone)]
+pub struct WirePayloadTriad {
+    pub id: String,
+    pub payload: String,
+    pub payload_blake3: String,
+}
+
+/// Implemented for any row type whose table shape is "wire-payload":
+/// id + payload + payload_blake3 + a handful of promoted columns +
+/// the `length(payload_blake3) = 64` CHECK. The single method
+/// returns the table's DDL, suitable for splicing into a provider's
+/// `full_ddl()` vector.
+///
+/// Hand-implementing this trait is possible but unusual; the
+/// `#[derive(WirePayloadRow)]` macro in `frankweiler-etl-macros`
+/// generates it (and the matching `BulkUpsertable` impl) from a row
+/// struct in one shot. See `signal::extract::schema_raw` for the
+/// canonical applications.
+pub trait WirePayloadRow {
+    /// `CREATE TABLE IF NOT EXISTS …` for this row type's table.
+    /// Equivalent to calling [`wire_payload_table_ddl`] with the
+    /// promoted-column declarations derived from the struct's
+    /// non-triad fields.
+    fn ddl() -> String;
+}
+
 /// Build a `CREATE TABLE` statement for an event-shaped raw table
 /// that stores its upstream wire bytes as a `payload` blob with a
 /// Blake3 content fingerprint. Every such table shares the same

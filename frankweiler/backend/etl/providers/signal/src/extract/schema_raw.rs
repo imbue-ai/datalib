@@ -32,13 +32,16 @@
 //!
 //! ## Row structs and the bulk-upsert path
 //!
-//! Each entity table has a Rust row struct declared right after its
-//! `_ddl()` function (`AccountRow`, `RecipientRow`, `ChatRow`,
-//! `ChatItemRow`, `ChatItemAttachmentRow`). Each impls
-//! [`frankweiler_etl::bulk::BulkUpsertable`], so the generic
-//! [`frankweiler_etl::bulk::bulk_upsert_in_tx`] helper writes them
-//! through the same chunked multi-row UPSERT. No table-specific bulk
-//! SQL anywhere in this provider's code.
+//! Each wire-payload entity table is declared as a Rust row struct
+//! with `#[derive(WirePayloadRow)]` (`AccountRow`, `RecipientRow`,
+//! `ChatRow`, `ChatItemRow`); the derive generates both the table's
+//! DDL and its [`frankweiler_etl::bulk::BulkUpsertable`] impl from the
+//! struct's field list, so the schema and the bind code can't drift.
+//! The N:M edge table (`ChatItemAttachmentRow`) is hand-rolled since
+//! it doesn't fit the wire-payload shape. All four go through the
+//! generic [`frankweiler_etl::bulk::bulk_upsert_in_tx`] helper for
+//! writes — no table-specific bulk SQL anywhere in this provider's
+//! code.
 //!
 //! ## Attachment bytes
 //!
@@ -82,7 +85,8 @@
 //!   single-row PK-lookup skip. See plan §P1.12.
 
 use frankweiler_etl::bulk::BulkUpsertable;
-use frankweiler_etl::doltlite_raw as dr;
+use frankweiler_etl::doltlite_raw::{self as dr, WirePayloadRow, WirePayloadTriad};
+use frankweiler_etl_macros::WirePayloadRow;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
@@ -112,36 +116,15 @@ pub const DATA_TABLES: &[&str] = &[
 ///   dependent document needs to re-render without reading the
 ///   payload itself. See `super::super::translate::parse`.
 /// - `payload` — JSONB of the `Frame::Account` message.
-pub fn account_ddl() -> String {
-    dr::wire_payload_table_ddl("account", &[])
-}
-
-/// Row to upsert into [`account_ddl`]. `id` is always the literal
-/// `"self"`. The `payload` is the JSON-serialized `Frame::Account`.
-/// `payload_blake3` is blake3 hex of the payload bytes — computed
-/// once by the extract path right before the bulk upsert.
-#[derive(Debug, Clone)]
+///
+/// `triad.id` is always the literal `"self"`. `triad.payload` is the
+/// JSON-serialized `Frame::Account`; `triad.payload_blake3` is its
+/// blake3 hex, computed once by the extract path right before the
+/// bulk upsert.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "account")]
 pub struct AccountRow {
-    pub id: String,
-    pub payload_blake3: String,
-    pub payload: String,
-}
-
-impl BulkUpsertable for AccountRow {
-    const TABLE: &'static str = "account";
-    const TYPED_COLUMNS: &'static [&'static str] = &["payload_blake3"];
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.payload_blake3)
-            .bind(&self.payload)
-    }
+    pub triad: WirePayloadTriad,
 }
 
 /// `recipients` — one row per Signal recipient (peer / group).
@@ -155,44 +138,15 @@ impl BulkUpsertable for AccountRow {
 ///   indexer joins avoid cracking the protobuf payload open.
 /// - `display_name` — promoted from the payload for the same reason.
 /// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`account_ddl`] doc comment for the bucket-fingerprint
+///   [`AccountRow`] doc comment for the bucket-fingerprint
 ///   rationale.
 /// - `payload` — JSONB of the `Frame::Recipient` message.
-pub fn recipients_ddl() -> String {
-    dr::wire_payload_table_ddl(
-        "recipients",
-        &["identifier     TEXT NULL", "display_name   TEXT NULL"],
-    )
-}
-
-/// Row to upsert into [`recipients_ddl`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "recipients")]
 pub struct RecipientRow {
-    pub id: String,
+    pub triad: WirePayloadTriad,
     pub identifier: Option<String>,
     pub display_name: Option<String>,
-    pub payload_blake3: String,
-    pub payload: String,
-}
-
-impl BulkUpsertable for RecipientRow {
-    const TABLE: &'static str = "recipients";
-    const TYPED_COLUMNS: &'static [&'static str] =
-        &["identifier", "display_name", "payload_blake3"];
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(self.identifier.as_deref())
-            .bind(self.display_name.as_deref())
-            .bind(&self.payload_blake3)
-            .bind(&self.payload)
-    }
 }
 
 /// `chats` — one row per Signal chat (DM or group thread).
@@ -200,41 +154,17 @@ impl BulkUpsertable for RecipientRow {
 /// Columns:
 /// - `id` — the in-backup `chat_id` (`uint64` upstream),
 ///   stringified. Primary key.
-/// - `recipient_id` — promoted FK into [`recipients_ddl`]; joins
+/// - `recipient_id` — promoted FK into [`RecipientRow`]; joins
 ///   `chats` to its peer / group without cracking the payload.
 /// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`account_ddl`] doc comment for the bucket-fingerprint
+///   [`AccountRow`] doc comment for the bucket-fingerprint
 ///   rationale.
 /// - `payload` — JSONB of the `Frame::Chat` message.
-pub fn chats_ddl() -> String {
-    dr::wire_payload_table_ddl("chats", &["recipient_id   TEXT NOT NULL"])
-}
-
-/// Row to upsert into [`chats_ddl`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "chats")]
 pub struct ChatRow {
-    pub id: String,
+    pub triad: WirePayloadTriad,
     pub recipient_id: String,
-    pub payload_blake3: String,
-    pub payload: String,
-}
-
-impl BulkUpsertable for ChatRow {
-    const TABLE: &'static str = "chats";
-    const TYPED_COLUMNS: &'static [&'static str] = &["recipient_id", "payload_blake3"];
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.recipient_id)
-            .bind(&self.payload_blake3)
-            .bind(&self.payload)
-    }
 }
 
 /// `chat_items` — one row per Signal message / call / system event
@@ -246,8 +176,8 @@ impl BulkUpsertable for ChatRow {
 /// Columns:
 /// - `id` — synthesized composite PK
 ///   (`"{chat_id}#{author_id}#{date_sent}"`). Primary key.
-/// - `chat_id` — promoted FK into [`chats_ddl`].
-/// - `author_id` — promoted FK into [`recipients_ddl`].
+/// - `chat_id` — promoted FK into [`ChatRow`].
+/// - `author_id` — promoted FK into [`RecipientRow`].
 /// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
 ///   The closest thing this provider has to an event-shaped
 ///   timestamp; sourced into `GridRow.when_ts` by translate.
@@ -256,47 +186,13 @@ impl BulkUpsertable for ChatRow {
 ///   per-document bucket fingerprint to decide whether re-rendering
 ///   is needed.
 /// - `payload` — JSONB of the `Frame::ChatItem` message.
-pub fn chat_items_ddl() -> String {
-    dr::wire_payload_table_ddl(
-        "chat_items",
-        &[
-            "chat_id        TEXT NOT NULL",
-            "author_id      TEXT NOT NULL",
-            "date_sent      INTEGER NOT NULL",
-        ],
-    )
-}
-
-/// Row to upsert into [`chat_items_ddl`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "chat_items")]
 pub struct ChatItemRow {
-    pub id: String,
+    pub triad: WirePayloadTriad,
     pub chat_id: String,
     pub author_id: String,
     pub date_sent: i64,
-    pub payload_blake3: String,
-    pub payload: String,
-}
-
-impl BulkUpsertable for ChatItemRow {
-    const TABLE: &'static str = "chat_items";
-    const TYPED_COLUMNS: &'static [&'static str] =
-        &["chat_id", "author_id", "date_sent", "payload_blake3"];
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.chat_id)
-            .bind(&self.author_id)
-            .bind(self.date_sent)
-            .bind(&self.payload_blake3)
-            .bind(&self.payload)
-    }
 }
 
 /// Index on `chats.recipient_id` — supports joining a chat to its
@@ -331,7 +227,7 @@ pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
 ///   recipe Signal uses for chat_items (composite-key flattened to
 ///   a string), so the bookkeeping sidecar's uniform
 ///   `id TEXT PRIMARY KEY` shape holds without change.
-/// - `chat_item_id` — FK into [`chat_items_ddl`]. Explicit (not
+/// - `chat_item_id` — FK into [`ChatItemRow`]. Explicit (not
 ///   reverse-parsed from the synthesized PK) so render can fetch
 ///   "every attachment of this chat_item" in one indexed SELECT
 ///   instead of either scanning the table or parsing PKs. Paired
@@ -505,7 +401,7 @@ pub fn snapshot_fingerprint(snapshot_dir: &std::path::Path) -> anyhow::Result<St
     Ok(parts.join(":"))
 }
 
-/// Recipe for the synthesized [`chat_items_ddl`] primary key.
+/// Recipe for the synthesized [`ChatItemRow`] primary key.
 ///
 /// Signal's backup format does not carry a per-item id. We hand-roll
 /// a composite PK from `(chat_id, author_id, date_sent)` — the only
@@ -532,11 +428,11 @@ pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> St
 /// repo-wide bookkeeping macro) is deferred to P1.1.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
-        account_ddl(),
-        recipients_ddl(),
-        chats_ddl(),
+        AccountRow::ddl(),
+        RecipientRow::ddl(),
+        ChatRow::ddl(),
         CHATS_BY_RECIPIENT_INDEX_DDL.to_string(),
-        chat_items_ddl(),
+        ChatItemRow::ddl(),
         CHAT_ITEMS_BY_CHAT_INDEX_DDL.to_string(),
         CHAT_ITEM_ATTACHMENTS_DDL.to_string(),
         CHAT_ITEM_ATTACHMENTS_BY_CHAT_ITEM_INDEX_DDL.to_string(),

@@ -8,6 +8,7 @@ members = [
     "obs",
     "time",
     "etl",
+    "etl/macros",
     "etl/providers/anthropic",
     "etl/providers/beeper",
     "etl/providers/chatgpt",
