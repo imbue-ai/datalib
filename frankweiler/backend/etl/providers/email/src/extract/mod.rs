@@ -30,7 +30,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::extract_run::ExtractRun;
+use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
@@ -38,7 +40,64 @@ use tracing::{debug, info, warn};
 pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
-use db::{EmailRow, BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+use db::refresh_email_joins;
+use schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
+
+/// Bulk-upsert one account row. Wraps the generic
+/// `bulk_upsert_in_tx<AccountRow>` so call sites don't have to spell
+/// out the row construction + tx ceremony.
+async fn upsert_account(db: &RawDb, id: &str, payload: &Value) -> Result<()> {
+    let row = AccountRow::from_payload(id, payload)?;
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = db.pool().begin().await.context("begin account tx")?;
+    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
+    tx.commit().await.context("commit account tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert a `Mailbox/get` `list` array under one account.
+async fn upsert_mailboxes(db: &RawDb, account_id: &str, payloads: &[Value]) -> Result<()> {
+    if payloads.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<MailboxRow> = payloads
+        .iter()
+        .map(|p| MailboxRow::from_payload(account_id, p))
+        .collect::<Result<Vec<_>>>()?;
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = db.pool().begin().await.context("begin mailboxes tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
+    tx.commit().await.context("commit mailboxes tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert one thread row.
+async fn upsert_thread(db: &RawDb, id: &str, account_id: &str, payload: &Value) -> Result<()> {
+    let row = ThreadRow::from_payload(id, account_id, payload)?;
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = db.pool().begin().await.context("begin thread tx")?;
+    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), &now).await?;
+    tx.commit().await.context("commit thread tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert a batch of emails: the envelope rows go through
+/// `bulk_upsert_in_tx`, and each row's join tables get refreshed
+/// (delete-then-insert) inside the same transaction.
+async fn upsert_emails(db: &RawDb, rows: &[EmailRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = db.pool().begin().await.context("begin emails tx")?;
+    bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    for row in rows {
+        refresh_email_joins(&mut tx, row).await?;
+    }
+    tx.commit().await.context("commit emails tx")?;
+    Ok(())
+}
+use db::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
 use session::Session;
 
 /// Batch size for `Email/get` detail fetches. JMAP servers typically
@@ -197,7 +256,7 @@ async fn run_sync(
         .find(|(k, _)| k == account_id)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| json!({}));
-    db.upsert_account(account_id, &account_payload).await?;
+    upsert_account(db, account_id, &account_payload).await?;
 
     let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_ids.is_empty() {
         None
@@ -287,7 +346,7 @@ async fn sync_mailboxes(
         .cloned()
         .unwrap_or_default();
     summary.mailboxes_upserted += list.len();
-    db.upsert_mailboxes(account_id, &list).await?;
+    upsert_mailboxes(db, account_id, &list).await?;
     if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
         db.save_state(account_id, "Mailbox", state).await?;
     }
@@ -327,7 +386,7 @@ async fn incremental_mailboxes(
                 .cloned()
                 .unwrap_or_default();
             summary.mailboxes_upserted += list.len();
-            db.upsert_mailboxes(account_id, &list).await?;
+            upsert_mailboxes(db, account_id, &list).await?;
         }
 
         if !destroyed.is_empty() {
@@ -614,7 +673,7 @@ async fn ingest_email_list(
         return Ok(());
     }
     summary.emails_upserted += rows.len();
-    db.upsert_emails(&rows).await
+    upsert_emails(db, &rows).await
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -648,7 +707,7 @@ async fn sync_threads(
             let Some(id) = thread.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            db.upsert_thread(id, account_id, &thread).await?;
+            upsert_thread(db, id, account_id, &thread).await?;
             summary.threads_upserted += 1;
         }
         if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {

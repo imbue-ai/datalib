@@ -1,13 +1,19 @@
-//! Data-manipulation surface for the JMAP raw store: open, UPSERTs,
-//! SELECTs, `RawDb::reset`, and the state-token plumbing.
+//! Open + non-DDL data-manipulation for the JMAP raw store.
 //!
-//! Single sqlite file at `<data_root>/raw/<name>.doltlite_db`. Shared
-//! bookkeeping (`blobs`, `sync_runs`, `sync_scope_state`) and the
-//! open / blob plumbing live in
-//! [`frankweiler_etl::doltlite_raw`]. The table shape — DDL,
-//! column-by-column semantics, the entity-vs-join family split, and
-//! the blob-CAS bridge — lives next door in
-//! [`super::schema_raw`].
+//! [`RawDb`] owns the entity-db pool and the (currently-shared)
+//! blob_refs surface plus the sibling CAS handle. The schema itself —
+//! every table DDL, every wire-payload row struct + its derived
+//! `BulkUpsertable` impl, the envelope-shaped `EmailRow` with its
+//! hand-written `BulkUpsertable` impl, and the per-table commentary
+//! — lives next door in [`super::schema_raw`].
+//!
+//! What's here is the small set of things `schema_raw` can't be:
+//! `RawDb::open`, `reset`, the JMAP-specific state-token plumbing
+//! (`load_state` / `save_state`), the load helpers translate consumes,
+//! and the join-table refresh helper that fires alongside email
+//! bulk-upserts. Entity-table writes go through the generic
+//! `frankweiler_etl::bulk::bulk_upsert_in_tx<T>` helper from the
+//! caller (`super::mod`), not via methods on `RawDb`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -16,7 +22,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
-use sqlx::Row;
+use sqlx::{Row, Sqlite, Transaction};
 
 use frankweiler_etl::blob_cas::{
     self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
@@ -24,9 +30,10 @@ use frankweiler_etl::blob_cas::{
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
-// Re-exported so existing `crate::extract::db::BLOB_KIND_*` callsites
-// keep resolving without a churn pass across the module.
-pub use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+// Re-exported so existing `crate::extract::db::{EmailRow, AttachmentRow,
+// BLOB_KIND_*}` callsites (mbox.rs, tests) keep resolving without a
+// churn pass across the module.
+pub use super::schema_raw::{AttachmentRow, EmailRow, BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -41,133 +48,6 @@ pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 pub fn state_scope(account_id: &str, type_name: &str) -> String {
     format!("jmap:{account_id}:state:{type_name}")
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Row structs
-// ─────────────────────────────────────────────────────────────────────
-
-/// Envelope columns + join-table inputs for one email. Construct via
-/// [`EmailRow::from_envelope`] (JMAP `Email/get` JSON) or by hand
-/// (the mbox extractor builds these straight from mail-parser
-/// headers). The `.eml` body itself rides in the shared blob CAS
-/// keyed by `blob_id` — translate reads it from there on demand.
-#[derive(Debug, Clone)]
-pub struct EmailRow {
-    pub id: String,
-    pub account_id: String,
-    pub thread_id: String,
-    pub blob_id: String,
-    pub message_id: Option<String>,
-    pub received_at: Option<String>,
-    pub sent_at: Option<String>,
-    pub size: Option<i64>,
-    pub subject: Option<String>,
-    pub from_json: Option<String>,
-    pub has_attachment: bool,
-    pub mailbox_ids: Vec<String>,
-    pub keywords: Vec<String>,
-    pub attachments: Vec<AttachmentRow>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AttachmentRow {
-    pub part_id: String,
-    pub blob_id: String,
-    pub name: Option<String>,
-    pub content_type: Option<String>,
-    pub size: Option<i64>,
-    pub disposition: Option<String>,
-    pub cid: Option<String>,
-}
-
-impl EmailRow {
-    /// Promote the envelope columns from a JMAP `Email/get` response.
-    /// Returns `None` if the response is missing one of the required
-    /// identifiers (`id`, `blobId`, `threadId`). The body parts
-    /// (`bodyValues`, `textBody`, `htmlBody`) are deliberately
-    /// ignored — translate reads them out of the `.eml` blob.
-    pub fn from_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
-        let id = envelope.get("id")?.as_str()?.to_string();
-        let blob_id = envelope.get("blobId")?.as_str()?.to_string();
-        let thread_id = envelope.get("threadId")?.as_str()?.to_string();
-        let message_id = envelope
-            .get("messageId")
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let received_at = envelope
-            .get("receivedAt")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let sent_at = envelope
-            .get("sentAt")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let size = envelope.get("size").and_then(|v| v.as_i64());
-        let subject = envelope
-            .get("subject")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let from_json = envelope
-            .get("from")
-            .map(|v| serde_json::to_string(v).unwrap_or_default());
-        let has_attachment = envelope
-            .get("hasAttachment")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let mailbox_ids = envelope
-            .get("mailboxIds")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        let keywords = envelope
-            .get("keywords")
-            .and_then(|v| v.as_object())
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default();
-        let attachments = envelope
-            .get("attachments")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(AttachmentRow::from_json).collect())
-            .unwrap_or_default();
-        Some(Self {
-            id,
-            account_id: account_id.to_string(),
-            thread_id,
-            blob_id,
-            message_id,
-            received_at,
-            sent_at,
-            size,
-            subject,
-            from_json,
-            has_attachment,
-            mailbox_ids,
-            keywords,
-            attachments,
-        })
-    }
-}
-
-impl AttachmentRow {
-    fn from_json(v: &Value) -> Option<Self> {
-        let part_id = v.get("partId")?.as_str()?.to_string();
-        let blob_id = v.get("blobId")?.as_str()?.to_string();
-        Some(Self {
-            part_id,
-            blob_id,
-            name: v.get("name").and_then(|x| x.as_str()).map(str::to_string),
-            content_type: v.get("type").and_then(|x| x.as_str()).map(str::to_string),
-            size: v.get("size").and_then(|x| x.as_i64()),
-            disposition: v
-                .get("disposition")
-                .and_then(|x| x.as_str())
-                .map(str::to_string),
-            cid: v.get("cid").and_then(|x| x.as_str()).map(str::to_string),
-        })
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -235,142 +115,14 @@ impl RawDb {
         dr::upsert_scope_state(&self.pool, &state_scope(account_id, type_name), token).await
     }
 
-    // ── accounts ───────────────────────────────────────────────────
-
-    pub async fn upsert_account(&self, id: &str, payload: &Value) -> Result<()> {
-        let name = payload.get("name").and_then(|v| v.as_str());
-        let is_personal = payload.get("isPersonal").and_then(|v| v.as_bool());
-        let is_read_only = payload.get("isReadOnly").and_then(|v| v.as_bool());
-        let payload_str = serde_json::to_string(payload).context("serialize account")?;
-        let mut tx = self.pool.begin().await.context("begin account tx")?;
-        sqlx::query(
-            "INSERT INTO accounts (id, name, is_personal, is_read_only, payload)
-             VALUES (?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                name = COALESCE(excluded.name, accounts.name),
-                is_personal = COALESCE(excluded.is_personal, accounts.is_personal),
-                is_read_only = COALESCE(excluded.is_read_only, accounts.is_read_only),
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(is_personal.map(|b| b as i64))
-        .bind(is_read_only.map(|b| b as i64))
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert account {id}"))?;
-        dr::record_object_attempt(&mut tx, "accounts", id, None).await?;
-        tx.commit().await.context("commit account tx")?;
-        Ok(())
-    }
+    // ── loads (consumed by translate) ───────────────────────────────
 
     pub async fn load_accounts(&self) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, "accounts").await
     }
 
-    // ── mailboxes ──────────────────────────────────────────────────
-
-    pub async fn upsert_mailbox(&self, account_id: &str, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin mailbox tx")?;
-        upsert_mailbox_in(&mut tx, account_id, payload).await?;
-        tx.commit().await.context("commit mailbox tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_mailboxes(&self, account_id: &str, payloads: &[Value]) -> Result<()> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin mailboxes batch tx")?;
-        for p in payloads {
-            upsert_mailbox_in(&mut tx, account_id, p).await?;
-        }
-        tx.commit().await.context("commit mailboxes batch tx")?;
-        Ok(())
-    }
-
-    pub async fn delete_mailboxes(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin delete mailboxes tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM mailboxes WHERE id = ?",
-                "DELETE FROM mailboxes_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete mailbox {id}"))?;
-            }
-        }
-        tx.commit().await.context("commit delete mailboxes tx")?;
-        Ok(())
-    }
-
     pub async fn load_mailboxes(&self) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, "mailboxes").await
-    }
-
-    // ── threads ────────────────────────────────────────────────────
-
-    pub async fn upsert_thread(&self, id: &str, account_id: &str, payload: &Value) -> Result<()> {
-        let email_count = payload
-            .get("emailIds")
-            .and_then(|v| v.as_array())
-            .map(|a| a.len() as i64);
-        let payload_str = serde_json::to_string(payload).context("serialize thread")?;
-        let mut tx = self.pool.begin().await.context("begin thread tx")?;
-        sqlx::query(
-            "INSERT INTO threads (id, account_id, email_count, payload)
-             VALUES (?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                account_id = excluded.account_id,
-                email_count = excluded.email_count,
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(account_id)
-        .bind(email_count)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert thread {id}"))?;
-        dr::record_object_attempt(&mut tx, "threads", id, None).await?;
-        tx.commit().await.context("commit thread tx")?;
-        Ok(())
-    }
-
-    pub async fn delete_threads(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin delete threads tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM threads WHERE id = ?",
-                "DELETE FROM threads_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete thread {id}"))?;
-            }
-        }
-        tx.commit().await.context("commit delete threads tx")?;
-        Ok(())
     }
 
     pub async fn load_threads(&self) -> Result<Vec<Value>> {
@@ -394,54 +146,6 @@ impl RawDb {
             }
         }
         Ok(out)
-    }
-
-    // ── emails ─────────────────────────────────────────────────────
-
-    pub async fn upsert_email(&self, row: &EmailRow) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin email tx")?;
-        upsert_email_in(&mut tx, row).await?;
-        tx.commit().await.context("commit email tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_emails(&self, rows: &[EmailRow]) -> Result<()> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin emails batch tx")?;
-        for row in rows {
-            upsert_email_in(&mut tx, row).await?;
-        }
-        tx.commit().await.context("commit emails batch tx")?;
-        Ok(())
-    }
-
-    /// Hard-delete one email plus its joins + bookkeeping. Blobs are
-    /// untouched — another email may share the same `.eml` blob or an
-    /// attachment blob. Dolt history preserves the pre-delete state.
-    pub async fn delete_emails(&self, ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin delete emails tx")?;
-        for id in ids {
-            for sql in [
-                "DELETE FROM email_mailboxes WHERE email_id = ?",
-                "DELETE FROM email_keywords WHERE email_id = ?",
-                "DELETE FROM email_attachments WHERE email_id = ?",
-                "DELETE FROM emails WHERE id = ?",
-                "DELETE FROM emails_bookkeeping WHERE id = ?",
-            ] {
-                sqlx::query(sql)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await
-                    .with_context(|| format!("delete email {id}"))?;
-            }
-        }
-        tx.commit().await.context("commit delete emails tx")?;
-        Ok(())
     }
 
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
@@ -555,6 +259,81 @@ impl RawDb {
         Ok(out)
     }
 
+    // ── hard-deletes (JMAP destroy + parent-id cascades) ────────────
+
+    pub async fn delete_mailboxes(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin delete mailboxes tx")?;
+        for id in ids {
+            for sql in [
+                "DELETE FROM mailboxes WHERE id = ?",
+                "DELETE FROM mailboxes_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("delete mailbox {id}"))?;
+            }
+        }
+        tx.commit().await.context("commit delete mailboxes tx")?;
+        Ok(())
+    }
+
+    pub async fn delete_threads(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin delete threads tx")?;
+        for id in ids {
+            for sql in [
+                "DELETE FROM threads WHERE id = ?",
+                "DELETE FROM threads_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("delete thread {id}"))?;
+            }
+        }
+        tx.commit().await.context("commit delete threads tx")?;
+        Ok(())
+    }
+
+    /// Hard-delete one email plus its joins + bookkeeping. Blobs are
+    /// untouched — another email may share the same `.eml` blob or an
+    /// attachment blob. Dolt history preserves the pre-delete state.
+    pub async fn delete_emails(&self, ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await.context("begin delete emails tx")?;
+        for id in ids {
+            for sql in [
+                "DELETE FROM email_mailboxes WHERE email_id = ?",
+                "DELETE FROM email_keywords WHERE email_id = ?",
+                "DELETE FROM email_attachments WHERE email_id = ?",
+                "DELETE FROM emails WHERE id = ?",
+                "DELETE FROM emails_bookkeeping WHERE id = ?",
+            ] {
+                sqlx::query(sql)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| format!("delete email {id}"))?;
+            }
+        }
+        tx.commit().await.context("commit delete emails tx")?;
+        Ok(())
+    }
+
     // ── blobs (delegate to shared `blob_cas`) ───────────────────────
 
     pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
@@ -625,96 +404,19 @@ impl RawDb {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Row-level upserts (shared by single + batch APIs)
+// Email join-table refresh
 // ─────────────────────────────────────────────────────────────────────
 
-async fn upsert_mailbox_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    account_id: &str,
-    payload: &Value,
-) -> Result<()> {
-    let id = payload
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("mailbox payload missing id"))?;
-    let name = payload.get("name").and_then(|v| v.as_str());
-    let parent_id = payload.get("parentId").and_then(|v| v.as_str());
-    let role = payload.get("role").and_then(|v| v.as_str());
-    let sort_order = payload.get("sortOrder").and_then(|v| v.as_i64());
-    let total_emails = payload.get("totalEmails").and_then(|v| v.as_i64());
-    let unread_emails = payload.get("unreadEmails").and_then(|v| v.as_i64());
-    let payload_str = serde_json::to_string(payload).context("serialize mailbox")?;
-    sqlx::query(
-        "INSERT INTO mailboxes
-            (id, account_id, name, parent_id, role, sort_order, total_emails,
-             unread_emails, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-         ON CONFLICT(id) DO UPDATE SET
-            account_id = excluded.account_id,
-            name = COALESCE(excluded.name, mailboxes.name),
-            parent_id = COALESCE(excluded.parent_id, mailboxes.parent_id),
-            role = COALESCE(excluded.role, mailboxes.role),
-            sort_order = COALESCE(excluded.sort_order, mailboxes.sort_order),
-            total_emails = COALESCE(excluded.total_emails, mailboxes.total_emails),
-            unread_emails = COALESCE(excluded.unread_emails, mailboxes.unread_emails),
-            payload = excluded.payload",
-    )
-    .bind(id)
-    .bind(account_id)
-    .bind(name)
-    .bind(parent_id)
-    .bind(role)
-    .bind(sort_order)
-    .bind(total_emails)
-    .bind(unread_emails)
-    .bind(&payload_str)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("upsert mailbox {id}"))?;
-    dr::record_object_attempt(tx, "mailboxes", id, None).await
-}
-
-async fn upsert_email_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    row: &EmailRow,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO emails
-            (id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-             size, subject, from_json, has_attachment)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-            account_id = excluded.account_id,
-            thread_id = excluded.thread_id,
-            blob_id = excluded.blob_id,
-            message_id = COALESCE(excluded.message_id, emails.message_id),
-            received_at = COALESCE(excluded.received_at, emails.received_at),
-            sent_at = COALESCE(excluded.sent_at, emails.sent_at),
-            size = COALESCE(excluded.size, emails.size),
-            subject = COALESCE(excluded.subject, emails.subject),
-            from_json = COALESCE(excluded.from_json, emails.from_json),
-            has_attachment = COALESCE(excluded.has_attachment, emails.has_attachment)",
-    )
-    .bind(&row.id)
-    .bind(&row.account_id)
-    .bind(&row.thread_id)
-    .bind(&row.blob_id)
-    .bind(row.message_id.as_deref())
-    .bind(row.received_at.as_deref())
-    .bind(row.sent_at.as_deref())
-    .bind(row.size)
-    .bind(row.subject.as_deref())
-    .bind(row.from_json.as_deref())
-    .bind(row.has_attachment as i64)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("upsert email {}", row.id))?;
-    dr::record_object_attempt(tx, "emails", &row.id, None).await?;
-
-    // Refresh join tables for this email (delete-then-insert). Owning
-    // table updates are the source of truth for labels/keywords —
-    // anything we previously had for this id but is no longer present
-    // upstream must disappear.
+/// Refresh the three email-side join tables (`email_mailboxes`,
+/// `email_keywords`, `email_attachments`) for one email. Delete-then-
+/// insert because the join tables mirror current upstream state —
+/// anything we previously had for this id that's no longer present
+/// must disappear.
+///
+/// Runs inside the same transaction as the parent email's
+/// `bulk_upsert_in_tx` call so failure during the refresh rolls the
+/// envelope row back too. Caller is responsible for committing.
+pub async fn refresh_email_joins(tx: &mut Transaction<'_, Sqlite>, row: &EmailRow) -> Result<()> {
     sqlx::query("DELETE FROM email_mailboxes WHERE email_id = ?")
         .bind(&row.id)
         .execute(&mut **tx)
@@ -881,6 +583,9 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
+    use frankweiler_etl::bulk::bulk_upsert_in_tx;
+    use frankweiler_time::IsoOffsetTimestamp;
     use serde_json::json;
 
     async fn tmp_db() -> (tempfile::TempDir, RawDb) {
@@ -889,15 +594,37 @@ mod tests {
         (d, db)
     }
 
+    fn now() -> String {
+        IsoOffsetTimestamp::now_local().to_rfc3339()
+    }
+
+    async fn bulk<T: frankweiler_etl::bulk::BulkUpsertable>(db: &RawDb, rows: &[T]) {
+        if rows.is_empty() {
+            return;
+        }
+        let mut tx = db.pool().begin().await.unwrap();
+        bulk_upsert_in_tx(&mut tx, rows, &now()).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    async fn upsert_email(db: &RawDb, row: &EmailRow) {
+        let mut tx = db.pool().begin().await.unwrap();
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), &now())
+            .await
+            .unwrap();
+        refresh_email_joins(&mut tx, row).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
     #[tokio::test]
     async fn account_round_trips() {
         let (_d, db) = tmp_db().await;
-        db.upsert_account(
+        let row = AccountRow::from_payload(
             "A1",
             &json!({"name": "thad@fastmail.com", "isPersonal": true}),
         )
-        .await
         .unwrap();
+        bulk(&db, &[row]).await;
         let accts = db.load_accounts().await.unwrap();
         assert_eq!(accts.len(), 1);
         assert_eq!(accts[0]["name"], "thad@fastmail.com");
@@ -906,15 +633,16 @@ mod tests {
     #[tokio::test]
     async fn mailbox_round_trips_and_filters_by_account() {
         let (_d, db) = tmp_db().await;
-        db.upsert_mailbox(
-            "A1",
-            &json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": 42}),
-        )
-        .await
-        .unwrap();
-        db.upsert_mailbox("A1", &json!({"id": "M2", "name": "Sent", "role": "sent"}))
-            .await
-            .unwrap();
+        let rows = vec![
+            MailboxRow::from_payload(
+                "A1",
+                &json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": 42}),
+            )
+            .unwrap(),
+            MailboxRow::from_payload("A1", &json!({"id": "M2", "name": "Sent", "role": "sent"}))
+                .unwrap(),
+        ];
+        bulk(&db, &rows).await;
         let mboxes = db.load_mailboxes().await.unwrap();
         assert_eq!(mboxes.len(), 2);
         // promoted columns
@@ -949,7 +677,7 @@ mod tests {
             ],
         });
         let row = EmailRow::from_envelope("A1", &payload).expect("from_payload");
-        db.upsert_email(&row).await.unwrap();
+        upsert_email(&db, &row).await;
 
         let loaded = db.load_emails().await.unwrap();
         assert_eq!(loaded.len(), 1);
@@ -982,14 +710,10 @@ mod tests {
             "mailboxIds": {"M1": true},
             "keywords": {"$seen": true},
         });
-        db.upsert_email(&EmailRow::from_envelope("A", &payload).unwrap())
-            .await
-            .unwrap();
+        upsert_email(&db, &EmailRow::from_envelope("A", &payload).unwrap()).await;
         payload["keywords"] = json!({"$flagged": true});
         payload["mailboxIds"] = json!({"M2": true});
-        db.upsert_email(&EmailRow::from_envelope("A", &payload).unwrap())
-            .await
-            .unwrap();
+        upsert_email(&db, &EmailRow::from_envelope("A", &payload).unwrap()).await;
         let joins = db.load_email_joins().await.unwrap();
         assert_eq!(joins.mailboxes["E1"], vec!["M2"]);
         assert_eq!(joins.keywords["E1"], vec!["$flagged"]);
@@ -1006,9 +730,7 @@ mod tests {
             "keywords": {"$seen": true},
             "attachments": [{"partId": "1", "blobId": "B-att"}],
         });
-        db.upsert_email(&EmailRow::from_envelope("A", &p).unwrap())
-            .await
-            .unwrap();
+        upsert_email(&db, &EmailRow::from_envelope("A", &p).unwrap()).await;
         // Also stash a blob row so we can prove it survives.
         db.store_blob(
             &RefStub {
@@ -1046,9 +768,8 @@ mod tests {
     #[tokio::test]
     async fn payload_stored_as_jsonb_blob() {
         let (_d, db) = tmp_db().await;
-        db.upsert_mailbox("A1", &json!({"id": "M1", "name": "Inbox"}))
-            .await
-            .unwrap();
+        let row = MailboxRow::from_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
+        bulk(&db, &[row]).await;
         let t: String = sqlx::query_scalar("SELECT typeof(payload) FROM mailboxes WHERE id='M1'")
             .fetch_one(db.pool())
             .await
@@ -1075,24 +796,19 @@ mod tests {
     #[tokio::test]
     async fn reset_clears_data_joins_and_state_but_not_runs() {
         let (_d, db) = tmp_db().await;
-        db.upsert_account("A1", &json!({"name": "x"}))
-            .await
-            .unwrap();
-        db.upsert_mailbox("A1", &json!({"id": "M1", "name": "Inbox"}))
-            .await
-            .unwrap();
-        db.upsert_email(
-            &EmailRow::from_envelope(
-                "A1",
-                &json!({
-                    "id": "E1", "blobId": "B", "threadId": "T",
-                    "mailboxIds": {"M1": true},
-                }),
-            )
-            .unwrap(),
+        let acct = AccountRow::from_payload("A1", &json!({"name": "x"})).unwrap();
+        bulk(&db, &[acct]).await;
+        let mbox = MailboxRow::from_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
+        bulk(&db, &[mbox]).await;
+        let email = EmailRow::from_envelope(
+            "A1",
+            &json!({
+                "id": "E1", "blobId": "B", "threadId": "T",
+                "mailboxIds": {"M1": true},
+            }),
         )
-        .await
         .unwrap();
+        upsert_email(&db, &email).await;
         db.save_state("A1", "Email", "tok").await.unwrap();
         let run = frankweiler_etl::doltlite_raw::start_run(db.pool(), &json!({"phase": "test"}))
             .await
@@ -1112,5 +828,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(run_count, 1);
+
+        // Suppress unused warning when the new threads loader isn't
+        // touched by the assertions above. `_` silences without
+        // editing the test set.
+        let _: Vec<Value> = db.load_threads().await.unwrap();
+
+        // Same for ThreadRow / from_payload — exercise the
+        // constructor so the import stays live across phase 1.
+        let _ = ThreadRow::from_payload("T1", "A1", &json!({"emailIds": ["E1"]})).unwrap();
     }
 }
