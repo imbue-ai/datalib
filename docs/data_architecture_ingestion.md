@@ -709,8 +709,93 @@ row type at compile time. What these shared helpers own today is the
 cross-provider boilerplate — chunked SQL, bookkeeping, commit, and
 (for the wire-event subset) the tape mirror.
 
+## Incremental update via content fingerprints (load-bearing rule)
+
+**Every derived artifact in the system carries a fingerprint of the
+inputs that produced it, and every re-derivation step compares its
+*current* inputs against the stored fingerprint before doing any
+work.** Structurally this is the same content-addressable cache
+pattern that Bazel and Nix use for build artifacts — derived
+outputs are keyed by a hash of their inputs; on re-run, if the
+inputs hash the same, the cached output is still valid. The
+difference is that Bazel and Nix make the user write build files;
+we hide the cache machinery inside each stage so the user just
+runs `frankweiler-sync`.
+
+The recipe at every stage:
+
+  1. **Each persisted artifact carries a `*_fingerprint` field**
+     that hashes the inputs that produced it.
+  2. **The inputs hash covers both content and dependencies** — the
+     payload bytes themselves plus the content hashes of every
+     entity this artifact reads from upstream stages (so a change to
+     an attachment's content invalidates the rendered doc that
+     references it; a change to a chat_item's payload invalidates
+     the bucket-fingerprint for its bucket; etc.).
+  3. **Before re-deriving the artifact, recompute the inputs hash
+     and compare.** Skip if equal. This compare-and-skip is the only
+     thing the re-run loop should be doing for the common steady
+     state.
+  4. **A `*_VERSION` constant is the explicit "invalidate everything
+     downstream" lever.** Bumping `RENDER_VERSION` is how we say
+     "the renderer schema changed; treat every prior fingerprint as
+     mismatched."
+
+Where the pattern lives today:
+
+| Stage                       | Inputs hash                                                                | Stored as                                | Skip-check it powers                                                       |
+|-----------------------------|----------------------------------------------------------------------------|------------------------------------------|----------------------------------------------------------------------------|
+| Extract (snapshot-level)    | `(metadata, main, files)` triple of `(mtime, byte_size)` (Signal)          | `ingested_backups.fingerprint`           | "Have we already ingested this snapshot?" — before any decrypt/walk        |
+| Extract (per-payload)       | blake3 of the JSONB payload bytes                                          | `<entity_table>.payload_blake3`          | Input to translate's bucket fingerprint aggregation                        |
+| Extract (per-attachment)    | blake3 of the decrypted attachment bytes                                   | `<provider>_attachments.blake3`          | Input to translate's bucket fingerprint aggregation                        |
+| Translate (per document)    | blake3 of `group_concat(payload_blake3 + attachment.blake3)` over a bucket | sidecar `header.source_fingerprint`      | "Have we already rendered this document?" — before loading payloads        |
+| Load (per sidecar)          | the sidecar's own `source_fingerprint`                                     | `markdowns_loaded.source_fingerprint`    | "Have we already loaded this sidecar's rows?" — before re-applying rows    |
+
+Where it still needs to land (aspirational; some not yet built):
+
+  - **Per-table extract commit hash.** Today the orchestrator
+    wraps each source in one commit per run; with finer-grained
+    table-level commit hashes we could skip downstream stages whose
+    inputs are unchanged at the table level even when other tables
+    changed.
+  - **Attachment-GC dependency tracking.** `gc_orphans` walks
+    references today; making it incremental requires a fingerprint
+    over "the union of referenced blake3s across providers."
+  - **qmd-index rebuild.** Currently rebuilt full; should derive an
+    inputs fingerprint per index shard.
+
+Why this pattern matters:
+
+  - **Re-runs are cheap.** A second sync run against an unchanged
+    source touches as little disk as possible at every stage. A
+    re-render against an unchanged bucket loads zero payloads off
+    disk (translate's two-phase parse short-circuits before reading
+    any chat_items in the unchanged bucket).
+  - **Bazel/Nix complexity, hidden.** The user does not write build
+    files. No DAG declaration, no explicit rule registration, no
+    `target` syntax to learn. Each stage's fingerprint recipe is
+    internal to that stage, and the orchestrator wires the
+    "previous fingerprints" map through automatically.
+  - **Correct-by-construction.** Two runs that should produce
+    different outputs produce different fingerprints (because their
+    inputs hash differently). Two runs that should produce identical
+    outputs produce matching fingerprints; the cached output stays.
+    The render of an unchanged bucket is exactly the same bytes.
+
+**Rule for new stages.** Any new derivation added to the pipeline
+(future Annotate step, future index shard, future projection)
+follows the same recipe: declare what the inputs are (content +
+dependency hashes), compute a deterministic hash over them, store
+it alongside the output, compare on re-run. The compare-and-skip
+loop is what makes the system feel responsive on a laptop with
+months of accumulated data.
+
 ## Cursor / resume strategy
 
+Cursor / resume is the **extract-side specialization** of the
+[Incremental update](#incremental-update-via-content-fingerprints-load-bearing-rule)
+pattern: "what was the last upstream identifier we successfully
+recorded?" answers "what's the inputs hash for the next walk?"
 Two patterns in the tree, picked by upstream API shape:
 
   - **Forward-walk + refresh window** (slack, anthropic, chatgpt,

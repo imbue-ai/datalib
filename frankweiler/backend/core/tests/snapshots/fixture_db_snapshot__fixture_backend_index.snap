@@ -391,7 +391,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.3",
       "row_set_hash": "c9cc293918c3cc4fb1dd7070744a00b02b817b184d4136f32751ad156857041a",
-      "source_fingerprint": "600084907c3d37d9d184c4eca6262395053c26a4740b5abf7221ab56aad44f6b",
+      "source_fingerprint": "dd320663ade9c6b0473c32fc2c02479f6097768ce24944e02ef022eb602661ba",
       "source_name": "signal",
       "title": "Signal · Will Riker (2364-04)",
       "updated_at": "2364-04-11T00:09:00+00:00"

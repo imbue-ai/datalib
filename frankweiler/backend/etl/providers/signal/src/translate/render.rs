@@ -18,7 +18,6 @@
 //! bucket plus one message-level grid_row (`Signal Message`) per
 //! chat item that surfaces in the search grid.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -31,7 +30,6 @@ use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use frankweiler_time::IsoOffsetTimestamp;
-use sha2::{Digest, Sha256};
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
@@ -68,14 +66,22 @@ pub fn render_all(
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary {
-        docs_total: parsed.docs.len(),
+        // `docs` only contains the buckets that need re-rendering,
+        // so `docs_total = parsed.docs.len() + docs_skipped` is the
+        // count the orchestrator's progress bar wants. Skip count
+        // comes from parse — it filtered them.
+        docs_total: parsed.docs.len() + parsed.docs_skipped,
+        docs_skipped: parsed.docs_skipped,
         ..Default::default()
     };
     progress.set_length(Some(summary.docs_total as u64));
+    // The parse-side skip-load has already filtered out unchanged
+    // buckets; report them all up front so the progress bar accounts
+    // for them too.
+    progress.inc(summary.docs_skipped as u64);
 
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
@@ -90,23 +96,11 @@ pub fn render_all(
             progress.inc(1);
             continue;
         };
-        let outcome = render_one(
-            chat,
-            doc,
-            parsed,
-            out_dir,
-            source_name,
-            prior_fingerprints,
-            on_doc_complete,
-        )?;
-        match outcome {
-            RenderOutcome::Rendered { messages, blobs } => {
-                summary.docs_rendered += 1;
-                summary.messages_rendered += messages;
-                summary.blobs_materialized += blobs;
-            }
-            RenderOutcome::Skipped => summary.docs_skipped += 1,
-        }
+        let RenderOutcome::Rendered { messages, blobs } =
+            render_one(chat, doc, parsed, out_dir, source_name, on_doc_complete)?;
+        summary.docs_rendered += 1;
+        summary.messages_rendered += messages;
+        summary.blobs_materialized += blobs;
         progress.inc(1);
     }
     Ok(summary)
@@ -114,7 +108,6 @@ pub fn render_all(
 
 enum RenderOutcome {
     Rendered { messages: usize, blobs: usize },
-    Skipped,
 }
 
 fn render_one(
@@ -123,12 +116,11 @@ fn render_one(
     parsed: &ParsedSignal,
     out_dir: &Path,
     source_name: &str,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderOutcome> {
     let chat_uuid = signal_chat_uuid(source_name, &chat.id);
     let markdown_uuid = signal_markdown_uuid(&chat_uuid, &doc.period_key);
-    let fingerprint = compute_fingerprint(doc);
+    let fingerprint = doc.fingerprint.clone();
 
     let recipient_display = parsed
         .recipients
@@ -147,11 +139,9 @@ fn render_one(
         &doc.period_key,
     );
 
-    if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        return Ok(RenderOutcome::Skipped);
-    }
+    // No prior-fingerprint check here: parse already filtered out
+    // unchanged buckets before they reach render. Reaching this
+    // function means we have committed to writing this doc.
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Materialize attachment bytes into `<page_dir>/blobs/<short-b3>.<ext>`
@@ -488,24 +478,6 @@ fn iso_ts(date_sent_ms: i64) -> String {
             );
             "1970-01-01T00:00:00+00:00".to_string()
         })
-}
-
-fn compute_fingerprint(doc: &DocBucket) -> String {
-    let mut h = Sha256::new();
-    h.update(doc.chat_id.as_bytes());
-    h.update(b"|");
-    h.update(doc.period_key.as_bytes());
-    for item in &doc.items {
-        h.update(b"\n");
-        h.update(item.author_id.as_bytes());
-        h.update(b"|");
-        h.update(item.date_sent.to_string().as_bytes());
-        h.update(b"|");
-        h.update(item.outgoing.to_string().as_bytes());
-        h.update(b"|");
-        h.update(item.text.as_deref().unwrap_or("").as_bytes());
-    }
-    format!("{:x}", h.finalize())
 }
 
 fn slugify(s: &str) -> String {

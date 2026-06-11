@@ -107,23 +107,32 @@ pub const DATA_TABLES: &[&str] = &[
 /// - `id` — always the string literal `'self'`. The PK is a literal
 ///   rather than a Signal-side id because the backup format only
 ///   ever carries one account entity per file.
+/// - `payload_blake3` — blake3 hex of the `payload` bytes. Used by
+///   translate's bucket-fingerprint path to decide whether a
+///   dependent document needs to re-render without reading the
+///   payload itself. See `super::super::translate::parse`.
 /// - `payload` — JSONB of the `Frame::Account` message.
 pub const ACCOUNT_DDL: &str = "CREATE TABLE IF NOT EXISTS account (
-    id TEXT PRIMARY KEY,
-    payload TEXT NULL
+    id             TEXT PRIMARY KEY,
+    payload_blake3 TEXT NULL,
+    payload        TEXT NULL,
+    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
 )";
 
 /// Row to upsert into [`ACCOUNT_DDL`]. `id` is always the literal
 /// `"self"`. The `payload` is the JSON-serialized `Frame::Account`.
+/// `payload_blake3` is blake3 hex of the payload bytes — computed
+/// once by the extract path right before the bulk upsert.
 #[derive(Debug, Clone)]
 pub struct AccountRow {
     pub id: String,
+    pub payload_blake3: String,
     pub payload: String,
 }
 
 impl BulkUpsertable for AccountRow {
     const TABLE: &'static str = "account";
-    const TYPED_COLUMNS: &'static [&'static str] = &[];
+    const TYPED_COLUMNS: &'static [&'static str] = &["payload_blake3"];
 
     fn id(&self) -> &str {
         &self.id
@@ -132,7 +141,9 @@ impl BulkUpsertable for AccountRow {
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments<'q>>,
     ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id).bind(&self.payload)
+        q.bind(&self.id)
+            .bind(&self.payload_blake3)
+            .bind(&self.payload)
     }
 }
 
@@ -146,12 +157,17 @@ impl BulkUpsertable for AccountRow {
 ///   phone number or the ACI hex string. Lets the translate /
 ///   indexer joins avoid cracking the protobuf payload open.
 /// - `display_name` — promoted from the payload for the same reason.
+/// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
+///   [`ACCOUNT_DDL`] doc comment for the bucket-fingerprint
+///   rationale.
 /// - `payload` — JSONB of the `Frame::Recipient` message.
 pub const RECIPIENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS recipients (
-    id TEXT PRIMARY KEY,
-    identifier TEXT NULL,
-    display_name TEXT NULL,
-    payload TEXT NULL
+    id             TEXT PRIMARY KEY,
+    identifier     TEXT NULL,
+    display_name   TEXT NULL,
+    payload_blake3 TEXT NULL,
+    payload        TEXT NULL,
+    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
 )";
 
 /// Row to upsert into [`RECIPIENTS_DDL`].
@@ -160,12 +176,14 @@ pub struct RecipientRow {
     pub id: String,
     pub identifier: Option<String>,
     pub display_name: Option<String>,
+    pub payload_blake3: String,
     pub payload: String,
 }
 
 impl BulkUpsertable for RecipientRow {
     const TABLE: &'static str = "recipients";
-    const TYPED_COLUMNS: &'static [&'static str] = &["identifier", "display_name"];
+    const TYPED_COLUMNS: &'static [&'static str] =
+        &["identifier", "display_name", "payload_blake3"];
 
     fn id(&self) -> &str {
         &self.id
@@ -177,6 +195,7 @@ impl BulkUpsertable for RecipientRow {
         q.bind(&self.id)
             .bind(self.identifier.as_deref())
             .bind(self.display_name.as_deref())
+            .bind(&self.payload_blake3)
             .bind(&self.payload)
     }
 }
@@ -188,11 +207,16 @@ impl BulkUpsertable for RecipientRow {
 ///   stringified. Primary key.
 /// - `recipient_id` — promoted FK into [`RECIPIENTS_DDL`]; joins
 ///   `chats` to its peer / group without cracking the payload.
+/// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
+///   [`ACCOUNT_DDL`] doc comment for the bucket-fingerprint
+///   rationale.
 /// - `payload` — JSONB of the `Frame::Chat` message.
 pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
-    id TEXT PRIMARY KEY,
-    recipient_id TEXT NOT NULL,
-    payload TEXT NULL
+    id             TEXT PRIMARY KEY,
+    recipient_id   TEXT NOT NULL,
+    payload_blake3 TEXT NULL,
+    payload        TEXT NULL,
+    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
 )";
 
 /// Row to upsert into [`CHATS_DDL`].
@@ -200,12 +224,13 @@ pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
 pub struct ChatRow {
     pub id: String,
     pub recipient_id: String,
+    pub payload_blake3: String,
     pub payload: String,
 }
 
 impl BulkUpsertable for ChatRow {
     const TABLE: &'static str = "chats";
-    const TYPED_COLUMNS: &'static [&'static str] = &["recipient_id"];
+    const TYPED_COLUMNS: &'static [&'static str] = &["recipient_id", "payload_blake3"];
 
     fn id(&self) -> &str {
         &self.id
@@ -216,6 +241,7 @@ impl BulkUpsertable for ChatRow {
     ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
         q.bind(&self.id)
             .bind(&self.recipient_id)
+            .bind(&self.payload_blake3)
             .bind(&self.payload)
     }
 }
@@ -234,13 +260,19 @@ impl BulkUpsertable for ChatRow {
 /// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
 ///   The closest thing this provider has to an event-shaped
 ///   timestamp; sourced into `GridRow.when_ts` by translate.
+/// - `payload_blake3` — blake3 hex of the `payload` bytes. The
+///   per-row content fingerprint translate aggregates into a
+///   per-document bucket fingerprint to decide whether re-rendering
+///   is needed.
 /// - `payload` — JSONB of the `Frame::ChatItem` message.
 pub const CHAT_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS chat_items (
-    id TEXT PRIMARY KEY,
-    chat_id TEXT NOT NULL,
-    author_id TEXT NOT NULL,
-    date_sent INTEGER NOT NULL,
-    payload TEXT NULL
+    id             TEXT PRIMARY KEY,
+    chat_id        TEXT NOT NULL,
+    author_id      TEXT NOT NULL,
+    date_sent      INTEGER NOT NULL,
+    payload_blake3 TEXT NULL,
+    payload        TEXT NULL,
+    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
 )";
 
 /// Row to upsert into [`CHAT_ITEMS_DDL`].
@@ -250,12 +282,14 @@ pub struct ChatItemRow {
     pub chat_id: String,
     pub author_id: String,
     pub date_sent: i64,
+    pub payload_blake3: String,
     pub payload: String,
 }
 
 impl BulkUpsertable for ChatItemRow {
     const TABLE: &'static str = "chat_items";
-    const TYPED_COLUMNS: &'static [&'static str] = &["chat_id", "author_id", "date_sent"];
+    const TYPED_COLUMNS: &'static [&'static str] =
+        &["chat_id", "author_id", "date_sent", "payload_blake3"];
 
     fn id(&self) -> &str {
         &self.id
@@ -268,6 +302,7 @@ impl BulkUpsertable for ChatItemRow {
             .bind(&self.chat_id)
             .bind(&self.author_id)
             .bind(self.date_sent)
+            .bind(&self.payload_blake3)
             .bind(&self.payload)
     }
 }

@@ -253,8 +253,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match &frame.item {
             Some(backup::frame::Item::Account(a)) => {
                 let payload = serde_json::to_string(a).context("serialize account frame")?;
+                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 accounts.push(AccountRow {
                     id: "self".to_string(),
+                    payload_blake3,
                     payload,
                 });
             }
@@ -262,10 +264,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let id = r.id.to_string();
                 let (identifier, name) = recipient_pretty(r);
                 let payload = serde_json::to_string(r).context("serialize recipient frame")?;
+                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 recipients.push(RecipientRow {
                     id,
                     identifier,
                     display_name: name,
+                    payload_blake3,
                     payload,
                 });
                 summary.recipients += 1;
@@ -274,9 +278,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let id = c.id.to_string();
                 let rid = c.recipient_id.to_string();
                 let payload = serde_json::to_string(c).context("serialize chat frame")?;
+                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 chats.push(ChatRow {
                     id,
                     recipient_id: rid,
+                    payload_blake3,
                     payload,
                 });
                 summary.chats += 1;
@@ -309,11 +315,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
 
                 let payload = serde_json::to_string(ci).context("serialize chat_item frame")?;
+                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 chat_items.push(ChatItemRow {
                     id: pk,
                     chat_id,
                     author_id,
                     date_sent,
+                    payload_blake3,
                     payload,
                 });
                 summary.chat_items += 1;

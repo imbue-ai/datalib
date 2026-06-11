@@ -9,7 +9,6 @@
 //! the crypto path runs exactly as it would against a real backup;
 //! we just publish the key.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -151,10 +150,13 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         1,
         "expected 1 (chat, period_key) bucket; all messages in same month"
     );
+    assert_eq!(
+        parsed.docs_skipped, 0,
+        "first parse: empty prior_fingerprints → nothing skipped"
+    );
     assert_eq!(parsed.docs[0].period_key, "2364-04");
 
     let progress = Progress::noop();
-    let prior: HashMap<String, String> = HashMap::new();
     let mut rendered_docs: Vec<RenderedMarkdown> = Vec::new();
     {
         let mut on_doc_complete = |doc: RenderedMarkdown| -> Result<()> {
@@ -166,11 +168,18 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             &data_root,
             "signal-tng",
             &progress,
-            &prior,
             &mut on_doc_complete,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
         assert_eq!(render_summary.messages_rendered, 4);
+        assert_eq!(
+            render_summary.docs_skipped, 0,
+            "first pass: nothing to skip (no prior fingerprints)"
+        );
+        assert_eq!(
+            render_summary.docs_total, 1,
+            "first pass: docs_total = docs_rendered + docs_skipped"
+        );
     }
 
     assert_eq!(rendered_docs.len(), 1, "expected one rendered doc");
@@ -223,6 +232,83 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     let sidecar_path = doc.md_path.with_extension("grid_rows.json");
     assert!(sidecar_path.exists(), "sidecar written next to md");
+
+    // ── Second pass: prove the docs_skipped path works ─────────────
+    //
+    // Build a `prior_fingerprints` map from what we just rendered,
+    // re-run parse + render against the same on-disk raw store, and
+    // assert that the second pass skips everything. This is the
+    // load-bearing assertion for the incremental-update pattern
+    // described in `docs/data_architecture_ingestion.md` §"Incremental
+    // update via content fingerprints": same inputs → same
+    // bucket-fingerprint → skip-load + skip-render. Verifies both
+    // halves of the contract in one shot — parse must not emit a
+    // bucket whose fingerprint matched (parsed.docs is empty,
+    // parsed.docs_skipped == 1), and render must not call
+    // on_doc_complete a second time (the count of new rendered_docs
+    // is 0).
+    let prior_fingerprints: std::collections::HashMap<String, String> = rendered_docs
+        .iter()
+        .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
+        .collect();
+    assert_eq!(
+        prior_fingerprints.len(),
+        1,
+        "exactly one prior fingerprint to compare against"
+    );
+
+    let parsed2 = tokio::task::spawn_blocking({
+        let raw = raw_db_path.clone();
+        let priors = prior_fingerprints.clone();
+        move || {
+            frankweiler_etl_signal::translate::parse(
+                &raw,
+                frankweiler_etl::periodize::Period::Month,
+                "signal-tng",
+                &priors,
+            )
+        }
+    })
+    .await??;
+    assert_eq!(
+        parsed2.docs.len(),
+        0,
+        "second parse should emit zero docs — all buckets' \
+         fingerprints matched"
+    );
+    assert_eq!(
+        parsed2.docs_skipped, 1,
+        "second parse should report one skipped bucket"
+    );
+
+    let mut rendered_docs_second_pass: Vec<RenderedMarkdown> = Vec::new();
+    let render_summary_2 = render_all(
+        &parsed2,
+        &data_root,
+        "signal-tng",
+        &progress,
+        &mut |doc: RenderedMarkdown| -> Result<()> {
+            rendered_docs_second_pass.push(doc);
+            Ok(())
+        },
+    )?;
+    assert_eq!(
+        render_summary_2.docs_rendered, 0,
+        "second pass should render zero docs"
+    );
+    assert_eq!(
+        render_summary_2.docs_skipped, 1,
+        "second pass should report one skipped doc"
+    );
+    assert_eq!(
+        render_summary_2.docs_total, 1,
+        "docs_total still counts the skipped bucket so the \
+         progress bar sums right"
+    );
+    assert!(
+        rendered_docs_second_pass.is_empty(),
+        "on_doc_complete must not fire for skipped buckets"
+    );
 
     Ok(())
 }

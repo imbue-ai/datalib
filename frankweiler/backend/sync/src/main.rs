@@ -2380,18 +2380,16 @@ fn translate_source(
             use frankweiler_etl_signal::translate::{parse, render_all, Period};
             let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
                 .context("parse signal period")?;
-            let parsed = parse(&fixture, period)
+            // `parse` now consumes `prior_fingerprints` directly:
+            // it does the per-bucket fingerprint compare in SQL and
+            // only loads chat_items for buckets that need re-rendering.
+            // `render_all` no longer takes prior_fingerprints — every
+            // doc in `parsed.docs` needs a write.
+            let parsed = parse(&fixture, period, name, prior_fingerprints)
                 .with_context(|| format!("signal parse {}", fixture.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("signal render_all")
-            .map(|_| ())
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("signal render_all")
+                .map(|_| ())
         }
         SourceConfig::Yolink { .. } => {
             // Extract-only provider. Time-series viz lives outside
