@@ -151,24 +151,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let known_blobs = db.loaded_blob_ids().await?;
 
+    // Progress bar runs over bytes-consumed-from-mbox-files (a known
+    // total from the filesystem, so it has a real endpoint and ETA)
+    // rather than emails-processed (which we don't know up front and
+    // would only resolve at EOF). Per-batch `set_message` reports the
+    // running email count as supplemental progress info.
+    let total_bytes: u64 = mbox_paths
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
+        .sum();
+    opts.progress.set_length(Some(total_bytes));
+
     let mut accumulator = Accumulator::new(account_id.clone(), opts.blob_size_limit_bytes);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
+    let mut emails_seen: u64 = 0;
 
     for path in &mbox_paths {
         for raw in iter_mbox_messages(path)? {
-            let raw = match raw {
-                Ok(bytes) => bytes,
+            let (raw, bytes_consumed) = match raw {
+                Ok((bytes, consumed)) => (bytes, consumed),
                 Err(e) => {
                     warn!(event = "mbox_read_failed", path = %path.display(), error = %e);
                     summary.parse_errors += 1;
                     continue;
                 }
             };
+            opts.progress.inc(bytes_consumed);
             match accumulator.ingest_message(&raw, &known_blobs, &mut batch, &mut summary) {
                 Ok(true) => {
+                    emails_seen += 1;
+                    opts.progress.set_message(&format!("{emails_seen} emails"));
                     if batch.emails.len() >= FLUSH_BATCH {
-                        flush_batch(&db, &mut batch, &opts.progress, &mut summary).await?;
+                        flush_batch(&db, &mut batch, &mut summary).await?;
                     }
                 }
                 Ok(false) => {} // duplicate; skipped
@@ -179,7 +194,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         }
     }
-    flush_batch(&db, &mut batch, &opts.progress, &mut summary).await?;
+    flush_batch(&db, &mut batch, &mut summary).await?;
 
     // Account + mailboxes + threads + matching bookkeeping all land in
     // one closing transaction. They're tiny compared to the email
@@ -194,26 +209,39 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 // Streaming mbox iterator
 // ─────────────────────────────────────────────────────────────────────
 
-/// Iterate `path` yielding one RFC 5322 message at a time. The mbox
-/// envelope `From ` line is stripped; `>From `-style escapes are
-/// unquoted. Streams off disk via `BufReader` so peak RSS stays bounded
-/// regardless of file size.
-fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<Vec<u8>>>> {
+/// Iterate `path` yielding one RFC 5322 message at a time. Each yield
+/// also reports the number of mbox-stream bytes consumed since the
+/// previous yield, so the caller can advance a byte-keyed progress
+/// bar against the known file size. The mbox envelope `From ` line is
+/// stripped; `>From `-style escapes are unquoted. Streams off disk via
+/// `BufReader` so peak RSS stays bounded regardless of file size.
+fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<(Vec<u8>, u64)>>> {
     let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut reader = BufReader::with_capacity(1 << 16, file);
     let mut pending: Option<Vec<u8>> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
+    // `bytes_since_yield` accumulates every byte read from the file
+    // (including the envelope `From ` lines, blank separators, and any
+    // pre-first-message junk) and resets at each yield. The caller
+    // sums these into a "bytes processed" progress increment, which
+    // ends up matching the file's `metadata().len()` once iteration
+    // finishes — regardless of how many emails ended up in the file.
+    let mut bytes_since_yield: u64 = 0;
     let it = std::iter::from_fn(move || loop {
         buf.clear();
         let n = match reader.read_until(b'\n', &mut buf) {
             Ok(0) => {
-                // EOF; flush any pending message.
-                return pending.take().map(Ok);
+                // EOF; flush any pending message together with the
+                // remaining bytes counted on this last `read_until`
+                // (which returned 0 — nothing to add).
+                let take_bytes = std::mem::take(&mut bytes_since_yield);
+                return pending.take().map(|msg| Ok((msg, take_bytes)));
             }
             Ok(n) => n,
             Err(e) => return Some(Err(e.into())),
         };
+        bytes_since_yield += n as u64;
         // Strip trailing newline (and CR if CRLF).
         let mut line: &[u8] = &buf[..n];
         if line.last() == Some(&b'\n') {
@@ -227,7 +255,8 @@ fn iter_mbox_messages(path: &Path) -> Result<impl Iterator<Item = Result<Vec<u8>
             pending = Some(Vec::with_capacity(4096));
             started = true;
             if let Some(msg) = prev {
-                return Some(Ok(msg));
+                let take_bytes = std::mem::take(&mut bytes_since_yield);
+                return Some(Ok((msg, take_bytes)));
             }
             continue;
         }
@@ -543,7 +572,6 @@ impl PendingBatch {
 async fn flush_batch(
     db: &RawDb,
     batch: &mut PendingBatch,
-    progress: &Progress,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     if batch.emails.is_empty() && batch.cas_objects.is_empty() {
@@ -568,7 +596,6 @@ async fn flush_batch(
     }
 
     summary.emails_upserted += batch.emails.len();
-    progress.inc(batch.emails.len() as u64);
     batch.clear();
     Ok(())
 }
@@ -1358,7 +1385,10 @@ mod tests {
         let msgs: Vec<Vec<u8>> = iter_mbox_messages(&path)
             .unwrap()
             .collect::<Result<Vec<_>>>()
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|(bytes, _consumed)| bytes)
+            .collect();
         assert_eq!(msgs.len(), 2);
         assert!(msgs[0].starts_with(b"X-GM-THRID:"));
         assert!(msgs[1].starts_with(b"X-GM-THRID:"));
@@ -1372,7 +1402,10 @@ mod tests {
         let msgs: Vec<Vec<u8>> = iter_mbox_messages(&path)
             .unwrap()
             .collect::<Result<Vec<_>>>()
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .map(|(bytes, _consumed)| bytes)
+            .collect();
         assert_eq!(msgs.len(), 1);
         let s = std::str::from_utf8(&msgs[0]).unwrap();
         assert!(s.contains("From the desk"));
