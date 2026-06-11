@@ -283,6 +283,34 @@ pub const EMAIL_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS email_attach
 pub const EMAIL_ATTACHMENTS_BY_BLOB_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
         email_attachments_by_blob ON email_attachments(blob_id)";
 
+// ── cursor table ────────────────────────────────────────────────────
+
+/// `mbox_files_checkpoint` — one row per mbox file the extractor has
+/// fully ingested. The mbox extractor consults this before opening
+/// each file: if the on-disk `(size_bytes, mtime_ns)` still match the
+/// stamped row, the file is skipped entirely. Append-only mbox
+/// semantics (mail clients only ever append) make `(size, mtime)` a
+/// sufficient fingerprint without re-hashing contents.
+///
+/// Not an entity table and not in [`DATA_TABLES`] — it's
+/// extractor-side bookkeeping that survives `RawDb::reset` only by
+/// being explicitly truncated alongside the data/join tables.
+///
+/// Columns:
+/// - `path` — canonicalized absolute filesystem path. Primary key.
+/// - `size_bytes` — `metadata().len()` at last ingest.
+/// - `mtime_ns` — `metadata().modified()` as nanoseconds since the
+///   UNIX epoch (i64 fits ~292 years past 1970).
+/// - `last_finished_at` — RFC3339 local-tz timestamp of the run that
+///   stamped this row. Informational; the skip decision uses
+///   `(size_bytes, mtime_ns)` only.
+pub const MBOX_FILES_CHECKPOINT_DDL: &str = "CREATE TABLE IF NOT EXISTS mbox_files_checkpoint (
+    path TEXT PRIMARY KEY,
+    size_bytes INTEGER NOT NULL,
+    mtime_ns INTEGER NOT NULL,
+    last_finished_at TEXT NOT NULL
+)";
+
 /// Compose the full DDL list passed to
 /// [`frankweiler_etl::doltlite_raw::open`]: every entity + join
 /// table, every CREATE-INDEX, plus the paired
@@ -309,6 +337,7 @@ pub fn full_ddl() -> Vec<String> {
         EMAIL_KEYWORDS_BY_KEYWORD_INDEX_DDL.to_string(),
         EMAIL_ATTACHMENTS_DDL.to_string(),
         EMAIL_ATTACHMENTS_BY_BLOB_INDEX_DDL.to_string(),
+        MBOX_FILES_CHECKPOINT_DDL.to_string(),
     ];
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

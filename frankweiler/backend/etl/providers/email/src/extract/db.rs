@@ -211,6 +211,10 @@ impl RawDb {
             .execute(&mut *tx)
             .await
             .context("clear jmap scope state on reset")?;
+        sqlx::query("DELETE FROM mbox_files_checkpoint")
+            .execute(&mut *tx)
+            .await
+            .context("clear mbox file checkpoints on reset")?;
         tx.commit().await.context("commit reset tx")?;
         Ok(())
     }

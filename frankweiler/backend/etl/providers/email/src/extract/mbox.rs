@@ -47,10 +47,11 @@
 //! | `Important`                  | keyword `$important`        |
 //! | (any other user label)       | role=`null`, name kept      |
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use anyhow::{anyhow, Context, Result};
 use frankweiler_etl::blob_cas::{blake3_hex, CasInsert};
@@ -64,7 +65,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::db::{db_path_for, AttachmentRow, EmailRow, RawDb};
 use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
@@ -149,28 +150,70 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let known_blobs = db.loaded_blob_ids().await?;
 
+    // Per-file (size, mtime_ns) fingerprints. Files whose stamped
+    // checkpoint still matches the current fingerprint are skipped
+    // outright — mail clients only append to mbox, so `(size, mtime)`
+    // is a sufficient unchanged-ness signal without re-hashing
+    // contents. Files that can't be stat'd or canonicalized fall
+    // through to the process bucket and fail loudly downstream.
+    let stamped = load_mbox_checkpoints(&db).await?;
+    let mut to_process: Vec<MboxJob> = Vec::with_capacity(mbox_paths.len());
+    let mut skipped_total_bytes: u64 = 0;
+    let mut skipped_count: usize = 0;
+    for path in &mbox_paths {
+        let job = match prepare_mbox_job(path) {
+            Ok(j) => j,
+            Err(e) => {
+                warn!(event = "mbox_stat_failed", path = %path.display(), error = %e);
+                continue;
+            }
+        };
+        if stamped
+            .get(&job.canonical)
+            .is_some_and(|(sz, mt)| *sz == job.size_bytes && *mt == job.mtime_ns)
+        {
+            info!(
+                event = "mbox_file_skipped",
+                path = %job.path.display(),
+                size_bytes = job.size_bytes,
+                "fingerprint matches checkpoint; skipping",
+            );
+            skipped_total_bytes = skipped_total_bytes.saturating_add(job.size_bytes);
+            skipped_count += 1;
+            continue;
+        }
+        to_process.push(job);
+    }
+
     // Progress bar runs over bytes-consumed-from-mbox-files (a known
     // total from the filesystem, so it has a real endpoint and ETA)
     // rather than emails-processed (which we don't know up front and
     // would only resolve at EOF). Per-batch `set_message` reports the
-    // running email count as supplemental progress info.
-    let total_bytes: u64 = mbox_paths
+    // running email count as supplemental progress info. Skipped
+    // files' bytes are baked into `set_length` and pre-incremented
+    // up front so the bar reflects "100% means done with this run."
+    let total_bytes: u64 = to_process
         .iter()
-        .filter_map(|p| std::fs::metadata(p).ok().map(|m| m.len()))
-        .sum();
+        .map(|j| j.size_bytes)
+        .sum::<u64>()
+        .saturating_add(skipped_total_bytes);
     opts.progress.set_length(Some(total_bytes));
+    if skipped_total_bytes > 0 {
+        opts.progress.inc(skipped_total_bytes);
+    }
 
     let mut accumulator = Accumulator::new(account_id.clone(), opts.blob_size_limit_bytes);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
+    let mut files_processed: usize = 0;
 
-    for path in &mbox_paths {
-        for raw in iter_mbox_messages(path)? {
+    for job in &to_process {
+        for raw in iter_mbox_messages(&job.path)? {
             let (raw, bytes_consumed) = match raw {
                 Ok((bytes, consumed)) => (bytes, consumed),
                 Err(e) => {
-                    warn!(event = "mbox_read_failed", path = %path.display(), error = %e);
+                    warn!(event = "mbox_read_failed", path = %job.path.display(), error = %e);
                     summary.parse_errors += 1;
                     continue;
                 }
@@ -191,16 +234,103 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
             }
         }
+        // Flush at the file boundary so the checkpoint we stamp next
+        // is causally after every row this file produced. Without
+        // this, a Ctrl-C between two files' messages could leave the
+        // checkpoint ahead of the data.
+        flush_batch(&db, &mut batch, &mut summary).await?;
+        upsert_mbox_checkpoint(&db, job).await?;
+        files_processed += 1;
     }
     flush_batch(&db, &mut batch, &mut summary).await?;
 
-    // Account + mailboxes + threads + matching bookkeeping all land in
-    // one closing transaction. They're tiny compared to the email
-    // tables (mailbox count = label count ~ tens; thread count up to
-    // total emails / avg-thread-size).
-    flush_account_and_lookups(&db, &account_id, &accumulator, &mut summary).await?;
+    // Account + mailboxes + threads + matching bookkeeping all land
+    // in one closing transaction. Skip it entirely when nothing was
+    // processed — the accumulator is empty, and even the no-op
+    // upserts (which are idempotent ON CONFLICT chains, not
+    // delete-then-insert) aren't worth the round-trip when every
+    // file was a cache hit.
+    if files_processed > 0 {
+        flush_account_and_lookups(&db, &account_id, &accumulator, &mut summary).await?;
+    } else if skipped_count > 0 {
+        info!(
+            event = "mbox_all_files_skipped",
+            skipped_count, "every mbox file matched its checkpoint; nothing to ingest",
+        );
+    }
 
     Ok(summary)
+}
+
+/// One mbox file scheduled for ingest, paired with the fingerprint
+/// that will be stamped into `mbox_files_checkpoint` after it
+/// drains successfully.
+struct MboxJob {
+    path: PathBuf,
+    /// Canonical absolute path — the checkpoint table's primary key.
+    /// Canonicalization happens once at scheduling time so relative
+    /// vs absolute spellings of the same file hit the same row
+    /// across runs.
+    canonical: String,
+    size_bytes: u64,
+    mtime_ns: i64,
+}
+
+fn prepare_mbox_job(path: &Path) -> Result<MboxJob> {
+    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    let mtime = meta
+        .modified()
+        .with_context(|| format!("mtime {}", path.display()))?;
+    let mtime_ns = match mtime.duration_since(UNIX_EPOCH) {
+        Ok(d) => i64::try_from(d.as_nanos()).unwrap_or(i64::MAX),
+        // Pre-1970 mtime is exotic enough that we treat it as
+        // "never matches" rather than panic — the file will be
+        // ingested every run, which is the safe default.
+        Err(_) => i64::MIN,
+    };
+    let canonical = std::fs::canonicalize(path)
+        .with_context(|| format!("canonicalize {}", path.display()))?
+        .to_string_lossy()
+        .into_owned();
+    Ok(MboxJob {
+        path: path.to_path_buf(),
+        canonical,
+        size_bytes: meta.len(),
+        mtime_ns,
+    })
+}
+
+async fn load_mbox_checkpoints(db: &RawDb) -> Result<HashMap<String, (u64, i64)>> {
+    let rows = sqlx::query_as::<_, (String, i64, i64)>(
+        "SELECT path, size_bytes, mtime_ns FROM mbox_files_checkpoint",
+    )
+    .fetch_all(db.pool())
+    .await
+    .context("load mbox_files_checkpoint")?;
+    Ok(rows
+        .into_iter()
+        .map(|(p, sz, mt)| (p, (sz as u64, mt)))
+        .collect())
+}
+
+async fn upsert_mbox_checkpoint(db: &RawDb, job: &MboxJob) -> Result<()> {
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    sqlx::query(
+        "INSERT INTO mbox_files_checkpoint (path, size_bytes, mtime_ns, last_finished_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+            size_bytes = excluded.size_bytes,
+            mtime_ns = excluded.mtime_ns,
+            last_finished_at = excluded.last_finished_at",
+    )
+    .bind(&job.canonical)
+    .bind(job.size_bytes as i64)
+    .bind(job.mtime_ns)
+    .bind(&now)
+    .execute(db.pool())
+    .await
+    .with_context(|| format!("upsert mbox checkpoint {}", job.path.display()))?;
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1380,10 +1510,11 @@ mod tests {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
         let work = tempfile::tempdir().unwrap();
         let db_path = work.path().join("e.doltlite_db");
+        let mut summaries: Vec<FetchSummary> = Vec::new();
         for _ in 0..2 {
             let db = RawDb::open(&db_path).await.unwrap();
             let pool = db.pool().clone();
-            fetch(FetchOptions {
+            let s = fetch(FetchOptions {
                 db_path: db_path.clone(),
                 db: Some(db),
                 input_path: path.clone(),
@@ -1391,9 +1522,27 @@ mod tests {
             })
             .await
             .unwrap();
+            summaries.push(s);
             pool.close().await;
         }
         let db = RawDb::open(&db_path).await.unwrap();
         assert_eq!(db.load_emails().await.unwrap().len(), 2);
+
+        // First run did real work; second run hit the checkpoint and
+        // skipped every file. The mbox file's (size, mtime) is
+        // unchanged between the two runs, so the cursor short-
+        // circuits before `iter_mbox_messages` opens it.
+        assert_eq!(summaries[0].emails_upserted, 2);
+        assert_eq!(summaries[1].emails_upserted, 0);
+        assert_eq!(summaries[1].blobs_stored, 0);
+        assert_eq!(summaries[1].mailboxes_upserted, 0);
+        assert_eq!(summaries[1].threads_upserted, 0);
+
+        // And the cursor row is present after the first run.
+        let stamped: i64 = sqlx::query_scalar("SELECT count(*) FROM mbox_files_checkpoint")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(stamped, 1);
     }
 }
