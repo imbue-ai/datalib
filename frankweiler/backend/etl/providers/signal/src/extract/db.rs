@@ -34,9 +34,38 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
+use frankweiler_etl::bulk::{bulk_upsert_bookkeeping, push_placeholders, SQL_CHUNK};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES};
+
+/// One recipient to upsert via [`RawDb::bulk_upsert_recipients`].
+#[derive(Debug, Clone)]
+pub struct RecipientRow {
+    pub id: String,
+    pub identifier: Option<String>,
+    pub display_name: Option<String>,
+    /// Raw prost-encoded `Frame` bytes (BLOB).
+    pub payload: Vec<u8>,
+}
+
+/// One chat to upsert via [`RawDb::bulk_upsert_chats`].
+#[derive(Debug, Clone)]
+pub struct ChatRow {
+    pub id: String,
+    pub recipient_id: String,
+    pub payload: Vec<u8>,
+}
+
+/// One chat_item (message) to upsert via [`RawDb::bulk_upsert_chat_items`].
+#[derive(Debug, Clone)]
+pub struct ChatItemRow {
+    pub id: String,
+    pub chat_id: String,
+    pub author_id: String,
+    pub date_sent: i64,
+    pub payload: Vec<u8>,
+}
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -156,7 +185,10 @@ impl RawDb {
         Ok(())
     }
 
+    /// Upsert the singleton `account` row. Account is one-per-snapshot
+    /// so chunking buys nothing; kept as a single-row call.
     pub async fn upsert_account(&self, payload: &[u8]) -> Result<()> {
+        let now = IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin account tx")?;
         sqlx::query(
             "INSERT INTO account (id, payload) VALUES ('self', ?)
@@ -166,86 +198,130 @@ impl RawDb {
         .execute(&mut *tx)
         .await
         .context("upsert account")?;
-        dr::record_object_attempt(&mut tx, "account", "self", None).await?;
+        bulk_upsert_bookkeeping(&mut tx, "account", std::iter::once("self"), &now).await?;
         tx.commit().await.context("commit account tx")?;
         Ok(())
     }
 
-    pub async fn upsert_recipient(
-        &self,
-        id: &str,
-        identifier: Option<&str>,
-        display_name: Option<&str>,
-        payload: &[u8],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin recipient tx")?;
-        sqlx::query(
-            "INSERT INTO recipients (id, identifier, display_name, payload)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                identifier = excluded.identifier,
-                display_name = excluded.display_name,
-                payload = excluded.payload",
+    /// Bulk-upsert recipients via chunked multi-row INSERT inside one
+    /// tx. Mirror of email's mbox bulk pattern (see
+    /// `frankweiler/backend/etl/providers/email/src/extract/mbox.rs::flush_batch`).
+    pub async fn bulk_upsert_recipients(&self, rows: &[RecipientRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin bulk recipients tx")?;
+        for chunk in rows.chunks(SQL_CHUNK) {
+            let mut sql = String::from(
+                "INSERT INTO recipients (id, identifier, display_name, payload) VALUES ",
+            );
+            push_placeholders(&mut sql, chunk.len(), 4);
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    identifier = excluded.identifier,
+                    display_name = excluded.display_name,
+                    payload = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for r in chunk {
+                q = q
+                    .bind(&r.id)
+                    .bind(r.identifier.as_deref())
+                    .bind(r.display_name.as_deref())
+                    .bind(&r.payload);
+            }
+            q.execute(&mut *tx)
+                .await
+                .context("bulk insert recipients")?;
+        }
+        bulk_upsert_bookkeeping(
+            &mut tx,
+            "recipients",
+            rows.iter().map(|r| r.id.as_str()),
+            &now,
         )
-        .bind(id)
-        .bind(identifier)
-        .bind(display_name)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert recipient {id}"))?;
-        dr::record_object_attempt(&mut tx, "recipients", id, None).await?;
-        tx.commit().await.context("commit recipient tx")?;
+        .await?;
+        tx.commit().await.context("commit bulk recipients tx")?;
         Ok(())
     }
 
-    pub async fn upsert_chat(&self, id: &str, recipient_id: &str, payload: &[u8]) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin chat tx")?;
-        sqlx::query(
-            "INSERT INTO chats (id, recipient_id, payload) VALUES (?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                recipient_id = excluded.recipient_id,
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(recipient_id)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert chat {id}"))?;
-        dr::record_object_attempt(&mut tx, "chats", id, None).await?;
-        tx.commit().await.context("commit chat tx")?;
+    /// Bulk-upsert chats via chunked multi-row INSERT inside one tx.
+    pub async fn bulk_upsert_chats(&self, rows: &[ChatRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+        let mut tx = self.pool.begin().await.context("begin bulk chats tx")?;
+        for chunk in rows.chunks(SQL_CHUNK) {
+            let mut sql = String::from("INSERT INTO chats (id, recipient_id, payload) VALUES ");
+            push_placeholders(&mut sql, chunk.len(), 3);
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    recipient_id = excluded.recipient_id,
+                    payload = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for r in chunk {
+                q = q.bind(&r.id).bind(&r.recipient_id).bind(&r.payload);
+            }
+            q.execute(&mut *tx).await.context("bulk insert chats")?;
+        }
+        bulk_upsert_bookkeeping(&mut tx, "chats", rows.iter().map(|r| r.id.as_str()), &now).await?;
+        tx.commit().await.context("commit bulk chats tx")?;
         Ok(())
     }
 
-    pub async fn upsert_chat_item(
-        &self,
-        id: &str,
-        chat_id: &str,
-        author_id: &str,
-        date_sent: i64,
-        payload: &[u8],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin chat_item tx")?;
-        sqlx::query(
-            "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                chat_id = excluded.chat_id,
-                author_id = excluded.author_id,
-                date_sent = excluded.date_sent,
-                payload = excluded.payload",
+    /// Bulk-upsert chat_items (messages) via chunked multi-row INSERT
+    /// inside one tx. Highest-volume table in Signal — a full backup
+    /// can carry 50k+ messages; this is where the speedup lands.
+    pub async fn bulk_upsert_chat_items(&self, rows: &[ChatItemRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin bulk chat_items tx")?;
+        for chunk in rows.chunks(SQL_CHUNK) {
+            let mut sql = String::from(
+                "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload) VALUES ",
+            );
+            push_placeholders(&mut sql, chunk.len(), 5);
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    chat_id = excluded.chat_id,
+                    author_id = excluded.author_id,
+                    date_sent = excluded.date_sent,
+                    payload = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for r in chunk {
+                q = q
+                    .bind(&r.id)
+                    .bind(&r.chat_id)
+                    .bind(&r.author_id)
+                    .bind(r.date_sent)
+                    .bind(&r.payload);
+            }
+            q.execute(&mut *tx)
+                .await
+                .context("bulk insert chat_items")?;
+        }
+        bulk_upsert_bookkeeping(
+            &mut tx,
+            "chat_items",
+            rows.iter().map(|r| r.id.as_str()),
+            &now,
         )
-        .bind(id)
-        .bind(chat_id)
-        .bind(author_id)
-        .bind(date_sent)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert chat_item {id}"))?;
-        dr::record_object_attempt(&mut tx, "chat_items", id, None).await?;
-        tx.commit().await.context("commit chat_item tx")?;
+        .await?;
+        tx.commit().await.context("commit bulk chat_items tx")?;
         Ok(())
     }
 }

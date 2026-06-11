@@ -39,6 +39,16 @@ use tracing::{debug, info, warn};
 
 use super::db::{EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
+use crate::translate::beeper_event_uuid;
+
+/// In-memory accumulator the per-thread walkers push into; flushed
+/// once in three chunked multi-row INSERTs at the end of [`ingest`].
+#[derive(Default)]
+struct PendingBatch {
+    rooms: Vec<RoomRow>,
+    users: Vec<UserRow>,
+    events: Vec<EventRow>,
+}
 
 /// `source` tag stamped on every row this module emits. Distinguishes
 /// `beeper_index` rows from future `macos_imessage` rows so the same
@@ -189,16 +199,25 @@ pub async fn ingest(
     progress.set_length(Some(target_rooms.len() as u64));
 
     let mut seen_users: HashSet<String> = HashSet::new();
+    let mut batch = PendingBatch::default();
     for (thread_id, network, thread_json) in &target_rooms {
         let account_id = thread_json
             .pointer("/accountID")
             .and_then(|v| v.as_str())
             .map(String::from);
         let room_row = build_room_row(thread_id, network, account_id.as_deref(), thread_json);
-        dst.upsert_room(&room_row).await?;
+        batch.rooms.push(room_row);
         summary.rooms += 1;
 
-        ingest_participants(db_path, dst, thread_id, network, &mut seen_users, summary).await?;
+        ingest_participants(
+            db_path,
+            thread_id,
+            network,
+            &mut seen_users,
+            &mut batch,
+            summary,
+        )
+        .await?;
         ingest_messages(
             db_path,
             dst,
@@ -206,10 +225,11 @@ pub async fn ingest(
             thread_id,
             network,
             download_media,
+            &mut batch,
             summary,
         )
         .await?;
-        ingest_reactions(db_path, dst, thread_id, network, summary).await?;
+        ingest_reactions(db_path, thread_id, network, &mut batch, summary).await?;
 
         progress.inc(1);
         progress.set_message(&format!(
@@ -217,6 +237,15 @@ pub async fn ingest(
             summary.rooms, summary.events, summary.users, summary.blobs
         ));
     }
+
+    // One bulk-flush per entity table — each a chunked multi-row
+    // INSERT with bookkeeping in the same tx. Attachments are already
+    // landed in the CAS at this point (their `blob_refs.owning_id`
+    // points at the event's UUID which we computed eagerly above; the
+    // events row lands now to complete the picture).
+    dst.bulk_upsert_rooms(&batch.rooms).await?;
+    dst.bulk_upsert_users(&batch.users).await?;
+    dst.bulk_upsert_events(&batch.events).await?;
     Ok(())
 }
 
@@ -288,10 +317,10 @@ fn sql_quote(s: &str) -> String {
 
 async fn ingest_participants(
     db_path: &Path,
-    dst: &RawDb,
     thread_id: &str,
     network: &str,
     seen_users: &mut HashSet<String>,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -314,7 +343,7 @@ async fn ingest_participants(
             .and_then(|v| v.as_str())
             .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
-        let row = UserRow {
+        batch.users.push(UserRow {
             source: SOURCE.to_string(),
             network: Some(network.to_string()),
             native_user_id: user_id,
@@ -323,13 +352,13 @@ async fn ingest_participants(
             remote_id: None,
             avatar_blob_id: None,
             payload: r.clone(),
-        };
-        dst.upsert_user(&row).await?;
+        });
         summary.users += 1;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ingest_messages(
     db_path: &Path,
     dst: &RawDb,
@@ -337,6 +366,7 @@ async fn ingest_messages(
     thread_id: &str,
     network: &str,
     download_media: bool,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -429,7 +459,13 @@ async fn ingest_messages(
             reaction_target_native_event_id: reaction_target,
             payload: message_json.clone(),
         };
-        let event_uuid = dst.upsert_event(&row).await?;
+        // Event UUID computed eagerly so attachments can refer to it
+        // via `blob_refs.owning_id` before the bulk-flush of `events`
+        // lands at end of `ingest()`. `blob_refs` has no FK
+        // constraint on `owning_id`, so the temporary forward
+        // reference is fine.
+        let event_uuid = beeper_event_uuid(&row.source, &row.native_event_id);
+        batch.events.push(row);
         summary.events += 1;
 
         if let Some(attachments) = message_json
@@ -463,9 +499,9 @@ async fn ingest_messages(
 
 async fn ingest_reactions(
     db_path: &Path,
-    dst: &RawDb,
     thread_id: &str,
     network: &str,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -494,7 +530,7 @@ async fn ingest_reactions(
             .and_then(|v| v.as_str())
             .map(String::from);
         let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        let row = EventRow {
+        batch.events.push(EventRow {
             source: SOURCE.to_string(),
             network: network.to_string(),
             native_room_id: thread_id.to_string(),
@@ -506,8 +542,7 @@ async fn ingest_reactions(
             reaction_target_native_event_id: Some(target_event),
             payload: Value::Null,
             ..EventRow::default()
-        };
-        dst.upsert_event(&row).await?;
+        });
         summary.events += 1;
     }
     Ok(())

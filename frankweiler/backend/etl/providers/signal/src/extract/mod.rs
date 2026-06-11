@@ -24,7 +24,7 @@ use prost::Message;
 use serde::Serialize;
 use tracing::{info, warn};
 
-pub use db::{db_path_for, RawDb};
+pub use db::{db_path_for, ChatItemRow, ChatRow, RawDb, RecipientRow};
 
 const DEFAULT_AEP_ENV: &str = "SIGNAL_PASSPHRASE";
 
@@ -183,6 +183,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ..Default::default()
     };
 
+    // Accumulate entity rows in memory and bulk-upsert in chunked
+    // multi-row INSERTs at the end. Mirror of email's mbox bulk
+    // pattern — see `docs/data_architecture_ingestion.md` §
+    // "Bulk-upsert as the standard write path". Attachments still
+    // ingest per-row inside the frame loop because each one needs a
+    // skip-check + decrypt + CAS write that aren't bulk-shaped today.
+    let mut recipients: Vec<RecipientRow> = Vec::new();
+    let mut chats: Vec<ChatRow> = Vec::new();
+    let mut chat_items: Vec<ChatItemRow> = Vec::new();
+
     for frame in snap.frames() {
         let frame = match frame {
             Ok(f) => f,
@@ -199,14 +209,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             Some(backup::frame::Item::Recipient(r)) => {
                 let id = r.id.to_string();
                 let (identifier, name) = recipient_pretty(&r);
-                db.upsert_recipient(&id, identifier.as_deref(), name.as_deref(), &raw)
-                    .await?;
+                recipients.push(RecipientRow {
+                    id,
+                    identifier,
+                    display_name: name,
+                    payload: raw,
+                });
                 summary.recipients += 1;
             }
             Some(backup::frame::Item::Chat(c)) => {
                 let id = c.id.to_string();
                 let rid = c.recipient_id.to_string();
-                db.upsert_chat(&id, &rid, &raw).await?;
+                chats.push(ChatRow {
+                    id,
+                    recipient_id: rid,
+                    payload: raw,
+                });
                 summary.chats += 1;
             }
             Some(backup::frame::Item::ChatItem(ci)) => {
@@ -214,9 +232,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let author_id = ci.author_id.to_string();
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
-                db.upsert_chat_item(&pk, &chat_id, &author_id, date_sent, &raw)
-                    .await?;
-                summary.chat_items += 1;
 
                 // Walk attachments + push their bytes into the CAS.
                 // Pattern matches every other media-bearing provider:
@@ -227,6 +242,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         ingest_attachment(&db, &files_root, &pk, idx, att, &mut summary).await?;
                     }
                 }
+
+                chat_items.push(ChatItemRow {
+                    id: pk,
+                    chat_id,
+                    author_id,
+                    date_sent,
+                    payload: raw,
+                });
+                summary.chat_items += 1;
             }
             _ => {
                 // StickerPack, AdHocCall, NotificationProfile,
@@ -234,6 +258,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
         }
     }
+
+    // One tx per entity table, each a chunked multi-row INSERT with
+    // bookkeeping inside.
+    db.bulk_upsert_recipients(&recipients).await?;
+    db.bulk_upsert_chats(&chats).await?;
+    db.bulk_upsert_chat_items(&chat_items).await?;
 
     db.record_snapshot_ingested(
         &snapshot_blake3,

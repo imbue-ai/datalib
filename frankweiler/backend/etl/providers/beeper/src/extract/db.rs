@@ -42,6 +42,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use frankweiler_etl::blob_cas::{self, BlobCas};
+use frankweiler_etl::bulk::{bulk_upsert_bookkeeping, SQL_CHUNK};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -192,135 +193,238 @@ impl RawDb {
         })
     }
 
-    pub async fn upsert_room(&self, row: &RoomRow) -> Result<String> {
-        let id = beeper_room_uuid(&row.source, &row.native_room_id);
-        let payload = serde_json::to_string(&row.payload).context("serialize room payload")?;
-        let mut tx = self.pool.begin().await.context("begin room tx")?;
-        sqlx::query(
-            "INSERT INTO rooms (
-                id, source, network, native_room_id,
-                external_room_id, external_workspace_id,
-                account_id, room_type, title, description, is_dm, is_space,
-                payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-            ON CONFLICT(id) DO UPDATE SET
-                network               = excluded.network,
-                external_room_id      = COALESCE(excluded.external_room_id, rooms.external_room_id),
-                external_workspace_id = COALESCE(excluded.external_workspace_id, rooms.external_workspace_id),
-                account_id            = COALESCE(excluded.account_id, rooms.account_id),
-                room_type             = COALESCE(excluded.room_type, rooms.room_type),
-                title                 = excluded.title,
-                description           = excluded.description,
-                is_dm                 = excluded.is_dm,
-                is_space              = excluded.is_space,
-                payload               = excluded.payload",
+    /// Bulk-upsert rooms via chunked multi-row INSERT inside one tx.
+    /// The synthesized PK is computed eagerly per row from
+    /// `(source, native_room_id)` via [`beeper_room_uuid`].
+    pub async fn bulk_upsert_rooms(&self, rows: &[RoomRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        // Precompute (id, payload_text) per row so the bind loop
+        // below can borrow stable slices.
+        let prepared: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| {
+                let id = beeper_room_uuid(&r.source, &r.native_room_id);
+                let payload =
+                    serde_json::to_string(&r.payload).unwrap_or_else(|_| "null".to_string());
+                (id, payload)
+            })
+            .collect();
+        let mut tx = self.pool.begin().await.context("begin bulk rooms tx")?;
+        for (chunk, prepared_chunk) in rows.chunks(SQL_CHUNK).zip(prepared.chunks(SQL_CHUNK)) {
+            let mut sql = String::from(
+                "INSERT INTO rooms (
+                    id, source, network, native_room_id,
+                    external_room_id, external_workspace_id,
+                    account_id, room_type, title, description, is_dm, is_space,
+                    payload
+                ) VALUES ",
+            );
+            // 12 plain placeholders + jsonb(?) for payload.
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,?,?,?,?,?,?,?,?,?,jsonb(?))");
+            }
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    network               = excluded.network,
+                    external_room_id      = COALESCE(excluded.external_room_id, rooms.external_room_id),
+                    external_workspace_id = COALESCE(excluded.external_workspace_id, rooms.external_workspace_id),
+                    account_id            = COALESCE(excluded.account_id, rooms.account_id),
+                    room_type             = COALESCE(excluded.room_type, rooms.room_type),
+                    title                 = excluded.title,
+                    description           = excluded.description,
+                    is_dm                 = excluded.is_dm,
+                    is_space              = excluded.is_space,
+                    payload               = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for (r, (id, payload_txt)) in chunk.iter().zip(prepared_chunk.iter()) {
+                q = q
+                    .bind(id)
+                    .bind(&r.source)
+                    .bind(&r.network)
+                    .bind(&r.native_room_id)
+                    .bind(r.external_room_id.as_deref())
+                    .bind(r.external_workspace_id.as_deref())
+                    .bind(r.account_id.as_deref())
+                    .bind(r.room_type.as_deref())
+                    .bind(r.title.as_deref())
+                    .bind(r.description.as_deref())
+                    .bind(r.is_dm as i64)
+                    .bind(r.is_space as i64)
+                    .bind(payload_txt);
+            }
+            q.execute(&mut *tx).await.context("bulk insert rooms")?;
+        }
+        bulk_upsert_bookkeeping(
+            &mut tx,
+            "rooms",
+            prepared.iter().map(|(id, _)| id.as_str()),
+            &now,
         )
-        .bind(&id)
-        .bind(&row.source)
-        .bind(&row.network)
-        .bind(&row.native_room_id)
-        .bind(row.external_room_id.as_deref())
-        .bind(row.external_workspace_id.as_deref())
-        .bind(row.account_id.as_deref())
-        .bind(row.room_type.as_deref())
-        .bind(row.title.as_deref())
-        .bind(row.description.as_deref())
-        .bind(row.is_dm as i64)
-        .bind(row.is_space as i64)
-        .bind(&payload)
-        .execute(&mut *tx)
-        .await
-        .context("insert rooms")?;
-        dr::record_object_attempt(&mut tx, "rooms", &id, None).await?;
-        tx.commit().await.context("commit room tx")?;
-        Ok(id)
+        .await?;
+        tx.commit().await.context("commit bulk rooms tx")?;
+        Ok(())
     }
 
-    pub async fn upsert_user(&self, row: &UserRow) -> Result<String> {
-        let id = beeper_user_uuid(&row.source, &row.native_user_id);
-        let payload = serde_json::to_string(&row.payload).context("serialize user payload")?;
-        let mut tx = self.pool.begin().await.context("begin user tx")?;
-        sqlx::query(
-            "INSERT INTO users (
-                id, source, network, native_user_id,
-                display_name, full_name, remote_id, avatar_blob_id,
-                payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-            ON CONFLICT(id) DO UPDATE SET
-                network         = COALESCE(excluded.network, users.network),
-                display_name    = COALESCE(excluded.display_name, users.display_name),
-                full_name       = COALESCE(excluded.full_name, users.full_name),
-                remote_id       = COALESCE(excluded.remote_id, users.remote_id),
-                avatar_blob_id  = COALESCE(excluded.avatar_blob_id, users.avatar_blob_id),
-                payload         = excluded.payload",
+    /// Bulk-upsert users via chunked multi-row INSERT inside one tx.
+    pub async fn bulk_upsert_users(&self, rows: &[UserRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let prepared: Vec<(String, String)> = rows
+            .iter()
+            .map(|r| {
+                let id = beeper_user_uuid(&r.source, &r.native_user_id);
+                let payload =
+                    serde_json::to_string(&r.payload).unwrap_or_else(|_| "null".to_string());
+                (id, payload)
+            })
+            .collect();
+        let mut tx = self.pool.begin().await.context("begin bulk users tx")?;
+        for (chunk, prepared_chunk) in rows.chunks(SQL_CHUNK).zip(prepared.chunks(SQL_CHUNK)) {
+            let mut sql = String::from(
+                "INSERT INTO users (
+                    id, source, network, native_user_id,
+                    display_name, full_name, remote_id, avatar_blob_id,
+                    payload
+                ) VALUES ",
+            );
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,?,?,?,?,?,jsonb(?))");
+            }
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    network         = COALESCE(excluded.network, users.network),
+                    display_name    = COALESCE(excluded.display_name, users.display_name),
+                    full_name       = COALESCE(excluded.full_name, users.full_name),
+                    remote_id       = COALESCE(excluded.remote_id, users.remote_id),
+                    avatar_blob_id  = COALESCE(excluded.avatar_blob_id, users.avatar_blob_id),
+                    payload         = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for (r, (id, payload_txt)) in chunk.iter().zip(prepared_chunk.iter()) {
+                q = q
+                    .bind(id)
+                    .bind(&r.source)
+                    .bind(r.network.as_deref())
+                    .bind(&r.native_user_id)
+                    .bind(r.display_name.as_deref())
+                    .bind(r.full_name.as_deref())
+                    .bind(r.remote_id.as_deref())
+                    .bind(r.avatar_blob_id.as_deref())
+                    .bind(payload_txt);
+            }
+            q.execute(&mut *tx).await.context("bulk insert users")?;
+        }
+        bulk_upsert_bookkeeping(
+            &mut tx,
+            "users",
+            prepared.iter().map(|(id, _)| id.as_str()),
+            &now,
         )
-        .bind(&id)
-        .bind(&row.source)
-        .bind(row.network.as_deref())
-        .bind(&row.native_user_id)
-        .bind(row.display_name.as_deref())
-        .bind(row.full_name.as_deref())
-        .bind(row.remote_id.as_deref())
-        .bind(row.avatar_blob_id.as_deref())
-        .bind(&payload)
-        .execute(&mut *tx)
-        .await
-        .context("insert users")?;
-        dr::record_object_attempt(&mut tx, "users", &id, None).await?;
-        tx.commit().await.context("commit user tx")?;
-        Ok(id)
+        .await?;
+        tx.commit().await.context("commit bulk users tx")?;
+        Ok(())
     }
 
-    pub async fn upsert_event(&self, row: &EventRow) -> Result<String> {
-        let id = beeper_event_uuid(&row.source, &row.native_event_id);
-        let room_uuid = beeper_room_uuid(&row.source, &row.native_room_id);
-        let sender_uuid = row
-            .sender_native_user_id
-            .as_deref()
-            .map(|s| beeper_user_uuid(&row.source, s));
-        let payload = serde_json::to_string(&row.payload).context("serialize event payload")?;
-        let mut tx = self.pool.begin().await.context("begin event tx")?;
-        sqlx::query(
-            "INSERT INTO events (
-                id, source, network, room_uuid, sender_uuid,
-                native_event_id, external_event_id,
-                event_type, timestamp_ms, text_content,
-                reply_to_native_event_id, edit_of_native_event_id,
-                reaction_emoji, reaction_target_native_event_id,
-                payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-            ON CONFLICT(id) DO UPDATE SET
-                sender_uuid                       = COALESCE(excluded.sender_uuid, events.sender_uuid),
-                external_event_id                 = COALESCE(excluded.external_event_id, events.external_event_id),
-                event_type                        = excluded.event_type,
-                timestamp_ms                      = excluded.timestamp_ms,
-                text_content                      = excluded.text_content,
-                reply_to_native_event_id          = COALESCE(excluded.reply_to_native_event_id, events.reply_to_native_event_id),
-                edit_of_native_event_id           = COALESCE(excluded.edit_of_native_event_id, events.edit_of_native_event_id),
-                reaction_emoji                    = COALESCE(excluded.reaction_emoji, events.reaction_emoji),
-                reaction_target_native_event_id   = COALESCE(excluded.reaction_target_native_event_id, events.reaction_target_native_event_id),
-                payload                           = excluded.payload",
+    /// Bulk-upsert events via chunked multi-row INSERT inside one tx.
+    /// Hot path on a fresh ingest (thousands to tens of thousands of
+    /// events per beeper account). Synthesized PKs and FK uuids are
+    /// computed eagerly per row.
+    pub async fn bulk_upsert_events(&self, rows: &[EventRow]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        struct Prepared {
+            id: String,
+            room_uuid: String,
+            sender_uuid: Option<String>,
+            payload_txt: String,
+        }
+        let prepared: Vec<Prepared> = rows
+            .iter()
+            .map(|r| Prepared {
+                id: beeper_event_uuid(&r.source, &r.native_event_id),
+                room_uuid: beeper_room_uuid(&r.source, &r.native_room_id),
+                sender_uuid: r
+                    .sender_native_user_id
+                    .as_deref()
+                    .map(|s| beeper_user_uuid(&r.source, s)),
+                payload_txt: serde_json::to_string(&r.payload)
+                    .unwrap_or_else(|_| "null".to_string()),
+            })
+            .collect();
+        let mut tx = self.pool.begin().await.context("begin bulk events tx")?;
+        for (chunk, prepared_chunk) in rows.chunks(SQL_CHUNK).zip(prepared.chunks(SQL_CHUNK)) {
+            let mut sql = String::from(
+                "INSERT INTO events (
+                    id, source, network, room_uuid, sender_uuid,
+                    native_event_id, external_event_id,
+                    event_type, timestamp_ms, text_content,
+                    reply_to_native_event_id, edit_of_native_event_id,
+                    reaction_emoji, reaction_target_native_event_id,
+                    payload
+                ) VALUES ",
+            );
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,?,?,?,?,?,?,?,?,?,?,?,jsonb(?))");
+            }
+            sql.push_str(
+                " ON CONFLICT(id) DO UPDATE SET
+                    sender_uuid                       = COALESCE(excluded.sender_uuid, events.sender_uuid),
+                    external_event_id                 = COALESCE(excluded.external_event_id, events.external_event_id),
+                    event_type                        = excluded.event_type,
+                    timestamp_ms                      = excluded.timestamp_ms,
+                    text_content                      = excluded.text_content,
+                    reply_to_native_event_id          = COALESCE(excluded.reply_to_native_event_id, events.reply_to_native_event_id),
+                    edit_of_native_event_id           = COALESCE(excluded.edit_of_native_event_id, events.edit_of_native_event_id),
+                    reaction_emoji                    = COALESCE(excluded.reaction_emoji, events.reaction_emoji),
+                    reaction_target_native_event_id   = COALESCE(excluded.reaction_target_native_event_id, events.reaction_target_native_event_id),
+                    payload                           = excluded.payload",
+            );
+            let mut q = sqlx::query(&sql);
+            for (r, p) in chunk.iter().zip(prepared_chunk.iter()) {
+                q = q
+                    .bind(&p.id)
+                    .bind(&r.source)
+                    .bind(&r.network)
+                    .bind(&p.room_uuid)
+                    .bind(p.sender_uuid.as_deref())
+                    .bind(&r.native_event_id)
+                    .bind(r.external_event_id.as_deref())
+                    .bind(&r.event_type)
+                    .bind(r.timestamp_ms)
+                    .bind(r.text_content.as_deref())
+                    .bind(r.reply_to_native_event_id.as_deref())
+                    .bind(r.edit_of_native_event_id.as_deref())
+                    .bind(r.reaction_emoji.as_deref())
+                    .bind(r.reaction_target_native_event_id.as_deref())
+                    .bind(&p.payload_txt);
+            }
+            q.execute(&mut *tx).await.context("bulk insert events")?;
+        }
+        bulk_upsert_bookkeeping(
+            &mut tx,
+            "events",
+            prepared.iter().map(|p| p.id.as_str()),
+            &now,
         )
-        .bind(&id)
-        .bind(&row.source)
-        .bind(&row.network)
-        .bind(&room_uuid)
-        .bind(sender_uuid.as_deref())
-        .bind(&row.native_event_id)
-        .bind(row.external_event_id.as_deref())
-        .bind(&row.event_type)
-        .bind(row.timestamp_ms)
-        .bind(row.text_content.as_deref())
-        .bind(row.reply_to_native_event_id.as_deref())
-        .bind(row.edit_of_native_event_id.as_deref())
-        .bind(row.reaction_emoji.as_deref())
-        .bind(row.reaction_target_native_event_id.as_deref())
-        .bind(&payload)
-        .execute(&mut *tx)
-        .await
-        .context("insert events")?;
-        dr::record_object_attempt(&mut tx, "events", &id, None).await?;
-        tx.commit().await.context("commit event tx")?;
-        Ok(id)
+        .await?;
+        tx.commit().await.context("commit bulk events tx")?;
+        Ok(())
     }
 }
