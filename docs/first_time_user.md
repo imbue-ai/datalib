@@ -17,7 +17,9 @@ Liberate your data from silos. Run SOTA AI and data tools on it, on your own ter
 > <span style="color:red">**Also remember that most agentic harnesses are effectively
 > (!!!) EXFILTRATION SCRIPTS (!!!), and running them on your private data will
 > upload it to a third party where you have very little control over what happens
-> with it next.**</span>
+> with it next. Ask yourself: "would the people who sent me these messages be
+> OK with me sending them to Anthropic, OpenAI, or Google?"  Because that's exactly what
+> you're doing when you run an agentic harness on this data.**</span>
 
 Codenames in this project (`frankweiler`, etc.) are inspired by
 [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
