@@ -391,11 +391,23 @@ async fn mirror_message(
         let from_me: i64 = r.get("from_me");
         let key_id: String = r.get("key_id");
         let Some(chat_jid) = chat_map.get(&chat_row_id).cloned() else {
-            tracing::warn!(
-                message_id = id,
-                chat_row_id,
-                "wa_message: chat_row_id not in chat map; dropping row"
-            );
+            // Every msgstore ships with a synthetic seed row at
+            // `_id=1` with `chat_row_id=-1` and `key_id="-1"` —
+            // it's an Android-side schema artifact, not a real
+            // message. Drop it silently. Other orphan rows
+            // (real `key_id`, missing chat) still WARN because
+            // they're worth flagging — maybe a chat row was
+            // pruned, maybe the source is corrupted.
+            if chat_row_id == -1 && key_id == "-1" {
+                tracing::debug!(message_id = id, "wa_message: dropping msgstore seed row");
+            } else {
+                tracing::warn!(
+                    message_id = id,
+                    chat_row_id,
+                    key_id,
+                    "wa_message: chat_row_id not in chat map; dropping row"
+                );
+            }
             continue;
         };
         let sender_jid_row_id: Option<i64> = r.get("sender_jid_row_id");
