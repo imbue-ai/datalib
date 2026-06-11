@@ -647,7 +647,12 @@ impl SourceConfig {
             SourceConfig::GithubApi { sync, .. } => sync.is_some(),
             SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
             SourceConfig::NotionApi { sync, .. } => sync.is_some(),
-            SourceConfig::Email { sync, .. } => sync.is_some(),
+            // Email: `sync:` present → JMAP API path; `sync:` absent +
+            // `input_path:` pointing at an mbox → file-backed extract
+            // path. Both are "managed" in that we own the raw doltlite
+            // store. The orchestrator's `ExtractPlan::for_source` decides
+            // which extractor to dispatch.
+            SourceConfig::Email { sync, common } => sync.is_some() || common.input_path.is_some(),
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),

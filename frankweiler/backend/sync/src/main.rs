@@ -1332,7 +1332,7 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Carddav { .. } => {
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
-        ExtractKind::Jmap { .. } => {
+        ExtractKind::Jmap { .. } | ExtractKind::EmailMbox { .. } => {
             DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
         }
         ExtractKind::Yolink { .. } => {
@@ -1383,6 +1383,15 @@ enum ExtractKind {
         sync: EmailSync,
         blob_size_limit_bytes: Option<u64>,
     },
+    EmailMbox {
+        /// `.mbox` file or a directory containing one, from
+        /// `SourceCommon::input_path`.
+        input_path: PathBuf,
+        /// Optional `account_id` override; falls back to the mbox
+        /// file stem.
+        account_id_override: Option<String>,
+        blob_size_limit_bytes: Option<u64>,
+    },
     Yolink {
         sync: YolinkSync,
     },
@@ -1410,7 +1419,7 @@ impl ExtractPlan {
         }
         let name = src.name().to_string();
         let type_str = src.type_str();
-        let out_dir = src.resolved_input_path(&cfg.data_root);
+        let mut out_dir = src.resolved_input_path(&cfg.data_root);
         let kind = match src {
             SourceConfig::ClaudeApi { sync, .. } => ExtractKind::Anthropic {
                 sync: sync.clone().unwrap_or_default(),
@@ -1473,15 +1482,35 @@ impl ExtractPlan {
             }
             SourceConfig::ClaudeExport { .. } => return None,
             SourceConfig::Email { sync, .. } => {
-                let sync = sync
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("email source {name} missing sync: block"));
-                match sync {
-                    Ok(sync) => ExtractKind::Jmap {
+                let blob_size_limit_bytes = src.resolved_shared(cfg).blob_size_limit_bytes;
+                match sync.clone() {
+                    Some(sync) => ExtractKind::Jmap {
                         sync,
-                        blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
+                        blob_size_limit_bytes,
                     },
-                    Err(e) => return Some(Err(e)),
+                    None => {
+                        // No `sync:` block — file-backed mbox mode.
+                        // `out_dir` was just resolved from
+                        // `input_path:` (with tilde expansion), so it
+                        // points at the user's `.mbox`. The raw
+                        // doltlite store always lives at
+                        // `<data_root>/raw/<name>`, so override
+                        // `out_dir` to the canonical path after
+                        // capturing the source-side input.
+                        let input_path = out_dir.clone();
+                        if !is_mbox_input(&input_path) {
+                            return Some(Err(anyhow::anyhow!(
+                                "email source {name} has no sync: block and no .mbox found under {}",
+                                input_path.display()
+                            )));
+                        }
+                        out_dir = cfg.data_root.join("raw").join(&name);
+                        ExtractKind::EmailMbox {
+                            input_path,
+                            account_id_override: None,
+                            blob_size_limit_bytes,
+                        }
+                    }
                 }
             }
         };
@@ -1925,6 +1954,37 @@ impl ExtractPlan {
                     s.blobs_errored,
                 )
             }),
+            (
+                ExtractKind::EmailMbox {
+                    input_path,
+                    account_id_override,
+                    blob_size_limit_bytes,
+                },
+                Some(DbHandle::Jmap(db)),
+            ) => frankweiler_etl_email::extract::mbox::fetch(
+                frankweiler_etl_email::extract::mbox::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    input_path,
+                    account_id_override,
+                    blob_size_limit_bytes,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "mailboxes={} threads={} emails={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
+                    s.mailboxes_upserted,
+                    s.threads_upserted,
+                    s.emails_upserted,
+                    s.blobs_stored,
+                    s.blobs_skipped,
+                    s.blobs_oversize,
+                    s.parse_errors,
+                )
+            }),
             // matching DbHandle variant, so any mismatch here would
             // be a bug in `open_extract_db`. We don't try to recover.
             _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
@@ -2256,37 +2316,28 @@ fn translate_source(
         SourceConfig::Email { sync, .. } => {
             use frankweiler_etl_email::extract::block_on_load_all;
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
-            use frankweiler_etl_email::translate::mbox;
             use frankweiler_etl_email::translate::render::render_all;
 
-            // Two-mode dispatch, parallel to how contacts picks
-            // between a server-backed doltlite db and a translate-only
-            // .vcf input_path:
-            //
-            //  1. doltlite db exists at `fixture` → server-extracted
-            //     run; load via block_on_load_all.
-            //  2. else `fixture` is an .mbox file or a directory
-            //     containing one → file-backed Google Takeout mode;
-            //     parse via translate::mbox::parse.
-            //  3. else nothing staged yet → skip (matches the
-            //     translate-only contacts shape for an empty
-            //     input_path).
-            let db = jmap_db_path_for(&fixture);
-            let parsed = if db.exists() {
-                block_on_load_all(&db)
-                    .with_context(|| format!("jmap block_on_load_all {}", db.display()))?
-            } else if is_mbox_input(&fixture) {
-                let account_override = sync.as_ref().and_then(|s| s.account_id.as_deref());
-                mbox::parse(&fixture, account_override)
-                    .with_context(|| format!("jmap mbox parse {}", fixture.display()))?
+            // Both JMAP-server and mbox sources land their data in
+            // the same shape; translate is identical for both. The
+            // canonical doltlite location is `<data_root>/raw/<name>`
+            // — for the mbox case `fixture` is the user's `.mbox`,
+            // not the raw store, so we look up the db path by name.
+            let db_dir = if sync.is_some() {
+                fixture.clone()
             } else {
+                cfg.data_root.join("raw").join(name)
+            };
+            let db = jmap_db_path_for(&db_dir);
+            if !db.exists() {
                 status_line!(
-                    "[translate] {name} (jmap): no raw db at {} and no .mbox under {} — skipping",
+                    "[translate] {name} (email): no raw db at {} — skipping",
                     db.display(),
-                    fixture.display(),
                 );
                 return Ok(());
-            };
+            }
+            let parsed = block_on_load_all(&db)
+                .with_context(|| format!("email block_on_load_all {}", db.display()))?;
             render_all(
                 &parsed,
                 root,
@@ -2295,7 +2346,7 @@ fn translate_source(
                 prior_fingerprints,
                 on_doc_complete,
             )
-            .context("jmap render_all")
+            .context("email render_all")
             .map(|_| ())
         }
         SourceConfig::Perseus { .. } => {

@@ -104,6 +104,7 @@ rust_test(
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
     ],
 )
 

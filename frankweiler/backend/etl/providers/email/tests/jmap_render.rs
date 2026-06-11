@@ -1,7 +1,8 @@
-//! End-to-end render test: build a tiny in-memory `LoadedRaw`,
+//! End-to-end render test: build a tiny in-memory `LoadedRaw` whose
+//! `blobs` reader carries real RFC 5322 `.eml` bytes for each email,
 //! render it through `render_all`, and assert the on-disk layout +
-//! grid_rows sidecar shape. Doesn't need a real JMAP server or
-//! HTTP playback — exercises the renderer in isolation.
+//! grid_rows sidecar shape. Doesn't need a real JMAP server or HTTP
+//! playback — exercises the renderer in isolation.
 
 use std::collections::HashMap;
 #[allow(unused_imports)]
@@ -14,41 +15,38 @@ use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEma
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 use serde_json::json;
 
+const EML_E1: &str = "From: Alice <a@x.test>\r\n\
+                      To: Bob <b@x.test>\r\n\
+                      Subject: Hello\r\n\
+                      Date: Thu, 1 Jan 2026 00:00:00 +0000\r\n\
+                      Content-Type: text/plain; charset=utf-8\r\n\
+                      \r\n\
+                      first message body\r\n";
+
+const EML_E2: &str = "From: Bob <b@x.test>\r\n\
+                      Subject: Re: Hello\r\n\
+                      Date: Fri, 2 Jan 2026 00:00:00 +0000\r\n\
+                      Content-Type: text/plain; charset=utf-8\r\n\
+                      \r\n\
+                      reply body\r\n";
+
+fn insert_eml(reader: &mut InMemoryBlobReader, ref_id: &str, owning_id: &str, body: &[u8]) {
+    reader.insert(BlobView {
+        ref_id: ref_id.into(),
+        owning_id: owning_id.into(),
+        slot: "source".into(),
+        blake3: blake3_hex(body),
+        content_type: Some("message/rfc822".into()),
+        upstream_name: None,
+        source_url: None,
+        bytes: body.to_vec(),
+    });
+}
+
 fn make_loaded() -> LoadedRaw {
     let account = json!({"id": "A1", "name": "thad@example.com", "isPersonal": true});
     let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
     let thread = json!({"id": "T1", "emailIds": ["E1", "E2"]});
-    let email_1_payload = json!({
-        "id": "E1",
-        "blobId": "B-eml-1",
-        "threadId": "T1",
-        "mailboxIds": {"M-inbox": true},
-        "keywords": {"$seen": true},
-        "from": [{"name": "Alice", "email": "a@x.test"}],
-        "to": [{"name": "Bob", "email": "b@x.test"}],
-        "subject": "Hello",
-        "receivedAt": "2026-01-01T00:00:00Z",
-        "preview": "first message",
-        "bodyValues": {"1": {"value": "first message body\n"}},
-        "textBody": [{"partId": "1", "type": "text/plain"}],
-        "hasAttachment": false,
-    });
-    let email_2_payload = json!({
-        "id": "E2",
-        "blobId": "B-eml-2",
-        "threadId": "T1",
-        "mailboxIds": {"M-inbox": true},
-        "keywords": {"$seen": true, "$flagged": true},
-        "from": [{"name": "Bob", "email": "b@x.test"}],
-        "subject": "Re: Hello",
-        "receivedAt": "2026-01-02T00:00:00Z",
-        "preview": "reply with attachment",
-        "bodyValues": {"1": {"value": "reply body\n"}},
-        "textBody": [{"partId": "1", "type": "text/plain"}],
-        "hasAttachment": true,
-        "attachments": [{"partId": "2", "blobId": "B-att-1", "name": "doc.pdf",
-                         "type": "application/pdf", "size": 12}],
-    });
 
     let emails = vec![
         LoadedEmail {
@@ -59,10 +57,10 @@ fn make_loaded() -> LoadedRaw {
             message_id: None,
             received_at: Some("2026-01-01T00:00:00Z".into()),
             sent_at: None,
-            size: Some(100),
+            size: Some(EML_E1.len() as i64),
             subject: Some("Hello".into()),
+            from_json: Some(r#"[{"name":"Alice","email":"a@x.test"}]"#.into()),
             has_attachment: false,
-            payload: email_1_payload,
         },
         LoadedEmail {
             id: "E2".into(),
@@ -72,10 +70,10 @@ fn make_loaded() -> LoadedRaw {
             message_id: None,
             received_at: Some("2026-01-02T00:00:00Z".into()),
             sent_at: None,
-            size: Some(200),
+            size: Some(EML_E2.len() as i64),
             subject: Some("Re: Hello".into()),
+            from_json: Some(r#"[{"name":"Bob","email":"b@x.test"}]"#.into()),
             has_attachment: true,
-            payload: email_2_payload,
         },
     ];
 
@@ -100,16 +98,18 @@ fn make_loaded() -> LoadedRaw {
     );
 
     let mut reader = InMemoryBlobReader::new();
-    let payload = b"hello-pdf-12";
+    insert_eml(&mut reader, "B-eml-1", "E1", EML_E1.as_bytes());
+    insert_eml(&mut reader, "B-eml-2", "E2", EML_E2.as_bytes());
+    let att_bytes = b"hello-pdf-12";
     reader.insert(BlobView {
         ref_id: "B-att-1".into(),
         owning_id: "E2".into(),
         slot: "2".into(),
-        blake3: blake3_hex(payload),
+        blake3: blake3_hex(att_bytes),
         content_type: Some("application/pdf".into()),
         upstream_name: Some("hello.pdf".into()),
         source_url: None,
-        bytes: payload.to_vec(),
+        bytes: att_bytes.to_vec(),
     });
 
     LoadedRaw {
@@ -156,10 +156,6 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         page_dir.join("index.grid_rows.json").exists(),
         "sidecar missing"
     );
-    // With CAS-based filenames, the on-disk name is `<short-b3>.<ext>`
-    // (16 hex chars + extension) rather than the upstream filename. Just
-    // assert *some* file exists in the blobs dir; the link text in the
-    // markdown still uses the original `doc.pdf`.
     let blobs_dir = page_dir.join("blobs");
     assert!(blobs_dir.is_dir(), "blobs/ dir missing");
     let mut entries: Vec<_> = std::fs::read_dir(&blobs_dir)

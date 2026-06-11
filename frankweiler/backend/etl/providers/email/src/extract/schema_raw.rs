@@ -139,38 +139,41 @@ pub const THREADS_DDL: &str = "CREATE TABLE IF NOT EXISTS threads (
 pub const THREADS_BY_ACCOUNT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS threads_by_account ON threads(account_id)";
 
-/// `emails` — one row per JMAP Email.
+/// `emails` — one row per email.
 ///
-/// The full `Email/get` response lives in `payload`; a handful of
-/// fields are promoted to typed columns for cheap querying. The
-/// RFC5322 `.eml` source for each email lives in the shared
-/// `blobs` table keyed by `Email.blobId` and discriminated by
-/// [`BLOB_KIND_EML`].
+/// **Envelope-only.** The body lives in the shared `blobs` CAS as the
+/// RFC5322 `.eml` source, keyed by `blob_id` and discriminated by
+/// [`BLOB_KIND_EML`]. Translate mail-parses the `.eml` on demand;
+/// nothing about bodies is materialized at extract.
 ///
 /// Columns:
-/// - `id` — upstream JMAP Email `id`. Primary key.
+/// - `id` — upstream email id. Primary key. For JMAP this is the
+///   server's opaque `Email.id`; for mbox sources it's the RFC 822
+///   `Message-ID:` value (angle brackets stripped) or
+///   `sha256(eml_bytes)` when the header is missing.
 /// - `account_id` — owning account; FK into [`ACCOUNTS_DDL`].
-/// - `thread_id` — owning thread; FK into [`THREADS_DDL`].
-/// - `blob_id` — upstream JMAP `Email.blobId`: a server-opaque
-///   string the JMAP server issues for this email's RFC5322 source
-///   bytes (e.g. Fastmail returns strings like `"B-eml-1"`). This
-///   is **not** the bytes' blake3 hash; it's the JMAP-side
-///   identifier we use as `ref_id` when calling into the shared
-///   blob CAS. The shared `blob_refs(ref_id, blake3)` table is
-///   what translates this opaque JMAP id to the blake3 that keys
-///   the actual bytes in `cas_objects`.
-/// - `message_id` — RFC 822 `Message-ID:` header value when
-///   present.
-/// - `received_at` — upstream `Email.receivedAt` (UTC ISO-8601).
-///   The event timestamp for this row.
-/// - `sent_at` — upstream `Email.sentAt` (the Date header).
-/// - `size` — JMAP-reported size in bytes.
+/// - `thread_id` — owning thread; FK into [`THREADS_DDL`]. For JMAP
+///   this is the server's `Email.threadId`; for mbox it's
+///   `X-GM-THRID` verbatim, falling back to `id` for single-message
+///   threads.
+/// - `blob_id` — `ref_id` into the shared blob CAS for this email's
+///   `.eml` bytes. For JMAP this is the server-opaque
+///   `Email.blobId` (e.g. `"B-eml-1"`); for mbox it's
+///   `sha256(eml_bytes)`. In both cases the shared
+///   `blob_refs(ref_id, blake3)` table maps it to the blake3 that
+///   keys the actual bytes in `cas_objects`.
+/// - `message_id` — RFC 822 `Message-ID:` header value when present.
+/// - `received_at` — event timestamp (UTC ISO-8601). For JMAP,
+///   `Email.receivedAt`; for mbox, the parsed `Date:` header.
+/// - `sent_at` — `Date:` header value. For mbox sources this equals
+///   `received_at`; JMAP keeps them distinct.
+/// - `size` — `.eml` size in bytes.
 /// - `subject` — denormalized subject for cheap listing display.
 /// - `from_json` — promoted JSON of the From: header(s); kept as
-///   JSON because RFC 5322 permits multiple addresses, with
-///   display names and groups.
-/// - `has_attachment` — 0/1 flag from JMAP.
-/// - `payload` — raw `Email/get` response (JSONB-encoded on disk).
+///   JSON because RFC 5322 permits multiple addresses with display
+///   names and groups.
+/// - `has_attachment` — 0/1 flag, set when at least one non-body
+///   MIME part is present.
 pub const EMAILS_DDL: &str = "CREATE TABLE IF NOT EXISTS emails (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL,
@@ -182,8 +185,7 @@ pub const EMAILS_DDL: &str = "CREATE TABLE IF NOT EXISTS emails (
     size INTEGER NULL,
     subject TEXT NULL,
     from_json TEXT NULL,
-    has_attachment INTEGER NULL,
-    payload TEXT NULL
+    has_attachment INTEGER NULL
 )";
 
 /// Index on `emails(thread_id)` — supports the "all emails in this
