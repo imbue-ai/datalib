@@ -117,7 +117,13 @@ impl ParsedEml {
 fn part_text(part: &mail_parser::MessagePart<'_>) -> String {
     match &part.body {
         PartType::Text(s) | PartType::Html(s) => s.to_string(),
-        PartType::Binary(b) | PartType::InlineBinary(b) => String::from_utf8_lossy(b).into_owned(),
+        // mail-parser sometimes includes inline image parts in
+        // `msg.html_body` (they're "part of" the HTML view). The
+        // image bytes belong in the blob CAS, not the rendered
+        // markdown — they render via the `<img src="cid:…">` →
+        // `blobs/<file>` rewrite, not by being inlined as text.
+        // Lossy-decoding multi-MB of JPEG/PNG into the body string
+        // is what made htmd dump raw binary into index.md.
         _ => String::new(),
     }
 }
@@ -533,7 +539,7 @@ fn email_body_plain(parsed: &ParsedEml) -> Option<String> {
 }
 
 /// Render one email's body to markdown. Prefers the `text/html` part
-/// (run through html2md after rewriting `cid:` srcs to point at
+/// (run through htmd after rewriting `cid:` srcs to point at
 /// materialized blobs) so we get auto-linked URLs, inline images,
 /// lists, and blockquotes for free. Falls back to `text/plain` with
 /// a light URL-autolink pass when no HTML body is present.
@@ -543,7 +549,7 @@ fn email_body_markdown(
     materialized: &HashMap<String, String>,
 ) -> Option<String> {
     // Build a cid → "blobs/<filename>" lookup so we can rewrite
-    // `<img src="cid:…">` URLs before html2md sees them.
+    // `<img src="cid:…">` URLs before htmd sees them.
     let mut cid_to_blob: HashMap<String, String> = HashMap::new();
     for a in attachments {
         let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
@@ -555,8 +561,11 @@ fn email_body_markdown(
     // Try HTML body first.
     if !parsed.html_body.trim().is_empty() {
         let rewritten = rewrite_cid_srcs(&parsed.html_body, &cid_to_blob);
-        let stripped = strip_noisy_blocks(&rewritten);
-        let md = html2md::parse_html(&stripped);
+        let md = htmd::HtmlToMarkdown::builder()
+            .skip_tags(vec!["script", "style", "head"])
+            .build()
+            .convert(&rewritten)
+            .unwrap_or_default();
         if !md.trim().is_empty() {
             return Some(md);
         }
@@ -577,39 +586,34 @@ fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String
     if cid_to_blob.is_empty() {
         return html.to_string();
     }
+    // Lowercase once up front so per-iteration `find` is O(remaining)
+    // not O(remaining²). Lowercasing preserves byte offsets (ASCII
+    // 'A'..='Z' → 'a'..='z'), so positions found in `lower` index
+    // straight into `html`.
+    let lower = html.to_ascii_lowercase();
     let mut out = String::with_capacity(html.len());
-    let bytes = html.as_bytes();
     let mut i = 0;
-    while i < bytes.len() {
-        // Look for `cid:` (case-insensitive) preceded by `"` or `'`
-        // (i.e. the start of an attribute value).
-        let rest = &html[i..];
-        let lower = rest.to_ascii_lowercase();
-        let Some(pos) = lower.find("cid:") else {
-            out.push_str(rest);
+    while i < html.len() {
+        let Some(rel) = lower[i..].find("cid:") else {
+            out.push_str(&html[i..]);
             break;
         };
+        let pos = i + rel;
         // Need at least one char before `cid:` and it must be a quote.
-        if pos == 0 {
-            out.push_str(&rest[..pos + 4]);
-            i += pos + 4;
-            continue;
-        }
-        let prev_char = rest[..pos].chars().last();
+        let prev_char = html[..pos].chars().last();
         if !matches!(prev_char, Some('"') | Some('\'')) {
-            out.push_str(&rest[..pos + 4]);
-            i += pos + 4;
+            out.push_str(&html[i..pos + 4]);
+            i = pos + 4;
             continue;
         }
         let quote = prev_char.unwrap();
-        // Find end-quote.
-        let after = &rest[pos + 4..];
+        let after = &html[pos + 4..];
         let Some(end_rel) = after.find(quote) else {
-            out.push_str(rest);
+            out.push_str(&html[i..]);
             break;
         };
         let cid = &after[..end_rel];
-        out.push_str(&rest[..pos]);
+        out.push_str(&html[i..pos]);
         if let Some(path) = cid_to_blob.get(cid) {
             out.push_str(path);
         } else {
@@ -618,60 +622,7 @@ fn rewrite_cid_srcs(html: &str, cid_to_blob: &HashMap<String, String>) -> String
             out.push_str("cid:");
             out.push_str(cid);
         }
-        i += pos + 4 + end_rel;
-    }
-    out
-}
-
-/// Remove `<style>…</style>`, `<script>…</script>`, and `<head>…</head>`
-/// blocks (case-insensitive) before html2md sees them. html2md treats
-/// CSS / JS as plain text and dumps the whole stylesheet into the
-/// rendered output, which is what produces the wall of `:root {…}`
-/// noise at the top of marketing emails.
-fn strip_noisy_blocks(html: &str) -> String {
-    let mut out = html.to_string();
-    for tag in ["style", "script", "head"] {
-        out = strip_tag_block(&out, tag);
-    }
-    out
-}
-
-fn strip_tag_block(html: &str, tag: &str) -> String {
-    let lower = html.to_ascii_lowercase();
-    let open_needle = format!("<{tag}");
-    let close_needle = format!("</{tag}>");
-    let mut out = String::with_capacity(html.len());
-    let mut i = 0;
-    while i < html.len() {
-        let Some(rel_open) = lower[i..].find(&open_needle) else {
-            out.push_str(&html[i..]);
-            break;
-        };
-        let open_at = i + rel_open;
-        // Confirm the next char after `<tag` is `>` or whitespace —
-        // otherwise it's a different tag with the same prefix
-        // (e.g. `<header>` when stripping `<head>`).
-        let after_name = open_at + open_needle.len();
-        let boundary_ok = lower
-            .as_bytes()
-            .get(after_name)
-            .map(|c| matches!(c, b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/'))
-            .unwrap_or(false);
-        if !boundary_ok {
-            out.push_str(&html[i..after_name]);
-            i = after_name;
-            continue;
-        }
-        out.push_str(&html[i..open_at]);
-        match lower[after_name..].find(&close_needle) {
-            Some(rel_close) => {
-                i = after_name + rel_close + close_needle.len();
-            }
-            None => {
-                // Unterminated — drop everything from the open tag to EOF.
-                break;
-            }
-        }
+        i = pos + 4 + end_rel;
     }
     out
 }

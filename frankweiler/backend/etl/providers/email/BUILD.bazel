@@ -30,7 +30,7 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:html2md",
+        "@frankweiler_crates//:htmd",
         "@frankweiler_crates//:mail-parser",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",

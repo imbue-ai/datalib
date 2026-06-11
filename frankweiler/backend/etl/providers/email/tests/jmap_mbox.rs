@@ -181,7 +181,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     }
 
     // Risa promo thread prefers the HTML body — `**jewel of the
-    // Alpha Quadrant**` appears in the html2md output.
+    // Alpha Quadrant**` appears in the htmd output.
     let risa_tuid = thread_uuid("enterprise", "2000000000000000002");
     let risa_md = std::fs::read_to_string(
         tmp.path()
