@@ -361,14 +361,39 @@ X", and that drives the cursor pattern (see [Cursor / resume strategy](#cursor--
 
 ### Wire-fidelity of the raw store
 
-The raw store preserves upstream responses as we received them. Two
-load-bearing rules follow:
+The raw store preserves the **semantic content** of upstream responses
+verbatim — every field, every value, with no loss and no
+pre-shaping into our internal model. The on-disk *encoding* of that
+content is a separate question; we pick whichever encoding is
+human-readable and inspectable. Concretely:
 
-  - **Normalize at translate time, not extract time.** A lesson learned
-    on the anthropic port: we used to pre-normalize the API response
-    at fetch time. We don't anymore. The raw `payload` is the upstream
-    bytes, so `dolt diff` reflects *actual upstream change* rather than
-    churn from our normalizer evolving. Port guide §5 spells this out.
+  - **JSON-shaped sources** (HTTP API responses from Slack,
+    Anthropic, Notion, GitHub, etc.) store the response JSON
+    verbatim, as JSONB.
+  - **Binary-protocol sources** (Signal's encrypted protobuf
+    backup, future binary feeds) are **decoded** at extract time
+    into JSON of equal semantic content. Encryption layers, compression,
+    binary wire encodings, and other transport-level packaging are
+    artifacts of how the data got to us, not part of the wire data
+    itself. Storing them raw on disk would be "too raw" — the point
+    of the raw store is that a human can `tail`/`grep`/`jq` it
+    without a decoder in the loop.
+  - **File-imported sources** (mbox `.eml` bytes, WhatsApp `msgstore.db`,
+    Beeper `index.db`) keep the underlying file (or its blobs)
+    available — in CAS for `.eml`, on disk for sqlite — while
+    promoting the *semantic* content (typed columns, JSONB payloads)
+    into the entity tables.
+
+Two load-bearing rules follow:
+
+  - **Normalize at translate time, not extract time.** A lesson
+    learned on the anthropic port: we used to pre-normalize the API
+    response (renaming fields, collapsing shapes, dropping subtrees)
+    at fetch time. We don't anymore. Decoding a binary wire encoding
+    to JSON of the **same** semantic content is **not normalization**
+    — every field upstream sent us is still present, with the same
+    values. Normalization means pre-shaping into our internal model
+    (renaming, collapsing, projecting), which we defer to translate.
   - **Don't pollute payloads with downloader-synthesized keys.**
     `_fetched_at`, `_listing_update_time` etc. are bookkeeping, not
     upstream data; promote them to real columns on the entity table

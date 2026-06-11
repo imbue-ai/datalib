@@ -20,7 +20,6 @@ use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
 use frankweiler_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
-use prost::Message;
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -136,20 +135,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
-    // Resume cursor: hash the snapshot's three files before we do any
-    // crypto work. If we've already ingested these bytes, return
-    // early with a marker summary.
-    let snapshot_dir_for_hash = snapshot_dir.clone();
-    let (snapshot_blake3, total_byte_size) =
-        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
-            .await
-            .context("join snapshot hash task")?
-            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
-    if db.snapshot_already_ingested(&snapshot_blake3).await? {
+    // Resume cursor — fast path. Build a stat-derived fingerprint
+    // (three `(mtime_ns, byte_size)` pairs joined by `:`) and look
+    // it up against `ingested_backups`. No body I/O on the skip,
+    // no crypto, no decrypt. See `schema_raw::snapshot_fingerprint`.
+    let fingerprint = schema_raw::snapshot_fingerprint(&snapshot_dir)
+        .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
+    if db.snapshot_already_ingested(&fingerprint).await? {
         info!(
             event = "signal_snapshot_already_ingested",
             snapshot = %snapshot_dir.display(),
-            blake3 = %snapshot_blake3,
+            fingerprint = %fingerprint,
             note = "skipping decrypt + walk; pass --reset-and-redownload to re-ingest",
         );
         return Ok(FetchSummary {
@@ -157,11 +153,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            snapshot_blake3,
+            snapshot_blake3: String::new(),
             already_ingested: true,
             ..Default::default()
         });
     }
+
+    // Fingerprint missed. Compute the forensic blake3 (used to fill
+    // the `blake3` column on a successful record) before we open the
+    // decrypted snapshot. Streams in 64KiB chunks; tens of MB → a
+    // few hundred ms.
+    let snapshot_dir_for_hash = snapshot_dir.clone();
+    let (snapshot_blake3, total_byte_size) =
+        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
+            .await
+            .context("join snapshot hash task")?
+            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
 
     // Heavy crypto work — gunzip + AES on tens of MB — runs in a
     // blocking thread so we don't block the tokio runtime.
@@ -201,29 +208,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             }
         };
-        let raw = frame.encode_to_vec();
-        match frame.item {
-            Some(backup::frame::Item::Account(_)) => {
-                db.upsert_account(&raw).await?;
+        match &frame.item {
+            Some(backup::frame::Item::Account(a)) => {
+                let payload = serde_json::to_string(a).context("serialize account frame")?;
+                db.upsert_account(&payload).await?;
             }
             Some(backup::frame::Item::Recipient(r)) => {
                 let id = r.id.to_string();
-                let (identifier, name) = recipient_pretty(&r);
+                let (identifier, name) = recipient_pretty(r);
+                let payload = serde_json::to_string(r).context("serialize recipient frame")?;
                 recipients.push(RecipientRow {
                     id,
                     identifier,
                     display_name: name,
-                    payload: raw,
+                    payload,
                 });
                 summary.recipients += 1;
             }
             Some(backup::frame::Item::Chat(c)) => {
                 let id = c.id.to_string();
                 let rid = c.recipient_id.to_string();
+                let payload = serde_json::to_string(c).context("serialize chat frame")?;
                 chats.push(ChatRow {
                     id,
                     recipient_id: rid,
-                    payload: raw,
+                    payload,
                 });
                 summary.chats += 1;
             }
@@ -243,12 +252,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
 
+                let payload = serde_json::to_string(ci).context("serialize chat_item frame")?;
                 chat_items.push(ChatItemRow {
                     id: pk,
                     chat_id,
                     author_id,
                     date_sent,
-                    payload: raw,
+                    payload,
                 });
                 summary.chat_items += 1;
             }
@@ -266,6 +276,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.bulk_upsert_chat_items(&chat_items).await?;
 
     db.record_snapshot_ingested(
+        &fingerprint,
         &snapshot_blake3,
         &snapshot_dir.to_string_lossy(),
         total_byte_size,

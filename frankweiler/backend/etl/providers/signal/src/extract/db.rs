@@ -34,7 +34,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
-use frankweiler_etl::bulk::{bulk_upsert_bookkeeping, push_placeholders, SQL_CHUNK};
+use frankweiler_etl::bulk::{bulk_upsert_bookkeeping, SQL_CHUNK};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES};
@@ -45,8 +45,10 @@ pub struct RecipientRow {
     pub id: String,
     pub identifier: Option<String>,
     pub display_name: Option<String>,
-    /// Raw prost-encoded `Frame` bytes (BLOB).
-    pub payload: Vec<u8>,
+    /// JSON text of the `Frame::Recipient` payload, produced via
+    /// `serde_json::to_string(&recipient)`. Bound as `jsonb(?)` —
+    /// SQLite converts to binary JSONB on insert.
+    pub payload: String,
 }
 
 /// One chat to upsert via [`RawDb::bulk_upsert_chats`].
@@ -54,7 +56,8 @@ pub struct RecipientRow {
 pub struct ChatRow {
     pub id: String,
     pub recipient_id: String,
-    pub payload: Vec<u8>,
+    /// JSON text of the `Frame::Chat` payload. See [`RecipientRow::payload`].
+    pub payload: String,
 }
 
 /// One chat_item (message) to upsert via [`RawDb::bulk_upsert_chat_items`].
@@ -64,7 +67,8 @@ pub struct ChatItemRow {
     pub chat_id: String,
     pub author_id: String,
     pub date_sent: i64,
-    pub payload: Vec<u8>,
+    /// JSON text of the `Frame::ChatItem` payload. See [`RecipientRow::payload`].
+    pub payload: String,
 }
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -107,12 +111,13 @@ impl RawDb {
 
     // ── ingested_backups (resume cursor) ────────────────────────────
 
-    /// Returns true if a row with this snapshot Blake3 already
-    /// exists. Callers use this to short-circuit before the
-    /// expensive decrypt + walk.
-    pub async fn snapshot_already_ingested(&self, blake3_hex: &str) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE blake3 = ? LIMIT 1")
-            .bind(blake3_hex)
+    /// Returns true if a row with this snapshot fingerprint already
+    /// exists. Cheap (single PK lookup against the fingerprint
+    /// computed from `stat()` alone, no body I/O) — callers use this
+    /// to short-circuit before any decrypt/blake3 work.
+    pub async fn snapshot_already_ingested(&self, fingerprint: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE fingerprint = ? LIMIT 1")
+            .bind(fingerprint)
             .fetch_optional(&self.pool)
             .await
             .context("snapshot_already_ingested")?;
@@ -124,6 +129,7 @@ impl RawDb {
     /// fail loudly.
     pub async fn record_snapshot_ingested(
         &self,
+        fingerprint: &str,
         blake3_hex: &str,
         snapshot_dir: &str,
         total_byte_size: u64,
@@ -131,9 +137,10 @@ impl RawDb {
         let now = IsoOffsetTimestamp::now_local().to_rfc3339_secs();
         sqlx::query(
             "INSERT OR IGNORE INTO ingested_backups
-                 (blake3, snapshot_dir, total_byte_size, ingested_at)
-             VALUES (?, ?, ?, ?)",
+                 (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at)
+             VALUES (?, ?, ?, ?, ?)",
         )
+        .bind(fingerprint)
         .bind(blake3_hex)
         .bind(snapshot_dir)
         .bind(total_byte_size as i64)
@@ -186,15 +193,16 @@ impl RawDb {
     }
 
     /// Upsert the singleton `account` row. Account is one-per-snapshot
-    /// so chunking buys nothing; kept as a single-row call.
-    pub async fn upsert_account(&self, payload: &[u8]) -> Result<()> {
+    /// so chunking buys nothing; kept as a single-row call. Payload
+    /// is JSON text bound as `jsonb(?)`.
+    pub async fn upsert_account(&self, payload_json: &str) -> Result<()> {
         let now = IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin account tx")?;
         sqlx::query(
-            "INSERT INTO account (id, payload) VALUES ('self', ?)
+            "INSERT INTO account (id, payload) VALUES ('self', jsonb(?))
              ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
         )
-        .bind(payload)
+        .bind(payload_json)
         .execute(&mut *tx)
         .await
         .context("upsert account")?;
@@ -220,7 +228,13 @@ impl RawDb {
             let mut sql = String::from(
                 "INSERT INTO recipients (id, identifier, display_name, payload) VALUES ",
             );
-            push_placeholders(&mut sql, chunk.len(), 4);
+            // (id, identifier, display_name, jsonb(payload)) per row.
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,jsonb(?))");
+            }
             sql.push_str(
                 " ON CONFLICT(id) DO UPDATE SET
                     identifier = excluded.identifier,
@@ -259,7 +273,12 @@ impl RawDb {
         let mut tx = self.pool.begin().await.context("begin bulk chats tx")?;
         for chunk in rows.chunks(SQL_CHUNK) {
             let mut sql = String::from("INSERT INTO chats (id, recipient_id, payload) VALUES ");
-            push_placeholders(&mut sql, chunk.len(), 3);
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,jsonb(?))");
+            }
             sql.push_str(
                 " ON CONFLICT(id) DO UPDATE SET
                     recipient_id = excluded.recipient_id,
@@ -293,7 +312,12 @@ impl RawDb {
             let mut sql = String::from(
                 "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload) VALUES ",
             );
-            push_placeholders(&mut sql, chunk.len(), 5);
+            for i in 0..chunk.len() {
+                if i > 0 {
+                    sql.push(',');
+                }
+                sql.push_str("(?,?,?,?,jsonb(?))");
+            }
             sql.push_str(
                 " ON CONFLICT(id) DO UPDATE SET
                     chat_id = excluded.chat_id,

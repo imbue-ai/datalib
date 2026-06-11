@@ -7,14 +7,17 @@
 //!
 //! Signal-specific notes:
 //!
-//! - **Payloads are BLOBs, not JSON.** Signal's backup format is a
-//!   stream of prost-encoded `Frame` protobuf messages. We store
-//!   each entity's frame verbatim as a `BLOB` so `dolt diff` between
-//!   two backup imports reflects exactly the bytes that changed
-//!   upstream, with no schema-mapping step in extract. The
-//!   `jsonb(?)` / `json(payload)` round-trip used by JSON-shaped
-//!   providers (anthropic, chatgpt, notion, …) does **not** apply
-//!   here.
+//! - **Payloads are JSONB**, same convention as every other
+//!   provider. Signal's backup format is a stream of prost-encoded
+//!   `Frame` protobuf messages; we decode each frame in extract via
+//!   the serde derive macros injected on the prost types (see
+//!   `tools/prost_toolchain/BUILD.bazel`) and store the resulting
+//!   JSON. The decode is lossless: every field upstream sent is
+//!   present in the JSON. See
+//!   `docs/data_architecture_ingestion.md` §"Wire-fidelity of the
+//!   raw store" for the principle. The `jsonb(?)` / `json(payload)`
+//!   round-trip used by JSON-shaped providers (anthropic, chatgpt,
+//!   notion, …) applies here too.
 //!
 //! - **No live upstream UUIDs.** Signal's in-backup `recipient_id`
 //!   and `chat_id` are `uint64` ids local to that snapshot. We use
@@ -50,10 +53,10 @@ pub const DATA_TABLES: &[&str] = &["account", "recipients", "chats", "chat_items
 /// - `id` — always the string literal `'self'`. The PK is a literal
 ///   rather than a Signal-side id because the backup format only
 ///   ever carries one account entity per file.
-/// - `payload` — raw prost-encoded `Frame::Account` bytes.
+/// - `payload` — JSONB of the `Frame::Account` message.
 pub const ACCOUNT_DDL: &str = "CREATE TABLE IF NOT EXISTS account (
     id TEXT PRIMARY KEY,
-    payload BLOB NULL
+    payload TEXT NULL
 )";
 
 /// `recipients` — one row per Signal recipient (peer / group).
@@ -66,12 +69,12 @@ pub const ACCOUNT_DDL: &str = "CREATE TABLE IF NOT EXISTS account (
 ///   phone number or the ACI hex string. Lets the translate /
 ///   indexer joins avoid cracking the protobuf payload open.
 /// - `display_name` — promoted from the payload for the same reason.
-/// - `payload` — raw prost-encoded `Frame::Recipient` bytes.
+/// - `payload` — JSONB of the `Frame::Recipient` message.
 pub const RECIPIENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS recipients (
     id TEXT PRIMARY KEY,
     identifier TEXT NULL,
     display_name TEXT NULL,
-    payload BLOB NULL
+    payload TEXT NULL
 )";
 
 /// `chats` — one row per Signal chat (DM or group thread).
@@ -81,11 +84,11 @@ pub const RECIPIENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS recipients (
 ///   stringified. Primary key.
 /// - `recipient_id` — promoted FK into [`RECIPIENTS_DDL`]; joins
 ///   `chats` to its peer / group without cracking the payload.
-/// - `payload` — raw prost-encoded `Frame::Chat` bytes.
+/// - `payload` — JSONB of the `Frame::Chat` message.
 pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
     id TEXT PRIMARY KEY,
     recipient_id TEXT NOT NULL,
-    payload BLOB NULL
+    payload TEXT NULL
 )";
 
 /// `chat_items` — one row per Signal message / call / system event
@@ -102,13 +105,13 @@ pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
 /// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
 ///   The closest thing this provider has to an event-shaped
 ///   timestamp; sourced into `GridRow.when_ts` by translate.
-/// - `payload` — raw prost-encoded `Frame::ChatItem` bytes.
+/// - `payload` — JSONB of the `Frame::ChatItem` message.
 pub const CHAT_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS chat_items (
     id TEXT PRIMARY KEY,
     chat_id TEXT NOT NULL,
     author_id TEXT NOT NULL,
     date_sent INTEGER NOT NULL,
-    payload BLOB NULL
+    payload TEXT NULL
 )";
 
 /// Index on `chats.recipient_id` — supports joining a chat to its
@@ -132,48 +135,89 @@ pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
 /// protobuf for nothing. This cursor lets fetch short-circuit at
 /// "have we ever ingested this snapshot?" before any of that work.
 ///
-/// **PK choice.** Blake3 hash, hex-encoded, of
-/// `metadata || main || files` concatenated in that order. Cheap to
-/// compute (single Blake3 stream, three reads), and the recipe lives
-/// in [`snapshot_blake3_recipe_doc`] for the writer + reader to
-/// agree on.
+/// **PK choice — `fingerprint`.** A composite stat-derived string
+/// `"{metadata_mtime_ns}:{metadata_size}:{main_mtime_ns}:{main_size}:
+/// {files_mtime_ns}:{files_size}"`. Cheap (three `stat()`s, no
+/// I/O on file bodies), and unique enough in practice: Signal's
+/// backup writer emits a fresh directory per snapshot, so the
+/// triple-(mtime, size) per file changes on every legitimate
+/// snapshot. False-positive skips would require both the same
+/// mtime and the same byte length across files, which a real
+/// backup pipeline doesn't produce.
+///
+/// **Forensic — `blake3`.** Hex-encoded Blake3 of
+/// `metadata || main || files` concatenated in that order. Computed
+/// only after the fingerprint skip misses (so a repeat-skip pays
+/// zero I/O). Kept as a forensic column so a user inspecting the
+/// table later can verify "yes, that was definitely those bytes."
+/// See [`SNAPSHOT_BLAKE3_RECIPE_DOC`].
 ///
 /// **Lifecycle.**
-/// - `extract` reads the three files, hashes them, looks up the
-///   resulting blake3. If present → skip. If absent → process and
-///   then `INSERT` a new row.
+/// - `extract` `stat()`s the three files, builds the fingerprint,
+///   looks it up. If present → skip immediately (no I/O on file
+///   bodies, no crypto, no walk). If absent → compute blake3,
+///   decrypt + walk, then `INSERT` a row with both fingerprint and
+///   blake3.
 /// - `--reset-and-redownload` wipes this table along with the
 ///   entity tables, so an explicit reset will re-process even a
 ///   previously-ingested snapshot.
 ///
 /// Columns:
+/// - `fingerprint` — composite stat-derived string. Primary key.
 /// - `blake3` — hex-encoded Blake3 of the snapshot's three files.
-///   Primary key.
+///   Forensic; never read on the hot path.
 /// - `snapshot_dir` — directory the snapshot was read from, recorded
 ///   so a user can correlate cursor rows with on-disk locations.
-///   Informational only — not part of the skip-check.
+///   Informational only.
 /// - `total_byte_size` — combined byte size of `metadata + main +
-///   files`. Informational only — a cheap sanity check.
+///   files`. Informational only.
 /// - `ingested_at` — ISO-8601 UTC stamp of when we recorded
 ///   ingestion. NOT NULL: an `ingested_backups` row only exists once
 ///   ingestion has finished successfully.
 pub const INGESTED_BACKUPS_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_backups (
-    blake3 TEXT PRIMARY KEY,
+    fingerprint TEXT PRIMARY KEY,
+    blake3 TEXT NOT NULL,
     snapshot_dir TEXT NULL,
     total_byte_size INTEGER NULL,
     ingested_at TEXT NOT NULL
 )";
 
-/// Documentation-only: the recipe for [`INGESTED_BACKUPS_DDL`]'s PK.
-/// Kept as a const string rather than a function because the actual
-/// hashing happens in `extract/mod.rs` with streaming I/O — the
-/// recipe is a one-line invariant rather than a callable helper.
+/// Documentation-only: the recipe for [`INGESTED_BACKUPS_DDL`]'s
+/// forensic `blake3` column. Kept as a const string rather than a
+/// function because the actual hashing happens in `extract/mod.rs`
+/// with streaming I/O — the recipe is a one-line invariant rather
+/// than a callable helper.
 ///
 /// Format: `blake3.hex(metadata || main || files)`, where the three
 /// names refer to the on-disk files under a Signal snapshot
 /// directory and `||` is byte-concatenation in that fixed order.
 pub const SNAPSHOT_BLAKE3_RECIPE_DOC: &str =
     "blake3.hex(snapshot_dir/metadata || snapshot_dir/main || snapshot_dir/files)";
+
+/// Build the fingerprint string for a snapshot directory: three
+/// `(mtime_ns, byte_size)` pairs joined by `:`, in `(metadata, main,
+/// files)` order. Used as the [`INGESTED_BACKUPS_DDL`] PK.
+///
+/// Errors if any of the three files is missing or unreadable; that's
+/// the same condition that would later fail the decrypt pass, so
+/// failing fast here is correct.
+pub fn snapshot_fingerprint(snapshot_dir: &std::path::Path) -> anyhow::Result<String> {
+    use anyhow::Context;
+    let mut parts = Vec::with_capacity(6);
+    for name in ["metadata", "main", "files"] {
+        let path = snapshot_dir.join(name);
+        let meta = std::fs::metadata(&path)
+            .with_context(|| format!("stat {} for fingerprint", path.display()))?;
+        let mtime_ns = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        parts.push(format!("{}:{}", mtime_ns, meta.len()));
+    }
+    Ok(parts.join(":"))
+}
 
 /// Recipe for the synthesized [`CHAT_ITEMS_DDL`] primary key.
 ///

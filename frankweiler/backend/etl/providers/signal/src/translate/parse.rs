@@ -2,11 +2,11 @@
 //! that the renderer can walk without re-querying.
 //!
 //! We read three tables — `recipients`, `chats`, `chat_items` — decode
-//! each `chat_items.payload` BLOB to extract the text body of any
+//! each `chat_items.payload` JSON to extract the text body of any
 //! `StandardMessage`, and bucket the result by (chat, period). Other
 //! ChatItem variants (stickers, view-once, ChatUpdate, …) are skipped
 //! silently in this render version; the raw doltlite still has the
-//! bytes, so a future `RENDER_VERSION` bump can surface them.
+//! payload, so a future `RENDER_VERSION` bump can surface them.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,7 +17,6 @@ use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader, SqliteBlobReader};
 use frankweiler_etl::periodize::Period;
 use frankweiler_signal_backup::backup;
-use prost::Message;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::Row;
 
@@ -200,12 +199,14 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
     // ── chat items, bucketed by (chat_id, period_key) ──────────────
     //
     // Bucketing happens in Rust (not SQL) because each item's text +
-    // direction live inside a prost-encoded BLOB column; we have to
-    // decode anyway, and the date_sent we use for the period key is
-    // already promoted to its own column. Single scan over
-    // chat_items; bucket lookup is HashMap on the period key.
+    // direction live inside the JSON payload; we have to parse it
+    // anyway, and the date_sent we use for the period key is already
+    // promoted to its own column. Single scan over chat_items;
+    // bucket lookup is HashMap on the period key. The `json(payload)`
+    // wrapper unwraps JSONB to text so `serde_json::from_str` can
+    // parse it.
     let irows = sqlx::query(
-        "SELECT chat_id, author_id, date_sent, payload \
+        "SELECT chat_id, author_id, date_sent, json(payload) AS payload \
          FROM chat_items ORDER BY chat_id, date_sent",
     )
     .fetch_all(&pool)
@@ -218,7 +219,7 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
         let chat_id: String = r.try_get("chat_id")?;
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
-        let payload: Vec<u8> = r.try_get("payload")?;
+        let payload: String = r.try_get("payload")?;
         let item_pk =
             crate::extract::schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
         let (text, outgoing, attachments) = decode_chat_item(&payload);
@@ -250,17 +251,14 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedSignal> {
     })
 }
 
-/// Crack a `Frame.chat_item` blob and pull out (text, outgoing,
-/// attachments). Returns empty defaults for non-StandardMessage chat
-/// items so the renderer can skip them cleanly without panicking.
-fn decode_chat_item(payload: &[u8]) -> (Option<String>, bool, Vec<ParsedAttachment>) {
-    let frame = match backup::Frame::decode(payload) {
-        Ok(f) => f,
+/// Parse a `chat_items.payload` JSON string (a `Frame::ChatItem`
+/// serialized via serde) and pull out (text, outgoing, attachments).
+/// Returns empty defaults for non-StandardMessage chat items so the
+/// renderer can skip them cleanly without panicking.
+fn decode_chat_item(payload: &str) -> (Option<String>, bool, Vec<ParsedAttachment>) {
+    let ci: backup::ChatItem = match serde_json::from_str(payload) {
+        Ok(c) => c,
         Err(_) => return (None, false, Vec::new()),
-    };
-    let ci = match frame.item {
-        Some(backup::frame::Item::ChatItem(ci)) => ci,
-        _ => return (None, false, Vec::new()),
     };
     let outgoing = matches!(
         ci.directional_details,
