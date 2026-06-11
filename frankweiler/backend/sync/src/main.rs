@@ -2360,6 +2360,7 @@ fn translate_source(
                 .with_context(|| format!("whatsapp parse {}", fixture.display()))?;
             render_all(
                 &chats,
+                &fixture,
                 root,
                 name,
                 progress,

@@ -165,9 +165,9 @@ expression: snapshot
       "md_path": "rendered_md/whatsapp/whatsapp/chat-bridge-crew@g.us__bridge-crew__931592e5/2364-04.md",
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "396fc85b2f2cb6db4439a4df60ee6c142979d268e9c0a119c3589bede5abda39",
-      "source_fingerprint": "bee6a0ce9eed4aa53a8b63804626ab844d75829bc7bc0afecdab965addf39eb6",
+      "source_fingerprint": "027c588e480620c240092dd14e8a50fb1b1cebbf272ec6c25dbc8a7114ac9aa9",
       "source_name": "whatsapp",
       "title": "Bridge Crew",
       "updated_at": "2364-04-11T00:08:20+00:00"
@@ -207,9 +207,9 @@ expression: snapshot
       "md_path": "rendered_md/whatsapp/whatsapp/chat-17015550102@s.whatsapp.net__17015550102__95e94192/2364-04.md",
       "provider": "whatsapp",
       "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.2",
+      "renderer_version": "rust-v1.3",
       "row_set_hash": "b2bdccdae7ae958341f9832a86077849ae3e573e856c1f45e3c0776b28c16643",
-      "source_fingerprint": "24303a047497bc038987680e483295edf2d2e603654de8e58a4923d04631f312",
+      "source_fingerprint": "fa3fc9bbb0fb0b609837a69ead49ccaa21eb405584353722bb96669963435484",
       "source_name": "whatsapp",
       "title": "+17015550102",
       "updated_at": "2364-04-11T00:09:00+00:00"

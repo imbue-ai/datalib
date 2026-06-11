@@ -5,8 +5,10 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::msg_div_open;
@@ -57,12 +59,21 @@ pub struct RenderSummary {
 
 /// Render every bucket of every chat. Returns aggregate counts; the
 /// per-doc work is delegated to [`render_one`].
+///
+/// `blobs` is the reader that turns an attachment's `ref_id` into bytes
+/// on disk. Each chat-style provider builds one against its own raw
+/// store (signal/beeper/whatsapp all back this with a
+/// `SqliteBlobReader`). Pass `InMemoryBlobReader::empty_handle()` when
+/// the doc set carries no attachments — chat-common will silently
+/// emit "(not yet fetched)" placeholders for any attachment whose
+/// `ref_id` the reader can't resolve.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     profile: &RenderProfile,
     chats: &[NormalizedChat],
     out_dir: &Path,
     source_name: &str,
+    blobs: Arc<dyn BlobReader>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -81,6 +92,7 @@ pub fn render_all(
                 doc,
                 out_dir,
                 source_name,
+                blobs.as_ref(),
                 prior_fingerprints,
                 on_doc_complete,
             )?;
@@ -110,6 +122,7 @@ fn render_one(
     doc: &NormalizedDoc,
     out_dir: &Path,
     source_name: &str,
+    blobs: &dyn BlobReader,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
@@ -132,12 +145,12 @@ fn render_one(
     }
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
-    // Resolve attachment `local_path` bytes into the page's `blobs/`
-    // dir. Modifies a local copy of the doc — we don't want to mutate
-    // the caller's `NormalizedDoc` since the provider may render the
-    // same chat into multiple per-period buckets and each needs its
-    // own materialization pass.
-    let resolved_doc = materialize_attachment_bytes(doc, &page_dir);
+    // Materialize attachment bytes from blob_cas into <page_dir>/blobs/
+    // and rewrite each attachment's `rel_path` to point at the file we
+    // just wrote. Mutates a local copy of `doc` — the same chat may be
+    // re-rendered into another bucket later, and each bucket needs its
+    // own per-page materialization pass.
+    let resolved_doc = materialize_attachment_bytes(doc, &page_dir, blobs);
     let doc = &resolved_doc;
 
     let chat_title = format!(
@@ -192,98 +205,49 @@ fn render_one(
     })
 }
 
-/// Walk `doc.items`, and for every attachment whose `local_path` points
-/// at a real file on disk, copy the bytes into `<page_dir>/blobs/<short>.<ext>`
-/// and overwrite the attachment's `rel_path` so the markdown link points
-/// at the materialized blob. Failures (file missing, copy denied, …) are
-/// logged at WARN and the attachment falls through to the existing
-/// placeholder rendering — partial materialization is preferable to a
-/// hard render failure.
-fn materialize_attachment_bytes(doc: &NormalizedDoc, page_dir: &Path) -> NormalizedDoc {
+/// Walk `doc.items`; for every attachment with a `ref_id`, ask the
+/// blob_cas reader for the bytes and write them under
+/// `<page_dir>/blobs/<short-blake3>.<ext>` (the universal filename
+/// produced by [`BlobView::rendered_filename`]). On success, overwrite
+/// the attachment's `rel_path` so the markdown emitter picks up the
+/// materialized blob instead of the "(not yet fetched)" placeholder.
+///
+/// All failure modes (ref missing, bytes missing, copy denied) log
+/// WARN and leave `rel_path` alone — the existing renderer branch
+/// already handles the placeholder rendering, and a partial render is
+/// strictly better than a hard fail mid-translate.
+///
+/// [`BlobView::rendered_filename`]: frankweiler_etl::blob_cas::BlobView::rendered_filename
+fn materialize_attachment_bytes(
+    doc: &NormalizedDoc,
+    page_dir: &Path,
+    blobs: &dyn BlobReader,
+) -> NormalizedDoc {
     let mut out = doc.clone();
-    let blobs_dir = page_dir.join("blobs");
-    let mut blobs_dir_ready = false;
     for item in &mut out.items {
         for att in &mut item.attachments {
-            let Some(src) = att.local_path.as_deref() else {
+            let Some(ref_id) = att.ref_id.as_deref() else {
                 continue;
             };
-            if !src.exists() {
-                tracing::warn!(
-                    src = %src.display(),
-                    "chat_common::materialize: source file missing; leaving rel_path unset"
-                );
-                continue;
-            }
-            let ext = ext_for(att.mime_type.as_deref(), att.file_name.as_deref())
-                .unwrap_or_else(|| "bin".to_string());
-            let short = match &att.content_hash {
-                Some(h) => h.chars().take(16).collect::<String>(),
-                None => short_path_hash(src),
-            };
-            let rel = format!("blobs/{short}.{ext}");
-            let dst = page_dir.join(&rel);
-            if !blobs_dir_ready {
-                if let Err(e) = fs::create_dir_all(&blobs_dir) {
-                    tracing::warn!(
-                        blobs_dir = %blobs_dir.display(),
-                        error = %e,
-                        "chat_common::materialize: failed to mkdir blobs/; skipping"
-                    );
-                    return out;
+            match blob_cas::materialize_to_disk(blobs, ref_id, &page_dir.join("blobs")) {
+                Ok(Some((_view, _abs, rel))) => {
+                    att.rel_path = Some(rel);
                 }
-                blobs_dir_ready = true;
-            }
-            if !dst.exists() {
-                if let Err(e) = fs::copy(src, &dst) {
+                Ok(None) => {
+                    // Reader knows nothing about this ref_id; fall
+                    // through to the placeholder branch.
+                }
+                Err(e) => {
                     tracing::warn!(
-                        src = %src.display(),
-                        dst = %dst.display(),
+                        ref_id,
                         error = %e,
-                        "chat_common::materialize: copy failed; leaving rel_path unset"
+                        "chat_common::materialize: blob materialize failed; leaving rel_path unset"
                     );
-                    continue;
                 }
             }
-            att.rel_path = Some(rel);
         }
     }
     out
-}
-
-fn ext_for(mime_type: Option<&str>, file_name: Option<&str>) -> Option<String> {
-    if let Some(mt) = mime_type {
-        let mt = mt.split(';').next().unwrap_or(mt).trim();
-        let ext = match mt {
-            "image/jpeg" => "jpg",
-            "image/png" => "png",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            "video/mp4" => "mp4",
-            "video/webm" => "webm",
-            "video/quicktime" => "mov",
-            "audio/mpeg" => "mp3",
-            "audio/mp4" => "m4a",
-            "audio/wav" => "wav",
-            "audio/ogg" => "ogg",
-            "application/pdf" => "pdf",
-            _ => "",
-        };
-        if !ext.is_empty() {
-            return Some(ext.to_string());
-        }
-    }
-    file_name
-        .and_then(|n| n.rsplit('.').next())
-        .filter(|e| !e.contains(' ') && !e.is_empty())
-        .map(str::to_string)
-}
-
-fn short_path_hash(path: &Path) -> String {
-    let mut h = Sha256::new();
-    h.update(path.to_string_lossy().as_bytes());
-    let full = format!("{:x}", h.finalize());
-    full.chars().take(16).collect()
 }
 
 /// `<out>/rendered_md/<provider>/<source_name>/<chat-slug>/<period>.md`
@@ -656,7 +620,13 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         h.update(b"|");
         h.update((item.attachments.len() as u32).to_be_bytes());
         for a in &item.attachments {
-            h.update(a.rel_path.as_deref().unwrap_or("").as_bytes());
+            // Hash `ref_id` (the source-of-truth pointer into blob_cas)
+            // rather than `rel_path` — `rel_path` is filled in at
+            // render time, so hashing it would defeat the
+            // "compute the fingerprint up front" pattern. file_name
+            // mixed in so a renamed but otherwise identical attachment
+            // still triggers a re-render.
+            h.update(a.ref_id.as_deref().unwrap_or("").as_bytes());
             h.update(b"+");
             h.update(a.file_name.as_deref().unwrap_or("").as_bytes());
         }
@@ -818,8 +788,7 @@ mod tests {
                 mime_type: Some("image/jpeg".to_string()),
                 byte_len: Some(384),
                 source_url: Some("https://example/vscapture".to_string()),
-                local_path: None,
-                content_hash: None,
+                ref_id: None,
             }],
             ..chat.buckets[0].items[0].clone()
         };

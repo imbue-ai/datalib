@@ -42,7 +42,6 @@ pub const DATA_TABLES: &[&str] = &[
     "wa_chat",
     "wa_jid",
     "wa_media_files",
-    "wa_extract_metadata",
 ];
 
 pub const WA_JID_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_jid (
@@ -230,27 +229,12 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Registry of plaintext media files on disk.
-///
-/// `wa_message_media.file_path` joins to `relative_path`. The actual
-/// bytes live at `<media_root>/<relative_path>` — we don't import
-/// them into doltlite, since they're potentially hundreds of MB of
-/// media and doltlite stores blobs by content but doesn't dedup
-/// across rows; the on-disk tree is already content-organized by
-/// WhatsApp. We mirror just enough to verify presence + integrity:
-/// sha256, size, mtime.
-/// Tiny key/value table for extract-time provenance the translate stage
-/// needs to find on its own. Today: just the absolute path to the source
-/// `Media/` directory so translate can copy attachment bytes into each
-/// rendered page's `blobs/` subdir. Kept as a generic kv table (instead
-/// of a single-purpose column on some other table) so future
-/// extract-side context — e.g. the crypt15 file's IV, the backup
-/// timestamp, the phone number suffix — can land here additively.
-pub const WA_EXTRACT_METADATA_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_extract_metadata (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);";
-
+/// Catalog of plaintext media files from the source backup. Actual
+/// bytes live in the shared `blob_refs` + sibling CAS file (managed by
+/// `frankweiler_etl::blob_cas` — the same store signal/beeper use);
+/// `wa_media_files.sha256` is the `blob_refs.ref_id` for that lookup.
+/// Re-renders work even after the user deletes the original `Media/`
+/// folder because the bytes live in the raw store.
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     sha256 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
@@ -269,5 +253,4 @@ pub const ALL_DDL: &[&str] = &[
     WA_MESSAGE_ADD_ON_DDL,
     WA_MESSAGE_ADD_ON_REACTION_DDL,
     WA_MEDIA_FILES_DDL,
-    WA_EXTRACT_METADATA_DDL,
 ];

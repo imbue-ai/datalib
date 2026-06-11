@@ -5,7 +5,7 @@
 //! MB at most) so the renderer can walk in memory without re-querying.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -64,21 +64,6 @@ async fn parse_async(
         .await
         .with_context(|| format!("open {}", db_path.display()))?;
 
-    // 0) Source `Media/` path stamped by extract. Translate uses it to
-    //    locate attachment bytes on disk so chat-common can copy them
-    //    into each rendered page's `blobs/` subdir. Empty string =
-    //    extract didn't record it (older raw stores) — treated as no
-    //    media root.
-    let media_root: Option<PathBuf> = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT value FROM wa_extract_metadata WHERE key = 'media_root'",
-    )
-    .fetch_optional(&pool)
-    .await
-    .context("read wa_extract_metadata['media_root']")?
-    .flatten()
-    .filter(|s| !s.is_empty())
-    .map(PathBuf::from);
-
     // 1) Pull every chat with its display label. Group chats use
     //    `subject`; 1:1 chats fall back to the JID's local part.
     let chat_rows =
@@ -117,13 +102,13 @@ async fn parse_async(
     .await
     .context("select wa_message")?;
 
-    // 3) Media joined to its parent. file_path lookup happens later via
-    //    wa_media_files for the attachment's file metadata, but we
-    //    don't *materialize* the bytes — just surface the path so the
-    //    rendered link points at where it lives on disk.
+    // 3) Media joined to its `wa_media_files` row to pick up the
+    //    `sha256` extract stored alongside the blob_cas put. That sha256
+    //    IS the `blob_refs.ref_id`, so chat-common can stream the bytes
+    //    out at render time without translate ever touching disk.
     let media_rows = sqlx::query(
         "SELECT m.chat_jid, m.key_id, m.from_me, m.file_path, m.mime_type, m.file_size, \
-                m.media_caption, m.media_name, f.relative_path, f.sha256 \
+                m.media_caption, m.media_name, f.sha256 \
          FROM wa_message_media m \
          LEFT JOIN wa_media_files f ON f.relative_path = m.file_path",
     )
@@ -143,18 +128,12 @@ async fn parse_async(
         let mime_type: Option<String> = r.get("mime_type");
         let file_size: Option<i64> = r.get("file_size");
         let media_caption: Option<String> = r.get("media_caption");
-        let sha256: Option<String> = r.get("sha256");
-        // `local_path` lets chat-common copy the bytes into the page's
-        // `blobs/` at render time. Only set when both `media_root` (from
-        // extract metadata) and a `file_path` are known. The
-        // `wa_media_files` row gives us the content hash for the
-        // materialized filename; absent (rare in practice — only when
-        // the file went missing between scan and translate), the
-        // renderer falls back to a path-based hash.
-        let local_path = match (&media_root, file_path.as_deref()) {
-            (Some(root), Some(p)) => Some(root.join(p)),
-            _ => None,
-        };
+        // `sha256` is the `blob_refs.ref_id` extract stored at put time
+        // (see `extract::mirror_media_files`). `None` here means either
+        // the file went missing between scan and put, or the message's
+        // `file_path` didn't resolve to a row in `wa_media_files`
+        // (corrupted backup, partial Media/ tree, …). In either case the
+        // renderer's "(not yet fetched)" placeholder fires.
         media_by_msg
             .entry(key)
             .or_default()
@@ -169,8 +148,7 @@ async fn parse_async(
                 mime_type,
                 byte_len: file_size,
                 source_url: file_path.clone().or_else(|| media_caption.clone()),
-                local_path,
-                content_hash: sha256,
+                ref_id: r.get("sha256"),
             });
     }
 

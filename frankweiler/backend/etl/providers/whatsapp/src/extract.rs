@@ -14,7 +14,7 @@
 //! plaintext copy of those is ever made.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
 use frankweiler_etl::doltlite_raw;
 use frankweiler_whatsapp_backup::decrypt_file;
 
@@ -52,16 +53,28 @@ pub struct IngestSummary {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// Path on disk of the doltlite file the pool wraps. Kept so
+    /// `frankweiler_etl::blob_cas::cas_path_for` can derive the
+    /// sibling CAS file location without the caller threading two
+    /// paths around in parallel.
+    db_path: PathBuf,
 }
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = doltlite_raw::open(db_path, ALL_DDL).await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            db_path: db_path.to_path_buf(),
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
     }
 }
 
@@ -86,13 +99,14 @@ pub async fn ingest(
 /// the sync orchestrator, which opens the pool up front (so SIGINT can
 /// flush) and threads it through.
 pub async fn fetch(backup_dir: &Path, root_key: &[u8; 32], db: &RawDb) -> Result<IngestSummary> {
-    fetch_with_pool(backup_dir, root_key, db.pool().clone()).await
+    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path()).await
 }
 
 async fn fetch_with_pool(
     backup_dir: &Path,
     root_key: &[u8; 32],
     dst_pool: SqlitePool,
+    target_db_path: &Path,
 ) -> Result<IngestSummary> {
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(
@@ -138,14 +152,8 @@ async fn fetch_with_pool(
     mirror_message_add_on_reaction(&src_pool, &dst_pool, &addon_map, &mut summary).await?;
 
     let media_root = backup_dir.join("Media");
-    // Stamp the source `Media/` path so translate can copy attachment
-    // bytes into each rendered page's `blobs/`. Recorded regardless of
-    // whether the dir exists — translate will see it missing and skip
-    // the copy step gracefully, same as it does for a missing
-    // `wa_media_files` entry.
-    record_metadata(&dst_pool, "media_root", &media_root.display().to_string()).await?;
     if media_root.is_dir() {
-        mirror_media_files(&dst_pool, &media_root, &mut summary).await?;
+        mirror_media_files(&dst_pool, target_db_path, &media_root, &mut summary).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -733,20 +741,28 @@ async fn mirror_message_add_on_reaction(
     Ok(())
 }
 
-/// Walk `media_root` and register every regular file by sha256.
+/// Walk `media_root`, register every regular file in `wa_media_files`,
+/// and put its bytes into the sibling blob_cas keyed by sha256 as
+/// `blob_refs.ref_id`. Translate later resolves attachments through
+/// the same ref_id via `SqliteBlobReader::read_by_ref_id`.
 ///
 /// Skips dot-prefixed dirs (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`,
 /// …) — those are local WhatsApp scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
+    target_db_path: &Path,
     media_root: &Path,
     summary: &mut IngestSummary,
 ) -> Result<()> {
-    let media_root = media_root.to_path_buf();
-    // Hashing is CPU+IO work — do it on a blocking pool so we don't
-    // starve the sqlx async runtime.
+    let media_root_owned = media_root.to_path_buf();
+    // Hashing + reading bytes are CPU+IO work — do them on the blocking
+    // pool so we don't starve the sqlx async runtime.
     let entries: Vec<MediaEntry> =
-        tokio::task::spawn_blocking(move || scan_media(&media_root)).await??;
+        tokio::task::spawn_blocking(move || scan_media(&media_root_owned)).await??;
+    let cas_path = blob_cas::cas_path_for(target_db_path);
+    let cas = BlobCas::open(&cas_path)
+        .await
+        .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
     let mut n = 0u64;
     for e in &entries {
@@ -764,7 +780,31 @@ async fn mirror_media_files(
         .context("insert wa_media_files")?;
         n += 1;
     }
+    // Commit the metadata rows before doing the (potentially long) CAS
+    // writes so a SIGINT mid-put still leaves a consistent metadata
+    // table; orphan ref_ids in blob_refs get swept by `gc_orphans` on a
+    // later run.
     tx.commit().await.context("commit wa_media_files tx")?;
+
+    // CAS put per file. `store_bytes` is one transaction per file, which
+    // is fine for the typical 5-50 attachment range; bulk backups with
+    // 1000s of files would benefit from batching but aren't the common
+    // case.
+    for e in &entries {
+        let stub = RefStub {
+            ref_id: &e.sha256,
+            kind: "whatsapp_media",
+            owning_id: &e.relative_path,
+            slot: "content",
+            upstream_uuid: None,
+            upstream_name: e.relative_path.rsplit('/').next(),
+            source_url: None,
+            content_type: e.mime_type.as_deref(),
+        };
+        blob_cas::store_bytes(dst, &cas, &stub, &e.content)
+            .await
+            .with_context(|| format!("blob_cas put {}", e.relative_path))?;
+    }
     summary.media_files = n;
     Ok(())
 }
@@ -775,6 +815,11 @@ struct MediaEntry {
     size_bytes: u64,
     mtime_unix: Option<i64>,
     mime_type: Option<String>,
+    /// Raw file bytes. Kept in memory between scan and the blob_cas
+    /// put so a single walk over `Media/` produces both the metadata
+    /// rows and the CAS contents in one pass. Released immediately
+    /// after the put.
+    content: Vec<u8>,
 }
 
 fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
@@ -812,6 +857,7 @@ fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
             relative_path: rel.to_string_lossy().into_owned(),
             size_bytes,
             mtime_unix,
+            content: bytes,
             mime_type,
         });
     }
@@ -835,18 +881,6 @@ fn mime_from_ext(path: &Path) -> Option<String> {
         "pdf" => "application/pdf".to_string(),
         _ => return None,
     })
-}
-
-/// Insert (or replace) a row into `wa_extract_metadata`. Used to stash
-/// `media_root` so translate knows where to find attachment bytes.
-async fn record_metadata(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO wa_extract_metadata (key, value) VALUES (?, ?)")
-        .bind(key)
-        .bind(value)
-        .execute(pool)
-        .await
-        .with_context(|| format!("write wa_extract_metadata[{key}]"))?;
-    Ok(())
 }
 
 /// Stamp the doltlite db with one `dolt_commit('-Am', '…')`. Returns
