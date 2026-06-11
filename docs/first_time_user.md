@@ -42,12 +42,11 @@ To access the Imbue-private repo, also make sure you're authenticated with GitHu
 gh auth login
 ```
 
-## 1. Make a data_root playground and download the CLI
+## 1. Make a data_root playground and download the CLI (here it's `~/mixed_up_files`)
 
-Make a "data root", for example here: `~/mixed_up_files`.  This is where the tools will download your data.
+This is where the tools will download your data.
 
-The tools can run from anywhere, but for now, you can just download them
-directly into the data_root directory as well.
+The tools themselves can run from anywhere, but for now, you can just download them directly into the data_root directory and run them from there.
 
 ```sh
 # Make the data_root as our playground.
@@ -80,11 +79,11 @@ Verify:
 > local agent (including this one) inherits this authority for as long
 > as the cookies remain valid.
 
-You don't need to install `latchkey` — the commands below invoke it via
+You don't necessarily need to install `latchkey` — the commands below invoke it via
 `npx`, which fetches it on demand (the `node` install from step 0 ships
 with `npx`).
 
-### Option: Download some Google Takeout
+### Option 1: Download some Google Takeout data
 
 Google Takeout (<https://takeout.google.com>) lets you export your own
 data out of Google's silos. Useful targets for this project:
@@ -123,7 +122,7 @@ Steps:
    that points at exactly that path.
 
 
-### Option: Register Slack with latchkey (easy, supported flow)
+### Option 2: Register Slack with latchkey (easy, supported flow)
 
   Register Slack via latchkey's browser flow (the sample config in the
   next step includes a Slack source, so this is needed for the sync to
@@ -133,8 +132,13 @@ Steps:
   npx -y latchkey auth browser slack
   ```
 
-### Option: Register Claude web with latchkey (tricky, needs browser)
+### Option 3: Register Claude web with latchkey (tricky)
 
+This is tricky, requires you to do sketchy things in your browser.
+
+It also might not work inside Minds because of the Chrome handshake issues.
+When Minds runs latchkey, it doesn't use our curl shim with the Chrome 131 handshake
+because latchkey reaches out to its gateway.
 
 a. Register the `claude-ai` service with latchkey (one-time):
 
