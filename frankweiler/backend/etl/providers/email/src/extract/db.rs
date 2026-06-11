@@ -47,8 +47,11 @@ pub fn state_scope(account_id: &str, type_name: &str) -> String {
 // Row structs
 // ─────────────────────────────────────────────────────────────────────
 
-/// Promoted columns + raw JMAP payload for one email. Construct via
-/// [`EmailRow::from_payload`] and then hand to [`RawDb::upsert_email`].
+/// Envelope columns + join-table inputs for one email. Construct via
+/// [`EmailRow::from_envelope`] (JMAP `Email/get` JSON) or by hand
+/// (the mbox extractor builds these straight from mail-parser
+/// headers). The `.eml` body itself rides in the shared blob CAS
+/// keyed by `blob_id` — translate reads it from there on demand.
 #[derive(Debug, Clone)]
 pub struct EmailRow {
     pub id: String,
@@ -65,7 +68,6 @@ pub struct EmailRow {
     pub mailbox_ids: Vec<String>,
     pub keywords: Vec<String>,
     pub attachments: Vec<AttachmentRow>,
-    pub payload: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -80,50 +82,52 @@ pub struct AttachmentRow {
 }
 
 impl EmailRow {
-    /// Promote the fields we want as columns from a JMAP `Email/get`
-    /// response. Returns `None` if the payload is missing one of the
-    /// required identifiers (`id`, `blobId`, `threadId`).
-    pub fn from_payload(account_id: &str, payload: Value) -> Option<Self> {
-        let id = payload.get("id")?.as_str()?.to_string();
-        let blob_id = payload.get("blobId")?.as_str()?.to_string();
-        let thread_id = payload.get("threadId")?.as_str()?.to_string();
-        let message_id = payload
+    /// Promote the envelope columns from a JMAP `Email/get` response.
+    /// Returns `None` if the response is missing one of the required
+    /// identifiers (`id`, `blobId`, `threadId`). The body parts
+    /// (`bodyValues`, `textBody`, `htmlBody`) are deliberately
+    /// ignored — translate reads them out of the `.eml` blob.
+    pub fn from_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
+        let id = envelope.get("id")?.as_str()?.to_string();
+        let blob_id = envelope.get("blobId")?.as_str()?.to_string();
+        let thread_id = envelope.get("threadId")?.as_str()?.to_string();
+        let message_id = envelope
             .get("messageId")
             .and_then(|v| v.as_array())
             .and_then(|arr| arr.first())
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let received_at = payload
+        let received_at = envelope
             .get("receivedAt")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let sent_at = payload
+        let sent_at = envelope
             .get("sentAt")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let size = payload.get("size").and_then(|v| v.as_i64());
-        let subject = payload
+        let size = envelope.get("size").and_then(|v| v.as_i64());
+        let subject = envelope
             .get("subject")
             .and_then(|v| v.as_str())
             .map(str::to_string);
-        let from_json = payload
+        let from_json = envelope
             .get("from")
             .map(|v| serde_json::to_string(v).unwrap_or_default());
-        let has_attachment = payload
+        let has_attachment = envelope
             .get("hasAttachment")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let mailbox_ids = payload
+        let mailbox_ids = envelope
             .get("mailboxIds")
             .and_then(|v| v.as_object())
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
-        let keywords = payload
+        let keywords = envelope
             .get("keywords")
             .and_then(|v| v.as_object())
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
-        let attachments = payload
+        let attachments = envelope
             .get("attachments")
             .and_then(|v| v.as_array())
             .map(|arr| arr.iter().filter_map(AttachmentRow::from_json).collect())
@@ -143,7 +147,6 @@ impl EmailRow {
             mailbox_ids,
             keywords,
             attachments,
-            payload,
         })
     }
 }
@@ -440,9 +443,8 @@ impl RawDb {
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
         let rows = sqlx::query(
             "SELECT id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-                    size, subject, from_json, has_attachment, json(payload) AS payload
+                    size, subject, from_json, has_attachment
              FROM emails
-             WHERE payload IS NOT NULL
              ORDER BY thread_id, received_at, id",
         )
         .fetch_all(&self.pool)
@@ -450,13 +452,6 @@ impl RawDb {
         .context("select emails")?;
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
-            let payload_str: String = match r.try_get("payload") {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
-                continue;
-            };
             out.push(LoadedEmail {
                 id: r.try_get("id").unwrap_or_default(),
                 account_id: r.try_get("account_id").unwrap_or_default(),
@@ -469,12 +464,12 @@ impl RawDb {
                 sent_at: r.try_get::<Option<String>, _>("sent_at").unwrap_or(None),
                 size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
                 subject: r.try_get::<Option<String>, _>("subject").unwrap_or(None),
+                from_json: r.try_get::<Option<String>, _>("from_json").unwrap_or(None),
                 has_attachment: r
                     .try_get::<Option<i64>, _>("has_attachment")
                     .unwrap_or(None)
                     .unwrap_or(0)
                     != 0,
-                payload,
             });
         }
         Ok(out)
@@ -543,7 +538,7 @@ impl RawDb {
     /// Every persisted email id — for a quick set-membership check
     /// during incremental sync ("do we already have this id?").
     pub async fn known_email_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM emails WHERE payload IS NOT NULL")
+        let rows = sqlx::query("SELECT id FROM emails WHERE blob_id != ''")
             .fetch_all(&self.pool)
             .await
             .context("select known_email_ids")?;
@@ -679,12 +674,11 @@ async fn upsert_email_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     row: &EmailRow,
 ) -> Result<()> {
-    let payload_str = serde_json::to_string(&row.payload).context("serialize email")?;
     sqlx::query(
         "INSERT INTO emails
             (id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-             size, subject, from_json, has_attachment, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
+             size, subject, from_json, has_attachment)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             account_id = excluded.account_id,
             thread_id = excluded.thread_id,
@@ -695,8 +689,7 @@ async fn upsert_email_in(
             size = COALESCE(excluded.size, emails.size),
             subject = COALESCE(excluded.subject, emails.subject),
             from_json = COALESCE(excluded.from_json, emails.from_json),
-            has_attachment = COALESCE(excluded.has_attachment, emails.has_attachment),
-            payload = excluded.payload",
+            has_attachment = COALESCE(excluded.has_attachment, emails.has_attachment)",
     )
     .bind(&row.id)
     .bind(&row.account_id)
@@ -709,7 +702,6 @@ async fn upsert_email_in(
     .bind(row.subject.as_deref())
     .bind(row.from_json.as_deref())
     .bind(row.has_attachment as i64)
-    .bind(&payload_str)
     .execute(&mut **tx)
     .await
     .with_context(|| format!("upsert email {}", row.id))?;
@@ -801,8 +793,12 @@ pub struct LoadedEmail {
     pub sent_at: Option<String>,
     pub size: Option<i64>,
     pub subject: Option<String>,
+    /// Serialized JSON of the From: header(s) as
+    /// `[{name?, email}, …]`. Same shape on the JMAP path and the
+    /// mbox path. Translate uses this for cheap "who sent it"
+    /// rendering without paying for a full mail-parser pass.
+    pub from_json: Option<String>,
     pub has_attachment: bool,
-    pub payload: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -948,7 +944,7 @@ mod tests {
                  "type": "application/pdf", "size": 999, "disposition": "attachment"}
             ],
         });
-        let row = EmailRow::from_payload("A1", payload).expect("from_payload");
+        let row = EmailRow::from_envelope("A1", &payload).expect("from_payload");
         db.upsert_email(&row).await.unwrap();
 
         let loaded = db.load_emails().await.unwrap();
@@ -982,12 +978,12 @@ mod tests {
             "mailboxIds": {"M1": true},
             "keywords": {"$seen": true},
         });
-        db.upsert_email(&EmailRow::from_payload("A", payload.clone()).unwrap())
+        db.upsert_email(&EmailRow::from_envelope("A", &payload).unwrap())
             .await
             .unwrap();
         payload["keywords"] = json!({"$flagged": true});
         payload["mailboxIds"] = json!({"M2": true});
-        db.upsert_email(&EmailRow::from_payload("A", payload).unwrap())
+        db.upsert_email(&EmailRow::from_envelope("A", &payload).unwrap())
             .await
             .unwrap();
         let joins = db.load_email_joins().await.unwrap();
@@ -1006,7 +1002,7 @@ mod tests {
             "keywords": {"$seen": true},
             "attachments": [{"partId": "1", "blobId": "B-att"}],
         });
-        db.upsert_email(&EmailRow::from_payload("A", p).unwrap())
+        db.upsert_email(&EmailRow::from_envelope("A", &p).unwrap())
             .await
             .unwrap();
         // Also stash a blob row so we can prove it survives.
@@ -1082,9 +1078,9 @@ mod tests {
             .await
             .unwrap();
         db.upsert_email(
-            &EmailRow::from_payload(
+            &EmailRow::from_envelope(
                 "A1",
-                json!({
+                &json!({
                     "id": "E1", "blobId": "B", "threadId": "T",
                     "mailboxIds": {"M1": true},
                 }),

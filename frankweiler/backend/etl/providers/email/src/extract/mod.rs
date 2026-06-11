@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod db;
+pub mod mbox;
 pub mod schema_raw;
 pub mod session;
 
@@ -55,10 +56,11 @@ const CHANGES_MAX: u64 = 5_000;
 /// Per-request timeout for blob downloads. Big attachments take time.
 const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Email/get properties we ask the server for. Includes the structural
-/// body refs (`bodyValues`, `textBody`, `htmlBody`) plus the headers we
-/// promote into typed columns. Bodies up to `maxBodyValueBytes` arrive
-/// inline; anything truncated remains available via the `.eml` blob.
+/// Envelope-only `Email/get` properties. Body parts (`bodyValues`,
+/// `textBody`, `htmlBody`, `preview`) are deliberately omitted: the
+/// canonical body source is the `.eml` blob in the shared CAS, and
+/// translate `mail-parse`s it on demand so the JMAP and mbox sources
+/// feed identical inputs into the renderer.
 const EMAIL_GET_PROPERTIES: &[&str] = &[
     "id",
     "blobId",
@@ -66,27 +68,14 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
     "mailboxIds",
     "keywords",
     "from",
-    "to",
-    "cc",
-    "bcc",
-    "replyTo",
     "subject",
     "sentAt",
     "receivedAt",
     "size",
     "messageId",
-    "inReplyTo",
-    "references",
     "hasAttachment",
     "attachments",
-    "preview",
-    "bodyValues",
-    "textBody",
-    "htmlBody",
-    "headers",
 ];
-
-const EMAIL_BODY_VALUE_MAX_BYTES: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
@@ -595,9 +584,6 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
             "accountId": account_id,
             "ids": ids,
             "properties": props,
-            "fetchTextBodyValues": true,
-            "fetchHTMLBodyValues": true,
-            "maxBodyValueBytes": EMAIL_BODY_VALUE_MAX_BYTES,
         }),
     )
     .await
@@ -612,8 +598,8 @@ async fn ingest_email_list(
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
     let mut rows: Vec<EmailRow> = Vec::with_capacity(list.len());
-    for payload in list {
-        let Some(row) = EmailRow::from_payload(account_id, payload) else {
+    for envelope in list {
+        let Some(row) = EmailRow::from_envelope(account_id, &envelope) else {
             continue;
         };
         if let Some(allow) = mailbox_filter {

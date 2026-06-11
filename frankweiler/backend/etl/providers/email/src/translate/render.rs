@@ -13,10 +13,12 @@
 //! `index.md` carries YAML frontmatter with thread-level metadata
 //! (subject, participants, mailbox labels, keywords, message count)
 //! followed by one section per email in `receivedAt` order. Each
-//! section's body is the JMAP `bodyValues` text representation when
-//! available, else the `preview`. Attachment links resolve to the
-//! sibling `blobs/` directory; the byte-perfect copy lives in the
-//! `blobs` doltlite table.
+//! section's body is mail-parsed from the RFC 5322 `.eml` bytes
+//! stored in the blob CAS — same code path for JMAP-sourced and
+//! mbox-sourced messages — falling back to a short preview when
+//! neither a text nor html body is present. Attachment links
+//! resolve to the sibling `blobs/` directory; the byte-perfect copy
+//! lives in the `blobs` doltlite table.
 //!
 //! The grid_rows sidecar emits two row kinds: one `"Email Thread"`
 //! row for the thread itself + one `"Email"` row per email. Both
@@ -32,12 +34,114 @@ use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
-use serde_json::Value;
+use mail_parser::{Address, MessageParser, PartType};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::RENDER_VERSION;
 use crate::extract::db::{LoadedAttachment, LoadedEmail, LoadedRaw};
+
+/// Everything the renderer needs from the RFC 5322 `.eml` bytes,
+/// extracted via mail-parser in one pass and made owned so we don't
+/// hold the borrow across the whole render loop.
+#[derive(Default)]
+struct ParsedEml {
+    from_display: String,
+    /// Email addresses the message touches (from/to/cc), in insertion
+    /// order. Used for the YAML `participants:` list at the thread
+    /// level.
+    participants: Vec<String>,
+    /// Concatenated `text/plain` body parts.
+    text_body: String,
+    /// Concatenated `text/html` body parts.
+    html_body: String,
+}
+
+impl ParsedEml {
+    fn from_eml_bytes(bytes: &[u8]) -> Self {
+        let Some(msg) = MessageParser::default().parse(bytes) else {
+            return Self::default();
+        };
+        let from_display = format_address(msg.from());
+        let mut participants_set: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        for addr in [msg.from(), msg.to(), msg.cc()].into_iter().flatten() {
+            for a in addr.iter() {
+                let email = a.address().unwrap_or_default().trim().to_string();
+                if !email.is_empty() {
+                    participants_set.insert(email);
+                }
+            }
+        }
+        let mut text_body = String::new();
+        for &idx in &msg.text_body {
+            if let Some(part) = msg.part(idx) {
+                text_body.push_str(&part_text(part));
+                text_body.push('\n');
+            }
+        }
+        let mut html_body = String::new();
+        for &idx in &msg.html_body {
+            if let Some(part) = msg.part(idx) {
+                html_body.push_str(&part_text(part));
+                html_body.push('\n');
+            }
+        }
+        Self {
+            from_display,
+            participants: participants_set.into_iter().collect(),
+            text_body,
+            html_body,
+        }
+    }
+
+    /// First ~200 chars of the plaintext (whitespace-collapsed), falling
+    /// back to the HTML body when no text/plain part exists.
+    fn preview(&self) -> String {
+        let raw = if !self.text_body.trim().is_empty() {
+            self.text_body.as_str()
+        } else {
+            self.html_body.as_str()
+        };
+        let collapsed: String = raw
+            .chars()
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        collapsed.chars().take(200).collect()
+    }
+}
+
+fn part_text(part: &mail_parser::MessagePart<'_>) -> String {
+    match &part.body {
+        PartType::Text(s) | PartType::Html(s) => s.to_string(),
+        PartType::Binary(b) | PartType::InlineBinary(b) => String::from_utf8_lossy(b).into_owned(),
+        _ => String::new(),
+    }
+}
+
+fn format_address(addr: Option<&Address>) -> String {
+    let Some(addr) = addr else {
+        return "(unknown sender)".to_string();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for a in addr.iter() {
+        let email = a.address().unwrap_or_default();
+        let name = a.name().unwrap_or_default();
+        if !name.is_empty() {
+            parts.push(format!("{name} <{email}>"));
+        } else if !email.is_empty() {
+            parts.push(email.to_string());
+        }
+    }
+    if parts.is_empty() {
+        "(unknown sender)".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
 
 /// Namespace UUID for everything this provider emits. Generated once
 /// (uuidv5(NIL, "frankweiler.jmap")) and frozen forever; any change here
@@ -157,6 +261,20 @@ pub fn render_all(
         fs::create_dir_all(page_dir)
             .with_context(|| format!("create thread dir {}", page_dir.display()))?;
 
+        // mail-parse each email's `.eml` from the blob CAS once and
+        // cache the envelope/body extracts the renderer needs. Single
+        // input contract for both JMAP and mbox sources — neither
+        // path stores a pre-decoded body anywhere.
+        let mut parsed_emls: HashMap<String, ParsedEml> = HashMap::new();
+        for em in emails {
+            let view = parsed.blobs.read_by_ref_id(&em.blob_id)?;
+            let parsed_eml = match view {
+                Some(v) => ParsedEml::from_eml_bytes(&v.bytes),
+                None => ParsedEml::default(),
+            };
+            parsed_emls.insert(em.id.clone(), parsed_eml);
+        }
+
         // Materialize attachments referenced by any email in this thread.
         // Filenames come from `BlobView::rendered_filename` (hash + ext)
         // so collisions across attachments are impossible.
@@ -193,6 +311,7 @@ pub fn render_all(
             &mailbox_name,
             &parsed.joins,
             &materialized,
+            &parsed_emls,
         );
         fs::write(&abs, &body).with_context(|| format!("write {}", abs.display()))?;
 
@@ -203,6 +322,7 @@ pub fn render_all(
             emails,
             &parsed.joins,
             &mailbox_name,
+            &parsed_emls,
         );
         let sidecar_path = abs.with_extension("grid_rows.json");
         emit_sidecar(&sidecar_path, &tuid, &fp, RENDER_VERSION, &rows, &[])?;
@@ -247,10 +367,11 @@ fn render_thread_md(
     mailbox_name: &HashMap<String, String>,
     joins: &crate::extract::db::EmailJoins,
     materialized: &HashMap<String, String>,
+    parsed_emls: &HashMap<String, ParsedEml>,
 ) -> String {
     let root = emails.first().unwrap();
     let subject = root.subject.as_deref().unwrap_or("(no subject)");
-    let participants = collect_participants(emails);
+    let participants = collect_participants(emails, parsed_emls);
     let labels: Vec<String> = emails
         .iter()
         .flat_map(|e| {
@@ -337,7 +458,13 @@ fn render_thread_md(
     );
 
     for (idx, em) in emails.iter().enumerate() {
-        let from = format_addresses(em.payload.get("from"));
+        let default_parsed = ParsedEml::default();
+        let parsed_eml = parsed_emls.get(&em.id).unwrap_or(&default_parsed);
+        let from = if parsed_eml.from_display.is_empty() {
+            "(unknown sender)".to_string()
+        } else {
+            parsed_eml.from_display.clone()
+        };
         let when = em.received_at.as_deref().unwrap_or("(unknown date)");
         out.push_str(&format!("## #{} — {} — {}\n\n", idx + 1, from, when));
         let atts = joins
@@ -345,14 +472,17 @@ fn render_thread_md(
             .get(&em.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        if let Some(body) = email_body_markdown(em, atts, materialized) {
+        if let Some(body) = email_body_markdown(parsed_eml, atts, materialized) {
             out.push_str(&body);
             if !body.ends_with('\n') {
                 out.push('\n');
             }
-        } else if let Some(preview) = em.payload.get("preview").and_then(|v| v.as_str()) {
-            out.push_str(preview);
-            out.push('\n');
+        } else {
+            let preview = parsed_eml.preview();
+            if !preview.is_empty() {
+                out.push_str(&preview);
+                out.push('\n');
+            }
         }
 
         // Attachment list — exclude inline attachments that were
@@ -391,31 +521,14 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
 
 /// Raw concatenated text for the grid_rows `text` column. Uses the
 /// `text/plain` part when present (best for search; no HTML noise)
-/// and falls back to `text/html` stripped to its `bodyValues` text.
-/// Different from [`email_body_markdown`] which prefers HTML and
-/// runs html2md for the on-disk markdown render.
-fn email_body_plain(em: &LoadedEmail) -> Option<String> {
-    let body_values = em.payload.get("bodyValues")?.as_object()?;
-    let parts = em
-        .payload
-        .get("textBody")
-        .and_then(|v| v.as_array())
-        .or_else(|| em.payload.get("htmlBody").and_then(|v| v.as_array()))?;
-    let mut out = String::new();
-    for p in parts {
-        if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
-            if let Some(bv) = body_values.get(part_id) {
-                if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
-                    out.push_str(s);
-                    out.push('\n');
-                }
-            }
-        }
-    }
-    if out.is_empty() {
-        None
+/// and falls back to `text/html` when there's no plain alternative.
+fn email_body_plain(parsed: &ParsedEml) -> Option<String> {
+    if !parsed.text_body.trim().is_empty() {
+        Some(parsed.text_body.clone())
+    } else if !parsed.html_body.trim().is_empty() {
+        Some(parsed.html_body.clone())
     } else {
-        Some(out)
+        None
     }
 }
 
@@ -425,16 +538,12 @@ fn email_body_plain(em: &LoadedEmail) -> Option<String> {
 /// lists, and blockquotes for free. Falls back to `text/plain` with
 /// a light URL-autolink pass when no HTML body is present.
 fn email_body_markdown(
-    em: &LoadedEmail,
+    parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
     materialized: &HashMap<String, String>,
 ) -> Option<String> {
-    let body_values = em.payload.get("bodyValues")?.as_object()?;
-
     // Build a cid → "blobs/<filename>" lookup so we can rewrite
-    // `<img src="cid:…">` URLs before html2md sees them. `cid` in
-    // JMAP is the bare Message-ID-style token (no `cid:` prefix);
-    // the HTML carries the `cid:` URL scheme around it.
+    // `<img src="cid:…">` URLs before html2md sees them.
     let mut cid_to_blob: HashMap<String, String> = HashMap::new();
     for a in attachments {
         let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
@@ -444,48 +553,21 @@ fn email_body_markdown(
     }
 
     // Try HTML body first.
-    if let Some(html_parts) = em.payload.get("htmlBody").and_then(|v| v.as_array()) {
-        let mut html = String::new();
-        for p in html_parts {
-            if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
-                if let Some(bv) = body_values.get(part_id) {
-                    if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
-                        html.push_str(s);
-                        html.push('\n');
-                    }
-                }
-            }
-        }
-        if !html.is_empty() {
-            let rewritten = rewrite_cid_srcs(&html, &cid_to_blob);
-            let stripped = strip_noisy_blocks(&rewritten);
-            let md = html2md::parse_html(&stripped);
-            if !md.trim().is_empty() {
-                return Some(md);
-            }
+    if !parsed.html_body.trim().is_empty() {
+        let rewritten = rewrite_cid_srcs(&parsed.html_body, &cid_to_blob);
+        let stripped = strip_noisy_blocks(&rewritten);
+        let md = html2md::parse_html(&stripped);
+        if !md.trim().is_empty() {
+            return Some(md);
         }
     }
 
-    // Plaintext fallback. html2md handles bare URLs via the HTML
-    // path naturally — for plaintext, the email is unlikely to
-    // contain inline images (no MIME structure), but bare URLs
-    // are common. Autolink them so they render as clickable links.
-    let plain_parts = em.payload.get("textBody")?.as_array()?;
-    let mut plain = String::new();
-    for p in plain_parts {
-        if let Some(part_id) = p.get("partId").and_then(|v| v.as_str()) {
-            if let Some(bv) = body_values.get(part_id) {
-                if let Some(s) = bv.get("value").and_then(|v| v.as_str()) {
-                    plain.push_str(s);
-                    plain.push('\n');
-                }
-            }
-        }
-    }
-    if plain.is_empty() {
+    // Plaintext fallback. Autolink bare URLs so they render as
+    // clickable links.
+    if parsed.text_body.trim().is_empty() {
         return None;
     }
-    Some(autolink_bare_urls(&plain))
+    Some(autolink_bare_urls(&parsed.text_body))
 }
 
 /// Replace `src="cid:<id>"` / `src='cid:<id>'` in raw HTML with the
@@ -635,35 +717,15 @@ fn autolink_bare_urls(s: &str) -> String {
     out
 }
 
-fn format_addresses(v: Option<&Value>) -> String {
-    let arr = v.and_then(|v| v.as_array());
-    let Some(arr) = arr else {
-        return "(unknown sender)".to_string();
-    };
-    let mut parts = Vec::new();
-    for a in arr {
-        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let email = a.get("email").and_then(|v| v.as_str()).unwrap_or("");
-        if !name.is_empty() {
-            parts.push(format!("{name} <{email}>"));
-        } else {
-            parts.push(email.to_string());
-        }
-    }
-    parts.join(", ")
-}
-
-fn collect_participants(emails: &[&LoadedEmail]) -> Vec<String> {
+fn collect_participants(
+    emails: &[&LoadedEmail],
+    parsed_emls: &HashMap<String, ParsedEml>,
+) -> Vec<String> {
     let mut set = std::collections::BTreeSet::new();
     for em in emails {
-        for key in ["from", "to", "cc"] {
-            if let Some(arr) = em.payload.get(key).and_then(|v| v.as_array()) {
-                for a in arr {
-                    let email = a.get("email").and_then(|v| v.as_str()).unwrap_or("");
-                    if !email.is_empty() {
-                        set.insert(email.to_string());
-                    }
-                }
+        if let Some(parsed) = parsed_emls.get(&em.id) {
+            for p in &parsed.participants {
+                set.insert(p.clone());
             }
         }
     }
@@ -689,14 +751,17 @@ fn build_grid_rows(
     emails: &[&LoadedEmail],
     joins: &crate::extract::db::EmailJoins,
     mailbox_name: &HashMap<String, String>,
+    parsed_emls: &HashMap<String, ParsedEml>,
 ) -> Vec<GridRow> {
     let tuid = thread_uuid(account_id, thread_id);
     let qmd_path = format!("rendered_md/jmap/{account_slug}/{tuid}/index.md");
+    let default_parsed = ParsedEml::default();
     let root = emails.first().unwrap();
     let subject = root.subject.clone().unwrap_or_default();
     let preview: String = emails
         .iter()
-        .filter_map(|e| e.payload.get("preview").and_then(|v| v.as_str()))
+        .map(|e| parsed_emls.get(&e.id).unwrap_or(&default_parsed).preview())
+        .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" / ");
 
@@ -720,6 +785,7 @@ fn build_grid_rows(
         .collect::<Vec<_>>()
         .join(", ");
 
+    let root_parsed = parsed_emls.get(&root.id).unwrap_or(&default_parsed);
     let mut rows = Vec::with_capacity(emails.len() + 1);
     rows.push(GridRow {
         uuid: tuid.clone(),
@@ -727,7 +793,11 @@ fn build_grid_rows(
         kind: "Email Thread".to_string(),
         source_label: "Mail".to_string(),
         when_ts: root.received_at.clone(),
-        author: Some(format_addresses(root.payload.get("from"))),
+        author: Some(if root_parsed.from_display.is_empty() {
+            "(unknown sender)".to_string()
+        } else {
+            root_parsed.from_display.clone()
+        }),
         account: Some(account_id.to_string()),
         project: None,
         org_uuid: None,
@@ -758,20 +828,19 @@ fn build_grid_rows(
 
     for (idx, em) in emails.iter().enumerate() {
         let euid = email_uuid(&em.account_id, &em.id);
-        let body = email_body_plain(em).unwrap_or_else(|| {
-            em.payload
-                .get("preview")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        });
+        let parsed_eml = parsed_emls.get(&em.id).unwrap_or(&default_parsed);
+        let body = email_body_plain(parsed_eml).unwrap_or_else(|| parsed_eml.preview());
         rows.push(GridRow {
             uuid: euid,
             provider: "jmap".to_string(),
             kind: "Email".to_string(),
             source_label: "Mail".to_string(),
             when_ts: em.received_at.clone(),
-            author: Some(format_addresses(em.payload.get("from"))),
+            author: Some(if parsed_eml.from_display.is_empty() {
+                "(unknown sender)".to_string()
+            } else {
+                parsed_eml.from_display.clone()
+            }),
             account: Some(account_id.to_string()),
             project: None,
             org_uuid: None,
@@ -820,13 +889,19 @@ fn slug_acct(name: &str, fallback: &str) -> String {
     }
 }
 
+/// Skip-key for the translate-side incremental cache. Hashes
+/// `RENDER_VERSION` + each email's content-addressed `.eml` blob id +
+/// the per-email mailbox/keyword join state. The blob_id is already
+/// `sha256(eml_bytes)` (or the JMAP server's opaque hash), so it
+/// changes iff the underlying message did — no need to re-hash the
+/// bytes here.
 fn source_fingerprint(emails: &[&LoadedEmail], joins: &crate::extract::db::EmailJoins) -> String {
     let mut h = Sha256::new();
     h.update(RENDER_VERSION.to_le_bytes());
     for em in emails {
         h.update(em.id.as_bytes());
         h.update(b"\n");
-        h.update(em.payload.to_string().as_bytes());
+        h.update(em.blob_id.as_bytes());
         h.update(b"\n");
         if let Some(ms) = joins.mailboxes.get(&em.id) {
             for m in ms {
