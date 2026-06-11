@@ -71,6 +71,13 @@ pub struct FetchSummary {
     pub failed_blobs: usize,
     pub requests: u64,
     pub network_seconds: f64,
+    /// Total number of extra `get_conversation` attempts spent on
+    /// transient-403 retries (does not count the initial attempt).
+    pub forbidden_retry_attempts: u64,
+    /// Conversations that ultimately succeeded only after at least one
+    /// retry. `forbidden_retry_attempts > 0` with `_recovered == 0`
+    /// would mean every retry path exhausted without success.
+    pub forbidden_retry_recoveries: u64,
 }
 
 #[instrument(skip_all, fields(db = %opts.db_path.display()))]
@@ -155,8 +162,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             return Ok::<(), anyhow::Error>(());
         }
 
-        // Walk each org's listing, pre-seed conversations, prioritize
-        // missing-then-stale, fetch detail.
+        // Pass 1: list every org, pre-seed, classify. Collect the
+        // per-org fetch plans so we know the total work up front and
+        // can set the progress bar's length exactly once — otherwise
+        // a length reset per org makes the bar jump backwards (e.g.
+        // `77/58` when the second org's length is smaller than the
+        // count already accumulated from the first).
+        struct OrgPlan<'a> {
+            org_uuid: String,
+            org_name: String,
+            ordered: Vec<&'a Value>,
+        }
+        let mut plans: Vec<OrgPlan> = Vec::new();
+        let mut listings_by_org: Vec<(String, String, Vec<Value>)> = Vec::new();
         for org in &orgs {
             let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
                 continue;
@@ -192,12 +210,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
             let listing_refs: Vec<(&str, &Value)> = listing.iter().map(|c| (org_uuid, c)).collect();
             db.pre_seed_conversations(&listing_refs).await?;
+            listings_by_org.push((org_uuid.to_string(), org_name, listing));
+        }
 
-            // Plan: classify each listing item against current DB state.
-            let states = db.conversation_states().await?;
+        // States are read once after all pre-seeds so each org's plan
+        // sees the same snapshot.
+        let states = db.conversation_states().await?;
+        for (org_uuid, org_name, listing) in &listings_by_org {
             let mut missing: Vec<&Value> = Vec::new();
             let mut stale: Vec<&Value> = Vec::new();
-            // Apply overlap by re-fetching the top-N most-recently-updated.
             let mut overlap_force: HashSet<String> = HashSet::new();
             {
                 let mut sorted: Vec<&Value> = listing.iter().collect();
@@ -213,7 +234,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
             }
             let mut up_to_date: usize = 0;
-            for item in &listing {
+            for item in listing {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
@@ -234,6 +255,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             info!(
                 event = "anthropic_priority_split",
+                org = %org_name,
                 missing = missing.len(),
                 stale = stale.len(),
                 up_to_date = up_to_date,
@@ -241,29 +263,63 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             summary.skipped += up_to_date;
 
             let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
-            opts.progress.set_length(Some(ordered.len() as u64));
-            for item in ordered {
+            plans.push(OrgPlan {
+                org_uuid: org_uuid.clone(),
+                org_name: org_name.clone(),
+                ordered,
+            });
+        }
+
+        // Pass 2: fetch. The outer bar's length is the sum across all
+        // orgs and advances once per chat — so a quick glance answers
+        // "how close is the whole sync to done?". Each org also gets
+        // its own inner bar (mirroring the per-channel pattern in
+        // slack) so the current-org context stays visible.
+        let total: usize = plans.iter().map(|p| p.ordered.len()).sum();
+        opts.progress.set_length(Some(total as u64));
+        for plan in &plans {
+            let inner = opts
+                .progress
+                .child(&format!("claude org: {}", plan.org_name));
+            inner.set_length(Some(plan.ordered.len() as u64));
+            for item in &plan.ordered {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
+                inner.inc(1);
+                inner.set_message(uuid);
                 opts.progress.inc(1);
-                opts.progress.set_message(&format!("{org_name} {uuid}"));
-                match client.get_conversation(org_uuid, uuid).await {
-                    Ok(full) => {
-                        save_conversation(&db, org_uuid, &org_name, uuid, &full).await?;
+                opts.progress
+                    .set_message(&format!("{} {uuid}", plan.org_name));
+                match get_conversation_with_403_retry(&mut client, &plan.org_uuid, uuid).await {
+                    Ok(outcome) => {
+                        summary.forbidden_retry_attempts += outcome.retries as u64;
+                        if outcome.retries > 0 {
+                            summary.forbidden_retry_recoveries += 1;
+                        }
+                        save_conversation(
+                            &db,
+                            &plan.org_uuid,
+                            &plan.org_name,
+                            uuid,
+                            &outcome.value,
+                        )
+                        .await?;
                         summary.fetched += 1;
-                        fetch_files_for(&db, &full, uuid, &mut summary).await;
+                        fetch_files_for(&db, &outcome.value, uuid, &mut summary).await;
                         if opts.sleep_between > Duration::ZERO {
                             sleep(opts.sleep_between).await;
                         }
                     }
-                    Err(e) => {
+                    Err((e, retries)) => {
+                        summary.forbidden_retry_attempts += retries as u64;
                         warn!(event = "anthropic_fetch_error", uuid = uuid, error = %e);
                         let _ = db.record_conversation_error(uuid, &e.to_string()).await;
                         summary.errors += 1;
                     }
                 }
             }
+            inner.finish_and_clear();
         }
         Ok(())
     };
@@ -334,6 +390,71 @@ async fn fetch_single(
     Err(anyhow::anyhow!(
         "conversation {conv_uuid} not found in any of {} org(s)",
         orgs.len()
+    ))
+}
+
+/// Backoff delays for transient-403 retries on a single
+/// `get_conversation`. claude.ai occasionally returns 403 on detail GETs
+/// when listing+detail are issued in rapid succession; the same UUID
+/// re-fetched a moment later typically returns 200. Verified by direct
+/// probe: a UUID that 403'd inside a run returned 200 to a fresh
+/// `latchkey curl` immediately after. We treat Forbidden as transient
+/// here (not at the transport layer) so a real org-level permission
+/// denial — caught earlier by `list_conversations` — still short-circuits
+/// to `anthropic_org_forbidden`.
+const FORBIDDEN_RETRY_BACKOFFS: &[Duration] = &[Duration::from_millis(500), Duration::from_secs(2)];
+
+/// Outcome of a 403-retrying detail fetch. `retries` counts the
+/// *additional* attempts after the first (so 0 = first try succeeded).
+struct RetryOutcome {
+    value: Value,
+    retries: u32,
+}
+
+async fn get_conversation_with_403_retry(
+    client: &mut ClaudeClient,
+    org_uuid: &str,
+    conv_uuid: &str,
+) -> Result<RetryOutcome, (ClaudeError, u32)> {
+    let mut last_err: Option<ClaudeError> = None;
+    for (attempt, delay) in std::iter::once(None)
+        .chain(FORBIDDEN_RETRY_BACKOFFS.iter().copied().map(Some))
+        .enumerate()
+    {
+        if let Some(d) = delay {
+            sleep(d).await;
+        }
+        match client.get_conversation(org_uuid, conv_uuid).await {
+            Ok(v) => {
+                if attempt > 0 {
+                    info!(
+                        event = "anthropic_fetch_403_retry_ok",
+                        uuid = conv_uuid,
+                        attempt = attempt,
+                    );
+                }
+                return Ok(RetryOutcome {
+                    value: v,
+                    retries: attempt as u32,
+                });
+            }
+            Err(ClaudeError::Forbidden(msg)) => {
+                warn!(
+                    event = "anthropic_fetch_403_transient",
+                    uuid = conv_uuid,
+                    attempt = attempt,
+                    error = %msg,
+                );
+                last_err = Some(ClaudeError::Forbidden(msg));
+            }
+            Err(other) => {
+                return Err((other, attempt as u32));
+            }
+        }
+    }
+    Err((
+        last_err.expect("at least one attempt"),
+        FORBIDDEN_RETRY_BACKOFFS.len() as u32,
     ))
 }
 

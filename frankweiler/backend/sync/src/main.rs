@@ -1565,7 +1565,10 @@ impl ExtractPlan {
                         // input_path. In playback mode the genrule
                         // pre-seeds it there.
                         export_dir: Some(self.out_dir.clone()),
-                        overlap: sync.overlap.map(|v| v as usize).unwrap_or(usize::MAX),
+                        overlap: sync
+                            .refresh_most_recent_n_chat_count
+                            .map(|v| v as usize)
+                            .unwrap_or(0),
                         sleep_between: Duration::ZERO,
                         conv_uuids: sync.conv_uuids.clone(),
                         progress: progress.clone(),
@@ -1575,8 +1578,16 @@ impl ExtractPlan {
                 .await
                 .map(|s| {
                     format!(
-                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={}",
-                        s.fetched, s.skipped, s.errors, s.forbidden_orgs, s.total, s.requests,
+                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={} \
+                         forbidden_retry_attempts={} forbidden_retry_recoveries={}",
+                        s.fetched,
+                        s.skipped,
+                        s.errors,
+                        s.forbidden_orgs,
+                        s.total,
+                        s.requests,
+                        s.forbidden_retry_attempts,
+                        s.forbidden_retry_recoveries,
                     )
                 })
             }

@@ -143,8 +143,13 @@ fn default_true() -> bool {
 pub struct ClaudeApiSync {
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
+    /// Force-refetch the N most-recently-updated conversations in
+    /// each org on every run, even if the listing's `updated_at`
+    /// matches what we already have on disk. Catches the case where
+    /// upstream adds messages without bumping `updated_at`, and
+    /// keeps the chat you're actively using fresh. Default 0.
     #[serde(default)]
-    pub overlap: Option<i64>,
+    pub refresh_most_recent_n_chat_count: Option<i64>,
     /// When non-empty, restrict the fetch to exactly these conversation
     /// UUIDs. Accepts either the bare UUID or a paste-able browser URL
     /// (`https://claude.ai/chat/<uuid>`); URLs are normalized to the
@@ -1077,7 +1082,7 @@ sources:
     type: claude_export
   - name: claude-api
     type: claude_api
-    sync: {refresh_window_days: 14, overlap: 2}
+    sync: {refresh_window_days: 14, refresh_most_recent_n_chat_count: 2}
   - name: chatgpt
     type: chatgpt_api
     sync: {max_pages: 5}

@@ -8,7 +8,7 @@ sources:
   - name: anthropic-api
     type: claude_api
     sync: {}
-      # overlap: 50              # re-fetch the N most-recently-updated
+      # refresh_most_recent_n_chat_count: 3   # force-refetch top-N by updated_at
       # refresh_window_days: 7   # treat anything older than this as cold
 
   - name: slack
