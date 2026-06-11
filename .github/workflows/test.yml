@@ -88,8 +88,11 @@ jobs:
 
       # Drop the BuildBuddy API key into the workspace `.bazelrc.user`
       # (gitignored) — `.bazelrc`'s `try-import` at the bottom picks it
-      # up, and `build --config=buildbuddy` / `test --config=buildbuddy`
-      # activate the remote cache + BES endpoint.
+      # up, and `build --config=buildbuddy` activates the remote cache
+      # + BES endpoint. `test` inherits from `build`, so a single
+      # `build --config=...` line covers both; adding a separate
+      # `test --config=...` line on top double-expands the config and
+      # trips bazel's "config expanded more than once" warning.
       #
       # If the secret isn't available (PR from a fork; manual local
       # `act` runs without secrets), the step writes nothing and bazel
@@ -104,7 +107,6 @@ jobs:
               cat > .bazelrc.user <<EOF
           common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
           build --config=buildbuddy
-          test  --config=buildbuddy
           EOF
               echo "BuildBuddy remote cache enabled for this job."
           else
