@@ -277,13 +277,15 @@ pub const EMAILS_DDL: &str = "CREATE TABLE IF NOT EXISTS emails (
     account_id TEXT NOT NULL,
     thread_id TEXT NOT NULL,
     blob_id TEXT NOT NULL,
+    blake3 TEXT NULL,
     message_id TEXT NULL,
     received_at TEXT NULL,
     sent_at TEXT NULL,
     size INTEGER NULL,
     subject TEXT NULL,
     from_json TEXT NULL,
-    has_attachment INTEGER NULL
+    has_attachment INTEGER NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
 )";
 
 /// Row struct for the `emails` table. Carries the envelope columns
@@ -465,6 +467,11 @@ pub const EMAILS_BY_THREAD_INDEX_DDL: &str =
 pub const EMAILS_BY_ACCOUNT_RECEIVED_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
         emails_by_account_received ON emails(account_id, received_at)";
 
+/// Composite index on `emails(blob_id, blake3)` — supports the
+/// `EmailBlobReader` skip-check `WHERE blob_id = ? AND blake3 IS NOT NULL`.
+pub const EMAILS_BY_BLOB_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS emails_by_blob ON emails(blob_id, blake3)";
+
 // ── join tables ─────────────────────────────────────────────────────
 
 /// `email_mailboxes` — many-to-many: an email can live in multiple
@@ -512,19 +519,21 @@ pub const EMAIL_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS email_attach
     email_id TEXT NOT NULL,
     part_id TEXT NOT NULL,
     blob_id TEXT NOT NULL,
+    blake3 TEXT NULL,
     name TEXT NULL,
     type TEXT NULL,
     size INTEGER NULL,
     disposition TEXT NULL,
     cid TEXT NULL,
-    PRIMARY KEY (email_id, part_id)
+    PRIMARY KEY (email_id, part_id),
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
 )";
 
-/// Index on `email_attachments(blob_id)` — supports the
-/// "which emails reference this blob?" query that
-/// `blob_cas::gc_orphans` walks at GC time.
+/// Composite index on `email_attachments(blob_id, blake3)` — supports
+/// the `EmailBlobReader` skip-check and the "which emails reference
+/// this blob?" GC walk in a single index.
 pub const EMAIL_ATTACHMENTS_BY_BLOB_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
-        email_attachments_by_blob ON email_attachments(blob_id)";
+        email_attachments_by_blob ON email_attachments(blob_id, blake3)";
 
 // ── cursor table ────────────────────────────────────────────────────
 
@@ -561,6 +570,7 @@ pub fn full_ddl() -> Vec<String> {
         EMAILS_DDL.to_string(),
         EMAILS_BY_THREAD_INDEX_DDL.to_string(),
         EMAILS_BY_ACCOUNT_RECEIVED_INDEX_DDL.to_string(),
+        EMAILS_BY_BLOB_INDEX_DDL.to_string(),
         EMAIL_MAILBOXES_DDL.to_string(),
         EMAIL_MAILBOXES_BY_MAILBOX_INDEX_DDL.to_string(),
         EMAIL_KEYWORDS_DDL.to_string(),

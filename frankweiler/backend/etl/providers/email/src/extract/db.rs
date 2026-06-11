@@ -24,9 +24,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
-use frankweiler_etl::blob_cas::{
-    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
-};
+use frankweiler_etl::blob_cas::{self, BlobCas, BlobReader, InMemoryBlobReader};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
@@ -334,71 +332,58 @@ impl RawDb {
         Ok(())
     }
 
-    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
+    // ── blob skip-check + refetch-blobs control ────────────────────
 
-    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
-        blob_cas::ref_has_hash(&self.pool, ref_id).await
-    }
-
-    /// Snapshot every ref_id that already has a hash attached. Loaded
-    /// once at run start so the per-blob `download_bytes` skip-check is
-    /// a `HashSet` hit instead of a SQLite round trip.
-    pub async fn loaded_blob_ids(&self) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT id FROM blob_refs WHERE blake3 IS NOT NULL")
-            .fetch_all(&self.pool)
-            .await
-            .context("loaded_blob_ids")?;
-        let mut out = HashSet::with_capacity(rows.len());
+    /// `(blob_id, blake3)` pairs — every email-side ref we've
+    /// already resolved to CAS bytes. Pre-loaded once at the top of
+    /// `sync_blobs` so the per-blob "do we already have this?"
+    /// decision is a `HashMap` hit instead of a SQLite round trip.
+    /// Spans both wire-payload tables that own a CAS edge today
+    /// (`emails` for the `.eml` source, `email_attachments` for
+    /// per-part bytes); the JMAP server hands out distinct blob_ids
+    /// for distinct CAS objects, so a union is correct.
+    pub async fn loaded_blob_ids(&self) -> Result<HashMap<String, String>> {
+        let rows = sqlx::query(
+            "SELECT blob_id, blake3 FROM emails WHERE blake3 IS NOT NULL
+             UNION ALL
+             SELECT blob_id, blake3 FROM email_attachments WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("loaded_blob_ids")?;
+        let mut out = HashMap::with_capacity(rows.len());
         for r in rows {
-            if let Ok(id) = r.try_get::<String, _>("id") {
-                out.insert(id);
+            let blob_id: String = r.try_get("blob_id").unwrap_or_default();
+            let blake3: String = r.try_get("blake3").unwrap_or_default();
+            if !blob_id.is_empty() && !blake3.is_empty() {
+                out.insert(blob_id, blake3);
             }
         }
         Ok(out)
     }
 
-    pub async fn pre_seed_blob_stub(
-        &self,
-        ref_id: &str,
-        kind: &str,
-        owning_id: &str,
-        slot: &str,
-        content_type: Option<&str>,
-        source_url: Option<&str>,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob stub tx")?;
-        blob_cas::pre_seed_ref(
-            &mut tx,
-            &RefStub {
-                ref_id,
-                kind,
-                owning_id,
-                slot,
-                upstream_uuid: Some(ref_id),
-                upstream_name: None,
-                source_url,
-                content_type,
-            },
-        )
-        .await?;
-        tx.commit().await.context("commit blob stub tx")?;
-        Ok(())
-    }
-
-    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
-    }
-
-    pub async fn record_blob_error(
-        &self,
-        ref_id: &str,
-        owning_id: &str,
-        slot: &str,
-        err: &str,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
-        tx.commit().await.context("commit blob error tx")?;
+    /// Implements the `--refetch-blobs` control. Sets `emails.blake3`
+    /// and `email_attachments.blake3` back to NULL so the next
+    /// `sync_blobs` pass walks every blob from scratch. The CAS
+    /// (`cas_objects`) itself is left alone — re-downloaded bytes
+    /// hash to the same blake3, the `INSERT OR IGNORE` on the CAS
+    /// side is a no-op. Mirrors signal's `chat_item_attachments`
+    /// clear in `extract/mod.rs`.
+    pub async fn clear_blob_hashes(&self) -> Result<()> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin clear blob hashes tx")?;
+        sqlx::query("UPDATE emails SET blake3 = NULL")
+            .execute(&mut *tx)
+            .await
+            .context("clear emails.blake3")?;
+        sqlx::query("UPDATE email_attachments SET blake3 = NULL")
+            .execute(&mut *tx)
+            .await
+            .context("clear email_attachments.blake3")?;
+        tx.commit().await.context("commit clear blob hashes tx")?;
         Ok(())
     }
 }
@@ -560,10 +545,16 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
-                db.pool().clone(),
-                db.cas().pool().clone(),
-            ));
+            // Email's per-provider blob reader: blob_id → blake3 via
+            // emails.blake3 / email_attachments.blake3, then bytes
+            // out of the sibling CAS pool. Replaces the shared
+            // `SqliteBlobReader` (which went through the retired
+            // `blob_refs` table).
+            let blobs: Arc<dyn BlobReader> =
+                Arc::new(crate::translate::blob_reader::EmailBlobReader::new(
+                    db.pool().clone(),
+                    db.cas().pool().clone(),
+                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 accounts: db.load_accounts().await?,
                 mailboxes: db.load_mailboxes().await?,
@@ -720,7 +711,11 @@ mod tests {
     }
 
     /// Hard-delete cascades: the email row, its joins, and its
-    /// bookkeeping all disappear. Blobs are untouched.
+    /// bookkeeping all disappear. CAS bytes are untouched —
+    /// `delete_emails` only touches `emails` + its joins +
+    /// `emails_bookkeeping`. The structural guarantee is verified
+    /// by stashing one `cas_objects` row directly, deleting the
+    /// owning email, then checking the bytes are still there.
     #[tokio::test]
     async fn delete_email_cascades_to_joins_and_bookkeeping() {
         let (_d, db) = tmp_db().await;
@@ -731,22 +726,19 @@ mod tests {
             "attachments": [{"partId": "1", "blobId": "B-att"}],
         });
         upsert_email(&db, &EmailRow::from_envelope("A", &p).unwrap()).await;
-        // Also stash a blob row so we can prove it survives.
-        db.store_blob(
-            &RefStub {
-                ref_id: "B-eml",
-                kind: BLOB_KIND_EML,
-                owning_id: "E1",
-                slot: "source",
-                upstream_uuid: Some("B-eml"),
-                upstream_name: None,
-                source_url: None,
-                content_type: None,
-            },
-            b"raw",
-        )
-        .await
-        .unwrap();
+        // Stash an entry in the sibling CAS directly so we can prove
+        // it survives. blake3 is fake (64-char hex of zeros) — the
+        // CHECK constraint on `cas_objects.blake3` cares about
+        // length, not value.
+        let fake_blake3 = "0".repeat(64);
+        db.cas()
+            .put_many(&[frankweiler_etl::blob_cas::CasInsert {
+                blake3: &fake_blake3,
+                bytes: b"raw",
+                content_type: Some("message/rfc822"),
+            }])
+            .await
+            .unwrap();
 
         db.delete_emails(&["E1".to_string()]).await.unwrap();
 
@@ -761,8 +753,14 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(bk_count, 0);
-        // Blob untouched.
-        assert!(db.blob_exists("B-eml").await.unwrap());
+        // CAS untouched.
+        let cas_bytes: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
+                .bind(&fake_blake3)
+                .fetch_optional(db.cas().pool())
+                .await
+                .unwrap();
+        assert_eq!(cas_bytes.as_deref(), Some(&b"raw"[..]));
     }
 
     #[tokio::test]

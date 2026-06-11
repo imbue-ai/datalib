@@ -111,7 +111,6 @@ async fn upsert_emails(db: &RawDb, now: &str, rows: &[EmailRow]) -> Result<()> {
     tx.commit().await.context("commit emails tx")?;
     Ok(())
 }
-use db::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
 use session::Session;
 
 /// Batch size for `Email/get` detail fetches. JMAP servers typically
@@ -208,7 +207,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
+        // Phase 2: email no longer rides on the shared `blob_refs`
+        // table. Per-provider clear that sets `emails.blake3` and
+        // `email_attachments.blake3` back to NULL so the next
+        // sync_blobs walk re-downloads from scratch.
+        db.clear_blob_hashes().await?;
     }
 
     // Coarse per-phase progress so the bar moves even though we don't
@@ -781,25 +784,22 @@ async fn sync_blobs(
 ) -> Result<()> {
     let have_bytes = db.loaded_blob_ids().await?;
 
-    // Per-email .eml source + per-attachment blobs. We scan the emails
-    // table for what's needed; the rows hold the blobId and the
-    // attachments join table holds the per-part blobs + advertised
-    // sizes for the size-limit gate.
-    //
-    // BTreeMap so the dispatch order is stable; helps reading logs.
+    // Build the to-fetch worklist. Per-email .eml source + per-attachment
+    // blobs each go through the same accumulator. BTreeMap by blob_id
+    // dedupes (when multiple emails share the same blob_id) and gives
+    // stable dispatch order for log readability.
     let mut wanted: BTreeMap<String, BlobJob> = BTreeMap::new();
 
     // .eml source per email.
     for em in db.load_emails().await? {
-        if em.blob_id.is_empty() || have_bytes.contains(&em.blob_id) {
+        if em.blob_id.is_empty() || have_bytes.contains_key(&em.blob_id) {
             continue;
         }
         wanted.insert(
             em.blob_id.clone(),
             BlobJob {
-                kind: BLOB_KIND_EML,
+                kind: BlobKind::Eml,
                 owning_id: em.id.clone(),
-                slot: "source".to_string(),
                 advertised_size: em.size,
                 name: "message.eml".to_string(),
                 content_type: "message/rfc822".to_string(),
@@ -811,15 +811,16 @@ async fn sync_blobs(
     let joins = db.load_email_joins().await?;
     for (email_id, atts) in &joins.attachments {
         for a in atts {
-            if a.blob_id.is_empty() || have_bytes.contains(&a.blob_id) {
+            if a.blob_id.is_empty() || have_bytes.contains_key(&a.blob_id) {
                 continue;
             }
             wanted.insert(
                 a.blob_id.clone(),
                 BlobJob {
-                    kind: BLOB_KIND_ATTACHMENT,
+                    kind: BlobKind::Attachment {
+                        part_id: a.part_id.clone(),
+                    },
                     owning_id: email_id.clone(),
-                    slot: a.part_id.clone(),
                     advertised_size: a.size,
                     name: a.name.clone().unwrap_or_else(|| "blob".to_string()),
                     content_type: a
@@ -831,28 +832,37 @@ async fn sync_blobs(
         }
     }
 
+    summary.blobs_skipped = have_bytes.len();
     if wanted.is_empty() {
         debug!(event = "jmap_blobs_up_to_date");
         return Ok(());
     }
     info!(event = "jmap_blobs_pending", count = wanted.len());
 
+    // Download + hash. Accumulate the (blake3, bytes) tuples for one
+    // `BlobCas::put_many` flush at the end, mirroring signal's
+    // `PendingAttachments`.
+    let mut cas_pending: Vec<PendingCas> = Vec::with_capacity(wanted.len());
+    // (email_id, blake3) for the post-flush `UPDATE emails`.
+    let mut eml_updates: Vec<(String, String)> = Vec::new();
+    // (email_id, part_id, blake3) for the post-flush
+    // `UPDATE email_attachments`.
+    let mut att_updates: Vec<(String, String, String)> = Vec::new();
+    // (table, id) pairs for bookkeeping error stamps.
+    let mut errors: Vec<(&'static str, String, String)> = Vec::new();
+
     for (blob_id, job) in wanted {
         if let Some(limit) = opts.blob_size_limit_bytes {
             if let Some(sz) = job.advertised_size {
                 if sz as u64 > limit {
                     summary.blobs_oversize += 1;
-                    // Pre-seed a stub row so the bookkeeping shows we
-                    // know about it; the blake3 column stays NULL.
-                    db.pre_seed_blob_stub(
-                        &blob_id,
-                        job.kind,
-                        &job.owning_id,
-                        &job.slot,
-                        Some(&job.content_type),
-                        None,
-                    )
-                    .await?;
+                    // Record the oversize as a per-row bookkeeping
+                    // error so audit queries can find it.
+                    errors.push((
+                        job.kind.bookkeeping_table(),
+                        job.kind.bookkeeping_id(&job.owning_id),
+                        format!("blob {blob_id} exceeds size_limit {limit}"),
+                    ));
                     continue;
                 }
             }
@@ -861,42 +871,143 @@ async fn sync_blobs(
         let url = session.download_url_for(account_id, &blob_id, &job.name, &job.content_type);
         match api::download_bytes(&url, BLOB_TIMEOUT).await {
             Ok((bytes, content_type)) => {
-                let ct = content_type.as_deref().unwrap_or(job.content_type.as_str());
-                db.store_blob(
-                    &frankweiler_etl::blob_cas::RefStub {
-                        ref_id: &blob_id,
-                        kind: job.kind,
-                        owning_id: &job.owning_id,
-                        slot: &job.slot,
-                        upstream_uuid: Some(&blob_id),
-                        upstream_name: Some(job.name.as_str()),
-                        source_url: Some(&url),
-                        content_type: Some(ct),
-                    },
-                    &bytes,
-                )
-                .await?;
+                let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+                let ct = content_type.unwrap_or_else(|| job.content_type.clone());
+                cas_pending.push(PendingCas {
+                    blake3: blake3.clone(),
+                    content_type: ct,
+                    bytes,
+                });
+                match &job.kind {
+                    BlobKind::Eml => eml_updates.push((job.owning_id, blake3)),
+                    BlobKind::Attachment { part_id } => {
+                        att_updates.push((job.owning_id, part_id.clone(), blake3))
+                    }
+                }
                 summary.blobs_downloaded += 1;
             }
             Err(e) => {
                 summary.blobs_errored += 1;
                 warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e);
-                db.record_blob_error(&blob_id, &job.owning_id, &job.slot, &e.to_string())
-                    .await?;
+                errors.push((
+                    job.kind.bookkeeping_table(),
+                    job.kind.bookkeeping_id(&job.owning_id),
+                    e.to_string(),
+                ));
             }
         }
     }
-    let _ = summary.blobs_skipped; // populated when we know-skip via cache later
+
+    flush_blob_batch(db, cas_pending, eml_updates, att_updates, errors).await?;
     Ok(())
 }
 
+enum BlobKind {
+    /// `.eml` source for one email row.
+    Eml,
+    /// Attachment for one `(email_id, part_id)` pair.
+    Attachment { part_id: String },
+}
+
+impl BlobKind {
+    /// Which bookkeeping sidecar a per-row error annotation belongs
+    /// to. The attachment join table doesn't have a bookkeeping
+    /// sidecar (see [`schema_raw::JOIN_TABLES`]) — attachment errors
+    /// surface on the owning email's bookkeeping row.
+    fn bookkeeping_table(&self) -> &'static str {
+        match self {
+            BlobKind::Eml => "emails",
+            BlobKind::Attachment { .. } => "emails",
+        }
+    }
+
+    /// The id under which to stamp the error. For both kinds, it's
+    /// the owning email's id (attachments don't have a per-row
+    /// bookkeeping sidecar; their errors aggregate on the email).
+    fn bookkeeping_id(&self, owning_email_id: &str) -> String {
+        owning_email_id.to_string()
+    }
+}
+
+/// Plaintext bytes ready for the sibling CAS, paired with their hash
+/// and content_type. One entry per successful download. Bytes can be
+/// large; we accumulate them only between the download loop and the
+/// end-of-sync flush, then drop them.
+struct PendingCas {
+    blake3: String,
+    content_type: String,
+    bytes: Vec<u8>,
+}
+
 struct BlobJob {
-    kind: &'static str,
+    kind: BlobKind,
     owning_id: String,
-    slot: String,
     advertised_size: Option<i64>,
     name: String,
     content_type: String,
+}
+
+/// End-of-sync flush. Order:
+///  1. CAS pool: chunked `INSERT OR IGNORE` via `BlobCas::put_many`
+///     — so the entity-side blake3 references bytes that are
+///     definitely already in the CAS.
+///  2. Entity pool: `UPDATE emails / email_attachments SET blake3`
+///     per (id, blake3) tuple, plus per-row error stamps on
+///     `<table>_bookkeeping` for oversize / download-failed blobs.
+async fn flush_blob_batch(
+    db: &RawDb,
+    cas_pending: Vec<PendingCas>,
+    eml_updates: Vec<(String, String)>,
+    att_updates: Vec<(String, String, String)>,
+    errors: Vec<(&'static str, String, String)>,
+) -> Result<()> {
+    if cas_pending.is_empty() && errors.is_empty() {
+        return Ok(());
+    }
+
+    // CAS first.
+    if !cas_pending.is_empty() {
+        let cas_inserts: Vec<frankweiler_etl::blob_cas::CasInsert<'_>> = cas_pending
+            .iter()
+            .map(|c| frankweiler_etl::blob_cas::CasInsert {
+                blake3: &c.blake3,
+                bytes: &c.bytes,
+                content_type: Some(c.content_type.as_str()),
+            })
+            .collect();
+        db.cas()
+            .put_many(&cas_inserts)
+            .await
+            .context("flush_blob_batch put_many")?;
+    }
+
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin flush_blob_batch tx")?;
+    for (id, blake3) in &eml_updates {
+        sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
+            .bind(blake3)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("update emails.blake3 for {id}"))?;
+    }
+    for (email_id, part_id, blake3) in &att_updates {
+        sqlx::query("UPDATE email_attachments SET blake3 = ? WHERE email_id = ? AND part_id = ?")
+            .bind(blake3)
+            .bind(email_id)
+            .bind(part_id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("update email_attachments.blake3 for {email_id}/{part_id}"))?;
+    }
+    for (table, id, err) in &errors {
+        frankweiler_etl::doltlite_raw::record_object_attempt(&mut tx, table, id, Some(err)).await?;
+    }
+    tx.commit().await.context("commit flush_blob_batch tx")?;
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────

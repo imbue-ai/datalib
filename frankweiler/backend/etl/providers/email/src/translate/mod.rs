@@ -2,6 +2,7 @@
 //! per JMAP Thread, plus a `grid_rows.json` sidecar, plus the thread's
 //! attachment blobs materialized at `<thread>/blobs/<safe_filename>`.
 
+pub mod blob_reader;
 pub mod parse;
 pub mod render;
 

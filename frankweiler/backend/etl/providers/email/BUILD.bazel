@@ -106,6 +106,7 @@ rust_test(
         ":frankweiler_etl_email",
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],

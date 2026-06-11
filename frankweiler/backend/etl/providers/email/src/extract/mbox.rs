@@ -456,7 +456,7 @@ impl Accumulator {
     fn ingest_message(
         &mut self,
         raw: &[u8],
-        known_blobs: &std::collections::HashSet<String>,
+        known_blobs: &std::collections::HashMap<String, String>,
         pending: &mut PendingBatch,
         summary: &mut FetchSummary,
     ) -> Result<bool> {
@@ -525,17 +525,16 @@ impl Accumulator {
                 .is_some_and(|cap| bytes.len() as u64 > cap);
             if oversize {
                 summary.blobs_oversize += 1;
-            } else if known_blobs.contains(&blob_id) || pending.seen_blob_ids.contains(&blob_id) {
+            } else if known_blobs.contains_key(&blob_id) || pending.seen_blob_ids.contains(&blob_id)
+            {
                 summary.blobs_skipped += 1;
             } else {
                 pending.seen_blob_ids.insert(blob_id.clone());
                 pending.cas_objects.push(PendingCas {
                     blake3: blob_blake3,
-                    ref_id: blob_id.clone(),
                     kind: BLOB_KIND_ATTACHMENT,
                     owning_id: email_id.clone(),
                     slot: part_id.clone(),
-                    upstream_name: name.clone(),
                     content_type: content_type.clone(),
                     bytes: bytes.to_vec(),
                 });
@@ -555,17 +554,15 @@ impl Accumulator {
         let has_attachment = !attachments.is_empty();
 
         // Queue the .eml itself.
-        if known_blobs.contains(&eml_blob_id) || pending.seen_blob_ids.contains(&eml_blob_id) {
+        if known_blobs.contains_key(&eml_blob_id) || pending.seen_blob_ids.contains(&eml_blob_id) {
             summary.blobs_skipped += 1;
         } else {
             pending.seen_blob_ids.insert(eml_blob_id.clone());
             pending.cas_objects.push(PendingCas {
                 blake3: eml_blake3,
-                ref_id: eml_blob_id.clone(),
                 kind: BLOB_KIND_EML,
                 owning_id: email_id.clone(),
-                slot: "source".to_string(),
-                upstream_name: None,
+                slot: String::new(),
                 content_type: Some("message/rfc822".to_string()),
                 bytes: raw.to_vec(),
             });
@@ -674,11 +671,16 @@ struct PendingBatch {
 
 struct PendingCas {
     blake3: String,
-    ref_id: String,
     kind: &'static str,
+    /// For `BLOB_KIND_EML`: the owning email id (= the row to UPDATE
+    /// in `emails`). For `BLOB_KIND_ATTACHMENT`: the email id of
+    /// the parent (= the `email_id` to UPDATE in
+    /// `email_attachments`).
     owning_id: String,
+    /// For `BLOB_KIND_ATTACHMENT`: the JMAP `part_id` (= the
+    /// `part_id` in the `email_attachments` UPDATE). For
+    /// `BLOB_KIND_EML`: ignored.
     slot: String,
-    upstream_name: Option<String>,
     content_type: Option<String>,
     bytes: Vec<u8>,
 }
@@ -695,14 +697,12 @@ impl PendingBatch {
 
 /// Flush one accumulated `PendingBatch` to disk: chunked multi-row
 /// `INSERT`s inside a single entity-pool transaction (emails + join
-/// tables + blob_refs + bookkeeping) plus a single CAS-pool
-/// transaction via [`frankweiler_etl::blob_cas::BlobCas::put_many`].
+/// tables + the blake3 backfill onto the new per-provider CAS edge
+/// columns + bookkeeping) plus a single CAS-pool transaction via
+/// [`frankweiler_etl::blob_cas::BlobCas::put_many`].
 ///
 /// No JSONL wire-tape: mbox is a file on disk, not a wire — there
-/// are no upstream events to mirror. The
-/// [`frankweiler_etl::doltlite_raw::bulk_upsert_events`] chokepoint
-/// is for the wire-shaped path (future JMAP migration); mbox just
-/// calls [`bulk_upsert_bookkeeping`] directly.
+/// are no upstream events to mirror.
 async fn flush_batch(
     db: &RawDb,
     batch: &mut PendingBatch,
@@ -718,18 +718,48 @@ async fn flush_batch(
     bulk_insert_email_mailboxes(&mut etx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut etx, &batch.emails).await?;
     bulk_insert_email_attachments(&mut etx, &batch.emails).await?;
-    bulk_insert_blob_refs(&mut etx, &batch.cas_objects).await?;
+    // Phase 2: backfill the per-provider blake3 columns straight off
+    // the CAS-pending accumulator. The .eml entries land in
+    // `emails.blake3`; per-part entries land in
+    // `email_attachments.blake3`. Per-row UPDATEs are sufficient
+    // here — mbox batches are bounded by FLUSH_BATCH, so we're
+    // talking dozens-to-low-thousands of rows per flush.
+    for c in &batch.cas_objects {
+        match c.kind {
+            BLOB_KIND_EML => {
+                sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
+                    .bind(&c.blake3)
+                    .bind(&c.owning_id)
+                    .execute(&mut *etx)
+                    .await
+                    .with_context(|| format!("update emails.blake3 for {}", c.owning_id))?;
+            }
+            BLOB_KIND_ATTACHMENT => {
+                sqlx::query(
+                    "UPDATE email_attachments SET blake3 = ?
+                     WHERE email_id = ? AND part_id = ?",
+                )
+                .bind(&c.blake3)
+                .bind(&c.owning_id)
+                .bind(&c.slot)
+                .execute(&mut *etx)
+                .await
+                .with_context(|| {
+                    format!(
+                        "update email_attachments.blake3 for {}/{}",
+                        c.owning_id, c.slot
+                    )
+                })?;
+            }
+            other => {
+                anyhow::bail!("unexpected PendingCas.kind = {other:?}");
+            }
+        }
+    }
     bulk_upsert_bookkeeping(
         &mut etx,
         "emails",
         batch.emails.iter().map(|e| e.id.as_str()),
-        &now,
-    )
-    .await?;
-    bulk_upsert_bookkeeping(
-        &mut etx,
-        "blob_refs",
-        batch.cas_objects.iter().map(|c| c.ref_id.as_str()),
         &now,
     )
     .await?;
@@ -1044,41 +1074,6 @@ async fn bulk_insert_email_attachments(
         q.execute(&mut **tx)
             .await
             .context("bulk insert email_attachments")?;
-    }
-    Ok(())
-}
-
-async fn bulk_insert_blob_refs(
-    tx: &mut Transaction<'_, Sqlite>,
-    refs: &[PendingCas],
-) -> Result<()> {
-    for chunk in refs.chunks(SQL_CHUNK) {
-        let mut sql = String::from(
-            "INSERT INTO blob_refs
-                (id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url,
-                 content_type, blake3)
-             VALUES ",
-        );
-        push_placeholders(&mut sql, chunk.len(), 9);
-        // Existing refs win: matches `INSERT OR IGNORE` semantics
-        // store_bytes used to provide.
-        sql.push_str(" ON CONFLICT(id) DO NOTHING");
-        let mut q = sqlx::query(&sql);
-        for r in chunk {
-            q = q
-                .bind(&r.ref_id)
-                .bind(r.kind)
-                .bind(&r.owning_id)
-                .bind(&r.slot)
-                .bind(&r.ref_id) // upstream_uuid mirrors ref_id for mbox-derived refs.
-                .bind(r.upstream_name.as_deref())
-                .bind::<Option<&str>>(None) // source_url
-                .bind(r.content_type.as_deref())
-                .bind(&r.blake3);
-        }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk insert blob_refs")?;
     }
     Ok(())
 }
@@ -1496,8 +1491,22 @@ mod tests {
             .unwrap();
         assert_eq!(picard.id, "msg-one@enterprise.starfleet");
         assert_eq!(picard.thread_id, "1111");
-        // .eml is in CAS keyed by emails.blob_id.
-        assert!(db.blob_exists(&picard.blob_id).await.unwrap());
+        // .eml is in CAS keyed by emails.blob_id. The new path goes
+        // emails.blob_id → emails.blake3 → cas_objects.bytes (no
+        // shared blob_refs hop).
+        let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM emails WHERE id = ?")
+            .bind(&picard.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let blake3 = blake3.expect("emails.blake3 set by mbox flush");
+        let exists: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
+                .bind(&blake3)
+                .fetch_one(db.cas().pool())
+                .await
+                .unwrap();
+        assert!(exists);
         // Unread label suppressed $seen for Picard's message; Riker
         // (no Unread) gets $seen.
         let joins = db.load_email_joins().await.unwrap();
