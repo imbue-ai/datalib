@@ -16,7 +16,7 @@
 //!
 //! Module surface:
 //!
-//!   - [`BulkUpsertable`] + [`ColumnKind`] — the row-struct contract.
+//!   - [`BulkUpsertable`] — the row-struct contract.
 //!   - [`bulk_upsert_in_tx`] — the one generic UPSERT helper.
 //!   - [`SQL_CHUNK`], [`push_placeholders`], [`push_placeholder_list`]
 //!     — chunking utilities the helper uses (and which a few
@@ -138,29 +138,22 @@ where
     Ok(())
 }
 
-/// How a column's value should be bound in the multi-row INSERT.
-///
-/// Two shapes cover every entity table in the workspace:
-///
-/// - [`ColumnKind::Plain`] — placeholder `?`. The bound value's
-///   sqlx `Encode` impl handles the rest. Use for typed columns
-///   (`TEXT`, `INTEGER`, `BOOLEAN`, …) and for **raw-bytes payloads**
-///   like Signal's protobuf `BLOB`s.
-/// - [`ColumnKind::Jsonb`] — placeholder `jsonb(?)`. The bound value
-///   is a JSON text string; SQLite's `jsonb()` function converts it
-///   to the on-disk JSONB encoding. Use for any `payload` column
-///   that stores JSON.
-///
-/// Either kind is opaque to the trait; only the generic helper looks
-/// at it (to emit `?` or `jsonb(?)` in the VALUES tuple).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ColumnKind {
-    Plain,
-    Jsonb,
-}
-
 /// Row-struct contract that lets the generic [`bulk_upsert_in_tx`]
 /// helper write a batch into a table.
+///
+/// **The universal entity-table shape.** Every raw entity table is
+/// `(id, …typed_columns, payload)`:
+///
+///   - `id` — TEXT primary key, the upstream identifier (or a
+///     UUIDv5 synthesized from upstream-stable components when no
+///     stable id exists).
+///   - `…typed_columns` — zero or more writer-supplied fields that
+///     aren't in the payload (synthesized-PK components, FK
+///     references, namespace discriminators). Plain `?` binds.
+///   - `payload` — JSON text, stored as JSONB via `jsonb(?)` on
+///     write. The full upstream message, losslessly transcoded if
+///     necessary (see `docs/data_architecture_ingestion.md`
+///     §"Wire-fidelity of the raw store").
 ///
 /// **Where impls live.** By convention, the row struct and its
 /// `BulkUpsertable` impl live in the provider's `schema_raw.rs`,
@@ -168,10 +161,13 @@ pub enum ColumnKind {
 /// the rust struct's fields and the SQL columns are visibly aligned
 /// at the same vertical position in the file.
 ///
-/// **Required correspondence.** [`Self::COLUMNS`] must list the
-/// non-PK columns in the same order as [`Self::bind_into`] binds
-/// them, and that order must match the DDL's column declarations
-/// after `id`. Mismatch → mis-binding at runtime.
+/// **Required correspondence.** [`Self::TYPED_COLUMNS`] must list
+/// the non-PK, non-payload columns in the same order as
+/// [`Self::bind_into`] binds them, and that order must match the
+/// DDL's column declarations between `id` and the payload column.
+/// [`Self::bind_into`] binds id first, then each typed column in
+/// order, then the payload as a JSON text string. Mismatch →
+/// mis-binding at runtime.
 ///
 /// **One writer per row.** Per
 /// `docs/data_architecture_ingestion.md` §"One writer per row," the
@@ -182,21 +178,26 @@ pub trait BulkUpsertable: Sync {
     /// Target table name. Must match the DDL.
     const TABLE: &'static str;
 
-    /// Non-PK columns + their bind shape, in bind order. The helper
-    /// uses this to build the INSERT column list, the VALUES tuple
-    /// placeholder, and the ON CONFLICT SET clause.
-    const COLUMNS: &'static [(&'static str, ColumnKind)];
+    /// Non-PK, non-payload columns, in bind order. These bind as
+    /// plain `?`. Empty slice for tables that are just `(id, payload)`
+    /// (e.g. Signal's `account`).
+    const TYPED_COLUMNS: &'static [&'static str];
+
+    /// JSON payload column name. Bound as `jsonb(?)`. Almost always
+    /// `"payload"`; the associated const lets a provider with a
+    /// non-standard name (if one ever exists) override it.
+    const PAYLOAD_COLUMN: &'static str = "payload";
 
     /// PK value for this row. The PK column is always named `id` in
     /// every raw entity table (see
     /// `docs/data_architecture_ingestion.md` §"Object identity").
     fn id(&self) -> &str;
 
-    /// Bind the id and every non-PK column value in [`Self::COLUMNS`]
-    /// order. The helper has already emitted matching placeholders
-    /// (`?` for `Plain`, `jsonb(?)` for `Jsonb`) in the SQL; this
-    /// method just calls `q.bind(...)` once per column, starting
-    /// with `id`.
+    /// Bind the id, then each value in [`Self::TYPED_COLUMNS`] order,
+    /// then the payload as a JSON text string. The helper has
+    /// already emitted matching placeholders (`?` for id and typed
+    /// columns, `jsonb(?)` for payload); this method just calls
+    /// `q.bind(...)` once per column.
     fn bind_into<'q>(
         &'q self,
         q: Query<'q, Sqlite, SqliteArguments<'q>>,
@@ -210,16 +211,14 @@ pub trait BulkUpsertable: Sync {
 /// table upserts atomically. Per-batch behavior:
 ///
 ///   1. Chunks `rows` at [`SQL_CHUNK`] rows per statement.
-///   2. For each chunk, emits one `INSERT INTO <T::TABLE> (id, …)
-///      VALUES (?,?,…),(?,?,…),… ON CONFLICT(id) DO UPDATE SET …`
-///      with `T`'s column list and per-column placeholders driven by
-///      [`ColumnKind`].
+///   2. For each chunk, emits one
+///      `INSERT INTO <T::TABLE> (id, <typed_cols>, <payload>) VALUES
+///       (?,…,jsonb(?)),(?,…,jsonb(?)),… ON CONFLICT(id) DO UPDATE
+///       SET <every non-id col> = excluded.<col>`.
 ///   3. After all chunks land, stamps `<T::TABLE>_bookkeeping` for
 ///      every id via [`bulk_upsert_bookkeeping`] in the same tx.
 ///
-/// The caller commits `tx`.
-///
-/// No-op if `rows` is empty.
+/// The caller commits `tx`. No-op if `rows` is empty.
 pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     tx: &mut Transaction<'_, Sqlite>,
     rows: &[T],
@@ -229,27 +228,42 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
         return Ok(());
     }
     let table = T::TABLE;
-    let cols_csv = T::COLUMNS
-        .iter()
-        .map(|(n, _)| *n)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let set_csv = T::COLUMNS
-        .iter()
-        .map(|(n, _)| format!("{n} = excluded.{n}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // VALUES tuple: id placeholder is always `?`; each non-PK column
-    // contributes either `?` or `jsonb(?)` per its `ColumnKind`.
-    let mut tuple = String::from("(?");
-    for (_, kind) in T::COLUMNS {
-        tuple.push(',');
-        match kind {
-            ColumnKind::Plain => tuple.push('?'),
-            ColumnKind::Jsonb => tuple.push_str("jsonb(?)"),
+    let payload_col = T::PAYLOAD_COLUMN;
+
+    // Column lists: typed columns first, then payload at the end.
+    let mut cols_csv = String::new();
+    for (i, c) in T::TYPED_COLUMNS.iter().enumerate() {
+        if i > 0 {
+            cols_csv.push_str(", ");
         }
+        cols_csv.push_str(c);
     }
-    tuple.push(')');
+    if !T::TYPED_COLUMNS.is_empty() {
+        cols_csv.push_str(", ");
+    }
+    cols_csv.push_str(payload_col);
+
+    // ON CONFLICT SET clause — every non-id col gets excluded.<col>
+    // per §"One writer per row" in the ingestion doc.
+    let mut set_csv = String::new();
+    for c in T::TYPED_COLUMNS {
+        if !set_csv.is_empty() {
+            set_csv.push_str(", ");
+        }
+        set_csv.push_str(&format!("{c} = excluded.{c}"));
+    }
+    if !set_csv.is_empty() {
+        set_csv.push_str(", ");
+    }
+    set_csv.push_str(&format!("{payload_col} = excluded.{payload_col}"));
+
+    // VALUES tuple: id and typed columns as plain `?`, payload as
+    // `jsonb(?)`.
+    let mut tuple = String::from("(?");
+    for _ in T::TYPED_COLUMNS {
+        tuple.push_str(",?");
+    }
+    tuple.push_str(",jsonb(?))");
 
     for chunk in rows.chunks(SQL_CHUNK) {
         let mut sql = format!("INSERT INTO {table} (id, {cols_csv}) VALUES ");

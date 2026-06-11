@@ -17,13 +17,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
 use frankweiler_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use tracing::{info, warn};
 
-pub use db::{db_path_for, ChatItemRow, ChatRow, RawDb, RecipientRow};
+pub use db::{db_path_for, RawDb};
+pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
 const DEFAULT_AEP_ENV: &str = "SIGNAL_PASSPHRASE";
 
@@ -190,12 +192,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ..Default::default()
     };
 
-    // Accumulate entity rows in memory and bulk-upsert in chunked
-    // multi-row INSERTs at the end. Mirror of email's mbox bulk
-    // pattern — see `docs/data_architecture_ingestion.md` §
-    // "Bulk-upsert as the standard write path". Attachments still
-    // ingest per-row inside the frame loop because each one needs a
-    // skip-check + decrypt + CAS write that aren't bulk-shaped today.
+    // Accumulate entity rows in memory and bulk-upsert via the
+    // generic `bulk_upsert_in_tx` helper at the end. Every table
+    // (including singleton `account`) goes through the same code
+    // path — see `docs/data_architecture_ingestion.md` §"One writer
+    // per row" and §"Bulk-upsert as the standard write path".
+    // Attachments still ingest per-row inside the frame loop because
+    // each needs a skip-check + decrypt + CAS write that aren't
+    // bulk-shaped today.
+    let mut accounts: Vec<AccountRow> = Vec::new();
     let mut recipients: Vec<RecipientRow> = Vec::new();
     let mut chats: Vec<ChatRow> = Vec::new();
     let mut chat_items: Vec<ChatItemRow> = Vec::new();
@@ -211,7 +216,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match &frame.item {
             Some(backup::frame::Item::Account(a)) => {
                 let payload = serde_json::to_string(a).context("serialize account frame")?;
-                db.upsert_account(&payload).await?;
+                accounts.push(AccountRow {
+                    id: "self".to_string(),
+                    payload,
+                });
             }
             Some(backup::frame::Item::Recipient(r)) => {
                 let id = r.id.to_string();
@@ -269,11 +277,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
 
-    // One tx per entity table, each a chunked multi-row INSERT with
-    // bookkeeping inside.
-    db.bulk_upsert_recipients(&recipients).await?;
-    db.bulk_upsert_chats(&chats).await?;
-    db.bulk_upsert_chat_items(&chat_items).await?;
+    // One generic UPSERT path per table — same call, different row
+    // type. All four batches land in their own tx; an inner crash
+    // never leaves a half-applied snapshot because the snapshot-level
+    // commit happens in the orchestrator (see §"Commit lifecycle").
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    {
+        let mut tx = db.pool().begin().await.context("begin account tx")?;
+        bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;
+        tx.commit().await.context("commit account tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin recipients tx")?;
+        bulk_upsert_in_tx(&mut tx, &recipients, &now).await?;
+        tx.commit().await.context("commit recipients tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin chats tx")?;
+        bulk_upsert_in_tx(&mut tx, &chats, &now).await?;
+        tx.commit().await.context("commit chats tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin chat_items tx")?;
+        bulk_upsert_in_tx(&mut tx, &chat_items, &now).await?;
+        tx.commit().await.context("commit chat_items tx")?;
+    }
 
     db.record_snapshot_ingested(
         &fingerprint,

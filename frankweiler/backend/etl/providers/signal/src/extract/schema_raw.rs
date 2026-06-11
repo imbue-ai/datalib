@@ -37,7 +37,11 @@
 //!   three on-disk files. Re-ingesting the same snapshot is a
 //!   single-row PK-lookup skip. See plan §P1.12.
 
+use frankweiler_etl::bulk::BulkUpsertable;
 use frankweiler_etl::doltlite_raw as dr;
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::Sqlite;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -59,6 +63,29 @@ pub const ACCOUNT_DDL: &str = "CREATE TABLE IF NOT EXISTS account (
     payload TEXT NULL
 )";
 
+/// Row to upsert into [`ACCOUNT_DDL`]. `id` is always the literal
+/// `"self"`. The `payload` is the JSON-serialized `Frame::Account`.
+#[derive(Debug, Clone)]
+pub struct AccountRow {
+    pub id: String,
+    pub payload: String,
+}
+
+impl BulkUpsertable for AccountRow {
+    const TABLE: &'static str = "account";
+    const TYPED_COLUMNS: &'static [&'static str] = &[];
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id).bind(&self.payload)
+    }
+}
+
 /// `recipients` — one row per Signal recipient (peer / group).
 ///
 /// Columns:
@@ -77,6 +104,33 @@ pub const RECIPIENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS recipients (
     payload TEXT NULL
 )";
 
+/// Row to upsert into [`RECIPIENTS_DDL`].
+#[derive(Debug, Clone)]
+pub struct RecipientRow {
+    pub id: String,
+    pub identifier: Option<String>,
+    pub display_name: Option<String>,
+    pub payload: String,
+}
+
+impl BulkUpsertable for RecipientRow {
+    const TABLE: &'static str = "recipients";
+    const TYPED_COLUMNS: &'static [&'static str] = &["identifier", "display_name"];
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(self.identifier.as_deref())
+            .bind(self.display_name.as_deref())
+            .bind(&self.payload)
+    }
+}
+
 /// `chats` — one row per Signal chat (DM or group thread).
 ///
 /// Columns:
@@ -90,6 +144,31 @@ pub const CHATS_DDL: &str = "CREATE TABLE IF NOT EXISTS chats (
     recipient_id TEXT NOT NULL,
     payload TEXT NULL
 )";
+
+/// Row to upsert into [`CHATS_DDL`].
+#[derive(Debug, Clone)]
+pub struct ChatRow {
+    pub id: String,
+    pub recipient_id: String,
+    pub payload: String,
+}
+
+impl BulkUpsertable for ChatRow {
+    const TABLE: &'static str = "chats";
+    const TYPED_COLUMNS: &'static [&'static str] = &["recipient_id"];
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.recipient_id)
+            .bind(&self.payload)
+    }
+}
 
 /// `chat_items` — one row per Signal message / call / system event
 /// inside a chat.
@@ -113,6 +192,35 @@ pub const CHAT_ITEMS_DDL: &str = "CREATE TABLE IF NOT EXISTS chat_items (
     date_sent INTEGER NOT NULL,
     payload TEXT NULL
 )";
+
+/// Row to upsert into [`CHAT_ITEMS_DDL`].
+#[derive(Debug, Clone)]
+pub struct ChatItemRow {
+    pub id: String,
+    pub chat_id: String,
+    pub author_id: String,
+    pub date_sent: i64,
+    pub payload: String,
+}
+
+impl BulkUpsertable for ChatItemRow {
+    const TABLE: &'static str = "chat_items";
+    const TYPED_COLUMNS: &'static [&'static str] = &["chat_id", "author_id", "date_sent"];
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.chat_id)
+            .bind(&self.author_id)
+            .bind(self.date_sent)
+            .bind(&self.payload)
+    }
+}
 
 /// Index on `chats.recipient_id` — supports joining a chat to its
 /// peer / group without scanning.
