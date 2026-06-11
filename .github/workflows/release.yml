@@ -5,18 +5,15 @@
 # un-versioned filename so the install script's
 # `releases/latest/download/<name>` URL stays valid.
 #
-# Also runs on every push to main, with the release-publish steps
-# skipped. The main-branch runs exist purely to warm the bazel caches:
-# GitHub Actions caches are scoped by ref, and a tag push can only
-# read caches written by its own ref or by the *default* branch, so
-# tag-triggered runs would otherwise always pay the full cold-cache
-# cost. Letting main write the cache means tag runs hit the warm cache.
+# Bazel action cache is served by BuildBuddy (see the "Configure
+# BuildBuddy remote cache" step below); there's no GHA-side bazel
+# cache and no main-branch warmup run. Tag pushes hit BuildBuddy's
+# warm cache directly — populated by every contributor build and by
+# the `test.yml` workflow on main / PRs.
 name: release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*"
 
@@ -24,13 +21,9 @@ permissions:
   contents: write  # needed to create the GitHub Release
   packages: write  # needed for the docker-publish job to push to ghcr.io
 
-# Serialize main-branch runs so the bazel disk-cache save at the end of
-# one run finishes before the next run starts. Without this, two pushes
-# in quick succession race on the same actions/cache key; the loser
-# logs "Unable to reserve cache with key ... another job may be creating
-# this cache" and skips its save, so a clean cache never replaces a
-# stale/corrupt one. Don't cancel in progress — tag runs publish a
-# release and must complete.
+# Don't cancel in progress — tag runs publish a release and must
+# complete. (No main-branch races to serialize anymore now that the
+# warmup runs are gone.)
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -61,24 +54,22 @@ jobs:
           # always fall back to a bare sha.
           fetch-depth: 0
 
-      # bazel-contrib/setup-bazel wires actions/cache to bazel's various
-      # caches so subsequent runs skip the ~10-minute cold-cache rebuild
-      # of boring-sys2 / tokio / wreq etc. The four cache flags below
-      # each pin a different layer:
-      #   bazelisk-cache       — the bazel binary itself (~50 MB)
-      #   disk-cache           — bazel's action cache (build outputs)
-      #   repository-cache     — http_archive downloads (rules_rust, etc.)
-      #   external-cache       — fully-resolved external repos (crate_universe deps)
-      # All four share the 10 GB-per-repo actions/cache quota. Cache keys
-      # include `${platform}-${arch}` (see setup-bazel's config.js
-      # baseCacheKey), so every matrix entry gets its own slice —
-      # darwin-arm64, linux-x64, and linux-arm64 never stomp each other.
+      # We still use bazel-contrib/setup-bazel to install bazelisk on
+      # PATH, but with all four GHA cache layers disabled — the action
+      # cache, repository cache, and external-repo cache all flow
+      # through BuildBuddy now. Leaving the GHA cache on alongside
+      # BuildBuddy would double-bookkeep without speeding anything up,
+      # and previously caused "Lost inputs no longer available
+      # remotely" failures against rules_rust's
+      # ExtractCargoTomlEnvVars actions (see the test.yml header for
+      # the same bug). If BuildBuddy is ever down or unavailable, the
+      # build still runs — just without remote caching.
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
-          bazelisk-cache: true
-          disk-cache: true
-          repository-cache: true
-          external-cache: true
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
 
       # Install the Linux-only build dependencies the macOS runner gets
       # for free via Xcode CLT / Homebrew:
@@ -186,7 +177,6 @@ jobs:
       # to bump Cargo.toml before tagging". The bazel test below already
       # asserts Cargo.toml == BUILD.bazel; this asserts tag == Cargo.toml.
       - name: Assert tag matches Cargo.toml version
-        if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -231,19 +221,14 @@ jobs:
       - name: Run version-consistency test
         run: bazel test //frankweiler/backend:version_consistency_test -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
-      # On tag pushes, build with `--config=release` so `--stamp` is on
-      # and the binary's `--version` reports the real `git describe`
-      # output (e.g. `v0.8.0`) instead of falling back to the literal
-      # `"dev"` that an unstamped build produces. Main-branch warm-cache
-      # runs deliberately omit `--config=release`: stamping invalidates
-      # the action cache on every commit, which would defeat the cache
-      # the warmup exists to populate. The post-build version assertion
-      # below catches any future regression where a tag build slips
-      # through without stamping.
+      # `--config=release` turns on `--stamp` so the binary's
+      # `--version` reports the real `git describe` output (e.g.
+      # `v0.8.0`) instead of falling back to the literal `"dev"` that
+      # an unstamped build produces. The post-build version assertion
+      # below catches any future regression where stamping gets
+      # silently disabled.
       - name: Build dist bins
-        env:
-          STAMP_FLAG: ${{ github.ref_type == 'tag' && '--config=release' || '' }}
-        run: bazel build //frankweiler/backend:dist -c opt --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }} $STAMP_FLAG
+        run: bazel build //frankweiler/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
 
       # Defense against the v0.7.0 / v0.8.0 incident where the dist
       # build went out unstamped and `frankweiler-sync --version`
@@ -254,7 +239,6 @@ jobs:
       # suffix, or a mismatched tag — fails the release before any
       # tarball is staged.
       - name: Assert release binary reports tag version
-        if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
@@ -267,23 +251,17 @@ jobs:
               echo "  expected: ${expected}" >&2
               echo "  actual:   ${actual}" >&2
               echo "Likely cause: build-stamping was off for the dist build" >&2
-              echo "(see .bazelrc 'build:release --stamp' and the STAMP_FLAG" >&2
-              echo "computation above)." >&2
+              echo "(see .bazelrc 'build:release --stamp' and the" >&2
+              echo "'--config=release' on the Build dist bins step above)." >&2
               exit 1
           fi
 
-      # NOTE: the full `bazel test //...` step previously lived here
-      # but was removed because rules_rust's ExtractCargoTomlEnvVars
-      # actions kept tripping "Lost inputs no longer available
-      # remotely" against the bazel-contrib/setup-bazel disk cache
-      # (every release run rebuilt 1500+ actions and the broken cache
-      # never healed). Developers run the suite locally via
-      # `bazelisk test //...`; this workflow only gates release
-      # artifacts on `version_consistency_test` + the dist build.
+      # The full `bazel test //...` suite is gated by `test.yml` on
+      # PRs / main; this workflow only re-checks `version_consistency_test`
+      # + the dist build to keep tag-time wall clock low.
 
       - name: Stage tarball
         id: stage
-        if: github.ref_type == 'tag'
         env:
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
@@ -318,7 +296,6 @@ jobs:
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
           files: |
@@ -330,7 +307,7 @@ jobs:
   # the matrix `build` job has uploaded both Linux tarballs to the
   # GitHub Release so we can fetch them by their stable
   # `releases/download/<tag>/...` URLs from inside the docker build
-  # context. Tag-only; main-branch runs of this workflow skip it.
+  # context.
   #
   # This image is the user-facing way to run frankweiler on Linux
   # without trusting the bare binaries to your host shell — see
@@ -339,7 +316,6 @@ jobs:
   # shouldn't block publishing the Linux image.
   docker-publish:
     name: docker-publish (ghcr.io)
-    if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -499,7 +475,6 @@ jobs:
   # `WARM_BAZEL_CACHE=true`.
   devcontainer-publish:
     name: devcontainer-publish (ghcr.io)
-    if: github.ref_type == 'tag'
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
