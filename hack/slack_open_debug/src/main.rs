@@ -104,7 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("linked sqlite3_libversion: {version}");
     eprintln!("db path: {}", args.db_path.display());
     let meta = std::fs::metadata(&args.db_path)?;
-    eprintln!("file size: {} bytes ({:.1} MB)", meta.len(), meta.len() as f64 / 1e6);
+    eprintln!(
+        "file size: {} bytes ({:.1} MB)",
+        meta.len(),
+        meta.len() as f64 / 1e6
+    );
 
     if !args.sqlx_only {
         eprintln!("\n--- raw sqlite3_open_v2 ---");
@@ -125,7 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn raw_open_close(path: &std::path::Path, readonly: bool) -> Result<Duration, Box<dyn std::error::Error>> {
+fn raw_open_close(
+    path: &std::path::Path,
+    readonly: bool,
+) -> Result<Duration, Box<dyn std::error::Error>> {
     let c_path = CString::new(path.as_os_str().to_string_lossy().as_bytes())?;
     let flags = if readonly {
         SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
@@ -139,7 +146,11 @@ fn raw_open_close(path: &std::path::Path, readonly: bool) -> Result<Duration, Bo
         let msg = if db.is_null() {
             format!("rc={rc} (db null)")
         } else {
-            let s = unsafe { std::ffi::CStr::from_ptr(sqlite3_errmsg(db)).to_string_lossy().into_owned() };
+            let s = unsafe {
+                std::ffi::CStr::from_ptr(sqlite3_errmsg(db))
+                    .to_string_lossy()
+                    .into_owned()
+            };
             unsafe { sqlite3_close(db) };
             format!("rc={rc}: {s}")
         };
@@ -150,14 +161,16 @@ fn raw_open_close(path: &std::path::Path, readonly: bool) -> Result<Duration, Bo
     // PRAGMA takes ~1ms, so it doesn't materially change timing.
     let pragma = CString::new("PRAGMA foreign_keys = ON;")?;
     let mut errmsg: *mut c_char = ptr::null_mut();
-    let rc = unsafe {
-        sqlite3_exec(db, pragma.as_ptr(), None, ptr::null_mut(), &mut errmsg)
-    };
+    let rc = unsafe { sqlite3_exec(db, pragma.as_ptr(), None, ptr::null_mut(), &mut errmsg) };
     if rc != SQLITE_OK {
         let s = if errmsg.is_null() {
             format!("rc={rc}")
         } else {
-            let s = unsafe { std::ffi::CStr::from_ptr(errmsg).to_string_lossy().into_owned() };
+            let s = unsafe {
+                std::ffi::CStr::from_ptr(errmsg)
+                    .to_string_lossy()
+                    .into_owned()
+            };
             format!("rc={rc}: {s}")
         };
         unsafe { sqlite3_close(db) };

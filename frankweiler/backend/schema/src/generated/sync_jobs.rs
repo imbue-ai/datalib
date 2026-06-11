@@ -34,14 +34,13 @@ pub struct SyncJobRow {
     pub progress_msg: Option<String>,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("sync_jobs", "SyncJobRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("sync_jobs", "SyncJobRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("sync_jobs", r#"CREATE TABLE IF NOT EXISTS sync_jobs (
+pub const DDL: &[(&str, &str)] = &[(
+    "sync_jobs",
+    r#"CREATE TABLE IF NOT EXISTS sync_jobs (
     id VARCHAR(36) NOT NULL,
     source_name VARCHAR(64),
     kind VARCHAR(16) NOT NULL,
@@ -55,10 +54,24 @@ pub const DDL: &[(&str, &str)] = &[
     progress_pct DOUBLE,
     progress_msg VARCHAR(512),
     PRIMARY KEY (id)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("sync_jobs", &["id", "source_name", "kind", "parent_job_id", "state", "created_at", "started_at", "finished_at", "error", "pid", "progress_pct", "progress_msg"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "sync_jobs",
+    &[
+        "id",
+        "source_name",
+        "kind",
+        "parent_job_id",
+        "state",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "error",
+        "pid",
+        "progress_pct",
+        "progress_msg",
+    ],
+)];

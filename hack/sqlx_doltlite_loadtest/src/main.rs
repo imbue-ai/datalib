@@ -185,13 +185,11 @@ async fn run_one_source(idx: usize, dir: PathBuf, args: Args, stats: Arc<Stats>)
     // start_run equivalent
     {
         let mut tx = pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO sync_runs (started_at, config, status) VALUES (?, ?, 'running')",
-        )
-        .bind("2026-06-05T00:00:00Z")
-        .bind("{}")
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query("INSERT INTO sync_runs (started_at, config, status) VALUES (?, ?, 'running')")
+            .bind("2026-06-05T00:00:00Z")
+            .bind("{}")
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
     }
 
@@ -228,27 +226,36 @@ async fn run_one_source(idx: usize, dir: PathBuf, args: Args, stats: Arc<Stats>)
             match k % 4 {
                 0 => {
                     let _: (i64,) = sqlx::query_as("SELECT count(*) FROM messages")
-                        .fetch_one(&pool).await.context("count(*) messages")?;
+                        .fetch_one(&pool)
+                        .await
+                        .context("count(*) messages")?;
                 }
                 1 => {
-                    let _: Option<(String,)> = sqlx::query_as(
-                        "SELECT max(update_time) FROM messages")
-                        .fetch_optional(&pool).await.context("max update_time")?;
+                    let _: Option<(String,)> =
+                        sqlx::query_as("SELECT max(update_time) FROM messages")
+                            .fetch_optional(&pool)
+                            .await
+                            .context("max update_time")?;
                 }
                 2 => {
                     let _: Option<(String, String)> = sqlx::query_as(
                         "SELECT m.id, mb.fetched_at
                          FROM messages m
                          LEFT JOIN messages_bookkeeping mb ON mb.id = m.id
-                         WHERE m.id = ? LIMIT 1")
-                        .bind(&id)
-                        .fetch_optional(&pool).await.context("join read")?;
+                         WHERE m.id = ? LIMIT 1",
+                    )
+                    .bind(&id)
+                    .fetch_optional(&pool)
+                    .await
+                    .context("join read")?;
                 }
                 _ => {
-                    let _: Vec<(String,)> = sqlx::query_as(
-                        "SELECT id FROM messages WHERE id > ? ORDER BY id LIMIT 10")
-                        .bind(&id)
-                        .fetch_all(&pool).await.context("range scan")?;
+                    let _: Vec<(String,)> =
+                        sqlx::query_as("SELECT id FROM messages WHERE id > ? ORDER BY id LIMIT 10")
+                            .bind(&id)
+                            .fetch_all(&pool)
+                            .await
+                            .context("range scan")?;
                 }
             }
         }
@@ -363,7 +370,11 @@ async fn main() -> Result<()> {
     };
     eprintln!(
         "loadtest: sources={} items_per_source={} burst_size={} sleep_ms={} dir={}",
-        args.sources, args.items, args.burst_size, args.sleep_ms, dir.display()
+        args.sources,
+        args.items,
+        args.burst_size,
+        args.sleep_ms,
+        dir.display()
     );
 
     // Pre-open the backend_index pool at the same scope as sync_bin
@@ -425,15 +436,30 @@ async fn main() -> Result<()> {
     eprintln!("=== loadtest results ===");
     eprintln!("wall_clock:      {:>8.3} s", wall.as_secs_f64());
     eprintln!("sources:         {}", stats.sources.load(Ordering::Relaxed));
-    eprintln!("upserts ok:      {}", stats.upserts_ok.load(Ordering::Relaxed));
-    eprintln!("upserts BUSY:    {}", stats.upserts_busy.load(Ordering::Relaxed));
-    eprintln!("commits ok:      {}", stats.commits_ok.load(Ordering::Relaxed));
-    eprintln!("commits BUSY:    {}", stats.commits_busy.load(Ordering::Relaxed));
+    eprintln!(
+        "upserts ok:      {}",
+        stats.upserts_ok.load(Ordering::Relaxed)
+    );
+    eprintln!(
+        "upserts BUSY:    {}",
+        stats.upserts_busy.load(Ordering::Relaxed)
+    );
+    eprintln!(
+        "commits ok:      {}",
+        stats.commits_ok.load(Ordering::Relaxed)
+    );
+    eprintln!(
+        "commits BUSY:    {}",
+        stats.commits_busy.load(Ordering::Relaxed)
+    );
     eprintln!(
         "avg commit ms:   {:>8.2}",
         stats.commit_ms_total.load(Ordering::Relaxed) as f64 / ok as f64
     );
-    eprintln!("max commit ms:   {}", stats.commit_ms_max.load(Ordering::Relaxed));
+    eprintln!(
+        "max commit ms:   {}",
+        stats.commit_ms_max.load(Ordering::Relaxed)
+    );
     if args.keep {
         eprintln!("(--keep): {}", dir.display());
     }

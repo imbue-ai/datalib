@@ -26,14 +26,13 @@ pub struct DownloadRunRow {
     pub markdown_uuids_touched: Option<String>,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("download_runs", "DownloadRunRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("download_runs", "DownloadRunRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("download_runs", r#"CREATE TABLE IF NOT EXISTS download_runs (
+pub const DDL: &[(&str, &str)] = &[(
+    "download_runs",
+    r#"CREATE TABLE IF NOT EXISTS download_runs (
     id VARCHAR(36) NOT NULL,
     source_name VARCHAR(64) NOT NULL,
     raw_path VARCHAR(1024) NOT NULL,
@@ -43,10 +42,20 @@ pub const DDL: &[(&str, &str)] = &[
     ingested_at VARCHAR(40),
     markdown_uuids_touched JSON,
     PRIMARY KEY (id)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("download_runs", &["id", "source_name", "raw_path", "kind", "started_at", "finished_at", "ingested_at", "markdown_uuids_touched"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "download_runs",
+    &[
+        "id",
+        "source_name",
+        "raw_path",
+        "kind",
+        "started_at",
+        "finished_at",
+        "ingested_at",
+        "markdown_uuids_touched",
+    ],
+)];

@@ -32,14 +32,13 @@ pub struct MarkdownRow {
     pub rendered_at: Option<String>,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("markdowns", "MarkdownRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("markdowns", "MarkdownRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("markdowns", r#"CREATE TABLE IF NOT EXISTS markdowns (
+pub const DDL: &[(&str, &str)] = &[(
+    "markdowns",
+    r#"CREATE TABLE IF NOT EXISTS markdowns (
     markdown_uuid VARCHAR(96) NOT NULL,
     source_name VARCHAR(64) NOT NULL,
     provider VARCHAR(32) NOT NULL,
@@ -52,10 +51,23 @@ pub const DDL: &[(&str, &str)] = &[
     renderer_version VARCHAR(32) NOT NULL,
     rendered_at VARCHAR(40),
     PRIMARY KEY (markdown_uuid)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("markdowns", &["markdown_uuid", "source_name", "provider", "kind", "title", "created_at", "updated_at", "md_path", "row_set_hash", "renderer_version", "rendered_at"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "markdowns",
+    &[
+        "markdown_uuid",
+        "source_name",
+        "provider",
+        "kind",
+        "title",
+        "created_at",
+        "updated_at",
+        "md_path",
+        "row_set_hash",
+        "renderer_version",
+        "rendered_at",
+    ],
+)];
