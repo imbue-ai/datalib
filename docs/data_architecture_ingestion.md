@@ -9,8 +9,9 @@ for.
 
 The downstream stages — translate, load, indexing, annotation, and
 the UI's consumption of `grid_rows` — are mostly the subject of a
-separate document, *Data Architecture: Translation, Indexing,
-Annotation, and UI* (not yet written). Where understanding extract
+separate document,
+[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+Where understanding extract
 requires referring to a downstream concept (e.g. the sidecar contract
 that translate emits, the `GridRow` projection the UI reads), this
 document touches on it briefly. The bulk of the downstream-leaning
@@ -1185,8 +1186,9 @@ are load-bearing assumptions the rest of the design rests on:
 ## Downstream stages — pointer to the companion doc
 
 The material in this section is here as a placeholder for what will
-move into the companion document *Data Architecture: Translation,
-Indexing, Annotation, and UI*. It's included so this ingestion-focused
+move into the companion document
+[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+It's included so this ingestion-focused
 doc can still hand a reader enough of the downstream picture to
 understand the contracts extract has to honor.
 
