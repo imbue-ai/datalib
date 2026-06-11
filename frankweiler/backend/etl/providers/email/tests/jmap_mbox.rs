@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{block_on_load_all, RawDb};
+use frankweiler_etl_email::extract::db::{db_path_for, RawDb};
 use frankweiler_etl_email::extract::mbox;
+use frankweiler_etl_email::translate::parse::parse;
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 
 fn fixture_path() -> PathBuf {
@@ -133,17 +134,17 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let raw = block_on_load_all(&db_path).expect("load_all");
+    let parsed = parse(&db_path_for(&db_path), &HashMap::new())
+        .expect("parse with empty prior_fingerprints");
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();
     let mut docs: Vec<RenderedMarkdown> = Vec::new();
     render_all(
-        &raw,
+        &parsed,
         tmp.path(),
         "star-trek-mbox",
         &progress,
-        &HashMap::new(),
         &mut |doc| {
             docs.push(doc);
             Ok(())

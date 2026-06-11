@@ -25,7 +25,7 @@
 //! share `conversation_uuid = <thread_uuid>` so the existing
 //! conversation_uuid filter machinery in the grid backend "just works".
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,11 +36,11 @@ use frankweiler_etl::progress::Progress;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use super::parse::ParsedEmail;
 use super::RENDER_VERSION;
-use crate::extract::db::{LoadedAttachment, LoadedEmail, LoadedRaw};
+use crate::extract::db::{LoadedAttachment, LoadedEmail};
 
 /// A binary body part embedded in the .eml that the renderer needs
 /// to materialize to disk. Two flavors:
@@ -236,17 +236,17 @@ pub fn email_uuid(account_id: &str, email_id: &str) -> String {
 /// calling `on_doc_complete` per rendered markdown so the orchestrator
 /// can commit each `RenderedMarkdown` to the index atomically.
 ///
-/// Skip semantics match the rest of the providers: a thread is skipped
-/// (without shredding or writing) when `prior_fingerprints[thread_uuid]`
-/// equals the current fingerprint AND the `index.md` is still on disk.
-/// Returns the list of relative md paths the orchestrator can hand to
-/// downstream consumers (matches chatgpt / anthropic / slack shape).
+/// Skip semantics: the parse layer (`translate::parse`) has already
+/// run the bucket-fingerprint CTE and dropped buckets whose
+/// fingerprint matches `prior_fingerprints`. `parsed.docs` holds only
+/// the buckets that need rendering; everything else is reported via
+/// `parsed.docs_skipped`. So this function just iterates `parsed.docs`
+/// and writes — no inline skip check, no `source_fingerprint` walk.
 pub fn render_all(
-    parsed: &LoadedRaw,
+    parsed: &ParsedEmail,
     root: &Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
     // Build lookups.
@@ -278,30 +278,17 @@ pub fn render_all(
         })
         .collect();
 
-    // Group emails by thread; sort each thread by receivedAt for a
-    // deterministic render.
-    let mut by_thread: BTreeMap<String, Vec<&LoadedEmail>> = BTreeMap::new();
-    for em in &parsed.emails {
-        by_thread.entry(em.thread_id.clone()).or_default().push(em);
-    }
-    for emails in by_thread.values_mut() {
-        emails.sort_by(|a, b| {
-            a.received_at
-                .as_deref()
-                .unwrap_or("")
-                .cmp(b.received_at.as_deref().unwrap_or(""))
-        });
-    }
-
-    progress.set_length(Some(by_thread.len() as u64));
+    progress.set_length(Some(parsed.docs.len() as u64));
     let mut written: Vec<PathBuf> = Vec::new();
 
-    for (thread_id, emails) in &by_thread {
-        if emails.is_empty() {
+    for bucket in &parsed.docs {
+        if bucket.emails.is_empty() {
             progress.inc(1);
             continue;
         }
-        let acct = &emails[0].account_id;
+        let thread_id = &bucket.thread_id;
+        let emails: Vec<&LoadedEmail> = bucket.emails.iter().collect();
+        let acct = &bucket.account_id;
         let acct_slug = account_slug
             .get(acct)
             .cloned()
@@ -309,17 +296,8 @@ pub fn render_all(
         let tuid = thread_uuid(acct, thread_id);
         let rel = thread_relative_path(&acct_slug, &tuid);
         let abs = root.join(&rel);
-
-        let fp = source_fingerprint(emails, &parsed.joins);
-
-        // Skip when the indexer has the same fingerprint AND the md is
-        // still on disk. Matches chatgpt / anthropic / slack: a hand-
-        // edited `rm -rf rendered_md/` is recoverable on the next run.
-        if prior_fingerprints.get(&tuid).map(String::as_str) == Some(fp.as_str()) && abs.exists() {
-            written.push(rel);
-            progress.inc(1);
-            continue;
-        }
+        // Phase 1's CTE pre-computed this — no Rust-side hash walk.
+        let fp = bucket.fingerprint.clone();
 
         let page_dir = abs
             .parent()
@@ -332,7 +310,7 @@ pub fn render_all(
         // input contract for both JMAP and mbox sources — neither
         // path stores a pre-decoded body anywhere.
         let mut parsed_emls: HashMap<String, ParsedEml> = HashMap::new();
-        for em in emails {
+        for em in &emails {
             let view = parsed.blobs.read_by_ref_id(&em.blob_id)?;
             let parsed_eml = match view {
                 Some(v) => ParsedEml::from_eml_bytes(&v.bytes),
@@ -346,8 +324,8 @@ pub fn render_all(
         // so collisions across attachments are impossible.
         let blobs_dir = page_dir.join("blobs");
         let mut materialized: HashMap<String, String> = HashMap::new();
-        for em in emails {
-            if let Some(atts) = parsed.joins.attachments.get(&em.id) {
+        for em in &emails {
+            if let Some(atts) = bucket.joins.attachments.get(&em.id) {
                 for a in atts {
                     if materialized.contains_key(&a.blob_id) {
                         continue;
@@ -379,7 +357,7 @@ pub fn render_all(
         let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
         let mut loose_inline_per_email: HashMap<String, Vec<String>> = HashMap::new();
         let mut wrote_blobs_dir = blobs_dir.exists();
-        for em in emails {
+        for em in &emails {
             let Some(parsed_eml) = parsed_emls.get(&em.id) else {
                 continue;
             };
@@ -418,9 +396,9 @@ pub fn render_all(
             &tuid,
             thread_id,
             acct,
-            emails,
+            &emails,
             &mailbox_name,
-            &parsed.joins,
+            &bucket.joins,
             &materialized,
             &inline_cid_to_fname,
             &loose_inline_per_email,
@@ -432,8 +410,8 @@ pub fn render_all(
             thread_id,
             acct,
             &acct_slug,
-            emails,
-            &parsed.joins,
+            &emails,
+            &bucket.joins,
             &mailbox_name,
             &parsed_emls,
         );
@@ -973,38 +951,6 @@ fn slug_acct(name: &str, fallback: &str) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-/// Skip-key for the translate-side incremental cache. Hashes
-/// `RENDER_VERSION` + each email's content-addressed `.eml` blob id +
-/// the per-email mailbox/keyword join state. The blob_id is already
-/// `sha256(eml_bytes)` (or the JMAP server's opaque hash), so it
-/// changes iff the underlying message did — no need to re-hash the
-/// bytes here.
-fn source_fingerprint(emails: &[&LoadedEmail], joins: &crate::extract::db::EmailJoins) -> String {
-    let mut h = Sha256::new();
-    h.update(RENDER_VERSION.to_le_bytes());
-    for em in emails {
-        h.update(em.id.as_bytes());
-        h.update(b"\n");
-        h.update(em.blob_id.as_bytes());
-        h.update(b"\n");
-        if let Some(ms) = joins.mailboxes.get(&em.id) {
-            for m in ms {
-                h.update(m.as_bytes());
-                h.update(b",");
-            }
-        }
-        h.update(b"\n");
-        if let Some(ks) = joins.keywords.get(&em.id) {
-            for k in ks {
-                h.update(k.as_bytes());
-                h.update(b",");
-            }
-        }
-        h.update(b"\n");
-    }
-    format!("{:x}", h.finalize())
 }
 
 #[cfg(test)]

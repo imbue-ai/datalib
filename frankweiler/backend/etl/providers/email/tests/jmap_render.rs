@@ -4,14 +4,14 @@
 //! grid_rows sidecar shape. Doesn't need a real JMAP server or HTTP
 //! playback — exercises the renderer in isolation.
 
-use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::path::PathBuf;
 
 use frankweiler_etl::blob_cas::{blake3_hex, BlobView, InMemoryBlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail, LoadedRaw};
+use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
+use frankweiler_etl_email::translate::parse::{EmailThreadBucket, ParsedEmail};
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 use serde_json::json;
 
@@ -43,7 +43,7 @@ fn insert_eml(reader: &mut InMemoryBlobReader, ref_id: &str, owning_id: &str, bo
     });
 }
 
-fn make_loaded() -> LoadedRaw {
+fn make_loaded() -> ParsedEmail {
     let account = json!({"id": "A1", "name": "thad@example.com", "isPersonal": true});
     let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
     let thread = json!({"id": "T1", "emailIds": ["E1", "E2"]});
@@ -112,12 +112,18 @@ fn make_loaded() -> LoadedRaw {
         bytes: att_bytes.to_vec(),
     });
 
-    LoadedRaw {
+    ParsedEmail {
         accounts: vec![account],
         mailboxes: vec![mailbox],
         threads: vec![thread],
-        emails,
-        joins,
+        docs: vec![EmailThreadBucket {
+            account_id: "A1".into(),
+            thread_id: "T1".into(),
+            fingerprint: "test-fixture-fp".into(),
+            emails,
+            joins,
+        }],
+        docs_skipped: 0,
         blobs: reader.into_handle(),
     }
 }
@@ -127,21 +133,13 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     let parsed = make_loaded();
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();
-    let prior: HashMap<String, String> = HashMap::new();
     let mut completed: Vec<RenderedMarkdown> = Vec::new();
     let mut on_done = |md: RenderedMarkdown| -> anyhow::Result<()> {
         completed.push(md);
         Ok(())
     };
-    let written = render_all(
-        &parsed,
-        tmp.path(),
-        "fastmail",
-        &progress,
-        &prior,
-        &mut on_done,
-    )
-    .expect("render_all");
+    let written =
+        render_all(&parsed, tmp.path(), "fastmail", &progress, &mut on_done).expect("render_all");
     assert_eq!(written.len(), 1, "one thread → one rendered md");
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 

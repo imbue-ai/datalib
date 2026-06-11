@@ -2325,8 +2325,8 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::Email { sync, .. } => {
-            use frankweiler_etl_email::extract::block_on_load_all;
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
+            use frankweiler_etl_email::translate::parse::parse;
             use frankweiler_etl_email::translate::render::render_all;
 
             // Both JMAP-server and mbox sources land their data in
@@ -2347,18 +2347,15 @@ fn translate_source(
                 );
                 return Ok(());
             }
-            let parsed = block_on_load_all(&db)
-                .with_context(|| format!("email block_on_load_all {}", db.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("email render_all")
-            .map(|_| ())
+            // Two-phase parse: phase 1 runs the bucket-fingerprint
+            // CTE and drops unchanged threads; phase 2 loads only
+            // the to-render buckets. `render_all` no longer takes
+            // `prior_fingerprints` — parse already filtered.
+            let parsed = parse(&db, prior_fingerprints)
+                .with_context(|| format!("email parse {}", db.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("email render_all")
+                .map(|_| ())
         }
         SourceConfig::Perseus { .. } => {
             use frankweiler_etl_perseus::translate::{align, parse, render};
