@@ -118,6 +118,14 @@ jobs:
           bazel version
           rustc --version || true
 
+      # `-c opt --config=release` mirrors the build mode `release.yml`'s
+      # dist build uses, so the BuildBuddy action cache populated here
+      # on every PR / main push warms exactly the entries tag-time
+      # release builds will hit (instead of fastbuild entries the
+      # release path's opt-mode actions can't use). Side benefit:
+      # tests run against the same binaries we ship, which catches
+      # opt-mode-only behaviors before release.
+      #
       # `--build_metadata=ROLE=CI` tags the invocation in the BuildBuddy
       # UI so CI runs are filterable from contributor invocations.
       # Matches the convention used by `release.yml`'s build + test
@@ -133,4 +141,4 @@ jobs:
       # job-level still renders failed in the run summary.
       - name: bazel test //...
         continue-on-error: true
-        run: bazel test //... --build_metadata=ROLE=CI
+        run: bazel test //... -c opt --config=release --build_metadata=ROLE=CI
