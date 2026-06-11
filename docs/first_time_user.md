@@ -185,6 +185,10 @@ It's the `data_root` configuration parameter at the top.
 
 You can also feel free to comment out some of the YAML stanzas that identify different synchronization sources.
 
+If you only want to mirror your Claude conversations, download
+[**sample_config_claude_only.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config_claude_only.yaml)
+instead — it has just the `claude_api` stanza.
+
 ## 4. Run the sync
 
 ```sh
