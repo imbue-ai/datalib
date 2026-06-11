@@ -132,6 +132,14 @@ fn render_one(
     }
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
+    // Resolve attachment `local_path` bytes into the page's `blobs/`
+    // dir. Modifies a local copy of the doc — we don't want to mutate
+    // the caller's `NormalizedDoc` since the provider may render the
+    // same chat into multiple per-period buckets and each needs its
+    // own materialization pass.
+    let resolved_doc = materialize_attachment_bytes(doc, &page_dir);
+    let doc = &resolved_doc;
+
     let chat_title = format!(
         "{label} · {disp}",
         label = profile.source_label,
@@ -182,6 +190,100 @@ fn render_one(
         items: items_rendered,
         reactions: reactions_rendered,
     })
+}
+
+/// Walk `doc.items`, and for every attachment whose `local_path` points
+/// at a real file on disk, copy the bytes into `<page_dir>/blobs/<short>.<ext>`
+/// and overwrite the attachment's `rel_path` so the markdown link points
+/// at the materialized blob. Failures (file missing, copy denied, …) are
+/// logged at WARN and the attachment falls through to the existing
+/// placeholder rendering — partial materialization is preferable to a
+/// hard render failure.
+fn materialize_attachment_bytes(doc: &NormalizedDoc, page_dir: &Path) -> NormalizedDoc {
+    let mut out = doc.clone();
+    let blobs_dir = page_dir.join("blobs");
+    let mut blobs_dir_ready = false;
+    for item in &mut out.items {
+        for att in &mut item.attachments {
+            let Some(src) = att.local_path.as_deref() else {
+                continue;
+            };
+            if !src.exists() {
+                tracing::warn!(
+                    src = %src.display(),
+                    "chat_common::materialize: source file missing; leaving rel_path unset"
+                );
+                continue;
+            }
+            let ext = ext_for(att.mime_type.as_deref(), att.file_name.as_deref())
+                .unwrap_or_else(|| "bin".to_string());
+            let short = match &att.content_hash {
+                Some(h) => h.chars().take(16).collect::<String>(),
+                None => short_path_hash(src),
+            };
+            let rel = format!("blobs/{short}.{ext}");
+            let dst = page_dir.join(&rel);
+            if !blobs_dir_ready {
+                if let Err(e) = fs::create_dir_all(&blobs_dir) {
+                    tracing::warn!(
+                        blobs_dir = %blobs_dir.display(),
+                        error = %e,
+                        "chat_common::materialize: failed to mkdir blobs/; skipping"
+                    );
+                    return out;
+                }
+                blobs_dir_ready = true;
+            }
+            if !dst.exists() {
+                if let Err(e) = fs::copy(src, &dst) {
+                    tracing::warn!(
+                        src = %src.display(),
+                        dst = %dst.display(),
+                        error = %e,
+                        "chat_common::materialize: copy failed; leaving rel_path unset"
+                    );
+                    continue;
+                }
+            }
+            att.rel_path = Some(rel);
+        }
+    }
+    out
+}
+
+fn ext_for(mime_type: Option<&str>, file_name: Option<&str>) -> Option<String> {
+    if let Some(mt) = mime_type {
+        let mt = mt.split(';').next().unwrap_or(mt).trim();
+        let ext = match mt {
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/gif" => "gif",
+            "image/webp" => "webp",
+            "video/mp4" => "mp4",
+            "video/webm" => "webm",
+            "video/quicktime" => "mov",
+            "audio/mpeg" => "mp3",
+            "audio/mp4" => "m4a",
+            "audio/wav" => "wav",
+            "audio/ogg" => "ogg",
+            "application/pdf" => "pdf",
+            _ => "",
+        };
+        if !ext.is_empty() {
+            return Some(ext.to_string());
+        }
+    }
+    file_name
+        .and_then(|n| n.rsplit('.').next())
+        .filter(|e| !e.contains(' ') && !e.is_empty())
+        .map(str::to_string)
+}
+
+fn short_path_hash(path: &Path) -> String {
+    let mut h = Sha256::new();
+    h.update(path.to_string_lossy().as_bytes());
+    let full = format!("{:x}", h.finalize());
+    full.chars().take(16).collect()
 }
 
 /// `<out>/rendered_md/<provider>/<source_name>/<chat-slug>/<period>.md`
@@ -716,6 +818,8 @@ mod tests {
                 mime_type: Some("image/jpeg".to_string()),
                 byte_len: Some(384),
                 source_url: Some("https://example/vscapture".to_string()),
+                local_path: None,
+                content_hash: None,
             }],
             ..chat.buckets[0].items[0].clone()
         };

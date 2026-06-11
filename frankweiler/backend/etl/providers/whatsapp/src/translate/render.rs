@@ -18,9 +18,14 @@ use frankweiler_etl_chat_common::{
 /// Bump when the rendered markdown / grid_rows layout changes enough
 /// that we need every existing WhatsApp doc rebuilt.
 ///
+/// v2 = attachments now materialize bytes into the rendered page's
+/// `blobs/` subdir (chat-common reads `local_path` + `content_hash`
+/// off each `NormalizedAttachment`), so images render inline instead
+/// of as a "(not yet fetched)" placeholder.
+///
 /// v1 = chat-common's unified block style + reactions inline +
 /// per-message `id="m-{uuid}"` anchors.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 

@@ -7,6 +7,8 @@
 //! that. UUIDs are pre-minted by the provider (each has its own v5
 //! namespace) so chat-common stays provider-agnostic.
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 
 /// What flavor of item this is. Collapses each provider's richer event
@@ -59,6 +61,21 @@ pub struct NormalizedAttachment {
     /// `source_url`). Surfaced when `rel_path` is missing so a reader
     /// can still trace where the bytes were supposed to come from.
     pub source_url: Option<String>,
+    /// Absolute path on local disk to the source bytes. When set, the
+    /// renderer copies the file into the rendered page's `blobs/` subdir
+    /// at render time, names it `blobs/<short-hash>.<ext>`, and sets
+    /// `rel_path` accordingly. Used by providers (like WhatsApp) whose
+    /// extract phase doesn't bring bytes into the raw store; the file
+    /// stays on disk where the user dropped the backup. If unset or the
+    /// file is missing, the renderer falls back to the
+    /// "(not yet fetched)" placeholder.
+    #[serde(skip)]
+    pub local_path: Option<PathBuf>,
+    /// Content hash (sha256/blake3 hex) used to derive the short filename
+    /// of the materialized blob. When `None` but `local_path` is set,
+    /// the renderer hashes the path string instead (less stable across
+    /// runs if the path moves, but still deterministic per-run).
+    pub content_hash: Option<String>,
 }
 
 impl NormalizedAttachment {

@@ -42,6 +42,7 @@ pub const DATA_TABLES: &[&str] = &[
     "wa_chat",
     "wa_jid",
     "wa_media_files",
+    "wa_extract_metadata",
 ];
 
 pub const WA_JID_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_jid (
@@ -238,6 +239,18 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
 /// across rows; the on-disk tree is already content-organized by
 /// WhatsApp. We mirror just enough to verify presence + integrity:
 /// sha256, size, mtime.
+/// Tiny key/value table for extract-time provenance the translate stage
+/// needs to find on its own. Today: just the absolute path to the source
+/// `Media/` directory so translate can copy attachment bytes into each
+/// rendered page's `blobs/` subdir. Kept as a generic kv table (instead
+/// of a single-purpose column on some other table) so future
+/// extract-side context — e.g. the crypt15 file's IV, the backup
+/// timestamp, the phone number suffix — can land here additively.
+pub const WA_EXTRACT_METADATA_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_extract_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);";
+
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     sha256 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
@@ -256,4 +269,5 @@ pub const ALL_DDL: &[&str] = &[
     WA_MESSAGE_ADD_ON_DDL,
     WA_MESSAGE_ADD_ON_REACTION_DDL,
     WA_MEDIA_FILES_DDL,
+    WA_EXTRACT_METADATA_DDL,
 ];

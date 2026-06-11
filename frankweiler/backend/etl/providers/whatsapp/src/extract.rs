@@ -138,6 +138,12 @@ async fn fetch_with_pool(
     mirror_message_add_on_reaction(&src_pool, &dst_pool, &addon_map, &mut summary).await?;
 
     let media_root = backup_dir.join("Media");
+    // Stamp the source `Media/` path so translate can copy attachment
+    // bytes into each rendered page's `blobs/`. Recorded regardless of
+    // whether the dir exists — translate will see it missing and skip
+    // the copy step gracefully, same as it does for a missing
+    // `wa_media_files` entry.
+    record_metadata(&dst_pool, "media_root", &media_root.display().to_string()).await?;
     if media_root.is_dir() {
         mirror_media_files(&dst_pool, &media_root, &mut summary).await?;
     } else {
@@ -829,6 +835,18 @@ fn mime_from_ext(path: &Path) -> Option<String> {
         "pdf" => "application/pdf".to_string(),
         _ => return None,
     })
+}
+
+/// Insert (or replace) a row into `wa_extract_metadata`. Used to stash
+/// `media_root` so translate knows where to find attachment bytes.
+async fn record_metadata(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
+    sqlx::query("INSERT OR REPLACE INTO wa_extract_metadata (key, value) VALUES (?, ?)")
+        .bind(key)
+        .bind(value)
+        .execute(pool)
+        .await
+        .with_context(|| format!("write wa_extract_metadata[{key}]"))?;
+    Ok(())
 }
 
 /// Stamp the doltlite db with one `dolt_commit('-Am', '…')`. Returns
