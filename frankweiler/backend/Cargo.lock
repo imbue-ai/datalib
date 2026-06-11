@@ -1392,6 +1392,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-chat-common"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-etl",
+ "frankweiler-index-lib",
+ "frankweiler-schema",
+ "frankweiler-time",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-chatgpt"
 version = "0.8.0"
 dependencies = [
@@ -1616,10 +1632,14 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-whatsapp"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "frankweiler-etl",
+ "frankweiler-etl-chat-common",
+ "frankweiler-index-lib",
+ "frankweiler-schema",
+ "frankweiler-time",
  "frankweiler-whatsapp-backup",
  "serde",
  "serde_json",
@@ -1629,6 +1649,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "uuid",
  "walkdir",
 ]
 
@@ -1806,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-whatsapp-backup"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "aes",
  "anyhow",

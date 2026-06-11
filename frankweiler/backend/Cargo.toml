@@ -26,6 +26,7 @@ members = [
     "tauri-backend",
     "whatsapp-backup",
     "etl/providers/whatsapp",
+    "etl/chat-common",
 ]
 
 [workspace.package]

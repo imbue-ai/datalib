@@ -58,8 +58,14 @@ test("row clicks highlight and scroll to the right message", async ({
   const data = (await resp.json()) as { rows: Row[] };
   const byConv = new Map<string, Row[]>();
   for (const r of data.rows) {
-    if (r.kind === "Chat") continue;
-    if (r.message_index == null) continue;
+    // Providers stamp chat-level rows with their own prefix ("Signal
+    // Chat", "WhatsApp Chat", "Beeper:Signal Chat"); accept any suffix
+    // ending in "Chat" / "Thread" / "Reaction" so we only walk
+    // per-message rows here. (The previous strict `=== "Chat"` filter
+    // missed `WhatsApp Chat` and let a chat row through as a fake
+    // "message at index 0".)
+    if (/(Chat|Thread|Reaction)$/.test(r.kind)) continue;
+    if (typeof r.message_index !== "number") continue;
     const list = byConv.get(r.conversation_uuid) ?? [];
     list.push(r);
     byConv.set(r.conversation_uuid, list);

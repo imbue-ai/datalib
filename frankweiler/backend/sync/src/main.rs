@@ -2352,13 +2352,22 @@ fn translate_source(
             Ok(())
         }
         SourceConfig::WhatsAppBackup { .. } => {
-            // Extract-only for now — translate (render to QMD + grid_rows)
-            // lands in a follow-up. The verbatim `wa_*` mirror sits in
-            // the raw store as the durable artifact.
-            status_line!(
-                "[translate] {name} (whatsapp_backup): skipped (extract-only, no render path yet)"
-            );
-            Ok(())
+            use frankweiler_etl_whatsapp::translate::{parse, render_all, Period};
+            // WhatsApp doesn't expose a `period` knob on its sync block
+            // today — default to month bucketing, same as signal.
+            let period = Period::from_config(None).context("default whatsapp period")?;
+            let chats = parse(&fixture, period, name)
+                .with_context(|| format!("whatsapp parse {}", fixture.display()))?;
+            render_all(
+                &chats,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("whatsapp render_all")
+            .map(|_| ())
         }
     }
 }
