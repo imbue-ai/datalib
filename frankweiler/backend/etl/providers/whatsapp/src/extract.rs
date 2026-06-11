@@ -108,6 +108,13 @@ async fn fetch_with_pool(
     dst_pool: SqlitePool,
     target_db_path: &Path,
 ) -> Result<IngestSummary> {
+    // `backup_dir` lives inside the `sync:` block (not on
+    // SourceCommon.input_path), so core's load-time tilde expansion
+    // doesn't touch it — it lands here as a literal `~/...` if the
+    // user wrote `backup_dir: ~/backups/WhatsApp` in YAML. Expand
+    // here, same way signal handles `snapshot_dir`.
+    let backup_dir = expand_tilde(backup_dir);
+    let backup_dir = backup_dir.as_path();
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(
         crypt_path = %crypt_path.display(),
@@ -881,6 +888,15 @@ fn mime_from_ext(path: &Path) -> Option<String> {
         "pdf" => "application/pdf".to_string(),
         _ => return None,
     })
+}
+
+fn expand_tilde(p: &Path) -> PathBuf {
+    if let Ok(rest) = p.strip_prefix("~") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    p.to_path_buf()
 }
 
 /// Stamp the doltlite db with one `dolt_commit('-Am', '…')`. Returns
