@@ -561,6 +561,57 @@ Two consequences:
 The only other commits allowed in a raw store are `rescue:` commits.
 Anything else is a bug.
 
+## One writer per row (load-bearing rule)
+
+**Each write to a raw entity row is complete as of that write.** The
+writer's job is to assemble everything it knows about the row —
+`payload` plus all writer-supplied identity columns — and emit it in
+one UPSERT. We do not have a notion of "partial" writes that leave
+NULL columns the writer chose not to populate, and we do not have
+multi-pass enrichment where writer A populates some columns and
+writer B fills in the rest. Both are anti-patterns.
+
+Consequences:
+
+  - **One `ON CONFLICT(id) DO UPDATE` shape, everywhere.** Every
+    column on the entity table (other than `id`) is updated with
+    `excluded.<col>`. No `COALESCE(excluded.<col>, <table>.<col>)` —
+    that pattern only exists to protect a stale-but-known value from
+    being clobbered by a fresh-but-incomplete write, and we don't
+    allow incomplete writes. The uniform shape is what lets the
+    generalized bulk-upsert helper (see [Bulk-upsert as the standard
+    write path](#bulk-upsert-as-the-standard-write-path)) cover every
+    table.
+  - **One writer per row, normally.** Typically each raw entity
+    table has a single producing extractor. If two producers can in
+    principle write the same id (e.g. a JMAP API extractor and an
+    mbox file-import both targeting the `emails` table), it is a
+    configuration error to enable both for the same destination, and
+    the semantics if you did are **last-writer-wins, not merged**.
+    The system is not built to maintain a hodgepodge of two writers'
+    partial knowledge of the same row.
+  - **Enrichment is a different operation, not a different writer.**
+    If you genuinely need to add information to a row after the fact
+    (resolving a backfill cross-reference, joining in a second
+    source's view of the same upstream entity), encode it as a
+    separate, explicit `UPDATE` statement — not a partial UPSERT.
+    The UPDATE is auditable, named, and obviously distinct from the
+    table's normal upsert path.
+  - **Pre-seeding is not an exception.** Pre-seeding writes
+    `(id, payload=NULL)` — that *is* a complete write as of the
+    moment we learn the id exists, because NULL is the writer's
+    honest answer when it doesn't have the bytes yet. The later
+    detail-fetch writes `(id, payload=<bytes>)`, also complete. The
+    payload column moving from NULL to a value across two writes is
+    fine; both writes are complete-as-of-their-time.
+
+Why the discipline matters: the alternative is per-column conflict
+policies (COALESCE on some columns, replace on others), which makes
+the UPSERT shape diverge per table, makes the chunked-multi-row
+helper proliferate variants, makes `dolt diff` harder to read, and
+makes "which writer last touched this row?" an ambiguous question.
+None of that is value we want to maintain.
+
 ## Bulk-upsert as the standard write path
 
 Every extract is shaped the same at the bottom: for some entity
@@ -608,13 +659,19 @@ file-imported entities like mbox where there is no upstream
 tx and skip the tape. Synthesizing a fake wire payload just to feed
 the chokepoint would be making up data we don't have.
 
-The per-table entity UPSERT itself stays in the provider because each
-table's column list and `ON CONFLICT` clause varies (see [Events vs
-bookkeeping](#events-vs-bookkeeping-where-each-column-lives) for
-which extras live on the entity table vs the bookkeeping sidecar
-vs as VIRTUAL+index over payload). What these shared helpers own is
-the cross-provider boilerplate — chunked SQL, bookkeeping, commit,
-and (for the wire-event subset) the tape mirror.
+The `ON CONFLICT` clause is **the same shape on every table**: every
+non-PK column is set to `excluded.<col>`. The column list itself
+still varies per table (different writer-supplied extras — see
+[Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives)
+for which extras belong on the entity table vs the bookkeeping
+sidecar vs as VIRTUAL+index over payload), but the conflict policy
+does not vary — see [One writer per row](#one-writer-per-row-load-bearing-rule).
+That uniformity is what makes a single generic
+`bulk_upsert<T>(rows: &[T])` helper feasible (in flight): the only
+per-table input is the column list, which we can derive from the
+row type at compile time. What these shared helpers own today is the
+cross-provider boilerplate — chunked SQL, bookkeeping, commit, and
+(for the wire-event subset) the tape mirror.
 
 ## Cursor / resume strategy
 
