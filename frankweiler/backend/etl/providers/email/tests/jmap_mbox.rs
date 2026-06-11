@@ -50,8 +50,8 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let mailboxes = db.load_mailboxes().await.unwrap();
     let joins = db.load_email_joins().await.unwrap();
 
-    assert_eq!(emails.len(), 5);
-    assert_eq!(threads.len(), 3);
+    assert_eq!(emails.len(), 6);
+    assert_eq!(threads.len(), 4);
 
     let briefing = threads
         .iter()
@@ -139,7 +139,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     .expect("render_all");
 
     // One rendered document per thread.
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 4);
 
     // Briefing thread has the attachment materialized.
     let briefing_tuid = thread_uuid("enterprise", "1000000000000000001");
@@ -193,5 +193,48 @@ async fn star_trek_mbox_renders_through_render_all() {
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
         "expected html-rendered body in risa thread"
+    );
+
+    // Bridge-status thread has a `multipart/related` with an inline
+    // PNG referenced as `<img src="cid:lcars-glyph@enterprise">`. The
+    // renderer should materialize the PNG and rewrite the cid to a
+    // `blobs/<hash>.png` link — regression test for the Fastmail
+    // JMAP case where the inline image isn't in the `attachments`
+    // array but is sitting in the .eml MIME tree.
+    let bridge_tuid = thread_uuid("enterprise", "4000000000000000004");
+    let bridge_dir = tmp
+        .path()
+        .join("rendered_md/jmap/enterprise")
+        .join(&bridge_tuid);
+    let bridge_md = std::fs::read_to_string(bridge_dir.join("index.md")).unwrap();
+    let bridge_blobs = bridge_dir.join("blobs");
+    assert!(bridge_blobs.is_dir(), "bridge thread blobs/ dir missing");
+    let png_files: Vec<_> = std::fs::read_dir(&bridge_blobs)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|x| x == "png")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        png_files.len(),
+        1,
+        "expected exactly one .png in {}",
+        bridge_blobs.display()
+    );
+    let png_name = png_files[0].file_name().to_string_lossy().into_owned();
+    assert!(
+        bridge_md.contains(&format!("(blobs/{png_name})")),
+        "expected `blobs/{png_name}` markdown link in bridge thread, got:\n{bridge_md}"
+    );
+    // The raw cid URL should be gone — htmd should see the rewritten
+    // `src="blobs/…"` and emit `![…](blobs/…)`, not `cid:…`.
+    assert!(
+        !bridge_md.contains("cid:lcars-glyph"),
+        "raw cid: reference leaked into bridge thread md:\n{bridge_md}"
     );
 }

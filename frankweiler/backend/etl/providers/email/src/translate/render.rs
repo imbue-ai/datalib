@@ -30,16 +30,38 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::{blake3_hex, extension_for_content_type};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
-use mail_parser::{Address, MessageParser, PartType};
+use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::RENDER_VERSION;
 use crate::extract::db::{LoadedAttachment, LoadedEmail, LoadedRaw};
+
+/// A binary body part embedded in the .eml that the renderer needs
+/// to materialize to disk. Two flavors:
+///   * **cid-referenced**: the HTML body links it via
+///     `<img src="cid:…">` → we rewrite to `blobs/<fname>` and htmd
+///     emits the image inline.
+///   * **loose inline**: a `multipart/mixed` or Apple-Mail-style
+///     `multipart/appledouble` part with `Content-Disposition: inline`
+///     and no Content-ID. The body has no in-text reference to it, so
+///     we append `![](blobs/<fname>)` after the rendered body.
+///
+/// JMAP servers like Fastmail report `hasAttachment: false` for both
+/// of these and leave them out of the `attachments` array — they're
+/// classified as part of the body view. We discover them via
+/// mail-parser at render time instead of relying on the join table.
+#[derive(Default, Clone)]
+struct InlinePart {
+    cid: Option<String>,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
 
 /// Everything the renderer needs from the RFC 5322 `.eml` bytes,
 /// extracted via mail-parser in one pass and made owned so we don't
@@ -55,6 +77,9 @@ struct ParsedEml {
     text_body: String,
     /// Concatenated `text/html` body parts.
     html_body: String,
+    /// Non-text parts with a Content-ID. Materialized to `blobs/` at
+    /// render time and linked via the existing cid→blob rewrite.
+    inline_parts: Vec<InlinePart>,
 }
 
 impl ParsedEml {
@@ -87,11 +112,33 @@ impl ParsedEml {
                 html_body.push('\n');
             }
         }
+        let mut inline_parts: Vec<InlinePart> = Vec::new();
+        for &idx in &msg.attachments {
+            let Some(part) = msg.part(idx) else { continue };
+            let bytes: Vec<u8> = match &part.body {
+                PartType::Binary(b) | PartType::InlineBinary(b) => b.to_vec(),
+                _ => continue,
+            };
+            let cid = part.content_id().map(str::to_string);
+            let content_type = part.content_type().map(|ct| {
+                let base = ct.ctype();
+                match ct.subtype() {
+                    Some(sub) => format!("{base}/{sub}"),
+                    None => base.to_string(),
+                }
+            });
+            inline_parts.push(InlinePart {
+                cid,
+                content_type,
+                bytes,
+            });
+        }
         Self {
             from_display,
             participants: participants_set.into_iter().collect(),
             text_body,
             html_body,
+            inline_parts,
         }
     }
 
@@ -111,6 +158,19 @@ impl ParsedEml {
             .collect::<Vec<_>>()
             .join(" ");
         collapsed.chars().take(200).collect()
+    }
+}
+
+/// Stable on-disk name for an inline part: `<sha8>.<ext>` where the
+/// hash is the first 16 hex of blake3(bytes) and the extension comes
+/// from the content_type. Mirrors `BlobView::rendered_filename` so the
+/// path-shape is uniform across "real" attachments and inline parts.
+fn inline_blob_filename(bytes: &[u8], content_type: Option<&str>) -> String {
+    let hash = blake3_hex(bytes);
+    let short = &hash[..16.min(hash.len())];
+    match extension_for_content_type(content_type) {
+        Some(ext) => format!("{short}.{ext}"),
+        None => short.to_string(),
     }
 }
 
@@ -306,6 +366,51 @@ pub fn render_all(
             }
         }
 
+        // Materialize inline-image-style parts that mail-parser found in
+        // the .eml but the JMAP server excluded from `attachments`
+        // (Fastmail, iCloud, …). Filenames are content-hash + extension
+        // so two messages sharing the same logo collapse to one file.
+        // Two output maps so render_thread_md can route the two cases:
+        //   * `inline_cid_to_fname`: cid-tagged parts → fed into the
+        //     `<img src="cid:…">` rewrite so they render inline.
+        //   * `loose_inline_per_email`: cid-less parts (Apple Mail
+        //     iPhone style) → appended after the rendered body as
+        //     trailing `![](blobs/…)` links so the image still shows.
+        let mut inline_cid_to_fname: HashMap<String, String> = HashMap::new();
+        let mut loose_inline_per_email: HashMap<String, Vec<String>> = HashMap::new();
+        let mut wrote_blobs_dir = blobs_dir.exists();
+        for em in emails {
+            let Some(parsed_eml) = parsed_emls.get(&em.id) else {
+                continue;
+            };
+            for inline in &parsed_eml.inline_parts {
+                let fname = inline_blob_filename(&inline.bytes, inline.content_type.as_deref());
+                // Lazily create the blobs dir — many emails have no
+                // inline parts and we don't want to leave empty dirs.
+                if !wrote_blobs_dir {
+                    fs::create_dir_all(&blobs_dir)
+                        .with_context(|| format!("create blobs dir {}", blobs_dir.display()))?;
+                    wrote_blobs_dir = true;
+                }
+                let path = blobs_dir.join(&fname);
+                if !path.exists() {
+                    fs::write(&path, &inline.bytes)
+                        .with_context(|| format!("write inline part {}", path.display()))?;
+                }
+                match &inline.cid {
+                    Some(cid) => {
+                        inline_cid_to_fname.entry(cid.clone()).or_insert(fname);
+                    }
+                    None => {
+                        let bucket = loose_inline_per_email.entry(em.id.clone()).or_default();
+                        if !bucket.iter().any(|f| f == &fname) {
+                            bucket.push(fname);
+                        }
+                    }
+                }
+            }
+        }
+
         // Order: blobs → md → sidecar → callback. Callback is the
         // commit point — interrupted runs leave the indexer
         // un-notified so the next run re-renders.
@@ -317,6 +422,8 @@ pub fn render_all(
             &mailbox_name,
             &parsed.joins,
             &materialized,
+            &inline_cid_to_fname,
+            &loose_inline_per_email,
             &parsed_emls,
         );
         fs::write(&abs, &body).with_context(|| format!("write {}", abs.display()))?;
@@ -373,6 +480,8 @@ fn render_thread_md(
     mailbox_name: &HashMap<String, String>,
     joins: &crate::extract::db::EmailJoins,
     materialized: &HashMap<String, String>,
+    inline_cid_to_fname: &HashMap<String, String>,
+    loose_inline_per_email: &HashMap<String, Vec<String>>,
     parsed_emls: &HashMap<String, ParsedEml>,
 ) -> String {
     let root = emails.first().unwrap();
@@ -478,7 +587,8 @@ fn render_thread_md(
             .get(&em.id)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        if let Some(body) = email_body_markdown(parsed_eml, atts, materialized) {
+        if let Some(body) = email_body_markdown(parsed_eml, atts, materialized, inline_cid_to_fname)
+        {
             out.push_str(&body);
             if !body.ends_with('\n') {
                 out.push('\n');
@@ -488,6 +598,24 @@ fn render_thread_md(
             if !preview.is_empty() {
                 out.push_str(&preview);
                 out.push('\n');
+            }
+        }
+
+        // Append loose inline parts: cid-less inline parts from the
+        // .eml MIME tree (Apple Mail iPhone "drop the image into the
+        // message" pattern). The body never references them, so we
+        // render each as a trailing `![](blobs/<fname>)`. Skip any
+        // filename already mentioned in the body so we don't
+        // double-render parts that htmd happened to pick up via some
+        // other path.
+        if let Some(loose) = loose_inline_per_email.get(&em.id) {
+            for fname in loose {
+                let link = format!("blobs/{fname}");
+                if out.contains(&link) {
+                    continue;
+                }
+                out.push('\n');
+                out.push_str(&format!("![](blobs/{fname})\n"));
             }
         }
 
@@ -547,10 +675,17 @@ fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
     materialized: &HashMap<String, String>,
+    inline_cid_to_fname: &HashMap<String, String>,
 ) -> Option<String> {
     // Build a cid → "blobs/<filename>" lookup so we can rewrite
-    // `<img src="cid:…">` URLs before htmd sees them.
+    // `<img src="cid:…">` URLs before htmd sees them. JMAP-side cids
+    // (from `email_attachments.cid`) win when both sources have an
+    // entry for the same id — the JMAP rendered filename comes from
+    // the canonical blob in the CAS.
     let mut cid_to_blob: HashMap<String, String> = HashMap::new();
+    for (cid, fname) in inline_cid_to_fname {
+        cid_to_blob.insert(cid.clone(), format!("blobs/{fname}"));
+    }
     for a in attachments {
         let (Some(cid), Some(fname)) = (a.cid.as_deref(), materialized.get(&a.blob_id)) else {
             continue;

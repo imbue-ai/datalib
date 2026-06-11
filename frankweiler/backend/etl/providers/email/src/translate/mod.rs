@@ -9,4 +9,4 @@ pub mod render;
 /// payloads are unchanged. The Load step keys `(qmd_path,
 /// source_fingerprint)` on this version stamp, so a bump is the
 /// canonical way to roll out a renderer change.
-pub const RENDER_VERSION: u32 = 1;
+pub const RENDER_VERSION: u32 = 2;
