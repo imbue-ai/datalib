@@ -245,7 +245,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             rows="1"
             :value="slot.source"
             spellcheck="false"
-            placeholder="card source — e.g. documentView(&quot;uuid&quot;), Enter to run"
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />

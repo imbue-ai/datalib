@@ -1,93 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
 import { RouterView, RouterLink } from "vue-router";
 import SyncProgressChrome from "@/components/SyncProgressChrome.vue";
 import ToastStack from "@/components/ToastStack.vue";
-
-const menuOpen = ref(false);
-
-function toggleMenu() {
-  menuOpen.value = !menuOpen.value;
-}
-
-function closeMenu() {
-  menuOpen.value = false;
-}
-
-function onKey(e: KeyboardEvent) {
-  if (e.key === "Escape" && menuOpen.value) {
-    menuOpen.value = false;
-  }
-}
-
-onMounted(() => {
-  window.addEventListener("keydown", onKey);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("keydown", onKey);
-});
 </script>
 
 <template>
   <main class="frankweiler-shell" data-feedback-root>
     <header class="fw-header">
-      <button
-        class="fw-hamburger"
-        type="button"
-        aria-label="Open navigation"
-        :aria-expanded="menuOpen"
-        @click="toggleMenu"
-      >
-        <span class="fw-hamburger-bar" />
-        <span class="fw-hamburger-bar" />
-        <span class="fw-hamburger-bar" />
-      </button>
       <h1>Frankweiler</h1>
+      <nav class="fw-tabs" aria-label="Navigation">
+        <RouterLink class="fw-tab" to="/">Explore</RouterLink>
+        <RouterLink class="fw-tab" to="/sync">Sync</RouterLink>
+        <RouterLink class="fw-tab" to="/prefs">Preferences</RouterLink>
+      </nav>
       <div class="fw-spacer" />
     </header>
 
     <SyncProgressChrome />
     <RouterView />
     <ToastStack />
-
-    <transition name="fw-drawer">
-      <div
-        v-if="menuOpen"
-        class="fw-drawer-overlay"
-        @click.self="closeMenu"
-      >
-        <nav
-          class="fw-drawer"
-          role="dialog"
-          aria-label="Navigation"
-          aria-modal="true"
-        >
-          <div class="fw-drawer-header">
-            <strong>Navigate</strong>
-            <button
-              class="fw-drawer-close"
-              type="button"
-              aria-label="Close navigation"
-              @click="closeMenu"
-            >
-              ×
-            </button>
-          </div>
-          <ul class="fw-drawer-list">
-            <li>
-              <RouterLink to="/" @click="closeMenu">Search</RouterLink>
-            </li>
-            <li>
-              <RouterLink to="/sync" @click="closeMenu">Sync</RouterLink>
-            </li>
-            <li>
-              <RouterLink to="/prefs" @click="closeMenu">Preferences</RouterLink>
-            </li>
-          </ul>
-        </nav>
-      </div>
-    </transition>
   </main>
 </template>
 
@@ -152,102 +83,52 @@ a {
   flex: 0 0 auto;
 }
 
+/* Browser-style tab band: the header sits on a tinted strip and the
+   active tab is cut from the page background, flowing into the
+   content below with no separating line under it. Negative margins
+   counter the shell's 1rem padding so the band runs full-bleed. */
 .fw-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.6rem;
-  margin: 0 0 0.75rem 0;
+  margin: -1rem -1rem 0.75rem;
+  padding: 0.5rem 1rem 0;
+  background: var(--fw-card-bg);
+  border-bottom: 1px solid var(--fw-border);
 }
 .fw-header h1 {
-  margin: 0;
+  margin: 0 0 0.45rem 0;
   font-size: 1.25rem;
 }
 .fw-spacer {
   flex: 1;
 }
-.fw-hamburger {
-  display: inline-flex;
-  flex-direction: column;
-  justify-content: space-between;
-  width: 28px;
-  height: 22px;
-  padding: 4px 3px;
-  background: transparent;
-  border: 1px solid var(--fw-border);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.fw-hamburger:hover {
-  background: var(--fw-hover);
-}
-.fw-hamburger-bar {
-  display: block;
-  height: 2px;
-  width: 100%;
-  background: var(--fw-fg);
-  border-radius: 1px;
-}
-.fw-drawer-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 2000;
-}
-.fw-drawer {
-  position: fixed;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 260px;
-  max-width: 80vw;
-  background: var(--fw-bg);
-  color: var(--fw-fg);
-  border-right: 1px solid var(--fw-border);
-  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.2);
-  padding: 0.75rem 0;
+.fw-tabs {
   display: flex;
-  flex-direction: column;
+  gap: 2px;
+  margin-left: 0.75rem;
 }
-.fw-drawer-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 0.85rem 0.5rem;
-  border-bottom: 1px solid var(--fw-border);
-}
-.fw-drawer-close {
-  background: transparent;
-  border: none;
-  color: var(--fw-fg);
-  font-size: 1.4rem;
-  cursor: pointer;
-  line-height: 1;
-  padding: 0 0.25rem;
-}
-.fw-drawer-list {
-  list-style: none;
-  padding: 0;
-  margin: 0.25rem 0 0 0;
-}
-.fw-drawer-list li a {
-  display: block;
-  padding: 0.55rem 0.85rem;
-  color: var(--fw-fg);
+/* The active tab is cut from the page background; border-bottom: none
+   plus the -1px overlap lets its background erase the band's hairline
+   so tab and page read as one surface. */
+.fw-tab {
+  padding: 0.35rem 0.95rem;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  color: var(--fw-muted);
   text-decoration: none;
+  line-height: 1.4;
 }
-.fw-drawer-list li a:hover {
+.fw-tab:hover {
   background: var(--fw-hover);
+  color: var(--fw-fg);
 }
-.fw-drawer-list li a.router-link-active {
+.fw-tab.router-link-active {
+  background: var(--fw-bg);
+  border-color: var(--fw-border);
   color: var(--fw-accent);
   font-weight: 600;
-}
-.fw-drawer-enter-active,
-.fw-drawer-leave-active {
-  transition: opacity 120ms ease;
-}
-.fw-drawer-enter-from,
-.fw-drawer-leave-to {
-  opacity: 0;
 }
 </style>
