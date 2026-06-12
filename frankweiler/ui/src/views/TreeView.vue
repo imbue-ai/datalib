@@ -7,9 +7,14 @@
 // points to. Closing a node closes its whole subtree (children would
 // be orphaned otherwise).
 //
-// Positions are never user-set: every open/close/resize re-runs the
-// tidy-tree layout (treeLayout.ts) and nodes animate to their new
-// spots. Gestures follow the design-tool (Figma/tldraw) convention:
+// Positions are auto-layout first: every open/close/resize re-runs
+// the tidy-tree layout (treeLayout.ts) and nodes animate to their new
+// spots. Dragging a node by its title bar stores a manual offset ON
+// TOP of its layout position; descendants inherit ancestor offsets,
+// so dragging moves the whole subtree and later reflows preserve the
+// deviation instead of snapping it back. Nodes resize from any of
+// their four corners. Gestures follow the design-tool (Figma/tldraw)
+// convention:
 // wheel / two-finger scroll pans, ctrl-or-cmd+wheel and trackpad
 // pinch zoom toward the cursor, space+drag / middle-drag / background
 // drag pan. A wheel over a card is left alone so the card's own
@@ -37,6 +42,10 @@ type TreeNode = {
   parentId: string | null;
   width: number;
   height: number;
+  // Manual drag offset, applied on top of the computed layout
+  // position. Descendants inherit ancestor offsets (see rects).
+  dx: number;
+  dy: number;
 };
 
 const NODE_WIDTH = 640;
@@ -57,14 +66,41 @@ function newNode(source: string, parentId: string | null): TreeNode {
     parentId,
     width: NODE_WIDTH,
     height: NODE_HEIGHT,
+    dx: 0,
+    dy: 0,
   };
 }
 
 const nodes = ref<TreeNode[]>([newNode("gridView()", null)]);
 
-const rects = computed(() =>
+const layoutRects = computed(() =>
   layoutTree(nodes.value, { hGap: H_GAP, vGap: V_GAP }),
 );
+
+// Layout rects shifted by each node's manual drag offset plus all of
+// its ancestors' — so dragging a node carries its subtree along.
+const rects = computed(() => {
+  const byId = new Map(nodes.value.map((n) => [n.id, n]));
+  const offsets = new Map<string, { x: number; y: number }>();
+  function offsetOf(id: string): { x: number; y: number } {
+    let o = offsets.get(id);
+    if (o) return o;
+    const n = byId.get(id)!;
+    const p =
+      n.parentId !== null && byId.has(n.parentId)
+        ? offsetOf(n.parentId)
+        : { x: 0, y: 0 };
+    o = { x: p.x + n.dx, y: p.y + n.dy };
+    offsets.set(id, o);
+    return o;
+  }
+  const out = new Map<string, Rect>();
+  for (const [id, r] of layoutRects.value) {
+    const o = offsetOf(id);
+    out.set(id, { x: r.x + o.x, y: r.y + o.y, width: r.width, height: r.height });
+  }
+  return out;
+});
 
 function rectOf(id: string): Rect {
   // Every node the template iterates is in the layout; the fallback
@@ -209,7 +245,11 @@ function startPan(e: PointerEvent) {
 }
 
 function onPointerDown(e: PointerEvent) {
-  const overNode = e.target instanceof Element && !!e.target.closest(".tree-node");
+  if (!(e.target instanceof Element)) return;
+  // The controls overlay is buttons, never a pan start — capturing
+  // the pointer on the viewport would swallow the button's click.
+  if (e.target.closest(".tree-controls")) return;
+  const overNode = !!e.target.closest(".tree-node");
   const middle = e.button === 1;
   const primary = e.button === 0;
   if (middle || (primary && spaceHeld.value) || (primary && !overNode)) {
@@ -359,31 +399,74 @@ function aloneHref(node: TreeNode): string {
   return encodeColumns([{ code: node.source, state: node.state }]);
 }
 
-// Drag a node's bottom-right corner to resize it. Pointer deltas are
-// screen px; divide by zoom to get plane px. The layout shifts the
-// node's subtree as it grows — that's the deal with auto-layout.
-function onResizeStart(node: TreeNode, ev: PointerEvent) {
+// True while a node is being moved or resized; pauses the re-layout
+// position animation, which would otherwise trail the pointer by its
+// transition duration (and drag a moved subtree behind its parent).
+const nodeDragLive = ref(false);
+
+// Shared pointer-capture drag plumbing for node moves and resizes.
+function captureDrag(
+  ev: PointerEvent,
+  onMove: (mx: number, my: number) => void,
+) {
   ev.preventDefault();
+  nodeDragLive.value = true;
   const startX = ev.clientX;
   const startY = ev.clientY;
-  const startW = node.width;
-  const startH = node.height;
   const target = ev.currentTarget as HTMLElement;
   target.setPointerCapture(ev.pointerId);
-
-  const onMove = (e: PointerEvent) => {
-    node.width = Math.max(MIN_WIDTH, startW + (e.clientX - startX) / zoom.value);
-    node.height = Math.max(MIN_HEIGHT, startH + (e.clientY - startY) / zoom.value);
-  };
-  const onUp = (e: PointerEvent) => {
+  // Pointer deltas are screen px; divide by zoom to get plane px.
+  const move = (e: PointerEvent) =>
+    onMove((e.clientX - startX) / zoom.value, (e.clientY - startY) / zoom.value);
+  const up = (e: PointerEvent) => {
+    nodeDragLive.value = false;
     target.releasePointerCapture(e.pointerId);
-    target.removeEventListener("pointermove", onMove);
-    target.removeEventListener("pointerup", onUp);
-    target.removeEventListener("pointercancel", onUp);
+    target.removeEventListener("pointermove", move);
+    target.removeEventListener("pointerup", up);
+    target.removeEventListener("pointercancel", up);
   };
-  target.addEventListener("pointermove", onMove);
-  target.addEventListener("pointerup", onUp);
-  target.addEventListener("pointercancel", onUp);
+  target.addEventListener("pointermove", move);
+  target.addEventListener("pointerup", up);
+  target.addEventListener("pointercancel", up);
+}
+
+// Drag any of a node's four corners to resize it. Left/top corners
+// compensate via the drag offset so the opposite edge stays roughly
+// pinned (roughly: the reflow may still recenter siblings).
+const CORNERS = ["nw", "ne", "sw", "se"] as const;
+type Corner = (typeof CORNERS)[number];
+
+function onResizeStart(node: TreeNode, corner: Corner, ev: PointerEvent) {
+  if (ev.button !== 0) return;
+  const left = corner === "nw" || corner === "sw";
+  const top = corner === "nw" || corner === "ne";
+  const startW = node.width;
+  const startH = node.height;
+  const startDx = node.dx;
+  const startDy = node.dy;
+  captureDrag(ev, (mx, my) => {
+    node.width = Math.max(MIN_WIDTH, left ? startW - mx : startW + mx);
+    node.height = Math.max(MIN_HEIGHT, top ? startH - my : startH + my);
+    if (left) node.dx = startDx + (startW - node.width);
+    if (top) node.dy = startDy + (startH - node.height);
+  });
+}
+
+// Drag a node by the free space of its title bar to move it (and its
+// subtree — descendants inherit the offset). Interactive chrome
+// (source box, links, buttons) keeps its own behavior, and space+drag
+// stays a canvas pan even over nodes.
+function onChromeDown(node: TreeNode, ev: PointerEvent) {
+  if (ev.button !== 0 || spaceHeld.value) return;
+  if (ev.target instanceof Element && ev.target.closest("textarea, a, button")) {
+    return;
+  }
+  const startDx = node.dx;
+  const startDy = node.dy;
+  captureDrag(ev, (mx, my) => {
+    node.dx = startDx + mx;
+    node.dy = startDy + my;
+  });
 }
 </script>
 
@@ -404,6 +487,7 @@ function onResizeStart(node: TreeNode, ev: PointerEvent) {
     >
       <div
         class="tree-plane"
+        :class="{ 'tree-plane--live': nodeDragLive }"
         :style="{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }"
       >
         <svg class="tree-edges">
@@ -420,7 +504,10 @@ function onResizeStart(node: TreeNode, ev: PointerEvent) {
             height: node.height + 'px',
           }"
         >
-          <div class="tree-node-chrome">
+          <div
+            class="tree-node-chrome"
+            @pointerdown="(e) => onChromeDown(node, e)"
+          >
             <textarea
               v-auto-grow
               class="tree-node-source"
@@ -454,9 +541,12 @@ function onResizeStart(node: TreeNode, ev: PointerEvent) {
             :ctx="ctxFor(node)"
           />
           <div
+            v-for="corner in CORNERS"
+            :key="corner"
             class="tree-node-resize"
+            :class="`tree-node-resize--${corner}`"
             role="separator"
-            @pointerdown.stop="(e) => onResizeStart(node, e)"
+            @pointerdown.stop="(e) => onResizeStart(node, corner, e)"
           />
         </section>
       </div>
@@ -545,20 +635,34 @@ function onResizeStart(node: TreeNode, ev: PointerEvent) {
     left 180ms ease,
     top 180ms ease;
 }
+/* While a node is being dragged or resized, positions must track the
+   pointer directly — the animation would trail it (and lag a moved
+   subtree behind its parent). */
+.tree-plane--live .tree-node,
+.tree-plane--live .tree-edge {
+  transition: none;
+}
 .tree-node-chrome {
   flex: 0 0 auto;
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  padding: 0.3rem 0.5rem;
+  /* Extra top padding: a grab strip for moving the node without
+     misclicking into the source textarea. */
+  padding: 0.85rem 0.5rem 0.3rem;
   border-bottom: 1px solid #888;
   background: rgba(0, 0, 0, 0.08);
+  cursor: grab;
+}
+.tree-node-chrome:active {
+  cursor: grabbing;
 }
 .tree-node-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
 .tree-node-source {
   flex: 1 1 auto;
+  cursor: text;
   font: 12px/1.5 ui-monospace, Menlo, monospace;
   padding: 0.2rem 0.4rem;
   border: none;
@@ -599,12 +703,29 @@ function onResizeStart(node: TreeNode, ev: PointerEvent) {
 }
 .tree-node-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
   width: 14px;
   height: 14px;
-  cursor: nwse-resize;
   z-index: 1;
+}
+.tree-node-resize--nw {
+  left: 0;
+  top: 0;
+  cursor: nwse-resize;
+}
+.tree-node-resize--ne {
+  right: 0;
+  top: 0;
+  cursor: nesw-resize;
+}
+.tree-node-resize--sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+.tree-node-resize--se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
 }
 .tree-controls {
   position: absolute;

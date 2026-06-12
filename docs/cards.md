@@ -186,19 +186,23 @@ one blank column** — the place to type new card source. As soon as it
 gains code, a fresh blank appears after it; a run of several trailing
 blanks collapses to one.
 
-In the **tree** layout, nodes resize by dragging their bottom-right
-corner, and a "+ card" button in the canvas controls adds a blank
-root node.
+In the **tree** layout, the header bar carries extra top padding as a
+grab strip: drag it to move the node (and its subtree). Nodes resize
+by dragging any of their four corners, and a "+ card" button in the
+canvas controls adds a blank root node.
 
 ## Tree layout
 
 `TreeView.vue` renders cards as nodes on a 2D plane. Positions are
-never user-set: every open/close/resize re-runs a tidy left-to-right
-tree layout (`treeLayout.ts` — children in a column to the right of
-their parent, sibling subtrees in disjoint vertical bands, parent
-vertically centered on its children) and nodes animate to their new
-spots. Parent→child edges are cubic beziers in an SVG layer under the
-nodes.
+auto-layout first: every open/close/resize re-runs a tidy
+left-to-right tree layout (`treeLayout.ts` — children in a column to
+the right of their parent, sibling subtrees in disjoint vertical
+bands, parent vertically centered on its children) and nodes animate
+to their new spots. Dragging a node by its title bar stores a manual
+offset on top of the layout position; descendants inherit ancestor
+offsets, so a drag moves the whole subtree and later reflows keep the
+deviation instead of snapping it back. Parent→child edges are cubic
+beziers in an SVG layer under the nodes.
 
 Navigation follows design-tool (Figma/tldraw) conventions:
 
