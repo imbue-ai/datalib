@@ -77,9 +77,9 @@ onBeforeUnmount(tearDownCard);
 </template>
 
 <style scoped>
-/* Height comes from the parent (flex sizing on .miller-col-card) — a
-   height: 100% here would resolve against the whole column including
-   its chrome bar and overflow the column by that much. */
+/* Height comes from the parent (flex sizing on the host's card slot)
+   — a height: 100% here would resolve against the whole column/node
+   including its chrome bar and overflow by that much. */
 .shadow-card-host {
   width: 100%;
   overflow: hidden;
