@@ -13,17 +13,24 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::{self, BlobBundle};
 use serde_json::{Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::extract::db::{db_path_for, LoadedConversation, LoadedRaw};
 use crate::extract::normalize::normalize_to_export_shape;
+
+/// SQL projection that maps an Anthropic `file_uuid` to its CAS
+/// blake3. Consumed by [`BlobBundle::load`].
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT file_uuid AS ref_id, blake3,
+           NULL AS content_type, NULL AS upstream_name
+      FROM anthropic_attachments
+     WHERE file_uuid IN ({placeholders}) AND blake3 IS NOT NULL";
 
 #[derive(Debug, Clone)]
 pub struct AccountRow {
@@ -110,6 +117,14 @@ pub struct AttachmentRow {
 pub struct AnthropicConversation {
     pub conv: ConversationRow,
     pub upstream_payload: Value,
+    /// This conversation's attachment bytes, loaded in bulk by
+    /// [`parse`] (two SQL queries per conversation regardless of
+    /// attachment count). Render walks it synchronously via
+    /// [`BlobBundle::markdown_link`] and
+    /// [`BlobBundle::materialize_to_dir`]. Empty when the conversation
+    /// has no attachments or no doltlite db is present (legacy
+    /// JSON-tree fixture).
+    pub blobs: BlobBundle,
 }
 
 /// Shredded form of one conversation. Built by [`shred`] only for
@@ -135,7 +150,7 @@ pub struct ScanResult {
     pub scan_elapsed: Option<Duration>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
     pub projects: Vec<ProjectRow>,
@@ -143,21 +158,6 @@ pub struct ParsedExport {
     /// Count of conversations `dolt_diff` reported as unchanged.
     pub docs_skipped: usize,
     pub scan: ScanResult,
-    /// Streaming handle to blob bytes, keyed by upstream `file_uuid`.
-    pub blobs: Arc<dyn BlobReader>,
-}
-
-impl Default for ParsedExport {
-    fn default() -> Self {
-        Self {
-            accounts: Vec::new(),
-            projects: Vec::new(),
-            conversations: Vec::new(),
-            docs_skipped: 0,
-            scan: ScanResult::default(),
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
 }
 
 fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
@@ -212,18 +212,21 @@ async fn parse_doltlite_async(
         })?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
-    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
             .read_only(true);
-        let cas_pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(Duration::from_secs(60))
-            .connect_with(cas_opts)
-            .await
-            .with_context(|| format!("open anthropic CAS for translate {}", cas_path.display()))?;
-        super::blob_reader::AnthropicBlobReader::new(pool.clone(), cas_pool).into_handle()
+        Some(
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(60))
+                .connect_with(cas_opts)
+                .await
+                .with_context(|| {
+                    format!("open anthropic CAS for translate {}", cas_path.display())
+                })?,
+        )
     } else {
-        InMemoryBlobReader::empty_handle()
+        None
     };
 
     let scan = scan_diff(&pool, last_render_hash).await?;
@@ -249,13 +252,56 @@ async fn parse_doltlite_async(
         users,
         first_user_uuid,
         conversations: filtered,
-        blobs,
     };
 
     let mut parsed = parse_loaded(raw);
     parsed.docs_skipped = docs_skipped;
     parsed.scan = scan;
+
+    // Per-doc BlobBundle: walk each conversation's
+    // `chat_messages[*].files[*].file_uuid` and bulk-load the matching
+    // edge-table rows + CAS bytes. Two SQL queries per conversation.
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        for conv in &mut parsed.conversations {
+            let refs = collect_attachment_ref_ids(&conv.upstream_payload);
+            if refs.is_empty() {
+                continue;
+            }
+            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
+            conv.blobs =
+                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
+        }
+    }
+
     Ok(parsed)
+}
+
+/// Walk one conversation's `chat_messages[*].files[*]` and enumerate
+/// every `file_uuid` it references — the input set to
+/// [`BlobBundle::load`].
+fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    let Some(messages) = payload
+        .as_object()
+        .and_then(|o| o.get("chat_messages"))
+        .and_then(Value::as_array)
+    else {
+        return out;
+    };
+    for msg in messages {
+        let Some(files) = msg.get("files").and_then(Value::as_array) else {
+            continue;
+        };
+        for f in files {
+            if let Some(id) = f.get("file_uuid").and_then(Value::as_str) {
+                if seen.insert(id.to_string()) {
+                    out.push(id.to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
@@ -395,10 +441,7 @@ async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<
 /// doltlite DB. Each conversation is normalized into export shape (the
 /// same step that used to happen at fetch time) before being walked.
 pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
-    let mut out = ParsedExport {
-        blobs: raw.blobs,
-        ..Default::default()
-    };
+    let mut out = ParsedExport::default();
     for u in &raw.users {
         let Some(obj) = u.as_object() else { continue };
         let Some(uuid) = str_field(obj, "uuid") else {
@@ -425,6 +468,7 @@ pub fn parse_loaded(raw: crate::extract::db::LoadedRaw) -> ParsedExport {
             Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
                 conv,
                 upstream_payload: normalized,
+                blobs: BlobBundle::default(),
             }),
             Ok(None) => {}
             Err(e) => {
@@ -510,6 +554,7 @@ pub fn parse_export_json_dir(export_dir: &Path) -> Result<ParsedExport> {
             Ok(Some(conv)) => out.conversations.push(AnthropicConversation {
                 conv,
                 upstream_payload: c,
+                blobs: BlobBundle::default(),
             }),
             Ok(None) => {}
             Err(e) => return Err(e),

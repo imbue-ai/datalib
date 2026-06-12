@@ -9,7 +9,7 @@ use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 
 use anyhow::Context as _;
-use frankweiler_etl::blob_cas::{self, BlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
@@ -420,7 +420,7 @@ pub fn render_all(
 
         // Changed (or first-time): walk chat_messages into msgs/blocks/atts.
         let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
+        let Some(r) = render_one(&shredded, source_name, &c.blobs) else {
             progress.inc(1);
             continue;
         };
@@ -431,8 +431,8 @@ pub fn render_all(
         std::fs::create_dir_all(page_dir)?;
 
         // Order: blobs → md → sidecar → callback. Callback firing last
-        // is the commit point.
-        materialize_conv_blobs(&shredded, parsed.blobs.as_ref(), page_dir)?;
+        // is the commit point. All sync — `c.blobs` is already loaded.
+        c.blobs.materialize_to_dir(&page_dir.join("blobs"))?;
 
         std::fs::write(&abs, &r.body)?;
 
@@ -486,7 +486,7 @@ fn conv_relative_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> st
 pub fn render_one(
     shredded: &ShreddedConversation,
     _source_name: &str,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
 ) -> Option<Rendered> {
     let conv = &shredded.conv;
     let conv_uuid = conv.conversation_uuid.as_str();
@@ -623,22 +623,6 @@ pub fn render_one(
     })
 }
 
-fn materialize_conv_blobs(
-    shredded: &ShreddedConversation,
-    blobs: &dyn BlobReader,
-    page_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let blobs_dir = page_dir.join("blobs");
-    blob_cas::materialize_refs(
-        blobs,
-        shredded
-            .attachments
-            .iter()
-            .filter_map(|at| attachment_ref_id(at)),
-        &blobs_dir,
-    )
-}
-
 /// Pull (file_uuid, file_name, is_image) out of an Anthropic
 /// attachment row's raw_json. Anthropic uses one of several keys for
 /// the upstream id depending on whether the row came from the bulk
@@ -663,19 +647,7 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     (id, name, is_image)
 }
 
-fn attachment_ref_id(at: &AttachmentRow) -> Option<&str> {
-    // Only items from `chat_messages[*].files[]` (kind="file") name
-    // a downloadable resource the blob CAS should materialize.
-    // `kind="attachment"` items come from `chat_messages[*].attachments[]`
-    // and only carry text Claude pre-extracted from the upload — there
-    // is no binary upstream to fetch (see attachment_md below).
-    if at.kind != "file" {
-        return None;
-    }
-    attachment_meta(at).0
-}
-
-fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
+fn attachment_md(at: &AttachmentRow, blobs: &BlobBundle) -> String {
     let (id, name, is_image) = attachment_meta(at);
     let label = name.unwrap_or("(unnamed)");
 
@@ -683,9 +655,7 @@ fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
     // text — the API carries the bytes Claude extracted from a user
     // upload (the binary itself is not retained), surfaced as
     // `extracted_content`. Render that text inline rather than
-    // pretending there's a blob to link to. We deliberately do NOT
-    // route these through `blob_cas::attachment_md` (which would
-    // produce a misleading "not yet fetched" placeholder).
+    // pretending there's a blob to link to.
     if at.kind == "attachment" {
         let extracted = at
             .raw_json
@@ -695,14 +665,13 @@ fn attachment_md(at: &AttachmentRow, blobs: &dyn BlobReader) -> String {
         return render_extracted_attachment(label, extracted);
     }
 
-    // `files[]` items: real downloadable attachments. Hand off to the
-    // shared CAS-backed renderer which handles image vs file, and
-    // emits the durable "not yet fetched" placeholder when the bytes
-    // genuinely aren't in the CAS yet.
+    // `files[]` items: real downloadable attachments. Look them up in
+    // the per-doc BlobBundle, which emits the durable "not yet
+    // fetched" placeholder when the bytes aren't in the bundle.
     let Some(id) = id else {
         return format!("[{}] {}", at.kind, label);
     };
-    blob_cas::attachment_md(blobs, id, Some(label), is_image)
+    blobs.markdown_link(id, Some(label), is_image)
 }
 
 /// Render a Claude-`attachments[]` text item inline. Format:

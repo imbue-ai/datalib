@@ -768,6 +768,341 @@ pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// BlobBundle — per-doc unit of attachment data, read + write
+// ─────────────────────────────────────────────────────────────────────
+
+/// One attachment's worth of data inside a [`BlobBundle`]. Same shape
+/// the legacy [`BlobView`] carried (blake3 + bytes + the metadata
+/// `rendered_filename` needs), minus the `owning_id` / `slot` /
+/// `source_url` triple that nobody read at render time.
+#[derive(Debug, Clone)]
+pub struct Blob {
+    pub blake3: String,
+    pub bytes: Vec<u8>,
+    pub content_type: Option<String>,
+    pub upstream_name: Option<String>,
+}
+
+impl Blob {
+    /// Stable on-disk filename: `<short-blake3>.<ext>`. Extension comes
+    /// from `content_type` when known, else from the upstream filename.
+    /// Same rule [`BlobView::rendered_filename`] used.
+    pub fn rendered_filename(&self) -> String {
+        let ext = extension_for_content_type(self.content_type.as_deref())
+            .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()));
+        let short = &self.blake3[..16.min(self.blake3.len())];
+        match ext {
+            Some(e) => format!("{short}.{e}"),
+            None => short.to_string(),
+        }
+    }
+}
+
+/// One fetched-but-not-yet-flushed entry on the extract side, exposed
+/// through [`BlobBundle::fetched_refs`] so the per-provider flush code
+/// can build edge-table rows from it.
+#[derive(Debug, Clone, Copy)]
+pub struct FetchedRef<'a> {
+    pub ref_id: &'a str,
+    pub blake3: &'a str,
+    pub content_type: Option<&'a str>,
+    pub upstream_name: Option<&'a str>,
+}
+
+/// Per-doc bundle of attachment data. Travels through the whole
+/// pipeline:
+///
+/// - **Extract** builds an empty bundle, calls [`Self::add`] as bytes
+///   come in (and [`Self::add_error`] when a fetch fails), then asks
+///   the per-provider flush code to drain it via
+///   [`Self::cas_inserts`] (→ [`BlobCas::put_many`]),
+///   [`Self::fetched_refs`] (→ the provider's edge table), and
+///   [`Self::errors`] (→ `record_object_error`).
+///
+/// - **Parse** calls [`Self::load`] for one doc's set of `ref_id`s and
+///   attaches the resulting bundle to the parsed bucket. Two SQL
+///   queries total — one for the per-provider `ref_id → blake3 +
+///   metadata` projection, one for `cas_objects` bytes — regardless of
+///   how many attachments the doc has.
+///
+/// - **Render** consumes the bundle synchronously via [`Self::get`],
+///   [`Self::materialize_to_dir`], and [`Self::markdown_link`]. No SQL,
+///   no `tokio::task::block_in_place`, no `Arc<dyn BlobReader>` —
+///   render is a pure transformer over an already-loaded bag of bytes.
+///
+/// Same conceptual shape both ends. The "blob read" and "blob write"
+/// operations are mirror images, and the bundle is the common
+/// vocabulary.
+#[derive(Debug, Clone, Default)]
+pub struct BlobBundle {
+    by_ref: HashMap<String, Blob>,
+    errors: Vec<(String, String)>,
+}
+
+impl BlobBundle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_ref.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_ref.len()
+    }
+
+    pub fn get(&self, ref_id: &str) -> Option<&Blob> {
+        self.by_ref.get(ref_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Blob)> {
+        self.by_ref.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    // ── extract side ─────────────────────────────────────────────────
+
+    /// Record one fetched attachment. `bytes` is hashed lazily —
+    /// caller does NOT need to pre-compute blake3.
+    pub fn add(
+        &mut self,
+        ref_id: impl Into<String>,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+        upstream_name: Option<String>,
+    ) {
+        let blake3 = blake3_hex(&bytes);
+        self.by_ref.insert(
+            ref_id.into(),
+            Blob {
+                blake3,
+                bytes,
+                content_type,
+                upstream_name,
+            },
+        );
+    }
+
+    /// Record one failed fetch. The flush code routes these through
+    /// `record_object_error` on the provider's edge-table bookkeeping
+    /// sidecar.
+    pub fn add_error(&mut self, ref_id: impl Into<String>, error: impl Into<String>) {
+        self.errors.push((ref_id.into(), error.into()));
+    }
+
+    /// Borrow-friendly view for the per-provider flush code that has
+    /// to call [`BlobCas::put_many`].
+    pub fn cas_inserts(&self) -> Vec<CasInsert<'_>> {
+        self.by_ref
+            .values()
+            .map(|b| CasInsert {
+                blake3: b.blake3.as_str(),
+                bytes: b.bytes.as_slice(),
+                content_type: b.content_type.as_deref(),
+            })
+            .collect()
+    }
+
+    /// Iterator over fetched refs in arbitrary order — caller maps
+    /// these into per-provider edge-table row structs.
+    pub fn fetched_refs(&self) -> impl Iterator<Item = FetchedRef<'_>> {
+        self.by_ref.iter().map(|(ref_id, b)| FetchedRef {
+            ref_id: ref_id.as_str(),
+            blake3: b.blake3.as_str(),
+            content_type: b.content_type.as_deref(),
+            upstream_name: b.upstream_name.as_deref(),
+        })
+    }
+
+    pub fn errors(&self) -> &[(String, String)] {
+        &self.errors
+    }
+
+    // ── parse side ───────────────────────────────────────────────────
+
+    /// Bulk-load one doc's attachments. Two SQL queries, regardless of
+    /// how many attachments:
+    ///
+    /// 1. **Projection** (per-provider). Caller supplies a SQL string
+    ///    with **exactly one `{placeholders}` substring** where the
+    ///    `?, ?, ...` IN-list should land. Must `SELECT ref_id, blake3,
+    ///    content_type, upstream_name` (any of the last two may be
+    ///    `NULL`). Example:
+    ///
+    ///    ```text
+    ///    SELECT file_id AS ref_id, blake3,
+    ///           NULL AS content_type, NULL AS upstream_name
+    ///      FROM chatgpt_attachments
+    ///     WHERE file_id IN ({placeholders}) AND blake3 IS NOT NULL
+    ///    ```
+    ///
+    /// 2. **CAS bytes**: `SELECT blake3, bytes, content_type FROM
+    ///    cas_objects WHERE blake3 IN (?, ...)`. The provider's
+    ///    `content_type` wins over `cas_objects.content_type` when
+    ///    both are present — keeps backward compat with the legacy
+    ///    `SqliteBlobReader` precedence.
+    ///
+    /// Returns an empty bundle if `ref_ids` is empty. Refs that the
+    /// projection didn't surface (no row, or `blake3 IS NULL`) are
+    /// silently dropped — render then emits the
+    /// "attachment not yet fetched" placeholder via
+    /// [`Self::markdown_link`].
+    pub async fn load(
+        refs_pool: &SqlitePool,
+        cas_pool: &SqlitePool,
+        projection_sql_template: &str,
+        ref_ids: &[&str],
+    ) -> Result<Self> {
+        if ref_ids.is_empty() {
+            return Ok(Self::new());
+        }
+        // Stage 1: ref_id → (blake3, content_type, upstream_name).
+        // The template may use `{placeholders}` more than once (e.g.
+        // email's UNION ALL over `emails` and `email_attachments`
+        // wants the same IN-list twice); we bind the ref_ids once
+        // per occurrence so the binding order matches the SQL.
+        let placeholders = std::iter::repeat_n("?", ref_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let occurrences = projection_sql_template.matches("{placeholders}").count();
+        let sql = projection_sql_template.replace("{placeholders}", &placeholders);
+        let mut q = sqlx::query(&sql);
+        for _ in 0..occurrences {
+            for r in ref_ids {
+                q = q.bind(*r);
+            }
+        }
+        let rows = q
+            .fetch_all(refs_pool)
+            .await
+            .context("BlobBundle::load projection")?;
+        if rows.is_empty() {
+            return Ok(Self::new());
+        }
+        // Build a temporary (blake3 → entries-pointing-at-it) map so a
+        // single CAS query covers the whole set even if multiple
+        // ref_ids dedupe to one blake3.
+        struct PendingEntry {
+            ref_id: String,
+            content_type: Option<String>,
+            upstream_name: Option<String>,
+        }
+        let mut pending_by_blake3: HashMap<String, Vec<PendingEntry>> = HashMap::new();
+        let mut blake3_set: Vec<String> = Vec::with_capacity(rows.len());
+        for r in &rows {
+            let Ok(ref_id) = r.try_get::<String, _>("ref_id") else {
+                continue;
+            };
+            let Ok(blake3) = r.try_get::<String, _>("blake3") else {
+                continue;
+            };
+            let content_type: Option<String> = r.try_get("content_type").ok().flatten();
+            let upstream_name: Option<String> = r.try_get("upstream_name").ok().flatten();
+            if !pending_by_blake3.contains_key(&blake3) {
+                blake3_set.push(blake3.clone());
+            }
+            pending_by_blake3
+                .entry(blake3)
+                .or_default()
+                .push(PendingEntry {
+                    ref_id,
+                    content_type,
+                    upstream_name,
+                });
+        }
+        if pending_by_blake3.is_empty() {
+            return Ok(Self::new());
+        }
+        // Stage 2: cas_objects bytes for every blake3 we found.
+        let cas_placeholders = std::iter::repeat_n("?", blake3_set.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let cas_sql = format!(
+            "SELECT blake3, bytes, content_type \
+               FROM cas_objects WHERE blake3 IN ({cas_placeholders})"
+        );
+        let mut cq = sqlx::query(&cas_sql);
+        for h in &blake3_set {
+            cq = cq.bind(h);
+        }
+        let cas_rows = cq
+            .fetch_all(cas_pool)
+            .await
+            .context("BlobBundle::load cas_objects")?;
+        let mut bundle = Self::new();
+        for cr in &cas_rows {
+            let Ok(blake3) = cr.try_get::<String, _>("blake3") else {
+                continue;
+            };
+            let bytes: Vec<u8> = cr.try_get("bytes").unwrap_or_default();
+            let cas_ct: Option<String> = cr.try_get("content_type").ok().flatten();
+            let Some(entries) = pending_by_blake3.remove(&blake3) else {
+                continue;
+            };
+            for entry in entries {
+                bundle.by_ref.insert(
+                    entry.ref_id,
+                    Blob {
+                        blake3: blake3.clone(),
+                        bytes: bytes.clone(),
+                        content_type: entry.content_type.or_else(|| cas_ct.clone()),
+                        upstream_name: entry.upstream_name,
+                    },
+                );
+            }
+        }
+        Ok(bundle)
+    }
+
+    // ── render side (sync) ───────────────────────────────────────────
+
+    /// Write every blob's bytes into `blobs_dir/<rendered_filename>`.
+    /// Skips a write when the target file already exists with the
+    /// expected size — same idempotency the legacy
+    /// [`materialize_refs`] had.
+    pub fn materialize_to_dir(&self, blobs_dir: &Path) -> std::io::Result<()> {
+        if self.by_ref.is_empty() {
+            return Ok(());
+        }
+        std::fs::create_dir_all(blobs_dir)?;
+        for blob in self.by_ref.values() {
+            let fname = blob.rendered_filename();
+            let abs = blobs_dir.join(&fname);
+            if let Ok(meta) = std::fs::metadata(&abs) {
+                if meta.len() == blob.bytes.len() as u64 {
+                    continue;
+                }
+            }
+            std::fs::write(&abs, &blob.bytes)?;
+        }
+        Ok(())
+    }
+
+    /// Same image-vs-file split [`attachment_md`] did, but reads from
+    /// the bundle synchronously. Returns the
+    /// "attachment not yet fetched" placeholder when the bundle has
+    /// no view for this `ref_id`.
+    pub fn markdown_link(&self, ref_id: &str, display: Option<&str>, is_image: bool) -> String {
+        let Some(blob) = self.by_ref.get(ref_id) else {
+            let label = display.unwrap_or(ref_id);
+            return format!("*[attachment not yet fetched: {label}]*");
+        };
+        let display_clean = display.unwrap_or("").replace(']', "");
+        let alt = if display_clean.is_empty() {
+            blob.rendered_filename()
+        } else {
+            display_clean
+        };
+        let link = format!("blobs/{}", blob.rendered_filename());
+        if is_image {
+            format!("![{alt}]({link})")
+        } else {
+            format!("[\\[file\\] {alt}]({link})")
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Maintenance
 // ─────────────────────────────────────────────────────────────────────
 
@@ -895,5 +1230,146 @@ mod tests {
             cas_path_for(p),
             PathBuf::from("/tmp/raw/slack.blobs.doltlite_db")
         );
+    }
+
+    // ── BlobBundle ──────────────────────────────────────────────────
+
+    #[test]
+    fn bundle_add_then_get() {
+        let mut b = BlobBundle::new();
+        b.add(
+            "ref-1",
+            b"hello".to_vec(),
+            Some("text/plain".into()),
+            Some("greeting.txt".into()),
+        );
+        let got = b.get("ref-1").expect("present");
+        assert_eq!(got.blake3.len(), 64);
+        assert_eq!(got.bytes, b"hello");
+        assert_eq!(got.content_type.as_deref(), Some("text/plain"));
+    }
+
+    #[test]
+    fn bundle_cas_inserts_round_trip() {
+        let mut b = BlobBundle::new();
+        b.add("r1", b"aaa".to_vec(), Some("image/png".into()), None);
+        b.add("r2", b"bbb".to_vec(), None, Some("x.bin".into()));
+        let inserts = b.cas_inserts();
+        assert_eq!(inserts.len(), 2);
+        // ensure both blake3s are 64-hex
+        for i in &inserts {
+            assert_eq!(i.blake3.len(), 64);
+        }
+    }
+
+    #[test]
+    fn bundle_markdown_link_placeholder_when_missing() {
+        let b = BlobBundle::new();
+        let s = b.markdown_link("missing", Some("doc.pdf"), false);
+        assert!(s.contains("not yet fetched"));
+        assert!(s.contains("doc.pdf"));
+    }
+
+    #[test]
+    fn bundle_markdown_link_image_when_present() {
+        let mut b = BlobBundle::new();
+        b.add(
+            "img-1",
+            b"\x89PNG\r\n\x1a\n".to_vec(),
+            Some("image/png".into()),
+            Some("kitten.png".into()),
+        );
+        let s = b.markdown_link("img-1", Some("kitten.png"), true);
+        assert!(s.starts_with("![kitten.png](blobs/"));
+        assert!(s.ends_with(".png)"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bundle_materialize_writes_files() {
+        let d = tempdir().unwrap();
+        let mut b = BlobBundle::new();
+        b.add("r1", b"alpha".to_vec(), Some("image/png".into()), None);
+        b.add("r2", b"beta".to_vec(), Some("text/plain".into()), None);
+        let blobs_dir = d.path().join("blobs");
+        b.materialize_to_dir(&blobs_dir).unwrap();
+        let entries: Vec<_> = std::fs::read_dir(&blobs_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(entries.len(), 2);
+        // names are <short blake3>.<ext>
+        for p in &entries {
+            let name = p.file_name().unwrap().to_string_lossy();
+            assert!(name.contains('.'), "expected ext in {name}");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bundle_load_round_trips_through_cas() {
+        let d = tempdir().unwrap();
+        let cas_path = d.path().join("cas.blobs.doltlite_db");
+        let cas = BlobCas::open(&cas_path).await.unwrap();
+        // CAS side: stash two blobs.
+        let h1 = cas.put(b"alpha", Some("image/png")).await.unwrap();
+        let h2 = cas.put(b"beta", Some("application/pdf")).await.unwrap();
+        // Refs side: an inline mini edge table mimicking a per-provider
+        // attachments table, with (ref_id, blake3, content_type,
+        // upstream_name) columns.
+        let refs_path = d.path().join("refs.sqlite");
+        let opts = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
+            "sqlite://{}",
+            refs_path.display()
+        ))
+        .unwrap()
+        .create_if_missing(true);
+        let refs_pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE attachments (
+                file_id TEXT PRIMARY KEY,
+                blake3 TEXT NOT NULL,
+                upstream_name TEXT
+            )",
+        )
+        .execute(&refs_pool)
+        .await
+        .unwrap();
+        for (ref_id, blake3, name) in [
+            ("a", h1.as_str(), Some("alpha.png")),
+            ("b", h2.as_str(), Some("beta.pdf")),
+        ] {
+            sqlx::query(
+                "INSERT INTO attachments (file_id, blake3, upstream_name) VALUES (?, ?, ?)",
+            )
+            .bind(ref_id)
+            .bind(blake3)
+            .bind(name)
+            .execute(&refs_pool)
+            .await
+            .unwrap();
+        }
+
+        let bundle = BlobBundle::load(
+            &refs_pool,
+            cas.pool(),
+            "SELECT file_id AS ref_id, blake3, \
+                    NULL AS content_type, upstream_name \
+               FROM attachments \
+              WHERE file_id IN ({placeholders})",
+            &["a", "b", "missing"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(bundle.len(), 2);
+        let a = bundle.get("a").expect("a present");
+        assert_eq!(a.bytes, b"alpha");
+        // content_type comes from CAS when projection doesn't supply it
+        assert_eq!(a.content_type.as_deref(), Some("image/png"));
+        assert_eq!(a.upstream_name.as_deref(), Some("alpha.png"));
+        assert!(bundle.get("missing").is_none());
     }
 }

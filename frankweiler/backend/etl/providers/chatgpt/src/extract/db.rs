@@ -235,44 +235,30 @@ pub struct LoadedConversation {
     pub last_listing_update_time: Option<Value>,
 }
 
-/// Bag returned to the synchronous translate / synthesize path. `blobs`
-/// is a streaming handle so render can fetch one attachment at a time
-/// rather than bulk-loading the whole table into memory.
-#[derive(Clone)]
+/// Bag returned to the synchronous translate / synthesize path.
+/// Attachment bytes are no longer carried alongside — translate's
+/// `parse` loads a per-doc [`BlobBundle`] for each conversation,
+/// keeping render fully sync.
+#[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub me: Option<Value>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
-}
-
-impl Default for LoadedRaw {
-    fn default() -> Self {
-        Self {
-            me: None,
-            conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
-        }
-    }
 }
 
 /// Synchronous helper for tests that want a snapshot of every entity
 /// table at a fixed point in time. Production translate uses
 /// `crate::translate::parse::parse(..., last_render_hash)` instead;
-/// this one ignores the cursor and loads everything.
+/// this one ignores the cursor and loads everything. Attachment bytes
+/// are NOT loaded here — tests that need them load a [`BlobBundle`]
+/// via `BlobBundle::load(...)` directly.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader> =
-                std::sync::Arc::new(crate::translate::blob_reader::ChatgptBlobReader::new(
-                    db.pool().clone(),
-                    db.cas().pool().clone(),
-                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 me: db.load_me().await?,
                 conversations: db.load_conversations().await?,
-                blobs,
             })
         })
     })

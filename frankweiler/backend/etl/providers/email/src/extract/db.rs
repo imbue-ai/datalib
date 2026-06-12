@@ -17,14 +17,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
-use frankweiler_etl::blob_cas::{self, BlobCas, BlobReader, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
@@ -510,58 +509,32 @@ pub struct EmailJoins {
     pub attachments: HashMap<String, Vec<LoadedAttachment>>,
 }
 
-/// Bag passed to translate's sync render path. `blobs` is a streaming
-/// handle so peak RSS stays low even for accounts with multi-GB
-/// attachment totals.
-#[derive(Clone)]
+/// Bag passed to translate's sync render path. Attachment bytes are
+/// loaded per bucket as a [`BlobBundle`] by `translate::parse`, not
+/// here.
+#[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub accounts: Vec<Value>,
     pub mailboxes: Vec<Value>,
     pub threads: Vec<Value>,
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
-    pub blobs: Arc<dyn BlobReader>,
 }
 
-impl Default for LoadedRaw {
-    fn default() -> Self {
-        Self {
-            accounts: Vec::new(),
-            mailboxes: Vec::new(),
-            threads: Vec::new(),
-            emails: Vec::new(),
-            joins: EmailJoins::default(),
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
-}
-
-/// Synchronous loader for translate / synthesize callers that already
-/// sit under `#[tokio::main(flavor = "multi_thread")]`. Uses
-/// `block_in_place` + the current Handle, so it must be invoked on a
-/// multi-thread runtime.
+/// Synchronous loader for tests / ad-hoc callers that want every
+/// entity table at once. Production translate calls
+/// `crate::translate::parse::parse(..., last_render_hash)` instead.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            // Email's per-provider blob reader: blob_id → blake3 via
-            // emails.blake3 / email_attachments.blake3, then bytes
-            // out of the sibling CAS pool. Replaces the shared
-            // `SqliteBlobReader` (which went through the retired
-            // `blob_refs` table).
-            let blobs: Arc<dyn BlobReader> =
-                Arc::new(crate::translate::blob_reader::EmailBlobReader::new(
-                    db.pool().clone(),
-                    db.cas().pool().clone(),
-                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 accounts: db.load_accounts().await?,
                 mailboxes: db.load_mailboxes().await?,
                 threads: db.load_threads().await?,
                 emails: db.load_emails().await?,
                 joins: db.load_email_joins().await?,
-                blobs,
             })
         })
     })

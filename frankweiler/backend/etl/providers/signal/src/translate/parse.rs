@@ -24,21 +24,28 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader, BlobView, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::{self, BlobBundle};
 use frankweiler_etl::periodize::Period;
 use frankweiler_signal_backup::backup;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+/// SQL projection from Signal's `chat_item_attachments` edge to its
+/// CAS blake3. Consumed by [`BlobBundle::load`].
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT ref_id, blake3,
+           NULL AS content_type, NULL AS upstream_name
+      FROM chat_item_attachments
+     WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
+
 /// Result of the dolt_diff scan: the chats we need to re-render, the
 /// current HEAD hash to stamp into the next cursor, and how long the
 /// diff query took. All three travel together so `render` can write
 /// the cursor + log the elapsed_ms without a second round-trip.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → render only chats whose id is in `set`. `None` →
     /// cold start, render every chat. (First run, or no on-disk
@@ -55,7 +62,7 @@ pub struct ScanResult {
     pub scan_elapsed: Option<Duration>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ParsedSignal {
     pub recipients: HashMap<String, ParsedRecipient>,
     /// Chats indexed by `chat_id` for lookup from `DocBucket`. The
@@ -70,35 +77,11 @@ pub struct ParsedSignal {
     /// entirely absent from `docs`. Ordered by chat_id then
     /// period_key so the rendered tree is deterministic.
     pub docs: Vec<DocBucket>,
-    /// Count of chats `dolt_diff` said were unchanged, reported into
-    /// [`super::render::RenderSummary`] so the orchestrator's progress
-    /// accounting stays accurate. We count CHATS, not buckets, because
-    /// the diff is chat-grained — we never materialize buckets for
-    /// unchanged chats.
+    /// Count of chats `dolt_diff` said were unchanged.
     pub docs_skipped: usize,
     /// Scan diagnostics propagated up to render so it can write the
     /// cursor + log elapsed_ms.
     pub scan: ScanResult,
-    /// Streaming handle to attachment bytes stored in the sibling
-    /// CAS file.
-    pub blobs: Arc<dyn BlobReader>,
-}
-
-impl Default for ParsedSignal {
-    fn default() -> Self {
-        Self {
-            recipients: HashMap::new(),
-            chats: HashMap::new(),
-            docs: Vec::new(),
-            docs_skipped: 0,
-            scan: ScanResult {
-                changed_chats: None,
-                new_head: None,
-                scan_elapsed: None,
-            },
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -125,11 +108,16 @@ pub struct ParsedChat {
 
 /// One rendered-markdown bucket: a slice of a chat covering a single
 /// period key (`2024-03`, `2024-03-15`, `2024`, or `all`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DocBucket {
     pub chat_id: String,
     pub period_key: String,
     pub items: Vec<ParsedChatItem>,
+    /// This bucket's attachment bytes, loaded in bulk by [`parse`]
+    /// from `chat_item_attachments` + CAS in two SQL queries. Render
+    /// walks it synchronously via [`BlobBundle::markdown_link`] and
+    /// [`BlobBundle::materialize_to_dir`].
+    pub blobs: BlobBundle,
 }
 
 #[derive(Debug, Clone)]
@@ -205,20 +193,20 @@ async fn parse_async(
         .await
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
 
-    // Sibling CAS file holds attachment bytes; render fetches them on
-    // demand via `SignalBlobReader`.
+    // Sibling CAS file holds attachment bytes.
     let cas_path = blob_cas::cas_path_for(db_path);
-    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
             .read_only(true);
-        let cas_pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(cas_opts)
-            .await
-            .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
-        Arc::new(SignalBlobReader::new(pool.clone(), cas_pool))
+        Some(
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(cas_opts)
+                .await
+                .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?,
+        )
     } else {
-        InMemoryBlobReader::empty_handle()
+        None
     };
 
     let recipients = load_recipients(&pool).await?;
@@ -230,16 +218,11 @@ async fn parse_async(
     // Decide the load set.
     let (to_load_chats, docs_skipped) = match &scan.changed_chats {
         None => {
-            // Cold start — every chat with any chat_items needs loading.
             let ids = load_all_chat_ids(&pool).await?;
             (ids, 0usize)
         }
         Some(changed) => {
             let total = chats.len();
-            // Filter to chats we actually know about (a chat that
-            // existed only in `from_ref` shows up via dolt_diff but is
-            // gone from `chats` now; skip it — the stale markdown sits
-            // until the indexer GCs it).
             let to_load: HashSet<String> = changed
                 .iter()
                 .filter(|cid| chats.contains_key(*cid))
@@ -251,15 +234,33 @@ async fn parse_async(
     };
 
     // ── Phase 2: targeted load for to_load_chats ──────────────────
-    let docs = if to_load_chats.is_empty() {
+    let mut docs = if to_load_chats.is_empty() {
         Vec::new()
     } else {
         load_buckets(&pool, period, &to_load_chats).await?
     };
 
-    // Don't close `pool` — `SignalBlobReader` cloned it and the
-    // renderer reads through that clone after we return. The pool
-    // closes on the last Arc<BlobReader> drop.
+    // Per-bucket BlobBundle: each bucket gets its own bag of
+    // attachment bytes loaded in two queries. Render walks them
+    // synchronously.
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        for bucket in &mut docs {
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut refs: Vec<&str> = Vec::new();
+            for item in &bucket.items {
+                for att in &item.attachments {
+                    if seen.insert(att.ref_id.clone()) {
+                        refs.push(att.ref_id.as_str());
+                    }
+                }
+            }
+            if refs.is_empty() {
+                continue;
+            }
+            bucket.blobs =
+                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs).await?;
+        }
+    }
 
     Ok(ParsedSignal {
         recipients,
@@ -267,7 +268,6 @@ async fn parse_async(
         docs,
         docs_skipped,
         scan,
-        blobs,
     })
 }
 
@@ -505,6 +505,7 @@ async fn load_buckets(
                 chat_id: chat_id.clone(),
                 period_key: period_key.clone(),
                 items: Vec::new(),
+                blobs: BlobBundle::default(),
             });
             docs.len() - 1
         });
@@ -585,79 +586,4 @@ fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAtta
         file_name: ptr.file_name.clone(),
         is_image,
     })
-}
-
-/// Signal-specific [`BlobReader`].
-///
-/// **Lookup chain.** `read_by_ref_id(ref_id)`:
-///
-/// 1. `SELECT blake3 FROM chat_item_attachments WHERE ref_id = ?
-///    AND blake3 IS NOT NULL LIMIT 1` — resolve Signal's media_name
-///    to the CAS content hash, dedupe-aware across chat_items that
-///    share the same `media_name`.
-/// 2. `SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?`
-///    — load the decrypted bytes and (universal-across-providers)
-///    content_type that the CAS stored at extract time.
-pub struct SignalBlobReader {
-    refs_pool: SqlitePool,
-    cas_pool: SqlitePool,
-}
-
-impl SignalBlobReader {
-    pub fn new(refs_pool: SqlitePool, cas_pool: SqlitePool) -> Self {
-        Self {
-            refs_pool,
-            cas_pool,
-        }
-    }
-
-    fn block_on<F: std::future::Future>(&self, fut: F) -> F::Output {
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(fut))
-    }
-
-    async fn read_by_ref_id_async(&self, ref_id: &str) -> Result<Option<BlobView>> {
-        let blake3: Option<String> = sqlx::query_scalar(
-            "SELECT blake3 FROM chat_item_attachments \
-             WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
-        )
-        .bind(ref_id)
-        .fetch_optional(&self.refs_pool)
-        .await
-        .with_context(|| format!("lookup chat_item_attachments by ref_id {ref_id}"))?;
-        let Some(blake3) = blake3 else {
-            return Ok(None);
-        };
-        let row = sqlx::query("SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?")
-            .bind(&blake3)
-            .fetch_optional(&self.cas_pool)
-            .await
-            .with_context(|| format!("lookup cas_objects by blake3 {blake3}"))?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let bytes: Vec<u8> = row.try_get("bytes").unwrap_or_default();
-        let content_type: Option<String> = row.try_get("content_type").ok();
-        Ok(Some(BlobView {
-            ref_id: ref_id.to_string(),
-            owning_id: String::new(),
-            slot: String::new(),
-            blake3,
-            content_type,
-            upstream_name: None,
-            source_url: None,
-            bytes,
-        }))
-    }
-}
-
-impl BlobReader for SignalBlobReader {
-    fn read_by_ref_id(&self, ref_id: &str) -> Result<Option<BlobView>> {
-        self.block_on(self.read_by_ref_id_async(ref_id))
-    }
-    fn read_by_owner(&self, _owning_id: &str) -> Result<Option<BlobView>> {
-        Ok(None)
-    }
-    fn read_by_hash(&self, _blake3_hash: &str) -> Result<Option<BlobView>> {
-        Ok(None)
-    }
 }

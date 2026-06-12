@@ -26,21 +26,37 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::{self, BlobBundle};
 use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::extract::db::{db_path_for, EmailJoins, LoadedAttachment, LoadedEmail};
 
+/// SQL projection from email's two CAS-edge columns (`emails.blake3`
+/// for the `.eml` body, `email_attachments.blake3` for each attachment
+/// part) to their bytes. Consumed by [`BlobBundle::load`]; the
+/// `{placeholders}` token is substituted twice — once per UNION half.
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT blob_id AS ref_id, blake3,
+           'message/rfc822' AS content_type,
+           NULL AS upstream_name
+      FROM emails
+     WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL
+    UNION ALL
+    SELECT blob_id AS ref_id, blake3,
+           type AS content_type,
+           name AS upstream_name
+      FROM email_attachments
+     WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
+
 /// Result of the dolt_diff scan. Travels alongside the parsed bag so
 /// render can advance the cursor + log timing without a second
 /// round-trip.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ScanResult {
     /// `Some(set)` → load only threads whose `(account_id, thread_id)`
     /// is in `set`. `None` → cold start, render every thread.
@@ -53,7 +69,7 @@ pub struct ScanResult {
     pub scan_elapsed: Option<Duration>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ParsedEmail {
     pub accounts: Vec<Value>,
     pub mailboxes: Vec<Value>,
@@ -66,36 +82,19 @@ pub struct ParsedEmail {
     /// into the render summary.
     pub docs_skipped: usize,
     pub scan: ScanResult,
-    pub blobs: Arc<dyn BlobReader>,
-}
-
-impl Default for ParsedEmail {
-    fn default() -> Self {
-        Self {
-            accounts: Vec::new(),
-            mailboxes: Vec::new(),
-            threads: Vec::new(),
-            docs: Vec::new(),
-            docs_skipped: 0,
-            scan: ScanResult {
-                changed_threads: None,
-                new_head: None,
-                scan_elapsed: None,
-            },
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
 }
 
 /// One rendered-markdown bucket: every email in a single JMAP Thread
-/// plus its joins. No per-bucket fingerprint anymore — render skip is
-/// decided by the dolt_diff scan up in `parse`.
-#[derive(Debug, Clone)]
+/// plus its joins. Carries the per-doc [`BlobBundle`] of attachment
+/// bytes (.eml bodies + each attachment part) loaded in two SQL
+/// queries by `parse`.
+#[derive(Debug, Clone, Default)]
 pub struct EmailThreadBucket {
     pub account_id: String,
     pub thread_id: String,
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
+    pub blobs: BlobBundle,
 }
 
 /// Compatibility entry point for tests / ad-hoc repros that don't
@@ -126,20 +125,18 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
 
     let cas_path = blob_cas::cas_path_for(db_path);
-    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+    let cas_pool: Option<SqlitePool> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
             .read_only(true);
-        let cas_pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect_with(cas_opts)
-            .await
-            .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
-        Arc::new(super::blob_reader::EmailBlobReader::new(
-            pool.clone(),
-            cas_pool,
-        ))
+        Some(
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(cas_opts)
+                .await
+                .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?,
+        )
     } else {
-        InMemoryBlobReader::empty_handle()
+        None
     };
 
     let accounts = load_payloads(&pool, "accounts").await?;
@@ -171,14 +168,39 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     };
 
     // ── Phase 2: targeted load for to-render buckets ──────────────
-    let docs = if to_load.is_empty() {
+    let mut docs = if to_load.is_empty() {
         Vec::new()
     } else {
         load_buckets(&pool, &to_load).await?
     };
 
-    // Don't close `pool` — `EmailBlobReader` cloned it and the
-    // renderer reads through that clone after we return.
+    // Per-bucket BlobBundle: gather every email's blob_id (the .eml
+    // CAS pointer) + every attachment's blob_id and bulk-load them
+    // through the UNION-ALL projection. Two queries per bucket cover
+    // both source tables.
+    if let Some(cas_pool) = cas_pool.as_ref() {
+        for bucket in &mut docs {
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut refs: Vec<&str> = Vec::new();
+            for em in &bucket.emails {
+                if seen.insert(em.blob_id.clone()) {
+                    refs.push(em.blob_id.as_str());
+                }
+            }
+            for atts in bucket.joins.attachments.values() {
+                for att in atts {
+                    if seen.insert(att.blob_id.clone()) {
+                        refs.push(att.blob_id.as_str());
+                    }
+                }
+            }
+            if refs.is_empty() {
+                continue;
+            }
+            bucket.blobs =
+                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs).await?;
+        }
+    }
 
     Ok(ParsedEmail {
         accounts,
@@ -187,7 +209,6 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
         docs,
         docs_skipped,
         scan,
-        blobs,
     })
 }
 
@@ -329,6 +350,7 @@ async fn load_buckets(
             thread_id: thread_id.clone(),
             emails: Vec::new(),
             joins: EmailJoins::default(),
+            blobs: BlobBundle::default(),
         });
     }
 

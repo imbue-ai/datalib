@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, CasInsert};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
@@ -602,19 +602,6 @@ fn pick_user_fields(acct: &Value) -> Value {
     Value::Object(obj)
 }
 
-#[derive(Default)]
-struct PendingAttachments {
-    rows: Vec<ConversationAttachmentRow>,
-    cas_items: Vec<DecodedCas>,
-    errors: Vec<(String, String)>,
-}
-
-struct DecodedCas {
-    blake3: String,
-    content_type: Option<String>,
-    bytes: Vec<u8>,
-}
-
 /// Walk a conversation tree's `chat_messages[*].files[]` and
 /// queue every unique attachment for the end-of-conversation CAS
 /// flush. Skips files we already have bytes for.
@@ -642,7 +629,8 @@ async fn fetch_files_for(
             }
         }
     }
-    let mut pending = PendingAttachments::default();
+    let mut bundle = BlobBundle::new();
+    let mut failed: Vec<String> = Vec::new();
     for f in &targets {
         let Some(file_uuid) = f.get("file_uuid").and_then(|v| v.as_str()) else {
             continue;
@@ -651,89 +639,94 @@ async fn fetch_files_for(
             summary.skipped_blobs += 1;
             continue;
         }
-        let attachment_pk = attachment_id_recipe(conv_uuid, file_uuid);
+        let name = f
+            .get("file_name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         match download_one_file(f).await {
-            Ok(Some(decoded)) => {
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk,
-                    conversation_uuid: conv_uuid.to_string(),
-                    file_uuid: file_uuid.to_string(),
-                    blake3: Some(decoded.blake3.clone()),
-                });
-                pending.cas_items.push(decoded);
+            Ok(Some((bytes, content_type))) => {
+                bundle.add(file_uuid, bytes, content_type, name);
                 summary.new_blobs += 1;
             }
             Ok(None) => {
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk.clone(),
-                    conversation_uuid: conv_uuid.to_string(),
-                    file_uuid: file_uuid.to_string(),
-                    blake3: None,
-                });
-                pending.errors.push((attachment_pk, "no bytes".to_string()));
+                bundle.add_error(file_uuid, "no bytes");
+                failed.push(file_uuid.to_string());
                 summary.failed_blobs += 1;
             }
             Err(e) => {
                 warn!(event = "anthropic_media_unexpected_err", file_uuid = %file_uuid, error = %e);
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk.clone(),
-                    conversation_uuid: conv_uuid.to_string(),
-                    file_uuid: file_uuid.to_string(),
-                    blake3: None,
-                });
-                pending.errors.push((attachment_pk, e.to_string()));
+                bundle.add_error(file_uuid, e.to_string());
+                failed.push(file_uuid.to_string());
                 summary.failed_blobs += 1;
             }
         }
     }
-    if let Err(e) = flush_attachments(db, pending, now).await {
+    if let Err(e) = flush_attachment_bundle(db, &bundle, &failed, conv_uuid, now).await {
         warn!(event = "anthropic_attachment_flush_err", conv = %conv_uuid, error = %e);
     }
 }
 
-/// End-of-conversation flush. One CAS-pool tx (`put_many`) + one
-/// entity-pool tx (chunked multi-row UPSERT + bookkeeping) + per-row
-/// error recording. Order: CAS first so the entity-row's `blake3`
-/// points at bytes definitely in the CAS.
-async fn flush_attachments(db: &RawDb, pending: PendingAttachments, now: &str) -> Result<()> {
-    if pending.rows.is_empty() {
+/// End-of-conversation flush. CAS-pool tx (`put_many`) → entity-pool
+/// tx (chunked multi-row UPSERT for both successful fetches and the
+/// blake3=NULL stubs for failed ones, plus `record_object_error` per
+/// failure into the bookkeeping sidecar).
+async fn flush_attachment_bundle(
+    db: &RawDb,
+    bundle: &BlobBundle,
+    failed_refs: &[String],
+    conversation_uuid: &str,
+    now: &str,
+) -> Result<()> {
+    if bundle.is_empty() && bundle.errors().is_empty() {
         return Ok(());
     }
-    let inserts: Vec<CasInsert<'_>> = pending
-        .cas_items
-        .iter()
-        .map(|d| CasInsert {
-            blake3: d.blake3.as_str(),
-            content_type: d.content_type.as_deref(),
-            bytes: d.bytes.as_slice(),
-        })
-        .collect();
-    if !inserts.is_empty() {
+    let cas_inserts = bundle.cas_inserts();
+    if !cas_inserts.is_empty() {
         db.cas()
-            .put_many(&inserts)
+            .put_many(&cas_inserts)
             .await
             .context("anthropic CAS put_many")?;
+    }
+    let mut rows: Vec<ConversationAttachmentRow> = bundle
+        .fetched_refs()
+        .map(|f| ConversationAttachmentRow {
+            id: attachment_id_recipe(conversation_uuid, f.ref_id),
+            conversation_uuid: conversation_uuid.to_string(),
+            file_uuid: f.ref_id.to_string(),
+            blake3: Some(f.blake3.to_string()),
+        })
+        .collect();
+    for file_uuid in failed_refs {
+        rows.push(ConversationAttachmentRow {
+            id: attachment_id_recipe(conversation_uuid, file_uuid),
+            conversation_uuid: conversation_uuid.to_string(),
+            file_uuid: file_uuid.clone(),
+            blake3: None,
+        });
     }
     let mut tx = db
         .pool()
         .begin()
         .await
-        .context("begin flush_attachments tx")?;
-    bulk_upsert_in_tx(&mut tx, &pending.rows, now).await?;
-    for (id, err) in &pending.errors {
+        .context("begin flush_attachment_bundle tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    for (ref_id, err) in bundle.errors() {
+        let id = attachment_id_recipe(conversation_uuid, ref_id);
         frankweiler_etl::doltlite_raw::record_object_error(
             &mut tx,
             "anthropic_attachments",
-            id,
+            &id,
             err,
         )
         .await?;
     }
-    tx.commit().await.context("commit flush_attachments tx")?;
+    tx.commit()
+        .await
+        .context("commit flush_attachment_bundle tx")?;
     Ok(())
 }
 
-async fn download_one_file(file_obj: &Value) -> Result<Option<DecodedCas>> {
+async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<String>)>> {
     let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
         return Ok(None);
     };
@@ -773,12 +766,7 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<DecodedCas>> {
         Ok(resp) if (200..300).contains(&resp.status) => {
             let header_mime = resp.header("content-type").map(String::from);
             let effective_mime = header_mime.as_deref().or(mime);
-            let blake3 = blob_cas::blake3_hex(&resp.body);
-            Ok(Some(DecodedCas {
-                blake3,
-                content_type: effective_mime.map(String::from),
-                bytes: resp.body,
-            }))
+            Ok(Some((resp.body, effective_mime.map(String::from))))
         }
         Ok(resp) => {
             let msg = format!("HTTP {}", resp.status);

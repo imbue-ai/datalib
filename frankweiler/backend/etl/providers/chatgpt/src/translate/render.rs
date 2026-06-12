@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context as _;
-use frankweiler_etl::blob_cas::{self, BlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
@@ -132,7 +132,7 @@ pub fn render_all(
         let fingerprint = conv_id.clone();
 
         let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
+        let Some(r) = render_one(&shredded, source_name, &c.blobs) else {
             progress.inc(1);
             continue;
         };
@@ -144,8 +144,10 @@ pub fn render_all(
 
         // Order: blobs → md → sidecar → callback. The callback is the
         // commit point: an interrupted run leaves the indexer
-        // un-notified so next run re-tries.
-        materialize_conv_blobs(&shredded, parsed.blobs.as_ref(), page_dir)?;
+        // un-notified so next run re-tries. All sync now —
+        // `c.blobs.materialize_to_dir` is a pure-Rust loop over the
+        // pre-loaded bundle.
+        c.blobs.materialize_to_dir(&page_dir.join("blobs"))?;
 
         std::fs::write(&abs, &r.body)?;
 
@@ -202,7 +204,7 @@ fn conv_relative_path(account_id: &str, conv_id: &str) -> std::path::PathBuf {
 pub fn render_one(
     shredded: &ShreddedConversation,
     _source_name: &str,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
 ) -> Option<Rendered> {
     let conv = &shredded.conv;
     let msgs: Vec<&OAMessageRow> = shredded.messages.iter().collect();
@@ -394,22 +396,6 @@ pub fn render_one(
     })
 }
 
-fn materialize_conv_blobs(
-    shredded: &ShreddedConversation,
-    blobs: &dyn BlobReader,
-    page_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let blobs_dir = page_dir.join("blobs");
-    blob_cas::materialize_refs(
-        blobs,
-        shredded
-            .messages
-            .iter()
-            .flat_map(|m| m.attachments.iter().map(|a| a.file_id.as_str())),
-        &blobs_dir,
-    )
-}
-
-fn attachment_md(a: &OAAttachmentRef, blobs: &dyn BlobReader) -> String {
-    blob_cas::attachment_md(blobs, &a.file_id, a.name.as_deref(), a.is_image)
+fn attachment_md(a: &OAAttachmentRef, blobs: &BlobBundle) -> String {
+    blobs.markdown_link(&a.file_id, a.name.as_deref(), a.is_image)
 }

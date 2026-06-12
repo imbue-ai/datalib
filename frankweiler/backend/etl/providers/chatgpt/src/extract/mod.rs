@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, CasInsert};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
@@ -391,27 +391,17 @@ async fn upsert_conversations(db: &RawDb, rows: &[ConversationUpsert], now: &str
     Ok(())
 }
 
-/// Pending attachment state accumulated during one conversation's
-/// walk: the entity-table edge rows + the CAS inserts. Flushed at the
-/// end of the conversation in a single (entity tx) + (CAS tx) pair —
-/// same batching shape email uses for JMAP attachments.
-#[derive(Default)]
-struct PendingAttachments {
-    rows: Vec<ConversationAttachmentRow>,
-    cas_items: Vec<DecryptedCas>,
-    errors: Vec<(String, String)>, // (attachment_pk, error_msg)
-}
-
-struct DecryptedCas {
-    blake3: String,
-    content_type: Option<String>,
-    bytes: Vec<u8>,
-}
-
 /// Walk a conversation tree and pull every attachment + asset-pointer
 /// blob into the DB. Per the design doc we skip when we already have
 /// bytes (signed URLs rotate; bytes don't). Failures bump
 /// `attempt_count` and record `last_error`; they don't fail the sync.
+///
+/// Pending state accumulates in a [`BlobBundle`] — successful fetches
+/// go through `bundle.add(...)`, failures through `bundle.add_error(...)`.
+/// One flush at end-of-conversation drains the bundle into the CAS
+/// (via `BlobCas::put_many`) + the per-provider `chatgpt_attachments`
+/// edge table (via `bulk_upsert_in_tx`) + the bookkeeping sidecar
+/// (`record_object_error`).
 async fn fetch_attachments_for(
     client: &mut ChatGPTClient,
     db: &RawDb,
@@ -485,105 +475,116 @@ async fn fetch_attachments_for(
             }
         }
     }
-    let mut pending = PendingAttachments::default();
+    let mut bundle = BlobBundle::new();
+    // failures: ref_id → which we couldn't get bytes for; tracked here
+    // so the end-of-walk flush can insert blake3=NULL edge rows for
+    // them too (the bundle proper only carries successful fetches).
+    let mut failed: Vec<String> = Vec::new();
     for (file_id, name, mime) in targets {
         if db.attachment_has_bytes(&file_id).await.unwrap_or(false) {
             summary.skipped_blobs += 1;
             continue;
         }
-        let attachment_pk = attachment_id_recipe(cid, &file_id);
         match download_one_file(client, &file_id, name.as_deref(), mime.as_deref()).await {
-            Ok(Some(decoded)) => {
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk,
-                    conversation_id: cid.to_string(),
-                    file_id: file_id.clone(),
-                    blake3: Some(decoded.blake3.clone()),
-                });
-                pending.cas_items.push(decoded);
+            Ok(Some((bytes, content_type))) => {
+                bundle.add(&file_id, bytes, content_type, name.clone());
                 summary.new_blobs += 1;
             }
             Ok(None) => {
-                // No bytes (HTTP error / no signed URL). Insert the
-                // edge row with blake3=NULL so the bookkeeping
-                // sidecar's last_error is meaningful.
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk.clone(),
-                    conversation_id: cid.to_string(),
-                    file_id: file_id.clone(),
-                    blake3: None,
-                });
-                pending.errors.push((attachment_pk, "no bytes".to_string()));
+                bundle.add_error(&file_id, "no bytes");
+                failed.push(file_id.clone());
                 summary.failed_blobs += 1;
             }
             Err(e) => {
                 warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e);
-                pending.rows.push(ConversationAttachmentRow {
-                    id: attachment_pk.clone(),
-                    conversation_id: cid.to_string(),
-                    file_id: file_id.clone(),
-                    blake3: None,
-                });
-                pending.errors.push((attachment_pk, e.to_string()));
+                bundle.add_error(&file_id, e.to_string());
+                failed.push(file_id.clone());
                 summary.failed_blobs += 1;
             }
         }
     }
 
-    if let Err(e) = flush_attachments(db, pending, now).await {
+    if let Err(e) = flush_attachment_bundle(db, &bundle, &failed, cid, now).await {
         warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e);
     }
 }
 
-/// End-of-conversation flush. One CAS-pool tx (`put_many`) + one
-/// entity-pool tx (chunked multi-row UPSERT + bookkeeping) + per-row
-/// error recording. Order: CAS first so the entity-row's `blake3`
-/// points at bytes definitely in the CAS.
-async fn flush_attachments(db: &RawDb, pending: PendingAttachments, now: &str) -> Result<()> {
-    if pending.rows.is_empty() {
+/// End-of-conversation flush. CAS-pool tx (`put_many`) → entity-pool tx
+/// (chunked multi-row UPSERT for both successful fetches and the
+/// blake3=NULL stubs for failed ones, plus `record_object_error` per
+/// failure into the bookkeeping sidecar). Order: CAS first so the
+/// entity-row's `blake3` points at bytes definitely in the CAS.
+async fn flush_attachment_bundle(
+    db: &RawDb,
+    bundle: &BlobBundle,
+    failed_refs: &[String],
+    conversation_id: &str,
+    now: &str,
+) -> Result<()> {
+    if bundle.is_empty() && bundle.errors().is_empty() {
         return Ok(());
     }
-    let inserts: Vec<CasInsert<'_>> = pending
-        .cas_items
-        .iter()
-        .map(|d| CasInsert {
-            blake3: d.blake3.as_str(),
-            content_type: d.content_type.as_deref(),
-            bytes: d.bytes.as_slice(),
-        })
-        .collect();
-    if !inserts.is_empty() {
+    let cas_inserts = bundle.cas_inserts();
+    if !cas_inserts.is_empty() {
         db.cas()
-            .put_many(&inserts)
+            .put_many(&cas_inserts)
             .await
             .context("chatgpt CAS put_many")?;
+    }
+    // Build edge rows: one per successful fetch (with blake3) + one
+    // per failed fetch (blake3 NULL). Both go through the same bulk
+    // upsert so the sidecar's attempt_count moves uniformly.
+    let mut rows: Vec<ConversationAttachmentRow> = bundle
+        .fetched_refs()
+        .map(|f| ConversationAttachmentRow {
+            id: attachment_id_recipe(conversation_id, f.ref_id),
+            conversation_id: conversation_id.to_string(),
+            file_id: f.ref_id.to_string(),
+            blake3: Some(f.blake3.to_string()),
+        })
+        .collect();
+    for ref_id in failed_refs {
+        rows.push(ConversationAttachmentRow {
+            id: attachment_id_recipe(conversation_id, ref_id),
+            conversation_id: conversation_id.to_string(),
+            file_id: ref_id.clone(),
+            blake3: None,
+        });
     }
     let mut tx = db
         .pool()
         .begin()
         .await
-        .context("begin flush_attachments tx")?;
-    bulk_upsert_in_tx(&mut tx, &pending.rows, now).await?;
-    for (id, err) in &pending.errors {
-        frankweiler_etl::doltlite_raw::record_object_error(&mut tx, "chatgpt_attachments", id, err)
-            .await?;
+        .context("begin flush_attachment_bundle tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    for (ref_id, err) in bundle.errors() {
+        let id = attachment_id_recipe(conversation_id, ref_id);
+        frankweiler_etl::doltlite_raw::record_object_error(
+            &mut tx,
+            "chatgpt_attachments",
+            &id,
+            err,
+        )
+        .await?;
     }
-    tx.commit().await.context("commit flush_attachments tx")?;
+    tx.commit()
+        .await
+        .context("commit flush_attachment_bundle tx")?;
     Ok(())
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via
 /// latchkey (auth attached), then `latchkey curl -fSL` on the signed
 /// URL (no auth — Azure rejects the chatgpt cookie). On success returns
-/// the decoded bag the caller will queue for the end-of-conversation
-/// CAS flush. `Ok(None)` means "no bytes for this file" — caller
-/// inserts an edge row with blake3 NULL and a bookkeeping error.
+/// `(bytes, content_type)` for the caller to feed into the
+/// per-conversation [`BlobBundle`]. `Ok(None)` means "no bytes for
+/// this file" — caller logs a stub edge row + bookkeeping error.
 async fn download_one_file(
     client: &mut ChatGPTClient,
     file_id: &str,
     name: Option<&str>,
     mime: Option<&str>,
-) -> Result<Option<DecryptedCas>> {
+) -> Result<Option<(Vec<u8>, Option<String>)>> {
     let _ = name; // upstream_name is no longer stored on the edge row
                   // Step 1: metadata fetch.
     let meta = match client
@@ -643,12 +644,7 @@ async fn download_one_file(
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
-    let blake3 = blob_cas::blake3_hex(&bytes);
-    Ok(Some(DecryptedCas {
-        blake3,
-        content_type: mime.map(String::from),
-        bytes,
-    }))
+    Ok(Some((bytes, mime.map(String::from))))
 }
 
 #[instrument(skip(client))]

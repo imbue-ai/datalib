@@ -228,44 +228,28 @@ pub struct LoadedConversation {
     pub payload: Value,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub users: Vec<Value>,
     pub first_user_uuid: Option<String>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
-}
-
-impl Default for LoadedRaw {
-    fn default() -> Self {
-        Self {
-            users: Vec::new(),
-            first_user_uuid: None,
-            conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
-        }
-    }
 }
 
 /// Synchronous helper for tests that want a snapshot of every entity
 /// table at a fixed point in time. Production translate uses
 /// `crate::translate::parse::parse(..., last_render_hash)` instead;
-/// this one ignores the cursor and loads everything.
+/// this one ignores the cursor and loads everything. Attachment bytes
+/// are NOT loaded here — tests that need them load a `BlobBundle`
+/// via `BlobBundle::load(...)` directly.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader> =
-                std::sync::Arc::new(crate::translate::blob_reader::AnthropicBlobReader::new(
-                    db.pool().clone(),
-                    db.cas().pool().clone(),
-                ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 users: db.load_users().await?,
                 first_user_uuid: db.first_user_uuid().await?,
                 conversations: db.load_conversations().await?,
-                blobs,
             })
         })
     })

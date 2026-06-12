@@ -328,23 +328,21 @@ pub fn render_all(
         fs::create_dir_all(page_dir)
             .with_context(|| format!("create thread dir {}", page_dir.display()))?;
 
-        // mail-parse each email's `.eml` from the blob CAS once and
-        // cache the envelope/body extracts the renderer needs. Single
-        // input contract for both JMAP and mbox sources — neither
-        // path stores a pre-decoded body anywhere.
+        // mail-parse each email's `.eml` from the per-bucket bundle
+        // once and cache the envelope/body extracts. All sync — the
+        // bundle is pre-loaded.
         let mut parsed_emls: HashMap<String, ParsedEml> = HashMap::new();
         for em in &emails {
-            let view = parsed.blobs.read_by_ref_id(&em.blob_id)?;
-            let parsed_eml = match view {
-                Some(v) => ParsedEml::from_eml_bytes(&v.bytes),
+            let parsed_eml = match bucket.blobs.get(&em.blob_id) {
+                Some(blob) => ParsedEml::from_eml_bytes(&blob.bytes),
                 None => ParsedEml::default(),
             };
             parsed_emls.insert(em.id.clone(), parsed_eml);
         }
 
-        // Materialize attachments referenced by any email in this thread.
-        // Filenames come from `BlobView::rendered_filename` (hash + ext)
-        // so collisions across attachments are impossible.
+        // Materialize attachments referenced by any email in this
+        // thread. Filenames come from `Blob::rendered_filename` (hash +
+        // ext) so collisions across attachments are impossible.
         let blobs_dir = page_dir.join("blobs");
         let mut materialized: HashMap<String, String> = HashMap::new();
         for em in &emails {
@@ -353,13 +351,13 @@ pub fn render_all(
                     if materialized.contains_key(&a.blob_id) {
                         continue;
                     }
-                    let Some(view) = parsed.blobs.read_by_ref_id(&a.blob_id)? else {
+                    let Some(blob) = bucket.blobs.get(&a.blob_id) else {
                         continue;
                     };
                     fs::create_dir_all(&blobs_dir)
                         .with_context(|| format!("create blobs dir {}", blobs_dir.display()))?;
-                    let fname = view.rendered_filename();
-                    fs::write(blobs_dir.join(&fname), &view.bytes).with_context(|| {
+                    let fname = blob.rendered_filename();
+                    fs::write(blobs_dir.join(&fname), &blob.bytes).with_context(|| {
                         format!("write attachment {}", blobs_dir.join(&fname).display())
                     })?;
                     materialized.insert(a.blob_id.clone(), fname);

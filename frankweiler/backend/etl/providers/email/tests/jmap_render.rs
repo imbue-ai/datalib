@@ -1,13 +1,14 @@
-//! End-to-end render test: build a tiny in-memory `LoadedRaw` whose
-//! `blobs` reader carries real RFC 5322 `.eml` bytes for each email,
-//! render it through `render_all`, and assert the on-disk layout +
-//! grid_rows sidecar shape. Doesn't need a real JMAP server or HTTP
-//! playback — exercises the renderer in isolation.
+//! End-to-end render test: build a tiny in-memory `ParsedEmail`
+//! whose per-bucket `BlobBundle` carries real RFC 5322 `.eml` bytes
+//! for each email, render it through `render_all`, and assert the
+//! on-disk layout + grid_rows sidecar shape. Doesn't need a real
+//! JMAP server or HTTP playback — exercises the renderer in
+//! isolation.
 
 #[allow(unused_imports)]
 use std::path::PathBuf;
 
-use frankweiler_etl::blob_cas::{blake3_hex, BlobView, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
@@ -30,17 +31,8 @@ const EML_E2: &str = "From: Bob <b@x.test>\r\n\
                       \r\n\
                       reply body\r\n";
 
-fn insert_eml(reader: &mut InMemoryBlobReader, ref_id: &str, owning_id: &str, body: &[u8]) {
-    reader.insert(BlobView {
-        ref_id: ref_id.into(),
-        owning_id: owning_id.into(),
-        slot: "source".into(),
-        blake3: blake3_hex(body),
-        content_type: Some("message/rfc822".into()),
-        upstream_name: None,
-        source_url: None,
-        bytes: body.to_vec(),
-    });
+fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
+    bundle.add(ref_id, body.to_vec(), Some("message/rfc822".into()), None);
 }
 
 fn make_loaded() -> ParsedEmail {
@@ -97,20 +89,15 @@ fn make_loaded() -> ParsedEmail {
         }],
     );
 
-    let mut reader = InMemoryBlobReader::new();
-    insert_eml(&mut reader, "B-eml-1", "E1", EML_E1.as_bytes());
-    insert_eml(&mut reader, "B-eml-2", "E2", EML_E2.as_bytes());
-    let att_bytes = b"hello-pdf-12";
-    reader.insert(BlobView {
-        ref_id: "B-att-1".into(),
-        owning_id: "E2".into(),
-        slot: "2".into(),
-        blake3: blake3_hex(att_bytes),
-        content_type: Some("application/pdf".into()),
-        upstream_name: Some("hello.pdf".into()),
-        source_url: None,
-        bytes: att_bytes.to_vec(),
-    });
+    let mut bundle = BlobBundle::new();
+    insert_eml(&mut bundle, "B-eml-1", EML_E1.as_bytes());
+    insert_eml(&mut bundle, "B-eml-2", EML_E2.as_bytes());
+    bundle.add(
+        "B-att-1",
+        b"hello-pdf-12".to_vec(),
+        Some("application/pdf".into()),
+        Some("hello.pdf".into()),
+    );
 
     ParsedEmail {
         accounts: vec![account],
@@ -121,6 +108,7 @@ fn make_loaded() -> ParsedEmail {
             thread_id: "T1".into(),
             emails,
             joins,
+            blobs: bundle,
         }],
         docs_skipped: 0,
         scan: ScanResult {
@@ -128,7 +116,6 @@ fn make_loaded() -> ParsedEmail {
             new_head: None,
             scan_elapsed: None,
         },
-        blobs: reader.into_handle(),
     }
 }
 
