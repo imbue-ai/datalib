@@ -307,7 +307,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "47a0cc58152ec41743420e51b21bf84cd7f2a6a97cb2f75004f086421eea766c",
-      "source_fingerprint": "cad76e3c9e3bb0f6",
+      "source_fingerprint": "c0000003-1701-4d00-8000-00000000c003",
       "source_name": "anthropic-api",
       "title": "Klingon Diplomatic Greeting Drafting",
       "updated_at": "2369-04-14T10:02:00.000000+00:00"
@@ -321,7 +321,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "bf1f74567ee19392fa8c543870b01dcf2ac82b6ce6e1bb07445f88cd658d7148",
-      "source_fingerprint": "df0068468d2a6eec",
+      "source_fingerprint": "c0000004-1701-4d00-8000-00000000c004",
       "source_name": "anthropic-api",
       "title": "Tricorder Image Diagnostic",
       "updated_at": "2369-04-15T08:30:45.000000+00:00"
@@ -335,7 +335,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "60e6f52898e32974b156756fd810f289ea47360a5dc79046e99237420d2283a2",
-      "source_fingerprint": "5a19dc0e50284021",
+      "source_fingerprint": "c0000005-1701-4d00-8000-00000000c005",
       "source_name": "anthropic-api",
       "title": "Borg Encryption Signature Lookup",
       "updated_at": "2369-04-16T09:01:30.000004+00:00"

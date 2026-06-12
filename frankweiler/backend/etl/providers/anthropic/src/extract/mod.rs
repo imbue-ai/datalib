@@ -18,16 +18,23 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::blob_cas::{self, CasInsert};
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
+use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ClaudeClient, ClaudeError};
-pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{db_path_for, LoadedConversation, LoadedRaw, RawDb};
+use schema_raw::{
+    attachment_id_recipe, ConversationAttachmentRow, ConversationRow as ConversationRowSchema,
+    OrgRow, UserRow,
+};
 
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
 pub const DEFAULT_OVERLAP: usize = 3;
@@ -97,9 +104,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.control.refetch_blobs {
         info!(event = "anthropic_refetch_blobs");
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+        db.clear_blob_hashes()
             .await
-            .context("truncate blob_refs before refetch")?;
+            .context("clear anthropic_attachments.blake3 before refetch")?;
     }
 
     let run_config = json!({
@@ -109,6 +116,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let run = ExtractRun::start(db.pool(), &run_config).await?;
     let mut client = ClaudeClient::new();
     let mut summary = FetchSummary::default();
+    // One `now` per fetch — threaded into every bulk upsert so all
+    // `<table>_bookkeeping.fetched_at` stamps from a single sync share
+    // a timestamp.
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
 
     let work = async {
         // users.json from the bulk export carries the account.uuid we
@@ -117,7 +128,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // to `/api/account`.
         if !db.has_any_user().await.unwrap_or(false) {
             if let Some(export_dir) = opts.export_dir.as_deref() {
-                ingest_export_users(&db, export_dir)
+                ingest_export_users(&db, export_dir, &now)
                     .await
                     .unwrap_or_else(|e| {
                         warn!(event = "anthropic_export_users_failed", error = %e);
@@ -128,7 +139,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             match client.current_account().await {
                 Ok(acct) => {
                     let entry = pick_user_fields(&acct);
-                    if let Err(e) = db.upsert_user(&entry).await {
+                    if let Err(e) = upsert_users(&db, &[entry], &now).await {
                         warn!(event = "anthropic_synthesize_user_failed", error = %e);
                     } else {
                         info!(event = "anthropic_users_synthesized");
@@ -147,7 +158,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .await
             .map_err(|e| anyhow::anyhow!("list orgs: {e}"))?;
         info!(event = "anthropic_orgs", count = orgs.len());
-        if let Err(e) = db.upsert_orgs(&orgs).await {
+        if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
             warn!(event = "anthropic_orgs_upsert_failed", error = %e);
         }
 
@@ -157,7 +168,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.progress.inc(1);
                 opts.progress.set_message(raw);
                 let target = frankweiler_etl::ids::normalize_id_token(raw);
-                fetch_single(&mut client, &db, &orgs, &target, &mut summary).await?;
+                fetch_single(&mut client, &db, &orgs, &target, &mut summary, &now).await?;
             }
             return Ok::<(), anyhow::Error>(());
         }
@@ -209,7 +220,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             sleep(SLEEP_BETWEEN).await;
 
             let listing_refs: Vec<(&str, &Value)> = listing.iter().map(|c| (org_uuid, c)).collect();
-            db.pre_seed_conversations(&listing_refs).await?;
+            db.pre_seed_conversations(&listing_refs, &now).await?;
             listings_by_org.push((org_uuid.to_string(), org_name, listing));
         }
 
@@ -303,10 +314,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             &plan.org_name,
                             uuid,
                             &outcome.value,
+                            &now,
                         )
                         .await?;
                         summary.fetched += 1;
-                        fetch_files_for(&db, &outcome.value, uuid, &mut summary).await;
+                        fetch_files_for(&db, &outcome.value, uuid, &mut summary, &now).await;
                         if opts.sleep_between > Duration::ZERO {
                             sleep(opts.sleep_between).await;
                         }
@@ -339,6 +351,7 @@ async fn fetch_single(
     orgs: &[Value],
     conv_uuid: &str,
     summary: &mut FetchSummary,
+    now: &str,
 ) -> Result<()> {
     for org in orgs {
         let Some(org_uuid) = org.get("uuid").and_then(|v| v.as_str()) else {
@@ -351,14 +364,14 @@ async fn fetch_single(
             .to_string();
         match client.get_conversation(org_uuid, conv_uuid).await {
             Ok(full) => {
-                save_conversation(db, org_uuid, &org_name, conv_uuid, &full).await?;
+                save_conversation(db, org_uuid, &org_name, conv_uuid, &full, now).await?;
                 summary.fetched += 1;
                 info!(
                     event = "anthropic_fetch_single_ok",
                     uuid = conv_uuid,
                     org = %org_name
                 );
-                fetch_files_for(db, &full, conv_uuid, summary).await;
+                fetch_files_for(db, &full, conv_uuid, summary, now).await;
                 return Ok(());
             }
             Err(ClaudeError::Forbidden(_)) => {
@@ -464,6 +477,7 @@ async fn save_conversation(
     org_name: &str,
     uuid: &str,
     full: &Value,
+    now: &str,
 ) -> Result<()> {
     let payload = serde_json::to_string(full).context("serialize conversation")?;
     let name = full.get("name").and_then(|v| v.as_str()).map(String::from);
@@ -471,20 +485,98 @@ async fn save_conversation(
         .get("updated_at")
         .and_then(|v| v.as_str())
         .map(String::from);
-    db.upsert_conversation_detail(&db::ConversationDetail {
-        id: uuid.to_string(),
-        org_uuid: org_uuid.to_string(),
+    let row = ConversationRowSchema {
+        id_and_payload: WirePayload {
+            id: uuid.to_string(),
+            payload,
+        },
+        org_uuid: Some(org_uuid.to_string()),
         org_name: Some(org_name.to_string()),
         name,
         updated_at,
-        payload,
-    })
-    .await
+    };
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin save_conversation tx")?;
+    bulk_upsert_in_tx(&mut tx, &[row], now).await?;
+    tx.commit().await.context("commit save_conversation tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert helpers — same `now` as the rest of the fetch so the
+/// bookkeeping sidecars all share a timestamp.
+async fn upsert_users(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
+    if payloads.is_empty() {
+        return Ok(());
+    }
+    let mut rows: Vec<UserRow> = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let Some(id) = payload.get("uuid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let email = payload
+            .get("email_address")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let full_name = payload
+            .get("full_name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let payload_str = serde_json::to_string(payload).context("serialize user")?;
+        rows.push(UserRow {
+            id_and_payload: WirePayload {
+                id: id.to_string(),
+                payload: payload_str,
+            },
+            email,
+            full_name,
+        });
+    }
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool().begin().await.context("begin upsert_users tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    tx.commit().await.context("commit upsert_users tx")?;
+    Ok(())
+}
+
+async fn upsert_orgs(db: &RawDb, payloads: &[Value], now: &str) -> Result<()> {
+    if payloads.is_empty() {
+        return Ok(());
+    }
+    let mut rows: Vec<OrgRow> = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        let Some(id) = payload.get("uuid").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let name = payload
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let payload_str = serde_json::to_string(payload).context("serialize org")?;
+        rows.push(OrgRow {
+            id_and_payload: WirePayload {
+                id: id.to_string(),
+                payload: payload_str,
+            },
+            name,
+        });
+    }
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool().begin().await.context("begin upsert_orgs tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    tx.commit().await.context("commit upsert_orgs tx")?;
+    Ok(())
 }
 
 /// Pull `users.json` entries from an existing bulk-export directory
 /// into the DB. Best-effort: missing file is fine.
-async fn ingest_export_users(db: &RawDb, export_dir: &Path) -> Result<()> {
+async fn ingest_export_users(db: &RawDb, export_dir: &Path, now: &str) -> Result<()> {
     let path = export_dir.join("users.json");
     if !path.exists() {
         return Ok(());
@@ -493,7 +585,7 @@ async fn ingest_export_users(db: &RawDb, export_dir: &Path) -> Result<()> {
     let v: Value =
         serde_json::from_str(&txt).with_context(|| format!("parse {}", path.display()))?;
     if let Some(arr) = v.as_array() {
-        if let Err(e) = db.upsert_users(arr).await {
+        if let Err(e) = upsert_users(db, arr, now).await {
             warn!(event = "anthropic_users_upsert_failed", error = %e);
         }
     }
@@ -510,10 +602,29 @@ fn pick_user_fields(acct: &Value) -> Value {
     Value::Object(obj)
 }
 
+#[derive(Default)]
+struct PendingAttachments {
+    rows: Vec<ConversationAttachmentRow>,
+    cas_items: Vec<DecodedCas>,
+    errors: Vec<(String, String)>,
+}
+
+struct DecodedCas {
+    blake3: String,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
+
 /// Walk a conversation tree's `chat_messages[*].files[]` and
-/// download every unique attachment into the doltlite `blobs` table.
-/// Skips files we already have bytes for.
-async fn fetch_files_for(db: &RawDb, conv: &Value, conv_uuid: &str, summary: &mut FetchSummary) {
+/// queue every unique attachment for the end-of-conversation CAS
+/// flush. Skips files we already have bytes for.
+async fn fetch_files_for(
+    db: &RawDb,
+    conv: &Value,
+    conv_uuid: &str,
+    summary: &mut FetchSummary,
+    now: &str,
+) {
     let messages = match conv.get("chat_messages").and_then(|v| v.as_array()) {
         Some(arr) => arr,
         None => return,
@@ -531,31 +642,100 @@ async fn fetch_files_for(db: &RawDb, conv: &Value, conv_uuid: &str, summary: &mu
             }
         }
     }
+    let mut pending = PendingAttachments::default();
     for f in &targets {
         let Some(file_uuid) = f.get("file_uuid").and_then(|v| v.as_str()) else {
             continue;
         };
-        if db.blob_exists(file_uuid).await.unwrap_or(false) {
+        if db.attachment_has_bytes(file_uuid).await.unwrap_or(false) {
             summary.skipped_blobs += 1;
             continue;
         }
-        match download_one_file(db, f, conv_uuid).await {
-            Ok(true) => summary.new_blobs += 1,
-            Ok(false) => summary.failed_blobs += 1,
+        let attachment_pk = attachment_id_recipe(conv_uuid, file_uuid);
+        match download_one_file(f).await {
+            Ok(Some(decoded)) => {
+                pending.rows.push(ConversationAttachmentRow {
+                    id: attachment_pk,
+                    conversation_uuid: conv_uuid.to_string(),
+                    file_uuid: file_uuid.to_string(),
+                    blake3: Some(decoded.blake3.clone()),
+                });
+                pending.cas_items.push(decoded);
+                summary.new_blobs += 1;
+            }
+            Ok(None) => {
+                pending.rows.push(ConversationAttachmentRow {
+                    id: attachment_pk.clone(),
+                    conversation_uuid: conv_uuid.to_string(),
+                    file_uuid: file_uuid.to_string(),
+                    blake3: None,
+                });
+                pending.errors.push((attachment_pk, "no bytes".to_string()));
+                summary.failed_blobs += 1;
+            }
             Err(e) => {
                 warn!(event = "anthropic_media_unexpected_err", file_uuid = %file_uuid, error = %e);
-                let _ = db
-                    .record_blob_error(file_uuid, conv_uuid, "file", &e.to_string())
-                    .await;
+                pending.rows.push(ConversationAttachmentRow {
+                    id: attachment_pk.clone(),
+                    conversation_uuid: conv_uuid.to_string(),
+                    file_uuid: file_uuid.to_string(),
+                    blake3: None,
+                });
+                pending.errors.push((attachment_pk, e.to_string()));
                 summary.failed_blobs += 1;
             }
         }
     }
+    if let Err(e) = flush_attachments(db, pending, now).await {
+        warn!(event = "anthropic_attachment_flush_err", conv = %conv_uuid, error = %e);
+    }
 }
 
-async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Result<bool> {
+/// End-of-conversation flush. One CAS-pool tx (`put_many`) + one
+/// entity-pool tx (chunked multi-row UPSERT + bookkeeping) + per-row
+/// error recording. Order: CAS first so the entity-row's `blake3`
+/// points at bytes definitely in the CAS.
+async fn flush_attachments(db: &RawDb, pending: PendingAttachments, now: &str) -> Result<()> {
+    if pending.rows.is_empty() {
+        return Ok(());
+    }
+    let inserts: Vec<CasInsert<'_>> = pending
+        .cas_items
+        .iter()
+        .map(|d| CasInsert {
+            blake3: d.blake3.as_str(),
+            content_type: d.content_type.as_deref(),
+            bytes: d.bytes.as_slice(),
+        })
+        .collect();
+    if !inserts.is_empty() {
+        db.cas()
+            .put_many(&inserts)
+            .await
+            .context("anthropic CAS put_many")?;
+    }
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin flush_attachments tx")?;
+    bulk_upsert_in_tx(&mut tx, &pending.rows, now).await?;
+    for (id, err) in &pending.errors {
+        frankweiler_etl::doltlite_raw::record_object_error(
+            &mut tx,
+            "anthropic_attachments",
+            id,
+            err,
+        )
+        .await?;
+    }
+    tx.commit().await.context("commit flush_attachments tx")?;
+    Ok(())
+}
+
+async fn download_one_file(file_obj: &Value) -> Result<Option<DecodedCas>> {
     let Some(file_uuid) = file_obj.get("file_uuid").and_then(|v| v.as_str()) else {
-        return Ok(false);
+        return Ok(None);
     };
     let preview_path = file_obj
         .get("preview_url")
@@ -575,10 +755,7 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
                 event = "anthropic_media_no_preview_url",
                 file_uuid = file_uuid
             );
-            let _ = db
-                .record_blob_error(file_uuid, conv_uuid, "file", "no preview_url")
-                .await;
-            return Ok(false);
+            return Ok(None);
         }
     };
     let url = if preview_path.starts_with("http") {
@@ -586,45 +763,22 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
     } else {
         format!("{CLAUDE_ORIGIN}{preview_path}")
     };
-    let name = file_obj.get("file_name").and_then(|v| v.as_str());
     let mime = file_obj
         .get("file_kind")
         .and_then(|v| v.as_str())
         .or_else(|| file_obj.get("mime_type").and_then(|v| v.as_str()));
 
-    // Route through the shared `latchkey_curl` so playback-mode
-    // (FRANKWEILER_HTTP_PLAYBACK) intercepts these blob GETs the same
-    // way it does for every other provider's HTTP traffic. The previous
-    // implementation shelled out to `latchkey_tokio_command()` directly,
-    // bypassing playback — which made the fixture pipeline silently
-    // capture sandbox-/host-dependent failure text (the npm log-dir
-    // error you get inside Bazel's sandbox) into the `blob_errors` row
-    // we then snapshot. Going through `latchkey_curl` means the
-    // recorded error text now comes from one of `HttpError`'s
-    // well-defined variants — stable across hosts and reproducible.
     let req = HttpRequest::get("anthropic", &url).timeout(ATTACH_FILE_TIMEOUT);
     match latchkey_curl(&req).await {
         Ok(resp) if (200..300).contains(&resp.status) => {
-            // Prefer the server's Content-Type when present; fall back
-            // to the file_obj-derived mime so we still record something
-            // sensible if a fixture omits the header.
             let header_mime = resp.header("content-type").map(String::from);
             let effective_mime = header_mime.as_deref().or(mime);
-            db.store_blob(
-                &RefStub {
-                    ref_id: file_uuid,
-                    kind: "file",
-                    owning_id: conv_uuid,
-                    slot: "file",
-                    upstream_uuid: Some(file_uuid),
-                    upstream_name: name,
-                    source_url: Some(&url),
-                    content_type: effective_mime,
-                },
-                &resp.body,
-            )
-            .await?;
-            Ok(true)
+            let blake3 = blob_cas::blake3_hex(&resp.body);
+            Ok(Some(DecodedCas {
+                blake3,
+                content_type: effective_mime.map(String::from),
+                bytes: resp.body,
+            }))
         }
         Ok(resp) => {
             let msg = format!("HTTP {}", resp.status);
@@ -633,10 +787,7 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
                 file_uuid = file_uuid,
                 error = %msg,
             );
-            let _ = db
-                .record_blob_error(file_uuid, conv_uuid, "file", &msg)
-                .await;
-            Ok(false)
+            Ok(None)
         }
         Err(e) => {
             let msg = e.to_string();
@@ -645,10 +796,7 @@ async fn download_one_file(db: &RawDb, file_obj: &Value, conv_uuid: &str) -> Res
                 file_uuid = file_uuid,
                 error = %msg,
             );
-            let _ = db
-                .record_blob_error(file_uuid, conv_uuid, "file", &msg)
-                .await;
-            Ok(false)
+            Ok(None)
         }
     }
 }

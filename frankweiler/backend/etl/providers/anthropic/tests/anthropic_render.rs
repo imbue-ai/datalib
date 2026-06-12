@@ -50,7 +50,6 @@ fn renders_tng_fixture() {
         tmp.path(),
         "anthropic_api",
         &frankweiler_etl::progress::Progress::noop(),
-        &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
     )
     .expect("render");

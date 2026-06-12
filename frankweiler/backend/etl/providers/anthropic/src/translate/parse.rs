@@ -9,13 +9,20 @@
 //! `raw_json` carries the JSON minus any sibling rows we've exploded
 //! out.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
 use serde_json::{Map, Value};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::Row;
 
-use crate::extract::db::{block_on_load_all, db_path_for, LoadedConversation};
+use crate::extract::db::{db_path_for, LoadedConversation, LoadedRaw};
 use crate::extract::normalize::normalize_to_export_shape;
 
 #[derive(Debug, Clone)]
@@ -116,16 +123,28 @@ pub struct ShreddedConversation {
     pub attachments: Vec<AttachmentRow>,
 }
 
+/// Result of the dolt_diff scan. Travels alongside the parsed bag so
+/// render can advance the cursor + log timing without a second
+/// round-trip.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    /// `Some(set)` → render only conversations whose UUID is in
+    /// `set`. `None` → cold start.
+    pub changed_conversations: Option<HashSet<String>>,
+    pub new_head: Option<String>,
+    pub scan_elapsed: Option<Duration>,
+}
+
 #[derive(Clone)]
 pub struct ParsedExport {
     pub accounts: Vec<AccountRow>,
     pub projects: Vec<ProjectRow>,
     pub conversations: Vec<AnthropicConversation>,
+    /// Count of conversations `dolt_diff` reported as unchanged.
+    pub docs_skipped: usize,
+    pub scan: ScanResult,
     /// Streaming handle to blob bytes, keyed by upstream `file_uuid`.
-    /// Render materializes these onto disk in a `blobs/` directory
-    /// next to each rendered `.md` so the sibling-relative link
-    /// resolves.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
+    pub blobs: Arc<dyn BlobReader>,
 }
 
 impl Default for ParsedExport {
@@ -134,7 +153,9 @@ impl Default for ParsedExport {
             accounts: Vec::new(),
             projects: Vec::new(),
             conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
+            docs_skipped: 0,
+            scan: ScanResult::default(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -143,15 +164,18 @@ fn str_field(v: &Map<String, Value>, k: &str) -> Option<String> {
     v.get(k).and_then(Value::as_str).map(String::from)
 }
 
-/// Read raw payloads. If `path` resolves to an existing
-/// `.doltlite_db`, read from the DB (and normalize each conversation
-/// at read time). Otherwise fall back to the legacy JSON tree shape.
+/// Cold-start entry point: no render cursor, render everything.
+/// Kept for the in-crate JSON-tree fixture used by `anthropic_render`
+/// and similar tests.
 pub fn parse_export(path: &Path) -> Result<ParsedExport> {
+    parse(path, None)
+}
+
+/// Two-phase parse driven by `dolt_diff_<table>`.
+pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        let raw = block_on_load_all(&db_path)
-            .with_context(|| format!("load anthropic db {}", db_path.display()))?;
-        return Ok(parse_loaded(raw));
+        return parse_doltlite(&db_path, last_render_hash);
     }
     if path.is_dir() {
         return parse_export_json_dir(path);
@@ -160,6 +184,211 @@ pub fn parse_export(path: &Path) -> Result<ParsedExport> {
         "anthropic source not found at {} (no .doltlite_db, no JSON tree)",
         path.display()
     ))
+}
+
+fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedExport> {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(async move { parse_doltlite_async(db_path, last_render_hash).await })
+    })
+}
+
+async fn parse_doltlite_async(
+    db_path: &Path,
+    last_render_hash: Option<&str>,
+) -> Result<ParsedExport> {
+    let opts =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(60))
+        .connect_with(opts)
+        .await
+        .with_context(|| {
+            format!(
+                "open anthropic doltlite for translate {}",
+                db_path.display()
+            )
+        })?;
+
+    let cas_path = blob_cas::cas_path_for(db_path);
+    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
+            .read_only(true);
+        let cas_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(60))
+            .connect_with(cas_opts)
+            .await
+            .with_context(|| format!("open anthropic CAS for translate {}", cas_path.display()))?;
+        super::blob_reader::AnthropicBlobReader::new(pool.clone(), cas_pool).into_handle()
+    } else {
+        InMemoryBlobReader::empty_handle()
+    };
+
+    let scan = scan_diff(&pool, last_render_hash).await?;
+
+    let users = load_payloads(&pool, "users").await?;
+    let first_user_uuid = load_first_user_uuid(&pool).await?;
+    let all_convs = load_conversations(&pool).await?;
+    let total = all_convs.len();
+
+    let (filtered, docs_skipped) = match &scan.changed_conversations {
+        None => (all_convs, 0usize),
+        Some(changed) => {
+            let kept: Vec<LoadedConversation> = all_convs
+                .into_iter()
+                .filter(|c| changed.contains(&c.id))
+                .collect();
+            let skipped = total.saturating_sub(kept.len());
+            (kept, skipped)
+        }
+    };
+
+    let raw = LoadedRaw {
+        users,
+        first_user_uuid,
+        conversations: filtered,
+        blobs,
+    };
+
+    let mut parsed = parse_loaded(raw);
+    parsed.docs_skipped = docs_skipped;
+    parsed.scan = scan;
+    Ok(parsed)
+}
+
+async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
+    let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("load_payloads {table}"))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let s: String = r.try_get("payload").unwrap_or_default();
+        if let Ok(v) = serde_json::from_str::<Value>(&s) {
+            out.push(v);
+        }
+    }
+    Ok(out)
+}
+
+async fn load_first_user_uuid(pool: &SqlitePool) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("first_user_uuid")?;
+    Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
+}
+
+async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
+          WHERE payload IS NOT NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load_conversations")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let org_uuid: Option<String> = r.try_get("org_uuid").ok();
+        let org_name: Option<String> = r.try_get("org_name").ok();
+        let Ok(s) = r.try_get::<String, _>("payload") else {
+            continue;
+        };
+        let Ok(p) = serde_json::from_str::<Value>(&s) else {
+            continue;
+        };
+        out.push(LoadedConversation {
+            id,
+            org_uuid: org_uuid.unwrap_or_default(),
+            org_name,
+            payload: p,
+        });
+    }
+    Ok(out)
+}
+
+/// Phase 1: union over `dolt_diff_conversations` +
+/// `dolt_diff_anthropic_attachments` to project changed conversation
+/// UUIDs. Any change to `users` or `orgs` fans out to "render
+/// everything" — rendered conversations dereference those names in
+/// frontmatter / path slugs, so a rename has to repaint every doc in
+/// the affected scope.
+async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    let Some(from_ref) = last_render_hash else {
+        return Ok(ScanResult {
+            changed_conversations: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    };
+
+    // Fan-out triggers.
+    for table in ["dolt_diff_users", "dolt_diff_orgs"] {
+        let sql = format!(
+            "SELECT 1 FROM {table} \
+              WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
+        );
+        let any: Option<i64> = sqlx::query_scalar(&sql)
+            .bind(from_ref)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+        if any.is_some() {
+            return Ok(ScanResult {
+                changed_conversations: None,
+                new_head,
+                scan_elapsed: None,
+            });
+        }
+    }
+
+    let sql = "
+        SELECT DISTINCT conversation_uuid FROM (
+            SELECT coalesce(to_id, from_id) AS conversation_uuid
+              FROM dolt_diff_conversations
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            SELECT coalesce(to_conversation_uuid, from_conversation_uuid)
+              FROM dolt_diff_anthropic_attachments
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        )
+        WHERE conversation_uuid IS NOT NULL
+    ";
+    let started = std::time::Instant::now();
+    let res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
+    let elapsed = started.elapsed();
+    let rows = match res {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::info!(
+                source = "anthropic",
+                error = %e,
+                "dolt_diff scan failed — falling back to cold-start (render everything)"
+            );
+            return Ok(ScanResult {
+                changed_conversations: None,
+                new_head,
+                scan_elapsed: Some(elapsed),
+            });
+        }
+    };
+    let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    Ok(ScanResult {
+        changed_conversations: Some(set),
+        new_head,
+        scan_elapsed: Some(elapsed),
+    })
 }
 
 /// Build a [`ParsedExport`] from a snapshot already loaded out of the
