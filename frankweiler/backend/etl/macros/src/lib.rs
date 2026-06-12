@@ -2,9 +2,9 @@
 //!
 //! Today there is exactly one: [`WirePayloadRow`], which derives the
 //! DDL + bulk-upsert plumbing for any Rust row struct that maps to a
-//! wire-payload entity table (id + payload + payload_blake3 + CHECK +
-//! promoted columns). See the doc on the macro itself for the
-//! conventions the derived code follows.
+//! wire-payload entity table (id + payload + promoted columns). See
+//! the doc on the macro itself for the conventions the derived code
+//! follows.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -19,12 +19,11 @@ use syn::{
 /// to a wire-payload entity table.
 ///
 /// **Required shape.** The struct must have **exactly one field of
-/// type `WirePayloadTriad`** (path-tolerant — `WirePayloadTriad`,
-/// `dr::WirePayloadTriad`, or `frankweiler_etl::doltlite_raw::WirePayloadTriad`
-/// all match). That field carries the `id`, `payload`, and
-/// `payload_blake3` columns. Every *other* field is a promoted column,
-/// emitted into the CREATE TABLE in declaration order and bound in the
-/// same order.
+/// type `WirePayload`** (path-tolerant — `WirePayload`,
+/// `dr::WirePayload`, or `frankweiler_etl::doltlite_raw::WirePayload`
+/// all match). That field carries the `id` and `payload` columns.
+/// Every *other* field is a promoted column, emitted into the CREATE
+/// TABLE in declaration order and bound in the same order.
 ///
 /// **Attribute.** `#[wire_payload_row(table = "name")]` names the
 /// SQL table. Required.
@@ -41,13 +40,13 @@ use syn::{
 ///
 /// **Example.**
 /// ```ignore
-/// use frankweiler_etl::doltlite_raw::WirePayloadTriad;
+/// use frankweiler_etl::doltlite_raw::WirePayload;
 /// use frankweiler_etl_macros::WirePayloadRow;
 ///
 /// #[derive(WirePayloadRow)]
 /// #[wire_payload_row(table = "chat_items")]
 /// pub struct ChatItemRow {
-///     pub triad: WirePayloadTriad,
+///     pub id_and_payload: WirePayload,
 ///     pub chat_id: String,
 ///     pub author_id: String,
 ///     pub date_sent: i64,
@@ -71,7 +70,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = input.ident.clone();
     let table = parse_table_attr(&input.attrs, &struct_name)?;
     let fields = collect_named_fields(&input)?;
-    let (triad_ident, promoted) = split_triad(&fields, &struct_name)?;
+    let (id_and_payload_ident, promoted) = split_id_and_payload(&fields, &struct_name)?;
 
     // DDL: build the promoted-columns slice the existing
     // `wire_payload_table_ddl` helper expects. Aligning column names
@@ -96,19 +95,16 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
         .collect();
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
 
-    // BulkUpsertable typed columns: promoted columns first, then the
-    // triad's `payload_blake3`. (`payload` goes in PAYLOAD_COLUMN.)
+    // BulkUpsertable typed columns: promoted columns only.
+    // (`payload` goes in PAYLOAD_COLUMN; `id` is the PK and bound
+    // separately.)
     let typed_col_names: Vec<LitStr> = promoted
         .iter()
         .map(|p| LitStr::new(&p.name.to_string(), proc_macro2::Span::call_site()))
-        .chain(std::iter::once(LitStr::new(
-            "payload_blake3",
-            proc_macro2::Span::call_site(),
-        )))
         .collect();
 
-    // bind_into binds in INSERT column order: triad.id, then each
-    // promoted column, then triad.payload_blake3, then triad.payload.
+    // bind_into binds in INSERT column order: id_and_payload.id, then
+    // each promoted column, then id_and_payload.payload.
     let promoted_binds: Vec<TokenStream2> = promoted.iter().map(|p| p.bind_expr()).collect();
 
     Ok(quote! {
@@ -126,7 +122,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
             const TYPED_COLUMNS: &'static [&'static str] = &[#(#typed_col_names),*];
 
             fn id(&self) -> &str {
-                &self.#triad_ident.id
+                &self.#id_and_payload_ident.id
             }
 
             fn bind_into<'q>(
@@ -141,10 +137,9 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
                 ::sqlx::Sqlite,
                 ::sqlx::sqlite::SqliteArguments<'q>,
             > {
-                q.bind(&self.#triad_ident.id)
+                q.bind(&self.#id_and_payload_ident.id)
                     #(.bind(#promoted_binds))*
-                    .bind(&self.#triad_ident.payload_blake3)
-                    .bind(&self.#triad_ident.payload)
+                    .bind(&self.#id_and_payload_ident.payload)
             }
         }
     })
@@ -199,45 +194,45 @@ fn collect_named_fields(input: &DeriveInput) -> syn::Result<Vec<&Field>> {
     Ok(named.named.iter().collect())
 }
 
-/// Identify the single `WirePayloadTriad` field (by trailing
+/// Identify the single `WirePayload` field (by trailing
 /// path segment, so it doesn't matter whether the user wrote
-/// `WirePayloadTriad`, `dr::WirePayloadTriad`, or the full path).
+/// `WirePayload`, `dr::WirePayload`, or the full path).
 /// Every other field becomes a promoted column.
-fn split_triad<'a>(
+fn split_id_and_payload<'a>(
     fields: &[&'a Field],
     struct_name: &Ident,
 ) -> syn::Result<(&'a Ident, Vec<PromotedField<'a>>)> {
-    let mut triad: Option<&Ident> = None;
+    let mut id_and_payload: Option<&Ident> = None;
     let mut promoted: Vec<PromotedField<'a>> = Vec::new();
     for f in fields {
         let ident = f.ident.as_ref().expect("named field");
-        if is_wire_payload_triad(&f.ty) {
-            if triad.is_some() {
+        if is_wire_payload(&f.ty) {
+            if id_and_payload.is_some() {
                 return Err(syn::Error::new_spanned(
                     f,
-                    "duplicate WirePayloadTriad field; exactly one is allowed",
+                    "duplicate WirePayload field; exactly one is allowed",
                 ));
             }
-            triad = Some(ident);
+            id_and_payload = Some(ident);
         } else {
             promoted.push(PromotedField::from_field(f)?);
         }
     }
-    triad.map(|t| (t, promoted)).ok_or_else(|| {
+    id_and_payload.map(|t| (t, promoted)).ok_or_else(|| {
         syn::Error::new_spanned(
             struct_name,
-            "no WirePayloadTriad field; add one named field of type WirePayloadTriad",
+            "no WirePayload field; add one named field of type WirePayload",
         )
     })
 }
 
-fn is_wire_payload_triad(ty: &Type) -> bool {
+fn is_wire_payload(ty: &Type) -> bool {
     let Type::Path(TypePath { path, .. }) = ty else {
         return false;
     };
     path.segments
         .last()
-        .map(|seg| seg.ident == "WirePayloadTriad")
+        .map(|seg| seg.ident == "WirePayload")
         .unwrap_or(false)
 }
 

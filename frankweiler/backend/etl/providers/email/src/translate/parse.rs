@@ -1,36 +1,33 @@
-//! Two-phase parse of the email raw store.
+//! Parse the email raw store, driven by **`dolt_diff_<table>`**.
 //!
-//! **Phase 1 — bucket fingerprints via SQL.**
-//! One row per `(account_id, thread_id)` bucket — that's the email
-//! provider's rendering unit, one markdown doc per JMAP Thread. The
-//! aggregate's `bucket_concat` column carries a deterministic
-//! concatenation of every member email's content state: the
-//! `emails.blake3` (Blake3 of the `.eml` bytes), sorted mailbox ids,
-//! sorted keyword set, and sorted per-attachment blake3 hashes. We
-//! hash the concat once in Rust → the per-thread bucket fingerprint.
+//! Incrementality is no longer maintained by per-row content
+//! fingerprints (`emails.blake3`-style aggregates over a SQL CTE) and
+//! a `prior_fingerprints` map. We ask doltlite directly which threads
+//! touched any row since the cursor's commit, load envelopes/joins
+//! only for those threads, and re-render every email in each. Source
+//! of truth for "did anything change?" is the prolly-tree diff,
+//! period.
 //!
-//! Compared to the per-thread `source_fingerprint` walk this replaced
-//! (which read every `LoadedEmail` envelope + every join row even
-//! for threads we'd skip), Phase 1 deserializes nothing and reads no
-//! envelopes — just one SQL aggregate over indexes.
+//! Phase 1 — union over `dolt_diff_emails`,
+//! `dolt_diff_email_mailboxes`, `dolt_diff_email_keywords`,
+//! `dolt_diff_email_attachments`, `dolt_diff_threads`. The first
+//! three project `to_email_id`/`from_email_id` and join back to the
+//! live `emails` table to find each touched email's `(account_id,
+//! thread_id)`; thread changes project `thread_id` directly.
 //!
-//! **Phase 2 — load envelopes only for to-render buckets.**
-//! Compare each row's fingerprint to the matching entry in
-//! `prior_fingerprints` (keyed by `thread_uuid(account_id, thread_id)`,
-//! the same key the indexer stores on rendered docs). Skip matches;
-//! load only the survivors. Phase 2 issues one bounded `SELECT … WHERE
-//! thread_id IN (?, …)` against `emails`, plus one each against the
-//! three join tables, and routes the rows into per-bucket
-//! [`EmailThreadBucket`]s.
+//! Phase 2 — existing targeted `SELECT … WHERE thread_id IN (?, …)`
+//! over `emails` + the three join tables. No change in shape from the
+//! previous bucket-fingerprint era; just a smaller `to_load` set
+//! filter coming in.
 //!
-//! The two-phase shape mirrors the signal provider's `parse_async`
-//! (see `frankweiler_etl_signal::translate::parse`); email is the
-//! second provider on the pattern.
+//! Cold start (no cursor, or `dolt_diff_<table>` unavailable) loads
+//! every thread that has at least one email.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
@@ -40,39 +37,35 @@ use sqlx::Row;
 
 use crate::extract::db::{db_path_for, EmailJoins, LoadedAttachment, LoadedEmail};
 
-// `RENDER_VERSION` is mixed into the bucket-fingerprint pre-image so
-// bumping the renderer's bytes-for-bytes output forces every doc to
-// re-render even when upstream payloads are unchanged. Same lever
-// signal uses; lives in `translate::mod`.
-use super::RENDER_VERSION;
+/// Result of the dolt_diff scan. Travels alongside the parsed bag so
+/// render can advance the cursor + log timing without a second
+/// round-trip.
+#[derive(Debug, Clone)]
+pub struct ScanResult {
+    /// `Some(set)` → load only threads whose `(account_id, thread_id)`
+    /// is in `set`. `None` → cold start, render every thread.
+    pub changed_threads: Option<HashSet<(String, String)>>,
+    /// The HEAD commit hash at scan time. `None` if `dolt_log()` was
+    /// unavailable (non-doltlite sqlite); cursor stays unwritten.
+    pub new_head: Option<String>,
+    /// Wall-clock time spent in the union query. `None` on cold
+    /// start (no diff was issued).
+    pub scan_elapsed: Option<Duration>,
+}
 
-/// Bag passed from `parse` to `render`. Mirrors signal's
-/// `ParsedSignal`. Wide tables (accounts, mailboxes) load
-/// unconditionally — they're small and the renderer needs them for
-/// display lookups regardless of which thread is being written.
 #[derive(Clone)]
 pub struct ParsedEmail {
-    /// Every JMAP account payload. Used for the human-readable
-    /// account slug in the rendered tree.
     pub accounts: Vec<Value>,
-    /// Every mailbox payload. Used for id → display-name resolution
-    /// in the rendered `Mailboxes:` line.
     pub mailboxes: Vec<Value>,
-    /// Every thread payload. Used only when the renderer needs
-    /// a per-thread JMAP attribute we don't already promote.
     pub threads: Vec<Value>,
-    /// One bucket per `(account_id, thread_id)` whose fingerprint
-    /// changed. Buckets whose fingerprint matched a prior render are
-    /// entirely absent from this list (we don't even load their
-    /// envelopes). Ordered by `(account_id, thread_id)` so the
-    /// rendered tree is deterministic.
+    /// One bucket per `(account_id, thread_id)` whose thread changed
+    /// since the last render cursor. Threads whose dolt_diff entries
+    /// were empty are entirely absent.
     pub docs: Vec<EmailThreadBucket>,
-    /// Count of buckets whose fingerprint matched a prior render and
-    /// were therefore skipped. Reported into the render summary.
+    /// Count of threads `dolt_diff` reported as unchanged, reported
+    /// into the render summary.
     pub docs_skipped: usize,
-    /// Streaming handle to attachment bytes stored in the sibling CAS
-    /// file. Render fetches one blob's bytes at a time on demand
-    /// rather than bulk-loading them all into memory.
+    pub scan: ScanResult,
     pub blobs: Arc<dyn BlobReader>,
 }
 
@@ -84,63 +77,46 @@ impl Default for ParsedEmail {
             threads: Vec::new(),
             docs: Vec::new(),
             docs_skipped: 0,
+            scan: ScanResult {
+                changed_threads: None,
+                new_head: None,
+                scan_elapsed: None,
+            },
             blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
 
-/// One rendered-markdown bucket: every email in a single JMAP Thread,
-/// plus its joins, plus the bucket fingerprint that Phase 1
-/// pre-computed.
-///
-/// **Content fingerprint:** Blake3 of the per-thread `bucket_concat`
-/// — see the SQL in [`bucket_fingerprint_query`] for the exact
-/// concatenation order. Render writes it into the sidecar's
-/// `header.source_fingerprint`; the next translate run reads sidecars
-/// to build the `prior_fingerprints` map and skips buckets whose
-/// fingerprint hasn't changed.
+/// One rendered-markdown bucket: every email in a single JMAP Thread
+/// plus its joins. No per-bucket fingerprint anymore — render skip is
+/// decided by the dolt_diff scan up in `parse`.
 #[derive(Debug, Clone)]
 pub struct EmailThreadBucket {
     pub account_id: String,
     pub thread_id: String,
-    pub fingerprint: String,
     pub emails: Vec<LoadedEmail>,
     pub joins: EmailJoins,
 }
 
-/// Compatibility entry point for callers that don't pass a
-/// `prior_fingerprints` map (older test code, ad-hoc repros). Forces
-/// every bucket to render. New code should call [`parse`] directly.
+/// Compatibility entry point for tests / ad-hoc repros that don't
+/// have a render cursor. Forces a cold start.
 pub fn parse_export(input: &Path) -> Result<ParsedEmail> {
-    let prior = HashMap::new();
-    parse(input, &prior)
+    parse(input, None)
 }
 
-/// Two-phase parse. Phase 1 reads only the small CTE result + the
-/// account/mailbox/thread payload tables; Phase 2 reads emails +
-/// joins for the buckets that survived the fingerprint comparison.
-///
-/// The bucket key is `thread_uuid(account_id, thread_id)` — same as
-/// what the renderer writes to disk and what the indexer stores on
-/// the rendered doc. Account_id is the natural namespace for email
-/// (a personal Fastmail account and a Gmail `.mbox` export
-/// land in distinct accounts, so thread ids can't collide across
-/// sources without colliding on account_id first).
-pub fn parse(input: &Path, prior_fingerprints: &HashMap<String, String>) -> Result<ParsedEmail> {
+/// Two-phase parse driven by `dolt_diff_<table>`.
+pub fn parse(input: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
     let db_path = db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedEmail::default());
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, prior_fingerprints).await })
+            .block_on(async move { parse_async(&db_path, last_render_hash).await })
     })
 }
 
-async fn parse_async(
-    db_path: &Path,
-    prior_fingerprints: &HashMap<String, String>,
-) -> Result<ParsedEmail> {
+async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedEmail> {
     let opts =
         SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
     let pool = SqlitePoolOptions::new()
@@ -149,8 +125,6 @@ async fn parse_async(
         .await
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
 
-    // Sibling CAS pool drives the per-provider BlobReader. Phase 2
-    // doesn't touch attachment bytes — render does, lazily.
     let cas_path = blob_cas::cas_path_for(db_path);
     let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
@@ -172,28 +146,39 @@ async fn parse_async(
     let mailboxes = load_payloads(&pool, "mailboxes").await?;
     let threads = load_payloads(&pool, "threads").await?;
 
-    // ── Phase 1: bucket fingerprints via SQL ───────────────────────
-    let bucket_rows = bucket_fingerprint_query(&pool).await?;
-    let mut to_load: Vec<(String, String, String)> = Vec::new();
-    let mut docs_skipped: usize = 0;
-    for (account_id, thread_id, bucket_concat) in bucket_rows {
-        let mut pre_image = RENDER_VERSION.to_le_bytes().to_vec();
-        pre_image.extend_from_slice(bucket_concat.as_bytes());
-        let fingerprint = blob_cas::blake3_hex(&pre_image);
-        let tuid = super::render::thread_uuid(&account_id, &thread_id);
-        if prior_fingerprints.get(&tuid) == Some(&fingerprint) {
-            docs_skipped += 1;
-        } else {
-            to_load.push((account_id, thread_id, fingerprint));
-        }
-    }
+    // ── Phase 1: which threads changed since last_render_hash? ────
+    let scan = scan_diff(&pool).await?;
+    let scan = match last_render_hash {
+        None => scan,
+        Some(from_ref) => scan_with_from_ref(&pool, from_ref, scan).await?,
+    };
 
-    // ── Phase 2: targeted load for the to-render buckets ──────────
+    let (to_load, docs_skipped) = match &scan.changed_threads {
+        None => {
+            // Cold start — load every thread with at least one email.
+            let all = load_all_thread_keys(&pool).await?;
+            (all, 0usize)
+        }
+        Some(changed) => {
+            // Count "total threads that have any emails" so the
+            // skipped count is meaningful; same denominator the
+            // sidecar/load progress bar uses.
+            let total = load_all_thread_keys(&pool).await?;
+            let skipped = total.difference(changed).count();
+            let load: HashSet<(String, String)> = total.intersection(changed).cloned().collect();
+            (load, skipped)
+        }
+    };
+
+    // ── Phase 2: targeted load for to-render buckets ──────────────
     let docs = if to_load.is_empty() {
         Vec::new()
     } else {
         load_buckets(&pool, &to_load).await?
     };
+
+    // Don't close `pool` — `EmailBlobReader` cloned it and the
+    // renderer reads through that clone after we return.
 
     Ok(ParsedEmail {
         accounts,
@@ -201,13 +186,112 @@ async fn parse_async(
         threads,
         docs,
         docs_skipped,
+        scan,
         blobs,
     })
 }
 
-/// Generic payload loader for the account/mailbox/thread tables —
-/// same code on every provider's read path; we don't have a sync
-/// version of `dr::load_payloads` so we inline the SELECT here.
+/// Read HEAD only — used on cold start where there's no `from_ref`
+/// yet to diff against.
+async fn scan_diff(pool: &SqlitePool) -> Result<ScanResult> {
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+    Ok(ScanResult {
+        changed_threads: None,
+        new_head,
+        scan_elapsed: None,
+    })
+}
+
+/// Run the union diff query against `from_ref` and project the touched
+/// `(account_id, thread_id)` pairs.
+async fn scan_with_from_ref(
+    pool: &SqlitePool,
+    from_ref: &str,
+    mut scan: ScanResult,
+) -> Result<ScanResult> {
+    // The three join tables (`email_mailboxes`, `email_keywords`,
+    // `email_attachments`) carry only `email_id` upstream — we join
+    // back through the live `emails` table to project the natural
+    // bucket key (`account_id`, `thread_id`). `emails` itself and
+    // `threads` are projected directly.
+    //
+    // `accounts` and `mailboxes` changes don't enter the union: an
+    // account rename doesn't change rendered thread bytes, and
+    // mailbox label changes propagate via `email_mailboxes` (which
+    // we already cover).
+    let sql = "
+        SELECT DISTINCT account_id, thread_id FROM (
+            SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
+              FROM dolt_diff_emails
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            SELECT from_account_id, from_thread_id
+              FROM dolt_diff_emails
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            SELECT emails.account_id, emails.thread_id
+              FROM dolt_diff_email_mailboxes d
+              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+            UNION
+            SELECT emails.account_id, emails.thread_id
+              FROM dolt_diff_email_keywords d
+              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+            UNION
+            SELECT emails.account_id, emails.thread_id
+              FROM dolt_diff_email_attachments d
+              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+            UNION
+            SELECT t.account_id,
+                   coalesce(dt.to_id, dt.from_id) AS thread_id
+              FROM dolt_diff_threads dt
+              JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
+             WHERE dt.from_ref = ?1 AND dt.to_ref = 'HEAD' AND dt.diff_type != 'unchanged'
+        )
+        WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
+    ";
+
+    let started = std::time::Instant::now();
+    let rows = sqlx::query(sql)
+        .bind(from_ref)
+        .fetch_all(pool)
+        .await
+        .context("query dolt_diff_* for changed email threads")?;
+    scan.scan_elapsed = Some(started.elapsed());
+
+    let mut set: HashSet<(String, String)> = HashSet::with_capacity(rows.len());
+    for r in &rows {
+        let a: String = r.try_get("account_id")?;
+        let t: String = r.try_get("thread_id")?;
+        set.insert((a, t));
+    }
+    scan.changed_threads = Some(set);
+    Ok(scan)
+}
+
+async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, String)>> {
+    let rows = sqlx::query("SELECT DISTINCT account_id, thread_id FROM emails")
+        .fetch_all(pool)
+        .await
+        .context("load all (account_id, thread_id) pairs")?;
+    let mut out: HashSet<(String, String)> = HashSet::with_capacity(rows.len());
+    for r in &rows {
+        let a: String = r.try_get("account_id").unwrap_or_default();
+        let t: String = r.try_get("thread_id").unwrap_or_default();
+        if !a.is_empty() && !t.is_empty() {
+            out.insert((a, t));
+        }
+    }
+    Ok(out)
+}
+
 async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     let sql = format!("SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
     let rows = sqlx::query(&sql)
@@ -224,103 +308,30 @@ async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     Ok(out)
 }
 
-/// Phase-1 query. Returns one row per `(account_id, thread_id)`. Each
-/// row's `bucket_concat` column is a deterministic concatenation of
-/// the bucket's per-email content state, suitable for hashing into
-/// the bucket fingerprint.
-///
-/// **Per-email content state.** For each email we concatenate:
-///   - `emails.blake3` (the `.eml` content hash; NULL → empty), then
-///     `:`, then
-///   - sorted mailbox ids joined with `,` (the `Mailboxes:` line in
-///     the rendered markdown depends on this), then `:`, then
-///   - sorted keyword set joined with `,` (`$seen`, `$flagged` etc.),
-///     then `:`, then
-///   - sorted attachment blake3 hashes joined with `,`
-///     (attachment content changes mean the rendered preview /
-///     materialized blob set changes).
-///
-/// **Bucket aggregation.** Per-email strings are joined with `|` in
-/// `(received_at, email_id)` order — same display order the renderer
-/// uses, so the concat is byte-stable across runs.
-async fn bucket_fingerprint_query(pool: &SqlitePool) -> Result<Vec<(String, String, String)>> {
-    let sql = "WITH per_email AS (
-            SELECT
-                em.account_id,
-                em.thread_id,
-                em.id AS email_id,
-                em.received_at,
-                coalesce(em.blake3, '') AS email_blake3,
-                coalesce(
-                    (SELECT group_concat(mailbox_id, ',' ORDER BY mailbox_id)
-                       FROM email_mailboxes WHERE email_id = em.id),
-                    ''
-                ) AS mailbox_csv,
-                coalesce(
-                    (SELECT group_concat(keyword, ',' ORDER BY keyword)
-                       FROM email_keywords WHERE email_id = em.id),
-                    ''
-                ) AS keyword_csv,
-                coalesce(
-                    (SELECT group_concat(blake3, ',' ORDER BY part_id)
-                       FROM email_attachments
-                      WHERE email_id = em.id AND blake3 IS NOT NULL),
-                    ''
-                ) AS attachment_blake3_csv
-              FROM emails em
-        )
-        SELECT
-            account_id,
-            thread_id,
-            group_concat(
-                email_blake3 || ':' || mailbox_csv || ':' || keyword_csv
-                    || ':' || attachment_blake3_csv,
-                '|' ORDER BY received_at, email_id
-            ) AS bucket_concat
-          FROM per_email
-         GROUP BY account_id, thread_id
-         ORDER BY account_id, thread_id";
-    let rows = sqlx::query(sql)
-        .fetch_all(pool)
-        .await
-        .context("bucket fingerprint query")?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let account_id: String = r.try_get("account_id")?;
-        let thread_id: String = r.try_get("thread_id")?;
-        let bucket_concat: String = r.try_get("bucket_concat").unwrap_or_default();
-        out.push((account_id, thread_id, bucket_concat));
-    }
-    Ok(out)
-}
-
-/// Phase-2 load: pull envelopes + joins only for the to-render
-/// buckets. One SELECT against `emails` filtered to the surviving
-/// thread_ids; three more against the join tables filtered to the
-/// matching email_ids. Then route rows into per-bucket
-/// [`EmailThreadBucket`]s.
+/// Phase 2: pull envelopes + joins for the to-render thread set.
 async fn load_buckets(
     pool: &SqlitePool,
-    to_load: &[(String, String, String)],
+    to_load: &HashSet<(String, String)>,
 ) -> Result<Vec<EmailThreadBucket>> {
-    // Build the bucket index up front so each loaded row knows which
-    // bucket it belongs to in O(1).
+    if to_load.is_empty() {
+        return Ok(Vec::new());
+    }
     let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
     let mut docs: Vec<EmailThreadBucket> = Vec::with_capacity(to_load.len());
     let mut wanted_thread_ids: HashSet<String> = HashSet::with_capacity(to_load.len());
-    for (account_id, thread_id, fingerprint) in to_load {
+    let mut sorted: Vec<&(String, String)> = to_load.iter().collect();
+    sorted.sort();
+    for (account_id, thread_id) in sorted {
         bucket_idx.insert((account_id.clone(), thread_id.clone()), docs.len());
         wanted_thread_ids.insert(thread_id.clone());
         docs.push(EmailThreadBucket {
             account_id: account_id.clone(),
             thread_id: thread_id.clone(),
-            fingerprint: fingerprint.clone(),
             emails: Vec::new(),
             joins: EmailJoins::default(),
         });
     }
 
-    // ── envelopes ────────────────────────────────────────────────
     let placeholders = std::iter::repeat_n("?", wanted_thread_ids.len())
         .collect::<Vec<_>>()
         .join(",");
@@ -370,9 +381,6 @@ async fn load_buckets(
         return Ok(docs);
     }
 
-    // ── joins, filtered to the email ids we just loaded ──────────
-    // Build a `(email_id → bucket_idx)` map so each join row routes
-    // straight into its bucket's `EmailJoins`.
     let mut email_to_bucket: HashMap<String, usize> = HashMap::new();
     for (idx, bucket) in docs.iter().enumerate() {
         for em in &bucket.emails {

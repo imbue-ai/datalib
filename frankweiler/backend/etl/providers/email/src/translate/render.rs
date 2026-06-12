@@ -33,6 +33,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{blake3_hex, extension_for_content_type};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use mail_parser::{Address, MessageParser, MimeHeaders, PartType};
@@ -236,12 +237,17 @@ pub fn email_uuid(account_id: &str, email_id: &str) -> String {
 /// calling `on_doc_complete` per rendered markdown so the orchestrator
 /// can commit each `RenderedMarkdown` to the index atomically.
 ///
-/// Skip semantics: the parse layer (`translate::parse`) has already
-/// run the bucket-fingerprint CTE and dropped buckets whose
-/// fingerprint matches `prior_fingerprints`. `parsed.docs` holds only
-/// the buckets that need rendering; everything else is reported via
-/// `parsed.docs_skipped`. So this function just iterates `parsed.docs`
-/// and writes — no inline skip check, no `source_fingerprint` walk.
+/// Skip semantics: the parse layer ran the `dolt_diff_<table>` union
+/// query and only loaded buckets for threads that had any touched row
+/// since the prior render cursor. `parsed.docs` holds only those
+/// threads; everything else is reported via `parsed.docs_skipped`. So
+/// this function just iterates and writes — no inline skip check, no
+/// `source_fingerprint` compare.
+///
+/// On a successful render we stamp the new doltlite HEAD into a
+/// per-source cursor JSON file at the root of this provider's render
+/// dir; the next run will pass that hash back to `parse` as its
+/// `from_ref` for the dolt_diff scan.
 pub fn render_all(
     parsed: &ParsedEmail,
     root: &Path,
@@ -249,6 +255,19 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_threads = parsed
+            .scan
+            .changed_threads
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_threads.is_none(),
+        "[translate] email dolt_diff scan"
+    );
     // Build lookups.
     let mailbox_name: HashMap<String, String> = parsed
         .mailboxes
@@ -296,8 +315,12 @@ pub fn render_all(
         let tuid = thread_uuid(acct, thread_id);
         let rel = thread_relative_path(&acct_slug, &tuid);
         let abs = root.join(&rel);
-        // Phase 1's CTE pre-computed this — no Rust-side hash walk.
-        let fp = bucket.fingerprint.clone();
+        // The per-doc `source_fingerprint` used to be a bucket-
+        // fingerprint hash from a SQL CTE. With dolt_diff driving
+        // skip, that compare is gone; use the thread_uuid so the
+        // sidecar still has a stable identifier. The orchestrator's
+        // prior_fingerprints map is ignored by email now.
+        let fp = tuid.clone();
 
         let page_dir = abs
             .parent()
@@ -431,6 +454,16 @@ pub fn render_all(
 
         written.push(rel);
         progress.inc(1);
+    }
+
+    // Advance the cursor only when we got through the whole loop
+    // without erroring AND we managed to read HEAD at scan time. A
+    // missing HEAD (non-doltlite sqlite) leaves the cursor unwritten;
+    // next run is another cold start.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(root, "email", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write email render cursor {}", cursor_path.display()))?;
     }
     Ok(written)
 }

@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl::section::section_attrs;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
@@ -68,11 +69,29 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
+    // Log how long the dolt_diff scan took. Logged on every render
+    // (including cold start with `None`) so the timing shows up in
+    // sync output without the user having to crack the cursor open.
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_chats = parsed
+            .scan
+            .changed_chats
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_chats.is_none(),
+        "[translate] signal dolt_diff scan"
+    );
+
     let mut summary = RenderSummary {
         // `docs` only contains the buckets that need re-rendering,
         // so `docs_total = parsed.docs.len() + docs_skipped` is the
         // count the orchestrator's progress bar wants. Skip count
-        // comes from parse — it filtered them.
+        // comes from parse — it counted chats whose dolt_diff entry
+        // was empty.
         docs_total: parsed.docs.len() + parsed.docs_skipped,
         docs_skipped: parsed.docs_skipped,
         ..Default::default()
@@ -85,9 +104,6 @@ pub fn render_all(
 
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
-            // Parser populates the chat map from the same db, so this
-            // is a "shouldn't happen" path — log and skip rather than
-            // abort the whole translate pass.
             tracing::warn!(
                 event = "signal_render_missing_chat",
                 chat_id = %doc.chat_id,
@@ -102,6 +118,18 @@ pub fn render_all(
         summary.messages_rendered += messages;
         summary.blobs_materialized += blobs;
         progress.inc(1);
+    }
+
+    // Advance the render cursor only when:
+    //   * every doc rendered without error (we're here, so true), AND
+    //   * we managed to read HEAD at scan time.
+    // A missing HEAD (stock libsqlite3 / non-doltlite db) leaves the
+    // cursor unwritten — next run is another cold start, which is the
+    // right behavior since we have no way to anchor the diff.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(out_dir, "signal", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)
 }
@@ -120,7 +148,16 @@ fn render_one(
 ) -> Result<RenderOutcome> {
     let chat_uuid = signal_chat_uuid(source_name, &chat.id);
     let markdown_uuid = signal_markdown_uuid(&chat_uuid, &doc.period_key);
-    let fingerprint = doc.fingerprint.clone();
+    // The per-doc `source_fingerprint` used to be a content hash
+    // computed by the parse-side bucket-fingerprint CTE. With
+    // dolt_diff driving the skip decision, that compare doesn't
+    // happen anymore — but the load path still wants *some* stable
+    // identifier in the sidecar. Use the markdown_uuid: stable across
+    // re-renders of the same bucket, distinct between buckets,
+    // already in scope. The orchestrator's prior_fingerprints map is
+    // ignored by signal now (parse never reads it); this value just
+    // keeps the sidecar schema honest.
+    let fingerprint = markdown_uuid.clone();
 
     let recipient_display = parsed
         .recipients

@@ -2347,11 +2347,15 @@ fn translate_source(
                 );
                 return Ok(());
             }
-            // Two-phase parse: phase 1 runs the bucket-fingerprint
-            // CTE and drops unchanged threads; phase 2 loads only
-            // the to-render buckets. `render_all` no longer takes
-            // `prior_fingerprints` — parse already filtered.
-            let parsed = parse(&db, prior_fingerprints)
+            // Two-phase parse driven by `dolt_diff_<table>`: phase 1
+            // asks doltlite which threads changed since the render
+            // cursor's commit; phase 2 loads only those threads.
+            // The orchestrator's `prior_fingerprints` map is ignored
+            // here — the cursor is the single source of truth.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "email", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read email render cursor {}", cursor_path.display()))?;
+            let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))
                 .with_context(|| format!("email parse {}", db.display()))?;
             render_all(&parsed, root, name, progress, on_doc_complete)
                 .context("email render_all")
@@ -2388,13 +2392,21 @@ fn translate_source(
             use frankweiler_etl_signal::translate::{parse, render_all, Period};
             let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
                 .context("parse signal period")?;
-            // `parse` now consumes `prior_fingerprints` directly:
-            // it does the per-bucket fingerprint compare in SQL and
-            // only loads chat_items for buckets that need re-rendering.
-            // `render_all` no longer takes prior_fingerprints — every
-            // doc in `parsed.docs` needs a write.
-            let parsed = parse(&fixture, period, name, prior_fingerprints)
-                .with_context(|| format!("signal parse {}", fixture.display()))?;
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`
+            // anymore. Read the cursor (a JSON file at the root of
+            // signal's render dir), hand its commit hash to `parse`,
+            // and let `render_all` advance the cursor on success.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "signal", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                period,
+                name,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
+            )
+            .with_context(|| format!("signal parse {}", fixture.display()))?;
             render_all(&parsed, root, name, progress, on_doc_complete)
                 .context("signal render_all")
                 .map(|_| ())

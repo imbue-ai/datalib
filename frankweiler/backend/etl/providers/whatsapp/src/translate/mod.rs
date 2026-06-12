@@ -12,7 +12,6 @@
 //! the schema work or we get a test fixture for them.
 
 pub mod blob_reader;
-pub mod cursor;
 pub mod parse;
 pub mod render;
 

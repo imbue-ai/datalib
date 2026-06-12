@@ -54,7 +54,7 @@
 //!   `kind` discriminator values.
 
 use frankweiler_etl::bulk::BulkUpsertable;
-use frankweiler_etl::doltlite_raw::{self as dr, WirePayloadRow, WirePayloadTriad};
+use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use frankweiler_etl_macros::WirePayloadRow;
 use serde_json::Value;
 use sqlx::query::Query;
@@ -89,12 +89,10 @@ pub const BLOB_KIND_ATTACHMENT: &str = "attachment";
 ///
 /// Promoted columns: `name`, `is_personal`, `is_read_only`. The full
 /// session-fragment account entry is stored as the JSONB payload.
-/// `payload_blake3` is the blake3 hex of those bytes, used by
-/// translate's bucket-fingerprint path.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "accounts")]
 pub struct AccountRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub name: Option<String>,
     pub is_personal: Option<i64>,
     pub is_read_only: Option<i64>,
@@ -116,12 +114,10 @@ impl AccountRow {
             .and_then(|v| v.as_bool())
             .map(|b| b as i64);
         let payload_str = serde_json::to_string(payload)?;
-        let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload_str.as_bytes());
         Ok(Self {
-            triad: WirePayloadTriad {
+            id_and_payload: WirePayload {
                 id: id.to_string(),
                 payload: payload_str,
-                payload_blake3,
             },
             name,
             is_personal,
@@ -139,7 +135,7 @@ impl AccountRow {
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "mailboxes")]
 pub struct MailboxRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub account_id: String,
     pub name: Option<String>,
     pub parent_id: Option<String>,
@@ -171,12 +167,10 @@ impl MailboxRow {
         let total_emails = payload.get("totalEmails").and_then(|v| v.as_i64());
         let unread_emails = payload.get("unreadEmails").and_then(|v| v.as_i64());
         let payload_str = serde_json::to_string(payload)?;
-        let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload_str.as_bytes());
         Ok(Self {
-            triad: WirePayloadTriad {
+            id_and_payload: WirePayload {
                 id: id.to_string(),
                 payload: payload_str,
-                payload_blake3,
             },
             account_id: account_id.to_string(),
             name,
@@ -202,7 +196,7 @@ pub const MAILBOXES_BY_ACCOUNT_INDEX_DDL: &str =
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "threads")]
 pub struct ThreadRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub account_id: String,
     pub email_count: Option<i64>,
 }
@@ -214,12 +208,10 @@ impl ThreadRow {
             .and_then(|v| v.as_array())
             .map(|a| a.len() as i64);
         let payload_str = serde_json::to_string(payload)?;
-        let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload_str.as_bytes());
         Ok(Self {
-            triad: WirePayloadTriad {
+            id_and_payload: WirePayload {
                 id: id.to_string(),
                 payload: payload_str,
-                payload_blake3,
             },
             account_id: account_id.to_string(),
             email_count,
@@ -294,8 +286,8 @@ pub const EMAILS_DDL: &str = "CREATE TABLE IF NOT EXISTS emails (
 /// same transaction.
 ///
 /// `BulkUpsertable` is hand-rolled (not derived) because emails is
-/// envelope-only — there is no `payload` / `payload_blake3` triad
-/// to fit. The bind sequence binds `id` plus the typed columns;
+/// envelope-only — there is no `WirePayload` pair to fit. The bind
+/// sequence binds `id` plus the typed columns;
 /// join inputs (`mailbox_ids`, `keywords`, `attachments`) are NOT
 /// bound here — they're consumed by the per-row join-refresh helper
 /// the caller runs alongside the bulk-upsert.

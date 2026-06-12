@@ -16,10 +16,10 @@ use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
 
 use super::blob_reader::WhatsAppBlobReader;
-use super::cursor;
 use frankweiler_etl::doltlite_raw;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl_chat_common::{
     render::{RenderProfile, RenderSummary},
     NormalizedChat,
@@ -86,36 +86,46 @@ pub fn render_all(
     // every period bucket of that chat with identical bytes (mtimes
     // bump). Same-bytes rewrites are fine; if a downstream consumer
     // grows sensitive to mtime, reintroduce a per-bucket compare.
-    let cursor_path = cursor::cursor_path(out_dir, source_name);
-    let prior = cursor::read(&cursor_path)?;
+    let cursor_path = render_cursor::cursor_path(out_dir, "whatsapp", source_name);
+    let prior = render_cursor::read(&cursor_path)?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
-    let (filtered_owned, new_head): (Option<Vec<NormalizedChat>>, Option<String>) =
-        if db_path.exists() {
-            let (changed, head) = tokio::task::block_in_place(|| {
-                let h = tokio::runtime::Handle::try_current();
-                match h {
-                    Ok(h) => h.block_on(scan_diff(
-                        &db_path,
-                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                    )),
-                    Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(
-                        &db_path,
-                        prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
-                    )),
-                }
-            })?;
-            let filtered = changed.map(|set| {
-                chats
-                    .iter()
-                    .filter(|c| set.contains(&c.id))
-                    .cloned()
-                    .collect()
-            });
-            (filtered, head)
-        } else {
-            (None, None)
-        };
+    let (filtered_owned, new_head, scan_elapsed): (
+        Option<Vec<NormalizedChat>>,
+        Option<String>,
+        Option<std::time::Duration>,
+    ) = if db_path.exists() {
+        let (changed, head, elapsed) = tokio::task::block_in_place(|| {
+            let h = tokio::runtime::Handle::try_current();
+            match h {
+                Ok(h) => h.block_on(scan_diff(
+                    &db_path,
+                    prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
+                )),
+                Err(_) => tokio::runtime::Runtime::new()?.block_on(scan_diff(
+                    &db_path,
+                    prior.as_ref().map(|c| c.last_rendered_hash.as_str()),
+                )),
+            }
+        })?;
+        let filtered = changed.as_ref().map(|set| {
+            chats
+                .iter()
+                .filter(|c| set.contains(&c.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        tracing::info!(
+            source = source_name,
+            scan_elapsed_ms = elapsed.map(|d| d.as_millis() as u64),
+            changed_chats = changed.as_ref().map(|s| s.len() as i64).unwrap_or(-1),
+            cold_start = changed.is_none(),
+            "[translate] whatsapp dolt_diff scan"
+        );
+        (filtered, head, elapsed)
+    } else {
+        (None, None, None)
+    };
     let to_render: &[NormalizedChat] = filtered_owned.as_deref().unwrap_or(chats);
 
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
@@ -131,7 +141,7 @@ pub fn render_all(
     )?;
 
     if let Some(head) = new_head {
-        cursor::write(&cursor_path, &head)?;
+        render_cursor::write(&cursor_path, &head, scan_elapsed)?;
     }
     Ok(summary)
 }
@@ -144,7 +154,11 @@ pub fn render_all(
 async fn scan_diff(
     db_path: &Path,
     last_hash: Option<&str>,
-) -> Result<(Option<HashSet<String>>, Option<String>)> {
+) -> Result<(
+    Option<HashSet<String>>,
+    Option<String>,
+    Option<std::time::Duration>,
+)> {
     let pool = open_ro_pool(db_path).await?;
 
     let new_head: Option<String> =
@@ -154,8 +168,8 @@ async fn scan_diff(
             .ok()
             .flatten();
 
-    let changed = match last_hash {
-        None => None,
+    let (changed, elapsed) = match last_hash {
+        None => (None, None),
         Some(from_ref) => {
             // One union across the per-table dolt_diff vtabs. The
             // `chat_jid` column lives on every wa_message_* table, so a
@@ -191,18 +205,20 @@ async fn scan_diff(
                 )
                 WHERE chat_jid IS NOT NULL
             ";
+            let started = std::time::Instant::now();
             let rows = sqlx::query(sql)
                 .bind(from_ref)
                 .fetch_all(&pool)
                 .await
                 .context("query dolt_diff_wa_* changed chats")?;
+            let elapsed = started.elapsed();
             let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
-            Some(set)
+            (Some(set), Some(elapsed))
         }
     };
 
     pool.close().await;
-    Ok((changed, new_head))
+    Ok((changed, new_head, elapsed))
 }
 
 /// Build the `SqliteBlobReader` chat-common reads attachment bytes
@@ -326,12 +342,12 @@ mod tests {
             2,
             "first render should emit one doc per chat, got {docs1:?}"
         );
-        let cursor_path = cursor::cursor_path(&out_dir, "test");
+        let cursor_path = render_cursor::cursor_path(&out_dir, "whatsapp", "test");
         assert!(
             cursor_path.exists(),
             "cursor file missing after first render"
         );
-        let first_cursor = cursor::read(&cursor_path)
+        let first_cursor = render_cursor::read(&cursor_path)
             .expect("read cursor")
             .expect("cursor populated");
 
@@ -374,7 +390,7 @@ mod tests {
         );
 
         // Cursor advanced past the previous HEAD.
-        let third_cursor = cursor::read(&cursor_path)
+        let third_cursor = render_cursor::read(&cursor_path)
             .expect("read cursor 3")
             .expect("cursor populated 3");
         assert_ne!(

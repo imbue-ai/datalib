@@ -253,12 +253,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         match &frame.item {
             Some(backup::frame::Item::Account(a)) => {
                 let payload = serde_json::to_string(a).context("serialize account frame")?;
-                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 accounts.push(AccountRow {
-                    triad: frankweiler_etl::doltlite_raw::WirePayloadTriad {
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload {
                         id: "self".to_string(),
                         payload,
-                        payload_blake3,
                     },
                 });
             }
@@ -266,13 +264,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let id = r.id.to_string();
                 let (identifier, name) = recipient_pretty(r);
                 let payload = serde_json::to_string(r).context("serialize recipient frame")?;
-                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 recipients.push(RecipientRow {
-                    triad: frankweiler_etl::doltlite_raw::WirePayloadTriad {
-                        id,
-                        payload,
-                        payload_blake3,
-                    },
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id, payload },
                     identifier,
                     display_name: name,
                 });
@@ -282,13 +275,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let id = c.id.to_string();
                 let rid = c.recipient_id.to_string();
                 let payload = serde_json::to_string(c).context("serialize chat frame")?;
-                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 chats.push(ChatRow {
-                    triad: frankweiler_etl::doltlite_raw::WirePayloadTriad {
-                        id,
-                        payload,
-                        payload_blake3,
-                    },
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id, payload },
                     recipient_id: rid,
                 });
                 summary.chats += 1;
@@ -321,13 +309,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 }
 
                 let payload = serde_json::to_string(ci).context("serialize chat_item frame")?;
-                let payload_blake3 = frankweiler_etl::blob_cas::blake3_hex(payload.as_bytes());
                 chat_items.push(ChatItemRow {
-                    triad: frankweiler_etl::doltlite_raw::WirePayloadTriad {
-                        id: pk,
-                        payload,
-                        payload_blake3,
-                    },
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id: pk, payload },
                     chat_id,
                     author_id,
                     date_sent,

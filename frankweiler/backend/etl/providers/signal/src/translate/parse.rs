@@ -1,17 +1,31 @@
 //! Parse the doltlite raw store into a small in-memory `ParsedSignal`
 //! that the renderer can walk without re-querying.
 //!
-//! We read three tables — `recipients`, `chats`, `chat_items` — decode
-//! each `chat_items.payload` JSON to extract the text body of any
-//! `StandardMessage`, and bucket the result by (chat, period). Other
-//! ChatItem variants (stickers, view-once, ChatUpdate, …) are skipped
-//! silently in this render version; the raw doltlite still has the
-//! payload, so a future `RENDER_VERSION` bump can surface them.
+//! Incrementality is driven by **`dolt_diff_<table>`**, not by Rust- or
+//! SQL-side content hashes. The caller passes the doltlite commit hash
+//! the renderer last successfully completed against (from
+//! [`frankweiler_etl::render_cursor`]); we union the per-table diff
+//! vtabs to enumerate the `chat_id`s touched between that hash and
+//! `HEAD`, and load full chat data only for those. Cold start (no
+//! cursor, or `dolt_diff_<table>` unavailable / non-doltlite sqlite)
+//! falls back to "every chat with any chat_items" — the existing full
+//! load.
+//!
+//! The trade we accept: when ANY row in a chat changes — message edit,
+//! reaction, attachment swap — every period bucket of that chat
+//! re-renders, including buckets whose markdown bytes would have
+//! ended up identical. In exchange we drop a few hundred lines of
+//! bucket-fingerprint bookkeeping (the per-row `payload_blake3` column,
+//! the `bucket_fingerprint_query` CTE, and the `prior_fingerprints`
+//! plumbing through translate/render/orchestrator). The dolt prolly-
+//! tree diff itself is timed on every run and logged in the render
+//! cursor — see `translate::render`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{self, BlobReader, BlobView, InMemoryBlobReader};
@@ -19,6 +33,27 @@ use frankweiler_etl::periodize::Period;
 use frankweiler_signal_backup::backup;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
+
+/// Result of the dolt_diff scan: the chats we need to re-render, the
+/// current HEAD hash to stamp into the next cursor, and how long the
+/// diff query took. All three travel together so `render` can write
+/// the cursor + log the elapsed_ms without a second round-trip.
+#[derive(Debug, Clone)]
+pub struct ScanResult {
+    /// `Some(set)` → render only chats whose id is in `set`. `None` →
+    /// cold start, render every chat. (First run, or no on-disk
+    /// doltlite, or `dolt_diff_<table>` unavailable, or no prior
+    /// cursor.)
+    pub changed_chats: Option<HashSet<String>>,
+    /// The HEAD commit hash at scan time, ready to stamp into the
+    /// render cursor on success. `None` if we couldn't read HEAD —
+    /// next run is another cold start.
+    pub new_head: Option<String>,
+    /// Wall-clock time spent in the `dolt_diff_<table>` union query.
+    /// `None` on a cold start that didn't run the query (no cursor,
+    /// nothing to diff against).
+    pub scan_elapsed: Option<Duration>,
+}
 
 #[derive(Clone)]
 pub struct ParsedSignal {
@@ -28,21 +63,24 @@ pub struct ParsedSignal {
     /// matching bucket in `docs`.
     pub chats: HashMap<String, ParsedChat>,
     /// One bucket per `(chat_id, period_key)` pair that needs
-    /// re-rendering — i.e., buckets whose content fingerprint does
-    /// **not** match the matching entry in the
-    /// `prior_fingerprints` map passed in to [`parse`]. Buckets
-    /// whose fingerprint is unchanged are entirely omitted (we don't
-    /// even load their chat_items off disk). Ordered by chat_id then
+    /// re-rendering. A chat survives Phase 1 iff `dolt_diff_*`
+    /// reported any row of it as added/modified/removed since the
+    /// last render cursor — every period of that chat is then
+    /// loaded in Phase 2. Buckets whose chat didn't change are
+    /// entirely absent from `docs`. Ordered by chat_id then
     /// period_key so the rendered tree is deterministic.
     pub docs: Vec<DocBucket>,
-    /// Count of buckets whose fingerprint matched a prior render and
-    /// were therefore skipped. Reported into [`super::render::RenderSummary`]
-    /// so the orchestrator's `docs_skipped` counter stays accurate
-    /// even though the skipped buckets never appear in `docs`.
+    /// Count of chats `dolt_diff` said were unchanged, reported into
+    /// [`super::render::RenderSummary`] so the orchestrator's progress
+    /// accounting stays accurate. We count CHATS, not buckets, because
+    /// the diff is chat-grained — we never materialize buckets for
+    /// unchanged chats.
     pub docs_skipped: usize,
+    /// Scan diagnostics propagated up to render so it can write the
+    /// cursor + log elapsed_ms.
+    pub scan: ScanResult,
     /// Streaming handle to attachment bytes stored in the sibling
-    /// CAS file. Render fetches one blob's bytes at a time on demand
-    /// rather than bulk-loading them all into memory.
+    /// CAS file.
     pub blobs: Arc<dyn BlobReader>,
 }
 
@@ -53,6 +91,11 @@ impl Default for ParsedSignal {
             chats: HashMap::new(),
             docs: Vec::new(),
             docs_skipped: 0,
+            scan: ScanResult {
+                changed_chats: None,
+                new_head: None,
+                scan_elapsed: None,
+            },
             blobs: InMemoryBlobReader::empty_handle(),
         }
     }
@@ -82,28 +125,17 @@ pub struct ParsedChat {
 
 /// One rendered-markdown bucket: a slice of a chat covering a single
 /// period key (`2024-03`, `2024-03-15`, `2024`, or `all`).
-///
-/// **Content fingerprint:** blake3 of the concatenation, in
-/// `date_sent ASC` order, of every member chat_item's
-/// `payload_blake3` + sorted attachment blake3 hashes. Computed by
-/// [`parse`] from a single SQL `group_concat` aggregate — no need
-/// to deserialize payloads to derive it. The render path writes it
-/// into the sidecar's `header.source_fingerprint`; the next
-/// translate run reads sidecars to build the `prior_fingerprints`
-/// map and skips buckets whose fingerprint hasn't changed.
 #[derive(Debug, Clone)]
 pub struct DocBucket {
     pub chat_id: String,
     pub period_key: String,
-    pub fingerprint: String,
     pub items: Vec<ParsedChatItem>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedChatItem {
     /// `{chat_id}#{author_id}#{date_sent}` — matches the
-    /// `chat_items.id` PK and the `blob_refs.owning_id` for every
-    /// attachment under this item.
+    /// `chat_items.id` PK.
     pub item_pk: String,
     pub author_id: String,
     pub date_sent: i64,
@@ -117,71 +149,53 @@ pub struct ParsedChatItem {
     pub attachments: Vec<ParsedAttachment>,
 }
 
-/// One attachment referenced from a `ParsedChatItem`. `ref_id`
-/// matches `blob_refs.id`; the render walks them, hands each to
-/// `blob_cas::materialize_to_disk`, and emits an `![alt](blobs/<…>)`
-/// link via `blob_cas::attachment_md`.
 #[derive(Debug, Clone)]
 pub struct ParsedAttachment {
     /// `local_media_name(plaintext_hash, local_key)` — the same key
-    /// extract used when calling `db.store_blob(&RefStub { ref_id: … })`.
+    /// extract used when calling `db.store_blob`.
     pub ref_id: String,
     pub content_type: Option<String>,
     pub file_name: Option<String>,
     pub is_image: bool,
 }
 
-/// Compatibility wrapper: when sync hasn't passed an explicit period
-/// (or for unit tests / repros) default to `Period::Month` — same
-/// default the YAML knob falls back to. Forces a full re-render
-/// (empty `prior_fingerprints`).
+/// Compatibility wrapper for callers that don't have a render cursor
+/// (older unit tests, ad-hoc repros). Forces a cold start — every
+/// chat renders.
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedSignal> {
-    let prior = HashMap::new();
-    parse(input, Period::Month, "signal", &prior)
+    parse(input, Period::Month, "signal", None)
 }
 
-/// Two-phase load.
+/// Two-phase parse driven by `dolt_diff_<table>`.
 ///
-/// Phase 1 runs a `group_concat` aggregate over
-/// `chat_items.payload_blake3` (joined with `chat_item_attachments.blake3`)
-/// to compute one **bucket fingerprint** per `(chat_id, period_key)`
-/// pair, *without* deserializing any payloads. Each fingerprint is
-/// compared to the matching entry in `prior_fingerprints` (keyed by
-/// `signal_markdown_uuid(signal_chat_uuid(source_name, chat_id), period_key)`),
-/// and only the buckets whose fingerprint changed make it into
-/// Phase 2.
+/// Phase 1 — ask doltlite which chats changed since `last_render_hash`.
+/// Cold start (`last_render_hash = None`) loads every chat; same path
+/// also taken when doltlite extensions aren't linked.
 ///
-/// Phase 2 runs a targeted SELECT against `chat_items` filtered to
-/// the chat_ids + date_sent ranges of the to-render buckets,
-/// builds [`DocBucket`]s for them, and returns. Buckets whose
-/// fingerprint matched are reported via
-/// [`ParsedSignal::docs_skipped`] and entirely absent from
-/// [`ParsedSignal::docs`].
-///
-/// Recipients and chats are always loaded (they're small and
-/// rendering needs them for display).
+/// Phase 2 — `SELECT … WHERE chat_id IN (?, …)` over `chat_items` for
+/// the surviving chats only, build [`DocBucket`]s with one entry per
+/// period the chat spans.
 pub fn parse(
     input: &Path,
     period: Period,
     source_name: &str,
-    prior_fingerprints: &HashMap<String, String>,
+    last_render_hash: Option<&str>,
 ) -> Result<ParsedSignal> {
     let db_path = frankweiler_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedSignal::default());
     }
+    let _ = source_name; // currently unused; keep param for symmetry with whatsapp
     tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            parse_async(&db_path, period, source_name, prior_fingerprints).await
-        })
+        tokio::runtime::Handle::current()
+            .block_on(async move { parse_async(&db_path, period, last_render_hash).await })
     })
 }
 
 async fn parse_async(
     db_path: &Path,
     period: Period,
-    source_name: &str,
-    prior_fingerprints: &HashMap<String, String>,
+    last_render_hash: Option<&str>,
 ) -> Result<ParsedSignal> {
     let opts =
         SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
@@ -192,9 +206,7 @@ async fn parse_async(
         .with_context(|| format!("open raw doltlite for translate at {}", db_path.display()))?;
 
     // Sibling CAS file holds attachment bytes; render fetches them on
-    // demand via `SignalBlobReader`, which joins
-    // `chat_item_attachments` (entity db) to `cas_objects` (CAS db)
-    // on blake3 — see the struct's doc for the full lookup chain.
+    // demand via `SignalBlobReader`.
     let cas_path = blob_cas::cas_path_for(db_path);
     let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
         let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
@@ -212,41 +224,49 @@ async fn parse_async(
     let recipients = load_recipients(&pool).await?;
     let chats = load_chats(&pool).await?;
 
-    // ── Phase 1: bucket fingerprints via SQL ───────────────────────
-    //
-    // One row per `(chat_id, period_key)` bucket, no payloads
-    // touched. Each row carries a `group_concat` of every member
-    // chat_item's `payload_blake3` + that item's attachment blake3
-    // hashes (sorted), in `date_sent ASC` order. We hash the
-    // concat to get the bucket fingerprint, compare against
-    // `prior_fingerprints` keyed by the bucket's
-    // `signal_markdown_uuid`, and decide which buckets to load.
-    let bucket_rows = bucket_fingerprint_query(&pool, period).await?;
-    let mut to_load_buckets: Vec<(String, String, String)> = Vec::new();
-    let mut docs_skipped: usize = 0;
-    for (chat_id, period_key, bucket_concat) in bucket_rows {
-        let fingerprint = frankweiler_etl::blob_cas::blake3_hex(bucket_concat.as_bytes());
-        let chat_uuid = super::signal_chat_uuid(source_name, &chat_id);
-        let markdown_uuid = super::signal_markdown_uuid(&chat_uuid, &period_key);
-        if prior_fingerprints.get(&markdown_uuid) == Some(&fingerprint) {
-            docs_skipped += 1;
-        } else {
-            to_load_buckets.push((chat_id, period_key, fingerprint));
-        }
-    }
+    // ── Phase 1: which chats changed since last_render_hash? ──────
+    let scan = scan_diff(&pool, last_render_hash).await?;
 
-    // ── Phase 2: load chat_items only for to-render buckets ────────
-    let docs = if to_load_buckets.is_empty() {
+    // Decide the load set.
+    let (to_load_chats, docs_skipped) = match &scan.changed_chats {
+        None => {
+            // Cold start — every chat with any chat_items needs loading.
+            let ids = load_all_chat_ids(&pool).await?;
+            (ids, 0usize)
+        }
+        Some(changed) => {
+            let total = chats.len();
+            // Filter to chats we actually know about (a chat that
+            // existed only in `from_ref` shows up via dolt_diff but is
+            // gone from `chats` now; skip it — the stale markdown sits
+            // until the indexer GCs it).
+            let to_load: HashSet<String> = changed
+                .iter()
+                .filter(|cid| chats.contains_key(*cid))
+                .cloned()
+                .collect();
+            let skipped = total.saturating_sub(to_load.len());
+            (to_load, skipped)
+        }
+    };
+
+    // ── Phase 2: targeted load for to_load_chats ──────────────────
+    let docs = if to_load_chats.is_empty() {
         Vec::new()
     } else {
-        load_buckets(&pool, period, &to_load_buckets).await?
+        load_buckets(&pool, period, &to_load_chats).await?
     };
+
+    // Don't close `pool` — `SignalBlobReader` cloned it and the
+    // renderer reads through that clone after we return. The pool
+    // closes on the last Arc<BlobReader> drop.
 
     Ok(ParsedSignal {
         recipients,
         chats,
         docs,
         docs_skipped,
+        scan,
         blobs,
     })
 }
@@ -293,6 +313,134 @@ async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedCha
     Ok(chats)
 }
 
+async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
+    let rows = sqlx::query("SELECT DISTINCT chat_id FROM chat_items")
+        .fetch_all(pool)
+        .await
+        .context("load all chat_ids")?;
+    let mut out: HashSet<String> = HashSet::with_capacity(rows.len());
+    for r in &rows {
+        out.insert(r.try_get::<String, _>("chat_id")?);
+    }
+    Ok(out)
+}
+
+/// Phase 1: ask doltlite which chats touched any row since
+/// `last_render_hash`. Returns the change set + current HEAD + the
+/// wall-clock time the diff query took.
+///
+/// `recipients` changes propagate as "every chat needs re-render"
+/// because rendered chat names dereference recipient display names —
+/// a renamed recipient must repaint every chat they appear in, and we
+/// don't keep the recipient→chats reverse index handy. Cheap and
+/// correct.
+async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    // HEAD hash is always read so the cursor can advance on a
+    // successful render. `dolt_log()` returns the most recent commit;
+    // on stock libsqlite3 the call errors → leave `new_head = None`.
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    let Some(from_ref) = last_render_hash else {
+        // Cold start — render everything.
+        return Ok(ScanResult {
+            changed_chats: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    };
+
+    // One union across the per-table dolt_diff vtabs. `chat_id` lives
+    // on chats / chat_items / chat_item_attachments (via chat_items);
+    // changes to `recipients` fan out to "every chat" because the
+    // renderer dereferences recipient display names per chat.
+    let sql = "
+        SELECT DISTINCT chat_id FROM (
+            SELECT coalesce(to_id, from_id) AS chat_id
+              FROM dolt_diff_chats
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            SELECT coalesce(to_chat_id, from_chat_id)
+              FROM dolt_diff_chat_items
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            -- Attachment changes propagate to their owning chat by
+            -- joining the diff vtab back to the live `chat_items`
+            -- table (which is at HEAD, the same ref the surrounding
+            -- diff queries are projecting to).
+            SELECT chat_items.chat_id
+              FROM dolt_diff_chat_item_attachments ca
+              JOIN chat_items
+                ON chat_items.id = coalesce(ca.to_chat_item_id, ca.from_chat_item_id)
+             WHERE ca.from_ref = ?1 AND ca.to_ref = 'HEAD'
+               AND ca.diff_type != 'unchanged'
+        )
+        WHERE chat_id IS NOT NULL
+    ";
+
+    let started = std::time::Instant::now();
+    // The `dolt_diff_<table>` virtual tables only resolve once the
+    // underlying table has been recorded in dolt history; on a brand-
+    // new working set (extract ran but no commit yet) the vtab can
+    // report "no such table". Treat any error here as cold start —
+    // we'll render everything once and the cursor advances normally.
+    let direct_changes_res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
+    let direct_changes = match direct_changes_res {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::info!(
+                source = "signal",
+                error = %e,
+                "dolt_diff scan failed — falling back to cold-start (render everything)"
+            );
+            return Ok(ScanResult {
+                changed_chats: None,
+                new_head,
+                scan_elapsed: Some(started.elapsed()),
+            });
+        }
+    };
+
+    // Recipients: if any recipient row changed, dump every known chat
+    // into the load set. Tiny query, almost always empty on the hot
+    // path.
+    let any_recipient_change: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM dolt_diff_recipients \
+          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1",
+    )
+    .bind(from_ref)
+    .fetch_optional(pool)
+    .await
+    .context("query dolt_diff_recipients")?;
+    let scan_elapsed = started.elapsed();
+
+    let changed_chats: HashSet<String> = if any_recipient_change.is_some() {
+        // Force "every chat" by leaving the set empty here and
+        // returning None — caller treats None as cold start (load
+        // every chat). docs_skipped will be 0, accurately.
+        return Ok(ScanResult {
+            changed_chats: None,
+            new_head,
+            scan_elapsed: Some(scan_elapsed),
+        });
+    } else {
+        direct_changes
+            .iter()
+            .map(|r| r.get::<String, _>(0))
+            .collect()
+    };
+
+    Ok(ScanResult {
+        changed_chats: Some(changed_chats),
+        new_head,
+        scan_elapsed: Some(scan_elapsed),
+    })
+}
+
 /// Period::All bucket key — kept in one place so the SQL and Rust
 /// paths agree.
 const PERIOD_ALL_BUCKET_KEY: &str = "all";
@@ -313,90 +461,15 @@ fn period_key_sql(period: Period) -> String {
     }
 }
 
-/// Phase-1 query: one row per `(chat_id, period_key)`. Each row's
-/// `bucket_concat` column is a deterministic concatenation of the
-/// bucket's per-item content hashes, suitable for hashing into a
-/// bucket fingerprint.
-async fn bucket_fingerprint_query(
-    pool: &sqlx::SqlitePool,
-    period: Period,
-) -> Result<Vec<(String, String, String)>> {
-    let period_key_expr = period_key_sql(period);
-    // The per-item hash is `payload_blake3` plus a `:` plus a
-    // comma-separated list of this item's attachment blake3s sorted
-    // by attachment id (deterministic). LEFT JOIN so items with no
-    // attachments still appear; coalesce so the `:` and empty-list
-    // appear consistently.
-    //
-    // `group_concat(... ORDER BY ...)` lands in sqlite 3.44+; doltlite
-    // 0.11.x rides on sqlite 3.54 so the ORDER BY clause is honored
-    // and the resulting string is deterministic across runs.
-    let sql = format!(
-        "WITH item_hash AS (
-            SELECT ci.chat_id,
-                   {period_key_expr} AS period_key,
-                   ci.date_sent,
-                   ci.id AS chat_item_id,
-                   coalesce(ci.payload_blake3, '') ||
-                       ':' ||
-                       coalesce((
-                           SELECT group_concat(blake3, ',' ORDER BY id)
-                             FROM chat_item_attachments
-                            WHERE chat_item_id = ci.id
-                              AND blake3 IS NOT NULL
-                       ), '') AS item_hash
-              FROM chat_items ci
-         )
-         SELECT chat_id,
-                period_key,
-                group_concat(item_hash, '|' ORDER BY date_sent, chat_item_id) AS bucket_concat
-           FROM item_hash
-          GROUP BY chat_id, period_key
-          ORDER BY chat_id, period_key"
-    );
-    let rows = sqlx::query(&sql)
-        .fetch_all(pool)
-        .await
-        .context("bucket fingerprint query")?;
-    let mut out = Vec::with_capacity(rows.len());
-    for r in &rows {
-        let chat_id: String = r.try_get("chat_id")?;
-        let period_key: String = r.try_get("period_key")?;
-        let bucket_concat: String = r.try_get("bucket_concat").unwrap_or_default();
-        out.push((chat_id, period_key, bucket_concat));
-    }
-    Ok(out)
-}
-
-/// Phase-2 load: pull `chat_items.payload` for the buckets we
-/// decided to render, decode the chat_item items, and shape into
-/// [`DocBucket`]s with their pre-computed fingerprint attached.
+/// Phase 2: pull `chat_items.payload` for the chats we decided to
+/// render, decode the items, and shape into per-period `DocBucket`s.
 async fn load_buckets(
     pool: &sqlx::SqlitePool,
     period: Period,
-    to_load: &[(String, String, String)],
+    chat_ids: &HashSet<String>,
 ) -> Result<Vec<DocBucket>> {
-    // Index the to-load list by (chat_id, period_key) for fast
-    // routing of each loaded chat_item into its bucket.
-    let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
-    let mut docs: Vec<DocBucket> = Vec::with_capacity(to_load.len());
-    for (chat_id, period_key, fingerprint) in to_load {
-        bucket_idx.insert((chat_id.clone(), period_key.clone()), docs.len());
-        docs.push(DocBucket {
-            chat_id: chat_id.clone(),
-            period_key: period_key.clone(),
-            fingerprint: fingerprint.clone(),
-            items: Vec::new(),
-        });
-    }
-
-    // Restrict to the chat_ids we need. Period filtering happens in
-    // Rust (against the to-load set) — strftime in a WHERE clause
-    // would be just as expensive and harder to write.
-    let chat_ids: std::collections::HashSet<&str> =
-        to_load.iter().map(|(c, _, _)| c.as_str()).collect();
     if chat_ids.is_empty() {
-        return Ok(docs);
+        return Ok(Vec::new());
     }
     let placeholders = std::iter::repeat_n("?", chat_ids.len())
         .collect::<Vec<_>>()
@@ -410,25 +483,31 @@ async fn load_buckets(
                 json(payload) AS payload
            FROM chat_items
           WHERE chat_id IN ({placeholders})
-          ORDER BY chat_id, date_sent"
+          ORDER BY chat_id, period_key, date_sent"
     );
     let mut q = sqlx::query(&sql);
-    for c in &chat_ids {
-        q = q.bind(*c);
+    for c in chat_ids {
+        q = q.bind(c);
     }
     let irows = q.fetch_all(pool).await.context("read chat_items")?;
+
+    let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
+    let mut docs: Vec<DocBucket> = Vec::new();
     for r in &irows {
         let chat_id: String = r.try_get("chat_id")?;
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
         let period_key: String = r.try_get("period_key")?;
-        let Some(&idx) = bucket_idx.get(&(chat_id.clone(), period_key.clone())) else {
-            // chat_item falls into a bucket we marked as skipped —
-            // discard. (Happens when only one of several periods of
-            // a chat needs re-rendering.)
-            continue;
-        };
         let payload: String = r.try_get("payload")?;
+        let key = (chat_id.clone(), period_key.clone());
+        let idx = *bucket_idx.entry(key).or_insert_with(|| {
+            docs.push(DocBucket {
+                chat_id: chat_id.clone(),
+                period_key: period_key.clone(),
+                items: Vec::new(),
+            });
+            docs.len() - 1
+        });
         let item_pk =
             crate::extract::schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
         let (text, outgoing, attachments) = decode_chat_item(&payload);
@@ -478,10 +557,7 @@ fn decode_chat_item(payload: &str) -> (Option<String>, bool, Vec<ParsedAttachmen
 }
 
 /// Pull a `ParsedAttachment` out of a `MessageAttachment` if it has
-/// the fields we need to address its bytes in the CAS. Returns `None`
-/// for attachments that don't (no LocatorInfo, no plaintext hash, no
-/// local key) — extract would have skipped these too, so render
-/// surfacing them as missing-bytes placeholders would be misleading.
+/// the fields we need to address its bytes in the CAS.
 fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAttachment> {
     let ptr = att.pointer.as_ref()?;
     let li = ptr.locator_info.as_ref()?;
@@ -522,16 +598,6 @@ fn attachment_from_message(att: &backup::MessageAttachment) -> Option<ParsedAtta
 /// 2. `SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?`
 ///    — load the decrypted bytes and (universal-across-providers)
 ///    content_type that the CAS stored at extract time.
-///
-/// `upstream_name` / `source_url` on the returned [`BlobView`] are
-/// always `None` — Signal's translate already pulls those from the
-/// `chat_items.payload` (the `FilePointer` proto fields) and passes
-/// them explicitly through [`blob_cas::attachment_md`], so the
-/// BlobView never needs to carry them.
-///
-/// `read_by_owner` and `read_by_hash` are unused by Signal's render
-/// path; they return `Ok(None)`. If a future caller needs them,
-/// extend; today silently-empty is the right behavior.
 pub struct SignalBlobReader {
     refs_pool: SqlitePool,
     cas_pool: SqlitePool,

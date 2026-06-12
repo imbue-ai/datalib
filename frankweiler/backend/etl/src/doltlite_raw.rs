@@ -169,28 +169,34 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     )
 }
 
-/// The three columns every wire-payload entity table requires:
-/// `id` PK, the `payload` JSONB blob holding the upstream wire bytes,
-/// and `payload_blake3` (blake3 hex of those bytes) used as the
-/// per-row content fingerprint. Embed this struct as the **first**
-/// field of any row type that maps to a wire-payload table; the
-/// `#[derive(WirePayloadRow)]` macro (in `frankweiler-etl-macros`)
-/// recognizes it by *type*, not by field name, so a rename or typo
-/// is a compile error rather than a runtime SQL mismatch.
+/// The two columns every wire-payload entity table requires: `id` PK
+/// and the `payload` JSONB blob holding the upstream wire bytes. Embed
+/// this struct as the **first** field of any row type that maps to a
+/// wire-payload table; the `#[derive(WirePayloadRow)]` macro (in
+/// `frankweiler-etl-macros`) recognizes it by *type*, not by field
+/// name, so a rename or typo is a compile error rather than a runtime
+/// SQL mismatch.
+///
+/// Per-row content fingerprints used to live next to these as a
+/// `payload_blake3` hex hash, hand-maintained by every extract site
+/// and consumed by translate to drive incremental skip. That column is
+/// gone: translate now asks doltlite directly via `dolt_diff_<table>`
+/// what changed since the last render, which is both cheaper (the
+/// prolly-tree diff is already in dolt's hot path) and the single
+/// source of truth — see [`crate::render_cursor`] and the per-provider
+/// `translate::parse` for the new shape.
 ///
 /// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
 /// or — for the canonical path — the derive macro, which generates
 /// the DDL straight off the row struct's field list.
 #[derive(Debug, Clone)]
-pub struct WirePayloadTriad {
+pub struct WirePayload {
     pub id: String,
     pub payload: String,
-    pub payload_blake3: String,
 }
 
 /// Implemented for any row type whose table shape is "wire-payload":
-/// id + payload + payload_blake3 + a handful of promoted columns +
-/// the `length(payload_blake3) = 64` CHECK. The single method
+/// id + payload + a handful of promoted columns. The single method
 /// returns the table's DDL, suitable for splicing into a provider's
 /// `full_ddl()` vector.
 ///
@@ -203,46 +209,35 @@ pub trait WirePayloadRow {
     /// `CREATE TABLE IF NOT EXISTS …` for this row type's table.
     /// Equivalent to calling [`wire_payload_table_ddl`] with the
     /// promoted-column declarations derived from the struct's
-    /// non-triad fields.
+    /// non-`WirePayload` fields.
     fn ddl() -> String;
 }
 
 /// Build a `CREATE TABLE` statement for an event-shaped raw table
-/// that stores its upstream wire bytes as a `payload` blob with a
-/// Blake3 content fingerprint. Every such table shares the same
-/// shape — the `id`/`payload`/`payload_blake3` triad at the top, the
-/// entity's promoted columns in the middle, and the
-/// length-of-blake3-hex CHECK constraint at the end:
+/// that stores its upstream wire bytes as a `payload` JSONB blob.
+/// Every such table shares the same shape — the `id`/`payload` pair
+/// at the top, the entity's promoted columns underneath:
 ///
 /// ```sql
 /// CREATE TABLE IF NOT EXISTS <table> (
 ///     id             TEXT PRIMARY KEY,
 ///     payload        TEXT NULL,
-///     payload_blake3 TEXT NULL,
-///     <promoted columns>,
-///     CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
+///     <promoted columns>
 /// )
 /// ```
 ///
-/// The CHECK lands at the end because SQLite's `column-def-list`
-/// grammar requires all column-defs to precede any table-constraints —
-/// table-constraints can't interleave with columns. See
-/// <https://sqlite.org/lang_createtable.html>.
-///
 /// Callers pass `promoted_columns` as one column-declaration per slice
 /// entry, *without* commas — the helper joins them and handles the
-/// splicing around the triad and CHECK so individual call sites can't
-/// drift on the comma/newline convention. Pass `&[]` when the entity
-/// has no promoted columns (`account`'s single-row case).
+/// splicing so individual call sites can't drift on the comma/newline
+/// convention. Pass `&[]` when the entity has no promoted columns
+/// (`account`'s single-row case).
 ///
-/// Signal is the first provider on this pattern — see
-/// `frankweiler_etl_signal::extract::schema_raw`. The other providers
-/// (anthropic, chatgpt, slack, github, gitlab, notion, beeper, email,
-/// contacts) still store `payload TEXT NULL` only and will adopt this
-/// shape as they grow the bucket-fingerprint translate path. Centralizing
-/// it here means a future tweak (e.g. swapping Blake3-hex for
-/// Blake3-binary, or making `payload` NOT NULL) lands in one place
-/// instead of N.
+/// A per-row `payload_blake3` hex column used to live here for
+/// fingerprint-driven incremental render skips; it's been removed in
+/// favor of `dolt_diff_<table>`-driven incremental render, which uses
+/// doltlite's prolly-tree diff as the single source of truth. Existing
+/// rows on disk still carry the column as dead weight — `--reset-and-
+/// redownload` cleans it up.
 pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
     let promoted_block = if promoted_columns.is_empty() {
         String::new()
@@ -252,9 +247,7 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
     format!(
         "CREATE TABLE IF NOT EXISTS {table} (
     id             TEXT PRIMARY KEY,
-    payload        TEXT NULL,
-    payload_blake3 TEXT NULL{promoted_block},
-    CHECK (payload_blake3 IS NULL OR length(payload_blake3) = 64)
+    payload        TEXT NULL{promoted_block}
 )"
     )
 }

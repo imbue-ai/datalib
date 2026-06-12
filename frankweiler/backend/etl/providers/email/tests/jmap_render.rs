@@ -11,7 +11,7 @@ use frankweiler_etl::blob_cas::{blake3_hex, BlobView, InMemoryBlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
-use frankweiler_etl_email::translate::parse::{EmailThreadBucket, ParsedEmail};
+use frankweiler_etl_email::translate::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 use serde_json::json;
 
@@ -119,11 +119,15 @@ fn make_loaded() -> ParsedEmail {
         docs: vec![EmailThreadBucket {
             account_id: "A1".into(),
             thread_id: "T1".into(),
-            fingerprint: "test-fixture-fp".into(),
             emails,
             joins,
         }],
         docs_skipped: 0,
+        scan: ScanResult {
+            changed_threads: None,
+            new_head: None,
+            scan_elapsed: None,
+        },
         blobs: reader.into_handle(),
     }
 }

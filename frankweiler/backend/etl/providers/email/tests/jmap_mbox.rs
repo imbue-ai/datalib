@@ -134,8 +134,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let parsed = parse(&db_path_for(&db_path), &HashMap::new())
-        .expect("parse with empty prior_fingerprints");
+    let parsed = parse(&db_path_for(&db_path), None).expect("parse cold start");
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();

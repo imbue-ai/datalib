@@ -15,6 +15,7 @@ use anyhow::Result;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl_signal::extract::{self, FetchOptions};
 use frankweiler_etl_signal::translate::{parse_raw_dir, render_all};
 use frankweiler_signal_backup::{
@@ -133,6 +134,32 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
     assert_eq!(summary.blob_errors, 0, "no extract-side blob errors");
 
+    // Mirror what the orchestrator does in production: dolt_commit
+    // the freshly-extracted rows so the `dolt_diff_<table>` vtabs the
+    // translate path queries actually resolve. Without a commit the
+    // vtabs may report "no such table" on a brand-new working set,
+    // and the second-pass docs_skipped assertion below would fail.
+    // Self-skips on stock libsqlite3.
+    {
+        use frankweiler_etl::doltlite_raw::commit_run;
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        use std::str::FromStr;
+        let db_path = frankweiler_etl::doltlite_raw::db_path_for(&raw_db_path);
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        for q in [
+            "SELECT dolt_config('user.name', 'frankweiler-test')",
+            "SELECT dolt_config('user.email', 'test@frankweiler.local')",
+        ] {
+            let _ = sqlx::query(q).execute(&pool).await;
+        }
+        let _ = commit_run(&pool, "test extract").await;
+        pool.close().await;
+    }
+
     // Translate runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the
     // .doltlite_db extension) — extract::fetch normalized it the
@@ -152,7 +179,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
     assert_eq!(
         parsed.docs_skipped, 0,
-        "first parse: empty prior_fingerprints → nothing skipped"
+        "first parse: no render cursor → cold start → nothing skipped"
     );
     assert_eq!(parsed.docs[0].period_key, "2364-04");
 
@@ -174,7 +201,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         assert_eq!(render_summary.messages_rendered, 4);
         assert_eq!(
             render_summary.docs_skipped, 0,
-            "first pass: nothing to skip (no prior fingerprints)"
+            "first pass: nothing to skip (no prior render cursor)"
         );
         assert_eq!(
             render_summary.docs_total, 1,
@@ -235,37 +262,29 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     // ── Second pass: prove the docs_skipped path works ─────────────
     //
-    // Build a `prior_fingerprints` map from what we just rendered,
-    // re-run parse + render against the same on-disk raw store, and
-    // assert that the second pass skips everything. This is the
-    // load-bearing assertion for the incremental-update pattern
-    // described in `docs/data_architecture_ingestion.md` §"Incremental
-    // update via content fingerprints": same inputs → same
-    // bucket-fingerprint → skip-load + skip-render. Verifies both
-    // halves of the contract in one shot — parse must not emit a
-    // bucket whose fingerprint matched (parsed.docs is empty,
-    // parsed.docs_skipped == 1), and render must not call
-    // on_doc_complete a second time (the count of new rendered_docs
-    // is 0).
-    let prior_fingerprints: std::collections::HashMap<String, String> = rendered_docs
-        .iter()
-        .map(|d| (d.markdown_uuid.clone(), d.source_fingerprint.clone()))
-        .collect();
-    assert_eq!(
-        prior_fingerprints.len(),
-        1,
-        "exactly one prior fingerprint to compare against"
+    // Read the render cursor that the first pass wrote, hand its
+    // commit hash to `parse`, and assert: zero docs in the bucket set
+    // (no chats changed since the cursor), one chat counted as
+    // skipped, no on_doc_complete calls. The load-bearing assertion
+    // for the incremental story: dolt_diff says "nothing changed" →
+    // we render nothing.
+    let cursor_path = render_cursor::cursor_path(&data_root, "signal", "signal-tng");
+    let cursor =
+        render_cursor::read(&cursor_path)?.expect("first render should have written the cursor");
+    assert!(
+        !cursor.last_rendered_hash.is_empty(),
+        "cursor must carry a non-empty doltlite commit hash"
     );
 
     let parsed2 = tokio::task::spawn_blocking({
         let raw = raw_db_path.clone();
-        let priors = prior_fingerprints.clone();
+        let last_hash = cursor.last_rendered_hash.clone();
         move || {
             frankweiler_etl_signal::translate::parse(
                 &raw,
                 frankweiler_etl::periodize::Period::Month,
                 "signal-tng",
-                &priors,
+                Some(last_hash.as_str()),
             )
         }
     })
@@ -273,12 +292,11 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     assert_eq!(
         parsed2.docs.len(),
         0,
-        "second parse should emit zero docs — all buckets' \
-         fingerprints matched"
+        "second parse should emit zero docs — dolt_diff says no chats changed"
     );
     assert_eq!(
         parsed2.docs_skipped, 1,
-        "second parse should report one skipped bucket"
+        "second parse should report one skipped chat"
     );
 
     let mut rendered_docs_second_pass: Vec<RenderedMarkdown> = Vec::new();
@@ -302,7 +320,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
     assert_eq!(
         render_summary_2.docs_total, 1,
-        "docs_total still counts the skipped bucket so the \
+        "docs_total still counts the skipped chat so the \
          progress bar sums right"
     );
     assert!(

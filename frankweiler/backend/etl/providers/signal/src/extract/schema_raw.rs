@@ -85,7 +85,7 @@
 //!   single-row PK-lookup skip. See plan §P1.12.
 
 use frankweiler_etl::bulk::BulkUpsertable;
-use frankweiler_etl::doltlite_raw::{self as dr, WirePayloadRow, WirePayloadTriad};
+use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use frankweiler_etl_macros::WirePayloadRow;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
@@ -111,20 +111,17 @@ pub const DATA_TABLES: &[&str] = &[
 /// - `id` — always the string literal `'self'`. The PK is a literal
 ///   rather than a Signal-side id because the backup format only
 ///   ever carries one account entity per file.
-/// - `payload_blake3` — blake3 hex of the `payload` bytes. Used by
-///   translate's bucket-fingerprint path to decide whether a
-///   dependent document needs to re-render without reading the
-///   payload itself. See `super::super::translate::parse`.
 /// - `payload` — JSONB of the `Frame::Account` message.
 ///
-/// `triad.id` is always the literal `"self"`. `triad.payload` is the
-/// JSON-serialized `Frame::Account`; `triad.payload_blake3` is its
-/// blake3 hex, computed once by the extract path right before the
-/// bulk upsert.
+/// `id_and_payload.id` is always the literal `"self"`. `id_and_payload.payload` is the
+/// JSON-serialized `Frame::Account`. The per-row content fingerprint
+/// (`payload_blake3`) that used to ride alongside is gone — translate
+/// drives incremental skip via `dolt_diff_<table>` now; see
+/// `super::super::translate::parse`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "account")]
 pub struct AccountRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
 }
 
 /// `recipients` — one row per Signal recipient (peer / group).
@@ -137,14 +134,11 @@ pub struct AccountRow {
 ///   phone number or the ACI hex string. Lets the translate /
 ///   indexer joins avoid cracking the protobuf payload open.
 /// - `display_name` — promoted from the payload for the same reason.
-/// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`AccountRow`] doc comment for the bucket-fingerprint
-///   rationale.
 /// - `payload` — JSONB of the `Frame::Recipient` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "recipients")]
 pub struct RecipientRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub identifier: Option<String>,
     pub display_name: Option<String>,
 }
@@ -156,14 +150,11 @@ pub struct RecipientRow {
 ///   stringified. Primary key.
 /// - `recipient_id` — promoted FK into [`RecipientRow`]; joins
 ///   `chats` to its peer / group without cracking the payload.
-/// - `payload_blake3` — blake3 hex of the `payload` bytes. See the
-///   [`AccountRow`] doc comment for the bucket-fingerprint
-///   rationale.
 /// - `payload` — JSONB of the `Frame::Chat` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chats")]
 pub struct ChatRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub recipient_id: String,
 }
 
@@ -181,15 +172,11 @@ pub struct ChatRow {
 /// - `date_sent` — upstream `chat_item.date_sent`, integer Unix-ms.
 ///   The closest thing this provider has to an event-shaped
 ///   timestamp; sourced into `GridRow.when_ts` by translate.
-/// - `payload_blake3` — blake3 hex of the `payload` bytes. The
-///   per-row content fingerprint translate aggregates into a
-///   per-document bucket fingerprint to decide whether re-rendering
-///   is needed.
 /// - `payload` — JSONB of the `Frame::ChatItem` message.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "chat_items")]
 pub struct ChatItemRow {
-    pub triad: WirePayloadTriad,
+    pub id_and_payload: WirePayload,
     pub chat_id: String,
     pub author_id: String,
     pub date_sent: i64,

@@ -34,6 +34,7 @@ pub mod load;
 pub mod periodize;
 pub mod progress;
 pub mod raw_store;
+pub mod render_cursor;
 pub mod scope_state;
 pub mod section;
 pub mod synthesize;

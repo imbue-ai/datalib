@@ -68,6 +68,7 @@ rust_test(
         "//frankweiler/backend/signal-backup:frankweiler_signal_backup",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],
