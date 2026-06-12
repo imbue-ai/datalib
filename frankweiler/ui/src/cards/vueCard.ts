@@ -16,9 +16,15 @@ import type { CardRender } from "./types";
 type CardComponent = Component & { styles?: string[] };
 
 // Minimum chrome so the Vue app fills the column and clips itself.
+// The app root fills the host absolutely rather than via height:100%:
+// the host is sized by flex (`.miller-col-card`'s flex: 1 1 auto), and
+// WebKit (Safari + Tauri's WKWebView) resolves percentage heights
+// against flex-sized boxes as `auto`, collapsing every card to its
+// content height. Absolute positioning against the host sidesteps
+// percentage resolution entirely; Chromium renders both forms the same.
 const BASE_CSS = `
-:host { display: block; height: 100%; }
-.card-app-root { height: 100%; overflow: hidden; }
+:host { display: block; height: 100%; position: relative; }
+.card-app-root { position: absolute; inset: 0; overflow: hidden; }
 `;
 
 export function vueCard(

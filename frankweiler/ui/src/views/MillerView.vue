@@ -301,7 +301,12 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col {
   position: relative;
   flex: 0 0 auto;
-  height: 100%;
+  /* Fill the row's cross axis via flex stretch, not height: 100%.
+     WebKit (Safari + Tauri's WKWebView) resolves percentage heights
+     against the flex-sized .miller-columns as `auto`, collapsing every
+     column to its chrome bar (~36px); stretch sizes it definitively in
+     all engines. */
+  align-self: stretch;
   border-right: 1px solid #888;
   min-width: 0;
   display: flex;
