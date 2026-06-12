@@ -173,12 +173,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             return Ok::<(), anyhow::Error>(());
         }
 
-        // Pass 1: list every org, pre-seed, classify. Collect the
-        // per-org fetch plans so we know the total work up front and
-        // can set the progress bar's length exactly once — otherwise
-        // a length reset per org makes the bar jump backwards (e.g.
-        // `77/58` when the second org's length is smaller than the
-        // count already accumulated from the first).
+        // Pass 1: list every org, classify. Collect the per-org fetch
+        // plans so we know the total work up front and can set the
+        // progress bar's length exactly once — otherwise a length
+        // reset per org makes the bar jump backwards (e.g. `77/58`
+        // when the second org's length is smaller than the count
+        // already accumulated from the first).
+        //
+        // No pre-seed: we only ever write a row after a successful
+        // detail fetch. The next sync's listing is the source of truth
+        // for "what should exist." A previously-failed fetch is
+        // naturally retried because no row exists yet.
         struct OrgPlan<'a> {
             org_uuid: String,
             org_name: String,
@@ -218,15 +223,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 count = listing.len()
             );
             sleep(SLEEP_BETWEEN).await;
-
-            let listing_refs: Vec<(&str, &Value)> = listing.iter().map(|c| (org_uuid, c)).collect();
-            db.pre_seed_conversations(&listing_refs, &now).await?;
             listings_by_org.push((org_uuid.to_string(), org_name, listing));
         }
 
-        // States are read once after all pre-seeds so each org's plan
-        // sees the same snapshot.
-        let states = db.conversation_states().await?;
         for (org_uuid, org_name, listing) in &listings_by_org {
             let mut missing: Vec<&Value> = Vec::new();
             let mut stale: Vec<&Value> = Vec::new();
@@ -244,6 +243,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
             }
+            let listed_ids: Vec<&str> = listing
+                .iter()
+                .filter_map(|c| c.get("uuid").and_then(|v| v.as_str()))
+                .collect();
+            let existing = db.existing_updated_at(&listed_ids).await?;
             let mut up_to_date: usize = 0;
             for item in listing {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
@@ -253,15 +257,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     .get("updated_at")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                match states.get(uuid) {
-                    Some(s) if s.has_payload && !overlap_force.contains(uuid) => {
-                        if s.updated_at.as_deref().unwrap_or("") == api_updated {
+                match existing.get(uuid) {
+                    Some(stored) if !overlap_force.contains(uuid) => {
+                        if stored.as_str() == api_updated {
                             up_to_date += 1;
                         } else {
                             stale.push(item);
                         }
                     }
-                    _ => missing.push(item),
+                    Some(_) => stale.push(item),
+                    None => missing.push(item),
                 }
             }
             info!(

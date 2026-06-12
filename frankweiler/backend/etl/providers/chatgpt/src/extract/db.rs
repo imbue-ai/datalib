@@ -22,15 +22,6 @@ use super::schema_raw::{full_ddl, DATA_TABLES};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-/// One row's worth of "what does the listing pass know about this
-/// conversation right now". Used to decide whether to short-circuit a
-/// detail fetch.
-#[derive(Debug, Clone, Default)]
-pub struct ConvState {
-    pub last_listing_update_time: Option<Value>,
-    pub has_payload: bool,
-}
-
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
@@ -86,68 +77,44 @@ impl RawDb {
         Ok(payload.and_then(|s: String| serde_json::from_str(&s).ok()))
     }
 
-    // ── conversations: listing pre-seed + skip-check ───────────────
+    // ── conversations: listing skip-check ──────────────────────────
 
-    /// Pre-seed `(id, listing-derived metadata)` for every entry in a
-    /// listing page. Existing rows keep their `payload` intact; we
-    /// just refresh `last_listing_update_time`. Lightweight SQL —
-    /// keeps the surface predictable since these rows may not have a
-    /// payload yet (so the bulk-upsert path with PAYLOAD_COLUMN =
-    /// Some can't represent them).
-    pub async fn pre_seed_conversations(&self, items: &[&Value], now: &str) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
+    /// Bulk-read `(id → update_time)` for the listed ids. Returns one
+    /// entry per *existing* row (with a non-null `update_time`). Missing
+    /// ids are absent from the map — caller treats them as "we don't
+    /// have this conversation yet, fetch it." Used by the listing pass
+    /// to decide which conversations need a detail fetch.
+    ///
+    /// `update_time` is JSON-encoded — same encoding the upstream
+    /// listing returns (a number for chatgpt, but we round-trip
+    /// through `serde_json::to_string` for comparison-stability
+    /// against `string` / `null` variants the API has been known to
+    /// emit).
+    pub async fn existing_update_times(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
         }
-        let mut tx = self.pool.begin().await.context("begin pre_seed tx")?;
-        for item in items {
-            let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let title = item.get("title").and_then(|v| v.as_str());
-            let listing_ut = item.get("update_time").cloned();
-            let listing_ut_str = listing_ut
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default());
-            sqlx::query(
-                "INSERT INTO conversations (id, title, last_listing_update_time)
-                 VALUES (?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET
-                    title = COALESCE(excluded.title, conversations.title),
-                    last_listing_update_time = COALESCE(excluded.last_listing_update_time, conversations.last_listing_update_time)",
-            )
-            .bind(id)
-            .bind(title)
-            .bind(listing_ut_str.as_deref())
-            .execute(&mut *tx)
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, update_time FROM conversations \
+              WHERE id IN ({placeholders}) AND update_time IS NOT NULL"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in ids {
+            q = q.bind(*id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
             .await
-            .with_context(|| format!("pre_seed conversation {id}"))?;
-            dr::record_object_attempt(&mut tx, "conversations", id, Some(now)).await?;
-        }
-        tx.commit().await.context("commit pre_seed tx")?;
-        Ok(())
-    }
-
-    pub async fn conversation_states(&self) -> Result<HashMap<String, ConvState>> {
-        let rows = sqlx::query(
-            "SELECT id, last_listing_update_time, payload IS NOT NULL AS has_payload
-             FROM conversations",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("select conversation_states")?;
+            .context("existing_update_times")?;
         let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
+        for r in &rows {
             let id: String = r.try_get("id").unwrap_or_default();
-            let llut: Option<String> = r.try_get("last_listing_update_time").ok();
-            let has: i64 = r.try_get("has_payload").unwrap_or(0);
-            let llut_value = llut.and_then(|s: String| serde_json::from_str::<Value>(&s).ok());
-            out.insert(
-                id,
-                ConvState {
-                    last_listing_update_time: llut_value,
-                    has_payload: has != 0,
-                },
-            );
+            if let Ok(ut) = r.try_get::<String, _>("update_time") {
+                out.insert(id, ut);
+            }
         }
         Ok(out)
     }
@@ -191,7 +158,7 @@ impl RawDb {
     /// keys back on if they want them.
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT c.id, json(c.payload) AS payload, b.fetched_at, c.last_listing_update_time
+            "SELECT c.id, json(c.payload) AS payload, b.fetched_at
              FROM conversations c
              LEFT JOIN conversations_bookkeeping b ON b.id = c.id
              WHERE c.payload IS NOT NULL
@@ -208,8 +175,6 @@ impl RawDb {
                 Err(_) => continue,
             };
             let fetched_at: Option<String> = r.try_get("fetched_at").ok();
-            let llut_str: Option<String> = r.try_get("last_listing_update_time").ok();
-            let llut = llut_str.and_then(|s: String| serde_json::from_str::<Value>(&s).ok());
             let Ok(payload_v) = serde_json::from_str::<Value>(&payload) else {
                 continue;
             };
@@ -217,7 +182,6 @@ impl RawDb {
                 id,
                 payload: payload_v,
                 fetched_at,
-                last_listing_update_time: llut,
             });
         }
         Ok(out)
@@ -225,14 +189,12 @@ impl RawDb {
 }
 
 /// One row's worth of loaded conversation data — payload plus the
-/// metadata downstream consumers used to recover from the legacy
-/// `_fetched_at` / `_listing_update_time` synthetic keys.
+/// fetch timestamp. Rows only exist post-detail-fetch.
 #[derive(Debug, Clone)]
 pub struct LoadedConversation {
     pub id: String,
     pub payload: Value,
     pub fetched_at: Option<String>,
-    pub last_listing_update_time: Option<Value>,
 }
 
 /// Bag returned to the synchronous translate / synthesize path.
@@ -299,17 +261,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pre_seed_and_skip_check() {
+    async fn existing_update_times_round_trips() {
+        use crate::extract::schema_raw::ConversationRow;
+        use frankweiler_etl::bulk::bulk_upsert_in_tx;
+        use frankweiler_etl::doltlite_raw::WirePayload;
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("c.doltlite_db")).await.unwrap();
-        let listing = [json!({"id":"c1","title":"T","update_time":1.0})];
-        let refs: Vec<&Value> = listing.iter().collect();
-        db.pre_seed_conversations(&refs, "2026-06-11T00:00:00-07:00")
-            .await
-            .unwrap();
-        let states = db.conversation_states().await.unwrap();
-        assert!(states.contains_key("c1"));
-        assert!(!states["c1"].has_payload);
-        assert_eq!(states["c1"].last_listing_update_time, Some(json!(1.0)));
+        let mut tx = db.pool().begin().await.unwrap();
+        bulk_upsert_in_tx(
+            &mut tx,
+            &[ConversationRow {
+                id_and_payload: WirePayload {
+                    id: "c1".into(),
+                    payload: serde_json::to_string(&json!({"id":"c1","mapping":{}})).unwrap(),
+                },
+                title: Some("T".into()),
+                // upstream listing emits update_time as a number; we
+                // JSON-encode for comparison-stability.
+                update_time: Some("1.0".into()),
+            }],
+            "2026-06-11T00:00:00-07:00",
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let map = db.existing_update_times(&["c1", "missing"]).await.unwrap();
+        assert_eq!(map.get("c1").map(String::as_str), Some("1.0"));
+        assert!(!map.contains_key("missing"));
     }
 }

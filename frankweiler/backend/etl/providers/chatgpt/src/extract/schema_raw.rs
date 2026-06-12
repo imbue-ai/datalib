@@ -7,12 +7,21 @@
 //!
 //! ChatGPT-specific notes: upstream supplies stable string ids for
 //! every entity (no UUIDv5 recipe needed); `GridRow.when_ts` comes
-//! from `conversations.update_time`; `last_listing_update_time` is a
-//! demoted bookkeeping column — it used to be stuffed into the JSON
-//! payload as a synthetic `_listing_update_time` key, but promoting
-//! it out keeps the payload byte-for-byte identical to the live API
-//! (see [`docs/data_architecture_ingestion.md`] §"Wire-fidelity of the raw
-//! store").
+//! from `conversations.update_time`.
+//!
+//! ## No listing pre-seed
+//!
+//! Earlier versions of this provider pre-seeded a stub row for every
+//! conversation surfaced by the `/backend-api/conversations` listing
+//! and only set `payload` once the detail fetch landed. That tri-state
+//! row shape (doesn't exist / pre-seeded / fully fetched) didn't fit
+//! `WirePayloadRow` and forced a parallel hand-rolled UPSERT path.
+//! We've dropped it: writes only happen post-detail-fetch, every write
+//! goes through `bulk_upsert_in_tx`. Skip-check on subsequent syncs
+//! compares the listing's `update_time` to the stored
+//! `conversations.update_time` (both JSON-encoded). See
+//! `docs/data_architecture_ingestion.md` §"No-preseed listing flow"
+//! for the rationale.
 //!
 //! ## Row structs and the bulk-upsert path
 //!
@@ -67,22 +76,20 @@ pub struct MeRow {
 /// `conversations` — one row per ChatGPT conversation id.
 ///
 /// Stores the raw `/backend-api/conversation/{id}` response as
-/// received from the live API.
+/// received from the live API. **Rows only exist after a successful
+/// detail fetch** — no pre-seed stubs.
 ///
 /// Columns:
 /// - `id` — upstream conversation id. Primary key.
 /// - `title` — denormalized conversation title for cheap listing
 ///   queries; the payload remains authoritative.
-/// - `update_time` — upstream `payload.update_time`. Used both as the
-///   listing-derived skip-check cursor (extract side) and as the
-///   source for `GridRow.when_ts` (translate side).
-/// - `last_listing_update_time` — the most recent
-///   `update_time` value we saw for this conversation in the
-///   `/backend-api/conversations` listing pass. Promoted out of the
-///   payload to keep wire-fidelity. Compared against
-///   `payload.update_time` to decide whether the detail fetch is
-///   stale. Stored as JSON because the upstream listing returns
-///   varied types (string, number, sometimes null).
+/// - `update_time` — upstream `payload.update_time`, JSON-encoded
+///   (the upstream value can be a string, number, or sometimes null,
+///   so we round-trip through `serde_json::to_string` for
+///   comparison-stability against the listing endpoint's matching
+///   value). Used both as the listing-derived skip-check cursor
+///   (extract side) and as the source for `GridRow.when_ts`
+///   (translate side).
 /// - `payload` — raw upstream conversation JSON (JSONB on disk).
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "conversations")]
@@ -90,7 +97,6 @@ pub struct ConversationRow {
     pub id_and_payload: WirePayload,
     pub title: Option<String>,
     pub update_time: Option<String>,
-    pub last_listing_update_time: Option<String>,
 }
 
 /// Index on `conversations.update_time` — supports the listing-derived

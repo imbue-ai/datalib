@@ -48,6 +48,20 @@ whole migration.
   through parse + render + orchestrator.
 - Direct writes to the shared `blob_refs` table.
 
+**Also dropped during the port (where the provider had it):**
+- Listing-pass pre-seeding. The chatgpt and anthropic providers used
+  to write a stub row `(id, name, updated_at, payload=NULL)` for
+  every conversation surfaced by the listing endpoint, before the
+  detail fetch ran. The stub row didn't fit `WirePayloadRow` and
+  forced a parallel hand-rolled UPSERT path. We've reversed that
+  decision globally: rows only appear *after* a successful detail
+  fetch. The listing-pass skip-check works by bulk-reading
+  `(id → stored.update_time)` for the listed ids and comparing to
+  the listing's update_time; "no row" means "fetch it." A crashed
+  detail-fetch leaves no row; the next sync's listing surfaces it
+  as missing and re-fetches. See `data_architecture_ingestion.md`
+  §"No-preseed listing flow" for the rationale.
+
 **Kept (and load-bearing):**
 - Per-doc `source_fingerprint` field on the sidecar / `RenderedMarkdown`
   — the load step still reads it. It's now set to the markdown_uuid

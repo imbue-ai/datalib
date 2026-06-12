@@ -887,21 +887,33 @@ or report it still-failed without re-walking the entire upstream API.
 
 Five sub-rules:
 
-  - **Pre-seed before fetch.** Every entity row should be created in
-    the table the moment we *learn the upstream identifier exists*,
-    not when the detail fetch returns. A pre-seeded row carries the
-    PK, the `parent_id` / context needed to redo the fetch, and a
-    `NULL` payload. If the detail fetch then crashes, errors out, or
-    gets killed, the row is still there with `payload IS NULL` and
-    we know to retry it. This is the
-    `dr::ensure_object_row(&mut tx, table, id)` pattern.
+  - **No-preseed listing flow.** Earlier versions of this doc
+    advocated pre-seeding entity rows from the listing pass with
+    `payload IS NULL`, so a crashed detail fetch would leave a row
+    visible to the retry walk. We've reversed that decision: rows
+    only appear *after a successful detail fetch*. Reasons:
 
-    The aspiration is "pre-seed always." Today we do this where the
-    upstream API gives us a clean listing-then-detail split (Notion,
-    Anthropic). For providers whose upstream forces us to discover
-    IDs only inside the same call that fetches their content, we
-    can't pre-seed and have to fall back to "row appears at fetch
-    success."
+      1. A pre-seeded row is a tri-state shape (doesn't exist /
+         pre-seeded / fully fetched) that doesn't fit the
+         `WirePayloadRow` derive, and forces a parallel hand-rolled
+         UPSERT path that diverges from `bulk_upsert_in_tx`.
+      2. The skip-check works just as well without it. The listing
+         pass bulk-reads `(id → stored.update_time)` for every id it
+         saw, compares to the upstream's `update_time`, and routes
+         everything to one of `missing` / `stale` / `up_to_date`.
+         "missing" means "row doesn't exist yet, fetch it" — which
+         is exactly the retry behavior pre-seeding tried to enable
+         for crashed fetches: the next sync's listing surfaces them
+         again, and they fall in the `missing` bucket.
+      3. The forensic value of "last sync attempted this id but
+         crashed" was rarely consulted in practice and not worth
+         the schema complexity.
+
+    Failed detail fetches still record `last_error` in the
+    `<table>_bookkeeping` sidecar via `record_object_error`, so
+    explicit failures are visible. A *silently* dropped id (process
+    killed mid-fetch) leaves no row at all — that's fine; the next
+    listing surfaces it as missing.
 
   - **Always-paired bookkeeping.** Every object table has a sidecar
     `<table>_bookkeeping` carrying `attempt_count`, `last_attempt_at`,

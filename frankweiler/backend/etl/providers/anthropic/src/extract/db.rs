@@ -33,12 +33,6 @@ pub struct RawDb {
     cas: BlobCas,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ConvState {
-    pub updated_at: Option<String>,
-    pub has_payload: bool,
-}
-
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
@@ -97,64 +91,39 @@ impl RawDb {
         Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
     }
 
-    // ── conversations: listing pre-seed + skip-check ───────────────
+    // ── conversations: listing skip-check ──────────────────────────
 
-    /// Pre-seed listing-derived rows. Existing rows keep their
-    /// `payload` intact; only `updated_at` is refreshed. Lightweight
-    /// SQL — keeps the surface predictable since these rows may not
-    /// have a payload yet (so the bulk-upsert path with
-    /// PAYLOAD_COLUMN = Some can't represent them).
-    pub async fn pre_seed_conversations(&self, items: &[(&str, &Value)], now: &str) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
+    /// Bulk-read `(id → updated_at)` for the listed ids. Returns one
+    /// entry per *existing* row (with a non-null `updated_at`). Missing
+    /// ids are absent from the map — caller treats them as "we don't
+    /// have this conversation yet, fetch it." Used by the listing pass
+    /// to decide which conversations need a detail fetch. Rows only
+    /// exist post-detail-fetch, so "id in map" ↔ "payload present."
+    pub async fn existing_updated_at(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
         }
-        let mut tx = self.pool.begin().await.context("begin pre_seed tx")?;
-        for (org_uuid, item) in items {
-            let Some(id) = item.get("uuid").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let name = item.get("name").and_then(|v| v.as_str());
-            let updated = item.get("updated_at").and_then(|v| v.as_str());
-            sqlx::query(
-                "INSERT INTO conversations (id, org_uuid, name, updated_at)
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET
-                    org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
-                    name = COALESCE(excluded.name, conversations.name),
-                    updated_at = COALESCE(excluded.updated_at, conversations.updated_at)",
-            )
-            .bind(id)
-            .bind(org_uuid)
-            .bind(name)
-            .bind(updated)
-            .execute(&mut *tx)
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, updated_at FROM conversations \
+              WHERE id IN ({placeholders}) AND updated_at IS NOT NULL"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in ids {
+            q = q.bind(*id);
+        }
+        let rows = q
+            .fetch_all(&self.pool)
             .await
-            .with_context(|| format!("pre_seed conv {id}"))?;
-            dr::record_object_attempt(&mut tx, "conversations", id, Some(now)).await?;
-        }
-        tx.commit().await.context("commit pre_seed tx")?;
-        Ok(())
-    }
-
-    pub async fn conversation_states(&self) -> Result<HashMap<String, ConvState>> {
-        let rows = sqlx::query(
-            "SELECT id, updated_at, payload IS NOT NULL AS has_payload FROM conversations",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("conversation_states")?;
+            .context("existing_updated_at")?;
         let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
+        for r in &rows {
             let id: String = r.try_get("id").unwrap_or_default();
-            let updated_at: Option<String> = r.try_get("updated_at").ok();
-            let has: i64 = r.try_get("has_payload").unwrap_or(0);
-            out.insert(
-                id,
-                ConvState {
-                    updated_at,
-                    has_payload: has != 0,
-                },
-            );
+            if let Ok(ut) = r.try_get::<String, _>("updated_at") {
+                out.insert(id, ut);
+            }
         }
         Ok(out)
     }

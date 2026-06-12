@@ -5,11 +5,10 @@
 //! per conversation, and per attached file. See `db.rs` for the schema
 //! and `frankweiler_etl::doltlite_raw` for the design rationale.
 //!
-//! The `_fetched_at` / `_listing_update_time` synthetic keys that the
-//! Python downloader stamped into per-conversation JSON files have
-//! been promoted to real columns (`fetched_at`,
-//! `last_listing_update_time`) — the stored payload is now the raw
-//! upstream response byte-for-byte.
+//! The `_fetched_at` synthetic key that the Python downloader stamped
+//! into per-conversation JSON files has been promoted to a real
+//! bookkeeping column (`conversations_bookkeeping.fetched_at`) — the
+//! stored payload is now the raw upstream response byte-for-byte.
 //!
 //! Auth + Cloudflare clearance is still delegated to `latchkey curl`
 //! with `LATCHKEY_CURL=/path/to/curl_impersonate-chrome`.
@@ -160,7 +159,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                                 id: target.clone(),
                                 title,
                                 update_time,
-                                last_listing_update_time: None,
                                 payload,
                             }],
                             &now,
@@ -186,18 +184,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(event = "chatgpt_listing", convs = listing.len());
         summary.listing = listing.len();
 
-        // Pre-seed every listed conversation so a later sync's skip
-        // check has a fresh `last_listing_update_time` to compare
-        // against, even if the detail fetch never gets a chance to
-        // land (rate limit, network hiccup).
-        let listing_refs: Vec<&Value> = listing.iter().collect();
-        db.pre_seed_conversations(&listing_refs, &now).await?;
-
-        let states = db.conversation_states().await?;
+        // Skip-check: bulk-read existing `(id, update_time)` for every
+        // listed id, then compare to the listing's update_time. Rows
+        // we don't have at all → missing. Rows whose stored update_time
+        // differs from the listing's → stale. Both fall into the work
+        // queue; everything else is up-to-date and skipped.
+        //
+        // No pre-seed: we only ever write a row after a successful
+        // detail fetch. The next sync's listing is the source of truth
+        // for "what should exist." A previously-failed fetch is
+        // naturally retried because no row exists yet.
+        let listed_ids: Vec<&str> = listing
+            .iter()
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+            .collect();
+        let existing = db.existing_update_times(&listed_ids).await?;
 
         // Prioritize: missing > stale > already-good. Same intent as
-        // the JSONL implementation's "spend our 429 budget on new work"
-        // ordering.
+        // the JSONL implementation's "spend our 429 budget on new
+        // work" ordering.
         let mut missing: Vec<&Value> = Vec::new();
         let mut stale: Vec<&Value> = Vec::new();
         let mut up_to_date: usize = 0;
@@ -205,17 +210,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let api_ut = item.get("update_time").cloned().unwrap_or(Value::Null);
-            match states.get(cid) {
-                Some(s) if s.has_payload => {
-                    let prev = s.last_listing_update_time.clone().unwrap_or(Value::Null);
-                    if prev == api_ut {
-                        up_to_date += 1;
-                    } else {
-                        stale.push(item);
-                    }
-                }
-                _ => missing.push(item),
+            // JSON-encode the listing's update_time so its byte shape
+            // matches the stored value (the listing can emit a number,
+            // string, or null depending on the conversation).
+            let api_ut_str = item
+                .get("update_time")
+                .map(|v| serde_json::to_string(v).unwrap_or_default());
+            match (existing.get(cid), api_ut_str.as_deref()) {
+                (Some(stored), Some(api)) if stored == api => up_to_date += 1,
+                (Some(_), _) => stale.push(item),
+                (None, _) => missing.push(item),
             }
         }
         info!(
@@ -224,11 +228,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stale = stale.len(),
             up_to_date = up_to_date,
         );
-        // Surface the skip count in the summary (the field exists on
-        // FetchSummary but was previously never assigned; without this
-        // the run-2 incrementality snapshot misleadingly showed
-        // `skipped=0` even when most conversations matched their
-        // stored `last_listing_update_time`).
         summary.skipped += up_to_date;
 
         let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
@@ -245,7 +244,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             };
             opts.progress.set_message(cid);
-            let api_ut = item.get("update_time").cloned().unwrap_or(Value::Null);
             match client.get_conversation(cid).await {
                 Ok(full) => {
                     let (title, update_time) = title_and_update_time(&full);
@@ -263,7 +261,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             id: cid.to_string(),
                             title,
                             update_time,
-                            last_listing_update_time: Some(api_ut),
                             payload,
                         }],
                         &now,
@@ -322,7 +319,6 @@ struct ConversationUpsert {
     id: String,
     title: Option<String>,
     update_time: Option<String>,
-    last_listing_update_time: Option<Value>,
     payload: String,
 }
 
@@ -373,10 +369,6 @@ async fn upsert_conversations(db: &RawDb, rows: &[ConversationUpsert], now: &str
             },
             title: r.title.clone(),
             update_time: r.update_time.clone(),
-            last_listing_update_time: r
-                .last_listing_update_time
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
         })
         .collect();
     let mut tx = db

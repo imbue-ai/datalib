@@ -639,7 +639,7 @@ async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
 
 async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
     let rows = sqlx::query(
-        "SELECT c.id, json(c.payload) AS payload, b.fetched_at, c.last_listing_update_time
+        "SELECT c.id, json(c.payload) AS payload, b.fetched_at
            FROM conversations c
            LEFT JOIN conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
@@ -658,14 +658,10 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
             continue;
         };
         let fetched_at: Option<String> = r.try_get("fetched_at").ok();
-        let llut_str: Option<String> = r.try_get("last_listing_update_time").ok();
-        let last_listing_update_time =
-            llut_str.and_then(|s: String| serde_json::from_str::<Value>(&s).ok());
         out.push(LoadedConversation {
             id,
             payload,
             fetched_at,
-            last_listing_update_time,
         });
     }
     Ok(out)
@@ -775,15 +771,8 @@ pub fn parse_loaded(raw: LoadedRaw) -> ParsedChatGPTApi {
     } else {
         None
     };
-    for LoadedConversation {
-        id: _,
-        payload,
-        last_listing_update_time,
-        ..
-    } in raw.conversations
-    {
-        let Some(conv) = build_conv_row(&payload, last_listing_update_time.as_ref(), &account_id)
-        else {
+    for LoadedConversation { id: _, payload, .. } in raw.conversations {
+        let Some(conv) = build_conv_row(&payload, None, &account_id) else {
             continue;
         };
         out.conversations.push(ChatGPTConversation {
