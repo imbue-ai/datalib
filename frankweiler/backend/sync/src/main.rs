@@ -2172,19 +2172,20 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::ChatgptApi { .. } => {
-            use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
-            let parsed = parse_api_dir(&fixture)
-                .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
+            use frankweiler_etl_chatgpt::translate::{parse::parse, render::render_all};
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "chatgpt", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read chatgpt render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("chatgpt render_all")
-            .map(|_| ())
+            .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("chatgpt render_all")
+                .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
             use frankweiler_etl_slack::extract::{

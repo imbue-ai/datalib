@@ -5,13 +5,15 @@
 
 use std::collections::HashMap;
 
+use anyhow::Context as _;
 use frankweiler_etl::blob_cas::{self, BlobReader};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
 
-use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
+use super::grid_rows::{rows_for_conversation, RENDER_VERSION};
 use super::parse::{shred, OAAttachmentRef, OAMessageRow, ParsedChatGPTApi, ShreddedConversation};
 
 fn yaml_scalar(v: Option<&str>) -> String {
@@ -92,31 +94,43 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    progress.set_length(Some(parsed.conversations.len() as u64));
+    // Log how long the dolt_diff scan took. Logged on every render
+    // (including cold start) so the timing shows up in sync output
+    // without users having to crack the cursor open.
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_conversations = parsed
+            .scan
+            .changed_conversations
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_conversations.is_none(),
+        "[translate] chatgpt dolt_diff scan"
+    );
+
+    progress.set_length(Some(
+        (parsed.conversations.len() + parsed.docs_skipped) as u64,
+    ));
+    progress.inc(parsed.docs_skipped as u64);
     let mut written = Vec::new();
     for c in &parsed.conversations {
-        let fingerprint = fingerprint_for_conversation(&c.upstream_payload);
         let conv_id = &c.conv.conversation_id;
         let account_id = c.conv.account_id.as_deref().unwrap_or("unknown");
         let rel = conv_relative_path(account_id, conv_id);
         let abs = root.join(&rel);
+        // The per-doc `source_fingerprint` used to be a hash over the
+        // upstream payload. With dolt_diff driving the skip decision
+        // upstream of render, that compare is gone; use the
+        // conversation_id so the sidecar still has a stable
+        // identifier. The orchestrator's prior_fingerprints map is
+        // ignored by chatgpt now.
+        let fingerprint = conv_id.clone();
 
-        // Skip when the indexer has the same fingerprint AND the md
-        // file is still on disk (defends against `rm -rf rendered_md/`
-        // by hand). No shredding happens here — the upstream payload
-        // alone is enough to decide.
-        if prior_fingerprints.get(conv_id).map(String::as_str) == Some(fingerprint.as_str())
-            && abs.exists()
-        {
-            written.push(rel);
-            progress.inc(1);
-            continue;
-        }
-
-        // Changed (or first-time): walk the mapping into messages/parts.
         let shredded = shred(c);
         let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
             progress.inc(1);
@@ -160,6 +174,17 @@ pub fn render_all(
 
         written.push(rel);
         progress.inc(1);
+    }
+
+    // Advance the render cursor only when everything succeeded AND we
+    // managed to read HEAD at scan time. Stock libsqlite3 leaves
+    // new_head as None → cursor stays unwritten → next run is another
+    // cold start, which is the right behavior since we have no way to
+    // anchor the diff.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(root, "chatgpt", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
     }
     Ok(written)
 }

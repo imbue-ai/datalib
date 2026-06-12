@@ -8,16 +8,22 @@
 //! into sibling row types — e.g. conversations drop `mapping`,
 //! messages drop `content` — so the row payload stays bounded.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
 use serde_json::{Map, Value};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::Row;
 
 use super::sentinels::clean_text;
-use crate::extract::db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw};
+use crate::extract::db::{db_path_for, LoadedConversation, LoadedRaw};
 
 #[derive(Debug, Clone)]
 pub struct OAAccountRow {
@@ -109,15 +115,39 @@ pub struct ShreddedConversation {
     pub content_parts: Vec<OAContentPartRow>,
 }
 
+/// Result of the dolt_diff scan. Travels alongside the parsed bag so
+/// render can advance the cursor + log timing without a second
+/// round-trip.
+#[derive(Debug, Clone, Default)]
+pub struct ScanResult {
+    /// `Some(set)` → render only conversations whose id is in `set`.
+    /// `None` → cold start, render every conversation. (First run, or
+    /// non-doltlite db, or `dolt_diff_<table>` unavailable.)
+    pub changed_conversations: Option<HashSet<String>>,
+    /// The HEAD commit hash at scan time, ready to stamp into the
+    /// render cursor on success. `None` if `dolt_log()` was
+    /// unavailable; cursor stays unwritten.
+    pub new_head: Option<String>,
+    /// Wall-clock time spent in the union query. `None` on cold start.
+    pub scan_elapsed: Option<Duration>,
+}
+
 #[derive(Clone)]
 pub struct ParsedChatGPTApi {
     pub accounts: Vec<OAAccountRow>,
     pub conversations: Vec<ChatGPTConversation>,
-    /// Streaming handle to blob bytes; rendered keyed by upstream
+    /// Count of conversations `dolt_diff` reported as unchanged.
+    /// Reported into the render summary so the orchestrator's
+    /// progress accounting stays accurate.
+    pub docs_skipped: usize,
+    /// Scan diagnostics propagated up to render so it can write the
+    /// cursor + log elapsed_ms.
+    pub scan: ScanResult,
+    /// Streaming handle to blob bytes; render-keyed by upstream
     /// `file_id`. Render materializes these onto disk in a `blobs/`
     /// directory next to each rendered `.md` so the sibling-relative
     /// link resolves.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
+    pub blobs: Arc<dyn BlobReader>,
 }
 
 impl Default for ParsedChatGPTApi {
@@ -125,7 +155,9 @@ impl Default for ParsedChatGPTApi {
         Self {
             accounts: Vec::new(),
             conversations: Vec::new(),
-            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
+            docs_skipped: 0,
+            scan: ScanResult::default(),
+            blobs: InMemoryBlobReader::empty_handle(),
         }
     }
 }
@@ -420,30 +452,229 @@ fn content_parts(message_id: &str, content: Option<&Value>) -> Vec<OAContentPart
     rows
 }
 
-/// Read raw payloads out of the doltlite DB. If `path` doesn't resolve
-/// to an existing `.doltlite_db`, falls back to walking a legacy JSON
-/// tree under `path/` — that's the shape the in-tree TNG render-test
-/// fixture still uses.
-///
-/// The DB path requires a tokio runtime (uses
-/// [`crate::extract::db::block_on_load_all`]); the bin entry point
-/// wraps `main` with `#[tokio::main]` for this reason.
+/// Cold-start entry point: no render cursor, render everything.
+/// Kept for the in-crate JSON-tree fixture used by `chatgpt_render`
+/// and similar tests.
 pub fn parse_api_dir(path: &Path) -> Result<ParsedChatGPTApi> {
+    parse(path, None)
+}
+
+/// Two-phase parse driven by `dolt_diff_<table>`.
+///
+/// Phase 1 — ask doltlite which conversations changed since
+/// `last_render_hash`. Cold start (`last_render_hash = None`) loads
+/// every conversation; same path also taken when doltlite extensions
+/// aren't linked or when `path` resolves to a legacy JSON tree.
+///
+/// Phase 2 — load conversation payloads, filtered to the surviving
+/// set.
+pub fn parse(path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGPTApi> {
     let db_path = db_path_for(path);
     if db_path.exists() {
-        let raw = block_on_load_all(&db_path)
-            .with_context(|| format!("load chatgpt db {}", db_path.display()))?;
-        return Ok(parse_loaded(raw));
+        return parse_doltlite(&db_path, last_render_hash);
     }
     if path.is_dir() {
         return parse_api_json_dir(path);
     }
-    // Neither a DB nor a JSON tree — caller's path is wrong; surface a
-    // clear error instead of silently returning empty rows.
     anyhow::bail!(
         "chatgpt source not found at {} (no .doltlite_db, no JSON tree)",
         path.display()
     )
+}
+
+fn parse_doltlite(db_path: &Path, last_render_hash: Option<&str>) -> Result<ParsedChatGPTApi> {
+    tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current()
+            .block_on(async move { parse_doltlite_async(db_path, last_render_hash).await })
+    })
+}
+
+async fn parse_doltlite_async(
+    db_path: &Path,
+    last_render_hash: Option<&str>,
+) -> Result<ParsedChatGPTApi> {
+    let opts =
+        SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))?.read_only(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(60))
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open chatgpt doltlite for translate {}", db_path.display()))?;
+
+    // Sibling CAS — render fetches attachment bytes on demand.
+    let cas_path = blob_cas::cas_path_for(db_path);
+    let blobs: Arc<dyn BlobReader> = if cas_path.is_file() {
+        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
+            .read_only(true);
+        let cas_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(60))
+            .connect_with(cas_opts)
+            .await
+            .with_context(|| format!("open chatgpt CAS for translate {}", cas_path.display()))?;
+        super::blob_reader::ChatgptBlobReader::new(pool.clone(), cas_pool).into_handle()
+    } else {
+        InMemoryBlobReader::empty_handle()
+    };
+
+    let scan = scan_diff(&pool, last_render_hash).await?;
+
+    // Load `me` + `conversations` payloads (filtered if Phase 1
+    // narrowed the set).
+    let me = load_me_payload(&pool).await?;
+    let all_convs = load_conversations(&pool).await?;
+    let total_convs = all_convs.len();
+
+    let (filtered, docs_skipped): (Vec<LoadedConversation>, usize) =
+        match &scan.changed_conversations {
+            None => (all_convs, 0usize),
+            Some(changed) => {
+                let kept: Vec<LoadedConversation> = all_convs
+                    .into_iter()
+                    .filter(|c| changed.contains(&c.id))
+                    .collect();
+                let skipped = total_convs.saturating_sub(kept.len());
+                (kept, skipped)
+            }
+        };
+
+    let raw = LoadedRaw {
+        me,
+        conversations: filtered,
+        blobs,
+    };
+
+    let mut parsed = parse_loaded(raw);
+    parsed.docs_skipped = docs_skipped;
+    parsed.scan = scan;
+    Ok(parsed)
+}
+
+async fn load_me_payload(pool: &SqlitePool) -> Result<Option<Value>> {
+    let row = sqlx::query("SELECT json(payload) AS payload FROM me ORDER BY id LIMIT 1")
+        .fetch_optional(pool)
+        .await
+        .context("select me")?;
+    let Some(row) = row else { return Ok(None) };
+    let s: Option<String> = row.try_get("payload").ok();
+    Ok(s.and_then(|t| serde_json::from_str::<Value>(&t).ok()))
+}
+
+async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
+    let rows = sqlx::query(
+        "SELECT c.id, json(c.payload) AS payload, b.fetched_at, c.last_listing_update_time
+           FROM conversations c
+           LEFT JOIN conversations_bookkeeping b ON b.id = c.id
+          WHERE c.payload IS NOT NULL
+          ORDER BY c.id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("select conversations")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let id: String = r.try_get("id").unwrap_or_default();
+        let Ok(payload_str) = r.try_get::<String, _>("payload") else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<Value>(&payload_str) else {
+            continue;
+        };
+        let fetched_at: Option<String> = r.try_get("fetched_at").ok();
+        let llut_str: Option<String> = r.try_get("last_listing_update_time").ok();
+        let last_listing_update_time =
+            llut_str.and_then(|s: String| serde_json::from_str::<Value>(&s).ok());
+        out.push(LoadedConversation {
+            id,
+            payload,
+            fetched_at,
+            last_listing_update_time,
+        });
+    }
+    Ok(out)
+}
+
+/// Phase 1: union over the per-table dolt_diff vtabs to project
+/// touched conversation ids. `dolt_diff_me` propagates as
+/// "render everything" because a renamed account shows up in every
+/// rendered conversation's frontmatter.
+async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    let Some(from_ref) = last_render_hash else {
+        return Ok(ScanResult {
+            changed_conversations: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    };
+
+    // Any `me` change fans out to "every conversation" — `me.email`
+    // and friends appear in rendered frontmatter, so a rename has to
+    // repaint every doc.
+    let any_me: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM dolt_diff_me \
+          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1",
+    )
+    .bind(from_ref)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    if any_me.is_some() {
+        return Ok(ScanResult {
+            changed_conversations: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    }
+
+    let sql = "
+        SELECT DISTINCT conversation_id FROM (
+            SELECT coalesce(to_id, from_id) AS conversation_id
+              FROM dolt_diff_conversations
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+            UNION
+            SELECT coalesce(to_conversation_id, from_conversation_id)
+              FROM dolt_diff_chatgpt_attachments
+             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+        )
+        WHERE conversation_id IS NOT NULL
+    ";
+    let started = std::time::Instant::now();
+    let res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
+    let elapsed = started.elapsed();
+    let rows = match res {
+        Ok(rows) => rows,
+        Err(e) => {
+            // `dolt_diff_<table>` can fail to resolve on a brand-new
+            // working set (extract ran but no commit yet). Fall back
+            // to cold-start so we don't return "nothing changed" when
+            // we have no way to know.
+            tracing::info!(
+                source = "chatgpt",
+                error = %e,
+                "dolt_diff scan failed — falling back to cold-start (render everything)"
+            );
+            return Ok(ScanResult {
+                changed_conversations: None,
+                new_head,
+                scan_elapsed: Some(elapsed),
+            });
+        }
+    };
+    let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    Ok(ScanResult {
+        changed_conversations: Some(set),
+        new_head,
+        scan_elapsed: Some(elapsed),
+    })
 }
 
 /// Build a [`ParsedChatGPTApi`] from a snapshot already loaded out of

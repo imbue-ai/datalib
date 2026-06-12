@@ -7,7 +7,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001",
-    "source_fingerprint": "988f6da99e3e50da",
+    "source_fingerprint": "68fa0001-fake-7000-8000-positronic0001",
     "render_version": 3
   },
   "rows": [
@@ -147,7 +147,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002",
-    "source_fingerprint": "6cb0080fb6c54318",
+    "source_fingerprint": "68fa0002-fake-7000-8000-positronic0002",
     "render_version": 3
   },
   "rows": [
@@ -261,7 +261,7 @@ expression: sbundle
 {
   "header": {
     "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003",
-    "source_fingerprint": "fd88bc6d53151268",
+    "source_fingerprint": "68fa0003-fake-7000-8000-positronic0003",
     "render_version": 3
   },
   "rows": [
