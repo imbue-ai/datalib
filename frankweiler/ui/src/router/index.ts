@@ -3,7 +3,9 @@ import { createRouter, createWebHistory } from "vue-router";
 // History-mode routing: the URL path *is* the Miller column stack —
 // each path segment encodes one column as `code:state` (see
 // `router/columns.ts`). `/` is an empty stack; the empty-stack case is
-// rendered as the default `[gridView()]` by `MillerView`.
+// rendered as the default `[gridView()]` by `MillerView`. The routed
+// component is `CardsView`, which hosts MillerView plus the
+// URL-independent tree layout behind a toggle.
 //
 // The catchall MUST come after the two explicit routes (`/sync`,
 // `/prefs`); Vue Router does prefer specific over param routes by
@@ -28,8 +30,8 @@ const router = createRouter({
     },
     {
       path: "/:stack(.*)*",
-      name: "miller",
-      component: () => import("@/views/MillerView.vue"),
+      name: "cards",
+      component: () => import("@/views/CardsView.vue"),
     },
   ],
 });
