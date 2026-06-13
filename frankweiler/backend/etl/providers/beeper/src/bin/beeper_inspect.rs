@@ -36,7 +36,10 @@ async fn main() -> Result<()> {
         ("rooms".into(), single_count(&pool, "rooms").await?),
         ("users".into(), single_count(&pool, "users").await?),
         ("events".into(), single_count(&pool, "events").await?),
-        ("blob_refs".into(), single_count(&pool, "blob_refs").await?),
+        (
+            "media_attachments".into(),
+            single_count(&pool, "beeper_media_attachments").await?,
+        ),
     ];
     println!("== counts ==");
     for (t, n) in &counts {
@@ -111,18 +114,16 @@ async fn main() -> Result<()> {
         println!("  {network:10} {with_ext}/{total} events have external_event_id");
     }
 
-    println!("\n== blob_refs ==");
-    let rows = sqlx::query("SELECT kind, slot, content_type, blake3, source_url FROM blob_refs")
+    println!("\n== beeper_media_attachments ==");
+    let rows = sqlx::query("SELECT event_uuid, ref_id, blake3 FROM beeper_media_attachments")
         .fetch_all(&pool)
         .await?;
     for r in &rows {
-        let kind: String = r.try_get("kind")?;
-        let slot: String = r.try_get("slot")?;
-        let mime: Option<String> = r.try_get("content_type")?;
+        let event_uuid: String = r.try_get("event_uuid")?;
+        let ref_id: String = r.try_get("ref_id")?;
         let hash: Option<String> = r.try_get("blake3")?;
-        let url: Option<String> = r.try_get("source_url")?;
         let h_short = hash.as_deref().map(|h| &h[..16.min(h.len())]);
-        println!("  [{kind}] slot={slot:?} mime={mime:?} blake3={h_short:?} url={url:?}");
+        println!("  event={event_uuid} ref_id={ref_id:?} blake3={h_short:?}");
     }
 
     println!("\n== users ==");

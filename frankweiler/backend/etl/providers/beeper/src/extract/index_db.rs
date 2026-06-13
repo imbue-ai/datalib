@@ -37,9 +37,10 @@ use serde_json::Value;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::db::{EventRow, RawDb, RoomRow, UserRow};
+use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
-use crate::translate::beeper_event_uuid;
+use crate::translate::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 
 /// In-memory accumulator the per-thread walkers push into; flushed
 /// once in three chunked multi-row INSERTs at the end of [`ingest`].
@@ -292,6 +293,7 @@ fn build_room_row(
         .and_then(|v| v.as_str())
         .map(String::from);
     RoomRow {
+        id: beeper_room_uuid(SOURCE, thread_id),
         source: SOURCE.to_string(),
         network: network.to_string(),
         native_room_id: thread_id.to_string(),
@@ -303,7 +305,6 @@ fn build_room_row(
         description,
         is_dm,
         is_space,
-        payload: thread_json.clone(),
     }
 }
 
@@ -344,6 +345,7 @@ async fn ingest_participants(
             .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
         batch.users.push(UserRow {
+            id: beeper_user_uuid(SOURCE, &user_id),
             source: SOURCE.to_string(),
             network: Some(network.to_string()),
             native_user_id: user_id,
@@ -351,7 +353,6 @@ async fn ingest_participants(
             full_name,
             remote_id: None,
             avatar_blob_id: None,
-            payload: r.clone(),
         });
         summary.users += 1;
     }
@@ -440,16 +441,20 @@ async fn ingest_messages(
             (None, None)
         };
 
+        let event_uuid = beeper_event_uuid(SOURCE, &event_id);
+        let room_uuid = beeper_room_uuid(SOURCE, thread_id);
+        let sender_uuid = sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s));
         let row = EventRow {
+            id: event_uuid.clone(),
             source: SOURCE.to_string(),
             network: network.to_string(),
-            native_room_id: thread_id.to_string(),
+            room_uuid,
+            sender_uuid,
             native_event_id: event_id.clone(),
             // Beeper Texts doesn't propagate native message ids
             // into index.db (we checked). Future readers (e.g.
             // local megabridge.db) can populate this.
             external_event_id: None,
-            sender_native_user_id: sender,
             event_type,
             timestamp_ms,
             text_content: text,
@@ -457,14 +462,7 @@ async fn ingest_messages(
             edit_of_native_event_id: edit_of,
             reaction_emoji,
             reaction_target_native_event_id: reaction_target,
-            payload: message_json.clone(),
         };
-        // Event UUID computed eagerly so attachments can refer to it
-        // via `blob_refs.owning_id` before the bulk-flush of `events`
-        // lands at end of `ingest()`. `blob_refs` has no FK
-        // constraint on `owning_id`, so the temporary forward
-        // reference is fine.
-        let event_uuid = beeper_event_uuid(&row.source, &row.native_event_id);
         batch.events.push(row);
         summary.events += 1;
 
@@ -531,16 +529,16 @@ async fn ingest_reactions(
             .map(String::from);
         let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
         batch.events.push(EventRow {
+            id: beeper_event_uuid(SOURCE, &reaction_id),
             source: SOURCE.to_string(),
             network: network.to_string(),
-            native_room_id: thread_id.to_string(),
+            room_uuid: beeper_room_uuid(SOURCE, thread_id),
+            sender_uuid: sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s)),
             native_event_id: reaction_id,
-            sender_native_user_id: sender,
             event_type: "REACTION".to_string(),
             timestamp_ms,
             reaction_emoji: emoji,
             reaction_target_native_event_id: Some(target_event),
-            payload: Value::Null,
             ..EventRow::default()
         });
         summary.events += 1;
@@ -598,7 +596,13 @@ async fn ingest_attachment(
     let slot_str = file_name
         .clone()
         .unwrap_or_else(|| format!("attachment_{slot}"));
-    let blob_id = format!("{owning_event_uuid}:{slot}");
+    // `ref_id` encodes both the per-event slot ordering and the
+    // display filename. The `|` separator lets parse split them
+    // back out — render uses the filename as the markdown link's
+    // alt text. Mirrors how WhatsApp's wa_media_files.relative_path
+    // doubles as a display label.
+    let blob_id = format!("{slot}|{slot_str}");
+    let _ = (&src_url,);
 
     let Some((_scheme, _server, media_id, dir_name)) = parse_attachment_id(att_id) else {
         debug!(event = "beeper_attachment_unknown_scheme", id = %att_id);
@@ -606,46 +610,54 @@ async fn ingest_attachment(
     };
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
 
-    let stub = frankweiler_etl::blob_cas::RefStub {
-        ref_id: &blob_id,
-        kind: "beeper_media",
-        owning_id: owning_event_uuid,
-        slot: &slot_str,
-        upstream_uuid: Some(att_id),
-        upstream_name: file_name.as_deref(),
-        source_url: Some(&src_url),
-        content_type: mime.as_deref(),
-    };
-
     if !download_media {
-        let mut tx = dst.pool().begin().await.context("begin pre_seed_blob tx")?;
-        frankweiler_etl::blob_cas::pre_seed_ref(&mut tx, &stub).await?;
-        tx.commit().await.context("commit pre_seed_blob tx")?;
+        // Record the edge with NULL blake3 — "we know about this
+        // attachment but haven't fetched bytes yet." Render will emit
+        // the "(not yet fetched)" placeholder for any ref_id whose
+        // bundle entry is missing bytes.
+        let edge = BeeperMediaAttachmentRow {
+            id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+            event_uuid: owning_event_uuid.to_string(),
+            ref_id: blob_id,
+            blake3: None,
+        };
+        dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+            .await?;
         return Ok(());
     }
 
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
         Err(e) => {
-            let mut tx = dst
-                .pool()
-                .begin()
-                .await
-                .context("begin record_blob_error tx")?;
-            frankweiler_etl::blob_cas::record_ref_error(
-                &mut tx,
-                &blob_id,
-                owning_event_uuid,
-                &slot_str,
-                &format!("media file not found at {}: {e}", path.display()),
-            )
-            .await?;
-            tx.commit().await.context("commit record_blob_error tx")?;
+            warn!(
+                event = "beeper_attachment_read_failed",
+                event_uuid = %owning_event_uuid,
+                path = %path.display(),
+                error = %e,
+            );
+            // Still record the edge so a future re-run (with the
+            // file present) can spot the gap and re-ingest.
+            let edge = BeeperMediaAttachmentRow {
+                id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+                event_uuid: owning_event_uuid.to_string(),
+                ref_id: blob_id,
+                blake3: None,
+            };
+            dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+                .await?;
             summary.blob_errors += 1;
             return Ok(());
         }
     };
-    frankweiler_etl::blob_cas::store_bytes(dst.pool(), dst.cas(), &stub, &bytes).await?;
+    let blake3 = dst.cas().put(&bytes, mime.as_deref()).await?;
+    let edge = BeeperMediaAttachmentRow {
+        id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+        event_uuid: owning_event_uuid.to_string(),
+        ref_id: blob_id,
+        blake3: Some(blake3),
+    };
+    dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+        .await?;
     summary.blobs += 1;
     Ok(())
 }

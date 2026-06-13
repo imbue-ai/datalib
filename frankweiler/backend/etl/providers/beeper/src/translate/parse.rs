@@ -197,30 +197,72 @@ async fn parse_async(db_path: &Path, period: Period) -> Result<ParsedBeeper> {
     }
 
     // ── blobs by owning event uuid ─────────────────────────────────
+    // Edge table is `beeper_media_attachments` (universal CasEdgeRow
+    // shape: id PK, event_uuid owning FK, ref_id, nullable blake3).
+    // The schema_raw.rs docstring explains the shape. `content_type`
+    // / `byte_len` no longer live alongside the ref — they're a
+    // property of the bytes themselves, so we look them up in
+    // `cas_objects` via the sibling CAS pool, mirroring how every
+    // other ported provider grabs that metadata at render time.
     let blob_rows = sqlx::query(
-        "SELECT id, owning_id, slot, content_type, source_url, blake3
-         FROM blob_refs",
+        "SELECT event_uuid, ref_id, blake3
+         FROM beeper_media_attachments",
     )
     .fetch_all(&pool)
     .await
-    .context("read blob_refs")?;
+    .context("read beeper_media_attachments")?;
+    let cas_path = frankweiler_etl::blob_cas::cas_path_for(db_path);
+    let cas_meta: HashMap<String, (Option<String>, Option<i64>)> = if cas_path.is_file() {
+        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))?
+            .read_only(true);
+        let cas_pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(cas_opts)
+            .await
+            .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
+        let rows = sqlx::query("SELECT blake3, content_type, byte_len FROM cas_objects")
+            .fetch_all(&cas_pool)
+            .await
+            .context("read cas_objects")?;
+        cas_pool.close().await;
+        let mut out: HashMap<String, (Option<String>, Option<i64>)> = HashMap::new();
+        for r in &rows {
+            let h: String = r.try_get("blake3")?;
+            let ct: Option<String> = r.try_get("content_type")?;
+            let bl: Option<i64> = r.try_get("byte_len")?;
+            out.insert(h, (ct, bl));
+        }
+        out
+    } else {
+        HashMap::new()
+    };
     let mut blobs_by_owner: HashMap<String, Vec<Blob>> = HashMap::new();
     for r in &blob_rows {
         let blake3: Option<String> = r.try_get("blake3")?;
         let has_bytes = blake3.is_some();
+        let ref_id: String = r.try_get("ref_id")?;
+        // `ref_id` is encoded as `"{slot_index}|{display_name}"` by
+        // extract (see `index_db::ingest_attachment`). The display
+        // half is what render uses as the markdown link's alt text.
+        let slot = ref_id
+            .split_once('|')
+            .map(|(_, name)| name.to_string())
+            .unwrap_or_else(|| ref_id.clone());
+        let (content_type, byte_len) = blake3
+            .as_deref()
+            .and_then(|h| cas_meta.get(h))
+            .cloned()
+            .unwrap_or_default();
         let blob = Blob {
-            blob_id: r.try_get("id")?,
-            slot: r.try_get("slot")?,
-            content_type: r.try_get("content_type")?,
-            // byte_len now lives on cas_objects (sibling file); we
-            // don't surface it here to keep parse synchronous and
-            // single-pool. Render falls back to "size unknown".
-            byte_len: None,
-            source_url: r.try_get("source_url")?,
+            blob_id: ref_id,
+            slot,
+            content_type,
+            byte_len,
+            source_url: None,
             blake3,
             has_bytes,
         };
-        let owner: String = r.try_get("owning_id")?;
+        let owner: String = r.try_get("event_uuid")?;
         blobs_by_owner.entry(owner).or_default().push(blob);
     }
 
