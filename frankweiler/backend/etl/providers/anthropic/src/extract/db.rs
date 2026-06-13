@@ -58,7 +58,11 @@ impl RawDb {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
-    /// Replaces `truncate_blob_refs` for this provider.
+    /// Reset bytes-have-been-fetched state for `refetch_blobs`: clear
+    /// the per-provider `blake3` column on `anthropic_attachments` so
+    /// the next walk re-decodes and re-stores. The `(message_uuid,
+    /// file_uuid)` edge metadata is upstream-driven so we leave the
+    /// rows in place.
     pub async fn clear_blob_hashes(&self) -> Result<()> {
         sqlx::query("UPDATE anthropic_attachments SET blake3 = NULL")
             .execute(&self.pool)

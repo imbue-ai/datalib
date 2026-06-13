@@ -21,7 +21,7 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{self, BlobBundle, BlobCas, CasEdgeRow as _, RefStub};
+use frankweiler_etl::blob_cas::{self, BlobBundle, BlobCas, CasEdgeRow as _};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -334,20 +334,40 @@ impl RawDb {
         Ok(out)
     }
 
+    /// Have we already stored bytes for this image-block's ref_id?
+    /// One SELECT against `notion_image_attachments` — the universal
+    /// CAS-edge "have we got these bytes yet?" skip-check shape every
+    /// other ported provider uses (`wa_media_files`, `slack_attachments`,
+    /// …). NULL `blake3` means "we know the ref exists but haven't
+    /// fetched bytes yet" — returns false so the caller fetches.
     pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
-        blob_cas::ref_has_hash(&self.pool, ref_id).await
+        let row = sqlx::query(
+            "SELECT 1 FROM notion_image_attachments \
+             WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
+        )
+        .bind(ref_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("notion_image_attachments skip-check")?;
+        Ok(row.is_some())
     }
 
-    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        let hash = blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await?;
-        // Also land an edge row on `notion_image_attachments` so the
-        // render path can build a per-page BlobBundle without touching
-        // the shared `blob_refs` table. PK is `{block_id}#{ref_id}` via
-        // the universal CasEdgeRow recipe.
+    /// Hash + store the bytes in the per-source CAS, then land an edge
+    /// row on `notion_image_attachments`. No writes to the shared
+    /// `blob_refs` table — Notion uses the per-provider edge shape
+    /// every other provider settled on.
+    pub async fn store_blob(
+        &self,
+        block_id: &str,
+        ref_id: &str,
+        content_type: Option<&str>,
+        bytes: &[u8],
+    ) -> Result<String> {
+        let hash = self.cas.put(bytes, content_type).await?;
         let edge = NotionImageAttachmentRow {
-            id: NotionImageAttachmentRow::pk_recipe(stub.owning_id, stub.ref_id),
-            block_id: stub.owning_id.to_string(),
-            ref_id: stub.ref_id.to_string(),
+            id: NotionImageAttachmentRow::pk_recipe(block_id, ref_id),
+            block_id: block_id.to_string(),
+            ref_id: ref_id.to_string(),
             blake3: Some(hash.clone()),
         };
         let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
@@ -363,16 +383,20 @@ impl RawDb {
         Ok(hash)
     }
 
-    /// Notion blobs are keyed `{block_id}:image`; we derive the
-    /// owning_id and slot from that for the error sidecar so a retry
-    /// path always has somewhere to look.
-    pub async fn record_blob_error(&self, ref_id: &str, err: &str) -> Result<()> {
-        let (owning, slot) = ref_id
-            .rsplit_once(':')
-            .map(|(o, s)| (o.to_string(), s.to_string()))
-            .unwrap_or_else(|| (ref_id.to_string(), "image".to_string()));
+    /// Record a known-but-not-yet-fetched edge row so a future retry
+    /// has something to look at. Mirrors how WhatsApp / Beeper handle
+    /// "we know about this attachment but haven't pulled bytes" —
+    /// blake3 stays NULL until the CAS write lands.
+    pub async fn record_blob_error(&self, block_id: &str, ref_id: &str) -> Result<()> {
+        let edge = NotionImageAttachmentRow {
+            id: NotionImageAttachmentRow::pk_recipe(block_id, ref_id),
+            block_id: block_id.to_string(),
+            ref_id: ref_id.to_string(),
+            blake3: None,
+        };
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        blob_cas::record_ref_error(&mut tx, ref_id, &owning, &slot, err).await?;
+        frankweiler_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
         tx.commit().await.context("commit blob error tx")?;
         Ok(())
     }

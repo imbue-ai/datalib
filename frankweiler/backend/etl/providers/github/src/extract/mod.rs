@@ -231,12 +231,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         tracing::info!(event = "github_reset_and_redownload");
         db.reset().await.context("reset raw db before redownload")?;
     }
-    if opts.control.refetch_blobs {
-        tracing::info!(event = "github_refetch_blobs");
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
-            .await
-            .context("truncate blob_refs before refetch")?;
-    }
+    // GitHub has no blob table — PRs / comments / reviews are pure
+    // JSON. `refetch_blobs` is a no-op for this provider.
+    let _ = opts.control.refetch_blobs;
     let run_config = json!({
         "scopes": opts.scopes,
         "refresh_window_days": opts.refresh_window_days,

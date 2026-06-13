@@ -96,9 +96,11 @@ impl RawDb {
         Ok(())
     }
 
-    /// Replaces `truncate_blob_refs` for this provider: clear the
-    /// per-provider `blake3` column so the next walk re-decodes and
-    /// re-stores.
+    /// Reset bytes-have-been-fetched state for `refetch_blobs`: clear
+    /// the per-provider `blake3` column on the CAS-edge table so the
+    /// next walk re-decodes and re-stores. Cheaper than truncating
+    /// the edge rows themselves since the `(message_uuid, file_id)`
+    /// metadata is upstream-driven and unchanged.
     pub async fn clear_blob_hashes(&self) -> Result<()> {
         sqlx::query("UPDATE slack_attachments SET blake3 = NULL")
             .execute(&self.pool)

@@ -1,24 +1,22 @@
-//! Content-addressable blob store + provider-agnostic blob refs.
+//! Content-addressable blob store + per-bucket attachment bundle.
 //!
 //! Each raw source ends up with two doltlite files:
 //!
-//!   `<data_root>/raw/<name>.doltlite_db`        — entities + `blob_refs`
+//!   `<data_root>/raw/<name>.doltlite_db`        — entities + per-provider CAS edge table
 //!   `<data_root>/raw/<name>.blobs.doltlite_db`  — pure CAS (this module)
 //!
 //! Bytes are keyed by their blake3 hash and stored exactly once in
-//! `cas_objects`. The entity db holds a `blob_refs` row per upstream
-//! attachment slot, carrying upstream metadata (uuid, original filename,
-//! source url) and a nullable hash pointing into the CAS. NULL hash =
-//! "we know this attachment exists but haven't fetched bytes yet".
+//! `cas_objects`. Each provider declares its own `(<owning>, <ref>,
+//! blake3)` edge table via the [`CasEdgeRow`] derive — see
+//! `slack_attachments`, `wa_media_files`, `notion_image_attachments`,
+//! etc. for the per-provider names. The render side consumes
+//! attachments per bucket via [`BlobBundle::load`], which joins the
+//! edge table to `cas_objects` to assemble one bag of bytes per
+//! rendered doc.
 //!
-//! Cross-file atomicity is not enforced. CAS inserts that succeed but
-//! whose ref-attach fails leave orphan bytes; a GC sweep
-//! ([`gc_orphans`]) reconciles. Refs that point at a missing hash are
-//! the same shape as today's pre-seeded stub: the next extract retries
-//! the fetch.
-//!
-//! Shared blob_refs DDL lives in [`crate::doltlite_raw::SHARED_DDL`] so
-//! every provider's entity db gets it for free.
+//! The legacy shared `blob_refs` table + its `RefStub` / `store_bytes`
+//! / `attach_hash` write API was retired once every provider moved
+//! to the per-provider edge shape; see git history for the old API.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,7 +24,7 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{Row, SqlitePool, Transaction};
+use sqlx::{Row, SqlitePool};
 
 // ─────────────────────────────────────────────────────────────────────
 // Schema
@@ -41,39 +39,6 @@ pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
     bytes         BLOB NOT NULL,
     first_seen_at TEXT NOT NULL,
     CHECK (length(blake3) = 64)
-)";
-
-/// Per-source attachment-slot table. Lives in the *entity* db so a
-/// dolt diff of a Slack message shows the attachment metadata change
-/// inline with the message. PK is the upstream-stable id (or
-/// `{owning_id}:{slot}` fallback) — same policy as the old `blobs`
-/// table. `blake3` is a logical FK into the sibling `cas_objects`
-/// table; NULL means the bytes haven't been fetched yet.
-pub const BLOB_REFS_DDL: &str = "CREATE TABLE IF NOT EXISTS blob_refs (
-    id            TEXT PRIMARY KEY,
-    kind          TEXT NOT NULL,
-    owning_id     TEXT NOT NULL,
-    slot          TEXT NOT NULL,
-    upstream_uuid TEXT NULL,
-    upstream_name TEXT NULL,
-    source_url    TEXT NULL,
-    content_type  TEXT NULL,
-    blake3        TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-pub const BLOB_REFS_BLAKE3_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS blob_refs_blake3 ON blob_refs(blake3)";
-
-pub const BLOB_REFS_OWNING_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS blob_refs_owning ON blob_refs(owning_id)";
-
-pub const BLOB_REFS_BOOKKEEPING_DDL: &str = "CREATE TABLE IF NOT EXISTS blob_refs_bookkeeping (
-    id               TEXT PRIMARY KEY,
-    fetched_at       TEXT NULL,
-    attempt_count    INTEGER NOT NULL DEFAULT 0,
-    last_attempt_at  TEXT NULL,
-    last_error       TEXT NULL
 )";
 
 // ─────────────────────────────────────────────────────────────────────
@@ -233,155 +198,6 @@ fn row_to_cas_object(r: SqliteRow) -> CasObject {
 
 pub fn blake3_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// blob_refs (live in the entity db; helpers are tx-based)
-// ─────────────────────────────────────────────────────────────────────
-
-/// Args for [`pre_seed_ref`]. A struct over a 7-arg fn — providers
-/// were already passing most of these one positional at a time and
-/// the named form documents itself.
-#[derive(Debug, Default, Clone)]
-pub struct RefStub<'a> {
-    pub ref_id: &'a str,
-    pub kind: &'a str,
-    pub owning_id: &'a str,
-    pub slot: &'a str,
-    pub upstream_uuid: Option<&'a str>,
-    pub upstream_name: Option<&'a str>,
-    pub source_url: Option<&'a str>,
-    pub content_type: Option<&'a str>,
-}
-
-/// Insert a blob_refs stub before the bytes are fetched, plus a
-/// matching bookkeeping row. `INSERT OR IGNORE` on both so a re-list
-/// over an already-attached ref doesn't clobber its hash or its
-/// fetch history.
-pub async fn pre_seed_ref(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    stub: &RefStub<'_>,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blob_refs \
-         (id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(stub.ref_id)
-    .bind(stub.kind)
-    .bind(stub.owning_id)
-    .bind(stub.slot)
-    .bind(stub.upstream_uuid)
-    .bind(stub.upstream_name)
-    .bind(stub.source_url)
-    .bind(stub.content_type)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("pre_seed_ref {}", stub.ref_id))?;
-    sqlx::query("INSERT OR IGNORE INTO blob_refs_bookkeeping (id) VALUES (?)")
-        .bind(stub.ref_id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("pre_seed_ref bookkeeping {}", stub.ref_id))?;
-    Ok(())
-}
-
-/// Attach a hash + content_type to an existing ref, OR create the ref
-/// row if it doesn't exist yet. Mirrors today's `upsert_blob_bytes`
-/// behavior where the stub is optional. Bumps the bookkeeping success
-/// counters.
-pub async fn attach_hash(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    stub: &RefStub<'_>,
-    blake3_hash: &str,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO blob_refs \
-         (id, kind, owning_id, slot, upstream_uuid, upstream_name, source_url, content_type, blake3) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(id) DO UPDATE SET \
-            kind          = excluded.kind, \
-            owning_id     = excluded.owning_id, \
-            slot          = excluded.slot, \
-            upstream_uuid = COALESCE(excluded.upstream_uuid, blob_refs.upstream_uuid), \
-            upstream_name = COALESCE(excluded.upstream_name, blob_refs.upstream_name), \
-            source_url    = COALESCE(excluded.source_url,    blob_refs.source_url), \
-            content_type  = COALESCE(excluded.content_type,  blob_refs.content_type), \
-            blake3        = excluded.blake3",
-    )
-    .bind(stub.ref_id)
-    .bind(stub.kind)
-    .bind(stub.owning_id)
-    .bind(stub.slot)
-    .bind(stub.upstream_uuid)
-    .bind(stub.upstream_name)
-    .bind(stub.source_url)
-    .bind(stub.content_type)
-    .bind(blake3_hash)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("attach_hash {}", stub.ref_id))?;
-    crate::doltlite_raw::record_object_attempt(tx, "blob_refs", stub.ref_id, None).await
-}
-
-/// Record a failed fetch attempt. Creates a stub row if needed.
-pub async fn record_ref_error(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
-    ref_id: &str,
-    owning_id: &str,
-    slot: &str,
-    err: &str,
-) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO blob_refs (id, kind, owning_id, slot) \
-         VALUES (?, 'unknown', ?, ?)",
-    )
-    .bind(ref_id)
-    .bind(owning_id)
-    .bind(slot)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("record_ref_error data {ref_id}"))?;
-    crate::doltlite_raw::record_object_attempt(tx, "blob_refs", ref_id, Some(err)).await
-}
-
-/// True iff the ref already has a hash attached (i.e. bytes are in
-/// the CAS). Cheap short-circuit for skip-already-fetched paths.
-pub async fn ref_has_hash(pool: &SqlitePool, ref_id: &str) -> Result<bool> {
-    let row = sqlx::query("SELECT 1 FROM blob_refs WHERE id = ? AND blake3 IS NOT NULL LIMIT 1")
-        .bind(ref_id)
-        .fetch_optional(pool)
-        .await
-        .context("ref_has_hash")?;
-    Ok(row.is_some())
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Combined extract-side helper: write bytes + attach + bookkeeping
-// ─────────────────────────────────────────────────────────────────────
-
-/// One-shot "we fetched the bytes — persist them everywhere".
-/// Performs three writes in this order:
-///   1. `cas.put(bytes, ct)` → returns the hash.
-///   2. `attach_hash(ref_id, hash)` against the entity db (with
-///      bookkeeping success).
-///
-/// Steps 1 and 2 span two doltlite files; if step 1 succeeds and step
-/// 2 fails the CAS gains an orphan row that [`gc_orphans`] sweeps
-/// later. If step 2 succeeds with a hash that never made it into the
-/// CAS, the next render will see a `read_by_ref_id` miss and the
-/// caller's existing "missing bytes" handling fires.
-pub async fn store_bytes(
-    entity_pool: &SqlitePool,
-    cas: &BlobCas,
-    stub: &RefStub<'_>,
-    bytes: &[u8],
-) -> Result<String> {
-    let hash = cas.put(bytes, stub.content_type).await?;
-    let mut tx = entity_pool.begin().await.context("begin attach_hash tx")?;
-    attach_hash(&mut tx, stub, &hash).await?;
-    tx.commit().await.context("commit attach_hash tx")?;
-    Ok(hash)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1154,57 +970,6 @@ pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
         .await
         .with_context(|| format!("commit flush_cas_edges {} tx", T::TABLE))?;
     Ok(())
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Maintenance
-// ─────────────────────────────────────────────────────────────────────
-
-/// Hashes referenced from any blob_refs row. Pass one tuple per
-/// entity db that points at this CAS file; the union is the GC root
-/// set. Single-writer regime: callers serialize this against extracts.
-pub async fn referenced_hashes(refs_pools: &[&SqlitePool]) -> Result<Vec<String>> {
-    let mut out: Vec<String> = Vec::new();
-    for p in refs_pools {
-        let rows = sqlx::query("SELECT DISTINCT blake3 FROM blob_refs WHERE blake3 IS NOT NULL")
-            .fetch_all(*p)
-            .await
-            .context("select referenced hashes")?;
-        for r in rows {
-            if let Ok(h) = r.try_get::<String, _>("blake3") {
-                out.push(h);
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Delete CAS rows whose hash isn't in `keep`. Returns the deletion
-/// count. Caller is responsible for having gathered every referencing
-/// entity db's hashes before calling.
-pub async fn gc_orphans(cas: &BlobCas, keep: &[String]) -> Result<u64> {
-    let mut tx = cas.pool().begin().await.context("begin gc tx")?;
-    sqlx::query("CREATE TEMP TABLE _keep (blake3 TEXT PRIMARY KEY)")
-        .execute(&mut *tx)
-        .await
-        .context("create temp _keep")?;
-    for h in keep {
-        sqlx::query("INSERT OR IGNORE INTO _keep (blake3) VALUES (?)")
-            .bind(h)
-            .execute(&mut *tx)
-            .await
-            .context("insert _keep")?;
-    }
-    let res = sqlx::query("DELETE FROM cas_objects WHERE blake3 NOT IN (SELECT blake3 FROM _keep)")
-        .execute(&mut *tx)
-        .await
-        .context("delete orphans")?;
-    sqlx::query("DROP TABLE _keep")
-        .execute(&mut *tx)
-        .await
-        .context("drop temp _keep")?;
-    tx.commit().await.context("commit gc tx")?;
-    Ok(res.rows_affected())
 }
 
 // ─────────────────────────────────────────────────────────────────────

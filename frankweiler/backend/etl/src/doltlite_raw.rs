@@ -281,15 +281,11 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 )";
 
 /// DDL every provider gets for free. Concatenated after the
-/// provider-specific table list inside [`open`].
-pub const SHARED_DDL: &[&str] = &[
-    SYNC_RUNS_DDL,
-    crate::blob_cas::BLOB_REFS_DDL,
-    crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
-    crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
-    crate::blob_cas::BLOB_REFS_BOOKKEEPING_DDL,
-    SYNC_SCOPE_STATE_DDL,
-];
+/// provider-specific table list inside [`open`]. The legacy
+/// `blob_refs` + `blob_refs_bookkeeping` tables used to live here —
+/// they were retired once every provider moved to per-provider CAS
+/// edge tables (`CasEdgeRow`); see git history for the old shape.
+pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL];
 
 // ─────────────────────────────────────────────────────────────────────
 // Path helper
@@ -602,27 +598,6 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
         }
     }
     tx.commit().await.context("commit truncate tx")?;
-    Ok(())
-}
-
-/// Wipe `blob_refs` + `blob_refs_bookkeeping`. NOT called by
-/// [`truncate_data_tables`] (entity reset preserves the ref index so
-/// the next extract skips re-fetching bytes we already have in the
-/// sibling CAS). Use this when the user explicitly asks to invalidate
-/// the cache key — driven by `--refetch-blobs` at the CLI.
-///
-/// The sibling `cas_objects` file is never touched: bytes are
-/// byte-stable; only the
-/// [`crate::blob_cas::gc_orphans`] sweep should delete from it.
-pub async fn truncate_blob_refs(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin truncate blob_refs tx")?;
-    for sql in ["DELETE FROM blob_refs", "DELETE FROM blob_refs_bookkeeping"] {
-        sqlx::query(sql)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("truncate {sql}"))?;
-    }
-    tx.commit().await.context("commit truncate blob_refs tx")?;
     Ok(())
 }
 
@@ -1189,10 +1164,6 @@ mod tests {
         let pool = open_test(&p).await;
         // Shared tables exist.
         sqlx::query("SELECT COUNT(*) FROM sync_runs")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM blob_refs")
             .fetch_one(&pool)
             .await
             .unwrap();

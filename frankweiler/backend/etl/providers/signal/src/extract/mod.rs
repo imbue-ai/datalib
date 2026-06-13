@@ -109,7 +109,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         // itself is never wiped — re-decrypted bytes hash to the
         // same blake3 and the `INSERT OR IGNORE` on the CAS side
         // is a no-op. This is the Signal-specific equivalent of the
-        // shared `truncate_blob_refs` (which Signal no longer uses).
+        // per-provider equivalent for `refetch_blobs`.
         sqlx::query("DELETE FROM chat_item_attachments")
             .execute(db.pool())
             .await

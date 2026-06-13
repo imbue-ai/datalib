@@ -76,13 +76,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
-    if opts.control.refetch_blobs {
-        // Contacts doesn't populate `blob_refs` (photos travel inline in
-        // the vCard payload), but the table exists via SHARED_DDL — the
-        // wipe is a harmless no-op that keeps the flag uniform across
-        // providers.
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
-    }
+    // Contacts has no blob table at all (vCard PHOTO bytes ride inline
+    // in the payload column), so `refetch_blobs` is a no-op for this
+    // provider — explicitly nothing to do.
+    let _ = opts.control.refetch_blobs;
 
     let mut summary = FetchSummary::default();
     let account_id = host_for_account(&opts.server_url)?;
