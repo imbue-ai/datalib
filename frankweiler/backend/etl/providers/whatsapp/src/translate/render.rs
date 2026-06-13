@@ -1,21 +1,19 @@
 //! WhatsApp render — thin adapter over
 //! [`frankweiler_etl_chat_common::render::render_all`].
 //!
-//! Opens the blob_cas pair (entity pool + sibling CAS pool) so
-//! chat-common can stream attachment bytes through the universal
-//! `SqliteBlobReader` interface, then forwards every other arg
-//! straight through.
+//! Receives the per-chat `BlobBundle` map already loaded by
+//! [`super::parse::parse`] (mirroring slack's per-thread bundles) and
+//! forwards every other arg straight through. No CAS-pool open here:
+//! parse owns the synchronous bag of attachment bytes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 
-use super::blob_reader::WhatsAppBlobReader;
 use frankweiler_etl::doltlite_raw;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
@@ -33,8 +31,8 @@ use sqlx::Row;
 /// v3 = attachment bytes now stream through `frankweiler_etl::blob_cas`
 /// (the same store every other chat-style provider uses). The on-disk
 /// `blobs/<short>.<ext>` filename is whatever
-/// [`BlobView::rendered_filename`] picks, which is blake3-prefixed
-/// (was sha256-prefixed in v2); existing docs all rebuild.
+/// `Blob::rendered_filename` picks, which is blake3-prefixed (was
+/// sha256-prefixed in v2); existing docs all rebuild.
 ///
 /// v2 = attachments now materialize bytes into the rendered page's
 /// `blobs/` subdir, so images render inline instead of "(not yet
@@ -42,8 +40,6 @@ use sqlx::Row;
 ///
 /// v1 = chat-common's unified block style + reactions inline +
 /// per-message `id="m-{uuid}"` anchors.
-///
-/// [`BlobView::rendered_filename`]: frankweiler_etl::blob_cas::BlobView::rendered_filename
 pub const RENDER_VERSION: u32 = 3;
 
 const SOURCE_LABEL: &str = "WhatsApp";
@@ -60,11 +56,14 @@ fn profile() -> RenderProfile {
 }
 
 /// Render every chat. `raw_dir` is the source's `input_path` — same
-/// value translate's `parse` walks — used here to derive the sibling
-/// CAS path so the renderer can stream attachment bytes through
-/// [`SqliteBlobReader`].
+/// value translate's `parse` walks — used here only to find the
+/// doltlite db for the dolt_diff render-cursor scan. Attachment bytes
+/// arrive pre-loaded in `blobs_by_chat`, which parse hydrates from the
+/// sibling CAS in the same call that built `chats`.
+#[allow(clippy::too_many_arguments)]
 pub fn render_all(
     chats: &[NormalizedChat],
+    blobs_by_chat: &HashMap<String, BlobBundle>,
     raw_dir: &Path,
     out_dir: &Path,
     source_name: &str,
@@ -72,8 +71,6 @@ pub fn render_all(
     _prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let blobs = open_blob_reader(raw_dir)?;
-
     // Incremental gate: if a render cursor exists at the root of this
     // source's render directory, ask doltlite which chats changed
     // between that hash and HEAD via `dolt_diff_wa_<table>`. Skip the
@@ -134,7 +131,7 @@ pub fn render_all(
         to_render,
         out_dir,
         source_name,
-        blobs,
+        blobs_by_chat,
         progress,
         &empty_fingerprints,
         on_doc_complete,
@@ -219,43 +216,6 @@ async fn scan_diff(
 
     pool.close().await;
     Ok((changed, new_head, elapsed))
-}
-
-/// Build the `SqliteBlobReader` chat-common reads attachment bytes
-/// through. Falls back to an empty in-memory reader when the raw store
-/// or CAS files aren't present (e.g. a translate-only re-run against a
-/// data root whose extract was skipped — the renderer emits placeholder
-/// markdown in that case, same as for any other blob_cas miss).
-fn open_blob_reader(raw_dir: &Path) -> Result<Arc<dyn BlobReader>> {
-    let db_path = doltlite_raw::db_path_for(raw_dir);
-    if !db_path.exists() {
-        return Ok(InMemoryBlobReader::empty_handle());
-    }
-    let cas_path = blob_cas::cas_path_for(&db_path);
-
-    // Bridge sync render → async sqlx the same way `translate::parse`
-    // does: borrow the current tokio Handle if there is one, else spin
-    // a fresh runtime for the open. Sync orchestrator calls translate
-    // from within `#[tokio::main]`, so the Handle path is the hot one.
-    tokio::task::block_in_place(|| {
-        let rt = tokio::runtime::Handle::try_current();
-        match rt {
-            Ok(h) => h.block_on(open_pools(&db_path, &cas_path)),
-            Err(_) => tokio::runtime::Runtime::new()?.block_on(open_pools(&db_path, &cas_path)),
-        }
-    })
-}
-
-async fn open_pools(db_path: &Path, cas_path: &Path) -> Result<Arc<dyn BlobReader>> {
-    let refs_pool = open_ro_pool(db_path).await?;
-    if !cas_path.exists() {
-        // Refs without bytes: a placeholder will fire for every
-        // attachment whose `read_by_ref_id` returns None, which the
-        // chat-common renderer already handles.
-        return Ok(InMemoryBlobReader::empty_handle());
-    }
-    let cas_pool = open_ro_pool(cas_path).await?;
-    Ok(WhatsAppBlobReader::new(refs_pool, cas_pool).into_handle())
 }
 
 async fn open_ro_pool(path: &Path) -> Result<SqlitePool> {
@@ -436,7 +396,7 @@ mod tests {
         // parse + render are sync but call into tokio::task::block_in_place,
         // so we have to push the whole thing off the test's reactor thread.
         tokio::task::spawn_blocking(move || {
-            let chats = parse(&raw_dir, Period::All, "test").expect("parse");
+            let parsed = parse(&raw_dir, Period::All, "test").expect("parse");
             let mut emitted: Vec<String> = Vec::new();
             let progress = frankweiler_etl::progress::Progress::noop();
             let prior: HashMap<String, String> = HashMap::new();
@@ -445,7 +405,8 @@ mod tests {
                 Ok(())
             };
             render_all(
-                &chats,
+                &parsed.chats,
+                &parsed.blobs_by_chat,
                 &raw_dir,
                 &out_dir,
                 "test",

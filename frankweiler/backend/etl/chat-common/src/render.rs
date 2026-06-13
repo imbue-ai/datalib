@@ -5,10 +5,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::{self, BlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::msg_div_open;
@@ -60,20 +59,20 @@ pub struct RenderSummary {
 /// Render every bucket of every chat. Returns aggregate counts; the
 /// per-doc work is delegated to [`render_one`].
 ///
-/// `blobs` is the reader that turns an attachment's `ref_id` into bytes
-/// on disk. Each chat-style provider builds one against its own raw
-/// store (signal/beeper/whatsapp all back this with a
-/// `SqliteBlobReader`). Pass `InMemoryBlobReader::empty_handle()` when
-/// the doc set carries no attachments — chat-common will silently
-/// emit "(not yet fetched)" placeholders for any attachment whose
-/// `ref_id` the reader can't resolve.
+/// `blobs_by_chat` maps `chat.id` to the per-chat
+/// [`BlobBundle`](frankweiler_etl::blob_cas::BlobBundle) the provider
+/// pre-loaded from its raw store + sibling CAS in `parse`. Each
+/// rendered page calls `bundle.materialize_to_dir(<page_dir>/blobs)` so
+/// the markdown's `![](blobs/…)` links resolve. Chats without an entry
+/// (or with an empty bundle) render with "(not yet fetched)"
+/// placeholders for any attachment that has a `ref_id`.
 #[allow(clippy::too_many_arguments)]
 pub fn render_all(
     profile: &RenderProfile,
     chats: &[NormalizedChat],
     out_dir: &Path,
     source_name: &str,
-    blobs: Arc<dyn BlobReader>,
+    blobs_by_chat: &HashMap<String, BlobBundle>,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -84,7 +83,9 @@ pub fn render_all(
     };
     progress.set_length(Some(summary.docs_total as u64));
 
+    let empty_bundle = BlobBundle::default();
     for chat in chats {
+        let bundle = blobs_by_chat.get(&chat.id).unwrap_or(&empty_bundle);
         for doc in &chat.buckets {
             let outcome = render_one(
                 profile,
@@ -92,7 +93,7 @@ pub fn render_all(
                 doc,
                 out_dir,
                 source_name,
-                blobs.as_ref(),
+                bundle,
                 prior_fingerprints,
                 on_doc_complete,
             )?;
@@ -122,7 +123,7 @@ fn render_one(
     doc: &NormalizedDoc,
     out_dir: &Path,
     source_name: &str,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
@@ -205,45 +206,41 @@ fn render_one(
     })
 }
 
-/// Walk `doc.items`; for every attachment with a `ref_id`, ask the
-/// blob_cas reader for the bytes and write them under
-/// `<page_dir>/blobs/<short-blake3>.<ext>` (the universal filename
-/// produced by [`BlobView::rendered_filename`]). On success, overwrite
-/// the attachment's `rel_path` so the markdown emitter picks up the
-/// materialized blob instead of the "(not yet fetched)" placeholder.
+/// Write every blob in the per-chat bundle into
+/// `<page_dir>/blobs/<short-blake3>.<ext>`, then walk `doc.items` and
+/// — for every attachment whose `ref_id` resolves in the bundle — set
+/// `rel_path = "blobs/<rendered_filename>"` so the markdown emitter
+/// picks up the materialized blob instead of the "(not yet fetched)"
+/// placeholder. Same shape slack's bucket-side render uses.
 ///
-/// All failure modes (ref missing, bytes missing, copy denied) log
-/// WARN and leave `rel_path` alone — the existing renderer branch
-/// already handles the placeholder rendering, and a partial render is
-/// strictly better than a hard fail mid-translate.
-///
-/// [`BlobView::rendered_filename`]: frankweiler_etl::blob_cas::BlobView::rendered_filename
+/// On any io error from `materialize_to_dir` we log WARN and leave
+/// `rel_path` alone — the existing renderer branch already handles
+/// the placeholder rendering, and a partial render is strictly better
+/// than a hard fail mid-translate.
 fn materialize_attachment_bytes(
     doc: &NormalizedDoc,
     page_dir: &Path,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
 ) -> NormalizedDoc {
     let mut out = doc.clone();
+    if blobs.is_empty() {
+        return out;
+    }
+    if let Err(e) = blobs.materialize_to_dir(&page_dir.join("blobs")) {
+        tracing::warn!(
+            page_dir = %page_dir.display(),
+            error = %e,
+            "chat_common::materialize: BlobBundle::materialize_to_dir failed; leaving rel_paths unset"
+        );
+        return out;
+    }
     for item in &mut out.items {
         for att in &mut item.attachments {
             let Some(ref_id) = att.ref_id.as_deref() else {
                 continue;
             };
-            match blob_cas::materialize_to_disk(blobs, ref_id, &page_dir.join("blobs")) {
-                Ok(Some((_view, _abs, rel))) => {
-                    att.rel_path = Some(rel);
-                }
-                Ok(None) => {
-                    // Reader knows nothing about this ref_id; fall
-                    // through to the placeholder branch.
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        ref_id,
-                        error = %e,
-                        "chat_common::materialize: blob materialize failed; leaving rel_path unset"
-                    );
-                }
+            if let Some(blob) = blobs.get(ref_id) {
+                att.rel_path = Some(format!("blobs/{}", blob.rendered_filename()));
             }
         }
     }

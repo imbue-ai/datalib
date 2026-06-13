@@ -2378,10 +2378,11 @@ fn translate_source(
             // WhatsApp doesn't expose a `period` knob on its sync block
             // today — default to month bucketing, same as signal.
             let period = Period::from_config(None).context("default whatsapp period")?;
-            let chats = parse(&fixture, period, name)
+            let parsed = parse(&fixture, period, name)
                 .with_context(|| format!("whatsapp parse {}", fixture.display()))?;
             render_all(
-                &chats,
+                &parsed.chats,
+                &parsed.blobs_by_chat,
                 &fixture,
                 root,
                 name,

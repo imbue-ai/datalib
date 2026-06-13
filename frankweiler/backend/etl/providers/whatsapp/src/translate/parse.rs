@@ -4,12 +4,13 @@
 //! Pulls all rows up-front (the raw stores in scope here are tens of
 //! MB at most) so the renderer can walk in memory without re-querying.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::{self, BlobBundle};
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl_chat_common::{
     ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -22,6 +23,31 @@ use super::{
     whatsapp_chat_uuid, whatsapp_markdown_uuid, whatsapp_message_uuid, whatsapp_reaction_uuid,
 };
 
+/// SQL projection that maps an attachment's `sha256` (the upstream
+/// `ref_id` translate stamps onto each `NormalizedAttachment`) to its
+/// CAS `blake3`. Consumed by [`BlobBundle::load`] from the per-chat
+/// load below. Returns one row per requested ref_id whose bytes are
+/// known to the CAS — `blake3 IS NOT NULL` guards against
+/// half-extracted Media/ trees.
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT sha256 AS ref_id, blake3,
+           mime_type AS content_type,
+           relative_path AS upstream_name
+      FROM wa_media_files
+     WHERE sha256 IN ({placeholders}) AND blake3 IS NOT NULL";
+
+/// What `parse` returns to render: the chat tree plus a per-chat
+/// `BlobBundle` (keyed by `NormalizedChat::id`) carrying every
+/// attachment's bytes pre-loaded from the sibling CAS. Mirrors slack's
+/// `(ParsedSlack { threads: SlackThreadBucket{ blobs }, … })` shape —
+/// the bundle is the synchronous bag the chat-common renderer reads
+/// at `materialize_to_dir` time.
+#[derive(Default)]
+pub struct ParsedWhatsApp {
+    pub chats: Vec<NormalizedChat>,
+    pub blobs_by_chat: HashMap<String, BlobBundle>,
+}
+
 /// Open the raw store and build the normalized chat tree.
 ///
 /// `raw_dir` is the source's `input_path` (sync sets it to
@@ -30,10 +56,10 @@ use super::{
 /// bucketed into rendered .md files.
 /// `source_name` is the YAML source name; goes into every UUID seed
 /// so two YAML sources backed by different phones don't collide.
-pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<Vec<NormalizedChat>> {
+pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
     let db_path = frankweiler_etl::doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(Vec::new());
+        return Ok(ParsedWhatsApp::default());
     }
     // Bridge to sync sqlx code: this fn is called from a sync context
     // (translate phase). We need to spin up a tokio runtime since sqlx
@@ -49,11 +75,7 @@ pub fn parse(raw_dir: &Path, period: Period, source_name: &str) -> Result<Vec<No
     })
 }
 
-async fn parse_async(
-    db_path: &Path,
-    period: Period,
-    source_name: &str,
-) -> Result<Vec<NormalizedChat>> {
+async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Result<ParsedWhatsApp> {
     let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
         .with_context(|| format!("sqlite uri for {}", db_path.display()))?
         .read_only(true);
@@ -264,8 +286,6 @@ async fn parse_async(
             .push(item);
     }
 
-    pool.close().await;
-
     // 6) Materialize into NormalizedChat.
     let mut out: Vec<NormalizedChat> = Vec::with_capacity(chats.len());
     for ch in chats.into_iter().filter(|c| !c.items_by_period.is_empty()) {
@@ -293,7 +313,56 @@ async fn parse_async(
             buckets,
         });
     }
-    Ok(out)
+
+    // 7) Per-chat BlobBundle: walk every attachment in every chat,
+    //    collect the unique `ref_id`s, then load their bytes from the
+    //    sibling CAS in one shot via ATTACHMENTS_PROJECTION_SQL. Same
+    //    shape slack uses for per-thread bundles — render no longer
+    //    has to open a CAS pool itself.
+    let cas_path = blob_cas::cas_path_for(db_path);
+    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
+    if cas_path.is_file() {
+        let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))
+            .with_context(|| format!("sqlite uri for {}", cas_path.display()))?
+            .read_only(true);
+        let cas_pool: SqlitePool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(60))
+            .connect_with(cas_opts)
+            .await
+            .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
+        for chat in &out {
+            let mut seen: HashSet<String> = HashSet::new();
+            let mut refs: Vec<String> = Vec::new();
+            for bucket in &chat.buckets {
+                for item in &bucket.items {
+                    for att in &item.attachments {
+                        if let Some(r) = att.ref_id.as_deref() {
+                            if seen.insert(r.to_string()) {
+                                refs.push(r.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            if refs.is_empty() {
+                continue;
+            }
+            let ref_strs: Vec<&str> = refs.iter().map(String::as_str).collect();
+            let bundle =
+                BlobBundle::load(&pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, &ref_strs).await?;
+            if !bundle.is_empty() {
+                blobs_by_chat.insert(chat.id.clone(), bundle);
+            }
+        }
+        cas_pool.close().await;
+    }
+    pool.close().await;
+
+    Ok(ParsedWhatsApp {
+        chats: out,
+        blobs_by_chat,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

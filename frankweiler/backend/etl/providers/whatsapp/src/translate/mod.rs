@@ -11,7 +11,6 @@
 //! left in the raw store unrendered until either real data drives
 //! the schema work or we get a test fixture for them.
 
-pub mod blob_reader;
 pub mod parse;
 pub mod render;
 

@@ -59,16 +59,16 @@ pub struct NormalizedAttachment {
     /// `source_url`). Surfaced when `rel_path` is missing so a reader
     /// can still trace where the bytes were supposed to come from.
     pub source_url: Option<String>,
-    /// `blob_refs.ref_id` of the attachment bytes in the source's
-    /// `frankweiler_etl::blob_cas` store. When set, chat-common reads
-    /// the bytes through the [`BlobReader`] passed into `render_all`,
-    /// writes them under `<page_dir>/blobs/<short-blake3>.<ext>`, and
-    /// overwrites `rel_path` so the markdown link points at the
-    /// materialized blob. If the reader has no view for this ref_id
-    /// (extract failed to fetch, `--no-media` set, …), the renderer
-    /// falls back to the "(not yet fetched)" placeholder.
+    /// Upstream ref_id of the attachment bytes — the same key the
+    /// provider hands to its per-chat [`BlobBundle`] in
+    /// `parse`. When chat-common's renderer can resolve the ref_id in
+    /// the bucket's bundle it writes the bytes under
+    /// `<page_dir>/blobs/<short-blake3>.<ext>` and overwrites
+    /// `rel_path` so the markdown link points at the materialized
+    /// blob. Unknown ref_ids fall through to the "(not yet fetched)"
+    /// placeholder.
     ///
-    /// [`BlobReader`]: frankweiler_etl::blob_cas::BlobReader
+    /// [`BlobBundle`]: frankweiler_etl::blob_cas::BlobBundle
     pub ref_id: Option<String>,
 }
 
