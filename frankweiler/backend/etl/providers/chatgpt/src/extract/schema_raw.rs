@@ -41,10 +41,10 @@
 //! Attachment bytes live in the sibling per-source CAS file managed
 //! by [`frankweiler_etl::blob_cas`]. The extract path bulk-writes via
 //! [`frankweiler_etl::blob_cas::BlobCas::put_many`] paired with a
-//! bulk UPSERT into `chatgpt_attachments`. The render path's
-//! `ChatgptBlobReader` (in [`crate::translate::blob_reader`]) joins
-//! `chatgpt_attachments` → `cas_objects` on `blake3`. Replaces this
-//! provider's use of the shared `blob_refs` table.
+//! bulk UPSERT into `chatgpt_attachments`. Translate joins
+//! `chatgpt_attachments` → `cas_objects` on `blake3` via
+//! [`BlobBundle::load`](frankweiler_etl::blob_cas::BlobBundle::load),
+//! one bundle per rendered conversation bucket.
 
 use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};

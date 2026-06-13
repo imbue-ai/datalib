@@ -446,10 +446,8 @@ pub fn extension_from_upstream_name(name: Option<&str>) -> Option<String> {
 // BlobBundle — per-doc unit of attachment data, read + write
 // ─────────────────────────────────────────────────────────────────────
 
-/// One attachment's worth of data inside a [`BlobBundle`]. Same shape
-/// the legacy [`BlobView`] carried (blake3 + bytes + the metadata
-/// `rendered_filename` needs), minus the `owning_id` / `slot` /
-/// `source_url` triple that nobody read at render time.
+/// One attachment's worth of data inside a [`BlobBundle`] — blake3 +
+/// bytes + the metadata `rendered_filename` needs.
 #[derive(Debug, Clone)]
 pub struct Blob {
     pub blake3: String,
@@ -461,7 +459,6 @@ pub struct Blob {
 impl Blob {
     /// Stable on-disk filename: `<short-blake3>.<ext>`. Extension comes
     /// from `content_type` when known, else from the upstream filename.
-    /// Same rule [`BlobView::rendered_filename`] used.
     pub fn rendered_filename(&self) -> String {
         let ext = extension_for_content_type(self.content_type.as_deref())
             .or_else(|| extension_from_upstream_name(self.upstream_name.as_deref()));
@@ -502,8 +499,9 @@ pub struct FetchedRef<'a> {
 ///
 /// - **Render** consumes the bundle synchronously via [`Self::get`],
 ///   [`Self::materialize_to_dir`], and [`Self::markdown_link`]. No SQL,
-///   no `tokio::task::block_in_place`, no `Arc<dyn BlobReader>` —
-///   render is a pure transformer over an already-loaded bag of bytes.
+///   no `tokio::task::block_in_place`, no dyn-dispatched blob reader
+///   — render is a pure transformer over an already-loaded bag of
+///   bytes.
 ///
 /// Same conceptual shape both ends. The "blob read" and "blob write"
 /// operations are mirror images, and the bundle is the common
@@ -614,8 +612,7 @@ impl BlobBundle {
     /// 2. **CAS bytes**: `SELECT blake3, bytes, content_type FROM
     ///    cas_objects WHERE blake3 IN (?, ...)`. The provider's
     ///    `content_type` wins over `cas_objects.content_type` when
-    ///    both are present — keeps backward compat with the legacy
-    ///    `SqliteBlobReader` precedence.
+    ///    both are present.
     ///
     /// Returns an empty bundle if `ref_ids` is empty. Refs that the
     /// projection didn't surface (no row, or `blake3 IS NULL`) are
@@ -733,8 +730,8 @@ impl BlobBundle {
 
     /// Write every blob's bytes into `blobs_dir/<rendered_filename>`.
     /// Skips a write when the target file already exists with the
-    /// expected size — same idempotency the legacy
-    /// [`materialize_refs`] had.
+    /// expected size, so re-running render against the same bundle is
+    /// idempotent.
     pub fn materialize_to_dir(&self, blobs_dir: &Path) -> std::io::Result<()> {
         if self.by_ref.is_empty() {
             return Ok(());
@@ -753,10 +750,9 @@ impl BlobBundle {
         Ok(())
     }
 
-    /// Same image-vs-file split [`attachment_md`] did, but reads from
-    /// the bundle synchronously. Returns the
-    /// "attachment not yet fetched" placeholder when the bundle has
-    /// no view for this `ref_id`.
+    /// Emit `![alt](blobs/<file>)` for images, `[\[file\] alt](…)`
+    /// otherwise. Returns the "attachment not yet fetched" placeholder
+    /// when the bundle has no entry for this `ref_id`.
     pub fn markdown_link(&self, ref_id: &str, display: Option<&str>, is_image: bool) -> String {
         let Some(blob) = self.by_ref.get(ref_id) else {
             let label = display.unwrap_or(ref_id);

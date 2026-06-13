@@ -552,7 +552,7 @@ async fn parse_doltlite_async(
     // the attachment file_ids it references, then bulk-load that set
     // from the per-provider edge table + CAS. Two SQL queries per
     // conversation (regardless of attachment count) replace 4N
-    // queries the old `SqliteBlobReader` did during render.
+    // queries the retired per-blob streaming reader did at render time.
     if let Some(cas_pool) = cas_pool.as_ref() {
         for conv in &mut parsed.conversations {
             let refs = collect_attachment_ref_ids(&conv.upstream_payload);

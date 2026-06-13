@@ -85,8 +85,8 @@ fn image_blob_lands_next_to_markdown() {
         "expected relative blob link, got:\n{md}"
     );
 
-    // Hash-based filename via BlobView::rendered_filename: first 16
-    // hex chars of blake3 + content-type extension.
+    // Hash-based filename via Blob::rendered_filename: first 16 hex
+    // chars of blake3 + content-type extension.
     let short = &blake3[..16];
     let blob_path = page_dir.join("blobs").join(format!("{short}.png"));
     let on_disk = fs::read(&blob_path).expect("blob file exists");

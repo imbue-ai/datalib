@@ -164,7 +164,7 @@ impl ParsedEml {
 
 /// Stable on-disk name for an inline part: `<sha8>.<ext>` where the
 /// hash is the first 16 hex of blake3(bytes) and the extension comes
-/// from the content_type. Mirrors `BlobView::rendered_filename` so the
+/// from the content_type. Mirrors `Blob::rendered_filename` so the
 /// path-shape is uniform across "real" attachments and inline parts.
 fn inline_blob_filename(bytes: &[u8], content_type: Option<&str>) -> String {
     let hash = blake3_hex(bytes);

@@ -18,9 +18,9 @@
 //!
 //! Attachment bytes live in the sibling per-source CAS. The
 //! `anthropic_attachments` edge table holds the (file_uuid → blake3)
-//! mapping; the renderer's `AnthropicBlobReader` joins it to
-//! `cas_objects`. Replaces this provider's writes into the shared
-//! `blob_refs`.
+//! mapping; translate joins it to `cas_objects` via
+//! [`BlobBundle::load`](frankweiler_etl::blob_cas::BlobBundle::load)
+//! to assemble each conversation bucket's per-bundle bag of bytes.
 
 use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};

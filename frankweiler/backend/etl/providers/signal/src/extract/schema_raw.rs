@@ -48,9 +48,10 @@
 //! Attachment bytes live in the sibling per-source CAS file managed
 //! by [`frankweiler_etl::blob_cas`]. The extract path bulk-writes via
 //! [`frankweiler_etl::blob_cas::BlobCas::put_many`] paired with a
-//! bulk UPSERT into `chat_item_attachments`. The render path's
-//! `SignalBlobReader` (in [`super::super::translate::parse`]) joins
-//! `chat_item_attachments` → `cas_objects` on `blake3`.
+//! bulk UPSERT into `chat_item_attachments`. Translate joins
+//! `chat_item_attachments` → `cas_objects` on `blake3` via
+//! [`BlobBundle::load`](frankweiler_etl::blob_cas::BlobBundle::load),
+//! one bundle per rendered chat bucket.
 //!
 //! ## Signal-specific notes:
 //!
