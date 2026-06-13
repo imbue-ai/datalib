@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use frankweiler_etl::blob_cas::BlobBundle;
+use frankweiler_etl::blob_cas::CasEdgeAccumulator;
 use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
@@ -238,7 +238,7 @@ async fn export_channel(
     // reference is appended, the BlobBundle carries one byte set per
     // file_id, and the end-of-channel flush writes both the CAS
     // (via put_many) and `slack_attachments` (via bulk_upsert_in_tx).
-    let mut attach = api::ChannelAttachments::new();
+    let mut attach = CasEdgeAccumulator::new();
 
     // Pass A: list every history page, upsert top-level messages, and
     // download per-page media (preserves the existing commit-as-we-go
@@ -358,7 +358,7 @@ async fn export_channel(
 
     // End-of-channel flush: CAS put_many + slack_attachments bulk
     // upsert. Mirrors chatgpt/anthropic's per-conv flush pattern.
-    if let Err(e) = attach.flush(db).await {
+    if let Err(e) = api::flush_channel_attachments(db, &attach).await {
         warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e);
     }
 
@@ -389,7 +389,7 @@ async fn list_history(
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
-    attach: &mut api::ChannelAttachments,
+    attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
     progress: &frankweiler_etl::progress::Progress,
     collected: &mut Vec<Value>,
@@ -473,7 +473,7 @@ async fn paginate_replies(
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
-    attach: &mut api::ChannelAttachments,
+    attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
@@ -776,13 +776,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     );
     Ok(grand)
 }
-
-/// Suppress `BlobBundle` import warnings if media downloads are
-/// disabled at compile time; today the BlobBundle path is always
-/// exercised via `api::ChannelAttachments`.
-const _: fn() = || {
-    let _ = BlobBundle::new;
-};
 
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     let t = frankweiler_time::parse_strict(s)

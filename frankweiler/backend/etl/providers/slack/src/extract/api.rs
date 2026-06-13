@@ -4,7 +4,7 @@
 //! `slack` service's `baseApiUrls` (latchkey ≥ 2.11.2), so a single
 //! credential signs both API calls and file downloads.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
-use frankweiler_etl::blob_cas::{flush_cas_edges, BlobBundle, CasEdgeRow as _};
+use frankweiler_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
@@ -172,147 +172,19 @@ pub async fn call_slack(
 // File-download path: `latchkey curl` against files.slack.com.
 // ---------------------------------------------------------------------------
 
-/// Per-channel accumulator for attachment fetches.
-///
-/// Three callers feed it:
-///   * [`Self::add_fetched`] — fresh bytes downloaded this run; lands
-///     in the [`BlobBundle`] so the end-of-channel CAS flush stores
-///     them, then the edge row is stamped with the bundle-derived
-///     blake3.
-///   * [`Self::add_known`] — file already in the CAS from a prior
-///     run; caller passes the existing blake3 looked up via
-///     [`RawDb::attachment_blake3`]. The edge row is stamped with
-///     that hash, so every edge carries its actual content hash —
-///     not NULL with the bytes only reachable through a sibling row
-///     keyed by a different message.
-///   * [`Self::add_failed`] — fetch attempt errored; edge row is
-///     stamped with `blake3 = NULL` and an error is recorded on the
-///     bookkeeping sidecar.
-///
-/// One row per `(message_uuid, file_id)` pair. End-of-channel flush
-/// delegates to [`flush_cas_edges`].
-pub struct ChannelAttachments {
-    bundle: BlobBundle,
-    edges: Vec<EdgePending>,
-    errors: Vec<(String, String)>,
-    seen_message_file: HashSet<(String, String)>,
-    known_blake3: HashMap<String, String>,
-}
-
-struct EdgePending {
-    message_uuid: String,
-    file_id: String,
-}
-
-impl ChannelAttachments {
-    pub fn new() -> Self {
-        Self {
-            bundle: BlobBundle::new(),
-            edges: Vec::new(),
-            errors: Vec::new(),
-            seen_message_file: HashSet::new(),
-            known_blake3: HashMap::new(),
-        }
-    }
-
-    fn push_edge(&mut self, message_uuid: &str, file_id: &str) -> bool {
-        if !self
-            .seen_message_file
-            .insert((message_uuid.to_string(), file_id.to_string()))
-        {
-            return false;
-        }
-        self.edges.push(EdgePending {
-            message_uuid: message_uuid.to_string(),
-            file_id: file_id.to_string(),
-        });
-        true
-    }
-
-    fn add_fetched(
-        &mut self,
-        message_uuid: &str,
-        file_id: &str,
-        bytes: Vec<u8>,
-        content_type: Option<String>,
-        name: Option<String>,
-    ) {
-        self.push_edge(message_uuid, file_id);
-        self.bundle.add(file_id, bytes, content_type, name);
-    }
-
-    fn add_failed(&mut self, message_uuid: &str, file_id: &str, err: impl Into<String>) {
-        self.push_edge(message_uuid, file_id);
-        let err_str = err.into();
-        self.errors.push((file_id.to_string(), err_str));
-        self.bundle.add_error(file_id, "fetch failed");
-    }
-
-    fn add_known(&mut self, message_uuid: &str, file_id: &str, blake3: String) {
-        self.push_edge(message_uuid, file_id);
-        self.known_blake3.insert(file_id.to_string(), blake3);
-    }
-
-    /// End-of-channel flush via the shared
-    /// [`flush_cas_edges`]: CAS `put_many` → bulk upsert
-    /// `slack_attachments` → bookkeeping error stamps.
-    pub async fn flush(&self, db: &RawDb) -> Result<()> {
-        // file_id → blake3 lookup spans fresh fetches (from bundle)
-        // and refs we previously had bytes for (recorded by
-        // `add_known`).
-        let mut blake3_by_file: HashMap<&str, &str> = HashMap::new();
-        for f in self.bundle.fetched_refs() {
-            blake3_by_file.insert(f.ref_id, f.blake3);
-        }
-        for (file_id, hash) in &self.known_blake3 {
-            blake3_by_file
-                .entry(file_id.as_str())
-                .or_insert(hash.as_str());
-        }
-
-        let rows: Vec<SlackAttachmentRow> = self
-            .edges
-            .iter()
-            .map(|e| SlackAttachmentRow {
-                id: SlackAttachmentRow::pk_recipe(&e.message_uuid, &e.file_id),
-                message_uuid: e.message_uuid.clone(),
-                file_id: e.file_id.clone(),
-                blake3: blake3_by_file
-                    .get(e.file_id.as_str())
-                    .map(|s| s.to_string()),
-            })
-            .collect();
-
-        // Expand (file_id → err) failures into per-edge (synth_pk,
-        // err) bookkeeping stamps: one row per (message_uuid,
-        // file_id) pair whose file_id errored.
-        let mut error_stamps: Vec<(String, String)> = Vec::new();
-        for (file_id, err) in &self.errors {
-            for e in &self.edges {
-                if &e.file_id == file_id {
-                    error_stamps.push((
-                        SlackAttachmentRow::pk_recipe(&e.message_uuid, &e.file_id),
-                        err.clone(),
-                    ));
-                }
+/// End-of-channel flush. Delegates to the shared
+/// [`CasEdgeAccumulator::flush`] with a slack-specific row builder.
+pub async fn flush_channel_attachments(db: &RawDb, attach: &CasEdgeAccumulator) -> Result<()> {
+    attach
+        .flush(db.pool(), db.cas(), |message_uuid, file_id, blake3| {
+            SlackAttachmentRow {
+                id: SlackAttachmentRow::pk_recipe(message_uuid, file_id),
+                message_uuid: message_uuid.to_string(),
+                file_id: file_id.to_string(),
+                blake3: blake3.map(String::from),
             }
-        }
-
-        flush_cas_edges(
-            db.pool(),
-            db.cas(),
-            &self.bundle.cas_inserts(),
-            &rows,
-            &error_stamps,
-        )
+        })
         .await
-    }
-}
-
-impl Default for ChannelAttachments {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Walk `messages[].files[]` and download each into the per-channel
@@ -329,7 +201,7 @@ pub async fn download_files_for_messages(
     channel_id: &str,
     messages: &[Value],
     _thread_ts: Option<&str>,
-    attach: &mut ChannelAttachments,
+    attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut HashMap<String, String>,
     blob_size_limit_bytes: Option<u64>,
 ) -> Result<BTreeMap<String, usize>> {
@@ -383,7 +255,7 @@ async fn download_one_file(
     _db: &RawDb,
     message_uuid: &str,
     file_obj: &Value,
-    attach: &mut ChannelAttachments,
+    attach: &mut CasEdgeAccumulator,
     blake3_by_file: &mut HashMap<String, String>,
     blob_size_limit_bytes: Option<u64>,
 ) -> Result<&'static str> {

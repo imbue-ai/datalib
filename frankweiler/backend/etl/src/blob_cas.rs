@@ -1247,6 +1247,185 @@ pub async fn load_blake3_index(
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// CAS-edge accumulator
+// ─────────────────────────────────────────────────────────────────────
+
+/// Per-bucket attachment-fetch accumulator. Every per-provider
+/// extract walks an upstream bucket (a conversation, a thread, a
+/// channel of messages) and decides per file: did we just fetch
+/// bytes, did we discover bytes were already in the CAS, or did
+/// the fetch fail? This struct collects those outcomes, then
+/// [`Self::flush`] hands them to [`flush_cas_edges`] via a row
+/// builder the caller supplies.
+///
+/// **Three add paths:**
+///
+///   - [`Self::add_fetched`] — we just downloaded the bytes. Lands in
+///     the [`BlobBundle`] so the end-of-bucket CAS write picks them
+///     up; the edge row will be stamped with the bundle-derived
+///     blake3.
+///   - [`Self::add_known`] — the bytes were already in the CAS from a
+///     prior sync (or an earlier file in this run hit the same
+///     ref_id). Caller passes the looked-up blake3 so the new edge
+///     row carries the actual hash.
+///   - [`Self::add_failed`] — the fetch errored. Edge row gets
+///     `blake3 = NULL` and an error stamp lands on the bookkeeping
+///     sidecar.
+///
+/// One row per `(owning_id, ref_id)` pair — same pair seen twice
+/// is a no-op after the first add. End-of-bucket
+/// [`Self::flush`] resolves each edge's blake3 (fetched → from
+/// bundle, known → from the looked-up map, failed → `None`) and
+/// delegates to [`flush_cas_edges`].
+pub struct CasEdgeAccumulator {
+    bundle: BlobBundle,
+    edges: Vec<EdgePending>,
+    errors: Vec<(String, String)>,
+    seen: std::collections::HashSet<(String, String)>,
+    known_blake3: HashMap<String, String>,
+}
+
+struct EdgePending {
+    owning_id: String,
+    ref_id: String,
+}
+
+impl CasEdgeAccumulator {
+    pub fn new() -> Self {
+        Self {
+            bundle: BlobBundle::new(),
+            edges: Vec::new(),
+            errors: Vec::new(),
+            seen: std::collections::HashSet::new(),
+            known_blake3: HashMap::new(),
+        }
+    }
+
+    /// Direct mutable access to the underlying [`BlobBundle`] —
+    /// rarely needed; here for callers that want to set
+    /// upstream_name / content_type via the bundle's own helpers
+    /// without round-tripping through [`Self::add_fetched`].
+    pub fn bundle_mut(&mut self) -> &mut BlobBundle {
+        &mut self.bundle
+    }
+
+    fn push_edge(&mut self, owning_id: &str, ref_id: &str) -> bool {
+        if !self
+            .seen
+            .insert((owning_id.to_string(), ref_id.to_string()))
+        {
+            return false;
+        }
+        self.edges.push(EdgePending {
+            owning_id: owning_id.to_string(),
+            ref_id: ref_id.to_string(),
+        });
+        true
+    }
+
+    /// Record `(owning, ref)` edge with freshly-downloaded bytes.
+    pub fn add_fetched(
+        &mut self,
+        owning_id: &str,
+        ref_id: &str,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+        upstream_name: Option<String>,
+    ) {
+        self.push_edge(owning_id, ref_id);
+        self.bundle.add(ref_id, bytes, content_type, upstream_name);
+    }
+
+    /// Record `(owning, ref)` edge whose bytes were already in CAS
+    /// from a prior run. `blake3` is the looked-up hex hash that the
+    /// new edge row will carry.
+    pub fn add_known(&mut self, owning_id: &str, ref_id: &str, blake3: String) {
+        self.push_edge(owning_id, ref_id);
+        self.known_blake3
+            .entry(ref_id.to_string())
+            .or_insert(blake3);
+    }
+
+    /// Record `(owning, ref)` edge whose fetch errored. The edge row
+    /// gets `blake3 = NULL`; `err` lands on the bookkeeping sidecar
+    /// via `record_object_attempt`.
+    pub fn add_failed(&mut self, owning_id: &str, ref_id: &str, err: impl Into<String>) {
+        self.push_edge(owning_id, ref_id);
+        self.errors.push((ref_id.to_string(), err.into()));
+        self.bundle.add_error(ref_id, "fetch failed");
+    }
+
+    /// End-of-bucket flush. Builds the per-`(owning, ref)` edge rows
+    /// via `build_row` and delegates to [`flush_cas_edges`]: CAS
+    /// `put_many` → bulk UPSERT edge rows → bookkeeping error stamps.
+    ///
+    /// `build_row` receives `(owning_id, ref_id, blake3)` and returns
+    /// the provider's row type. `blake3` is resolved per edge: the
+    /// bundle's `fetched_refs` for new fetches, [`Self::add_known`]'s
+    /// recorded hash for refs already in CAS, or `None` for failures.
+    ///
+    /// On failures, one stamp per failed edge (synthesized via the
+    /// row's [`BulkUpsertable::id`]) lands on the
+    /// `<T::TABLE>_bookkeeping` sidecar inside the same flush tx.
+    pub async fn flush<T, F>(
+        &self,
+        pool: &sqlx::SqlitePool,
+        cas: &BlobCas,
+        build_row: F,
+    ) -> Result<()>
+    where
+        T: crate::bulk::BulkUpsertable,
+        F: Fn(&str, &str, Option<&str>) -> T,
+    {
+        let mut blake3_by_ref: HashMap<&str, &str> = HashMap::new();
+        for f in self.bundle.fetched_refs() {
+            blake3_by_ref.insert(f.ref_id, f.blake3);
+        }
+        for (ref_id, hash) in &self.known_blake3 {
+            blake3_by_ref
+                .entry(ref_id.as_str())
+                .or_insert(hash.as_str());
+        }
+
+        let rows: Vec<T> = self
+            .edges
+            .iter()
+            .map(|e| {
+                build_row(
+                    &e.owning_id,
+                    &e.ref_id,
+                    blake3_by_ref.get(e.ref_id.as_str()).copied(),
+                )
+            })
+            .collect();
+
+        // Error stamps: expand (ref_id → err) failures into per-edge
+        // (synth_pk, err) bookkeeping stamps.
+        let row_id_by_index: Vec<(String, String)> = rows
+            .iter()
+            .zip(self.edges.iter())
+            .map(|(row, edge)| (row.id().to_string(), edge.ref_id.clone()))
+            .collect();
+        let mut error_stamps: Vec<(String, String)> = Vec::new();
+        for (ref_id, err) in &self.errors {
+            for (row_id, edge_ref_id) in &row_id_by_index {
+                if edge_ref_id == ref_id {
+                    error_stamps.push((row_id.clone(), err.clone()));
+                }
+            }
+        }
+
+        flush_cas_edges(pool, cas, &self.bundle.cas_inserts(), &rows, &error_stamps).await
+    }
+}
+
+impl Default for CasEdgeAccumulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // CAS-edge flush primitive
 // ─────────────────────────────────────────────────────────────────────
 

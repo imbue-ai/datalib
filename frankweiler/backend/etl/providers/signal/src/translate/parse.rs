@@ -335,109 +335,43 @@ async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
 /// don't keep the recipient→chats reverse index handy. Cheap and
 /// correct.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
-    // HEAD hash is always read so the cursor can advance on a
-    // successful render. `dolt_log()` returns the most recent commit;
-    // on stock libsqlite3 the call errors → leave `new_head = None`.
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-    let Some(from_ref) = last_render_hash else {
-        // Cold start — render everything.
-        return Ok(ScanResult {
-            changed_chats: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // One union across the per-table dolt_diff vtabs. `chat_id` lives
-    // on chats / chat_items / chat_item_attachments (via chat_items);
-    // changes to `recipients` fan out to "every chat" because the
-    // renderer dereferences recipient display names per chat.
-    let sql = "
-        SELECT DISTINCT chat_id FROM (
-            SELECT coalesce(to_id, from_id) AS chat_id
-              FROM dolt_diff_chats
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT coalesce(to_chat_id, from_chat_id)
-              FROM dolt_diff_chat_items
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            -- Attachment changes propagate to their owning chat by
-            -- joining the diff vtab back to the live `chat_items`
-            -- table (which is at HEAD, the same ref the surrounding
-            -- diff queries are projecting to).
-            SELECT chat_items.chat_id
-              FROM dolt_diff_chat_item_attachments ca
-              JOIN chat_items
-                ON chat_items.id = coalesce(ca.to_chat_item_id, ca.from_chat_item_id)
-             WHERE ca.from_ref = ?1 AND ca.to_ref = 'HEAD'
-               AND ca.diff_type != 'unchanged'
-        )
-        WHERE chat_id IS NOT NULL
-    ";
-
-    let started = std::time::Instant::now();
-    // The `dolt_diff_<table>` virtual tables only resolve once the
-    // underlying table has been recorded in dolt history; on a brand-
-    // new working set (extract ran but no commit yet) the vtab can
-    // report "no such table". Treat any error here as cold start —
-    // we'll render everything once and the cursor advances normally.
-    let direct_changes_res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
-    let direct_changes = match direct_changes_res {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::info!(
-                source = "signal",
-                error = %e,
-                "dolt_diff scan failed — falling back to cold-start (render everything)"
-            );
-            return Ok(ScanResult {
-                changed_chats: None,
-                new_head,
-                scan_elapsed: Some(started.elapsed()),
-            });
-        }
-    };
-
-    // Recipients: if any recipient row changed, dump every known chat
-    // into the load set. Tiny query, almost always empty on the hot
-    // path.
-    let any_recipient_change: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM dolt_diff_recipients \
-          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1",
+    let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &frankweiler_etl::doltlite_raw::DiffScanSpec {
+            // Recipients fan out to every chat — the renderer
+            // dereferences recipient display names per chat.
+            global_fanout_tables: &["recipients"],
+            bucket_query: "
+                SELECT DISTINCT chat_id FROM (
+                    SELECT coalesce(to_id, from_id) AS chat_id
+                      FROM dolt_diff_chats
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_chat_id, from_chat_id)
+                      FROM dolt_diff_chat_items
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    -- Attachment changes propagate to their owning chat by
+                    -- joining the diff vtab back to the live `chat_items`
+                    -- table (which is at HEAD, the same ref the
+                    -- surrounding diff queries are projecting to).
+                    SELECT chat_items.chat_id
+                      FROM dolt_diff_chat_item_attachments ca
+                      JOIN chat_items
+                        ON chat_items.id = coalesce(ca.to_chat_item_id, ca.from_chat_item_id)
+                     WHERE ca.from_ref = ?1 AND ca.to_ref = 'HEAD'
+                       AND ca.diff_type != 'unchanged'
+                )
+                WHERE chat_id IS NOT NULL
+            ",
+        },
     )
-    .bind(from_ref)
-    .fetch_optional(pool)
-    .await
-    .context("query dolt_diff_recipients")?;
-    let scan_elapsed = started.elapsed();
-
-    let changed_chats: HashSet<String> = if any_recipient_change.is_some() {
-        // Force "every chat" by leaving the set empty here and
-        // returning None — caller treats None as cold start (load
-        // every chat). docs_skipped will be 0, accurately.
-        return Ok(ScanResult {
-            changed_chats: None,
-            new_head,
-            scan_elapsed: Some(scan_elapsed),
-        });
-    } else {
-        direct_changes
-            .iter()
-            .map(|r| r.get::<String, _>(0))
-            .collect()
-    };
-
+    .await?;
     Ok(ScanResult {
-        changed_chats: Some(changed_chats),
-        new_head,
-        scan_elapsed: Some(scan_elapsed),
+        changed_chats: scan.changed_buckets,
+        new_head: scan.new_head,
+        scan_elapsed: scan.scan_elapsed,
     })
 }
 

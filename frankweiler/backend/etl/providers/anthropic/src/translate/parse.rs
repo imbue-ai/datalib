@@ -364,76 +364,30 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
 /// frontmatter / path slugs, so a rename has to repaint every doc in
 /// the affected scope.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-    let Some(from_ref) = last_render_hash else {
-        return Ok(ScanResult {
-            changed_conversations: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // Fan-out triggers.
-    for table in ["dolt_diff_users", "dolt_diff_orgs"] {
-        let sql = format!(
-            "SELECT 1 FROM {table} \
-              WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
-        );
-        let any: Option<i64> = sqlx::query_scalar(&sql)
-            .bind(from_ref)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-        if any.is_some() {
-            return Ok(ScanResult {
-                changed_conversations: None,
-                new_head,
-                scan_elapsed: None,
-            });
-        }
-    }
-
-    let sql = "
-        SELECT DISTINCT conversation_uuid FROM (
-            SELECT coalesce(to_id, from_id) AS conversation_uuid
-              FROM dolt_diff_conversations
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT coalesce(to_conversation_uuid, from_conversation_uuid)
-              FROM dolt_diff_anthropic_attachments
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-        )
-        WHERE conversation_uuid IS NOT NULL
-    ";
-    let started = std::time::Instant::now();
-    let res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
-    let elapsed = started.elapsed();
-    let rows = match res {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::info!(
-                source = "anthropic",
-                error = %e,
-                "dolt_diff scan failed — falling back to cold-start (render everything)"
-            );
-            return Ok(ScanResult {
-                changed_conversations: None,
-                new_head,
-                scan_elapsed: Some(elapsed),
-            });
-        }
-    };
-    let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &frankweiler_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &["users", "orgs"],
+            bucket_query: "
+                SELECT DISTINCT conversation_uuid FROM (
+                    SELECT coalesce(to_id, from_id) AS conversation_uuid
+                      FROM dolt_diff_conversations
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_conversation_uuid, from_conversation_uuid)
+                      FROM dolt_diff_anthropic_attachments
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                )
+                WHERE conversation_uuid IS NOT NULL
+            ",
+        },
+    )
+    .await?;
     Ok(ScanResult {
-        changed_conversations: Some(set),
-        new_head,
-        scan_elapsed: Some(elapsed),
+        changed_conversations: scan.changed_buckets,
+        new_head: scan.new_head,
+        scan_elapsed: scan.scan_elapsed,
     })
 }
 

@@ -213,83 +213,31 @@ async fn parse_doltlite_async(
 /// fan out to "render everything" — channel renames + user renames
 /// appear inside every thread we render.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-    let Some(from_ref) = last_render_hash else {
-        return Ok(ScanResult {
-            changed_threads: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // Workspace / users / channels are referenced by every thread's
-    // render. Any change → repaint everything.
-    let any_global: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM dolt_diff_workspaces \
-          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' \
-         UNION ALL \
-         SELECT 1 FROM dolt_diff_users \
-          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' \
-         UNION ALL \
-         SELECT 1 FROM dolt_diff_channels \
-          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' \
-         LIMIT 1",
+    let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &frankweiler_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &["workspaces", "users", "channels"],
+            bucket_query: "
+                SELECT DISTINCT thread_root_uuid FROM (
+                    SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
+                      FROM dolt_diff_messages
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT m.thread_root_uuid
+                      FROM dolt_diff_slack_attachments d
+                      JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
+                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                )
+                WHERE thread_root_uuid IS NOT NULL
+            ",
+        },
     )
-    .bind(from_ref)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    if any_global.is_some() {
-        return Ok(ScanResult {
-            changed_threads: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    }
-
-    let sql = "
-        SELECT DISTINCT thread_root_uuid FROM (
-            SELECT coalesce(to_thread_root_uuid, from_thread_root_uuid) AS thread_root_uuid
-              FROM dolt_diff_messages
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT m.thread_root_uuid
-              FROM dolt_diff_slack_attachments d
-              JOIN messages m ON m.id = coalesce(d.to_message_uuid, d.from_message_uuid)
-             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
-        )
-        WHERE thread_root_uuid IS NOT NULL
-    ";
-    let started = std::time::Instant::now();
-    let res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
-    let elapsed = started.elapsed();
-    let rows = match res {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::info!(
-                source = "slack",
-                error = %e,
-                "dolt_diff scan failed — falling back to cold-start (render everything)"
-            );
-            return Ok(ScanResult {
-                changed_threads: None,
-                new_head,
-                scan_elapsed: Some(elapsed),
-            });
-        }
-    };
-    let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    .await?;
     Ok(ScanResult {
-        changed_threads: Some(set),
-        new_head,
-        scan_elapsed: Some(elapsed),
+        changed_threads: scan.changed_buckets,
+        new_head: scan.new_head,
+        scan_elapsed: scan.scan_elapsed,
     })
 }
 

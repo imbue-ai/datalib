@@ -672,80 +672,30 @@ async fn load_conversations(pool: &SqlitePool) -> Result<Vec<LoadedConversation>
 /// "render everything" because a renamed account shows up in every
 /// rendered conversation's frontmatter.
 async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-
-    let Some(from_ref) = last_render_hash else {
-        return Ok(ScanResult {
-            changed_conversations: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    };
-
-    // Any `me` change fans out to "every conversation" — `me.email`
-    // and friends appear in rendered frontmatter, so a rename has to
-    // repaint every doc.
-    let any_me: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM dolt_diff_me \
-          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1",
+    let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &frankweiler_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &["me"],
+            bucket_query: "
+                SELECT DISTINCT conversation_id FROM (
+                    SELECT coalesce(to_id, from_id) AS conversation_id
+                      FROM dolt_diff_conversations
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT coalesce(to_conversation_id, from_conversation_id)
+                      FROM dolt_diff_chatgpt_attachments
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                )
+                WHERE conversation_id IS NOT NULL
+            ",
+        },
     )
-    .bind(from_ref)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
-    if any_me.is_some() {
-        return Ok(ScanResult {
-            changed_conversations: None,
-            new_head,
-            scan_elapsed: None,
-        });
-    }
-
-    let sql = "
-        SELECT DISTINCT conversation_id FROM (
-            SELECT coalesce(to_id, from_id) AS conversation_id
-              FROM dolt_diff_conversations
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT coalesce(to_conversation_id, from_conversation_id)
-              FROM dolt_diff_chatgpt_attachments
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-        )
-        WHERE conversation_id IS NOT NULL
-    ";
-    let started = std::time::Instant::now();
-    let res = sqlx::query(sql).bind(from_ref).fetch_all(pool).await;
-    let elapsed = started.elapsed();
-    let rows = match res {
-        Ok(rows) => rows,
-        Err(e) => {
-            // `dolt_diff_<table>` can fail to resolve on a brand-new
-            // working set (extract ran but no commit yet). Fall back
-            // to cold-start so we don't return "nothing changed" when
-            // we have no way to know.
-            tracing::info!(
-                source = "chatgpt",
-                error = %e,
-                "dolt_diff scan failed — falling back to cold-start (render everything)"
-            );
-            return Ok(ScanResult {
-                changed_conversations: None,
-                new_head,
-                scan_elapsed: Some(elapsed),
-            });
-        }
-    };
-    let set: HashSet<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    .await?;
     Ok(ScanResult {
-        changed_conversations: Some(set),
-        new_head,
-        scan_elapsed: Some(elapsed),
+        changed_conversations: scan.changed_buckets,
+        new_head: scan.new_head,
+        scan_elapsed: scan.scan_elapsed,
     })
 }
 

@@ -21,7 +21,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
@@ -490,112 +489,46 @@ async fn fetch_attachments_for(
             }
         }
     }
-    let mut bundle = BlobBundle::new();
-    // failures: file_ids whose download errored; tracked alongside
-    // the bundle so the end-of-walk flush stamps both the edge row
-    // and the bookkeeping sidecar's last_error.
-    let mut failed: Vec<String> = Vec::new();
-    // known_blake3: file_ids whose bytes were already in the CAS
-    // from a prior sync (or landed earlier in this run, via the
-    // run-scoped `blake3_by_file` map). We still want a (this_conv,
-    // file_id) edge row stamped with the existing hash so the
-    // conversation's slice of the attachment table is complete.
-    let mut known_blake3: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
+    let mut attach = frankweiler_etl::blob_cas::CasEdgeAccumulator::new();
     for (file_id, name, mime) in targets {
         if let Some(blake3) = blake3_by_file.get(&file_id) {
-            known_blake3.insert(file_id.clone(), blake3.clone());
+            attach.add_known(cid, &file_id, blake3.clone());
             summary.skipped_blobs += 1;
             continue;
         }
         match download_one_file(client, &file_id, name.as_deref(), mime.as_deref()).await {
             Ok(Some((bytes, content_type))) => {
-                // Stamp the run-scoped cache before bytes go into
-                // the bundle so a later conversation in the same
-                // run that references the same file_id hits the
-                // cache.
                 let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
                 blake3_by_file.insert(file_id.clone(), blake3);
-                bundle.add(&file_id, bytes, content_type, name.clone());
+                attach.add_fetched(cid, &file_id, bytes, content_type, name.clone());
                 summary.new_blobs += 1;
             }
             Ok(None) => {
-                bundle.add_error(&file_id, "no bytes");
-                failed.push(file_id.clone());
+                attach.add_failed(cid, &file_id, "no bytes");
                 summary.failed_blobs += 1;
             }
             Err(e) => {
                 warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e);
-                bundle.add_error(&file_id, e.to_string());
-                failed.push(file_id.clone());
+                attach.add_failed(cid, &file_id, e.to_string());
                 summary.failed_blobs += 1;
             }
         }
     }
 
-    if let Err(e) = flush_attachment_bundle(db, &bundle, &failed, &known_blake3, cid, now).await {
+    let flush_result = attach
+        .flush(db.pool(), db.cas(), |conv_id, file_id, blake3| {
+            ConversationAttachmentRow {
+                id: ConversationAttachmentRow::pk_recipe(conv_id, file_id),
+                conversation_id: conv_id.to_string(),
+                file_id: file_id.to_string(),
+                blake3: blake3.map(String::from),
+            }
+        })
+        .await;
+    if let Err(e) = flush_result {
         warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e);
     }
     let _ = now;
-}
-
-/// End-of-conversation flush. Builds the per-(conv, file) edge rows
-/// — successful fetches (blake3 from the bundle), failed fetches
-/// (blake3 NULL), and refs whose bytes were already in CAS from a
-/// prior sync (blake3 looked up via `attachment_blake3`) — and hands
-/// them to the shared
-/// [`frankweiler_etl::blob_cas::flush_cas_edges`] primitive.
-async fn flush_attachment_bundle(
-    db: &RawDb,
-    bundle: &BlobBundle,
-    failed_refs: &[String],
-    known_blake3: &std::collections::HashMap<String, String>,
-    conversation_id: &str,
-    _now: &str,
-) -> Result<()> {
-    let mut rows: Vec<ConversationAttachmentRow> = bundle
-        .fetched_refs()
-        .map(|f| ConversationAttachmentRow {
-            id: ConversationAttachmentRow::pk_recipe(conversation_id, f.ref_id),
-            conversation_id: conversation_id.to_string(),
-            file_id: f.ref_id.to_string(),
-            blake3: Some(f.blake3.to_string()),
-        })
-        .collect();
-    for ref_id in failed_refs {
-        rows.push(ConversationAttachmentRow {
-            id: ConversationAttachmentRow::pk_recipe(conversation_id, ref_id),
-            conversation_id: conversation_id.to_string(),
-            file_id: ref_id.clone(),
-            blake3: None,
-        });
-    }
-    for (file_id, blake3) in known_blake3 {
-        rows.push(ConversationAttachmentRow {
-            id: ConversationAttachmentRow::pk_recipe(conversation_id, file_id),
-            conversation_id: conversation_id.to_string(),
-            file_id: file_id.clone(),
-            blake3: Some(blake3.clone()),
-        });
-    }
-    let errors: Vec<(String, String)> = bundle
-        .errors()
-        .iter()
-        .map(|(ref_id, err)| {
-            (
-                ConversationAttachmentRow::pk_recipe(conversation_id, ref_id),
-                err.clone(),
-            )
-        })
-        .collect();
-    frankweiler_etl::blob_cas::flush_cas_edges(
-        db.pool(),
-        db.cas(),
-        &bundle.cas_inserts(),
-        &rows,
-        &errors,
-    )
-    .await
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via

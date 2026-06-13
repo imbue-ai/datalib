@@ -918,6 +918,142 @@ pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// dolt_diff incremental-render scan
+// ─────────────────────────────────────────────────────────────────────
+
+/// Result of a [`scan_buckets`] dolt_diff scan. Same shape every
+/// per-provider parse step used to hand-roll; consolidated here so
+/// each `parse_doltlite_async` is a one-liner against the scan.
+#[derive(Debug, Clone, Default)]
+pub struct DiffScan {
+    /// `Some(set)` → render only the buckets whose key is in `set`.
+    /// `None` → cold start (no prior render cursor, a globally-
+    /// fanning table changed, the bucket query errored, or the
+    /// doltlite extension is unavailable). Render everything.
+    pub changed_buckets: Option<std::collections::HashSet<String>>,
+    /// HEAD commit hash at scan time, ready to stamp into the render
+    /// cursor on success. `None` if `dolt_log()` was unavailable
+    /// (e.g. stock libsqlite3); cursor stays unwritten in that case
+    /// so the next run cold-starts again.
+    pub new_head: Option<String>,
+    /// Wall-clock time spent in the union query. `None` if we
+    /// cold-started before running it (first run or global-fanout
+    /// hit).
+    pub scan_elapsed: Option<std::time::Duration>,
+}
+
+/// Spec for [`scan_buckets`]. Names the dolt_diff vtabs that fan
+/// out to "render everything" and the SQL that projects bucket keys
+/// for the per-bucket changed set.
+pub struct DiffScanSpec<'a> {
+    /// Bare entity-table names whose changes mean "render every
+    /// bucket" — typically tables that appear in every rendered
+    /// doc's frontmatter or header (`workspaces`, `users`,
+    /// `channels`, `me`, `recipients`, etc.). Any non-`unchanged`
+    /// row in `dolt_diff_<table>` for any of these short-circuits
+    /// the scan and returns `changed_buckets: None`.
+    pub global_fanout_tables: &'a [&'a str],
+    /// SQL that projects bucket keys for changed rows. The query is
+    /// run with `last_render_hash` bound at parameter index 1;
+    /// column 0 of each returned row is the bucket key.
+    ///
+    /// Convention: `UNION` across the relevant
+    /// `dolt_diff_<table>` vtabs with the standard
+    /// `WHERE from_ref = ?1 AND to_ref = 'HEAD' AND
+    /// diff_type != 'unchanged'` clause, projecting whichever
+    /// column on each table maps to the provider's bucket key
+    /// (`thread_root_uuid` for slack, `conversation_id` for
+    /// chatgpt, `chat_id` for signal, …). See provider parse.rs
+    /// for examples.
+    pub bucket_query: &'a str,
+}
+
+/// Two-phase dolt_diff scan. Looks up HEAD, checks
+/// [`DiffScanSpec::global_fanout_tables`] for any change, then runs
+/// [`DiffScanSpec::bucket_query`] to project the per-bucket changed
+/// set. On any failure short of "no last hash" we fall back to cold
+/// start — render-everything is always safe, partial-render against
+/// stale dolt_diff is not.
+///
+/// Same control flow every per-provider scan_diff used to hand-roll;
+/// consolidating it makes "what does the scan promise?" a one-stop
+/// answer.
+pub async fn scan_buckets(
+    pool: &sqlx::SqlitePool,
+    last_render_hash: Option<&str>,
+    spec: &DiffScanSpec<'_>,
+) -> Result<DiffScan> {
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    let Some(from_ref) = last_render_hash else {
+        return Ok(DiffScan {
+            changed_buckets: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    };
+
+    for table in spec.global_fanout_tables {
+        let sql = format!(
+            "SELECT 1 FROM dolt_diff_{table} \
+              WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
+        );
+        let any: Option<i64> = sqlx::query_scalar(&sql)
+            .bind(from_ref)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+        if any.is_some() {
+            return Ok(DiffScan {
+                changed_buckets: None,
+                new_head,
+                scan_elapsed: None,
+            });
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let res = sqlx::query(spec.bucket_query)
+        .bind(from_ref)
+        .fetch_all(pool)
+        .await;
+    let elapsed = started.elapsed();
+    let rows = match res {
+        Ok(r) => r,
+        Err(e) => {
+            // `dolt_diff_<table>` can fail to resolve on a brand-new
+            // working set (extract ran but no commit yet), or when
+            // doltlite extensions aren't linked. Fall back to
+            // cold-start so we don't return "nothing changed" when
+            // we can't tell.
+            tracing::info!(
+                error = %e,
+                "dolt_diff scan failed — falling back to cold-start (render everything)"
+            );
+            return Ok(DiffScan {
+                changed_buckets: None,
+                new_head,
+                scan_elapsed: Some(elapsed),
+            });
+        }
+    };
+    use sqlx::Row;
+    let set: std::collections::HashSet<String> =
+        rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    Ok(DiffScan {
+        changed_buckets: Some(set),
+        new_head,
+        scan_elapsed: Some(elapsed),
+    })
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.

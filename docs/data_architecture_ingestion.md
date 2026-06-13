@@ -688,6 +688,15 @@ The shared pieces, all in `frankweiler_etl`:
     and (if a tape is attached) appends one JSONL line per row via
     `EventTape::append_batch`. Tape errors log but don't fail the
     upsert — doltlite is the source of truth.
+  - **`doltlite_raw::bulk_upsert_with_tape(pool, tape, rows,
+    payloads)`** — all-in-one variant. Open tx →
+    `bulk::bulk_upsert_in_tx` (entity rows + paired bookkeeping) →
+    commit → post-commit tape append. Use when the caller has a
+    `&[T: BulkUpsertable]` vec in hand (every `WirePayloadRow`-derived
+    provider does) and wants the tape mirror without manually
+    composing the tx + bookkeeping + commit + append sequence. Same
+    "doltlite is truth, tape is best-effort mirror" semantics as
+    `bulk_upsert_events`.
 
 The chokepoint is the right tool **only for tables whose rows came
 off a wire**. For everything else — `blob_refs`, sidecars,
@@ -783,6 +792,45 @@ Why this pattern matters:
     outputs produce matching fingerprints; the cached output stays.
     The render of an unchanged bucket is exactly the same bytes.
 
+### dolt_diff supersedes per-bucket fingerprints (ported providers)
+
+Ported providers (chatgpt, anthropic, signal, slack, plus email)
+**replaced the per-bucket fingerprint pattern with
+`dolt_diff_<table>` virtual tables driven by a per-source render
+cursor**. The translate-side fingerprint CTE is gone in those
+providers; doltlite's prolly-tree diff answers "what changed since
+last render?" directly.
+
+Mechanism:
+
+  - On render success, the per-source render cursor stamps the
+    doltlite HEAD into
+    `<out>/rendered_md/<provider>/<source>/_render_cursor.json`.
+  - On the next render, `parse` reads that hash and runs the shared
+    `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec
+    { global_fanout_tables, bucket_query })`. The scan:
+      1. Reads HEAD via `dolt_log()`.
+      2. Cold-starts if any `dolt_diff_<global_fanout_tables[i]>` row
+         is non-`unchanged` (changes to those tables fan out to
+         "render everything").
+      3. Otherwise runs the per-bucket `bucket_query`, projecting the
+         bucket-key column across whichever per-table `dolt_diff_*`
+         vtabs contribute to that provider's natural bucket.
+  - Parse then loads payloads only for the surviving bucket keys.
+
+Sidecar `source_fingerprint` and the load-step compare stay — they
+still gate the load step ("have we already loaded this sidecar's
+rows?"). On the ported providers `source_fingerprint` is now just
+the stable bucket UUID (distinct per bucket, stable across re-renders
+of the same bucket).
+
+This swap moves the "what's different?" decision from
+Rust-computed hash trees to doltlite's native diff, which it has to
+maintain anyway for `dolt diff`. The per-row `payload_blake3`
+columns are gone (their `WirePayloadRow` derive no longer emits
+them); unported providers still carry them but they're dead weight
+until the port lands.
+
 **Rule for new stages.** Any new derivation added to the pipeline
 (future Annotate step, future index shard, future projection)
 follows the same recipe: declare what the inputs are (content +
@@ -827,6 +875,53 @@ Two reasons the split matters:
     no-op via `INSERT OR IGNORE`. Intra-source dedup is automatic;
     cross-source dedup is one config change away (single-writer caveat
     in the port guide).
+
+### Per-provider CAS edge tables
+
+The shared `blob_refs` table is **only used by unported providers**.
+Ported providers (chatgpt, anthropic, signal, slack, plus email and
+whatsapp via Shape A) each own a small four-column edge table that
+maps `(owning_id, ref_id) → blake3`. Bytes still live in the shared
+`cas_objects`; the edge table is provider-specific so providers
+that happen to use the same upstream id format don't collide.
+
+The four-column shape is universal — `id` (synth PK
+`{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the
+declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]`
+struct. The derive emits the DDL, the two indices, the synth-PK
+recipe, and the `BulkUpsertable` impl. See
+[`provider_migration_dolt_diff_and_cas_edge.md`](provider_migration_dolt_diff_and_cas_edge.md)
+for the full recipe.
+
+### Shared attachment-flush primitives
+
+Per-bucket attachment-fetch flow is consolidated into three shared
+pieces in `frankweiler_etl::blob_cas`:
+
+  - **`load_blake3_index(pool, table, ref_id_column)`** — one SQL
+    scan at fetch entry produces the run-scoped `(ref_id → blake3)`
+    map. The per-file dedupe check is a HashMap hit, not a SQL
+    round trip queued behind preceding multi-MB CAS commits on the
+    single-connection doltlite pool.
+  - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths:
+    `add_fetched`, `add_known`, `add_failed`. Tracks the
+    `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id`
+    error strings. Dedupes by `(owning, ref)`.
+  - **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the
+    canonical 3-step end-of-bucket flush: CAS `put_many` →
+    `bulk_upsert_in_tx` the edge rows → stamp `last_error` on the
+    bookkeeping sidecar for every failed `(synth_pk, err)` pair →
+    commit. `CasEdgeAccumulator::flush` delegates to it via a
+    provider-supplied row-builder closure.
+
+The blake3 forward-stamp invariant: every edge row carries the
+actual content hash. When a file's bytes were already in CAS from a
+prior sync, the new `(this_bucket, file_id)` edge row gets the
+looked-up hash too — not NULL with the bytes only reachable through
+a sibling row keyed by a different bucket. This keeps the
+`<provider>_attachments` table self-describing: an edge row tells
+you what you need to fetch the bytes, without joining through any
+other row.
 
 ### Why contacts doesn't participate
 
@@ -1464,6 +1559,27 @@ they're listed here so they don't get lost.
     repo: this file, signal's `extract/mod.rs`, each provider's
     `EXTRACT.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
     and any AGENTS.md / README pointers.
+
+  - **VIRTUAL column projection from JSONB payload.** Each
+    `WirePayloadRow`-derived row currently stores a small set of
+    denormalized columns alongside the payload for cheap predicate
+    queries (`name`, `update_time`, `is_member`, etc.). On DoltLite
+    v0.11.9+ these are candidates for `VIRTUAL` generated columns
+    over `payload->>'$.x'` expressions, paired with expression
+    indexes. The denormalization stays queryable; the write cost
+    drops to zero and drift-vs-payload becomes impossible by
+    construction. The `WirePayloadRow` macro would need a per-field
+    attribute like `#[wire_payload_row(virtual = "$.profile.real_name")]`.
+    Several FIXMEs in `slack/src/extract/schema_raw.rs` (UserRow,
+    ChannelRow, MessageRow) flag the specific columns that would
+    convert cleanly.
+
+  - **`BulkUpsertable` derive for non-payload tables.** Several
+    provider tables (bookkeeping tables like slack's
+    `RepliesPagesRow`) hand-roll the `BulkUpsertable` impl because
+    they have no wire payload. The shape is mechanical — a
+    `#[derive(BulkUpsertable)]` macro with a per-field column-name
+    attribute would collapse each impl to the struct definition.
 
 ## What this document does not cover
 

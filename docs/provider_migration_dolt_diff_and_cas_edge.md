@@ -1,10 +1,33 @@
 # Provider migration recipe: dolt_diff incremental render + per-provider CAS edges
 
 This doc is the migration recipe for the remaining ETL providers
-(anthropic, chatgpt, slack, github, gitlab, notion, beeper, contacts,
-perseus). It captures what we learned doing **whatsapp → email →
-signal**, distilled into a sequence of moves that should apply to any
-provider whose raw store lives in doltlite.
+(notion, github, gitlab, beeper, contacts, perseus, yolink). It
+captures what we learned doing **whatsapp → email → signal → chatgpt
+→ anthropic → slack** and consolidates the steady-state shape that
+the recipe lands at.
+
+The recipe matured a lot as we ported providers. The shape is now:
+
+  - One proc-macro derive per row struct (`WirePayloadRow` for
+    entity tables, `CasEdgeRow` for attachment-edge tables); SQL DDL,
+    `BulkUpsertable` impl, and PK recipe are all derived.
+  - One shared `flush_cas_edges` primitive that every per-provider
+    attachment flush delegates to.
+  - One shared `CasEdgeAccumulator` that every per-provider extract
+    pushes (fetched, known, failed) outcomes into; flush at end of
+    bucket is a closure call.
+  - One shared `scan_buckets` for the dolt_diff incremental-render
+    scan; each provider supplies a global-fanout-table list and a
+    bucket-key SQL projection.
+  - One shared `load_blake3_index` to pre-load the `(ref_id → blake3)`
+    map at fetch entry, so the per-file dedupe check is a HashMap hit
+    instead of a SQLite round trip.
+  - One shared `bulk_upsert_with_tape` for providers that wire the
+    JSONL wire-tape mirror (today: slack and beeper).
+
+After this consolidation, each new provider's port is roughly **300
+lines of provider-specific glue** (schema_raw + extract walk + render
+md generation) plus standard shared-helper plumbing.
 
 The migration combines **two separate changes** that turned out to be
 load-bearing and naturally land together:
@@ -75,7 +98,7 @@ whole migration.
 
 ---
 
-## The two new primitives
+## The shared primitives
 
 ### `frankweiler_etl::render_cursor`
 
@@ -110,8 +133,8 @@ pub fn write(path: &Path, hash: &str, scan_elapsed: Option<Duration>) -> Result<
 
 ### Per-provider CAS edge
 
-Each provider owns one of two shapes, picked based on what its existing
-schema looks like:
+Each provider owns one of two shapes, picked based on what its
+existing schema looks like:
 
 **Shape A — edge column on an existing table.** Use this when the
 table that "owns" the attachment already has a natural row per
@@ -128,85 +151,261 @@ Examples landed:
 
 **Shape B — new per-provider edge table.** Use this when the
 attachment metadata lives only inside a JSONB `payload` and there's
-no obvious row to bolt a column onto. Schema:
+no obvious row to bolt a column onto. Add the
+[`CasEdgeRow`](#casedgerow-derive) derive to a four-field struct;
+the derive emits the table DDL, the two indices, the
+`BulkUpsertable` impl, and the synth-PK recipe:
 
-```sql
-CREATE TABLE IF NOT EXISTS <provider>_attachments (
-    id TEXT PRIMARY KEY,              -- synthesized PK
-    <owner_id> TEXT NOT NULL,         -- FK into the entity table
-    ref_id TEXT NOT NULL,             -- upstream id (chat-side)
-    blake3 TEXT NULL,                 -- CAS content hash (NULL until bytes land)
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-);
-CREATE INDEX <provider>_attachments_by_<owner>
-    ON <provider>_attachments(<owner_id>);
-CREATE INDEX <provider>_attachments_by_ref
-    ON <provider>_attachments(ref_id, blake3);
+```rust
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "<provider>_attachments")]
+pub struct <Provider>AttachmentRow {
+    pub id: String,           // synth: "{owning}#{ref}"
+    pub <owning>_<id>: String,// FK into the owning entity table
+    pub <ref>_id: String,     // upstream id
+    pub blake3: Option<String>,// CAS content hash (NULL until bytes land)
+}
 ```
 
-Example landed: `chat_item_attachments` (signal).
+Plug into `full_ddl()`:
 
-In both shapes the renderer reaches the bytes via a per-provider
-`*BlobReader` impl that resolves `ref_id → blake3` from this table
-and `blake3 → bytes` from `cas_objects`. The second hop is identical
-across providers; we haven't lifted it because the first hop's SQL
-is provider-specific and the helper would be a one-line shim.
+```rust
+out.extend(<Provider>AttachmentRow::all_ddl());
+```
+
+Examples landed: `chatgpt_attachments`, `anthropic_attachments`,
+`slack_attachments`, `chat_item_attachments`.
+
+In both shapes the renderer reaches the bytes via the per-bucket
+[`BlobBundle`](#blobbundle), which `parse_doltlite_async` loads once
+per bucket via a small projection SQL against the per-provider edge
+column/table.
+
+### `CasEdgeRow` derive
+
+The four-field shape above is universal: every per-provider CAS edge
+table has the same column structure (id PK + owning FK + ref id +
+blake3). The `CasEdgeRow` proc-macro derive emits:
+
+- `Self::ddl()` — the `CREATE TABLE IF NOT EXISTS` string.
+- `Self::by_owning_index_ddl()` / `Self::by_ref_index_ddl()` — the
+  two indices.
+- `Self::all_ddl()` — the three above as a `Vec<String>`, ready to
+  splice into `full_ddl()`.
+- `Self::pk_recipe(owning, ref) -> String` — synth PK
+  `"{owning}#{ref}"`. Override only if your provider needs a
+  different shape (signal does, since one chat_item can attach the
+  same media_name to multiple slots).
+- `impl BulkUpsertable for Self` — `TABLE`, `TYPED_COLUMNS`,
+  `bind_into`, all derived.
+
+Field-order discipline is enforced at derive-time: `id: String`
+must be first, `blake3: Option<String>` must be last. The two
+middle fields become `OWNING_COLUMN` / `REF_COLUMN` based on their
+identifiers.
+
+### `flush_cas_edges` + `CasEdgeAccumulator`
+
+`flush_cas_edges` is the canonical 3-step end-of-bucket flush:
+
+1. CAS pool: `put_many` so every edge row's `blake3` points at bytes
+   already in the CAS.
+2. Entity pool, single tx: `bulk_upsert_in_tx` the edge rows, then
+   `record_object_error` stamps for every `(synth_pk, err)` pair.
+3. Commit.
+
+`CasEdgeAccumulator` is the matching per-bucket walker. The provider
+walks upstream and pushes outcomes into the accumulator:
+
+```rust
+let mut attach = CasEdgeAccumulator::new();
+for file in walk_upstream(bucket) {
+    if let Some(blake3) = blake3_by_file.get(&file.id) {
+        attach.add_known(&owning_id, &file.id, blake3.clone());
+    } else {
+        match download(file).await {
+            Ok((bytes, ct)) => {
+                let b3 = blake3_hex(&bytes);
+                blake3_by_file.insert(file.id.clone(), b3);
+                attach.add_fetched(&owning_id, &file.id, bytes, ct, Some(file.name));
+            }
+            Err(e) => attach.add_failed(&owning_id, &file.id, e.to_string()),
+        }
+    }
+}
+// End-of-bucket flush: provider supplies a row-builder closure.
+attach
+    .flush(db.pool(), db.cas(), |owning, ref_id, blake3| <Provider>AttachmentRow {
+        id: <Provider>AttachmentRow::pk_recipe(owning, ref_id),
+        <owning>_<id>: owning.to_string(),
+        <ref>_id: ref_id.to_string(),
+        blake3: blake3.map(String::from),
+    })
+    .await?;
+```
+
+The accumulator handles all the bookkeeping: dedup by `(owning,
+ref)`, blake3 resolution (fetched → bundle, known → looked up, failed
+→ None), and error-stamp expansion. No per-provider flush code.
+
+### `load_blake3_index` + run-scoped cache
+
+At the start of `fetch()`, load the full `(ref_id → blake3)` map
+once:
+
+```rust
+let mut blake3_by_file = db.load_attachment_blake3s().await?;
+```
+
+(Each provider's `RawDb` wraps the shared helper.) Thread `&mut
+blake3_by_file` through the fetch chain. The per-file skip check is
+a HashMap hit; after a successful download, insert into the map so
+subsequent files in the same run hit the cache without re-fetching.
+
+### `scan_buckets`
+
+The dolt_diff scan is consolidated into one shared call:
+
+```rust
+let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+    pool,
+    last_render_hash,
+    &DiffScanSpec {
+        global_fanout_tables: &["users", "channels"],
+        bucket_query: "
+            SELECT DISTINCT <bucket_key> FROM (
+                SELECT coalesce(to_<col>, from_<col>) AS <bucket_key>
+                  FROM dolt_diff_<table_a>
+                 WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                UNION
+                <more unions...>
+            )
+            WHERE <bucket_key> IS NOT NULL
+        ",
+    },
+).await?;
+```
+
+Returns `DiffScan { changed_buckets, new_head, scan_elapsed }`. The
+provider passes those through to its `ScanResult` (each provider's
+ScanResult names its bucket field appropriately:
+`changed_conversations`, `changed_threads`, `changed_chats`).
+
+### `bulk_upsert_with_tape`
+
+When the provider mirrors entity-row writes to a JSONL wire-tape
+(today: slack, beeper), every entity upsert goes through:
+
+```rust
+bulk_upsert_with_tape(pool, tape, rows, payloads).await
+```
+
+— tx → `bulk_upsert_in_tx` → commit → post-commit tape append,
+with table name derived from `T::TABLE`. Drops in for any
+[`BulkUpsertable`] type.
 
 ---
 
 ## Phase-by-phase recipe (template)
 
-Each provider's port lands as a single commit. The phases inside
-that commit map roughly to:
+Each provider's port lands as a single commit, ~300–600 lines after
+the shared helpers do most of the work. The phases inside that
+commit map roughly to:
 
-### Phase 1: per-provider CAS edge
+### Phase 1: schema_raw.rs
 
-1. Pick shape A or B based on the provider's schema.
-2. Add the column/table to `extract/schema_raw.rs`. Wire into
-   `full_ddl()` and any index list.
-3. Rewrite the attachment-download path:
-   - Accumulate `Vec<PendingCas>` during the listing/decrypt loop.
-   - End-of-walk flush: `BlobCas::put_many` for the bytes, then one
-     entity-pool tx that UPDATEs each row's `blake3` column.
-   - Delete the per-attachment `blob_cas::store_bytes` /
-     `db.store_blob` loop — the `RefStub`/`blob_refs` path goes
-     away entirely for this provider.
-4. Add a `clear_blob_hashes` helper that sets every per-provider
-   `blake3` column back to NULL. Wire it into the
-   `ExtractControl::refetch_blobs` arm in place of
-   `truncate_blob_refs(db.pool())`.
-5. Write a per-provider `*BlobReader` in `src/translate/blob_reader.rs`
-   (or inline at the bottom of `src/translate/parse.rs` — signal's
-   pattern). Two queries: ref_id → blake3 from the new column/table,
-   then blake3 → (bytes, content_type) from `cas_objects`.
-6. Replace `SqliteBlobReader::new(...)` with the new reader.
+1. Every entity row struct uses `#[derive(WirePayloadRow)]` with a
+   `#[wire_payload_row(table = "...")]` attribute. The derive emits
+   the DDL + `BulkUpsertable` impl. Field shape: `id_and_payload:
+   WirePayload` first, then promoted columns
+   (`String`/`Option<String>`/`i64`/`Option<i64>`).
 
-### Phase 2: render cursor + dolt_diff
+2. The per-provider CAS edge table (if Shape B) is a four-field
+   struct with `#[derive(CasEdgeRow)]`. See
+   [`CasEdgeRow` derive](#casedgerow-derive) above.
 
-1. Refactor `translate::parse` to take a `last_render_hash:
-   Option<&str>` arg (or wrap it in a `ScanResult` struct that
-   parse fills and render consumes).
-2. The dolt_diff scan is a single union query. Identify the
-   provider's natural bucket key (what becomes one rendered .md
-   per row) and union over every per-table `dolt_diff_<table>` that
-   carries — directly or via join — that bucket key. Always do
-   `coalesce(to_<col>, from_<col>)` to cover the removed-row case.
-3. Issue `SELECT commit_hash FROM dolt_log() ORDER BY date DESC
-   LIMIT 1` to read the current HEAD. Wrap in `.fetch_optional`
-   so non-doltlite sqlite returns `None` and the cursor stays
-   unwritten.
-4. Time the union query. Record both elapsed and result count so
-   render can log and persist them.
-5. Phase 2 of parse loads envelopes/joins only for the surviving
-   bucket keys.
-6. `render_all` reads the cursor before parse, advances it after a
-   successful loop (when HEAD was readable). `tracing::info!`s the
-   scan_elapsed_ms + changed-bucket-count + cold_start flag on
-   every run.
-7. Drop the per-bucket `fingerprint` field; set `source_fingerprint`
-   on the sidecar to the stable bucket UUID.
+3. Any provider-specific non-payload tables (bookkeeping, sync
+   cursors) hand-roll `BulkUpsertable` — slack's `RepliesPagesRow`
+   is the template.
 
-### Phase 3: orchestrator integration
+4. `full_ddl()` composes: each entity `Row::ddl()`, the CAS edge
+   `Row::all_ddl()`, any provider-specific index DDLs, and the
+   shared bookkeeping DDLs via `dr::bookkeeping_ddl_for(table)`.
+
+### Phase 2: extract — `RawDb` + walk + flush
+
+1. **No pre-seed.** Rows only appear after a successful detail
+   fetch. The listing-pass skip-check works by bulk-reading
+   `(id → stored.update_time)` for the listed ids; "no row" means
+   "fetch it." A crashed fetch leaves no row; the next sync's
+   listing re-surfaces it. See `data_architecture_ingestion.md`
+   §"No-preseed listing flow".
+
+2. **Run-scoped blake3 cache.** Load it once at the top of `fetch()`:
+
+   ```rust
+   let mut blake3_by_file = db.load_attachment_blake3s().await?;
+   ```
+
+   Thread `&mut blake3_by_file` through the fetch chain. The
+   per-file dedupe check is a HashMap hit, no SQL.
+
+3. **`CasEdgeAccumulator`.** Inside the per-bucket walk, push
+   outcomes — `add_known`, `add_fetched`, `add_failed`. End-of-bucket
+   flush is one call with a row-builder closure. See
+   [`CasEdgeAccumulator`](#flush_cas_edges--casedgeaccumulator).
+
+4. **Entity writes.** Every entity upsert goes through
+   `bulk_upsert_in_tx` (or `bulk_upsert_with_tape` if the provider
+   wires the JSONL tape). No hand-rolled UPSERT SQL.
+
+5. **`clear_blob_hashes` for `--refetch-blobs`.** Update
+   `<provider>_attachments.blake3 = NULL` (or the
+   per-column equivalent for Shape A) so the next walk re-decodes
+   and re-stores.
+
+### Phase 3: translate — `parse` + `scan_buckets`
+
+1. `parse.rs::parse(path, last_render_hash)` is the doltlite-aware
+   entry. It opens a read-only pool, runs `scan_buckets`, filters
+   the load to changed buckets, and per-bucket calls
+   `BlobBundle::load(refs_pool, cas_pool, projection_sql,
+   &ref_ids)` to populate each bucket's attachment bytes.
+
+2. The dolt_diff scan is one `scan_buckets` call. See
+   [`scan_buckets`](#scan_buckets) — the provider supplies a
+   `global_fanout_tables` list (entities whose changes mean
+   "render everything", typically things in every doc's frontmatter)
+   and a `bucket_query` projecting bucket keys.
+
+3. The JSON-tree / mbox fallback (where it exists for fixture
+   tests) is a separate function that returns the same
+   `ParsedX` shape with `BlobBundle::default()` on each bucket.
+   No dolt_diff for that path.
+
+### Phase 4: translate — `render`
+
+1. `render_all(parsed, out_dir, source_name, progress,
+   on_doc_complete)` is fully sync — `BlobBundle::materialize_to_dir`
+   on the bucket's pre-loaded bytes, no `Arc<dyn BlobReader>`.
+
+2. `parsed.threads`/`parsed.conversations`/etc. is already
+   filtered down to changed buckets by the parse step. No
+   `prior_fingerprints` arg; no fingerprint compare inside render.
+
+3. `source_fingerprint` on the sidecar / `RenderedMarkdown` is the
+   bucket UUID itself (stable, distinct).
+
+4. On success, advance the render cursor:
+
+   ```rust
+   if let Some(head) = parsed.scan.new_head.as_deref() {
+       let cursor_path = render_cursor::cursor_path(out_dir, "<provider>", source_name);
+       render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)?;
+   }
+   ```
+
+### Phase 5: orchestrator integration
 
 In `frankweiler/backend/sync/src/main.rs`'s match arm for the
 provider:
@@ -215,8 +414,7 @@ provider:
 let cursor_path = frankweiler_etl::render_cursor::cursor_path(
     root, "<provider>", name,
 );
-let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-    .with_context(...)?;
+let cursor = frankweiler_etl::render_cursor::read(&cursor_path)?;
 let parsed = parse(
     &fixture,
     cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
@@ -224,23 +422,9 @@ let parsed = parse(
 render_all(&parsed, root, name, progress, on_doc_complete)?;
 ```
 
-The `prior_fingerprints` arg stays in the function signature
-(`translate_source` still threads it for unported providers) — just
-unused inside this arm. Don't try to refactor that signature
-mid-migration.
-
-### Phase 4: payload_blake3 cleanup
-
-If the provider was on the `WirePayloadRow` derive pattern (anthropic,
-chatgpt, …):
-- The derive emits no `payload_blake3` column anymore (already done
-  in the framework crate). Remove the `let payload_blake3 = ...;`
-  lines and the `payload_blake3:` field from every `WirePayload {
-  ... }` construction at extract sites.
-
-Otherwise (envelope-only `BulkUpsertable` impls like email's
-`EmailRow`): nothing to do — those impls already had
-`PAYLOAD_COLUMN = None` and no `payload_blake3`.
+The `prior_fingerprints` arg stays in `translate_source`'s signature
+for unported providers — just unused inside this arm. Don't refactor
+that signature mid-migration.
 
 ---
 
