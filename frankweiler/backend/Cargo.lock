@@ -1678,6 +1678,7 @@ dependencies = [
  "csv",
  "frankweiler-core",
  "frankweiler-etl",
+ "frankweiler-etl-macros",
  "frankweiler-time",
  "insta",
  "md-5",

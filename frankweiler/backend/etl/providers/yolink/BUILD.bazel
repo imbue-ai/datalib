@@ -10,6 +10,9 @@ rust_library(
     ),
     crate_name = "frankweiler_etl_yolink",
     edition = "2021",
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",

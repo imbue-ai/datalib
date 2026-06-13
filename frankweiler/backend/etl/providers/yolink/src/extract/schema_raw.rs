@@ -34,7 +34,11 @@
 //!   this provider has to `GridRow.when_ts`. `yolink_devices` is
 //!   config-shaped, not event-shaped.
 
+use frankweiler_etl::bulk::BulkUpsertable;
 use frankweiler_etl::doltlite_raw as dr;
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::Sqlite;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -73,6 +77,38 @@ pub const YOLINK_DEVICES_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_devices 
     last_ts_ms INTEGER NULL
 )";
 
+/// Row matching [`YOLINK_DEVICES_DDL`]. Hand-rolled `BulkUpsertable`
+/// (no payload column — every field is a typed column). `last_ts_ms`
+/// is bumped separately via the `UPDATE yolink_devices SET
+/// last_ts_ms = …` cursor advance after each successful window, so
+/// it's NOT in the promoted-column list (bulk-upsert won't clobber
+/// the cursor).
+#[derive(Debug, Clone, Default)]
+pub struct YolinkDeviceRow {
+    pub id: String,
+    pub family_device_id: String,
+    pub kind: String,
+    pub start_ms: i64,
+}
+
+impl BulkUpsertable for YolinkDeviceRow {
+    const TABLE: &'static str = "yolink_devices";
+    const TYPED_COLUMNS: &'static [&'static str] = &["family_device_id", "kind", "start_ms"];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.family_device_id)
+            .bind(&self.kind)
+            .bind(self.start_ms)
+    }
+}
+
 /// `yolink_readings` — one row per sensor sample.
 ///
 /// YoLink's CSV format does not carry a per-sample id, so the PK is
@@ -100,6 +136,50 @@ pub const YOLINK_READINGS_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_reading
     metric TEXT NOT NULL,
     value REAL NOT NULL
 )";
+
+/// Row matching [`YOLINK_READINGS_DDL`]. Hand-rolled
+/// `BulkUpsertable`. PK is synthesized at construction time via
+/// [`reading_id_recipe`] so this row carries an already-minted
+/// composite key.
+#[derive(Debug, Clone, Default)]
+pub struct YolinkReadingRow {
+    pub id: String,
+    pub device_name: String,
+    pub ts_ms: i64,
+    pub metric: String,
+    pub value: f64,
+}
+
+impl YolinkReadingRow {
+    pub fn new(device_name: &str, ts_ms: i64, metric: &str, value: f64) -> Self {
+        Self {
+            id: reading_id_recipe(device_name, ts_ms, metric),
+            device_name: device_name.to_string(),
+            ts_ms,
+            metric: metric.to_string(),
+            value,
+        }
+    }
+}
+
+impl BulkUpsertable for YolinkReadingRow {
+    const TABLE: &'static str = "yolink_readings";
+    const TYPED_COLUMNS: &'static [&'static str] = &["device_name", "ts_ms", "metric", "value"];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.device_name)
+            .bind(self.ts_ms)
+            .bind(&self.metric)
+            .bind(self.value)
+    }
+}
 
 /// Index on `yolink_readings(device_name, ts_ms)` — supports the
 /// "max ts for this device" cursor lookup and the "readings for
