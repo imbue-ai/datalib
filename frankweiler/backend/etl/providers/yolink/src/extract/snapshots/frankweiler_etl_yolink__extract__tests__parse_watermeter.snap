@@ -1,16 +1,20 @@
 ---
-source: etl/providers/yolink/src/extract.rs
+source: etl/providers/yolink/src/extract/mod.rs
 expression: "parse(WM, \"watermeter\").unwrap()"
 ---
 - ts_ms: 1775433600000
   metric: water_meter_gal
   value: 529.084
+  payload: "{\"Device Id\":\"d88b\",\"Time\":\"2026/04/05 17:00:00-0700\",\"Water Consumption(GAL)\":\"0.000\",\"Water Meter(GAL)\":\"529.084\"}"
 - ts_ms: 1775433600000
   metric: water_consumption_gal
   value: 0
+  payload: "{\"Device Id\":\"d88b\",\"Time\":\"2026/04/05 17:00:00-0700\",\"Water Consumption(GAL)\":\"0.000\",\"Water Meter(GAL)\":\"529.084\"}"
 - ts_ms: 1775433756000
   metric: water_meter_gal
   value: 529.374
+  payload: "{\"Device Id\":\"d88b\",\"Time\":\"2026/04/05 17:02:36-0700\",\"Water Consumption(GAL)\":\"0.291\",\"Water Meter(GAL)\":\"529.374\"}"
 - ts_ms: 1775433756000
   metric: water_consumption_gal
   value: 0.291
+  payload: "{\"Device Id\":\"d88b\",\"Time\":\"2026/04/05 17:02:36-0700\",\"Water Consumption(GAL)\":\"0.291\",\"Water Meter(GAL)\":\"529.374\"}"

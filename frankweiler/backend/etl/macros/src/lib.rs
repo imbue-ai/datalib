@@ -39,6 +39,8 @@ use syn::{
 /// - `Option<String>` → `TEXT NULL`
 /// - `i64` → `INTEGER NOT NULL`
 /// - `Option<i64>` → `INTEGER NULL`
+/// - `f64` → `REAL NOT NULL`
+/// - `Option<f64>` → `REAL NULL`
 ///
 /// Any other field type is a compile error pointing at the field.
 /// Add support here when a new shape comes up — keeping the universe
@@ -252,6 +254,8 @@ enum PromotedKind {
     TextNullable,
     IntegerNotNull,
     IntegerNullable,
+    RealNotNull,
+    RealNullable,
 }
 
 impl PromotedKind {
@@ -261,6 +265,8 @@ impl PromotedKind {
             PromotedKind::TextNullable => "TEXT NULL",
             PromotedKind::IntegerNotNull => "INTEGER NOT NULL",
             PromotedKind::IntegerNullable => "INTEGER NULL",
+            PromotedKind::RealNotNull => "REAL NOT NULL",
+            PromotedKind::RealNullable => "REAL NULL",
         }
     }
 }
@@ -277,7 +283,8 @@ impl<'a> PromotedField<'a> {
             syn::Error::new_spanned(
                 &f.ty,
                 "unsupported field type for #[derive(WirePayloadRow)]; \
-                 supported types: String, Option<String>, i64, Option<i64>",
+                 supported types: String, Option<String>, i64, Option<i64>, \
+                 f64, Option<f64>",
             )
         })?;
         Ok(Self {
@@ -290,14 +297,17 @@ impl<'a> PromotedField<'a> {
     /// Emit the right `.bind(...)` argument expression for this field.
     /// sqlx wants `&String` for non-null TEXT, `Option<&str>` for
     /// nullable TEXT (use `.as_deref()`), and bare `i64` /
-    /// `Option<i64>` by value for INTEGER columns.
+    /// `Option<i64>` by value for INTEGER columns, and the same
+    /// by-value treatment for `f64` / `Option<f64>` REAL columns.
     fn bind_expr(&self) -> TokenStream2 {
         let name = self.name;
         match self.kind {
             PromotedKind::TextNotNull => quote! { &self.#name },
             PromotedKind::TextNullable => quote! { self.#name.as_deref() },
-            PromotedKind::IntegerNotNull => quote! { self.#name },
-            PromotedKind::IntegerNullable => quote! { self.#name },
+            PromotedKind::IntegerNotNull
+            | PromotedKind::IntegerNullable
+            | PromotedKind::RealNotNull
+            | PromotedKind::RealNullable => quote! { self.#name },
         }
     }
 }
@@ -310,6 +320,7 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
     match seg.ident.to_string().as_str() {
         "String" => Some(PromotedKind::TextNotNull),
         "i64" => Some(PromotedKind::IntegerNotNull),
+        "f64" => Some(PromotedKind::RealNotNull),
         "Option" => {
             let PathArguments::AngleBracketed(args) = &seg.arguments else {
                 return None;
@@ -324,6 +335,7 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
             match inner_seg.ident.to_string().as_str() {
                 "String" => Some(PromotedKind::TextNullable),
                 "i64" => Some(PromotedKind::IntegerNullable),
+                "f64" => Some(PromotedKind::RealNullable),
                 _ => None,
             }
         }

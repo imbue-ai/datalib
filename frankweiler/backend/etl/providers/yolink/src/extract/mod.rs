@@ -55,11 +55,20 @@ const DEFAULT_WINDOW_DAYS: i64 = 7;
 
 /// One parsed sample. Serializable so insta snapshot tests can
 /// pretty-print it.
+///
+/// `payload` is the JSON-encoded `{header: value}` map of the source
+/// CSV row this sample was derived from — the raw wire representation
+/// YoLink served. Two `Reading`s coming out of the same CSV row (e.g.
+/// the temperature + humidity pair from a `Temperature(℃) Humidity
+/// (%RH)` row) share an identical `payload` string; see the
+/// [`schema_raw::YolinkReadingRow`] docstring for why we keep this
+/// even though it costs a small amount of denormalization.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reading {
     pub ts_ms: i64,
     pub metric: &'static str,
     pub value: f64,
+    pub payload: String,
 }
 
 /// Expected columns per device kind: `(header, metric, suffix)`.
@@ -108,6 +117,18 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
             .with_context(|| format!("row {}: bad ts {ts:?}", i + 2))?
             .inner()
             .timestamp_millis();
+        // Build the per-CSV-row payload once: `{header: value}` for
+        // every column in the source record. Every Reading derived
+        // from this CSV row carries the same payload string, so the
+        // raw wire representation survives even after the typed
+        // columns strip unit suffixes / parse numerics.
+        let payload = {
+            let mut m = serde_json::Map::with_capacity(headers.len());
+            for (h, v) in headers.iter().zip(rec.iter()) {
+                m.insert(h.to_string(), serde_json::Value::String(v.to_string()));
+            }
+            serde_json::Value::Object(m).to_string()
+        };
         for ((_, metric, suffix), &idx) in cols.iter().zip(&val_idxs) {
             let Some(raw) = rec.get(idx).filter(|s| !s.is_empty()) else {
                 continue;
@@ -128,6 +149,7 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
                 ts_ms,
                 metric,
                 value,
+                payload: payload.clone(),
             });
         }
     }
@@ -175,7 +197,7 @@ async fn upsert_readings(pool: &SqlitePool, device: &str, readings: &[Reading]) 
     }
     let rows: Vec<YolinkReadingRow> = readings
         .iter()
-        .map(|r| YolinkReadingRow::new(device, r.ts_ms, r.metric, r.value))
+        .map(|r| YolinkReadingRow::new(device, r.ts_ms, r.metric, r.value, r.payload.clone()))
         .collect();
     let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = pool.begin().await?;
@@ -460,6 +482,7 @@ mod tests {
             ts_ms: ts,
             metric: "water_meter_gal",
             value: v,
+            payload: "{}".to_string(),
         };
         // Two readings land.
         assert_eq!(
