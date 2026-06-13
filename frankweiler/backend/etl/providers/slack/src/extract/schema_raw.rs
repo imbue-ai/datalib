@@ -46,9 +46,10 @@
 //! → `cas_objects` on `blake3`. Replaces this provider's use of the
 //! shared `blob_refs` table.
 
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::bulk::BulkUpsertable;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use frankweiler_etl_macros::WirePayloadRow;
+use frankweiler_etl_macros::{CasEdgeRow, WirePayloadRow};
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
@@ -203,57 +204,19 @@ impl BulkUpsertable for RepliesPagesRow {
 
 /// `slack_attachments` — N:M edge between one Slack message's
 /// attachment slot and a `cas_objects` blob. Replaces this provider's
-/// use of the shared `blob_refs` table.
-///
-/// Columns:
-/// - `id` — synthesized PK `"{message_uuid}#{file_id}"`.
-/// - `message_uuid` — FK into [`MessageRow`]. Explicit so the dolt_diff
-///   union can project the natural bucket key (`thread_root_uuid`) by
-///   joining through `messages` without parsing the synthesized PK.
-/// - `file_id` — upstream Slack `file_id`. Skip-check key:
-///   `(file_id, blake3 IS NOT NULL)` means we already have the bytes.
-/// - `blake3` — CAS content hash, NULL until the CAS write succeeds.
-pub const SLACK_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS slack_attachments (
-    id           TEXT PRIMARY KEY,
-    message_uuid TEXT NOT NULL,
-    file_id      TEXT NOT NULL,
-    blake3       TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-pub const SLACK_ATTACHMENTS_BY_MSG_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS slack_attachments_by_msg \
-     ON slack_attachments(message_uuid)";
-
-pub const SLACK_ATTACHMENTS_BY_FILE_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS slack_attachments_by_file \
-     ON slack_attachments(file_id, blake3)";
-
-#[derive(Debug, Clone)]
+/// use of the shared `blob_refs` table. Universal CAS-edge shape:
+/// `id` (synth `"{message_uuid}#{file_id}"`), owning FK
+/// (`message_uuid`, indexed so per-thread loads on the render side
+/// stay cheap), upstream ref (`file_id`, also indexed for the
+/// `blake3 IS NOT NULL` skip-check), `blake3` (null until the CAS
+/// write lands). See [`frankweiler_etl::blob_cas::CasEdgeRow`].
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "slack_attachments")]
 pub struct SlackAttachmentRow {
     pub id: String,
     pub message_uuid: String,
     pub file_id: String,
     pub blake3: Option<String>,
-}
-
-impl BulkUpsertable for SlackAttachmentRow {
-    const TABLE: &'static str = "slack_attachments";
-    const TYPED_COLUMNS: &'static [&'static str] = &["message_uuid", "file_id", "blake3"];
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.message_uuid)
-            .bind(&self.file_id)
-            .bind(self.blake3.as_deref())
-    }
 }
 
 /// Shared namespace for v5-derived Slack UUIDs.
@@ -292,11 +255,6 @@ pub fn replies_page_id_recipe(channel_id: &str, thread_ts: &str) -> String {
     format!("{channel_id}:{thread_ts}")
 }
 
-/// Recipe for the synthesized [`SLACK_ATTACHMENTS_DDL`] PK.
-pub fn attachment_id_recipe(message_uuid: &str, file_id: &str) -> String {
-    format!("{message_uuid}#{file_id}")
-}
-
 /// Compose the full DDL list passed to
 /// [`frankweiler_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
@@ -308,10 +266,8 @@ pub fn full_ddl() -> Vec<String> {
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),
         MESSAGES_BY_THREAD_INDEX_DDL.to_string(),
         REPLIES_PAGES_DDL.to_string(),
-        SLACK_ATTACHMENTS_DDL.to_string(),
-        SLACK_ATTACHMENTS_BY_MSG_INDEX_DDL.to_string(),
-        SLACK_ATTACHMENTS_BY_FILE_INDEX_DDL.to_string(),
     ];
+    out.extend(SlackAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

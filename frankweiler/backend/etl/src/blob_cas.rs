@@ -1103,6 +1103,101 @@ impl BlobBundle {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Per-provider CAS-edge tables — shared shape
+// ─────────────────────────────────────────────────────────────────────
+
+/// The shape every per-provider CAS edge table follows. One row per
+/// `(owning_id, ref_id)` pair, recording the CAS `blake3` for the
+/// bytes that the upstream's `ref_id` resolved to.
+///
+/// Implementors are row structs with **exactly four fields, in this
+/// order**:
+///
+/// ```ignore
+/// #[derive(CasEdgeRow)]
+/// #[cas_edge_row(table = "slack_attachments")]
+/// pub struct SlackAttachmentRow {
+///     pub id: String,           // synth "{owning_id}#{ref_id}"
+///     pub message_uuid: String, // owning-entity FK ← OWNING_COLUMN
+///     pub file_id: String,      // upstream ref      ← REF_COLUMN
+///     pub blake3: Option<String>,
+/// }
+/// ```
+///
+/// The proc-macro derive (`frankweiler_etl_macros::CasEdgeRow`) reads
+/// the second and third fields' identifiers and emits
+/// [`Self::OWNING_COLUMN`] / [`Self::REF_COLUMN`] accordingly, plus
+/// the [`crate::bulk::BulkUpsertable`] impl. Default trait methods
+/// then synthesize the `CREATE TABLE` + two index DDLs and the
+/// `"{owning_id}#{ref_id}"` PK recipe, so each provider's
+/// `schema_raw.rs` is just the four-field struct + the attribute.
+pub trait CasEdgeRow: crate::bulk::BulkUpsertable {
+    /// SQL column name carrying the owning-entity FK
+    /// (e.g. `conversation_id`, `message_uuid`, `chat_item_id`).
+    const OWNING_COLUMN: &'static str;
+    /// SQL column name carrying the upstream ref id
+    /// (e.g. `file_id`, `file_uuid`, `ref_id`).
+    const REF_COLUMN: &'static str;
+
+    /// `CREATE TABLE IF NOT EXISTS …` for this edge table. Same shape
+    /// for every provider — `id` PK, owning FK NOT NULL, ref NOT
+    /// NULL, blake3 nullable hex.
+    fn ddl() -> String {
+        format!(
+            "CREATE TABLE IF NOT EXISTS {table} (
+    id      TEXT PRIMARY KEY,
+    {owning} TEXT NOT NULL,
+    {ref_c}  TEXT NOT NULL,
+    blake3  TEXT NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
+)",
+            table = Self::TABLE,
+            owning = Self::OWNING_COLUMN,
+            ref_c = Self::REF_COLUMN,
+        )
+    }
+
+    /// Index on the owning-FK column. Supports "load every edge for
+    /// this owner" queries (per-bucket attachment loads on the
+    /// render side).
+    fn by_owning_index_ddl() -> String {
+        format!(
+            "CREATE INDEX IF NOT EXISTS {table}_by_{owning} ON {table}({owning})",
+            table = Self::TABLE,
+            owning = Self::OWNING_COLUMN,
+        )
+    }
+
+    /// Index on `(ref_column, blake3)` — supports the skip-check
+    /// "have we ever stored this ref's bytes" without a full scan,
+    /// and the per-thread `BlobBundle::load` projection's
+    /// `WHERE ref_id IN (…) AND blake3 IS NOT NULL`.
+    fn by_ref_index_ddl() -> String {
+        format!(
+            "CREATE INDEX IF NOT EXISTS {table}_by_{ref_c} ON {table}({ref_c}, blake3)",
+            table = Self::TABLE,
+            ref_c = Self::REF_COLUMN,
+        )
+    }
+
+    /// Convenience: every entry in [`Self::all_ddl`] in one slice,
+    /// ready to splice into a provider's `full_ddl()` composer.
+    fn all_ddl() -> Vec<String> {
+        vec![
+            Self::ddl(),
+            Self::by_owning_index_ddl(),
+            Self::by_ref_index_ddl(),
+        ]
+    }
+
+    /// Synthesized primary key recipe: `"{owning_id}#{ref_id}"`.
+    /// Universal across all four providers, so it lives here once.
+    fn pk_recipe(owning_id: &str, ref_id: &str) -> String {
+        format!("{owning_id}#{ref_id}")
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Per-provider CAS-edge index loader
 // ─────────────────────────────────────────────────────────────────────
 

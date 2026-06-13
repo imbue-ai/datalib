@@ -34,10 +34,8 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
 pub use db::{db_path_for, LoadedConversation, LoadedRaw, RawDb};
-use schema_raw::{
-    attachment_id_recipe, ConversationAttachmentRow, ConversationRow as ConversationRowSchema,
-    MeRow,
-};
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
+use schema_raw::{ConversationAttachmentRow, ConversationRow as ConversationRowSchema, MeRow};
 
 /// Inter-fetch sleep. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop without
@@ -558,7 +556,7 @@ async fn flush_attachment_bundle(
     let mut rows: Vec<ConversationAttachmentRow> = bundle
         .fetched_refs()
         .map(|f| ConversationAttachmentRow {
-            id: attachment_id_recipe(conversation_id, f.ref_id),
+            id: ConversationAttachmentRow::pk_recipe(conversation_id, f.ref_id),
             conversation_id: conversation_id.to_string(),
             file_id: f.ref_id.to_string(),
             blake3: Some(f.blake3.to_string()),
@@ -566,7 +564,7 @@ async fn flush_attachment_bundle(
         .collect();
     for ref_id in failed_refs {
         rows.push(ConversationAttachmentRow {
-            id: attachment_id_recipe(conversation_id, ref_id),
+            id: ConversationAttachmentRow::pk_recipe(conversation_id, ref_id),
             conversation_id: conversation_id.to_string(),
             file_id: ref_id.clone(),
             blake3: None,
@@ -574,7 +572,7 @@ async fn flush_attachment_bundle(
     }
     for (file_id, blake3) in known_blake3 {
         rows.push(ConversationAttachmentRow {
-            id: attachment_id_recipe(conversation_id, file_id),
+            id: ConversationAttachmentRow::pk_recipe(conversation_id, file_id),
             conversation_id: conversation_id.to_string(),
             file_id: file_id.clone(),
             blake3: Some(blake3.clone()),
@@ -583,7 +581,12 @@ async fn flush_attachment_bundle(
     let errors: Vec<(String, String)> = bundle
         .errors()
         .iter()
-        .map(|(ref_id, err)| (attachment_id_recipe(conversation_id, ref_id), err.clone()))
+        .map(|(ref_id, err)| {
+            (
+                ConversationAttachmentRow::pk_recipe(conversation_id, ref_id),
+                err.clone(),
+            )
+        })
         .collect();
     frankweiler_etl::blob_cas::flush_cas_edges(
         db.pool(),

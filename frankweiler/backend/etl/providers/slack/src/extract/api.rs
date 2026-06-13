@@ -12,13 +12,13 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
-use frankweiler_etl::blob_cas::{flush_cas_edges, BlobBundle};
+use frankweiler_etl::blob_cas::{flush_cas_edges, BlobBundle, CasEdgeRow as _};
 use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 
 use super::db::RawDb;
-use super::schema_raw::{attachment_id_recipe, slack_message_uuid, SlackAttachmentRow};
+use super::schema_raw::{slack_message_uuid, SlackAttachmentRow};
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -274,7 +274,7 @@ impl ChannelAttachments {
             .edges
             .iter()
             .map(|e| SlackAttachmentRow {
-                id: attachment_id_recipe(&e.message_uuid, &e.file_id),
+                id: SlackAttachmentRow::pk_recipe(&e.message_uuid, &e.file_id),
                 message_uuid: e.message_uuid.clone(),
                 file_id: e.file_id.clone(),
                 blake3: blake3_by_file
@@ -291,7 +291,7 @@ impl ChannelAttachments {
             for e in &self.edges {
                 if &e.file_id == file_id {
                     error_stamps.push((
-                        attachment_id_recipe(&e.message_uuid, &e.file_id),
+                        SlackAttachmentRow::pk_recipe(&e.message_uuid, &e.file_id),
                         err.clone(),
                     ));
                 }

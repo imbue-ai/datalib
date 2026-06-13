@@ -22,12 +22,9 @@
 //! `cas_objects`. Replaces this provider's writes into the shared
 //! `blob_refs`.
 
-use frankweiler_etl::bulk::BulkUpsertable;
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use frankweiler_etl_macros::WirePayloadRow;
-use sqlx::query::Query;
-use sqlx::sqlite::SqliteArguments;
-use sqlx::Sqlite;
+use frankweiler_etl_macros::{CasEdgeRow, WirePayloadRow};
 
 pub const DATA_TABLES: &[&str] = &["users", "orgs", "conversations", "anthropic_attachments"];
 
@@ -78,62 +75,15 @@ pub const MIGRATION_CONVERSATIONS_ADD_ORG_NAME: &str =
 
 /// `anthropic_attachments` — N:M edge between one conversation's
 /// attachment slot and a `cas_objects` blob. Replaces this provider's
-/// use of the shared `blob_refs` table.
-///
-/// Columns:
-/// - `id` — synthesized PK `"{conversation_uuid}#{file_uuid}"`.
-/// - `conversation_uuid` — FK into [`ConversationRow`]. Indexed for
-///   the per-conversation load on render, and projected directly by
-///   the dolt_diff union as the natural bucket key.
-/// - `file_uuid` — upstream Anthropic `file_uuid`. Skip-check key:
-///   `(file_uuid, blake3 IS NOT NULL)` means we already have the
-///   bytes.
-/// - `blake3` — CAS content hash, NULL until the CAS write succeeds.
-pub const ANTHROPIC_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS anthropic_attachments (
-    id                TEXT PRIMARY KEY,
-    conversation_uuid TEXT NOT NULL,
-    file_uuid         TEXT NOT NULL,
-    blake3            TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-pub const ANTHROPIC_ATTACHMENTS_BY_CONV_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS anthropic_attachments_by_conv \
-     ON anthropic_attachments(conversation_uuid)";
-
-pub const ANTHROPIC_ATTACHMENTS_BY_FILE_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS anthropic_attachments_by_file \
-     ON anthropic_attachments(file_uuid, blake3)";
-
-#[derive(Debug, Clone)]
+/// use of the shared `blob_refs` table. Universal CAS-edge shape;
+/// see [`frankweiler_etl::blob_cas::CasEdgeRow`].
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "anthropic_attachments")]
 pub struct ConversationAttachmentRow {
     pub id: String,
     pub conversation_uuid: String,
     pub file_uuid: String,
     pub blake3: Option<String>,
-}
-
-impl BulkUpsertable for ConversationAttachmentRow {
-    const TABLE: &'static str = "anthropic_attachments";
-    const TYPED_COLUMNS: &'static [&'static str] = &["conversation_uuid", "file_uuid", "blake3"];
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.conversation_uuid)
-            .bind(&self.file_uuid)
-            .bind(self.blake3.as_deref())
-    }
-}
-
-pub fn attachment_id_recipe(conversation_uuid: &str, file_uuid: &str) -> String {
-    format!("{conversation_uuid}#{file_uuid}")
 }
 
 pub fn full_ddl() -> Vec<String> {
@@ -143,10 +93,8 @@ pub fn full_ddl() -> Vec<String> {
         ConversationRow::ddl(),
         CONVERSATIONS_ORG_INDEX_DDL.to_string(),
         CONVERSATIONS_UPDATED_INDEX_DDL.to_string(),
-        ANTHROPIC_ATTACHMENTS_DDL.to_string(),
-        ANTHROPIC_ATTACHMENTS_BY_CONV_INDEX_DDL.to_string(),
-        ANTHROPIC_ATTACHMENTS_BY_FILE_INDEX_DDL.to_string(),
     ];
+    out.extend(ConversationAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

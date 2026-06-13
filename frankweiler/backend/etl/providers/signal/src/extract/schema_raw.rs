@@ -84,12 +84,9 @@
 //!   three on-disk files. Re-ingesting the same snapshot is a
 //!   single-row PK-lookup skip. See plan §P1.12.
 
-use frankweiler_etl::bulk::BulkUpsertable;
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use frankweiler_etl_macros::WirePayloadRow;
-use sqlx::query::Query;
-use sqlx::sqlite::SqliteArguments;
-use sqlx::Sqlite;
+use frankweiler_etl_macros::{CasEdgeRow, WirePayloadRow};
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -193,68 +190,24 @@ pub const CHATS_BY_RECIPIENT_INDEX_DDL: &str =
 pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS chat_items_by_chat ON chat_items(chat_id, date_sent)";
 
-/// `chat_item_attachments` — one row per attachment slot of a
-/// `chat_items` row.
+/// `chat_item_attachments` — N:M edge between one chat_item's
+/// attachment slot and a `cas_objects` blob. Universal CAS-edge
+/// shape (see [`frankweiler_etl::blob_cas::CasEdgeRow`]):
+/// `id` (synth PK) + `chat_item_id` (owning FK, indexed) +
+/// `ref_id` (= Signal `media_name`, indexed for the skip-check)
+/// + `blake3` (CAS hash, NULL until decrypt+store succeed).
 ///
-/// The minimal "this entity references this CAS blob" edge — four
-/// columns. Per-attachment upstream metadata (`content_type`,
-/// `file_name`, etc.) is **not stored here**: every field translate
-/// needs is already in `chat_items.payload` (the `FilePointer`
-/// proto carries it), and `content_type` for the bytes themselves
-/// is on `cas_objects`. Storing it here would be unnecessary
-/// duplication.
+/// Replaces this provider's use of the shared `blob_refs` table;
+/// see [issue #36](https://github.com/imbue-ai/mixed_up_files/issues/36).
 ///
-/// This replaces Signal's use of the shared `blob_refs` table; see
-/// [issue #36](https://github.com/imbue-ai/mixed_up_files/issues/36)
-/// and the `docs/data_architecture_ingestion.md` discussion of the
-/// "N:M edge as a per-provider attachment table" pattern.
-///
-/// Columns:
-/// - `id` — synthesized PK `"{chat_item_id}#{slot}"`. The same
-///   recipe Signal uses for chat_items (composite-key flattened to
-///   a string), so the bookkeeping sidecar's uniform
-///   `id TEXT PRIMARY KEY` shape holds without change.
-/// - `chat_item_id` — FK into [`ChatItemRow`]. Explicit (not
-///   reverse-parsed from the synthesized PK) so render can fetch
-///   "every attachment of this chat_item" in one indexed SELECT
-///   instead of either scanning the table or parsing PKs. Paired
-///   with the `chat_item_attachments_by_chat_item` index below.
-/// - `ref_id` — Signal's `media_name` (=
-///   `local_media_name(plaintext_hash, local_key)`). The same value
-///   the encrypted on-disk attachment file is named by. Skip-check
-///   key: a row with `(ref_id = X, blake3 IS NOT NULL)` means "we
-///   have already decrypted and stored `media_name X`", and a later
-///   re-walk that sees the same media_name in a different chat_item
-///   skips redundant decrypt work.
-/// - `blake3` — content hash (64-hex Blake3) of the decrypted
-///   bytes once they're in the CAS. `NULL` until the CAS write
-///   succeeds; a non-NULL value is what the render-side BlobReader
-///   joins back to `cas_objects` on.
-pub const CHAT_ITEM_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS chat_item_attachments (
-    id           TEXT PRIMARY KEY,
-    chat_item_id TEXT NOT NULL,
-    ref_id       TEXT NOT NULL,
-    blake3       TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-/// Index on `chat_item_id` — supports "give me every attachment
-/// of this chat_item in one SELECT," which render uses to bulk-load
-/// attachments per message.
-pub const CHAT_ITEM_ATTACHMENTS_BY_CHAT_ITEM_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS chat_item_attachments_by_chat_item \
-     ON chat_item_attachments(chat_item_id)";
-
-/// Index on `(ref_id, blake3)` — supports the skip-check
-/// `WHERE ref_id = ? AND blake3 IS NOT NULL`, which both the
-/// extract path (don't re-decrypt) and the translate
-/// `SignalBlobReader` (resolve ref_id → blake3) use.
-pub const CHAT_ITEM_ATTACHMENTS_BY_REF_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS chat_item_attachments_by_ref \
-     ON chat_item_attachments(ref_id, blake3)";
-
-/// Row to upsert into [`CHAT_ITEM_ATTACHMENTS_DDL`].
-#[derive(Debug, Clone)]
+/// **Signal-specific:** the PK recipe is `"{chat_item_id}#{slot}"`,
+/// not the trait's default `"{chat_item_id}#{ref_id}"` — one
+/// chat_item can attach the same `media_name` to multiple slots,
+/// so the PK has to include the slot index. Signal calls
+/// [`chat_item_attachment_id_recipe`] directly; the trait-derived
+/// `pk_recipe` is not used for this table.
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "chat_item_attachments")]
 pub struct ChatItemAttachmentRow {
     pub id: String,
     pub chat_item_id: String,
@@ -262,34 +215,9 @@ pub struct ChatItemAttachmentRow {
     pub blake3: Option<String>,
 }
 
-impl BulkUpsertable for ChatItemAttachmentRow {
-    const TABLE: &'static str = "chat_item_attachments";
-    const TYPED_COLUMNS: &'static [&'static str] = &["chat_item_id", "ref_id", "blake3"];
-    // No payload column — this is an N:M edge table that just
-    // records (this chat_item's attachment slot, the CAS blob it
-    // references via its content hash). All per-attachment upstream
-    // metadata lives in `chat_items.payload` (the `FilePointer`
-    // proto fields); per-blob metadata like `content_type` lives in
-    // `cas_objects`.
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.chat_item_id)
-            .bind(&self.ref_id)
-            .bind(self.blake3.as_deref())
-    }
-}
-
-/// Recipe for the synthesized [`CHAT_ITEM_ATTACHMENTS_DDL`] PK.
-/// `"{chat_item_id}#{slot}"` — same `#`-delimited shape Signal uses
-/// for `chat_items.id`.
+/// Signal-specific PK recipe: `"{chat_item_id}#{slot}"`. The trait's
+/// default `pk_recipe` doesn't apply here (see the type-level
+/// doc-comment).
 pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String {
     format!("{chat_item_id}#{slot}")
 }
@@ -421,14 +349,12 @@ pub fn full_ddl() -> Vec<String> {
         CHATS_BY_RECIPIENT_INDEX_DDL.to_string(),
         ChatItemRow::ddl(),
         CHAT_ITEMS_BY_CHAT_INDEX_DDL.to_string(),
-        CHAT_ITEM_ATTACHMENTS_DDL.to_string(),
-        CHAT_ITEM_ATTACHMENTS_BY_CHAT_ITEM_INDEX_DDL.to_string(),
-        CHAT_ITEM_ATTACHMENTS_BY_REF_INDEX_DDL.to_string(),
         // Resume cursor — see INGESTED_BACKUPS_DDL. Not in
         // DATA_TABLES because it has no upstream-id / bookkeeping
         // shape; reset() truncates it explicitly.
         INGESTED_BACKUPS_DDL.to_string(),
     ];
+    out.extend(ChatItemAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

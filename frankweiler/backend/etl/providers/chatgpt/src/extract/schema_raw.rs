@@ -46,12 +46,9 @@
 //! `chatgpt_attachments` → `cas_objects` on `blake3`. Replaces this
 //! provider's use of the shared `blob_refs` table.
 
-use frankweiler_etl::bulk::BulkUpsertable;
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
-use frankweiler_etl_macros::WirePayloadRow;
-use sqlx::query::Query;
-use sqlx::sqlite::SqliteArguments;
-use sqlx::Sqlite;
+use frankweiler_etl_macros::{CasEdgeRow, WirePayloadRow};
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -106,74 +103,19 @@ pub const CONVERSATIONS_UPDATE_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS conversations_update ON conversations(update_time)";
 
 /// `chatgpt_attachments` — N:M edge between one conversation's
-/// attachment slot and a `cas_objects` blob.
-///
-/// Replaces this provider's use of the shared `blob_refs` table. The
-/// per-attachment metadata translate needs (file name, mime type)
-/// already lives in `conversations.payload.mapping[*]...`; we only
-/// store the (file_id → blake3) mapping here.
-///
-/// Columns:
-/// - `id` — synthesized PK `"{conversation_id}#{file_id}"`. Keeps
-///   the same `id TEXT PRIMARY KEY` shape as every other table so the
-///   bookkeeping sidecar pattern lifts unchanged.
-/// - `conversation_id` — FK into [`ConversationRow`]. Explicit so the
-///   dolt_diff union can project the natural bucket key without
-///   parsing the synthesized PK; also indexed for "every attachment
-///   in this conversation" loads.
-/// - `file_id` — upstream ChatGPT `file_id`. The same value the
-///   renderer's `OAAttachmentRef.file_id` carries. Skip-check key:
-///   `(file_id, blake3 IS NOT NULL)` means "we already have the
-///   bytes for this file."
-/// - `blake3` — CAS content hash. `NULL` until the CAS write
-///   succeeds.
-pub const CHATGPT_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS chatgpt_attachments (
-    id              TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    file_id         TEXT NOT NULL,
-    blake3          TEXT NULL,
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-pub const CHATGPT_ATTACHMENTS_BY_CONV_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS chatgpt_attachments_by_conv \
-     ON chatgpt_attachments(conversation_id)";
-
-pub const CHATGPT_ATTACHMENTS_BY_FILE_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS chatgpt_attachments_by_file \
-     ON chatgpt_attachments(file_id, blake3)";
-
-/// Row to upsert into [`CHATGPT_ATTACHMENTS_DDL`].
-#[derive(Debug, Clone)]
+/// attachment slot and a `cas_objects` blob. Replaces this provider's
+/// use of the shared `blob_refs` table. The per-attachment metadata
+/// translate needs (file name, mime type) already lives in
+/// `conversations.payload.mapping[*]...`; we only store the
+/// (file_id → blake3) mapping here. Universal CAS-edge shape;
+/// see [`frankweiler_etl::blob_cas::CasEdgeRow`].
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "chatgpt_attachments")]
 pub struct ConversationAttachmentRow {
     pub id: String,
     pub conversation_id: String,
     pub file_id: String,
     pub blake3: Option<String>,
-}
-
-impl BulkUpsertable for ConversationAttachmentRow {
-    const TABLE: &'static str = "chatgpt_attachments";
-    const TYPED_COLUMNS: &'static [&'static str] = &["conversation_id", "file_id", "blake3"];
-    const PAYLOAD_COLUMN: Option<&'static str> = None;
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-    fn bind_into<'q>(
-        &'q self,
-        q: Query<'q, Sqlite, SqliteArguments<'q>>,
-    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
-        q.bind(&self.id)
-            .bind(&self.conversation_id)
-            .bind(&self.file_id)
-            .bind(self.blake3.as_deref())
-    }
-}
-
-/// Recipe for the synthesized [`CHATGPT_ATTACHMENTS_DDL`] PK.
-pub fn attachment_id_recipe(conversation_id: &str, file_id: &str) -> String {
-    format!("{conversation_id}#{file_id}")
 }
 
 /// Compose the full DDL list passed to
@@ -183,10 +125,8 @@ pub fn full_ddl() -> Vec<String> {
         MeRow::ddl(),
         ConversationRow::ddl(),
         CONVERSATIONS_UPDATE_INDEX_DDL.to_string(),
-        CHATGPT_ATTACHMENTS_DDL.to_string(),
-        CHATGPT_ATTACHMENTS_BY_CONV_INDEX_DDL.to_string(),
-        CHATGPT_ATTACHMENTS_BY_FILE_INDEX_DDL.to_string(),
     ];
+    out.extend(ConversationAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
