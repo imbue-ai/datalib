@@ -390,6 +390,33 @@ pub const EVENTS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 
 /// Row matching [`EVENTS_DDL`]. Hand-rolled `BulkUpsertable` (no
 /// `payload` column).
+///
+/// **Schema honesty caveat:** `reaction_emoji` and
+/// `reaction_target_native_event_id` are only meaningful when
+/// `event_type = 'REACTION'`; `text_content` and `reply_to_*` /
+/// `edit_of_*` make sense for `'TEXT'` / `'IMAGE'` / `'FILE'` rows
+/// but not for `'REACTION'` / `'MEMBERSHIP'` / `'HIDDEN'`. The DDL
+/// doesn't enforce these per-`event_type` subsets — it can't,
+/// without a per-type table split — and a reader of the schema has
+/// to consult this docstring (and the
+/// [`crate::translate::render`] taxonomy switch) to know which
+/// columns apply when.
+///
+/// We pay this cost deliberately to keep the
+/// "everything-on-one-timeline" rendering shape:
+/// `SELECT … FROM events WHERE room_uuid = ? ORDER BY timestamp_ms`
+/// in one indexed scan is the load-bearing operation for both
+/// period-bucketing and reaction-to-message attachment. A
+/// per-`event_type` split (`beeper_message` / `beeper_reaction` /
+/// `beeper_membership` / …) would force a `UNION` or a join-heavy
+/// rewrite of the bucket walker in
+/// [`crate::translate::parse`] and lose the chronological
+/// ordering convenience the unified table buys us.
+///
+/// If a future need pushes us toward stricter typing, the natural
+/// re-split is along `event_type` — the docstring above already
+/// lists the canonical taxonomy and most columns map cleanly to
+/// one or two subtables.
 #[derive(Debug, Clone, Default)]
 pub struct EventRow {
     pub id: String,

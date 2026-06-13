@@ -28,7 +28,7 @@ use frankweiler_etl::progress::Progress;
 use tracing::{info, warn};
 
 use api::{CarddavError, Multistatus};
-use db::ContactRow;
+use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
 /// other provider crate exposes.
@@ -130,7 +130,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             }
         }
-        let book_id = RawDb::addressbook_pk(&account_id, &book.href);
+        let book_id = addressbook_pk(&account_id, &book.href);
         let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
@@ -275,15 +275,15 @@ async fn apply_multistatus(
         } else {
             summary.contacts_new += 1;
         }
-        rows.push(ContactRow {
-            addressbook_id: book_id.to_string(),
+        rows.push(ContactRow::new(
+            book_id.to_string(),
             uid,
-            href: href.clone(),
-            etag: etag.clone(),
-            display_name: api::vcard_fn(vcard),
-            revision: api::vcard_rev(vcard),
-            payload_vcard: vcard.clone(),
-        });
+            href.clone(),
+            etag.clone(),
+            api::vcard_fn(vcard),
+            api::vcard_rev(vcard),
+            vcard,
+        ));
     }
     db.upsert_contacts(&rows).await?;
 

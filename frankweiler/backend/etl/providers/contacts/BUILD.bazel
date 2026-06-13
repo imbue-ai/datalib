@@ -19,10 +19,14 @@ rust_library(
     crate_name = "frankweiler_etl_contacts",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:base64",
         "@frankweiler_crates//:chrono",
