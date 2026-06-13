@@ -57,7 +57,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
-    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
+    GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
     SourceConfig, WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
@@ -1390,6 +1390,10 @@ enum ExtractKind {
         /// Optional `account_id` override; falls back to the mbox
         /// file stem.
         account_id_override: Option<String>,
+        /// Account-row display data (name / email / personal flag)
+        /// from the YAML `mbox:` block, piped through to the mbox
+        /// extractor so the synthesized `accounts` row matches JMAP.
+        account_config: MboxSync,
         blob_size_limit_bytes: Option<u64>,
     },
     Yolink {
@@ -1481,7 +1485,7 @@ impl ExtractPlan {
                 }
             }
             SourceConfig::ClaudeExport { .. } => return None,
-            SourceConfig::Email { sync, .. } => {
+            SourceConfig::Email { sync, mbox, .. } => {
                 let blob_size_limit_bytes = src.resolved_shared(cfg).blob_size_limit_bytes;
                 match sync.clone() {
                     Some(sync) => ExtractKind::Jmap {
@@ -1505,9 +1509,11 @@ impl ExtractPlan {
                             )));
                         }
                         out_dir = cfg.data_root.join("raw").join(&name);
+                        let mbox_cfg = mbox.clone().unwrap_or_default();
                         ExtractKind::EmailMbox {
                             input_path,
-                            account_id_override: None,
+                            account_id_override: mbox_cfg.account_id.clone(),
+                            account_config: mbox_cfg,
                             blob_size_limit_bytes,
                         }
                     }
@@ -1969,6 +1975,7 @@ impl ExtractPlan {
                 ExtractKind::EmailMbox {
                     input_path,
                     account_id_override,
+                    account_config,
                     blob_size_limit_bytes,
                 },
                 Some(DbHandle::Jmap(db)),
@@ -1978,6 +1985,13 @@ impl ExtractPlan {
                     db: Some(db),
                     input_path,
                     account_id_override,
+                    account_config:
+                        frankweiler_etl_email::extract::mbox::MboxAccountConfig {
+                            account_id: account_config.account_id,
+                            display_name: account_config.display_name,
+                            email_address: account_config.email_address,
+                            is_personal: account_config.is_personal,
+                        },
                     blob_size_limit_bytes,
                     progress: progress.clone(),
                     control: control.clone(),

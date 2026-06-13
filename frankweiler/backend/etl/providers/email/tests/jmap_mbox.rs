@@ -75,9 +75,11 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         .find(|e| e.id == "briefing-003@enterprise.starfleet")
         .expect("geordi present");
     assert!(geordi.has_attachment);
-    let atts = &joins.attachments[&geordi.id];
-    assert_eq!(atts.len(), 1);
-    assert_eq!(atts[0].name.as_deref(), Some("warp_diagnostics.txt"));
+    // Attachment payloads now live inside the `.eml` itself (see
+    // `extract_attachments_from_emls` at parse time) — not in a
+    // dedicated email_attachments row. We only assert the
+    // `has_attachment` flag here; the rendered-blobs test exercises
+    // the parse-time mail-parsing path.
 
     // Geordi tagged Unread → no $seen (and possibly no keyword row at all if
     // Unread was the only label that mapped to a keyword).

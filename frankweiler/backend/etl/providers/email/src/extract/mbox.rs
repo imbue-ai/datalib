@@ -67,8 +67,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
-use super::db::{db_path_for, AttachmentRow, EmailRow, RawDb};
-use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+use super::db::{db_path_for, EmailRow, RawDb};
+use super::schema_raw::{AccountRow, BLOB_KIND_EML};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
@@ -82,6 +82,28 @@ use super::schema_raw::{BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
 /// that's ~30 transactions instead of ~120k.
 const FLUSH_BATCH: usize = 2000;
 
+/// Account-row data the orchestrator pipes in from the source YAML.
+///
+/// Mbox files don't carry an account identity inside them — the file
+/// stem is the only thing we can derive from the file alone, and even
+/// that is brittle. The sync YAML names the account (display name,
+/// canonical email address, personal-vs-shared flag), and this struct
+/// carries that information into the mbox extract so the synthesized
+/// `accounts` row matches the shape JMAP would produce.
+///
+/// All fields are optional so the extract still runs against a
+/// loose `.mbox` with no configured account (e.g. a one-off
+/// fixture). Defaults: `account_id` ← mbox file stem (or
+/// `account_id_override`); `display_name` ← `account_id`; `is_personal`
+/// ← `true`.
+#[derive(Debug, Clone, Default)]
+pub struct MboxAccountConfig {
+    pub account_id: Option<String>,
+    pub display_name: Option<String>,
+    pub email_address: Option<String>,
+    pub is_personal: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
     /// Doltlite database path. Ignored when `db` is `Some`.
@@ -91,8 +113,13 @@ pub struct FetchOptions {
     pub db: Option<RawDb>,
     /// `.mbox` file (or directory containing `*.mbox` files).
     pub input_path: PathBuf,
-    /// Overrides the file-stem default for `account_id`.
+    /// Overrides the file-stem default for `account_id`. (Kept
+    /// alongside `account_config` for back-compat with tests / older
+    /// call sites; if `account_config.account_id` is set, that wins.)
     pub account_id_override: Option<String>,
+    /// Account-row config from the source YAML (display name, email,
+    /// is_personal flag). See [`MboxAccountConfig`].
+    pub account_config: MboxAccountConfig,
     /// Skip attachment bytes whose size exceeds this. The
     /// `email_attachments` row still lands (so we record what was
     /// referenced), but the bytes never enter the CAS — translate
@@ -109,6 +136,7 @@ impl Default for FetchOptions {
             db: None,
             input_path: PathBuf::new(),
             account_id_override: None,
+            account_config: MboxAccountConfig::default(),
             blob_size_limit_bytes: None,
             progress: Progress::noop(),
             control: ExtractControl::default(),
@@ -144,8 +172,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         return Ok(FetchSummary::default());
     }
     let account_id = opts
-        .account_id_override
+        .account_config
+        .account_id
         .clone()
+        .or_else(|| opts.account_id_override.clone())
         .unwrap_or_else(|| default_account_id(&opts.input_path));
 
     let known_blobs = db.loaded_blob_ids().await?;
@@ -202,7 +232,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         opts.progress.inc(skipped_total_bytes);
     }
 
-    let mut accumulator = Accumulator::new(account_id.clone(), opts.blob_size_limit_bytes);
+    let mut accumulator = Accumulator::new(account_id.clone());
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
@@ -251,7 +281,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // delete-then-insert) aren't worth the round-trip when every
     // file was a cache hit.
     if files_processed > 0 {
-        flush_account_and_lookups(&db, &account_id, &accumulator, &mut summary).await?;
+        flush_account_and_lookups(
+            &db,
+            &account_id,
+            &opts.account_config,
+            &accumulator,
+            &mut summary,
+        )
+        .await?;
     } else if skipped_count > 0 {
         info!(
             event = "mbox_all_files_skipped",
@@ -420,7 +457,6 @@ fn unescape_from_line(line: &[u8]) -> Vec<u8> {
 
 struct Accumulator {
     account_id: String,
-    blob_size_limit_bytes: Option<u64>,
     mailboxes: BTreeMap<String, MailboxEntry>,
     threads: BTreeMap<String, Vec<ThreadMember>>,
     seen_email_ids: BTreeSet<String>,
@@ -438,10 +474,9 @@ struct ThreadMember {
 }
 
 impl Accumulator {
-    fn new(account_id: String, blob_size_limit_bytes: Option<u64>) -> Self {
+    fn new(account_id: String) -> Self {
         Self {
             account_id,
-            blob_size_limit_bytes,
             mailboxes: BTreeMap::new(),
             threads: BTreeMap::new(),
             seen_email_ids: BTreeSet::new(),
@@ -493,7 +528,7 @@ impl Accumulator {
         let labels = split_gmail_labels(&label_header);
         let (mailbox_ids, keywords) = self.resolve_labels(&labels);
 
-        // Date / subject / from.
+        // Date / subject / from / to / cc.
         let received_at = msg
             .date()
             .and_then(|d| frankweiler_time::parse_strict(&d.to_rfc3339()).ok())
@@ -503,57 +538,35 @@ impl Accumulator {
         let subject = msg.subject().map(str::to_string);
         let from_json =
             addresses_to_jmap(msg.from()).map(|v| serde_json::to_string(&v).unwrap_or_default());
+        let to_json =
+            addresses_to_jmap(msg.to()).map(|v| serde_json::to_string(&v).unwrap_or_default());
+        let cc_json =
+            addresses_to_jmap(msg.cc()).map(|v| serde_json::to_string(&v).unwrap_or_default());
 
-        // Walk the MIME tree once to enumerate attachments + queue
-        // their bytes for the CAS bulk-insert. No body decode.
-        let mut attachments: Vec<AttachmentRow> = Vec::new();
-        for (part_id, part) in iter_attachments(&msg) {
-            let bytes = part.contents();
-            let blob_blake3 = blake3_hex(bytes);
-            let blob_id = blob_blake3.clone();
-            let name = part.attachment_name().map(str::to_string);
-            let content_type = part.content_type().map(|ct| match ct.subtype() {
-                Some(sub) => format!("{}/{}", ct.ctype(), sub),
-                None => ct.ctype().to_string(),
-            });
-            let size = bytes.len() as i64;
-            let disposition = part.content_disposition().map(|cd| cd.ctype().to_string());
-            let cid = part.content_id().map(str::to_string);
+        // Threading headers — load-bearing for thread stitching when
+        // there's no `X-GM-THRID`.
+        let in_reply_to = msg
+            .header("In-Reply-To")
+            .and_then(header_text)
+            .map(|s| strip_angle(&s).to_string());
+        let references = msg
+            .header("References")
+            .and_then(header_text)
+            .map(|s| {
+                s.split_whitespace()
+                    .map(|tok| strip_angle(tok).to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|s| !s.is_empty());
 
-            let oversize = self
-                .blob_size_limit_bytes
-                .is_some_and(|cap| bytes.len() as u64 > cap);
-            if oversize {
-                summary.blobs_oversize += 1;
-            } else if known_blobs.contains_key(&blob_id) || pending.seen_blob_ids.contains(&blob_id)
-            {
-                summary.blobs_skipped += 1;
-            } else {
-                pending.seen_blob_ids.insert(blob_id.clone());
-                pending.cas_objects.push(PendingCas {
-                    blake3: blob_blake3,
-                    kind: BLOB_KIND_ATTACHMENT,
-                    owning_id: email_id.clone(),
-                    slot: part_id.clone(),
-                    content_type: content_type.clone(),
-                    bytes: bytes.to_vec(),
-                });
-                summary.blobs_stored += 1;
-            }
+        // Has-attachment is computed once by walking the parts — no
+        // per-part rows land. The bytes ARE the .eml; render
+        // mail-parses on demand if it needs to display attachments.
+        let has_attachment = iter_attachments(&msg).next().is_some();
 
-            attachments.push(AttachmentRow {
-                part_id,
-                blob_id,
-                name,
-                content_type,
-                size: Some(size),
-                disposition,
-                cid,
-            });
-        }
-        let has_attachment = !attachments.is_empty();
-
-        // Queue the .eml itself.
+        // Queue the .eml itself (the canonical body — everything we
+        // need for render lives inside it).
         if known_blobs.contains_key(&eml_blob_id) || pending.seen_blob_ids.contains(&eml_blob_id) {
             summary.blobs_skipped += 1;
         } else {
@@ -562,7 +575,6 @@ impl Accumulator {
                 blake3: eml_blake3,
                 kind: BLOB_KIND_EML,
                 owning_id: email_id.clone(),
-                slot: String::new(),
                 content_type: Some("message/rfc822".to_string()),
                 bytes: raw.to_vec(),
             });
@@ -583,15 +595,18 @@ impl Accumulator {
             thread_id,
             blob_id: eml_blob_id,
             message_id: msg.message_id().map(|m| strip_angle(m).to_string()),
+            in_reply_to,
+            references,
             received_at,
             sent_at,
             size: Some(raw.len() as i64),
             subject,
             from_json,
+            to_json,
+            cc_json,
             has_attachment,
             mailbox_ids,
             keywords,
-            attachments,
         });
         Ok(true)
     }
@@ -672,15 +687,9 @@ struct PendingBatch {
 struct PendingCas {
     blake3: String,
     kind: &'static str,
-    /// For `BLOB_KIND_EML`: the owning email id (= the row to UPDATE
-    /// in `emails`). For `BLOB_KIND_ATTACHMENT`: the email id of
-    /// the parent (= the `email_id` to UPDATE in
-    /// `email_attachments`).
+    /// The owning email id (= the row to UPDATE in `emails` once the
+    /// `.eml` blob is in CAS). Always `BLOB_KIND_EML` post-port.
     owning_id: String,
-    /// For `BLOB_KIND_ATTACHMENT`: the JMAP `part_id` (= the
-    /// `part_id` in the `email_attachments` UPDATE). For
-    /// `BLOB_KIND_EML`: ignored.
-    slot: String,
     content_type: Option<String>,
     bytes: Vec<u8>,
 }
@@ -717,44 +726,19 @@ async fn flush_batch(
     bulk_insert_emails(&mut etx, &batch.emails).await?;
     bulk_insert_email_mailboxes(&mut etx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut etx, &batch.emails).await?;
-    bulk_insert_email_attachments(&mut etx, &batch.emails).await?;
-    // Phase 2: backfill the per-provider blake3 columns straight off
-    // the CAS-pending accumulator. The .eml entries land in
-    // `emails.blake3`; per-part entries land in
-    // `email_attachments.blake3`. Per-row UPDATEs are sufficient
-    // here — mbox batches are bounded by FLUSH_BATCH, so we're
-    // talking dozens-to-low-thousands of rows per flush.
+    // Phase 2: backfill `emails.blake3` straight off the
+    // CAS-pending accumulator. Only `.eml` blobs land here after the
+    // eml-as-canonical port — per-attachment blobs are gone. Per-row
+    // UPDATEs are sufficient: mbox batches are bounded by
+    // FLUSH_BATCH.
     for c in &batch.cas_objects {
-        match c.kind {
-            BLOB_KIND_EML => {
-                sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
-                    .bind(&c.blake3)
-                    .bind(&c.owning_id)
-                    .execute(&mut *etx)
-                    .await
-                    .with_context(|| format!("update emails.blake3 for {}", c.owning_id))?;
-            }
-            BLOB_KIND_ATTACHMENT => {
-                sqlx::query(
-                    "UPDATE email_attachments SET blake3 = ?
-                     WHERE email_id = ? AND part_id = ?",
-                )
-                .bind(&c.blake3)
-                .bind(&c.owning_id)
-                .bind(&c.slot)
-                .execute(&mut *etx)
-                .await
-                .with_context(|| {
-                    format!(
-                        "update email_attachments.blake3 for {}/{}",
-                        c.owning_id, c.slot
-                    )
-                })?;
-            }
-            other => {
-                anyhow::bail!("unexpected PendingCas.kind = {other:?}");
-            }
-        }
+        debug_assert_eq!(c.kind, BLOB_KIND_EML);
+        sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
+            .bind(&c.blake3)
+            .bind(&c.owning_id)
+            .execute(&mut *etx)
+            .await
+            .with_context(|| format!("update emails.blake3 for {}", c.owning_id))?;
     }
     bulk_upsert_bookkeeping(
         &mut etx,
@@ -790,40 +774,29 @@ async fn flush_batch(
 async fn flush_account_and_lookups(
     db: &RawDb,
     account_id: &str,
+    account_config: &MboxAccountConfig,
     accumulator: &Accumulator,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     let mut tx = db.pool().begin().await.context("begin lookups tx")?;
 
-    // Account.
-    let account_payload = serde_json::to_string(&serde_json::json!({
-        "id": account_id,
-        "name": account_id,
-        "isPersonal": true,
-    }))
-    .unwrap_or_default();
-    sqlx::query(
-        "INSERT INTO accounts (id, name, is_personal, is_read_only, payload)
-         VALUES (?, ?, 1, NULL, jsonb(?))
-         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            is_personal = excluded.is_personal,
-            payload = excluded.payload",
-    )
-    .bind(account_id)
-    .bind(account_id)
-    .bind(&account_payload)
-    .execute(&mut *tx)
-    .await
-    .context("insert account")?;
-    frankweiler_etl::bulk::bulk_upsert_bookkeeping(
-        &mut tx,
-        "accounts",
-        std::iter::once(account_id),
-        &now,
-    )
-    .await?;
+    // Account row: route through `AccountRow::from_mbox_config` and
+    // the shared `bulk_upsert_in_tx` so the synthesized row has the
+    // exact same shape (columns + JSONB payload) that the JMAP path
+    // produces. Display name defaults to the account id when the
+    // config doesn't supply one; `is_personal` defaults to true.
+    let display_name = account_config
+        .display_name
+        .clone()
+        .unwrap_or_else(|| account_id.to_string());
+    let account_row = AccountRow::from_mbox_config(
+        account_id,
+        Some(display_name.as_str()),
+        account_config.email_address.as_deref(),
+        account_config.is_personal.unwrap_or(true),
+    );
+    frankweiler_etl::bulk::bulk_upsert_in_tx(&mut tx, &[account_row], &now).await?;
 
     // Mailboxes.
     let mailbox_specs: Vec<(String, String, Option<&'static str>, String)> = accumulator
@@ -884,46 +857,13 @@ async fn flush_account_and_lookups(
 }
 
 async fn bulk_insert_emails(tx: &mut Transaction<'_, Sqlite>, rows: &[EmailRow]) -> Result<()> {
-    let cols = 11;
-    for chunk in rows.chunks(SQL_CHUNK) {
-        let mut sql = String::from(
-            "INSERT INTO emails
-                (id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-                 size, subject, from_json, has_attachment)
-             VALUES ",
-        );
-        push_placeholders(&mut sql, chunk.len(), cols);
-        sql.push_str(
-            " ON CONFLICT(id) DO UPDATE SET
-                account_id = excluded.account_id,
-                thread_id = excluded.thread_id,
-                blob_id = excluded.blob_id,
-                message_id = COALESCE(excluded.message_id, emails.message_id),
-                received_at = COALESCE(excluded.received_at, emails.received_at),
-                sent_at = COALESCE(excluded.sent_at, emails.sent_at),
-                size = COALESCE(excluded.size, emails.size),
-                subject = COALESCE(excluded.subject, emails.subject),
-                from_json = COALESCE(excluded.from_json, emails.from_json),
-                has_attachment = COALESCE(excluded.has_attachment, emails.has_attachment)",
-        );
-        let mut q = sqlx::query(&sql);
-        for row in chunk {
-            q = q
-                .bind(&row.id)
-                .bind(&row.account_id)
-                .bind(&row.thread_id)
-                .bind(&row.blob_id)
-                .bind(row.message_id.as_deref())
-                .bind(row.received_at.as_deref())
-                .bind(row.sent_at.as_deref())
-                .bind(row.size)
-                .bind(row.subject.as_deref())
-                .bind(row.from_json.as_deref())
-                .bind(row.has_attachment as i64);
-        }
-        q.execute(&mut **tx).await.context("bulk insert emails")?;
-    }
-    Ok(())
+    // Standard `bulk_upsert_in_tx` path — `EmailRow` carries its
+    // own `BulkUpsertable` impl. The framework picks the right
+    // column list + binding sequence; the conflict clause uses the
+    // universal "every non-PK col = excluded.<col>" shape from
+    // `data_architecture_ingestion.md` §"One writer per row".
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    frankweiler_etl::bulk::bulk_upsert_in_tx(tx, rows, &now).await
 }
 
 async fn bulk_insert_email_mailboxes(
@@ -998,82 +938,6 @@ async fn bulk_insert_email_keywords(
         q.execute(&mut **tx)
             .await
             .context("bulk insert email_keywords")?;
-    }
-    Ok(())
-}
-
-async fn bulk_insert_email_attachments(
-    tx: &mut Transaction<'_, Sqlite>,
-    rows: &[EmailRow],
-) -> Result<()> {
-    for chunk in rows.chunks(SQL_CHUNK) {
-        let mut sql = String::from("DELETE FROM email_attachments WHERE email_id IN (");
-        push_placeholder_list(&mut sql, chunk.len());
-        sql.push(')');
-        let mut q = sqlx::query(&sql);
-        for r in chunk {
-            q = q.bind(&r.id);
-        }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk delete email_attachments")?;
-    }
-    struct AttachBind<'a> {
-        email_id: &'a str,
-        part_id: &'a str,
-        blob_id: &'a str,
-        name: Option<&'a str>,
-        ctype: Option<&'a str>,
-        size: Option<i64>,
-        disposition: Option<&'a str>,
-        cid: Option<&'a str>,
-    }
-    let flat: Vec<AttachBind> = rows
-        .iter()
-        .flat_map(|r| {
-            r.attachments.iter().map(move |a| AttachBind {
-                email_id: &r.id,
-                part_id: &a.part_id,
-                blob_id: &a.blob_id,
-                name: a.name.as_deref(),
-                ctype: a.content_type.as_deref(),
-                size: a.size,
-                disposition: a.disposition.as_deref(),
-                cid: a.cid.as_deref(),
-            })
-        })
-        .collect();
-    for chunk in flat.chunks(SQL_CHUNK) {
-        let mut sql = String::from(
-            "INSERT INTO email_attachments
-                (email_id, part_id, blob_id, name, type, size, disposition, cid)
-             VALUES ",
-        );
-        push_placeholders(&mut sql, chunk.len(), 8);
-        sql.push_str(
-            " ON CONFLICT(email_id, part_id) DO UPDATE SET
-                blob_id = excluded.blob_id,
-                name = excluded.name,
-                type = excluded.type,
-                size = excluded.size,
-                disposition = excluded.disposition,
-                cid = excluded.cid",
-        );
-        let mut q = sqlx::query(&sql);
-        for a in chunk {
-            q = q
-                .bind(a.email_id)
-                .bind(a.part_id)
-                .bind(a.blob_id)
-                .bind(a.name)
-                .bind(a.ctype)
-                .bind(a.size)
-                .bind(a.disposition)
-                .bind(a.cid);
-        }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk insert email_attachments")?;
     }
     Ok(())
 }

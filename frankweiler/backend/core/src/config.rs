@@ -321,6 +321,35 @@ pub struct BeeperSync {
     pub period: Option<String>,
 }
 
+/// Account-row data for the mbox extract path. The sync orchestrator
+/// pipes these fields through to `frankweiler_etl_email::mbox` so the
+/// synthesized `accounts` row matches JMAP's shape (display name,
+/// canonical email address, personal-vs-shared flag).
+///
+/// All fields are optional. Defaults: `account_id` falls back to the
+/// mbox file stem; `display_name` ← `account_id`; `is_personal` ←
+/// `true`. Provided primarily so YAML for an mbox-backed source can
+/// say "this Google Takeout export is for alice@example.com" without
+/// having to encode that info in the file path.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct MboxSync {
+    /// Account id used as the PK in `accounts` and the FK from every
+    /// `emails`/`mailboxes`/`threads` row. Stable; renaming re-keys.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Human-readable label for the account (e.g. "Alice's Gmail").
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Canonical email address for the account.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// `true` if this is a personal account (the default); `false`
+    /// for a shared inbox / mailing list archive.
+    #[serde(default)]
+    pub is_personal: Option<bool>,
+}
+
 /// Tunables for the email provider. Today this is JMAP-backed
 /// (Fastmail / any RFC 8620 + RFC 8621 server) when `sync:` is
 /// present, and Google Takeout mbox-backed when it's omitted —
@@ -534,6 +563,11 @@ pub enum SourceConfig {
         common: SourceCommon,
         #[serde(default)]
         sync: Option<EmailSync>,
+        /// Account-row config for the mbox path (display name, email
+        /// address, is_personal). Ignored when `sync:` is present
+        /// (JMAP carries that info itself). See [`MboxSync`].
+        #[serde(default)]
+        mbox: Option<MboxSync>,
     },
     Beeper {
         #[serde(flatten)]
@@ -657,7 +691,9 @@ impl SourceConfig {
             // path. Both are "managed" in that we own the raw doltlite
             // store. The orchestrator's `ExtractPlan::for_source` decides
             // which extractor to dispatch.
-            SourceConfig::Email { sync, common } => sync.is_some() || common.input_path.is_some(),
+            SourceConfig::Email { sync, common, .. } => {
+                sync.is_some() || common.input_path.is_some()
+            }
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),

@@ -34,23 +34,18 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use crate::extract::db::{db_path_for, EmailJoins, LoadedAttachment, LoadedEmail};
+use crate::extract::db::{db_path_for, EmailJoins, LoadedEmail};
 
-/// SQL projection from email's two CAS-edge columns (`emails.blake3`
-/// for the `.eml` body, `email_attachments.blake3` for each attachment
-/// part) to their bytes. Consumed by [`BlobBundle::load`]; the
-/// `{placeholders}` token is substituted twice — once per UNION half.
-const ATTACHMENTS_PROJECTION_SQL: &str = "
+/// SQL projection from `emails.blake3` to `.eml` bytes. Consumed by
+/// [`BlobBundle::load`]. After the eml-as-canonical port we only
+/// load `.eml`s — attachment parts are mail-parsed out of the loaded
+/// `.eml` bytes and added to the same per-bucket `BlobBundle` under
+/// synthesized content-hash ref ids.
+const EML_PROJECTION_SQL: &str = "
     SELECT blob_id AS ref_id, blake3,
            'message/rfc822' AS content_type,
            NULL AS upstream_name
       FROM emails
-     WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL
-    UNION ALL
-    SELECT blob_id AS ref_id, blake3,
-           type AS content_type,
-           name AS upstream_name
-      FROM email_attachments
      WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Result of the dolt_diff scan. Travels alongside the parsed bag so
@@ -144,11 +139,7 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     let threads = load_payloads(&pool, "threads").await?;
 
     // ── Phase 1: which threads changed since last_render_hash? ────
-    let scan = scan_diff(&pool).await?;
-    let scan = match last_render_hash {
-        None => scan,
-        Some(from_ref) => scan_with_from_ref(&pool, from_ref, scan).await?,
-    };
+    let scan = scan_diff(&pool, last_render_hash).await?;
 
     let (to_load, docs_skipped) = match &scan.changed_threads {
         None => {
@@ -175,9 +166,12 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     };
 
     // Per-bucket BlobBundle: gather every email's blob_id (the .eml
-    // CAS pointer) + every attachment's blob_id and bulk-load them
-    // through the UNION-ALL projection. Two queries per bucket cover
-    // both source tables.
+    // CAS pointer) and bulk-load the .eml bytes via the projection
+    // SQL. Then mail-parse each loaded .eml to extract attachment
+    // parts, adding each part's bytes back into the bundle under a
+    // synthesized content-hash ref id and populating
+    // `bucket.joins.attachments[email_id]` so render's existing
+    // `bucket.blobs.get(&att.blob_id)` lookup resolves uniformly.
     if let Some(cas_pool) = cas_pool.as_ref() {
         for bucket in &mut docs {
             let mut seen: HashSet<String> = HashSet::new();
@@ -187,18 +181,11 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
                     refs.push(em.blob_id.as_str());
                 }
             }
-            for atts in bucket.joins.attachments.values() {
-                for att in atts {
-                    if seen.insert(att.blob_id.clone()) {
-                        refs.push(att.blob_id.as_str());
-                    }
-                }
-            }
             if refs.is_empty() {
                 continue;
             }
-            bucket.blobs =
-                BlobBundle::load(&pool, cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs).await?;
+            bucket.blobs = BlobBundle::load(&pool, cas_pool, EML_PROJECTION_SQL, &refs).await?;
+            extract_attachments_from_emls(bucket);
         }
     }
 
@@ -212,89 +199,153 @@ async fn parse_async(db_path: &Path, last_render_hash: Option<&str>) -> Result<P
     })
 }
 
-/// Read HEAD only — used on cold start where there's no `from_ref`
-/// yet to diff against.
-async fn scan_diff(pool: &SqlitePool) -> Result<ScanResult> {
-    let new_head: Option<String> =
-        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-    Ok(ScanResult {
-        changed_threads: None,
-        new_head,
-        scan_elapsed: None,
-    })
+/// Mail-parse each `.eml` already loaded into the bucket's
+/// `BlobBundle` and pull out attachment-style parts. The bytes ARE
+/// already in the `.eml` envelope — we just walk the MIME tree to
+/// surface them as separate "blobs" for render's existing
+/// attachment-link machinery. Each part is added to the bundle
+/// under its content hash so render's `bucket.blobs.get(&blob_id)`
+/// resolves it identically to a JMAP-supplied attachment ref id.
+fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
+    use mail_parser::{MessageParser, MimeHeaders, PartType};
+
+    for em in &bucket.emails {
+        let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
+            continue;
+        };
+        let eml_bytes = eml_blob.bytes.clone();
+        let Some(msg) = MessageParser::default().parse(&eml_bytes) else {
+            continue;
+        };
+        // Walk both `msg.attachments` and `msg.html_body` (the latter
+        // catches inline images that live inside `multipart/related`
+        // and only show up via the html-body index). Filter out the
+        // alternate text/html body parts mail-parser sometimes
+        // surfaces in `attachments`.
+        let body_idx: HashSet<usize> = msg
+            .text_body
+            .iter()
+            .copied()
+            .chain(msg.html_body.iter().copied())
+            .collect();
+        let mut seen_idx: HashSet<usize> = HashSet::new();
+        let mut atts: Vec<crate::extract::db::LoadedAttachment> = Vec::new();
+        let candidate_idxs: Vec<usize> = msg
+            .attachments
+            .iter()
+            .copied()
+            .chain(msg.html_body.iter().copied())
+            .collect();
+        for idx in candidate_idxs {
+            if !seen_idx.insert(idx) {
+                continue;
+            }
+            let Some(part) = msg.part(idx) else { continue };
+            if body_idx.contains(&idx) && part.content_id().is_none() {
+                continue;
+            }
+            if matches!(part.body, PartType::Text(_) | PartType::Html(_))
+                && part.content_id().is_none()
+                && part.attachment_name().is_none()
+            {
+                continue;
+            }
+            let bytes: Vec<u8> = match &part.body {
+                PartType::Binary(b) | PartType::InlineBinary(b) => b.to_vec(),
+                PartType::Text(t) | PartType::Html(t) => t.as_bytes().to_vec(),
+                _ => continue,
+            };
+            let name = part.attachment_name().map(str::to_string);
+            let cid = part.content_id().map(str::to_string);
+            let disposition = part.content_disposition().map(|cd| cd.ctype().to_string());
+            let content_type = part.content_type().map(|ct| match ct.subtype() {
+                Some(sub) => format!("{}/{}", ct.ctype(), sub),
+                None => ct.ctype().to_string(),
+            });
+            let size = bytes.len() as i64;
+            let blob_id = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+            bucket
+                .blobs
+                .add(&blob_id, bytes, content_type.clone(), name.clone());
+            atts.push(crate::extract::db::LoadedAttachment {
+                part_id: format!("p{idx}"),
+                blob_id,
+                name,
+                content_type,
+                size: Some(size),
+                disposition,
+                cid,
+            });
+        }
+        if !atts.is_empty() {
+            bucket.joins.attachments.insert(em.id.clone(), atts);
+        }
+    }
 }
 
-/// Run the union diff query against `from_ref` and project the touched
-/// `(account_id, thread_id)` pairs.
-async fn scan_with_from_ref(
-    pool: &SqlitePool,
-    from_ref: &str,
-    mut scan: ScanResult,
-) -> Result<ScanResult> {
-    // The three join tables (`email_mailboxes`, `email_keywords`,
-    // `email_attachments`) carry only `email_id` upstream — we join
-    // back through the live `emails` table to project the natural
-    // bucket key (`account_id`, `thread_id`). `emails` itself and
-    // `threads` are projected directly.
-    //
-    // `accounts` and `mailboxes` changes don't enter the union: an
-    // account rename doesn't change rendered thread bytes, and
-    // mailbox label changes propagate via `email_mailboxes` (which
-    // we already cover).
-    let sql = "
-        SELECT DISTINCT account_id, thread_id FROM (
-            SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
-              FROM dolt_diff_emails
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT from_account_id, from_thread_id
-              FROM dolt_diff_emails
-             WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
-            UNION
-            SELECT emails.account_id, emails.thread_id
-              FROM dolt_diff_email_mailboxes d
-              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
-            UNION
-            SELECT emails.account_id, emails.thread_id
-              FROM dolt_diff_email_keywords d
-              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
-            UNION
-            SELECT emails.account_id, emails.thread_id
-              FROM dolt_diff_email_attachments d
-              JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
-             WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
-            UNION
-            SELECT t.account_id,
-                   coalesce(dt.to_id, dt.from_id) AS thread_id
-              FROM dolt_diff_threads dt
-              JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
-             WHERE dt.from_ref = ?1 AND dt.to_ref = 'HEAD' AND dt.diff_type != 'unchanged'
-        )
-        WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
-    ";
-
-    let started = std::time::Instant::now();
-    let rows = sqlx::query(sql)
-        .bind(from_ref)
-        .fetch_all(pool)
-        .await
-        .context("query dolt_diff_* for changed email threads")?;
-    scan.scan_elapsed = Some(started.elapsed());
-
-    let mut set: HashSet<(String, String)> = HashSet::with_capacity(rows.len());
-    for r in &rows {
-        let a: String = r.try_get("account_id")?;
-        let t: String = r.try_get("thread_id")?;
-        set.insert((a, t));
-    }
-    scan.changed_threads = Some(set);
-    Ok(scan)
+/// Per-bucket dolt_diff scan. Delegates to the shared
+/// [`frankweiler_etl::doltlite_raw::scan_buckets`] helper, which is
+/// the same primitive every other provider uses (slack / chatgpt /
+/// anthropic / signal). Bucket key shape is `"<account_id>|<thread_id>"`
+/// so it fits the helper's `HashSet<String>` API; we split it back
+/// into a `(String, String)` pair locally for the load step.
+///
+/// Tables that fan out to "render everything" — `accounts` and
+/// `mailboxes` — are intentionally NOT in `global_fanout_tables`
+/// because their changes do not affect rendered thread bytes:
+/// account renames just relabel the per-thread frontmatter on the
+/// next cold start, and mailbox renames already propagate via
+/// `email_mailboxes` diffs.
+async fn scan_diff(pool: &SqlitePool, last_render_hash: Option<&str>) -> Result<ScanResult> {
+    let scan = frankweiler_etl::doltlite_raw::scan_buckets(
+        pool,
+        last_render_hash,
+        &frankweiler_etl::doltlite_raw::DiffScanSpec {
+            global_fanout_tables: &[],
+            bucket_query: "
+                SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
+                    SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
+                      FROM dolt_diff_emails
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT from_account_id, from_thread_id
+                      FROM dolt_diff_emails
+                     WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
+                    UNION
+                    SELECT emails.account_id, emails.thread_id
+                      FROM dolt_diff_email_mailboxes d
+                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                    UNION
+                    SELECT emails.account_id, emails.thread_id
+                      FROM dolt_diff_email_keywords d
+                      JOIN emails ON emails.id = coalesce(d.to_email_id, d.from_email_id)
+                     WHERE d.from_ref = ?1 AND d.to_ref = 'HEAD' AND d.diff_type != 'unchanged'
+                    UNION
+                    SELECT t.account_id,
+                           coalesce(dt.to_id, dt.from_id) AS thread_id
+                      FROM dolt_diff_threads dt
+                      JOIN threads t ON t.id = coalesce(dt.to_id, dt.from_id)
+                     WHERE dt.from_ref = ?1 AND dt.to_ref = 'HEAD' AND dt.diff_type != 'unchanged'
+                )
+                WHERE account_id IS NOT NULL AND thread_id IS NOT NULL
+            ",
+        },
+    )
+    .await?;
+    let changed_threads = scan.changed_buckets.map(|set| {
+        set.into_iter()
+            .filter_map(|key| {
+                let (a, t) = key.split_once('|')?;
+                Some((a.to_string(), t.to_string()))
+            })
+            .collect::<HashSet<(String, String)>>()
+    });
+    Ok(ScanResult {
+        changed_threads,
+        new_head: scan.new_head,
+        scan_elapsed: scan.scan_elapsed,
+    })
 }
 
 async fn load_all_thread_keys(pool: &SqlitePool) -> Result<HashSet<(String, String)>> {
@@ -358,8 +409,8 @@ async fn load_buckets(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-                size, subject, from_json, has_attachment
+        "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, \"references\",
+                received_at, sent_at, size, subject, from_json, to_json, cc_json, has_attachment
            FROM emails
           WHERE thread_id IN ({placeholders})
           ORDER BY thread_id, received_at, id"
@@ -384,6 +435,10 @@ async fn load_buckets(
             thread_id,
             blob_id: r.try_get("blob_id").unwrap_or_default(),
             message_id: r.try_get::<Option<String>, _>("message_id").unwrap_or(None),
+            in_reply_to: r
+                .try_get::<Option<String>, _>("in_reply_to")
+                .unwrap_or(None),
+            references: r.try_get::<Option<String>, _>("references").unwrap_or(None),
             received_at: r
                 .try_get::<Option<String>, _>("received_at")
                 .unwrap_or(None),
@@ -391,6 +446,8 @@ async fn load_buckets(
             size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
             subject: r.try_get::<Option<String>, _>("subject").unwrap_or(None),
             from_json: r.try_get::<Option<String>, _>("from_json").unwrap_or(None),
+            to_json: r.try_get::<Option<String>, _>("to_json").unwrap_or(None),
+            cc_json: r.try_get::<Option<String>, _>("cc_json").unwrap_or(None),
             has_attachment: r
                 .try_get::<Option<i64>, _>("has_attachment")
                 .unwrap_or(None)
@@ -455,42 +512,10 @@ async fn load_buckets(
         docs[idx].joins.keywords.entry(e).or_default().push(k);
     }
 
-    // attachments
-    let sql = format!(
-        "SELECT email_id, part_id, blob_id, name, type, size, disposition, cid
-           FROM email_attachments WHERE email_id IN ({placeholders})
-          ORDER BY email_id, part_id"
-    );
-    let mut q = sqlx::query(&sql);
-    for e in &email_ids_in_buckets {
-        q = q.bind(e);
-    }
-    for r in q
-        .fetch_all(pool)
-        .await
-        .context("phase 2 email_attachments select")?
-    {
-        let e: String = r.try_get("email_id").unwrap_or_default();
-        let Some(&idx) = email_to_bucket.get(&e) else {
-            continue;
-        };
-        docs[idx]
-            .joins
-            .attachments
-            .entry(e)
-            .or_default()
-            .push(LoadedAttachment {
-                part_id: r.try_get("part_id").unwrap_or_default(),
-                blob_id: r.try_get("blob_id").unwrap_or_default(),
-                name: r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                content_type: r.try_get::<Option<String>, _>("type").unwrap_or(None),
-                size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
-                disposition: r
-                    .try_get::<Option<String>, _>("disposition")
-                    .unwrap_or(None),
-                cid: r.try_get::<Option<String>, _>("cid").unwrap_or(None),
-            });
-    }
+    // Attachments are extracted later by mail-parsing each loaded
+    // `.eml` — see `extract_attachments_from_emls`. No
+    // `email_attachments` table to query after the eml-as-canonical
+    // port.
 
     Ok(docs)
 }

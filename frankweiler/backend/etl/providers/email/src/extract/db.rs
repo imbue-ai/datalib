@@ -27,10 +27,7 @@ use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
-// Re-exported so existing `crate::extract::db::{EmailRow, AttachmentRow,
-// BLOB_KIND_*}` callsites (mbox.rs, tests) keep resolving without a
-// churn pass across the module.
-pub use super::schema_raw::{AttachmentRow, EmailRow, BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -147,8 +144,9 @@ impl RawDb {
 
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
         let rows = sqlx::query(
-            "SELECT id, account_id, thread_id, blob_id, message_id, received_at, sent_at,
-                    size, subject, from_json, has_attachment
+            "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to,
+                    \"references\", received_at, sent_at, size, subject,
+                    from_json, to_json, cc_json, has_attachment
              FROM emails
              ORDER BY thread_id, received_at, id",
         )
@@ -163,6 +161,10 @@ impl RawDb {
                 thread_id: r.try_get("thread_id").unwrap_or_default(),
                 blob_id: r.try_get("blob_id").unwrap_or_default(),
                 message_id: r.try_get::<Option<String>, _>("message_id").unwrap_or(None),
+                in_reply_to: r
+                    .try_get::<Option<String>, _>("in_reply_to")
+                    .unwrap_or(None),
+                references: r.try_get::<Option<String>, _>("references").unwrap_or(None),
                 received_at: r
                     .try_get::<Option<String>, _>("received_at")
                     .unwrap_or(None),
@@ -170,6 +172,8 @@ impl RawDb {
                 size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
                 subject: r.try_get::<Option<String>, _>("subject").unwrap_or(None),
                 from_json: r.try_get::<Option<String>, _>("from_json").unwrap_or(None),
+                to_json: r.try_get::<Option<String>, _>("to_json").unwrap_or(None),
+                cc_json: r.try_get::<Option<String>, _>("cc_json").unwrap_or(None),
                 has_attachment: r
                     .try_get::<Option<i64>, _>("has_attachment")
                     .unwrap_or(None)
@@ -180,9 +184,9 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Snapshot every email's mailbox/keyword/attachment joins, keyed
-    /// by `email_id`. Cheaper than per-row queries when the translate
-    /// pass needs them all.
+    /// Snapshot every email's mailbox + keyword joins, keyed by
+    /// `email_id`. (No attachments join after the eml-as-canonical
+    /// port — render mail-parses the `.eml` for parts.)
     pub async fn load_email_joins(&self) -> Result<EmailJoins> {
         let mut mailboxes: HashMap<String, Vec<String>> = HashMap::new();
         for r in sqlx::query("SELECT email_id, mailbox_id FROM email_mailboxes")
@@ -208,35 +212,10 @@ impl RawDb {
                 keywords.entry(e).or_default().push(k);
             }
         }
-        let mut attachments: HashMap<String, Vec<LoadedAttachment>> = HashMap::new();
-        for r in sqlx::query(
-            "SELECT email_id, part_id, blob_id, name, type, size, disposition, cid
-             FROM email_attachments ORDER BY email_id, part_id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("load email_attachments")?
-        {
-            let e: String = r.try_get("email_id").unwrap_or_default();
-            if e.is_empty() {
-                continue;
-            }
-            attachments.entry(e).or_default().push(LoadedAttachment {
-                part_id: r.try_get("part_id").unwrap_or_default(),
-                blob_id: r.try_get("blob_id").unwrap_or_default(),
-                name: r.try_get::<Option<String>, _>("name").unwrap_or(None),
-                content_type: r.try_get::<Option<String>, _>("type").unwrap_or(None),
-                size: r.try_get::<Option<i64>, _>("size").unwrap_or(None),
-                disposition: r
-                    .try_get::<Option<String>, _>("disposition")
-                    .unwrap_or(None),
-                cid: r.try_get::<Option<String>, _>("cid").unwrap_or(None),
-            });
-        }
         Ok(EmailJoins {
             mailboxes,
             keywords,
-            attachments,
+            attachments: HashMap::new(),
         })
     }
 
@@ -305,8 +284,8 @@ impl RawDb {
     }
 
     /// Hard-delete one email plus its joins + bookkeeping. Blobs are
-    /// untouched — another email may share the same `.eml` blob or an
-    /// attachment blob. Dolt history preserves the pre-delete state.
+    /// untouched — another email may share the same `.eml` blob.
+    /// Dolt history preserves the pre-delete state.
     pub async fn delete_emails(&self, ids: &[String]) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
@@ -316,7 +295,6 @@ impl RawDb {
             for sql in [
                 "DELETE FROM email_mailboxes WHERE email_id = ?",
                 "DELETE FROM email_keywords WHERE email_id = ?",
-                "DELETE FROM email_attachments WHERE email_id = ?",
                 "DELETE FROM emails WHERE id = ?",
                 "DELETE FROM emails_bookkeeping WHERE id = ?",
             ] {
@@ -333,23 +311,17 @@ impl RawDb {
 
     // ── blob skip-check + refetch-blobs control ────────────────────
 
-    /// `(blob_id, blake3)` pairs — every email-side ref we've
-    /// already resolved to CAS bytes. Pre-loaded once at the top of
+    /// `(blob_id, blake3)` pairs for every `.eml` we've already
+    /// resolved to CAS bytes. Pre-loaded once at the top of
     /// `sync_blobs` so the per-blob "do we already have this?"
     /// decision is a `HashMap` hit instead of a SQLite round trip.
-    /// Spans both wire-payload tables that own a CAS edge today
-    /// (`emails` for the `.eml` source, `email_attachments` for
-    /// per-part bytes); the JMAP server hands out distinct blob_ids
-    /// for distinct CAS objects, so a union is correct.
+    /// Replaces the older two-table union — after the eml-as-canonical
+    /// port we only fetch `.eml` blobs.
     pub async fn loaded_blob_ids(&self) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query(
-            "SELECT blob_id, blake3 FROM emails WHERE blake3 IS NOT NULL
-             UNION ALL
-             SELECT blob_id, blake3 FROM email_attachments WHERE blake3 IS NOT NULL",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("loaded_blob_ids")?;
+        let rows = sqlx::query("SELECT blob_id, blake3 FROM emails WHERE blake3 IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await
+            .context("loaded_blob_ids")?;
         let mut out = HashMap::with_capacity(rows.len());
         for r in rows {
             let blob_id: String = r.try_get("blob_id").unwrap_or_default();
@@ -362,27 +334,15 @@ impl RawDb {
     }
 
     /// Implements the `--refetch-blobs` control. Sets `emails.blake3`
-    /// and `email_attachments.blake3` back to NULL so the next
-    /// `sync_blobs` pass walks every blob from scratch. The CAS
-    /// (`cas_objects`) itself is left alone — re-downloaded bytes
-    /// hash to the same blake3, the `INSERT OR IGNORE` on the CAS
-    /// side is a no-op. Mirrors signal's `chat_item_attachments`
-    /// clear in `extract/mod.rs`.
+    /// back to NULL so the next `sync_blobs` pass walks every `.eml`
+    /// from scratch. The CAS itself is left alone — re-downloaded
+    /// bytes hash to the same blake3, the `INSERT OR IGNORE` on the
+    /// CAS side is a no-op.
     pub async fn clear_blob_hashes(&self) -> Result<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin clear blob hashes tx")?;
         sqlx::query("UPDATE emails SET blake3 = NULL")
-            .execute(&mut *tx)
+            .execute(&self.pool)
             .await
             .context("clear emails.blake3")?;
-        sqlx::query("UPDATE email_attachments SET blake3 = NULL")
-            .execute(&mut *tx)
-            .await
-            .context("clear email_attachments.blake3")?;
-        tx.commit().await.context("commit clear blob hashes tx")?;
         Ok(())
     }
 }
@@ -391,11 +351,11 @@ impl RawDb {
 // Email join-table refresh
 // ─────────────────────────────────────────────────────────────────────
 
-/// Refresh the three email-side join tables (`email_mailboxes`,
-/// `email_keywords`, `email_attachments`) for one email. Delete-then-
-/// insert because the join tables mirror current upstream state —
-/// anything we previously had for this id that's no longer present
-/// must disappear.
+/// Refresh the two email-side join tables (`email_mailboxes`,
+/// `email_keywords`) for one email. Delete-then-insert because the
+/// join tables mirror current upstream state — anything we
+/// previously had for this id that's no longer present must
+/// disappear.
 ///
 /// Runs inside the same transaction as the parent email's
 /// `bulk_upsert_in_tx` call so failure during the refresh rolls the
@@ -434,37 +394,6 @@ pub async fn refresh_email_joins(tx: &mut Transaction<'_, Sqlite>, row: &EmailRo
         .await
         .with_context(|| format!("insert email_keyword {}={k}", row.id))?;
     }
-
-    sqlx::query("DELETE FROM email_attachments WHERE email_id = ?")
-        .bind(&row.id)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear email_attachments {}", row.id))?;
-    for a in &row.attachments {
-        sqlx::query(
-            "INSERT INTO email_attachments
-                (email_id, part_id, blob_id, name, type, size, disposition, cid)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(email_id, part_id) DO UPDATE SET
-                blob_id = excluded.blob_id,
-                name = excluded.name,
-                type = excluded.type,
-                size = excluded.size,
-                disposition = excluded.disposition,
-                cid = excluded.cid",
-        )
-        .bind(&row.id)
-        .bind(&a.part_id)
-        .bind(&a.blob_id)
-        .bind(a.name.as_deref())
-        .bind(a.content_type.as_deref())
-        .bind(a.size)
-        .bind(a.disposition.as_deref())
-        .bind(a.cid.as_deref())
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("insert email_attachment {}/{}", row.id, a.part_id))?;
-    }
     Ok(())
 }
 
@@ -479,18 +408,30 @@ pub struct LoadedEmail {
     pub thread_id: String,
     pub blob_id: String,
     pub message_id: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
     pub received_at: Option<String>,
     pub sent_at: Option<String>,
     pub size: Option<i64>,
     pub subject: Option<String>,
-    /// Serialized JSON of the From: header(s) as
+    /// Serialized JSON of the From/To/Cc header(s) as
     /// `[{name?, email}, …]`. Same shape on the JMAP path and the
-    /// mbox path. Translate uses this for cheap "who sent it"
-    /// rendering without paying for a full mail-parser pass.
+    /// mbox path. Translate uses these for cheap header rendering
+    /// without paying for a full mail-parser pass on the headers.
     pub from_json: Option<String>,
+    pub to_json: Option<String>,
+    pub cc_json: Option<String>,
     pub has_attachment: bool,
 }
 
+/// One attachment part extracted from a `.eml` at parse time.
+///
+/// **Not** loaded from a DB table — the eml IS the canonical body,
+/// and `parse_doltlite_async` mail-parses each loaded `.eml` to
+/// populate this list. `blob_id` is the synthesized content hash of
+/// the attachment bytes (added to the per-bucket [`BlobBundle`]
+/// under that key) so render's `bucket.blobs.get(&att.blob_id)`
+/// resolves uniformly across truly-attached and inline parts.
 #[derive(Debug, Clone)]
 pub struct LoadedAttachment {
     pub part_id: String,
@@ -506,6 +447,8 @@ pub struct LoadedAttachment {
 pub struct EmailJoins {
     pub mailboxes: HashMap<String, Vec<String>>,
     pub keywords: HashMap<String, Vec<String>>,
+    /// Per-email attachment parts, populated by `parse_doltlite_async`
+    /// from the mail-parsed `.eml`. Not loaded from a DB table.
     pub attachments: HashMap<String, Vec<LoadedAttachment>>,
 }
 
@@ -583,7 +526,7 @@ mod tests {
     #[tokio::test]
     async fn account_round_trips() {
         let (_d, db) = tmp_db().await;
-        let row = AccountRow::from_payload(
+        let row = AccountRow::from_jmap_payload(
             "A1",
             &json!({"name": "thad@fastmail.com", "isPersonal": true}),
         )
@@ -598,13 +541,16 @@ mod tests {
     async fn mailbox_round_trips_and_filters_by_account() {
         let (_d, db) = tmp_db().await;
         let rows = vec![
-            MailboxRow::from_payload(
+            MailboxRow::from_jmap_payload(
                 "A1",
                 &json!({"id": "M1", "name": "Inbox", "role": "inbox", "totalEmails": 42}),
             )
             .unwrap(),
-            MailboxRow::from_payload("A1", &json!({"id": "M2", "name": "Sent", "role": "sent"}))
-                .unwrap(),
+            MailboxRow::from_jmap_payload(
+                "A1",
+                &json!({"id": "M2", "name": "Sent", "role": "sent"}),
+            )
+            .unwrap(),
         ];
         bulk(&db, &rows).await;
         let mboxes = db.load_mailboxes().await.unwrap();
@@ -640,7 +586,7 @@ mod tests {
                  "type": "application/pdf", "size": 999, "disposition": "attachment"}
             ],
         });
-        let row = EmailRow::from_envelope("A1", &payload).expect("from_payload");
+        let row = EmailRow::from_jmap_envelope("A1", &payload).expect("from_payload");
         upsert_email(&db, &row).await;
 
         let loaded = db.load_emails().await.unwrap();
@@ -657,10 +603,6 @@ mod tests {
         let mut kws = joins.keywords["E1"].clone();
         kws.sort();
         assert_eq!(kws, vec!["$flagged", "$seen"]);
-        let atts = &joins.attachments["E1"];
-        assert_eq!(atts.len(), 1);
-        assert_eq!(atts[0].blob_id, "B-att-1");
-        assert_eq!(atts[0].name.as_deref(), Some("doc.pdf"));
     }
 
     /// Re-upserting an email with a different set of keywords drops the
@@ -674,10 +616,10 @@ mod tests {
             "mailboxIds": {"M1": true},
             "keywords": {"$seen": true},
         });
-        upsert_email(&db, &EmailRow::from_envelope("A", &payload).unwrap()).await;
+        upsert_email(&db, &EmailRow::from_jmap_envelope("A", &payload).unwrap()).await;
         payload["keywords"] = json!({"$flagged": true});
         payload["mailboxIds"] = json!({"M2": true});
-        upsert_email(&db, &EmailRow::from_envelope("A", &payload).unwrap()).await;
+        upsert_email(&db, &EmailRow::from_jmap_envelope("A", &payload).unwrap()).await;
         let joins = db.load_email_joins().await.unwrap();
         assert_eq!(joins.mailboxes["E1"], vec!["M2"]);
         assert_eq!(joins.keywords["E1"], vec!["$flagged"]);
@@ -698,7 +640,7 @@ mod tests {
             "keywords": {"$seen": true},
             "attachments": [{"partId": "1", "blobId": "B-att"}],
         });
-        upsert_email(&db, &EmailRow::from_envelope("A", &p).unwrap()).await;
+        upsert_email(&db, &EmailRow::from_jmap_envelope("A", &p).unwrap()).await;
         // Stash an entry in the sibling CAS directly so we can prove
         // it survives. blake3 is fake (64-char hex of zeros) — the
         // CHECK constraint on `cas_objects.blake3` cares about
@@ -719,7 +661,6 @@ mod tests {
         let joins = db.load_email_joins().await.unwrap();
         assert!(!joins.mailboxes.contains_key("E1"));
         assert!(!joins.keywords.contains_key("E1"));
-        assert!(!joins.attachments.contains_key("E1"));
         let bk_count: i64 =
             sqlx::query_scalar("SELECT count(*) FROM emails_bookkeeping WHERE id = 'E1'")
                 .fetch_one(db.pool())
@@ -739,7 +680,8 @@ mod tests {
     #[tokio::test]
     async fn payload_stored_as_jsonb_blob() {
         let (_d, db) = tmp_db().await;
-        let row = MailboxRow::from_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
+        let row =
+            MailboxRow::from_jmap_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
         bulk(&db, &[row]).await;
         let t: String = sqlx::query_scalar("SELECT typeof(payload) FROM mailboxes WHERE id='M1'")
             .fetch_one(db.pool())
@@ -767,11 +709,12 @@ mod tests {
     #[tokio::test]
     async fn reset_clears_data_joins_and_state_but_not_runs() {
         let (_d, db) = tmp_db().await;
-        let acct = AccountRow::from_payload("A1", &json!({"name": "x"})).unwrap();
+        let acct = AccountRow::from_jmap_payload("A1", &json!({"name": "x"})).unwrap();
         bulk(&db, &[acct]).await;
-        let mbox = MailboxRow::from_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
+        let mbox =
+            MailboxRow::from_jmap_payload("A1", &json!({"id": "M1", "name": "Inbox"})).unwrap();
         bulk(&db, &[mbox]).await;
-        let email = EmailRow::from_envelope(
+        let email = EmailRow::from_jmap_envelope(
             "A1",
             &json!({
                 "id": "E1", "blobId": "B", "threadId": "T",
@@ -807,6 +750,6 @@ mod tests {
 
         // Same for ThreadRow / from_payload — exercise the
         // constructor so the import stays live across phase 1.
-        let _ = ThreadRow::from_payload("T1", "A1", &json!({"emailIds": ["E1"]})).unwrap();
+        let _ = ThreadRow::from_jmap_payload("T1", "A1", &json!({"emailIds": ["E1"]})).unwrap();
     }
 }

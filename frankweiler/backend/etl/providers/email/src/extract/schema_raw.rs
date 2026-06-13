@@ -1,57 +1,42 @@
-//! Raw-store schema for the JMAP (email) provider.
+//! Raw-store schema for the email provider.
 //!
-//! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
-//! §P0.1 for the conventions every `schema_raw.rs` follows.
+//! Declarations-only, proto-flavored. The schema is the same regardless
+//! of where the data came from — Mbox and JMAP both populate it.
 //!
-//! JMAP-specific notes:
+//! ## The eml is the canonical body
 //!
-//! - **Two table families.** [`DATA_TABLES`] are the JMAP entity
-//!   tables — `accounts`, `mailboxes`, `threads`, `emails` — each
-//!   paired with a `<table>_bookkeeping` sidecar.
-//!   [`JOIN_TABLES`] are the many-to-many sidecar tables
-//!   (`email_mailboxes`, `email_keywords`, `email_attachments`)
-//!   that live and die with their parent email's upsert
-//!   transaction. The join tables deliberately don't get
-//!   `<table>_bookkeeping` companions; their PK is composite, they
-//!   refresh delete-then-insert per email, and there's no per-row
-//!   retry story to track.
+//! The RFC 5322 `.eml` is the **complete backup** of a message: body,
+//! headers, MIME parts (attachments included). It rides in the shared
+//! per-source CAS keyed by `blob_id`. Everything else is metadata
+//! around it.
 //!
-//! - **Row structs and the bulk-upsert path.** Three of the four
-//!   entity tables (`accounts`, `mailboxes`, `threads`) follow the
-//!   shared wire-payload shape and are declared as
-//!   `#[derive(WirePayloadRow)]` row structs — the derive emits both
-//!   the table's DDL and its `BulkUpsertable` impl from the field
-//!   list. The fourth (`emails`) is **envelope-only**: the
-//!   `.eml` body lives in the shared blob CAS keyed by `blob_id`, so
-//!   the table carries promoted columns but no JSONB payload. It
-//!   gets a hand-written DDL + manual `BulkUpsertable` impl
-//!   (with `PAYLOAD_COLUMN = None`). All four route through the
-//!   generic `bulk_upsert_in_tx` helper — no table-specific bulk
-//!   SQL anywhere in this provider's code.
+//! Concretely: there is no `email_attachments` table. The parts inside
+//! an `.eml` are reachable by mail-parsing the bytes at render time;
+//! we don't extract them into separate CAS entries during ingest.
+//! Both Mbox and JMAP land *only the `.eml`* in the CAS. JMAP no
+//! longer calls `Blob/download` per attachment — only for the `.eml`
+//! itself.
 //!
-//! - **PKs are upstream-supplied JMAP ids** for every entity:
-//!   `accountId`, Mailbox `id`, Thread `id`, Email `id`. No UUIDv5
-//!   recipes needed.
+//! ## `emails` is metadata-only
 //!
-//! - **Event-shaped.** `emails.received_at` carries the upstream
-//!   `Email/get.receivedAt` and is the event timestamp. `sent_at`
-//!   carries the message's Date header. `accounts`, `mailboxes`,
-//!   `threads` are not event-shaped.
+//! [`EmailRow`] is the event table: time, subject, from/to/cc,
+//! message-id, threading headers, the `.eml`'s blob ref. **No body
+//! columns, no JSONB payload.** The body comes back from the `.eml`
+//! when render needs it.
 //!
-//! - **Hard-delete on destroy.** When JMAP reports an email
-//!   `destroyed` the row + its joins + its bookkeeping get
-//!   DELETEd (blobs survive since other emails may share them).
-//!   Doltlite history retains the prior state — this is the
-//!   only place in the raw-store family where we hard-delete
-//!   rather than mark.
+//! ## Tables
 //!
-//! - **Blobs in the shared CAS, kind-discriminated.** The `.eml`
-//!   RFC5322 source for each message and each attachment ride in
-//!   the shared `blobs` table via `Email.blobId`; see
-//!   [`BLOB_KIND_EML`] and [`BLOB_KIND_ATTACHMENT`] for the
-//!   `kind` discriminator values.
+//! - `accounts`, `mailboxes`, `threads` — wire-payload entity tables
+//!   (`WirePayloadRow` derive); JSONB payload preserved.
+//! - `emails` — envelope-only event table; hand-rolled
+//!   `BulkUpsertable` (no payload column).
+//! - `email_mailboxes`, `email_keywords` — two many-to-many join
+//!   tables refreshed delete-then-insert per email upsert. No
+//!   bookkeeping sidecars.
+//! - `mbox_files_checkpoint` — Mbox-only cursor: per file, the
+//!   `(size_bytes, mtime_ns)` stamp from the last full ingest. Lets
+//!   `mbox::fetch` skip files that haven't been appended to since
+//!   the last run.
 
 use frankweiler_etl::bulk::BulkUpsertable;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
@@ -62,76 +47,95 @@ use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
 
 /// Entity tables — what `dolt diff` should see across re-fetches.
-/// Each gets a paired `<table>_bookkeeping` sidecar (added in
-/// [`full_ddl`]) and is wiped by `extract::db::RawDb::reset`.
+/// Each gets a paired `<table>_bookkeeping` sidecar.
 pub const DATA_TABLES: &[&str] = &["accounts", "mailboxes", "threads", "emails"];
 
-/// Many-to-many join tables. Not in [`DATA_TABLES`] because they
-/// don't get bookkeeping sidecars — they're refreshed
-/// delete-then-insert per parent email upsert, so per-row retry
-/// state would be noise. `RawDb::reset` truncates them alongside
-/// [`DATA_TABLES`].
-pub const JOIN_TABLES: &[&str] = &["email_mailboxes", "email_keywords", "email_attachments"];
+/// Many-to-many join tables. Not in [`DATA_TABLES`] because they're
+/// refreshed delete-then-insert per parent email upsert; per-row
+/// retry state would be noise. `RawDb::reset` truncates them
+/// alongside [`DATA_TABLES`].
+pub const JOIN_TABLES: &[&str] = &["email_mailboxes", "email_keywords"];
 
 /// `blobs.kind` discriminator for the RFC5322 `.eml` source of an
 /// email, stored in the shared `blobs` table keyed by JMAP
-/// `Email.blobId`.
+/// `Email.blobId` (or `sha256(eml_bytes)` for Mbox).
 pub const BLOB_KIND_EML: &str = "email";
-
-/// `blobs.kind` discriminator for an attachment blob, stored in
-/// the shared `blobs` table keyed by the JMAP attachment
-/// `blobId`. Cross-referenced from `email_attachments.blob_id`.
-pub const BLOB_KIND_ATTACHMENT: &str = "attachment";
 
 // ── entity rows / DDLs ──────────────────────────────────────────────
 
-/// `accounts` — one row per JMAP account known to the session.
+/// `accounts` — one row per JMAP account or Mbox-config-supplied
+/// account.
 ///
-/// Promoted columns: `name`, `is_personal`, `is_read_only`. The full
-/// session-fragment account entry is stored as the JSONB payload.
+/// For Mbox: the orchestrator passes a `MboxAccountConfig { id,
+/// name, email_address, is_personal }` from the YAML; one row
+/// lands per configured Mbox input.
+///
+/// For JMAP: one row per account exposed in the session response.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "accounts")]
 pub struct AccountRow {
     pub id_and_payload: WirePayload,
     pub name: Option<String>,
+    pub email_address: Option<String>,
     pub is_personal: Option<i64>,
     pub is_read_only: Option<i64>,
 }
 
 impl AccountRow {
-    /// Build an `AccountRow` from a session-fragment account JSON entry.
-    pub fn from_payload(id: &str, payload: &Value) -> anyhow::Result<Self> {
-        let name = payload
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let is_personal = payload
-            .get("isPersonal")
-            .and_then(|v| v.as_bool())
-            .map(|b| b as i64);
-        let is_read_only = payload
-            .get("isReadOnly")
-            .and_then(|v| v.as_bool())
-            .map(|b| b as i64);
-        let payload_str = serde_json::to_string(payload)?;
+    /// Build from a JMAP session-fragment account entry.
+    pub fn from_jmap_payload(id: &str, payload: &Value) -> anyhow::Result<Self> {
         Ok(Self {
             id_and_payload: WirePayload {
                 id: id.to_string(),
-                payload: payload_str,
+                payload: serde_json::to_string(payload)?,
             },
-            name,
-            is_personal,
-            is_read_only,
+            name: payload
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            email_address: None,
+            is_personal: payload
+                .get("isPersonal")
+                .and_then(|v| v.as_bool())
+                .map(|b| b as i64),
+            is_read_only: payload
+                .get("isReadOnly")
+                .and_then(|v| v.as_bool())
+                .map(|b| b as i64),
         })
+    }
+
+    /// Build from an mbox `MboxAccountConfig`. Synthesizes a payload
+    /// in the same shape the JMAP path produces so render can be
+    /// source-agnostic.
+    pub fn from_mbox_config(
+        id: &str,
+        name: Option<&str>,
+        email_address: Option<&str>,
+        is_personal: bool,
+    ) -> Self {
+        let payload = serde_json::json!({
+            "id": id,
+            "name": name,
+            "emailAddress": email_address,
+            "isPersonal": is_personal,
+            "isReadOnly": false,
+        });
+        Self {
+            id_and_payload: WirePayload {
+                id: id.to_string(),
+                payload: payload.to_string(),
+            },
+            name: name.map(str::to_string),
+            email_address: email_address.map(str::to_string),
+            is_personal: Some(is_personal as i64),
+            is_read_only: Some(0),
+        }
     }
 }
 
-/// `mailboxes` — one row per JMAP Mailbox.
-///
-/// Fastmail (and other JMAP servers) uses mailboxes as both folders
-/// and labels; this table is the source of truth for label names.
-/// Promoted columns: `account_id` (FK), `name`, `parent_id`, `role`,
-/// `sort_order`, `total_emails`, `unread_emails`.
+/// `mailboxes` — one row per JMAP Mailbox or Mbox-derived
+/// folder/label.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "mailboxes")]
 pub struct MailboxRow {
@@ -146,53 +150,41 @@ pub struct MailboxRow {
 }
 
 impl MailboxRow {
-    pub fn from_payload(account_id: &str, payload: &Value) -> anyhow::Result<Self> {
+    pub fn from_jmap_payload(account_id: &str, payload: &Value) -> anyhow::Result<Self> {
         let id = payload
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("mailbox payload missing id"))?;
-        let name = payload
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let parent_id = payload
-            .get("parentId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let role = payload
-            .get("role")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let sort_order = payload.get("sortOrder").and_then(|v| v.as_i64());
-        let total_emails = payload.get("totalEmails").and_then(|v| v.as_i64());
-        let unread_emails = payload.get("unreadEmails").and_then(|v| v.as_i64());
-        let payload_str = serde_json::to_string(payload)?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id: id.to_string(),
-                payload: payload_str,
+                payload: serde_json::to_string(payload)?,
             },
             account_id: account_id.to_string(),
-            name,
-            parent_id,
-            role,
-            sort_order,
-            total_emails,
-            unread_emails,
+            name: payload
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            parent_id: payload
+                .get("parentId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            role: payload
+                .get("role")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            sort_order: payload.get("sortOrder").and_then(|v| v.as_i64()),
+            total_emails: payload.get("totalEmails").and_then(|v| v.as_i64()),
+            unread_emails: payload.get("unreadEmails").and_then(|v| v.as_i64()),
         })
     }
 }
 
-/// Index on `mailboxes(account_id)` — supports the per-account
-/// listing walk without a full-table scan.
 pub const MAILBOXES_BY_ACCOUNT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS mailboxes_by_account ON mailboxes(account_id)";
 
-/// `threads` — one row per JMAP Thread.
-///
-/// Threads are the JMAP grouping for "messages in the same
-/// conversation"; an email belongs to exactly one thread. Promoted
-/// columns: `account_id` (FK), `email_count`.
+/// `threads` — one row per JMAP Thread or Mbox-derived thread
+/// grouping.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "threads")]
 pub struct ThreadRow {
@@ -202,16 +194,15 @@ pub struct ThreadRow {
 }
 
 impl ThreadRow {
-    pub fn from_payload(id: &str, account_id: &str, payload: &Value) -> anyhow::Result<Self> {
+    pub fn from_jmap_payload(id: &str, account_id: &str, payload: &Value) -> anyhow::Result<Self> {
         let email_count = payload
             .get("emailIds")
             .and_then(|v| v.as_array())
             .map(|a| a.len() as i64);
-        let payload_str = serde_json::to_string(payload)?;
         Ok(Self {
             id_and_payload: WirePayload {
                 id: id.to_string(),
-                payload: payload_str,
+                payload: serde_json::to_string(payload)?,
             },
             account_id: account_id.to_string(),
             email_count,
@@ -219,78 +210,39 @@ impl ThreadRow {
     }
 }
 
-/// Index on `threads(account_id)` — supports per-account thread
-/// queries.
 pub const THREADS_BY_ACCOUNT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS threads_by_account ON threads(account_id)";
 
-/// `emails` — one row per email.
+/// `emails` — one row per email. **Metadata only.**
 ///
-/// **Envelope-only.** The body lives in the shared `blobs` CAS as the
-/// RFC5322 `.eml` source, keyed by `blob_id` and discriminated by
-/// [`BLOB_KIND_EML`]. Translate mail-parses the `.eml` on demand;
-/// nothing about bodies is materialized at extract.
-///
-/// Unlike the other entity tables, `emails` has no JSONB payload column
-/// — the wire bytes ARE the .eml, and they live in the CAS, not inline.
-/// The DDL is therefore hand-written, and the [`EmailRow`] type carries
-/// its own [`BulkUpsertable`] impl (with `PAYLOAD_COLUMN = None`).
-///
-/// Columns:
-/// - `id` — upstream email id. Primary key. For JMAP this is the
-///   server's opaque `Email.id`; for mbox sources it's the RFC 822
-///   `Message-ID:` value (angle brackets stripped) or
-///   `sha256(eml_bytes)` when the header is missing.
-/// - `account_id` — owning account; FK into [`AccountRow`].
-/// - `thread_id` — owning thread; FK into [`ThreadRow`]. For JMAP
-///   this is the server's `Email.threadId`; for mbox it's
-///   `X-GM-THRID` verbatim, falling back to `id` for single-message
-///   threads.
-/// - `blob_id` — `ref_id` into the shared blob CAS for this email's
-///   `.eml` bytes. For JMAP this is the server-opaque
-///   `Email.blobId` (e.g. `"B-eml-1"`); for mbox it's
-///   `sha256(eml_bytes)`. In both cases the shared
-///   `blob_refs(ref_id, blake3)` table maps it to the blake3 that
-///   keys the actual bytes in `cas_objects`.
-/// - `message_id` — RFC 822 `Message-ID:` header value when present.
-/// - `received_at` — event timestamp (UTC ISO-8601). For JMAP,
-///   `Email.receivedAt`; for mbox, the parsed `Date:` header.
-/// - `sent_at` — `Date:` header value. For mbox sources this equals
-///   `received_at`; JMAP keeps them distinct.
-/// - `size` — `.eml` size in bytes.
-/// - `subject` — denormalized subject for cheap listing display.
-/// - `from_json` — promoted JSON of the From: header(s); kept as
-///   JSON because RFC 5322 permits multiple addresses with display
-///   names and groups.
-/// - `has_attachment` — 0/1 flag, set when at least one non-body
-///   MIME part is present.
+/// The body and all attachment bytes live inside the `.eml` blob in
+/// the CAS, reachable via `blob_id → blake3 → cas_objects.bytes`.
+/// Render mail-parses the `.eml` on demand for both body display and
+/// per-part attachment extraction.
 pub const EMAILS_DDL: &str = "CREATE TABLE IF NOT EXISTS emails (
-    id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL,
-    thread_id TEXT NOT NULL,
-    blob_id TEXT NOT NULL,
-    blake3 TEXT NULL,
-    message_id TEXT NULL,
-    received_at TEXT NULL,
-    sent_at TEXT NULL,
-    size INTEGER NULL,
-    subject TEXT NULL,
-    from_json TEXT NULL,
-    has_attachment INTEGER NULL,
+    id              TEXT PRIMARY KEY,
+    account_id      TEXT NOT NULL,
+    thread_id       TEXT NOT NULL,
+    blob_id         TEXT NOT NULL,
+    blake3          TEXT NULL,
+    message_id      TEXT NULL,
+    in_reply_to     TEXT NULL,
+    \"references\"  TEXT NULL,
+    received_at     TEXT NULL,
+    sent_at         TEXT NULL,
+    size            INTEGER NULL,
+    subject         TEXT NULL,
+    from_json       TEXT NULL,
+    to_json         TEXT NULL,
+    cc_json         TEXT NULL,
+    has_attachment  INTEGER NULL,
     CHECK (blake3 IS NULL OR length(blake3) = 64)
 )";
 
-/// Row struct for the `emails` table. Carries the envelope columns
-/// plus the join-table inputs the extract path will use to refresh
-/// `email_mailboxes` / `email_keywords` / `email_attachments` in the
-/// same transaction.
-///
-/// `BulkUpsertable` is hand-rolled (not derived) because emails is
-/// envelope-only — there is no `WirePayload` pair to fit. The bind
-/// sequence binds `id` plus the typed columns;
-/// join inputs (`mailbox_ids`, `keywords`, `attachments`) are NOT
-/// bound here — they're consumed by the per-row join-refresh helper
-/// the caller runs alongside the bulk-upsert.
+/// Envelope-only `emails` row. Caller-supplied join inputs
+/// (`mailbox_ids`, `keywords`) are NOT bound here — they're consumed
+/// by the per-email join-refresh helper run alongside the bulk
+/// upsert.
 #[derive(Debug, Clone)]
 pub struct EmailRow {
     pub id: String,
@@ -298,26 +250,18 @@ pub struct EmailRow {
     pub thread_id: String,
     pub blob_id: String,
     pub message_id: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
     pub received_at: Option<String>,
     pub sent_at: Option<String>,
     pub size: Option<i64>,
     pub subject: Option<String>,
     pub from_json: Option<String>,
+    pub to_json: Option<String>,
+    pub cc_json: Option<String>,
     pub has_attachment: bool,
     pub mailbox_ids: Vec<String>,
     pub keywords: Vec<String>,
-    pub attachments: Vec<AttachmentRow>,
-}
-
-#[derive(Debug, Clone)]
-pub struct AttachmentRow {
-    pub part_id: String,
-    pub blob_id: String,
-    pub name: Option<String>,
-    pub content_type: Option<String>,
-    pub size: Option<i64>,
-    pub disposition: Option<String>,
-    pub cid: Option<String>,
 }
 
 impl BulkUpsertable for EmailRow {
@@ -327,14 +271,17 @@ impl BulkUpsertable for EmailRow {
         "thread_id",
         "blob_id",
         "message_id",
+        "in_reply_to",
+        "\"references\"",
         "received_at",
         "sent_at",
         "size",
         "subject",
         "from_json",
+        "to_json",
+        "cc_json",
         "has_attachment",
     ];
-    // Envelope-only — no JSONB payload column.
     const PAYLOAD_COLUMN: Option<&'static str> = None;
 
     fn id(&self) -> &str {
@@ -350,22 +297,26 @@ impl BulkUpsertable for EmailRow {
             .bind(&self.thread_id)
             .bind(&self.blob_id)
             .bind(self.message_id.as_deref())
+            .bind(self.in_reply_to.as_deref())
+            .bind(self.references.as_deref())
             .bind(self.received_at.as_deref())
             .bind(self.sent_at.as_deref())
             .bind(self.size)
             .bind(self.subject.as_deref())
             .bind(self.from_json.as_deref())
+            .bind(self.to_json.as_deref())
+            .bind(self.cc_json.as_deref())
             .bind(self.has_attachment as i64)
     }
 }
 
 impl EmailRow {
-    /// Promote the envelope columns from a JMAP `Email/get` response.
-    /// Returns `None` if the response is missing one of the required
-    /// identifiers (`id`, `blobId`, `threadId`). The body parts
-    /// (`bodyValues`, `textBody`, `htmlBody`) are deliberately
-    /// ignored — translate reads them out of the `.eml` blob.
-    pub fn from_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
+    /// Promote metadata columns from a JMAP `Email/get` envelope.
+    /// Returns `None` if the required identifiers (`id`, `blobId`,
+    /// `threadId`) are missing. Body parts in the JMAP response are
+    /// deliberately ignored — render reads them out of the `.eml`
+    /// blob.
+    pub fn from_jmap_envelope(account_id: &str, envelope: &Value) -> Option<Self> {
         let id = envelope.get("id")?.as_str()?.to_string();
         let blob_id = envelope.get("blobId")?.as_str()?.to_string();
         let thread_id = envelope.get("threadId")?.as_str()?.to_string();
@@ -375,6 +326,22 @@ impl EmailRow {
             .and_then(|arr| arr.first())
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        let in_reply_to = envelope
+            .get("inReplyTo")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let references = envelope
+            .get("references")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|s| !s.is_empty());
         let received_at = envelope
             .get("receivedAt")
             .and_then(|v| v.as_str())
@@ -391,6 +358,12 @@ impl EmailRow {
         let from_json = envelope
             .get("from")
             .map(|v| serde_json::to_string(v).unwrap_or_default());
+        let to_json = envelope
+            .get("to")
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
+        let cc_json = envelope
+            .get("cc")
+            .map(|v| serde_json::to_string(v).unwrap_or_default());
         let has_attachment = envelope
             .get("hasAttachment")
             .and_then(|v| v.as_bool())
@@ -405,140 +378,77 @@ impl EmailRow {
             .and_then(|v| v.as_object())
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
-        let attachments = envelope
-            .get("attachments")
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(AttachmentRow::from_json).collect())
-            .unwrap_or_default();
         Some(Self {
             id,
             account_id: account_id.to_string(),
             thread_id,
             blob_id,
             message_id,
+            in_reply_to,
+            references,
             received_at,
             sent_at,
             size,
             subject,
             from_json,
+            to_json,
+            cc_json,
             has_attachment,
             mailbox_ids,
             keywords,
-            attachments,
         })
     }
 }
 
-impl AttachmentRow {
-    fn from_json(v: &Value) -> Option<Self> {
-        let part_id = v.get("partId")?.as_str()?.to_string();
-        let blob_id = v.get("blobId")?.as_str()?.to_string();
-        Some(Self {
-            part_id,
-            blob_id,
-            name: v.get("name").and_then(|x| x.as_str()).map(str::to_string),
-            content_type: v.get("type").and_then(|x| x.as_str()).map(str::to_string),
-            size: v.get("size").and_then(|x| x.as_i64()),
-            disposition: v
-                .get("disposition")
-                .and_then(|x| x.as_str())
-                .map(str::to_string),
-            cid: v.get("cid").and_then(|x| x.as_str()).map(str::to_string),
-        })
-    }
-}
-
-/// Index on `emails(thread_id)` — supports the "all emails in this
-/// thread" lookup that pulls a conversation together.
 pub const EMAILS_BY_THREAD_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS emails_by_thread ON emails(thread_id)";
 
-/// Composite index on `emails(account_id, received_at)` — supports
-/// per-account time-ordered queries (the "show me my recent mail"
-/// pattern) without a full-table scan.
 pub const EMAILS_BY_ACCOUNT_RECEIVED_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
         emails_by_account_received ON emails(account_id, received_at)";
 
-/// Composite index on `emails(blob_id, blake3)` — supports the
-/// `EmailBlobReader` skip-check `WHERE blob_id = ? AND blake3 IS NOT NULL`.
+/// Index on `(blob_id, blake3)` — supports the skip-check
+/// `WHERE blob_id = ? AND blake3 IS NOT NULL` and the per-thread
+/// `BlobBundle::load` projection.
 pub const EMAILS_BY_BLOB_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS emails_by_blob ON emails(blob_id, blake3)";
 
 // ── join tables ─────────────────────────────────────────────────────
 
 /// `email_mailboxes` — many-to-many: an email can live in multiple
-/// mailboxes simultaneously (because Fastmail and friends model
-/// labels as mailboxes). Refreshed delete-then-insert per email on
-/// every email upsert. No bookkeeping sidecar; lifecycle is the
-/// parent email's transaction.
+/// mailboxes simultaneously (Fastmail and friends model labels as
+/// mailboxes; Gmail does the same via `X-Gmail-Labels:`). Refreshed
+/// delete-then-insert per upsert. No bookkeeping sidecar.
 pub const EMAIL_MAILBOXES_DDL: &str = "CREATE TABLE IF NOT EXISTS email_mailboxes (
     email_id TEXT NOT NULL,
     mailbox_id TEXT NOT NULL,
     PRIMARY KEY (email_id, mailbox_id)
 )";
 
-/// Index on `email_mailboxes(mailbox_id)` — supports the
-/// reverse-direction "all emails in this mailbox" query.
 pub const EMAIL_MAILBOXES_BY_MAILBOX_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
         email_mailboxes_by_mailbox ON email_mailboxes(mailbox_id)";
 
-/// `email_keywords` — many-to-many between emails and JMAP
-/// keywords (`$seen`, `$flagged`, IMAP-style user keywords, …).
-/// Refreshed delete-then-insert per email upsert, no bookkeeping
-/// sidecar.
+/// `email_keywords` — many-to-many: JMAP keywords (`$seen`,
+/// `$flagged`, user keywords). Mbox equivalents come from
+/// `Status:` / `X-Status:` headers (`R` → seen, `F` → flagged) and
+/// from `X-Keywords:` when present.
 pub const EMAIL_KEYWORDS_DDL: &str = "CREATE TABLE IF NOT EXISTS email_keywords (
     email_id TEXT NOT NULL,
     keyword TEXT NOT NULL,
     PRIMARY KEY (email_id, keyword)
 )";
 
-/// Index on `email_keywords(keyword)` — supports "all emails with
-/// this keyword" queries (e.g. unread, flagged).
 pub const EMAIL_KEYWORDS_BY_KEYWORD_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
         email_keywords_by_keyword ON email_keywords(keyword)";
 
-/// `email_attachments` — per-email attachment metadata. The bytes
-/// themselves live in the shared `blobs` table discriminated by
-/// [`BLOB_KIND_ATTACHMENT`]; this table carries everything we know
-/// about each part as exposed by JMAP. Refreshed
-/// delete-then-insert per email upsert, no bookkeeping sidecar.
-///
-/// Phase 2 of the email port will replace this table with a
-/// per-provider CAS-backed edge table (mirroring signal's
-/// `chat_item_attachments`) that retires the shared `blob_refs`
-/// usage. For now it's the original JMAP-id-shaped table.
-pub const EMAIL_ATTACHMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS email_attachments (
-    email_id TEXT NOT NULL,
-    part_id TEXT NOT NULL,
-    blob_id TEXT NOT NULL,
-    blake3 TEXT NULL,
-    name TEXT NULL,
-    type TEXT NULL,
-    size INTEGER NULL,
-    disposition TEXT NULL,
-    cid TEXT NULL,
-    PRIMARY KEY (email_id, part_id),
-    CHECK (blake3 IS NULL OR length(blake3) = 64)
-)";
-
-/// Composite index on `email_attachments(blob_id, blake3)` — supports
-/// the `EmailBlobReader` skip-check and the "which emails reference
-/// this blob?" GC walk in a single index.
-pub const EMAIL_ATTACHMENTS_BY_BLOB_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS \
-        email_attachments_by_blob ON email_attachments(blob_id, blake3)";
-
 // ── cursor table ────────────────────────────────────────────────────
 
-/// `mbox_files_checkpoint` — one row per mbox file the extractor has
-/// fully ingested. The mbox extractor consults this before opening
-/// each file: if the on-disk `(size_bytes, mtime_ns)` still match the
-/// stamped row, the file is skipped entirely. Append-only mbox
-/// semantics (mail clients only ever append) make `(size, mtime)` a
-/// sufficient fingerprint without re-hashing contents.
-///
-/// Not an entity table and not in [`DATA_TABLES`] — it's
-/// extractor-side bookkeeping that survives `RawDb::reset` only by
-/// being explicitly truncated alongside the data/join tables.
+/// `mbox_files_checkpoint` — Mbox-only resume cursor. One row per
+/// mbox file the extractor has fully ingested. Before opening a
+/// file, `mbox::fetch` checks the row: if `(size_bytes, mtime_ns)`
+/// match what's on disk, the file is skipped entirely. Mbox is
+/// append-only by convention (mail clients only ever append), so
+/// `(size, mtime)` is a sufficient fingerprint without re-hashing
+/// contents.
 pub const MBOX_FILES_CHECKPOINT_DDL: &str = "CREATE TABLE IF NOT EXISTS mbox_files_checkpoint (
     path TEXT PRIMARY KEY,
     size_bytes INTEGER NOT NULL,
@@ -547,11 +457,7 @@ pub const MBOX_FILES_CHECKPOINT_DDL: &str = "CREATE TABLE IF NOT EXISTS mbox_fil
 )";
 
 /// Compose the full DDL list passed to
-/// [`frankweiler_etl::doltlite_raw::open`]: every entity + join
-/// table, every CREATE-INDEX, plus the paired
-/// `<table>_bookkeeping` DDL produced by the shared layer for
-/// [`DATA_TABLES`] entries. (Join tables deliberately don't get
-/// bookkeeping sidecars — see the module rustdoc.)
+/// [`frankweiler_etl::doltlite_raw::open`].
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         AccountRow::ddl(),
@@ -567,8 +473,6 @@ pub fn full_ddl() -> Vec<String> {
         EMAIL_MAILBOXES_BY_MAILBOX_INDEX_DDL.to_string(),
         EMAIL_KEYWORDS_DDL.to_string(),
         EMAIL_KEYWORDS_BY_KEYWORD_INDEX_DDL.to_string(),
-        EMAIL_ATTACHMENTS_DDL.to_string(),
-        EMAIL_ATTACHMENTS_BY_BLOB_INDEX_DDL.to_string(),
         MBOX_FILES_CHECKPOINT_DDL.to_string(),
     ];
     for table in DATA_TABLES {

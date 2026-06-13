@@ -24,6 +24,58 @@ fully honors every principle today, but a new provider, table, or
 transformation should be judged against this document, and divergences
 should be either justified or fixed.
 
+## Schema first — the tables _are_ the design
+
+> _"Show me your flowcharts and I will be confused. Show me your tables
+> and I won't need your flowcharts."_ — paraphrased from Fred Brooks
+
+The single most load-bearing principle of this whole document is
+that **the schema is the design**. When we port a provider, refactor a
+pipeline, or sketch a new feature, the **first** artifact is the
+table — its columns, its primary key, its uniqueness constraints, its
+foreign-key relationships, and a paragraph or two of prose explaining
+what each row _means_. Everything else — the extractor that fills the
+table, the renderer that reads it, the incremental cursor that
+re-syncs it, the test fixtures, the UI's projection — falls out of
+the schema mechanically. If those downstream pieces feel hard to
+write, that is almost always a signal that the schema is wrong, not
+that the code is wrong.
+
+Concretely, when starting any non-trivial piece of work in this
+codebase:
+
+1. **Write the DDL first** — even before reading the upstream API
+   docs in detail. A column you can't justify is a column the
+   upstream doesn't really give you, or a column nothing downstream
+   actually wants. Both are bugs in the schema.
+2. **Document each table _in the same file as the DDL_**. Per-provider
+   `schema_raw.rs` files (`etl/providers/<p>/src/extract/schema_raw.rs`)
+   are the canonical home for both the `CREATE TABLE` text and the
+   prose commentary on it. Tables without their prose are
+   half-finished.
+3. **Make the downstream code derive from the schema, not the other
+   way around.** The `WirePayloadRow` and `CasEdgeRow` derive macros
+   exist specifically so that the row struct and its DDL stay in
+   lockstep — change the struct, the DDL changes; change the DDL,
+   the compile breaks. If you find yourself writing helper code that
+   the schema "doesn't quite support," fix the schema, not the
+   helper.
+4. **When porting, the schema diff is the design review.** A clean
+   port shows up as a clean schema diff: tables added or removed,
+   columns added or removed, with prose explaining _why_. Code-level
+   diffs without a corresponding schema diff are nearly always
+   accidental complexity.
+
+The same principle applies one layer up: the **wire-event JSONL tape**
+(below) is "the schema, externalized" — one append-only line per
+upsert, exactly the row that landed in the table. If the schema is
+right, the tape is also right. If the tape is hard to read, the
+schema is too clever.
+
+This is the same discipline that, at a previous employer of one of the
+authors, took the form "write the protobuf first; everything else
+follows." Replace `protobuf` with `DDL` and we are in the same place.
+
 Pointers to the things that are **not** in this file:
 
   - The raw store's table-and-blob shape, primary-key rules,
