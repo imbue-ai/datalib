@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fs;
 
-use frankweiler_etl::blob_cas::{BlobView, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl_notion::translate::parse::ParsedNotionOfficial;
 use frankweiler_etl_notion::translate::render::render_notion_official;
 use serde_json::{json, Value};
@@ -42,18 +42,16 @@ fn image_blob_lands_next_to_markdown() {
         }
     });
 
-    let mut reader = InMemoryBlobReader::new();
     let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
-    reader.insert(BlobView {
-        ref_id: format!("{bid}:image"),
-        owning_id: bid.to_string(),
-        slot: "image".into(),
-        blake3: blake3.clone(),
-        content_type: Some("image/png".into()),
-        upstream_name: None,
-        source_url: Some("https://s3.notion-static.com/foo/test.png?expiry=123".into()),
-        bytes: bytes.clone(),
-    });
+    let mut bundle = BlobBundle::new();
+    bundle.add(
+        format!("{bid}:image"),
+        bytes.clone(),
+        Some("image/png".into()),
+        None,
+    );
+    let mut blobs_by_page = HashMap::new();
+    blobs_by_page.insert(pid.to_string(), bundle);
 
     let parsed = ParsedNotionOfficial {
         pages: vec![page],
@@ -62,7 +60,7 @@ fn image_blob_lands_next_to_markdown() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: reader.into_handle(),
+        blobs_by_page,
     };
 
     let summary = render_notion_official(
@@ -130,7 +128,7 @@ fn missing_blob_falls_back_to_upstream_url() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: InMemoryBlobReader::empty_handle(),
+        blobs_by_page: HashMap::new(),
     };
 
     render_notion_official(
@@ -227,7 +225,7 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: InMemoryBlobReader::empty_handle(),
+        blobs_by_page: HashMap::new(),
     };
 
     render_notion_official(
@@ -316,7 +314,7 @@ fn incremental_renders_only_changed_page() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: InMemoryBlobReader::empty_handle(),
+        blobs_by_page: HashMap::new(),
     };
 
     let mut priors: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -362,7 +360,7 @@ fn incremental_renders_only_changed_page() {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs: InMemoryBlobReader::empty_handle(),
+        blobs_by_page: HashMap::new(),
     };
 
     // ── pass 2: render with v1 priors; only page B should fire. ─────

@@ -18,7 +18,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::BlobReader;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::title::Title;
@@ -863,7 +862,7 @@ fn render_one_page(
     page_titles: &HashMap<String, String>,
     media_urls: &HashMap<String, String>,
     bookmark_titles: &HashMap<String, String>,
-    blobs: &dyn BlobReader,
+    blobs: &frankweiler_etl::blob_cas::BlobBundle,
     pages_root: &Path,
 ) -> Result<PathBuf> {
     let pid = page.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -921,36 +920,25 @@ fn render_one_page(
     // Files land in `<page_dir>/blobs/<short-b3>.<ext>`; the relative
     // path `blobs/<file>` is the one we splice into the markdown.
     //
-    // Streams from the [`BlobReader`] one block at a time — peak RSS
-    // stays at a single attachment instead of holding the whole
-    // page's blob set in memory.
+    // The per-page `BlobBundle` already carries every image block's
+    // bytes (loaded once in `block_on_load_all` via
+    // `notion_image_attachments` + the sibling CAS), so this is just
+    // a `materialize_to_dir` + a per-block ref_id lookup — no SQL,
+    // no `BlobReader` indirection. Slack / whatsapp / email use the
+    // identical shape.
     let mut local_blob_paths: HashMap<String, String> = HashMap::new();
-    if let Some(blocks) = children_by_parent.get(pid) {
-        let mut owner_ids: Vec<String> = Vec::new();
-        collect_block_ids(blocks, children_by_parent, &mut owner_ids);
-        let blobs_dir = page_dir.join("blobs");
-        let mut created_dir = false;
-        for owner in owner_ids {
-            let Some(b) = blobs.read_by_owner(&owner)? else {
-                continue;
-            };
-            if !created_dir {
-                fs::create_dir_all(&blobs_dir)?;
-                created_dir = true;
+    if !blobs.is_empty() {
+        if let Some(blocks) = children_by_parent.get(pid) {
+            let blobs_dir = page_dir.join("blobs");
+            blobs.materialize_to_dir(&blobs_dir)?;
+            let mut owner_ids: Vec<String> = Vec::new();
+            collect_block_ids(blocks, children_by_parent, &mut owner_ids);
+            for owner in owner_ids {
+                let ref_id = format!("{owner}:image");
+                if let Some(blob) = blobs.get(&ref_id) {
+                    local_blob_paths.insert(owner, format!("blobs/{}", blob.rendered_filename()));
+                }
             }
-            let filename = b.rendered_filename();
-            let target = blobs_dir.join(&filename);
-            // Trust our copy: write only if the file isn't already
-            // present with the same length. Lets `notion-translate`
-            // re-runs stay cheap.
-            let needs_write = match fs::metadata(&target) {
-                Ok(m) => m.len() as usize != b.bytes.len(),
-                Err(_) => true,
-            };
-            if needs_write {
-                fs::write(&target, &b.bytes)?;
-            }
-            local_blob_paths.insert(owner, format!("blobs/{filename}"));
         }
     }
 
@@ -1206,6 +1194,8 @@ pub fn render_notion_official(
             }
         }
 
+        let empty_bundle = frankweiler_etl::blob_cas::BlobBundle::default();
+        let bundle = parsed.blobs_by_page.get(&pid).unwrap_or(&empty_bundle);
         let target = render_one_page(
             page,
             &children_by_parent,
@@ -1213,7 +1203,7 @@ pub fn render_notion_official(
             &page_titles,
             &parsed.media_urls,
             &parsed.bookmark_titles,
-            parsed.blobs.as_ref(),
+            bundle,
             &pages_root,
         )?;
 

@@ -11,22 +11,22 @@
 //!
 //! See `DOLTLITE_RAW.md` next to this crate for the design rationale.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::sqlite::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{
-    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
-};
+use frankweiler_etl::blob_cas::{self, BlobBundle, BlobCas, CasEdgeRow as _, RefStub};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, DATA_TABLES};
+use super::schema_raw::{full_ddl, NotionImageAttachmentRow, DATA_TABLES};
 
 /// Handle on the raw-store sqlite file. Cheap to clone via the pool.
 #[derive(Clone, Debug)]
@@ -339,7 +339,28 @@ impl RawDb {
     }
 
     pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
+        let hash = blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await?;
+        // Also land an edge row on `notion_image_attachments` so the
+        // render path can build a per-page BlobBundle without touching
+        // the shared `blob_refs` table. PK is `{block_id}#{ref_id}` via
+        // the universal CasEdgeRow recipe.
+        let edge = NotionImageAttachmentRow {
+            id: NotionImageAttachmentRow::pk_recipe(stub.owning_id, stub.ref_id),
+            block_id: stub.owning_id.to_string(),
+            ref_id: stub.ref_id.to_string(),
+            blake3: Some(hash.clone()),
+        };
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .context("begin notion_image_attachments tx")?;
+        frankweiler_etl::bulk::bulk_upsert_in_tx(&mut tx, &[edge], &now).await?;
+        tx.commit()
+            .await
+            .context("commit notion_image_attachments tx")?;
+        Ok(hash)
     }
 
     /// Notion blobs are keyed `{block_id}:image`; we derive the
@@ -368,40 +389,94 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
             let pages = db.load_pages().await?;
             let blocks = db.load_blocks().await?;
             let comments = db.load_comments().await?;
-            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
-                db.pool().clone(),
-                db.cas().pool().clone(),
-            ));
+            let blobs_by_page =
+                load_blobs_by_page(db.pool(), &blob_cas::cas_path_for(&path), &blocks).await?;
             Ok::<_, anyhow::Error>(LoadedRaw {
                 pages,
                 blocks,
                 comments,
-                blobs,
+                blobs_by_page,
             })
         })
     })
 }
 
-/// Bag of payload arrays returned by [`block_on_load_all`]. Blob bytes
-/// come through `blobs` as a streaming handle (one-at-a-time fetch),
-/// not as a bulk HashMap.
-#[derive(Clone)]
+/// SQL projection used by [`BlobBundle::load`] to map an image
+/// block's `ref_id` (`"{block_uuid}:image"`) to its CAS `blake3`.
+const ATTACHMENTS_PROJECTION_SQL: &str = "
+    SELECT ref_id, blake3,
+           NULL AS content_type,
+           NULL AS upstream_name
+      FROM notion_image_attachments
+     WHERE ref_id IN ({placeholders}) AND blake3 IS NOT NULL";
+
+/// Build the per-page BlobBundle map render reads from. Walks every
+/// loaded block's `(page_id, block_id)` pair, derives the
+/// `"{block_id}:image"` ref_id convention extract uses, and per-page
+/// loads a BlobBundle from the sibling CAS via
+/// `ATTACHMENTS_PROJECTION_SQL`. Pages with no image blocks get no
+/// entry (render falls through to the upstream-URL placeholder).
+async fn load_blobs_by_page(
+    refs_pool: &SqlitePool,
+    cas_path: &Path,
+    blocks: &[(Value, Option<String>)],
+) -> Result<HashMap<String, BlobBundle>> {
+    let mut by_page: HashMap<String, Vec<String>> = HashMap::new();
+    for (block, page_id) in blocks {
+        let Some(page_id) = page_id.as_deref() else {
+            continue;
+        };
+        if block.get("type").and_then(|v| v.as_str()) != Some("image") {
+            continue;
+        }
+        let Some(block_id) = block.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        by_page
+            .entry(page_id.to_string())
+            .or_default()
+            .push(format!("{block_id}:image"));
+    }
+    if by_page.is_empty() || !cas_path.is_file() {
+        return Ok(HashMap::new());
+    }
+    let cas_opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", cas_path.display()))
+        .with_context(|| format!("sqlite uri for {}", cas_path.display()))?
+        .read_only(true);
+    let cas_pool: SqlitePool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(60))
+        .connect_with(cas_opts)
+        .await
+        .with_context(|| format!("open CAS for translate at {}", cas_path.display()))?;
+    let mut out: HashMap<String, BlobBundle> = HashMap::new();
+    for (page_id, refs) in by_page {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let refs_vec: Vec<&str> = refs
+            .iter()
+            .map(String::as_str)
+            .filter(|r| seen.insert(*r))
+            .collect();
+        let bundle =
+            BlobBundle::load(refs_pool, &cas_pool, ATTACHMENTS_PROJECTION_SQL, &refs_vec).await?;
+        if !bundle.is_empty() {
+            out.insert(page_id, bundle);
+        }
+    }
+    cas_pool.close().await;
+    Ok(out)
+}
+
+/// Bag of payload arrays returned by [`block_on_load_all`]. Attachment
+/// bytes arrive per-page in `blobs_by_page` — one `BlobBundle` per
+/// page that has at least one image block whose bytes are in the
+/// CAS — same shape slack / whatsapp / email use.
+#[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub pages: Vec<Value>,
     pub blocks: Vec<(Value, Option<String>)>,
     pub comments: Vec<(Value, Option<String>)>,
-    pub blobs: Arc<dyn BlobReader>,
-}
-
-impl Default for LoadedRaw {
-    fn default() -> Self {
-        Self {
-            pages: Vec::new(),
-            blocks: Vec::new(),
-            comments: Vec::new(),
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
+    pub blobs_by_page: HashMap<String, BlobBundle>,
 }
 
 #[cfg(test)]
