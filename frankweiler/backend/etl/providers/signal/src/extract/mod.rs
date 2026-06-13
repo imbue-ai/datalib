@@ -552,19 +552,12 @@ fn ingest_attachment(
     summary.blobs += 1;
 }
 
-/// End-of-fetch flush. One CAS-pool tx (`put_many`) + one entity-pool
-/// tx (chunked multi-row UPSERT + bookkeeping) + per-row error
-/// recording. Order: CAS first so the entity-table row's `blake3`
-/// points at bytes that are definitely already in the CAS.
+/// End-of-fetch flush. Delegates to the shared
+/// [`frankweiler_etl::blob_cas::flush_cas_edges`] primitive: CAS
+/// `put_many` for newly-decrypted bytes → bulk UPSERT
+/// `chat_item_attachments` → bookkeeping `last_error` stamps.
 async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()> {
-    if pending.rows.is_empty() {
-        return Ok(());
-    }
     use frankweiler_etl::blob_cas::CasInsert;
-    use frankweiler_etl::bulk::bulk_upsert_in_tx;
-
-    // CAS pool: one chunked INSERT OR IGNORE across all decrypted
-    // bytes. No-op for attachments that failed before decrypt.
     let cas_inserts: Vec<CasInsert<'_>> = pending
         .cas_items
         .iter()
@@ -574,38 +567,14 @@ async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()
             content_type: c.content_type.as_deref(),
         })
         .collect();
-    db.cas().put_many(&cas_inserts).await?;
-
-    // Entity pool: bulk UPSERT the attachment rows (success +
-    // failure alike) + bulk bookkeeping. Then walk the per-row error
-    // list and stamp `last_error` on the relevant bookkeeping rows.
-    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-    {
-        let mut tx = db
-            .pool()
-            .begin()
-            .await
-            .context("begin chat_item_attachments tx")?;
-        bulk_upsert_in_tx(&mut tx, &pending.rows, &now).await?;
-        // Error stamps: `record_object_attempt` with `Some(err)`
-        // updates bookkeeping.last_error and bumps attempt_count
-        // again — same shape every per-row error path uses. We do
-        // these inside the same tx so a failure here doesn't leave
-        // entity rows without their error annotations.
-        for (id, err) in &pending.errors {
-            frankweiler_etl::doltlite_raw::record_object_attempt(
-                &mut tx,
-                "chat_item_attachments",
-                id,
-                Some(err),
-            )
-            .await?;
-        }
-        tx.commit()
-            .await
-            .context("commit chat_item_attachments tx")?;
-    }
-    Ok(())
+    frankweiler_etl::blob_cas::flush_cas_edges(
+        db.pool(),
+        db.cas(),
+        &cas_inserts,
+        &pending.rows,
+        &pending.errors,
+    )
+    .await
 }
 
 /// Pick the newest `signal-backup-*` subdir under `root`. Signal's

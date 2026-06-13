@@ -1620,6 +1620,7 @@ dependencies = [
  "clap",
  "emojis",
  "frankweiler-etl",
+ "frankweiler-etl-macros",
  "frankweiler-index-lib",
  "frankweiler-obs",
  "frankweiler-schema",

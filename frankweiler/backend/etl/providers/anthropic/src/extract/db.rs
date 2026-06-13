@@ -175,17 +175,17 @@ impl RawDb {
         Ok(out)
     }
 
-    /// `(file_uuid, blake3 IS NOT NULL)` lookup.
-    pub async fn attachment_has_bytes(&self, file_uuid: &str) -> Result<bool> {
-        let row = sqlx::query(
-            "SELECT 1 FROM anthropic_attachments \
-              WHERE file_uuid = ? AND blake3 IS NOT NULL LIMIT 1",
+    /// Snapshot `(file_uuid → blake3)` for every attachment whose
+    /// bytes have ever landed in the CAS. Loaded once at the start of
+    /// a fetch run; updated in-place as new downloads land. Replaces
+    /// the per-file SQL `attachment_has_bytes` lookup.
+    pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
+        frankweiler_etl::blob_cas::load_blake3_index(
+            &self.pool,
+            "anthropic_attachments",
+            "file_uuid",
         )
-        .bind(file_uuid)
-        .fetch_optional(&self.pool)
         .await
-        .with_context(|| format!("attachment_has_bytes {file_uuid}"))?;
-        Ok(row.is_some())
     }
 }
 

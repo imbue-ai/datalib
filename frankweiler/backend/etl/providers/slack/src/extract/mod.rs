@@ -2,10 +2,9 @@
 //!
 //! Captures Slack data into a single doltlite db at
 //! `<data_root>/raw/<name>.doltlite_db` — one row per workspace
-//! (`auth.test`), user, channel, message, and reply page, plus the
-//! shared `blobs` / `sync_runs` tables. See `db.rs`
-//! for the table layout and the rationale for keying messages by
-//! `slack_message_uuid(team_id, channel_id, ts)`.
+//! (`auth.test`), user, channel, message, reply page, and attachment
+//! edge, plus the shared `cas_objects` blob store. See `db.rs` and
+//! `schema_raw.rs` for the table layout.
 //!
 //! Resume cursor: derived at startup from the DB.
 //! `RawDb::latest_ts_by_channel` gives the per-channel `max(ts)` we've
@@ -18,19 +17,17 @@ pub mod db;
 pub mod schema_raw;
 pub mod shapes;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use frankweiler_etl::blob_cas::BlobBundle;
 use serde_json::{json, Value};
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 use api::{call_slack, SlackCall, SlackError};
-pub use db::{
-    block_on_load_all, block_on_load_filtered, block_on_probe_thread_cursors, db_path_for,
-    LoadedMessage, LoadedRaw, MessageRow, RawDb,
-};
+pub use db::{block_on_load_all, db_path_for, LoadedMessage, LoadedRaw, MessageInput, RawDb};
 use frankweiler_etl::events;
 use shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
 
@@ -40,11 +37,7 @@ pub const DEFAULT_REFRESH_WINDOW_DAYS: i64 = 30;
 /// Max age of a successful channel/user list sweep before we refetch.
 /// Slack `conversations.list` is Tier-2 rate-limited (~20 req/min), so
 /// a workspace with thousands of channels costs tens of seconds per
-/// refetch even on warm-cache runs. Channels and users change on a
-/// human timescale; six hours of staleness is fine for an ETL whose
-/// downstream consumers re-resolve names from the cached `channels` /
-/// `users` tables anyway. `--reset-and-redownload` bypasses this by
-/// clearing the sweep markers in `RawDb::reset`.
+/// refetch even on warm-cache runs.
 pub const MANIFEST_TTL: chrono::Duration = chrono::Duration::hours(6);
 
 // ---------------------------------------------------------------------------
@@ -87,11 +80,6 @@ async fn fetch_self(db: &RawDb, progress: &frankweiler_etl::progress::Progress) 
     Ok(team_id)
 }
 
-/// Fetch every channel listing page, upserting each channel into the
-/// DB along the way. Returns the set of channels visible to this run
-/// (after the `members_only`/`include_archived` filter). Skips the
-/// sweep entirely if the previous sweep with the same filter completed
-/// within `MANIFEST_TTL`.
 #[instrument(skip(db, progress))]
 async fn fetch_channels(
     db: &RawDb,
@@ -243,9 +231,15 @@ async fn export_channel(
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
-    have_blob: &mut HashSet<String>,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<()> {
+    // Per-channel attachment accumulator: every (message, file)
+    // reference is appended, the BlobBundle carries one byte set per
+    // file_id, and the end-of-channel flush writes both the CAS
+    // (via put_many) and `slack_attachments` (via bulk_upsert_in_tx).
+    let mut attach = api::ChannelAttachments::new();
+
     // Pass A: list every history page, upsert top-level messages, and
     // download per-page media (preserves the existing commit-as-we-go
     // semantics for Ctrl-C safety). Thread replies are deferred so
@@ -267,7 +261,8 @@ async fn export_channel(
         download_blobs,
         blob_size_limit_bytes,
         totals,
-        have_blob,
+        &mut attach,
+        blake3_by_file,
         progress,
         &mut collected,
     )
@@ -293,7 +288,8 @@ async fn export_channel(
                     download_blobs,
                     blob_size_limit_bytes,
                     totals,
-                    have_blob,
+                    &mut attach,
+                    blake3_by_file,
                     progress,
                     &mut collected,
                 )
@@ -302,10 +298,7 @@ async fn export_channel(
         }
     }
 
-    // Pass B: walk the collected top-level messages, fetching replies
-    // for any thread whose latest_reply has advanced (or that we've
-    // never seen). Now that we know how many replies are coming, the
-    // inner bar can transition from spinner to determinate.
+    // Pass B: thread replies for threads whose latest_reply advanced.
     let replies_to_fetch: u64 = collected
         .iter()
         .filter_map(|m| {
@@ -350,7 +343,8 @@ async fn export_channel(
             download_blobs,
             blob_size_limit_bytes,
             totals,
-            have_blob,
+            &mut attach,
+            blake3_by_file,
         )
         .await?;
         let fetched = totals.replies.saturating_sub(before) as u64;
@@ -360,6 +354,12 @@ async fn export_channel(
             "msgs={} replies={} media={}",
             totals.messages, totals.replies, media_downloaded
         ));
+    }
+
+    // End-of-channel flush: CAS put_many + slack_attachments bulk
+    // upsert. Mirrors chatgpt/anthropic's per-conv flush pattern.
+    if let Err(e) = attach.flush(db).await {
+        warn!(event = "slack_attachment_flush_err", channel = %channel_id, error = %e);
     }
 
     Ok(())
@@ -377,8 +377,7 @@ struct ChannelTotals {
 /// downloading any media those messages reference. Threads are NOT
 /// fetched here — the caller defers those to pass B so the inner
 /// progress bar can announce a meaningful total before the long-tail
-/// thread fetches begin. Every collected top-level message is appended
-/// to `collected` for the caller to iterate in pass B.
+/// thread fetches begin.
 #[allow(clippy::too_many_arguments)]
 async fn list_history(
     db: &RawDb,
@@ -390,7 +389,8 @@ async fn list_history(
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
-    have_blob: &mut HashSet<String>,
+    attach: &mut api::ChannelAttachments,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
     progress: &frankweiler_etl::progress::Progress,
     collected: &mut Vec<Value>,
 ) -> Result<()> {
@@ -420,26 +420,23 @@ async fn list_history(
             .map(|a| a.to_vec())
             .unwrap_or_default();
 
-        let rows: Vec<db::MessageRow> = messages
+        let rows: Vec<MessageInput> = messages
             .iter()
-            .filter_map(|m| history_message_row(team_id, channel_id, m))
+            .filter_map(|m| history_message_input(team_id, channel_id, m))
             .collect();
         db.upsert_messages(&rows).await?;
-        // Count every message in the response — including any
-        // (vanishingly rare) ones without a `ts` that we skipped —
-        // so the progress total matches what Slack returned.
         totals.messages += messages.len();
         progress.inc(messages.len() as u64);
 
-        // Per-page media. Sequential — Slack hates concurrency on
-        // files.slack.com. Threads (in pass B) download their replies'
-        // files inline inside `paginate_replies`.
         if download_blobs {
             let counts = api::download_files_for_messages(
                 db,
+                team_id,
                 channel_id,
                 &messages,
-                have_blob,
+                None,
+                attach,
+                blake3_by_file,
                 blob_size_limit_bytes,
             )
             .await?;
@@ -466,8 +463,7 @@ async fn list_history(
 
 /// Paginate `conversations.replies` for one thread. Upserts every
 /// message in the response (including the parent re-served by Slack)
-/// and records a `replies_pages` row so the next sync can skip if no
-/// new replies have landed.
+/// and records a `replies_pages` row so the next sync can skip.
 #[allow(clippy::too_many_arguments)]
 async fn paginate_replies(
     db: &RawDb,
@@ -477,7 +473,8 @@ async fn paginate_replies(
     download_blobs: bool,
     blob_size_limit_bytes: Option<u64>,
     totals: &mut ChannelTotals,
-    have_blob: &mut HashSet<String>,
+    attach: &mut api::ChannelAttachments,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let mut base = BTreeMap::new();
     base.insert("channel".to_string(), channel_id.to_string());
@@ -498,32 +495,29 @@ async fn paginate_replies(
             .map(|a| a.to_vec())
             .unwrap_or_default();
 
-        let rows: Vec<db::MessageRow> = msgs
+        let rows: Vec<MessageInput> = msgs
             .iter()
-            .filter_map(|m| reply_message_row(team_id, channel_id, thread_ts, m))
+            .filter_map(|m| reply_message_input(team_id, channel_id, thread_ts, m))
             .collect();
         db.upsert_messages(&rows).await?;
         for m in &msgs {
             if let Some(ts) = m.get("ts").and_then(|v| v.as_str()) {
-                if ts != thread_ts {
-                    // Track the max child ts we've seen so the
-                    // replies_pages bookmark advances monotonically.
-                    if last_seen_reply.as_deref().is_none_or(|prev| ts > prev) {
-                        last_seen_reply = Some(ts.to_string());
-                    }
+                if ts != thread_ts && last_seen_reply.as_deref().is_none_or(|prev| ts > prev) {
+                    last_seen_reply = Some(ts.to_string());
                 }
             }
         }
-        // Total reply-children is messages minus the parent (one per
-        // page only carries the parent at most once).
         totals.replies += msgs.len().saturating_sub(1);
 
         if download_blobs {
             let counts = api::download_files_for_messages(
                 db,
+                team_id,
                 channel_id,
                 &msgs,
-                have_blob,
+                Some(thread_ts),
+                attach,
+                blake3_by_file,
                 blob_size_limit_bytes,
             )
             .await?;
@@ -541,7 +535,7 @@ async fn paginate_replies(
     Ok(())
 }
 
-fn history_message_row(team_id: &str, channel_id: &str, m: &Value) -> Option<db::MessageRow> {
+fn history_message_input(team_id: &str, channel_id: &str, m: &Value) -> Option<MessageInput> {
     let ts = m.get("ts").and_then(|v| v.as_str())?;
     let thread_ts = m
         .get("thread_ts")
@@ -551,7 +545,7 @@ fn history_message_row(team_id: &str, channel_id: &str, m: &Value) -> Option<db:
         None => true,
         Some(tts) => tts == ts,
     };
-    Some(db::MessageRow {
+    Some(MessageInput {
         team_id: team_id.to_string(),
         channel_id: channel_id.to_string(),
         ts: ts.to_string(),
@@ -562,23 +556,20 @@ fn history_message_row(team_id: &str, channel_id: &str, m: &Value) -> Option<db:
     })
 }
 
-fn reply_message_row(
+fn reply_message_input(
     team_id: &str,
     channel_id: &str,
     requested_thread_ts: &str,
     m: &Value,
-) -> Option<db::MessageRow> {
+) -> Option<MessageInput> {
     let ts = m.get("ts").and_then(|v| v.as_str())?;
-    // Slack returns the parent inline with replies; treat ts == requested
-    // as the root regardless of which endpoint delivered it. Replies
-    // that omit `thread_ts` get it filled in from the request.
     let thread_ts = m
         .get("thread_ts")
         .and_then(|v| v.as_str())
         .map(String::from)
         .or_else(|| Some(requested_thread_ts.to_string()));
     let is_thread_root = ts == requested_thread_ts;
-    Some(db::MessageRow {
+    Some(MessageInput {
         team_id: team_id.to_string(),
         channel_id: channel_id.to_string(),
         ts: ts.to_string(),
@@ -594,26 +585,15 @@ fn reply_message_row(
 // ---------------------------------------------------------------------------
 
 pub struct FetchOptions {
-    /// Path to the doltlite database file. If the caller passes a
-    /// legacy directory, it's rewritten to `<dir>.doltlite_db`.
-    /// Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
-    /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
-    /// instead of opening from `db_path`. See the matching field on
-    /// the other providers' FetchOptions for rationale.
     pub db: Option<RawDb>,
     pub channels: Option<Vec<String>>,
     pub since: String,
     pub refresh_window_days: i64,
     pub members_only: bool,
     pub media: bool,
-    /// Resolved blob size limit (bytes). Slack files whose advertised
-    /// `size` exceeds this are skipped before fetching. `None` = no limit;
-    /// files without a `size` field are never skipped (nothing to gate
-    /// against). Mirrors `SharedConfig::blob_size_limit_bytes`.
     pub blob_size_limit_bytes: Option<u64>,
     pub progress: frankweiler_etl::progress::Progress,
-    /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: frankweiler_etl::control::ExtractControl,
 }
 
@@ -658,9 +638,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.control.refetch_blobs {
         tracing::info!(event = "slack_refetch_blobs");
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+        db.clear_blob_hashes()
             .await
-            .context("truncate blob_refs before refetch")?;
+            .context("clear slack_attachments.blake3 before refetch")?;
     }
 
     let since_dt =
@@ -681,17 +661,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let t_scan = std::time::Instant::now();
     let channel_latest_ts = db.latest_ts_by_channel().await?;
     let latest_reply_map = db.latest_reply_by_thread().await?;
-    // Snapshot already-downloaded blob ids once so the per-file
-    // dedupe check inside `download_one_file` is a HashSet hit instead
-    // of a SQLite round trip queued behind the single doltlite pool
-    // connection. Augmented in-place as we successfully upsert new
-    // blobs during this run.
-    let mut have_blob = db.loaded_blob_ids().await?;
+    // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
+    // the per-file dedupe check inside `download_one_file` is a
+    // HashMap hit instead of a SQLite round trip queued behind preceding
+    // multi-MB CAS commits on the single-connection doltlite pool.
+    // Successful downloads insert into it so later files in the same
+    // run hit the cache without re-fetching.
+    let mut blake3_by_file = db.load_attachment_blake3s().await?;
     info!(
         event = "slack_resume_scan_done",
         channels_with_history = channel_latest_ts.len(),
         threads_with_replies = latest_reply_map.len(),
-        blobs_with_bytes = have_blob.len(),
+        attachments_with_bytes = blake3_by_file.len(),
         elapsed_ms = t_scan.elapsed().as_millis() as u64,
     );
 
@@ -702,9 +683,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     };
 
     let work = async {
-        // Nested bar covers everything that happens before the
-        // per-channel loop starts — auth, channel list, user list —
-        // so the user can see what stage we're stuck in.
         let setup = opts.progress.child("setup");
         setup.set_message("starting");
         let t_setup = std::time::Instant::now();
@@ -747,12 +725,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             opts.progress.set_message(name);
             let span = info_span!("channel", channel_name = %name, channel_id = %cid);
             let mut totals = ChannelTotals::default();
-            // Per-channel inner bar: starts as a spinner during the
-            // list pass (total unknown) and switches to a determinate
-            // bar in pass B once `export_channel` calls `set_length`.
-            // Prefix with `slack:` so the channel bars are visually
-            // attributed to the slack source — useful when several
-            // providers' inner bars are interleaved by MultiProgress.
             let inner = opts.progress.child(&format!("slack: {name}"));
             inner.set_message("listing");
             let result = export_channel(
@@ -767,7 +739,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 opts.media,
                 opts.blob_size_limit_bytes,
                 &mut totals,
-                &mut have_blob,
+                &mut blake3_by_file,
                 &inner,
             )
             .instrument(span)
@@ -805,10 +777,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     Ok(grand)
 }
 
-/// Parse a `--since` CLI value. Accepts either RFC 3339 with explicit
-/// offset (e.g. `2026-01-15T08:00:00-08:00`), or a bare ISO date
-/// (`2026-01-15`) interpreted as midnight UTC of that day. Both shapes
-/// funnel through `frankweiler-time` so the policy lives in one place.
+/// Suppress `BlobBundle` import warnings if media downloads are
+/// disabled at compile time; today the BlobBundle path is always
+/// exercised via `api::ChannelAttachments`.
+const _: fn() = || {
+    let _ = BlobBundle::new;
+};
+
 fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
     let t = frankweiler_time::parse_strict(s)
         .or_else(|_| frankweiler_time::parse_yyyy_mm_dd_assumed_utc(s))

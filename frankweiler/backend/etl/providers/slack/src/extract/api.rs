@@ -4,7 +4,7 @@
 //! `slack` service's `baseApiUrls` (latchkey ≥ 2.11.2), so a single
 //! credential signs both API calls and file downloads.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -12,12 +12,13 @@ use serde_json::Value;
 use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
-use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::blob_cas::{flush_cas_edges, BlobBundle};
 use frankweiler_etl::events;
 use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 
 use super::db::RawDb;
+use super::schema_raw::{attachment_id_recipe, slack_message_uuid, SlackAttachmentRow};
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -36,8 +37,7 @@ pub enum SlackError {
 }
 
 /// Successful Slack API call plus wall-clock duration of the underlying
-/// HTTP exchange. The caller stamps this into the raw-API capture so
-/// stored fixtures double as latency samples.
+/// HTTP exchange.
 pub struct SlackCall {
     pub response: Value,
     pub duration_ms: u64,
@@ -74,18 +74,14 @@ async fn call_slack_once(
 ) -> Result<Value, SlackError> {
     let url = build_url(method, params);
     let req = HttpRequest::get("slack", &url).timeout(LATCHKEY_TIMEOUT);
-    let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
-        // Curl transport-level errors (DNS/TLS/timeout) are transient
-        // for the slack retry loop; everything else stays permanent.
-        match e {
-            HttpError::Timeout { .. } => SlackError::Transient(format!("{method}: {e}")),
-            HttpError::Curl {
-                exit: 7 | 28 | 35 | 56,
-                ..
-            } => SlackError::Transient(format!("{method}: {e}")),
-            HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
-            _ => SlackError::Permanent(format!("{method}: {e}")),
-        }
+    let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
+        HttpError::Timeout { .. } => SlackError::Transient(format!("{method}: {e}")),
+        HttpError::Curl {
+            exit: 7 | 28 | 35 | 56,
+            ..
+        } => SlackError::Transient(format!("{method}: {e}")),
+        HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
+        _ => SlackError::Permanent(format!("{method}: {e}")),
     })?;
 
     if resp.status != 200 {
@@ -173,26 +169,222 @@ pub async fn call_slack(
 }
 
 // ---------------------------------------------------------------------------
-// File-download path: `latchkey curl` against files.slack.com, which
-// the `slack` service's baseApiUrls covers (latchkey ≥ 2.11.2).
+// File-download path: `latchkey curl` against files.slack.com.
 // ---------------------------------------------------------------------------
 
-/// Download one file's bytes into the doltlite `blobs` table. The
-/// `owning_id` we record is the channel containing the message that
-/// references the file — Slack files can be shared across channels,
-/// but bytes-are-bytes and the first downloader wins (subsequent
-/// references no-op via the `have_blob` cache).
+/// Per-channel accumulator for attachment fetches.
 ///
-/// `have_blob` is the run-scoped set of blob ids we've already
-/// confirmed bytes for (seeded from `RawDb::loaded_blob_ids` at run
-/// start, augmented on every successful upsert here). Checking it
-/// avoids a SQLite round trip per file, which on a single-connection
-/// doltlite pool was queuing behind preceding multi-MB blob commits.
-pub async fn download_one_file(
+/// Three callers feed it:
+///   * [`Self::add_fetched`] — fresh bytes downloaded this run; lands
+///     in the [`BlobBundle`] so the end-of-channel CAS flush stores
+///     them, then the edge row is stamped with the bundle-derived
+///     blake3.
+///   * [`Self::add_known`] — file already in the CAS from a prior
+///     run; caller passes the existing blake3 looked up via
+///     [`RawDb::attachment_blake3`]. The edge row is stamped with
+///     that hash, so every edge carries its actual content hash —
+///     not NULL with the bytes only reachable through a sibling row
+///     keyed by a different message.
+///   * [`Self::add_failed`] — fetch attempt errored; edge row is
+///     stamped with `blake3 = NULL` and an error is recorded on the
+///     bookkeeping sidecar.
+///
+/// One row per `(message_uuid, file_id)` pair. End-of-channel flush
+/// delegates to [`flush_cas_edges`].
+pub struct ChannelAttachments {
+    bundle: BlobBundle,
+    edges: Vec<EdgePending>,
+    errors: Vec<(String, String)>,
+    seen_message_file: HashSet<(String, String)>,
+    known_blake3: HashMap<String, String>,
+}
+
+struct EdgePending {
+    message_uuid: String,
+    file_id: String,
+}
+
+impl ChannelAttachments {
+    pub fn new() -> Self {
+        Self {
+            bundle: BlobBundle::new(),
+            edges: Vec::new(),
+            errors: Vec::new(),
+            seen_message_file: HashSet::new(),
+            known_blake3: HashMap::new(),
+        }
+    }
+
+    fn push_edge(&mut self, message_uuid: &str, file_id: &str) -> bool {
+        if !self
+            .seen_message_file
+            .insert((message_uuid.to_string(), file_id.to_string()))
+        {
+            return false;
+        }
+        self.edges.push(EdgePending {
+            message_uuid: message_uuid.to_string(),
+            file_id: file_id.to_string(),
+        });
+        true
+    }
+
+    fn add_fetched(
+        &mut self,
+        message_uuid: &str,
+        file_id: &str,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+        name: Option<String>,
+    ) {
+        self.push_edge(message_uuid, file_id);
+        self.bundle.add(file_id, bytes, content_type, name);
+    }
+
+    fn add_failed(&mut self, message_uuid: &str, file_id: &str, err: impl Into<String>) {
+        self.push_edge(message_uuid, file_id);
+        let err_str = err.into();
+        self.errors.push((file_id.to_string(), err_str));
+        self.bundle.add_error(file_id, "fetch failed");
+    }
+
+    fn add_known(&mut self, message_uuid: &str, file_id: &str, blake3: String) {
+        self.push_edge(message_uuid, file_id);
+        self.known_blake3.insert(file_id.to_string(), blake3);
+    }
+
+    /// End-of-channel flush via the shared
+    /// [`flush_cas_edges`]: CAS `put_many` → bulk upsert
+    /// `slack_attachments` → bookkeeping error stamps.
+    pub async fn flush(&self, db: &RawDb) -> Result<()> {
+        // file_id → blake3 lookup spans fresh fetches (from bundle)
+        // and refs we previously had bytes for (recorded by
+        // `add_known`).
+        let mut blake3_by_file: HashMap<&str, &str> = HashMap::new();
+        for f in self.bundle.fetched_refs() {
+            blake3_by_file.insert(f.ref_id, f.blake3);
+        }
+        for (file_id, hash) in &self.known_blake3 {
+            blake3_by_file
+                .entry(file_id.as_str())
+                .or_insert(hash.as_str());
+        }
+
+        let rows: Vec<SlackAttachmentRow> = self
+            .edges
+            .iter()
+            .map(|e| SlackAttachmentRow {
+                id: attachment_id_recipe(&e.message_uuid, &e.file_id),
+                message_uuid: e.message_uuid.clone(),
+                file_id: e.file_id.clone(),
+                blake3: blake3_by_file
+                    .get(e.file_id.as_str())
+                    .map(|s| s.to_string()),
+            })
+            .collect();
+
+        // Expand (file_id → err) failures into per-edge (synth_pk,
+        // err) bookkeeping stamps: one row per (message_uuid,
+        // file_id) pair whose file_id errored.
+        let mut error_stamps: Vec<(String, String)> = Vec::new();
+        for (file_id, err) in &self.errors {
+            for e in &self.edges {
+                if &e.file_id == file_id {
+                    error_stamps.push((
+                        attachment_id_recipe(&e.message_uuid, &e.file_id),
+                        err.clone(),
+                    ));
+                }
+            }
+        }
+
+        flush_cas_edges(
+            db.pool(),
+            db.cas(),
+            &self.bundle.cas_inserts(),
+            &rows,
+            &error_stamps,
+        )
+        .await
+    }
+}
+
+impl Default for ChannelAttachments {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Walk `messages[].files[]` and download each into the per-channel
+/// [`ChannelAttachments`]. `messages` is the raw array from a
+/// `conversations.history` or `conversations.replies` response. When
+/// `thread_ts` is supplied (replies path), Slack sometimes omits the
+/// per-message `thread_ts` field on the parent inline copy; that's
+/// fine for attachment edge keys because the message_uuid is derived
+/// from `ts` alone, not from the thread bucket.
+#[allow(clippy::too_many_arguments)]
+pub async fn download_files_for_messages(
     db: &RawDb,
+    team_id: &str,
     channel_id: &str,
+    messages: &[Value],
+    _thread_ts: Option<&str>,
+    attach: &mut ChannelAttachments,
+    blake3_by_file: &mut HashMap<String, String>,
+    blob_size_limit_bytes: Option<u64>,
+) -> Result<BTreeMap<String, usize>> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for k in [
+        "downloaded",
+        "skipped",
+        "tombstone",
+        "external",
+        "error",
+        "too_large",
+    ] {
+        counts.insert(k.to_string(), 0);
+    }
+    for m in messages {
+        let Some(message_ts) = m.get("ts").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let message_uuid = slack_message_uuid(team_id, channel_id, message_ts);
+        let Some(files) = m.get("files").and_then(|f| f.as_array()) else {
+            continue;
+        };
+        for f in files {
+            let outcome = download_one_file(
+                db,
+                &message_uuid,
+                f,
+                attach,
+                blake3_by_file,
+                blob_size_limit_bytes,
+            )
+            .await?;
+            *counts.entry(outcome.to_string()).or_insert(0) += 1;
+        }
+    }
+    debug!(
+        event = "slack_media_summary",
+        downloaded = counts.get("downloaded").copied().unwrap_or(0),
+        skipped = counts.get("skipped").copied().unwrap_or(0),
+        errors = counts.get("error").copied().unwrap_or(0),
+        external = counts.get("external").copied().unwrap_or(0),
+    );
+    Ok(counts)
+}
+
+/// Fetch one file's bytes (or note it as skipped/external/tombstoned)
+/// and feed the outcome into the per-channel accumulator. Trust-our-
+/// copy: signed URLs rotate, bytes don't, so a `file_id` we've
+/// already hashed never re-downloads.
+async fn download_one_file(
+    _db: &RawDb,
+    message_uuid: &str,
     file_obj: &Value,
-    have_blob: &mut HashSet<String>,
+    attach: &mut ChannelAttachments,
+    blake3_by_file: &mut HashMap<String, String>,
     blob_size_limit_bytes: Option<u64>,
 ) -> Result<&'static str> {
     let file_id = match file_obj.get("id").and_then(|v| v.as_str()) {
@@ -218,16 +410,17 @@ pub async fn download_one_file(
         None => return Ok("external"),
     };
 
-    // Trust-our-copy refetch policy: signed URLs rotate but bytes don't.
-    if have_blob.contains(file_id) {
+    // Skip-check: the run-scoped `(file_id → blake3)` cache was
+    // pre-loaded at fetch entry and is updated in-place by every
+    // successful download below. A hit means we either already had
+    // the bytes from a prior sync or another message in this run
+    // landed them; either way, no fetch needed — just record the
+    // (message_uuid, file_id) edge with the known hash.
+    if let Some(blake3) = blake3_by_file.get(file_id) {
+        attach.add_known(message_uuid, file_id, blake3.clone());
         return Ok("skipped");
     }
 
-    // Honor the resolved `blob_size_limit_bytes` knob. Slack file objects
-    // carry `size` (bytes) in their metadata; when it's both present and
-    // over the limit, skip the fetch. The pre-seeded blob stub still
-    // records the URL and mime so downstream tools can see the link
-    // existed — only the bytes are absent.
     if let (Some(limit), Some(size)) = (
         blob_size_limit_bytes,
         file_obj.get("size").and_then(|v| v.as_u64()),
@@ -239,6 +432,11 @@ pub async fn download_one_file(
                 size = size,
                 limit = limit,
             );
+            attach.add_failed(
+                message_uuid,
+                file_id,
+                format!("size {size} > limit {limit}"),
+            );
             return Ok("too_large");
         }
     }
@@ -246,8 +444,6 @@ pub async fn download_one_file(
     let name = file_obj.get("name").and_then(|v| v.as_str());
     let mime = file_obj.get("mimetype").and_then(|v| v.as_str());
 
-    // Tempfile + `latchkey curl -o` matches the chatgpt/anthropic pattern.
-    // files.slack.com is covered by the `slack` service's baseApiUrls.
     let tmp = tempfile::NamedTempFile::new().context("create blob tempfile")?;
     let mut cmd = latchkey_tokio_command();
     cmd.arg("curl")
@@ -277,29 +473,24 @@ pub async fn download_one_file(
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
-        let _ = db
-            .record_blob_error(file_id, channel_id, "file", tail.trim())
-            .await;
+        attach.add_failed(message_uuid, file_id, tail.trim().to_string());
         return Ok("error");
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
     let len = bytes.len() as u64;
-    db.store_blob(
-        &RefStub {
-            ref_id: file_id,
-            kind: "file",
-            owning_id: channel_id,
-            slot: "file",
-            upstream_uuid: Some(file_id),
-            upstream_name: name,
-            source_url: Some(url),
-            content_type: mime,
-        },
-        &bytes,
-    )
-    .await?;
-    have_blob.insert(file_id.to_string());
+    // Compute blake3 once, stamp into the run-scoped cache so later
+    // messages referencing the same file_id hit the cache, then hand
+    // bytes to the bundle.
+    let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+    blake3_by_file.insert(file_id.to_string(), blake3);
+    attach.add_fetched(
+        message_uuid,
+        file_id,
+        bytes,
+        mime.map(String::from),
+        name.map(String::from),
+    );
     events::item_fetched(url, len, 0);
     debug!(
         event = "slack_media_downloaded",
@@ -307,76 +498,4 @@ pub async fn download_one_file(
         bytes = len
     );
     Ok("downloaded")
-}
-
-/// Walk message records for `files[]` and download each into the
-/// doltlite blob store. `messages` is the raw array from a
-/// `conversations.history` or `conversations.replies` response.
-pub async fn download_files_for_messages(
-    db: &RawDb,
-    channel_id: &str,
-    messages: &[Value],
-    have_blob: &mut HashSet<String>,
-    blob_size_limit_bytes: Option<u64>,
-) -> Result<BTreeMap<String, usize>> {
-    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for k in [
-        "downloaded",
-        "skipped",
-        "tombstone",
-        "external",
-        "error",
-        "too_large",
-    ] {
-        counts.insert(k.to_string(), 0);
-    }
-    let mut targets: Vec<Value> = Vec::new();
-    for m in messages {
-        if let Some(files) = m.get("files").and_then(|f| f.as_array()) {
-            for f in files {
-                targets.push(f.clone());
-            }
-        }
-    }
-    // Pre-seed a blob stub (id + url, no bytes) for every fetchable
-    // file before we start downloading. Lets tooling count
-    // "known-but-undownloaded" mid-run / after a Ctrl-C; the
-    // subsequent upsert_blob_bytes overwrites the stub on success.
-    // Skip tombstones and externals (we won't try to fetch those).
-    for f in &targets {
-        let Some(id) = f.get("id").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if f.get("mode").and_then(|v| v.as_str()) == Some("tombstone") {
-            continue;
-        }
-        if f.get("is_external")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let url = f
-            .get("url_private_download")
-            .and_then(|v| v.as_str())
-            .or_else(|| f.get("url_private").and_then(|v| v.as_str()));
-        if url.is_none() {
-            continue;
-        }
-        let mime = f.get("mimetype").and_then(|v| v.as_str());
-        let _ = db.pre_seed_blob_stub(id, channel_id, mime, url).await;
-    }
-    for f in &targets {
-        let outcome =
-            download_one_file(db, channel_id, f, have_blob, blob_size_limit_bytes).await?;
-        *counts.entry(outcome.to_string()).or_insert(0) += 1;
-    }
-    debug!(
-        event = "slack_media_summary",
-        downloaded = counts.get("downloaded").copied().unwrap_or(0),
-        skipped = counts.get("skipped").copied().unwrap_or(0),
-        errors = counts.get("error").copied().unwrap_or(0),
-        external = counts.get("external").copied().unwrap_or(0),
-    );
-    Ok(counts)
 }

@@ -41,7 +41,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "f67d6b7e36720ea80cdf491c9f74a39a0268059c4f740b8a263bdbdaa296be65",
-      "source_fingerprint": "9c54d0ea26eaf0e0",
+      "source_fingerprint": "18661749-ed35-5c92-aa13-7cb73be53387",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:20:00.000800+00:00"
@@ -153,7 +153,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "708e77e247cca533c414ecbd1926ae1531e0237483ecfa403baa128de9912ea7",
-      "source_fingerprint": "52ae743cbfa65f6d",
+      "source_fingerprint": "8074b3b0-3bd4-5232-843f-c8278649d1a2",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:11:40.000300+00:00"
@@ -195,7 +195,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "7f3b94f4c8834ac32fa4b956029f5f386b47ddc45dc69bdaf30ecb4fc84d7974",
-      "source_fingerprint": "63d58eefe26bb7b1",
+      "source_fingerprint": "a93e15fa-68d5-5d53-aa9a-590e01b83275",
       "source_name": "slack",
       "title": "#ten-forward",
       "updated_at": "2369-05-28T15:18:20.000700+00:00"
@@ -265,7 +265,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "40314ca5c657dac29fc4c511ed9b7927e91780524da896db3253a9f53cd6f05d",
-      "source_fingerprint": "60f018793507c342",
+      "source_fingerprint": "b220c513-3e7b-5301-8b0d-13f9b8cf63fc",
       "source_name": "slack",
       "title": "#engineering",
       "updated_at": "2369-05-28T15:15:00.000500+00:00"
@@ -279,7 +279,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "06e886764cc5909e696abf625d8d8d29704102cc4d64ce5b2f2f29bd17b2c8ff",
-      "source_fingerprint": "3a8b34644fd72c5c",
+      "source_fingerprint": "b5ff7879-d563-59d6-8e89-906b6975dca1",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:13:20.000400+00:00"
@@ -293,7 +293,7 @@ expression: snapshot
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.2",
       "row_set_hash": "a096953cf8b1d7f050c172d86a990b0db695766b01e311fe791425e3da7068f8",
-      "source_fingerprint": "76aa4cfd02084d2a",
+      "source_fingerprint": "be617fe9-49d3-5fe1-b75d-0e210465c5bb",
       "source_name": "slack",
       "title": "#bridge",
       "updated_at": "2369-05-28T15:18:20.000700+00:00"

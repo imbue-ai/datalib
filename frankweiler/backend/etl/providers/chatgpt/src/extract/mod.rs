@@ -129,6 +129,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut client = ChatGPTClient::new();
     let mut summary = FetchSummary::default();
 
+    // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
+    // the per-file dedupe check inside `fetch_attachments_for` is a
+    // HashMap hit instead of a SQLite round trip. Successful
+    // downloads insert into it so files referenced by multiple
+    // conversations in the same run hit the cache on every reference
+    // after the first.
+    let mut blake3_by_file = db.load_attachment_blake3s().await?;
+
     let work = async {
         // /me — cheap, also pins the account id we report under.
         let me = client
@@ -165,7 +173,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         )
                         .await?;
                         summary.fetched += 1;
-                        fetch_attachments_for(&mut client, &db, &full, &mut summary, &now).await;
+                        fetch_attachments_for(
+                            &mut client,
+                            &db,
+                            &full,
+                            &mut summary,
+                            &mut blake3_by_file,
+                            &now,
+                        )
+                        .await;
                         info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                     }
                     Err(e) => {
@@ -267,7 +283,15 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     )
                     .await?;
                     summary.fetched += 1;
-                    fetch_attachments_for(&mut client, &db, &full, &mut summary, &now).await;
+                    fetch_attachments_for(
+                        &mut client,
+                        &db,
+                        &full,
+                        &mut summary,
+                        &mut blake3_by_file,
+                        &now,
+                    )
+                    .await;
                     if opts.sleep_between > Duration::ZERO {
                         sleep(opts.sleep_between).await;
                     }
@@ -399,6 +423,7 @@ async fn fetch_attachments_for(
     db: &RawDb,
     conv: &Value,
     summary: &mut FetchSummary,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
     now: &str,
 ) {
     let Some(cid) = conv
@@ -468,17 +493,31 @@ async fn fetch_attachments_for(
         }
     }
     let mut bundle = BlobBundle::new();
-    // failures: ref_id → which we couldn't get bytes for; tracked here
-    // so the end-of-walk flush can insert blake3=NULL edge rows for
-    // them too (the bundle proper only carries successful fetches).
+    // failures: file_ids whose download errored; tracked alongside
+    // the bundle so the end-of-walk flush stamps both the edge row
+    // and the bookkeeping sidecar's last_error.
     let mut failed: Vec<String> = Vec::new();
+    // known_blake3: file_ids whose bytes were already in the CAS
+    // from a prior sync (or landed earlier in this run, via the
+    // run-scoped `blake3_by_file` map). We still want a (this_conv,
+    // file_id) edge row stamped with the existing hash so the
+    // conversation's slice of the attachment table is complete.
+    let mut known_blake3: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for (file_id, name, mime) in targets {
-        if db.attachment_has_bytes(&file_id).await.unwrap_or(false) {
+        if let Some(blake3) = blake3_by_file.get(&file_id) {
+            known_blake3.insert(file_id.clone(), blake3.clone());
             summary.skipped_blobs += 1;
             continue;
         }
         match download_one_file(client, &file_id, name.as_deref(), mime.as_deref()).await {
             Ok(Some((bytes, content_type))) => {
+                // Stamp the run-scoped cache before bytes go into
+                // the bundle so a later conversation in the same
+                // run that references the same file_id hits the
+                // cache.
+                let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+                blake3_by_file.insert(file_id.clone(), blake3);
                 bundle.add(&file_id, bytes, content_type, name.clone());
                 summary.new_blobs += 1;
             }
@@ -496,36 +535,26 @@ async fn fetch_attachments_for(
         }
     }
 
-    if let Err(e) = flush_attachment_bundle(db, &bundle, &failed, cid, now).await {
+    if let Err(e) = flush_attachment_bundle(db, &bundle, &failed, &known_blake3, cid, now).await {
         warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e);
     }
+    let _ = now;
 }
 
-/// End-of-conversation flush. CAS-pool tx (`put_many`) → entity-pool tx
-/// (chunked multi-row UPSERT for both successful fetches and the
-/// blake3=NULL stubs for failed ones, plus `record_object_error` per
-/// failure into the bookkeeping sidecar). Order: CAS first so the
-/// entity-row's `blake3` points at bytes definitely in the CAS.
+/// End-of-conversation flush. Builds the per-(conv, file) edge rows
+/// — successful fetches (blake3 from the bundle), failed fetches
+/// (blake3 NULL), and refs whose bytes were already in CAS from a
+/// prior sync (blake3 looked up via `attachment_blake3`) — and hands
+/// them to the shared
+/// [`frankweiler_etl::blob_cas::flush_cas_edges`] primitive.
 async fn flush_attachment_bundle(
     db: &RawDb,
     bundle: &BlobBundle,
     failed_refs: &[String],
+    known_blake3: &std::collections::HashMap<String, String>,
     conversation_id: &str,
-    now: &str,
+    _now: &str,
 ) -> Result<()> {
-    if bundle.is_empty() && bundle.errors().is_empty() {
-        return Ok(());
-    }
-    let cas_inserts = bundle.cas_inserts();
-    if !cas_inserts.is_empty() {
-        db.cas()
-            .put_many(&cas_inserts)
-            .await
-            .context("chatgpt CAS put_many")?;
-    }
-    // Build edge rows: one per successful fetch (with blake3) + one
-    // per failed fetch (blake3 NULL). Both go through the same bulk
-    // upsert so the sidecar's attempt_count moves uniformly.
     let mut rows: Vec<ConversationAttachmentRow> = bundle
         .fetched_refs()
         .map(|f| ConversationAttachmentRow {
@@ -543,26 +572,27 @@ async fn flush_attachment_bundle(
             blake3: None,
         });
     }
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin flush_attachment_bundle tx")?;
-    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
-    for (ref_id, err) in bundle.errors() {
-        let id = attachment_id_recipe(conversation_id, ref_id);
-        frankweiler_etl::doltlite_raw::record_object_error(
-            &mut tx,
-            "chatgpt_attachments",
-            &id,
-            err,
-        )
-        .await?;
+    for (file_id, blake3) in known_blake3 {
+        rows.push(ConversationAttachmentRow {
+            id: attachment_id_recipe(conversation_id, file_id),
+            conversation_id: conversation_id.to_string(),
+            file_id: file_id.clone(),
+            blake3: Some(blake3.clone()),
+        });
     }
-    tx.commit()
-        .await
-        .context("commit flush_attachment_bundle tx")?;
-    Ok(())
+    let errors: Vec<(String, String)> = bundle
+        .errors()
+        .iter()
+        .map(|(ref_id, err)| (attachment_id_recipe(conversation_id, ref_id), err.clone()))
+        .collect();
+    frankweiler_etl::blob_cas::flush_cas_edges(
+        db.pool(),
+        db.cas(),
+        &bundle.cas_inserts(),
+        &rows,
+        &errors,
+    )
+    .await
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via

@@ -861,6 +861,63 @@ pub async fn bulk_upsert_events(
     Ok(())
 }
 
+/// All-in-one entity-bulk-write chokepoint paired with a JSONL
+/// wire-tape mirror. Use this when the caller already has a
+/// [`crate::bulk::BulkUpsertable`] row vec in hand (every ported
+/// extract path does), since [`bulk_upsert_events`] above only
+/// handles bookkeeping + tape and assumes the entity rows were
+/// written elsewhere in the tx.
+///
+/// Flow:
+///   1. Open a tx.
+///   2. [`crate::bulk::bulk_upsert_in_tx`] — entity rows + paired
+///      `<T::TABLE>_bookkeeping` stamps.
+///   3. Commit.
+///   4. If `tape` is `Some`, fire one
+///      [`crate::event_tape::EventTape::append_batch`] for `(table,
+///      payloads)` post-commit. Errors log at `error!` but don't
+///      fail the call (same contract as
+///      [`write_events_to_raw_storage_layer`]).
+///
+/// `payloads` carries one `(id, &Value)` per row so the tape line
+/// can mirror the upstream JSON. The caller already has these from
+/// constructing the [`crate::bulk::BulkUpsertable`] rows.
+pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
+    pool: &sqlx::SqlitePool,
+    tape: Option<&crate::event_tape::EventTape>,
+    rows: &[T],
+    payloads: &[(&str, &serde_json::Value)],
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin bulk_upsert_with_tape {} tx", T::TABLE))?;
+    crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit bulk_upsert_with_tape {} tx", T::TABLE))?;
+    if let Some(t) = tape {
+        let batch = EventBatch {
+            table: T::TABLE,
+            rows: payloads,
+        };
+        if let Err(e) = t.append_batch(&batch) {
+            tracing::error!(
+                event = "event_tape_append_failed",
+                table = T::TABLE,
+                count = payloads.len(),
+                error = %format!("{e:#}"),
+                "event tape append_batch failed after doltlite commit; rows ARE persisted, tape is missing lines — investigate"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.

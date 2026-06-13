@@ -136,19 +136,13 @@ impl RawDb {
         dr::failed_ids(&self.pool, "conversations").await
     }
 
-    /// `(file_id, blake3 IS NOT NULL)` lookup — true if we already
-    /// have the bytes for this attachment somewhere in the CAS. Uses
-    /// the per-file index so the per-attachment skip check is cheap.
-    pub async fn attachment_has_bytes(&self, file_id: &str) -> Result<bool> {
-        let row = sqlx::query(
-            "SELECT 1 FROM chatgpt_attachments \
-              WHERE file_id = ? AND blake3 IS NOT NULL LIMIT 1",
-        )
-        .bind(file_id)
-        .fetch_optional(&self.pool)
-        .await
-        .with_context(|| format!("attachment_has_bytes {file_id}"))?;
-        Ok(row.is_some())
+    /// Snapshot `(file_id → blake3)` for every attachment whose bytes
+    /// have ever landed in the CAS. Loaded once at the start of a
+    /// fetch run; updated in-place as new downloads land. Replaces
+    /// the per-file SQL `attachment_has_bytes` lookup.
+    pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
+        frankweiler_etl::blob_cas::load_blake3_index(&self.pool, "chatgpt_attachments", "file_id")
+            .await
     }
 
     // ── loads ───────────────────────────────────────────────────────

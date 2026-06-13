@@ -1,12 +1,12 @@
 //! Golden test for `slack::translate` against the checked-in TNG-themed
 //! fixture under `tests/fixtures/slack_api`. Locks in the grid_rows
 //! projection — UUID derivation, thread grouping, dedup, mention
-//! resolution — that the upcoming `slack-render` binary depends on.
+//! resolution.
 
 use std::path::PathBuf;
 
 use frankweiler_etl_slack::translate::{
-    grid_rows, slack_message_uuid, slack_thread_uuid, translate_raw_dir, ts_to_iso,
+    grid_rows, parse, slack_message_uuid, slack_thread_uuid, ts_to_iso,
 };
 use insta::assert_json_snapshot;
 use serde_json::json;
@@ -20,7 +20,6 @@ fn fixture_root() -> PathBuf {
 
 #[test]
 fn ts_to_iso_round_trips_microseconds() {
-    // 12604000100.000100 → year ~2369 with 100 µs.
     let iso = ts_to_iso("12604000100.000100");
     assert!(iso.ends_with("+00:00"), "got {iso:?}");
     assert!(iso.contains(".000100"), "got {iso:?}");
@@ -28,8 +27,8 @@ fn ts_to_iso_round_trips_microseconds() {
 
 #[test]
 fn translate_tng_fixture_produces_expected_lookups() {
-    let t = translate_raw_dir(&fixture_root()).expect("translate");
-    let ws = t.workspace.expect("workspace");
+    let t = parse(&fixture_root(), None).expect("parse");
+    let ws = t.workspace.as_ref().expect("workspace");
     assert_eq!(ws.team_id, "T_NCC1701D");
     assert_eq!(ws.self_user_id.as_deref(), Some("U_PICARD"));
 
@@ -42,24 +41,29 @@ fn translate_tng_fixture_produces_expected_lookups() {
 
     // Worf's "I recommend raising shields" appears in two run files of
     // conversations.history — must collapse to one message row.
-    let worf_key = ("C_BRIDGE".to_string(), "12604000400.000400".to_string());
-    assert!(t.messages.contains_key(&worf_key));
+    let worf_present = t
+        .threads
+        .iter()
+        .flat_map(|b| b.messages.iter())
+        .any(|m| m.channel_id == "C_BRIDGE" && m.ts == "12604000400.000400");
+    assert!(worf_present, "Worf message must be present");
 
     // Picard's thread root appears in both history and replies — one row.
-    let picard_root = ("C_BRIDGE".to_string(), "12604000100.000100".to_string());
-    let m = t.messages.get(&picard_root).expect("root present");
-    assert!(m.is_thread_root);
-    assert_eq!(m.effective_thread_ts, "12604000100.000100");
+    let picard_root = t
+        .threads
+        .iter()
+        .flat_map(|b| b.messages.iter())
+        .find(|m| m.channel_id == "C_BRIDGE" && m.ts == "12604000100.000100")
+        .expect("Picard root present");
+    assert!(picard_root.is_thread_root);
+    assert_eq!(picard_root.effective_thread_ts, "12604000100.000100");
 }
 
 #[test]
 fn translate_tng_fixture_grid_rows_snapshot() {
-    let t = translate_raw_dir(&fixture_root()).expect("translate");
+    let t = parse(&fixture_root(), None).expect("parse");
     let rows = grid_rows(&t);
 
-    // Determinism check: the well-known UUIDs the Python pipeline emits
-    // for these same fixture entries must match — that is the whole
-    // point of pinning the namespace.
     let picard_root_uuid = slack_message_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
     let picard_thread_uuid = slack_thread_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
 
@@ -77,8 +81,6 @@ fn translate_tng_fixture_grid_rows_snapshot() {
         .unwrap()
         .starts_with("rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/"));
 
-    // Root message row's uuid is distinct from its thread's uuid (so the
-    // two rows don't collide on the `uuid` PK in grid_rows).
     let root_msg = rows
         .iter()
         .find(|r| r.kind == "Slack Message" && r.uuid == picard_root_uuid)
@@ -86,9 +88,6 @@ fn translate_tng_fixture_grid_rows_snapshot() {
     assert_eq!(root_msg.message_index, Some(0));
     assert_ne!(root_msg.uuid, picard_thread_uuid);
 
-    // Stable snapshot of the full projection. Sort by (kind, when_ts, uuid)
-    // so any future iteration-order drift in `translate` doesn't flap the
-    // snapshot.
     let mut sortable: Vec<_> = rows.iter().map(|r| json!(r)).collect();
     sortable.sort_by_key(|v| {
         (

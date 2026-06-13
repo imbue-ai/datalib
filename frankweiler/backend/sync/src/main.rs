@@ -2145,7 +2145,7 @@ fn translate_source(
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
-    prior_cursors: &std::collections::HashMap<String, String>,
+    _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
@@ -2188,82 +2188,20 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
-            use frankweiler_etl_slack::extract::{
-                block_on_probe_thread_cursors, db_path_for as slack_db_path_for,
-            };
-            use frankweiler_etl_slack::translate::{
-                render::render_all, translate_raw_dir, translate_raw_dir_filtered,
-            };
-            // Cheap probe: `GROUP BY thread_root_uuid` against the
-            // existing index gives us (thread_uuid → cursor) without
-            // loading any message payloads. Threads whose cursor
-            // matches a prior render *and* whose md still sits on
-            // disk are pruned right here — their payloads never get
-            // pulled out of sqlite.
-            let slack_db = slack_db_path_for(&fixture);
-            if !slack_db.exists() {
-                // Fall back to the legacy JSONL path; no probe possible.
-                let t = translate_raw_dir(&fixture)
-                    .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-                return render_all(
-                    &t,
-                    root,
-                    name,
-                    progress,
-                    prior_fingerprints,
-                    &std::collections::HashMap::new(),
-                    on_doc_complete,
-                )
-                .context("slack render_all")
-                .map(|_| ());
-            }
-            let current_cursors = block_on_probe_thread_cursors(&slack_db)
-                .with_context(|| format!("slack probe {}", slack_db.display()))?;
-            let threads_to_render: std::collections::HashSet<String> = current_cursors
-                .iter()
-                .filter(|(tid, cur)| {
-                    // Re-render when the cheap cursor changed OR the
-                    // md file is missing (defends against `rm -rf
-                    // rendered_md/`). We don't know the thread's
-                    // team_id / channel_id without parsing — checking
-                    // md existence happens inside render_all's per-doc
-                    // skip, which still runs after the filtered load.
-                    // Worst case: cursor matches, md missing → we
-                    // load this thread's payloads but render_all
-                    // skips on fingerprint-and-md-exists anyway.
-                    // That's a small unnecessary load, not a wrong
-                    // skip.
-                    prior_cursors.get(*tid).map(String::as_str) != Some(cur.as_str())
-                })
-                .map(|(tid, _)| tid.clone())
-                .collect();
-            let total_threads = current_cursors.len();
-            let changed = threads_to_render.len();
-            status_line!(
-                "[translate] slack cheap-probe: {changed}/{total_threads} threads need rendering",
-            );
-
-            if threads_to_render.is_empty() {
-                // Everything's up to date — skip the bulk load entirely.
-                progress.set_length(Some(0));
-                return Ok(());
-            }
-
-            let t =
-                translate_raw_dir_filtered(&fixture, &threads_to_render).with_context(|| {
-                    format!("slack translate_raw_dir_filtered {}", fixture.display())
-                })?;
-            render_all(
-                &t,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                &current_cursors,
-                on_doc_complete,
+            use frankweiler_etl_slack::translate::{parse::parse, render::render_all};
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "slack", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("slack render_all")
-            .map(|_| ())
+            .with_context(|| format!("slack parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("slack render_all")
+                .map(|_| ())
         }
         SourceConfig::GithubApi { .. } => {
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};

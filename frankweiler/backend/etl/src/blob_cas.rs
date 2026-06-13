@@ -1103,6 +1103,115 @@ impl BlobBundle {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Per-provider CAS-edge index loader
+// ─────────────────────────────────────────────────────────────────────
+
+/// Snapshot a per-provider CAS edge table as a `(ref_id → blake3)`
+/// in-memory map. Loaded once at the start of `fetch()` so the
+/// per-file "have we got these bytes yet?" check is a HashMap hit
+/// instead of a SQLite round trip queued behind preceding multi-MB
+/// CAS commits on a single-connection doltlite pool.
+///
+/// `table` is the per-provider edge table (`chatgpt_attachments`,
+/// `anthropic_attachments`, `slack_attachments`); `ref_id_column` is
+/// the column carrying the upstream id (`file_id`, `file_uuid`).
+/// Many edge rows can share the same `ref_id` (different owning
+/// rows); the HashMap collapses duplicates and keeps the first
+/// non-null `blake3` we see — they should all agree, since one
+/// `ref_id` ↔ one immutable set of bytes ↔ one `blake3`.
+///
+/// The caller's `fetch()` keeps the map up to date as it goes:
+/// each successful download inserts the new (ref_id, blake3) so
+/// later files in the same run hit the cache without re-fetching.
+pub async fn load_blake3_index(
+    pool: &SqlitePool,
+    table: &str,
+    ref_id_column: &str,
+) -> Result<HashMap<String, String>> {
+    let sql = format!(
+        "SELECT {ref_id_column} AS ref_id, blake3 FROM {table} \
+          WHERE blake3 IS NOT NULL"
+    );
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("load_blake3_index {table}.{ref_id_column}"))?;
+    let mut out: HashMap<String, String> = HashMap::with_capacity(rows.len());
+    for r in &rows {
+        let Ok(ref_id) = r.try_get::<String, _>("ref_id") else {
+            continue;
+        };
+        let Ok(blake3) = r.try_get::<String, _>("blake3") else {
+            continue;
+        };
+        if !ref_id.is_empty() && !blake3.is_empty() {
+            out.entry(ref_id).or_insert(blake3);
+        }
+    }
+    Ok(out)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// CAS-edge flush primitive
+// ─────────────────────────────────────────────────────────────────────
+
+/// End-of-bucket CAS-edge flush. The shape every per-provider CAS
+/// edge table (chatgpt_attachments, anthropic_attachments,
+/// slack_attachments, chat_item_attachments) used to hand-roll
+/// individually:
+///
+///   1. CAS pool: `put_many` so every edge row's `blake3` points at
+///      bytes already in the CAS before the edge row lands.
+///   2. Entity pool, single tx:
+///      - `bulk_upsert_in_tx` the edge rows (writes + bookkeeping).
+///      - For each `(id, err)` in `errors`, stamp `last_error` on
+///        `<T::TABLE>_bookkeeping` via `record_object_attempt`. This
+///        runs in the same tx so a failure here doesn't leave entity
+///        rows without their error annotations.
+///   3. Commit.
+///
+/// `T::TABLE` (from [`BulkUpsertable`]) is used as the bookkeeping
+/// table name — every CAS-edge table has the standard
+/// `<table>_bookkeeping` sidecar.
+///
+/// Caller's job is to pre-build the edge rows with the right blake3:
+/// for fresh fetches the blake3 comes from `bundle.fetched_refs()`,
+/// for refs whose bytes were already in CAS the caller looks it up
+/// (e.g. via the provider's per-table `<ref_col>` query) and stamps
+/// it forward — so every edge row carries the actual hash, not NULL.
+/// Failures land in `errors` so the bookkeeping sidecar still
+/// records what went wrong.
+pub async fn flush_cas_edges<T: crate::bulk::BulkUpsertable>(
+    pool: &SqlitePool,
+    cas: &BlobCas,
+    cas_inserts: &[CasInsert<'_>],
+    rows: &[T],
+    errors: &[(String, String)],
+) -> Result<()> {
+    if rows.is_empty() && cas_inserts.is_empty() && errors.is_empty() {
+        return Ok(());
+    }
+    if !cas_inserts.is_empty() {
+        cas.put_many(cas_inserts)
+            .await
+            .with_context(|| format!("flush_cas_edges put_many {}", T::TABLE))?;
+    }
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin flush_cas_edges {} tx", T::TABLE))?;
+    crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    for (id, err) in errors {
+        crate::doltlite_raw::record_object_attempt(&mut tx, T::TABLE, id, Some(err)).await?;
+    }
+    tx.commit()
+        .await
+        .with_context(|| format!("commit flush_cas_edges {} tx", T::TABLE))?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Maintenance
 // ─────────────────────────────────────────────────────────────────────
 
