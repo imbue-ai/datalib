@@ -1,9 +1,8 @@
 ---
 source: frankweiler/backend/etl/providers/fsindex/tests/extract_smoke.rs
-expression: dump_files(&db_path).await
+expression: dump_b
 ---
-id=                                 kind=dir     size=   60 blake3=d1b648c26bde77c28d33902f0c1e19be8cb5d6aa3a0f207966f5a1c61f98eff1 symlink=None uuid=None
-id=empty.txt                        kind=file    size=    0 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 symlink=None uuid=None
+id=                                 kind=dir     size=   60 blake3=9cc94421a1a92029becbb81a87b66d49675b415b401e1b6ded6340c31267eada symlink=None uuid=None
 id=hello.link                       kind=symlink size=   17 blake3=755021af5f430e22ed0b33f07e5c881938aa2d97357161ff57e7a52b55ff3b2e symlink=Some("subdir/nested.txt") uuid=None
 id=hello.txt                        kind=file    size=   12 blake3=dc5a4edb8240b018124052c330270696f96771a63b45250a5c17d3000e823355 symlink=None uuid=None
 id=subdir                           kind=dir     size=   31 blake3=f549a3925035f91bc1ff0c7fb554769bcefd78ce93a42cf4c6050db3b48d1cad symlink=None uuid=None

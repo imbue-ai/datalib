@@ -61,16 +61,32 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if let Some(branch) = opts.target_doltlite_branch.as_deref() {
         db.checkout_branch(branch).await?;
     }
-    if opts.control.reset_and_redownload {
-        db.reset().await?;
-    }
     let _ = opts.control.refetch_blobs;
 
     opts.progress
         .set_message(&format!("indexing {}", opts.root.display()));
 
-    let prev_stats = db.load_prev_stats().await?;
-    let prev_file_blake3s = db.load_prev_file_blake3s().await?;
+    // Truncate-and-rebuild. We always wipe the data tables before
+    // a fresh walk so deleted files fall out naturally — no separate
+    // reconciliation pass to maintain. Dolt's prolly-tree alignment
+    // means re-inserting identical rows is a no-op at the storage
+    // layer, so the diff between commits stays exactly "what
+    // changed semantically." The rescan cache survives by living
+    // in-memory: we load the prior `file_stats` + `files.blake3`
+    // BEFORE truncating, so the Unison-style (mtime,size,inode)
+    // → reuse-cached-hash fast path still works.
+    //
+    // `reset_and_redownload` here means "ignore the cache too"
+    // — force a full rehash. Useful for verifying nothing has
+    // silently drifted between scans.
+    let (prev_stats, prev_file_blake3s) = if opts.control.reset_and_redownload {
+        (Default::default(), Default::default())
+    } else {
+        let s = db.load_prev_stats().await?;
+        let b = db.load_prev_file_blake3s().await?;
+        (s, b)
+    };
+    db.reset().await?;
 
     let default_stamp_kind = if cfg!(unix) {
         StampKind::Inode

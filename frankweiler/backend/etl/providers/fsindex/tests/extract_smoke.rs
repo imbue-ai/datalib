@@ -62,6 +62,54 @@ async fn dump_files(db_path: &Path) -> String {
     out
 }
 
+/// Verify the Unison cursor was stored correctly: every FILE row's
+/// `file_stats` should carry `stamp_kind = 'inode'` on unix with
+/// non-NULL `inode` + `dev`. If this fails, the rescan compare in
+/// `stamp::decide` will never reuse anything regardless of how
+/// unchanged the file is.
+///
+/// Dirs and symlinks deliberately get `stamp_kind = 'nostamp'`
+/// because they always rehash on every scan (no fast path), so
+/// there's no cache to consult for them.
+async fn assert_inode_stamp_kind(db_path: &Path) {
+    let db = RawDb::open(db_path).await.unwrap();
+    let rows = sqlx::query(
+        "SELECT file_stats.id, file_stats.stamp_kind, file_stats.inode, file_stats.dev \
+         FROM file_stats JOIN files ON files.id = file_stats.id \
+         WHERE files.kind = 'file'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert!(!rows.is_empty(), "no file-kind rows in file_stats");
+    for r in rows {
+        let id: String = r.try_get("id").unwrap();
+        let stamp_kind: String = r.try_get("stamp_kind").unwrap();
+        let inode: Option<i64> = r.try_get("inode").unwrap();
+        let dev: Option<i64> = r.try_get("dev").unwrap();
+        #[cfg(unix)]
+        {
+            assert_eq!(
+                stamp_kind, "inode",
+                "file row id={id:?} stamp_kind={stamp_kind} — expected 'inode' on unix"
+            );
+            assert!(
+                inode.is_some(),
+                "row id={id:?} has stamp_kind=inode but inode is NULL"
+            );
+            assert!(
+                dev.is_some(),
+                "row id={id:?} has stamp_kind=inode but dev is NULL"
+            );
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (inode, dev);
+            assert_eq!(stamp_kind, "nostamp", "row id={id:?} on non-unix");
+        }
+    }
+}
+
 fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
     FetchOptions {
         db_path: db_path.to_path_buf(),
@@ -104,8 +152,31 @@ async fn initial_scan_and_incremental_rescan() {
     assert_eq!(summary_a.entries_scanned, 7);
     #[cfg(not(unix))]
     assert_eq!(summary_a.entries_scanned, 6);
+    assert_inode_stamp_kind(&db_path).await;
 
     insta::assert_snapshot!("initial_scan", dump_files(&db_path).await);
+
+    // ── Phase A2: rescan with no changes — Unison fast path ─────────
+    // This is the test that the inode-based cursor is actually
+    // doing its job. All four FILE rows should reuse their cached
+    // blake3 against the unchanged (mtime, size, inode) triple;
+    // only the symlink and the two directories should rehash.
+    let summary_a2 = extract::fetch(fetch_opts(&db_path, &root))
+        .await
+        .expect("unchanged rescan");
+    assert_eq!(summary_a2.errors, 0);
+    #[cfg(unix)]
+    {
+        assert_eq!(summary_a2.entries_scanned, 7);
+        // 4 files (hello, empty, another, nested) reuse from cache.
+        assert_eq!(
+            summary_a2.entries_reused, 4,
+            "fast-rescan cache should reuse every unchanged file's blake3; \
+             got summary {summary_a2:?}",
+        );
+        // Symlink (1) + dirs (2) always recompute. = 3 rehashes.
+        assert_eq!(summary_a2.entries_rehashed, 3);
+    }
 
     // ── Phase B: edits + incremental rescan ─────────────────────────
     // Modify subdir/nested.txt: content change → blake3 change.
@@ -116,30 +187,34 @@ async fn initial_scan_and_incremental_rescan() {
     write(&root.join("hello.txt"), b"hello world\n");
     // Add a new file under subdir.
     write(&root.join("subdir/added.txt"), b"brand new");
+    // DELETE one file. After truncate-and-rebuild, the row should
+    // be gone from `files` (visible in the after_edits snapshot).
+    fs::remove_file(root.join("empty.txt")).unwrap();
 
     let summary_b = extract::fetch(fetch_opts(&db_path, &root))
         .await
         .expect("incremental fetch");
     assert_eq!(summary_b.errors, 0);
-    // Reused: empty.txt + subdir/another.txt — two file rows whose
-    // (mtime, size, inode) triple is unchanged. Everything else
-    // rehashes: hello.txt (mtime bump from re-write),
-    // subdir/nested.txt (content changed), subdir/added.txt (new),
-    // hello.link (symlinks rehash unconditionally),
-    // root + subdir (dirs recompute their tree-hash every scan).
+    // Scanned this time: root, hello.txt, hello.link, subdir,
+    // subdir/another.txt, subdir/nested.txt, subdir/added.txt = 7.
+    // (empty.txt is gone.)
+    // Reused: subdir/another.txt is the only file whose
+    // (mtime,size,inode) triple is unchanged across the edit set.
+    // hello.txt was re-written (mtime bump). nested.txt was
+    // re-written (content change). added.txt is new. empty.txt is
+    // gone and doesn't appear.
     #[cfg(unix)]
     {
-        assert_eq!(summary_b.entries_scanned, 8);
-        assert_eq!(summary_b.entries_reused, 2);
+        assert_eq!(summary_b.entries_scanned, 7);
+        assert_eq!(summary_b.entries_reused, 1);
         assert_eq!(summary_b.entries_rehashed, 6);
     }
 
-    insta::assert_snapshot!("after_edits", dump_files(&db_path).await);
-
-    // CONCERN(deletions-not-reconciled): the walker only emits rows
-    // for entries it *sees*. A file that existed at scan-A and is
-    // gone at scan-B leaves a stale row in `files` + `file_stats`.
-    // For now scans are additive/merge-style. A future reconciliation
-    // pass (delete-rows-whose-id-not-in-this-walk) is the obvious
-    // fix; not exercised by this test.
+    let dump_b = dump_files(&db_path).await;
+    // Truncate-and-rebuild: the deleted file must not appear.
+    assert!(
+        !dump_b.contains("empty.txt"),
+        "empty.txt was deleted but row survives: \n{dump_b}",
+    );
+    insta::assert_snapshot!("after_edits", dump_b);
 }

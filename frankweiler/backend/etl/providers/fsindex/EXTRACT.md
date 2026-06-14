@@ -65,6 +65,45 @@ expressive for this schema. Schema additions become
 `ALTER TABLE ADD COLUMN`, which is fine for a schema this small
 and stable.
 
+### Truncate-and-rebuild on every scan
+
+Every scan starts by `DELETE FROM files; DELETE FROM file_stats;
+DELETE FROM scan_meta;` (and their `_bookkeeping` sidecars), then
+walks the tree fresh. Two reasons this works:
+
+1. **Deletions fall out naturally.** A file present at scan-A and
+   gone at scan-B simply doesn't get re-inserted, so it disappears
+   from the table. No separate reconciliation pass
+   ("DELETE FROM files WHERE id NOT IN (this scan's ids)") to
+   maintain and forget to call.
+2. **Doltlite's prolly-tree dedup makes the rewrite nearly free.**
+   Rows with identical `(id, kind, size, blake3, …)` align on the
+   same prolly-tree leaves across commits. The diff between two
+   commits is exactly "what changed semantically" — re-inserting
+   the same row for an unchanged file is a no-op at the storage
+   layer.
+
+The Unison-style fast-rescan cache survives the truncate by living
+**in memory**: the orchestrator loads the prior `file_stats` rows
+and the prior `files.blake3` for `kind='file'` rows BEFORE the
+truncate, so `stamp::decide` still has cached state to compare
+against and the reuse path still skips the `read(2)` + `blake3`
+on unchanged files. See `extract::fetch` for the load-then-truncate
+ordering.
+
+The framework's `--reset-and-redownload` flag now means "ignore
+the cache too" — force a full rehash of every file even if the
+(mtime, size, inode) triple would have allowed reuse. Useful for
+verifying nothing has silently drifted.
+
+Caveat: the `<t>_bookkeeping` sidecars get truncated along with
+the entity tables, so `attempt_count` resets to 1 on every scan
+and cross-scan history is lost. For fsindex this is acceptable
+because the upstream is the local filesystem — there's no
+upstream API quota to protect or transient-failure budget to
+track across scans. A future provider where bookkeeping history
+matters would need a different reconciliation strategy.
+
 ## The fast-rescan trick
 
 Cribbed from Unison's `src/fpcache.ml:243` (`dataClearlyUnchanged`).
