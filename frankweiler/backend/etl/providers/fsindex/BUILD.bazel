@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_etl_fsindex",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_fsindex",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/time:frankweiler_time",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:blake3",
+        "@frankweiler_crates//:hex",
+        "@frankweiler_crates//:ignore",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+        "@frankweiler_crates//:walkdir",
+    ],
+)

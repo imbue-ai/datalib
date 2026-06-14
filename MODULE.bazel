@@ -253,6 +253,7 @@ crate.from_cargo(
         "//frankweiler/backend/etl/providers/github:Cargo.toml",
         "//frankweiler/backend/etl/providers/gitlab:Cargo.toml",
         "//frankweiler/backend/etl/providers/email:Cargo.toml",
+        "//frankweiler/backend/etl/providers/fsindex:Cargo.toml",
         "//frankweiler/backend/etl/providers/notion:Cargo.toml",
         "//frankweiler/backend/etl/providers/perseus:Cargo.toml",
         "//frankweiler/backend/etl/providers/signal:Cargo.toml",

@@ -16,6 +16,7 @@ members = [
     "etl/providers/github",
     "etl/providers/gitlab",
     "etl/providers/email",
+    "etl/providers/fsindex",
     "etl/providers/notion",
     "etl/providers/perseus",
     "etl/providers/signal",
@@ -83,7 +84,12 @@ sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     "uuid",
 ] }
-uuid = { version = "1", features = ["v4", "v5", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "v7", "serde"] }
+# Gitignore-style path matcher used by frankweiler-etl-fsindex's
+# walker for per-directory `.fsindex.yaml` ignore rules. Same crate
+# ripgrep and watchexec rely on; correct gitignore semantics out of
+# the box.
+ignore = "0.4"
 async-trait = "0.1"
 # Prost runtime. Codegen is driven by Bazel's `rust_prost_library`
 # (see //tools/prost_toolchain), so we don't depend on `prost-build`
