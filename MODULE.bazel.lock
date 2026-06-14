@@ -531,7 +531,7 @@
     "@@rules_rust+//crate_universe:extensions.bzl%crate": {
       "general": {
         "bzlTransitiveDigest": "3PwaY69dmw68DCo0U8+7+k6SeFK8bkqrUdZIcpkWWOM=",
-        "usagesDigest": "f/l/Ks7rZAhzh4TtRY2MZWR5eEfAGXDn8UyOutt78Vg=",
+        "usagesDigest": "sHjGIdcT09vFdsUo3hxkJ+s/9WOjkDraN68B2E494jw=",
         "recordedInputs": [
           "ENV:CARGO_BAZEL_DEBUG \\0",
           "ENV:CARGO_BAZEL_GENERATOR_SHA256 \\0",
@@ -559,11 +559,14 @@
           "FILE:@@//frankweiler/backend/schema/Cargo.toml 4a9a9724eaf4bbc8ecc9f487f8bdf9c6474b067a61422dd9808230067d417420",
           "FILE:@@//frankweiler/backend/index_lib/Cargo.toml c388faa4ab68d9f85458315e6686534f4eb8bfa808a470e2691b836b76fc23ba",
           "FILE:@@//frankweiler/backend/core/Cargo.toml 5433f17dc97319152d22c6c4d8da93e27f111d643d4fe791104f2ab799089ec2",
-          "FILE:@@//frankweiler/backend/http/Cargo.toml 9a5b40d9154cbf808b7fb69aa4280bcbb7b5bebdf52dcf9cb6f4697baf1f474e",
           "FILE:@@//frankweiler/backend/obs/Cargo.toml 0ff35bf52de8d6acc8874e1d8bf8e1294d38af979e40d7224322af80ee3bc517",
           "FILE:@@//frankweiler/backend/time/Cargo.toml 1aed62468f2a0c900b40b461c810e993da3ee495b3cb12a4b36684b238740ca9",
+          "FILE:@@//frankweiler/backend/http/Cargo.toml 9a5b40d9154cbf808b7fb69aa4280bcbb7b5bebdf52dcf9cb6f4697baf1f474e",
           "FILE:@@//frankweiler/backend/etl/Cargo.toml fd55a3499fb3e9a7f43e03951108069445bb1a49d4ce6ab764487816e0ef3878",
+          "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml d63180a8d7655198c94925328f95e8aeae872676dfa9d060a4be2157fa975f58",
+          "FILE:@@//frankweiler/backend/etl/macros/Cargo.toml fa3bbc88bd3850f8838d952bc359b1ed4e97e34552c8c6df02c732f6d115282d",
           "FILE:@@//frankweiler/backend/etl/providers/anthropic/Cargo.toml 74cda77ab4e2d62e641ca41b07b491d5bc57291412c505b2a2ff14d297826540",
+          "FILE:@@//frankweiler/backend/etl/providers/beeper/Cargo.toml a2556f2f06b92e1b2e71881fd349b3bb5a270eaae2d72ef6e4fc582bab66b14e",
           "FILE:@@//frankweiler/backend/etl/providers/chatgpt/Cargo.toml c72074e316c41db1c1f586ec38005707c3766db60e7ba05d42b0428f16dcc7b9",
           "FILE:@@//frankweiler/backend/etl/providers/contacts/Cargo.toml 4ae4cecfc035a076d81c989dfc597aff681b0db95b31822e3f2478fbe668078f",
           "FILE:@@//frankweiler/backend/etl/providers/github/Cargo.toml eff7b7d1c006a52456c5a27edf7d76668e99fdfb20fdee4fe26b7420bae6001b",
@@ -573,17 +576,14 @@
           "FILE:@@//frankweiler/backend/etl/providers/notion/Cargo.toml b03dec1302602c0c44bfddf17772a5d2bace241b6d21268fb5f9774964fafd2c",
           "FILE:@@//frankweiler/backend/etl/providers/perseus/Cargo.toml 705da04b6daf549d97911e473270092276f4bd5d41a77fe53d5badf0bb9c751f",
           "FILE:@@//frankweiler/backend/etl/providers/signal/Cargo.toml 51026e03389545ee49ac6564c011b9a0785da8e152fbc5276d090b6dd81e395a",
-          "FILE:@@//frankweiler/backend/etl/providers/slack/Cargo.toml 593e05b3d00c05af8f240df000119b5872efe275695720f3a159eaf9b379f1e9",
-          "FILE:@@//frankweiler/backend/qmd_indexer/Cargo.toml d63180a8d7655198c94925328f95e8aeae872676dfa9d060a4be2157fa975f58",
           "FILE:@@//frankweiler/backend/signal-backup/Cargo.toml ae4293d9c133da1b6a227513c944e0ba4708ee30cf2ecebe4f90684ed4e87cfb",
+          "FILE:@@//frankweiler/backend/etl/providers/slack/Cargo.toml 593e05b3d00c05af8f240df000119b5872efe275695720f3a159eaf9b379f1e9",
+          "FILE:@@//frankweiler/backend/etl/providers/yolink/Cargo.toml ab748d0991bf2cab25af45177f270c3218f95c0e08c03bf053b3a4b15538ccfe",
           "FILE:@@//frankweiler/backend/sync/Cargo.toml 1e55f7d113d4d83d3e9162caca593447b5aaf97d7f156cc6f9bcc3728024308c",
-          "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1",
-          "FILE:@@//frankweiler/backend/whatsapp-backup/Cargo.toml 654fd07cd2e10c9dfa446258bd192f807f8995d3acfa4441fd78ce4b6f22a55c",
           "FILE:@@//frankweiler/backend/etl/providers/whatsapp/Cargo.toml b259386bab03b4b7fad1f96eae596cb48c8b514ad0f778d269c22f3ed1d3aca7",
           "FILE:@@//frankweiler/backend/etl/chat-common/Cargo.toml cba7f24c9448d1aa33a091a9d376f94f9b51476901cd5e71553172311390c4c5",
-          "FILE:@@//frankweiler/backend/etl/macros/Cargo.toml fa3bbc88bd3850f8838d952bc359b1ed4e97e34552c8c6df02c732f6d115282d",
-          "FILE:@@//frankweiler/backend/etl/providers/beeper/Cargo.toml a2556f2f06b92e1b2e71881fd349b3bb5a270eaae2d72ef6e4fc582bab66b14e",
-          "FILE:@@//frankweiler/backend/etl/providers/yolink/Cargo.toml ab748d0991bf2cab25af45177f270c3218f95c0e08c03bf053b3a4b15538ccfe"
+          "FILE:@@//frankweiler/backend/whatsapp-backup/Cargo.toml 654fd07cd2e10c9dfa446258bd192f807f8995d3acfa4441fd78ce4b6f22a55c",
+          "FILE:@@//frankweiler/backend/tauri-backend/Cargo.toml a1161bcbd537c3f2fa1aab6d04843e2c625227582b44480e9c16c4479acc18b1"
         ],
         "generatedRepoSpecs": {
           "frankweiler_crates": {

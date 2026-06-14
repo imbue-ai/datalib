@@ -238,33 +238,11 @@ use_repo(pnpm, "pnpm")
 crate.from_cargo(
     name = "frankweiler_crates",
     cargo_lockfile = "//frankweiler/backend:Cargo.lock",
-    manifests = [
-        "//frankweiler/backend:Cargo.toml",
-        "//frankweiler/backend/schema:Cargo.toml",
-        "//frankweiler/backend/index_lib:Cargo.toml",
-        "//frankweiler/backend/core:Cargo.toml",
-        "//frankweiler/backend/http:Cargo.toml",
-        "//frankweiler/backend/obs:Cargo.toml",
-        "//frankweiler/backend/time:Cargo.toml",
-        "//frankweiler/backend/etl:Cargo.toml",
-        "//frankweiler/backend/etl/providers/anthropic:Cargo.toml",
-        "//frankweiler/backend/etl/providers/chatgpt:Cargo.toml",
-        "//frankweiler/backend/etl/providers/contacts:Cargo.toml",
-        "//frankweiler/backend/etl/providers/github:Cargo.toml",
-        "//frankweiler/backend/etl/providers/gitlab:Cargo.toml",
-        "//frankweiler/backend/etl/providers/email:Cargo.toml",
-        "//frankweiler/backend/etl/providers/fsindex:Cargo.toml",
-        "//frankweiler/backend/etl/providers/notion:Cargo.toml",
-        "//frankweiler/backend/etl/providers/perseus:Cargo.toml",
-        "//frankweiler/backend/etl/providers/signal:Cargo.toml",
-        "//frankweiler/backend/etl/providers/slack:Cargo.toml",
-        "//frankweiler/backend/qmd_indexer:Cargo.toml",
-        "//frankweiler/backend/signal-backup:Cargo.toml",
-        "//frankweiler/backend/sync:Cargo.toml",
-        "//frankweiler/backend/tauri-backend:Cargo.toml",
-        "//frankweiler/backend/whatsapp-backup:Cargo.toml",
-        "//frankweiler/backend/etl/providers/whatsapp:Cargo.toml",
-        "//frankweiler/backend/etl/chat-common:Cargo.toml",
-    ],
+    # `bazel mod deps` emits an INFO note that with a workspace
+    # Cargo.toml, only the workspace root is required here — bazel
+    # discovers per-crate manifests via the workspace's `members =`
+    # list. Adding a new provider crate now means a single edit to
+    # `frankweiler/backend/Cargo.toml`; no MODULE.bazel change.
+    manifests = ["//frankweiler/backend:Cargo.toml"],
 )
 use_repo(crate, "frankweiler_crates")
