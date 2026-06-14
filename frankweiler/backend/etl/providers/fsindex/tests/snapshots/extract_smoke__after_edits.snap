@@ -1,0 +1,12 @@
+---
+source: frankweiler/backend/etl/providers/fsindex/tests/extract_smoke.rs
+expression: dump_files(&db_path).await
+---
+id=                                 kind=dir     size=   60 blake3=d1b648c26bde77c28d33902f0c1e19be8cb5d6aa3a0f207966f5a1c61f98eff1 symlink=None uuid=None
+id=empty.txt                        kind=file    size=    0 blake3=af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 symlink=None uuid=None
+id=hello.link                       kind=symlink size=   17 blake3=755021af5f430e22ed0b33f07e5c881938aa2d97357161ff57e7a52b55ff3b2e symlink=Some("subdir/nested.txt") uuid=None
+id=hello.txt                        kind=file    size=   12 blake3=dc5a4edb8240b018124052c330270696f96771a63b45250a5c17d3000e823355 symlink=None uuid=None
+id=subdir                           kind=dir     size=   31 blake3=f549a3925035f91bc1ff0c7fb554769bcefd78ce93a42cf4c6050db3b48d1cad symlink=None uuid=None
+id=subdir/added.txt                 kind=file    size=    9 blake3=b31fc5c23080a207f72741512a2ed1d9c6acc031ed5d21e340b9fad637fdff76 symlink=None uuid=None
+id=subdir/another.txt               kind=file    size=    7 blake3=cee450a2406289497e67bcd0cc5503c073a6f15504e5c6993ab085f4d4e09462 symlink=None uuid=None
+id=subdir/nested.txt                kind=file    size=   15 blake3=c2431aadd109e81c2af7ec932d2607cb6c3c4de49b6f2446aa45caae08e63ee1 symlink=None uuid=None

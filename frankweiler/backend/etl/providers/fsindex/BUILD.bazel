@@ -1,10 +1,14 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
 rust_library(
     name = "frankweiler_etl_fsindex",
-    srcs = glob(["src/**/*.rs"]),
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
     crate_name = "frankweiler_etl_fsindex",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
@@ -23,4 +27,36 @@ rust_library(
         "@frankweiler_crates//:uuid",
         "@frankweiler_crates//:walkdir",
     ],
+)
+
+# Hermetic smoke test: build a small tree in a tempdir, scan it, snapshot
+# `files`, edit the tree, re-scan, snapshot again. Catches drift in the
+# canonical tree-hash, the symlink shape, and the cascaded ignore filter.
+# Update goldens with `bazel run :extract_smoke_test.update`.
+rust_test(
+    name = "extract_smoke_test",
+    srcs = ["tests/extract_smoke.rs"],
+    crate_name = "extract_smoke",
+    data = glob(
+        ["tests/snapshots/extract_smoke__*.snap"],
+        allow_empty = True,
+    ),
+    edition = "2021",
+    env = {
+        # See //frankweiler/backend/core/BUILD.bazel for the rationale.
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        ":frankweiler_etl_fsindex",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+insta_update(
+    name = "extract_smoke_test.update",
+    test = ":extract_smoke_test",
 )
