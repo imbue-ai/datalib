@@ -1,5 +1,5 @@
 ---
-source: etl/providers/slack/tests/slack_render.rs
+source: frankweiler/backend/etl/providers/slack/tests/slack_render.rs
 expression: bundle
 ---
 === rendered_md/slack/T_NCC1701D/C_BRIDGE/threads/18661749-ed35-5c92-aa13-7cb73be53387/index.md ===
@@ -126,7 +126,7 @@ render_version: 2
 
 New combadge prototypes — thoughts?
 
-![Delta shield prototype](*[attachment not yet fetched: delta_shield.png]*)
+![Delta shield prototype](https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)
 
 </div>
 

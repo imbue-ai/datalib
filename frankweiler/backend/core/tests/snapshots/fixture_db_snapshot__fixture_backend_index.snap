@@ -201,6 +201,20 @@ expression: snapshot
       "updated_at": "2369-05-28T15:18:20.000700+00:00"
     },
     {
+      "created_at": "2026-01-07T14:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "md_path": "rendered_md/jmap/jean_luc_picard/a9d22a8f-656e-5347-bd95-454448be45e7/index.md",
+      "provider": "jmap",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "cc789d90e44ca4f7d8f02038dec6585bdd7a6497b425047f0f1516c61e1952b3",
+      "source_fingerprint": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "source_name": "tng_email",
+      "title": "Captain's Log — Stardate 80124.1",
+      "updated_at": "2026-01-07T14:00:00+00:00"
+    },
+    {
       "created_at": "2364-04-11T00:08:00+00:00",
       "kind": "chat",
       "markdown_uuid": "aafa0ad5-4dc4-59cd-b75e-572a0329836e",
@@ -269,6 +283,20 @@ expression: snapshot
       "source_name": "slack",
       "title": "#engineering",
       "updated_at": "2369-05-28T15:15:00.000500+00:00"
+    },
+    {
+      "created_at": "2026-01-06T08:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "md_path": "rendered_md/jmap/jean_luc_picard/b52e719c-9f85-5e53-bdd3-483ba67e5637/index.md",
+      "provider": "jmap",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "2c199fdb50b8136fa58d517fd7450c15c3e7dd3936b9e1822b20b37e5b480ae6",
+      "source_fingerprint": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "source_name": "tng_email",
+      "title": "Your shore leave awaits!",
+      "updated_at": "2026-01-06T08:00:00+00:00"
     },
     {
       "created_at": "2369-05-28T15:13:20.000400+00:00",
@@ -355,6 +383,20 @@ expression: snapshot
       "updated_at": "2370-04-15T00:00:00Z"
     },
     {
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "md_path": "rendered_md/jmap/jean_luc_picard/c99c303c-2182-50ac-a7e2-321ead150a4c/index.md",
+      "provider": "jmap",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "b3e870ef737fbc28272ddbcee65311929f35ea4ac016c4bb6d8e144267482778",
+      "source_fingerprint": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "source_name": "tng_email",
+      "title": "Mission Briefing — Sector 001",
+      "updated_at": "2026-01-05T11:15:00+00:00"
+    },
+    {
       "created_at": "2024-03-15T09:00:00.000+00:00",
       "kind": "chat",
       "markdown_uuid": "e28ed67d-507b-5319-8732-00e249b6ebf6",
@@ -395,6 +437,20 @@ expression: snapshot
       "source_name": "signal",
       "title": "Signal · Will Riker (2364-04)",
       "updated_at": "2364-04-11T00:09:00+00:00"
+    },
+    {
+      "created_at": "2026-01-07T09:00:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "md_path": "rendered_md/jmap/jean_luc_picard/f568b5f9-c761-5a5d-be84-35cf144c21ba/index.md",
+      "provider": "jmap",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.2",
+      "row_set_hash": "3fc7e3cd1d51e2faf6f1db124a25c24da2fd807f71bdcc0e24624d00e145d8fb",
+      "source_fingerprint": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "source_name": "tng_email",
+      "title": "Bridge status display",
+      "updated_at": "2026-01-07T09:00:00+00:00"
     }
   ],
   "dolt_log": [
@@ -402,7 +458,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "frankweiler-sync: markdowns_loaded=28 markdowns_total=28 rows_inserted=105 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,signal,whatsapp]"
+      "message": "frankweiler-sync: markdowns_loaded=32 markdowns_total=32 rows_inserted=115 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,tng_contacts,signal,whatsapp,tng_email]"
     }
   ],
   "grid_rows": [
@@ -1132,6 +1188,31 @@ expression: snapshot
       "when_ts": "2369-04-15T14:00:01Z"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": "Geordi La Forge <laforge@enterprise.starfleet>",
+      "channel": null,
+      "conversation_name": "Mission Briefing — Sector 001",
+      "conversation_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "entire_chat": "/chat/c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "external_id": "briefing-003@enterprise.starfleet",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "message_index": 2,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/c99c303c-2182-50ac-a7e2-321ead150a4c/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 259,
+      "text_sha": "sha256:6bae220a63ef738307b3187aae2ed0112444dcc80315ae83e2c9f7a6c4c22542",
+      "uuid": "4ddc779a-31c7-5824-9425-04b4fa99cc67",
+      "when_ts": "2026-01-05T11:15:00+00:00"
+    },
+    {
       "account": null,
       "author": "Data Soong",
       "channel": null,
@@ -1507,6 +1588,31 @@ expression: snapshot
       "when_ts": "2364-04-11T00:02:00+00:00"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard <picard@enterprise.starfleet>",
+      "channel": null,
+      "conversation_name": "Captain's Log — Stardate 80124.1",
+      "conversation_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "entire_chat": "/chat/a9d22a8f-656e-5347-bd95-454448be45e7",
+      "external_id": "log-001@enterprise.starfleet",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/a9d22a8f-656e-5347-bd95-454448be45e7/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 339,
+      "text_sha": "sha256:1a95c9f855c251eeb59da452c35e08f8e114c868fcfb3e4bda3ad7f3c8a9a117",
+      "uuid": "6ce9dbf5-c1cc-52a5-ab4d-e252b7ebd0b9",
+      "when_ts": "2026-01-07T14:00:00+00:00"
+    },
+    {
       "account": "local-signal_ba_TNG",
       "author": "Jean-Luc Picard",
       "channel": "tng-crusher-conv-uuid-0002",
@@ -1582,6 +1688,31 @@ expression: snapshot
       "when_ts": "2369-05-28T15:16:40.000600+00:00"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard <picard@enterprise.starfleet>",
+      "channel": null,
+      "conversation_name": "Mission Briefing — Sector 001",
+      "conversation_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "entire_chat": "/chat/c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "external_id": "briefing-002@enterprise.starfleet",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/c99c303c-2182-50ac-a7e2-321ead150a4c/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 235,
+      "text_sha": "sha256:73997f631302bf019eaf6f4fffd010cf7763d1de1005be671965dc0e5ee4a7f6",
+      "uuid": "7634706e-b652-5782-857f-29512c1d8612",
+      "when_ts": "2026-01-05T10:30:00+00:00"
+    },
+    {
       "account": null,
       "author": "Geordi La Forge",
       "channel": null,
@@ -1630,6 +1761,31 @@ expression: snapshot
       "text_sha": "sha256:8c1e78b4320e97aeae239c4770ff35a8e72b3860f919a487fa37d1e181b51b87",
       "uuid": "78ad2e40-fc0b-58d0-a6a6-2acb4300003b",
       "when_ts": "2369-05-28T15:13:20.000400+00:00"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "LCARS Status <lcars@enterprise.starfleet>",
+      "channel": null,
+      "conversation_name": "Bridge status display",
+      "conversation_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "entire_chat": "/chat/f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "external_id": "bridge-001@enterprise.starfleet",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/f568b5f9-c761-5a5d-be84-35cf144c21ba/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 168,
+      "text_sha": "sha256:0d3fc5b344cc496b750847afc4b1c063ffc143823a888e8ca8a11437523323f2",
+      "uuid": "79236cba-b44a-5faa-89f1-4150d3f18c9b",
+      "when_ts": "2026-01-07T09:00:00+00:00"
     },
     {
       "account": null,
@@ -1705,6 +1861,31 @@ expression: snapshot
       "text_sha": "sha256:bd4b17a01707d7de6cf70e235828ff8afde9d8f446b889b60bff898b158f3835",
       "uuid": "8074b3b0-3bd4-5232-843f-c8278649d1a2",
       "when_ts": "2369-05-28T15:08:20.000100+00:00"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Risa Tourism Board <hello@risa.tourism>",
+      "channel": null,
+      "conversation_name": "Your shore leave awaits!",
+      "conversation_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "entire_chat": "/chat/b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "external_id": "risa-promo-001@risa.tourism",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/b52e719c-9f85-5e53-bdd3-483ba67e5637/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 218,
+      "text_sha": "sha256:b612032df65d3b387c3862eaee9e86b4e085d2182c4fe379d9ac7fe50a18bc24",
+      "uuid": "80ff9e5b-7346-5fc4-a502-41f15b3510e9",
+      "when_ts": "2026-01-06T08:00:00+00:00"
     },
     {
       "account": null,
@@ -1830,6 +2011,31 @@ expression: snapshot
       "text_sha": "sha256:067bd8106639ef31273d0ee6f2a7dc3feb4acdcbcbdc0adae25b69a99ce9ceb4",
       "uuid": "8bc7c2b5-04a6-5b56-b311-90c5947bcad1",
       "when_ts": "2364-04-11T00:05:00+00:00"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Starfleet Command <command@starfleet.gov>",
+      "channel": null,
+      "conversation_name": "Mission Briefing — Sector 001",
+      "conversation_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "entire_chat": "/chat/c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "external_id": "briefing-001@enterprise.starfleet",
+      "git_sha": null,
+      "kind": "Email",
+      "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/c99c303c-2182-50ac-a7e2-321ead150a4c/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 273,
+      "text_sha": "sha256:636d68a1fe539786ca871fe4b19f8bd28e1958527d2d079f736f1474b4323108",
+      "uuid": "90da25a7-b568-5a0f-b468-d84f74502d2a",
+      "when_ts": "2026-01-05T09:00:00+00:00"
     },
     {
       "account": "T_NCC1701D",
@@ -2057,6 +2263,31 @@ expression: snapshot
       "when_ts": "2369-05-28T15:16:40.000600+00:00"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": "Jean-Luc Picard <picard@enterprise.starfleet>",
+      "channel": "Sent",
+      "conversation_name": "Captain's Log — Stardate 80124.1",
+      "conversation_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "entire_chat": "/chat/a9d22a8f-656e-5347-bd95-454448be45e7",
+      "external_id": "3000000000000000003",
+      "git_sha": null,
+      "kind": "Email Thread",
+      "markdown_uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/a9d22a8f-656e-5347-bd95-454448be45e7/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 234,
+      "text_sha": "sha256:cb5118cac5cf368a31f98b3e0d27756d0fe93a3befac2b77a076fbd3b9a76d27",
+      "uuid": "a9d22a8f-656e-5347-bd95-454448be45e7",
+      "when_ts": "2026-01-07T14:00:00+00:00"
+    },
+    {
       "account": null,
       "author": null,
       "channel": "+17015550102",
@@ -2230,6 +2461,31 @@ expression: snapshot
       "text_sha": "sha256:148f52a8222e53d2cde7e7125199a29862b380a0f618e62db304581a9f42aa26",
       "uuid": "b528443b-a4b8-5651-9c48-ef6ee9a630cc",
       "when_ts": "2369-05-28T15:18:20.000700+00:00"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "Risa Tourism Board <hello@risa.tourism>",
+      "channel": "Category Promotions, Inbox",
+      "conversation_name": "Your shore leave awaits!",
+      "conversation_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "entire_chat": "/chat/b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "external_id": "2000000000000000002",
+      "git_sha": null,
+      "kind": "Email Thread",
+      "markdown_uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/b52e719c-9f85-5e53-bdd3-483ba67e5637/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 214,
+      "text_sha": "sha256:fefcf83b7576db9548fab81523de6a1b604faacf2bd63132e5d7a76dd377b4e0",
+      "uuid": "b52e719c-9f85-5e53-bdd3-483ba67e5637",
+      "when_ts": "2026-01-06T08:00:00+00:00"
     },
     {
       "account": "T_NCC1701D",
@@ -2457,6 +2713,31 @@ expression: snapshot
       "when_ts": "2369-04-15T10:00:00Z"
     },
     {
+      "account": "picard@enterprise.starfleet",
+      "author": "Starfleet Command <command@starfleet.gov>",
+      "channel": "Inbox, Sent",
+      "conversation_name": "Mission Briefing — Sector 001",
+      "conversation_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "entire_chat": "/chat/c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "external_id": "1000000000000000001",
+      "git_sha": null,
+      "kind": "Email Thread",
+      "markdown_uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/c99c303c-2182-50ac-a7e2-321ead150a4c/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 631,
+      "text_sha": "sha256:8d707f29da1b4277233a8dec82469f43376a874ad53bb023780f1d0517bb4097",
+      "uuid": "c99c303c-2182-50ac-a7e2-321ead150a4c",
+      "when_ts": "2026-01-05T09:00:00+00:00"
+    },
+    {
       "account": "googlechat",
       "author": null,
       "channel": "William T. Riker",
@@ -2630,6 +2911,31 @@ expression: snapshot
       "text_sha": "sha256:8fdd5b60a685316d1428f3fb34551446a62ac3cd77d843a630c22499461c6784",
       "uuid": "f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
       "when_ts": "2364-04-11T00:09:00+00:00"
+    },
+    {
+      "account": "picard@enterprise.starfleet",
+      "author": "LCARS Status <lcars@enterprise.starfleet>",
+      "channel": "Inbox",
+      "conversation_name": "Bridge status display",
+      "conversation_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "entire_chat": "/chat/f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "external_id": "4000000000000000004",
+      "git_sha": null,
+      "kind": "Email Thread",
+      "markdown_uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "jmap",
+      "qmd_path": "rendered_md/jmap/jean_luc_picard/f568b5f9-c761-5a5d-be84-35cf144c21ba/index.md",
+      "slack_link": null,
+      "source_label": "Mail",
+      "source_url": null,
+      "text_len": 166,
+      "text_sha": "sha256:ed3de4aa311c28fc2cd61e177cf8ca9420fd5c5ca25b4545e2bdd3e512245f47",
+      "uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
+      "when_ts": "2026-01-07T09:00:00+00:00"
     },
     {
       "account": "user-FAKE0DATAANDROID0POSITRONIC1",
@@ -3033,8 +3339,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 28,
+    "documents_count": 32,
     "dolt_log_count": 2,
-    "grid_rows_count": 105
+    "grid_rows_count": 115
   }
 }

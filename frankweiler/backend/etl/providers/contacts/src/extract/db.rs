@@ -31,6 +31,17 @@ pub struct RawDb {
     pool: SqlitePool,
 }
 
+/// One contact row served to the translate pass. The vCard text is
+/// pulled out of the `{"vcard": …}` payload envelope on the SQL side
+/// so the translate path doesn't have to know about the envelope.
+#[derive(Debug, Clone)]
+pub struct LoadedRawContact {
+    pub uid: String,
+    pub href: String,
+    pub addressbook_label: String,
+    pub vcard: String,
+}
+
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
@@ -215,6 +226,43 @@ impl RawDb {
         }
         tx.commit().await.context("commit delete contact tx")?;
         Ok(())
+    }
+
+    /// Snapshot every contact row for the translate pass, joined
+    /// against `addressbooks` so the caller gets the display-name
+    /// label without a second query. Same shape regardless of
+    /// whether the row landed via CardDAV sync-collection or
+    /// [`super::vcf_dir::fetch`].
+    pub async fn load_all_for_translate(&self) -> Result<Vec<LoadedRawContact>> {
+        let rows = sqlx::query(
+            "SELECT c.id AS id,
+                    c.uid AS uid,
+                    c.href AS href,
+                    json_extract(c.payload, '$.vcard') AS vcard,
+                    COALESCE(a.display_name, a.href) AS addressbook_label
+             FROM contacts c
+             LEFT JOIN addressbooks a ON a.id = c.addressbook_id
+             ORDER BY c.addressbook_id, c.id",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("select contacts for translate")?;
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let vcard: Option<String> = r.try_get("vcard").ok();
+            let Some(vcard) = vcard else { continue };
+            out.push(LoadedRawContact {
+                uid: r.try_get("uid").unwrap_or_default(),
+                href: r.try_get("href").unwrap_or_default(),
+                addressbook_label: r
+                    .try_get::<Option<String>, _>("addressbook_label")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "default".to_string()),
+                vcard,
+            });
+        }
+        Ok(out)
     }
 
     /// `{href -> etag}` for every contact we already have in the

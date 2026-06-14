@@ -43,6 +43,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/anthropic:tng_fixture",
         "//frankweiler/backend/etl/providers/beeper:tng_fixture",
         "//frankweiler/backend/etl/providers/contacts:tng_fixture",
+        "//frankweiler/backend/etl/providers/email:tng_fixture",
         "//frankweiler/backend/etl/providers/signal:tng_fixture",
         "//frankweiler/backend/etl/providers/whatsapp:tng_fixture",
     ],
@@ -109,6 +110,9 @@ genrule(
             "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
             # WhatsApp: same shape as signal.
             "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
+            # Email: Google Takeout mbox file. Drives the email
+            # extract path (mbox → raw doltlite → translate → render).
+            "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
@@ -156,6 +160,7 @@ py_test(
         "frankweiler/backend/etl/providers/contacts/tests/fixtures/carddav_tng",
         "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
         "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
+        "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
     ],
     data = [
         "run_sync_pipeline.py",
