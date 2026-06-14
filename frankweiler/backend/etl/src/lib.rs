@@ -25,6 +25,7 @@ pub mod event_store;
 pub mod event_tape;
 pub mod events;
 pub mod extract_run;
+pub mod file_checkpoint;
 pub mod http;
 pub mod ids;
 pub mod latchkey;
