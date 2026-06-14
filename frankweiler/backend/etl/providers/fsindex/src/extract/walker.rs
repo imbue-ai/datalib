@@ -210,13 +210,13 @@ impl<'a> Walker<'a> {
                             }
                             None => {
                                 summary.rehashed += 1;
-                                hash_file(path)
+                                hash_file(path, meta.len())
                                     .with_context(|| format!("hash file {}", path.display()))?
                             }
                         },
                         StampDecision::Rehash => {
                             summary.rehashed += 1;
-                            hash_file(path)
+                            hash_file(path, meta.len())
                                 .with_context(|| format!("hash file {}", path.display()))?
                         }
                     };

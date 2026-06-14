@@ -20,16 +20,28 @@ pub struct TreeChild {
     pub blake3_hex: String,
 }
 
-/// Hash file bytes. Streaming via `Hasher::update_reader`.
-// FIXME(perf): mmap above some threshold (e.g. 16 MiB) per blake3
-// upstream guidance. Current streaming path is correct but not
-// optimal for very large files.
-pub fn hash_file(path: &Path) -> Result<String> {
-    let f = File::open(path).with_context(|| format!("open for hash {}", path.display()))?;
+/// Files larger than this use `Hasher::update_mmap`, smaller files
+/// stream via `update_reader`. blake3 upstream guidance: mmap wins
+/// for large files because it lets the kernel page-in lazily and
+/// avoids one userspace copy; for tiny files the mmap setup
+/// overhead dominates and streaming is faster. 16 MiB is the
+/// threshold blake3's own b3sum CLI uses.
+const MMAP_THRESHOLD: u64 = 16 * 1024 * 1024;
+
+/// Hash file bytes. Streams via `update_reader` for files under
+/// [`MMAP_THRESHOLD`], mmaps via `update_mmap` above it.
+pub fn hash_file(path: &Path, size: u64) -> Result<String> {
     let mut hasher = blake3::Hasher::new();
-    hasher
-        .update_reader(f)
-        .with_context(|| format!("hash {}", path.display()))?;
+    if size >= MMAP_THRESHOLD {
+        hasher
+            .update_mmap(path)
+            .with_context(|| format!("mmap-hash {}", path.display()))?;
+    } else {
+        let f = File::open(path).with_context(|| format!("open for hash {}", path.display()))?;
+        hasher
+            .update_reader(f)
+            .with_context(|| format!("hash {}", path.display()))?;
+    }
     Ok(hasher.finalize().to_hex().to_string())
 }
 

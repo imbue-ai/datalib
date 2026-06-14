@@ -18,7 +18,7 @@ serde_yaml = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt-multi-thread", "time"] }
 tracing = "0.1"
 uuid = { workspace = true }
-blake3 = { version = "1", default-features = false, features = ["std", "pure"] }
+blake3 = { version = "1", default-features = false, features = ["std", "pure", "mmap"] }
 walkdir = { workspace = true }
 ignore = { workspace = true }
 hex = "0.4"
