@@ -439,16 +439,20 @@ fn files(raw: &Value) -> Vec<FileRef> {
         .unwrap_or_default()
 }
 
-/// Relative link from a thread's `index.md` to its locally-staged
-/// copy of `f`. Returns `None` for externals or files whose bytes
-/// aren't in the bundle, so the caller can fall back to the upstream
-/// URL.
+/// Relative path from a thread's `index.md` to its locally-staged
+/// copy of `f` (e.g. `"blobs/abc123.png"`). Returns `None` for
+/// externals or for files whose bytes aren't in the bundle, so the
+/// caller can fall back to the upstream URL. The caller wraps the
+/// returned path in `![alt](…)` / `[\[file\] alt](…)` itself, so this
+/// function must NOT pre-wrap — that's the bug the previous
+/// `bundle.markdown_link` call introduced.
 fn file_link(blobs: &BlobBundle, f: &FileRef) -> Option<String> {
     if f.external {
         return None;
     }
     let id = f.id.as_deref()?;
-    Some(blobs.markdown_link(id, f.name.as_deref(), f.is_image))
+    let blob = blobs.get(id)?;
+    Some(format!("blobs/{}", blob.rendered_filename()))
 }
 
 fn reactions(raw: &Value) -> Vec<(String, usize)> {
