@@ -1,0 +1,8 @@
+{
+  "name": "spaces/AAAAtng-bridge",
+  "type": "Direct Message",
+  "members": [
+    {"name": "Jean-Luc Picard", "email": "picard@enterprise.starfleet", "user_type": "Human"},
+    {"name": "William Riker", "email": "riker@enterprise.starfleet", "user_type": "Human"}
+  ]
+}

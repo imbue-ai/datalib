@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [0.0, 0.0]},
+      "properties": {
+        "date": "2026-01-04T08:00:00Z",
+        "google_maps_url": "https://www.google.com/maps/place/Vulcan/@0,0,15z/data=!4m1!1svulcan42!8m2",
+        "location": {"name": "Mount Seleya"}
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [0.0, 0.0]},
+      "properties": {
+        "date": "2026-02-14T08:00:00Z",
+        "google_maps_url": "https://maps.google.com/?cid=8675309",
+        "location": {"name": "Risa Beach Resort"}
+      }
+    }
+  ]
+}

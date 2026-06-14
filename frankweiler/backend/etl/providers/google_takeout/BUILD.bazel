@@ -1,0 +1,47 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed fictional Takeout tree used by the integration tests.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/Takeout/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_google_takeout",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_google_takeout",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/time:frankweiler_time",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "google_takeout_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_google_takeout",
+    edition = "2021",
+    data = [":tng_fixture"],
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)

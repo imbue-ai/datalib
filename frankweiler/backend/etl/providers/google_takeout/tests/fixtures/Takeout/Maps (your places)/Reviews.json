@@ -1,0 +1,27 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [-0.1, 51.5]},
+      "properties": {
+        "date": "2026-06-03T19:30:00Z",
+        "five_star_rating_published": 5,
+        "google_maps_url": "https://www.google.com/maps/place/Ten+Forward/@-0.1,51.5,15z/data=!4m1!1stenfwd001!8m2",
+        "location": {"address": "Deck 10, USS Enterprise-D", "name": "Ten Forward"},
+        "review_text_published": "Excellent place to relax after duty shift. Synthehol is acceptable; the view of warp transit is unmatched."
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {"type": "Point", "coordinates": [0.0, 0.0]},
+      "properties": {
+        "date": "2026-05-02T12:00:00Z",
+        "five_star_rating_published": 4,
+        "google_maps_url": "https://www.google.com/maps/place/Risa/@0,0,15z/data=!4m1!1srisa9999!8m2",
+        "location": {"address": "Risa", "name": "Resort Lounge"},
+        "review_text_published": "Lovely beaches. The horga'hn shop was crowded."
+      }
+    }
+  ]
+}
