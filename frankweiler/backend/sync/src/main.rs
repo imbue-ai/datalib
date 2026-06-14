@@ -1329,7 +1329,7 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Beeper { .. } => {
             DbHandle::Beeper(frankweiler_etl_beeper::extract::RawDb::open(path).await?)
         }
-        ExtractKind::Carddav { .. } => {
+        ExtractKind::Carddav { .. } | ExtractKind::CarddavFile { .. } => {
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
         ExtractKind::Jmap { .. } | ExtractKind::EmailMbox { .. } => {
@@ -1375,6 +1375,14 @@ enum ExtractKind {
     },
     Carddav {
         sync: CarddavSync,
+    },
+    /// File-tree vCard walker — the `sync:`-less carddav path. Reads
+    /// `.vcf` files under `input_path` and writes them into the raw
+    /// doltlite store using the same row shape CardDAV produces, so
+    /// translate has one input contract regardless of source.
+    CarddavFile {
+        input_path: PathBuf,
+        account_id_override: Option<String>,
     },
     Perseus {
         sync: PerseusSync,
@@ -1448,8 +1456,22 @@ impl ExtractPlan {
             SourceConfig::Beeper { sync, .. } => ExtractKind::Beeper {
                 sync: sync.clone().unwrap_or_default(),
             },
-            SourceConfig::Carddav { sync, .. } => ExtractKind::Carddav {
-                sync: sync.clone().unwrap_or_default(),
+            SourceConfig::Carddav { sync, .. } => match sync.clone() {
+                Some(sync) => ExtractKind::Carddav { sync },
+                None => {
+                    // No `sync:` block — file-tree mode. `out_dir` was
+                    // resolved from `input_path:` and points at the
+                    // user's .vcf file (or a directory of them). The
+                    // raw doltlite store goes under
+                    // `<data_root>/raw/<name>` (same shape as the
+                    // email mbox path).
+                    let input_path = out_dir.clone();
+                    out_dir = cfg.data_root.join("raw").join(&name);
+                    ExtractKind::CarddavFile {
+                        input_path,
+                        account_id_override: None,
+                    }
+                }
             },
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
@@ -1778,6 +1800,29 @@ impl ExtractPlan {
                     )
                 })
             }
+            (
+                ExtractKind::CarddavFile {
+                    input_path,
+                    account_id_override,
+                },
+                Some(DbHandle::Carddav(db)),
+            ) => frankweiler_etl_contacts::extract::vcf_dir::fetch(
+                frankweiler_etl_contacts::extract::vcf_dir::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    input_path,
+                    account_id_override,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "addressbooks={} new={} updated={} errors={}",
+                    s.addressbooks, s.contacts_new, s.contacts_updated, s.errors,
+                )
+            }),
             // Perseus is file-tree-backed (raw XML files on disk), not
             // doltlite — so it has no `DbHandle` and skips both the
             // pre-open and the post-extract dolt_commit. The pre-open
@@ -2257,10 +2302,22 @@ fn translate_source(
             .context("beeper render_all")
             .map(|_| ())
         }
-        SourceConfig::Carddav { .. } => {
+        SourceConfig::Carddav { sync, .. } => {
+            use frankweiler_etl_contacts::extract::db_path_for as carddav_db_path_for;
             use frankweiler_etl_contacts::translate::{parse, render};
-            let parsed = parse::parse(&fixture)
-                .with_context(|| format!("carddav parse {}", fixture.display()))?;
+            // Both CardDAV-server and vcf-file sources land their data
+            // in the same raw doltlite shape; translate reads from
+            // there. For the file path `fixture` is the user's `.vcf`
+            // (or directory of them), not the raw store, so look up
+            // the canonical doltlite location by source name.
+            let db_dir = if sync.is_some() {
+                fixture.clone()
+            } else {
+                cfg.data_root.join("raw").join(name)
+            };
+            let db_path = carddav_db_path_for(&db_dir);
+            let parsed = parse::parse(&db_path)
+                .with_context(|| format!("carddav parse {}", db_path.display()))?;
             render::render_all(
                 &parsed,
                 root,

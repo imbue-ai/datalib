@@ -17,6 +17,7 @@
 pub mod api;
 pub mod db;
 pub mod schema_raw;
+pub mod vcf_dir;
 
 pub use db::{db_path_for, RawDb};
 

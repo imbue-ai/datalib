@@ -11,8 +11,6 @@
 //!   Extract/Translate step. Initialization of the tracing subscriber
 //!   that consumes these events lives in the shared `frankweiler_obs`
 //!   crate so non-ETL binaries can use it too.
-//! - [`raw_store`] — content-addressed page capture used by every
-//!   Extract step.
 //!
 //! Incrementality is driven end-to-end by a `source_fingerprint`
 //! stamped into each sidecar; the loader stores it on
@@ -33,7 +31,6 @@ pub mod latchkey;
 pub mod load;
 pub mod periodize;
 pub mod progress;
-pub mod raw_store;
 pub mod render_cursor;
 pub mod scope_state;
 pub mod section;

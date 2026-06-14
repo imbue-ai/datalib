@@ -695,7 +695,13 @@ impl SourceConfig {
                 sync.is_some() || common.input_path.is_some()
             }
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
-            SourceConfig::Carddav { sync, .. } => sync.is_some(),
+            // Carddav: `sync:` present → CardDAV server path; `sync:`
+            // absent + `input_path:` → file-tree walker that ingests
+            // .vcf files into the raw doltlite store. Both write the
+            // same row shape; translate has one input contract.
+            SourceConfig::Carddav { sync, common, .. } => {
+                sync.is_some() || common.input_path.is_some()
+            }
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
             SourceConfig::SignalBackup { sync, .. } => sync.is_some(),

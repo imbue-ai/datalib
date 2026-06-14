@@ -13,6 +13,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# Subset of `fixtures` consumed by //tests/fixtures:ingested_tng — the
+# Star Trek themed Google Takeout mbox that drives the email extract
+# path end-to-end (mbox → raw → translate → render).
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/mbox/*.mbox"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "frankweiler_etl_email",
     srcs = glob(

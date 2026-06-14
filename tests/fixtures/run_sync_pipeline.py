@@ -44,6 +44,12 @@ Args (positional):
                       under the workspace, with root key = 64 zeros
                       (`WHATSAPP_BACKUP_DECRYPTION_KEY` env var
                       set below).
+    16: email_mbox    Path to a Google-Takeout-shaped `.mbox` file
+                      (e.g. `star_trek.mbox`). The email extractor
+                      walks it directly — no synth phase. Account
+                      metadata (display name, address, is_personal)
+                      is supplied via the source's `mbox:` block in
+                      the extract YAML below.
 """
 
 from __future__ import annotations
@@ -85,7 +91,8 @@ def main() -> int:
         carddav_fx,
         signal_spec,
         whatsapp_spec,
-    ) = (Path(p).resolve() for p in sys.argv[6:16])
+        email_mbox,
+    ) = (Path(p).resolve() for p in sys.argv[6:17])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -155,10 +162,10 @@ def main() -> int:
                 "gitlab": ("gitlab_api", gl_fx),
                 "notion": ("notion_api", notion_fx),
                 "beeper": ("beeper", beeper_data_dir),
-                # Contacts (carddav) is translate-only — no synth
-                # fixture, no extract. Listing it keeps the synth
-                # phase's `enabled_sources()` set consistent with
-                # extract's, mirroring beeper's pattern.
+                # Contacts (carddav) in file mode: no HTTP synth
+                # fixture, but extract DOES walk `input_path` for
+                # `.vcf` files (just like the email mbox path). The
+                # synth pass is a no-op; listed for symmetry.
                 "tng_contacts": ("carddav", carddav_fx),
                 # Signal also has no HTTP synthesizer (its extract
                 # reads a local file tree). Listing it for symmetry —
@@ -167,6 +174,12 @@ def main() -> int:
                 # WhatsApp same pattern: no synthesizer; included so
                 # `enabled_sources()` is consistent across phases.
                 "whatsapp": ("whatsapp_backup", whatsapp_dir),
+                # Email mbox: translate-only-shaped (no `sync:`
+                # block → is_managed() false for synth) but the
+                # extract phase below DOES walk the mbox into the
+                # raw doltlite store. Listed here for symmetry with
+                # the other no-synth providers.
+                "tng_email": ("email", email_mbox),
             },
             signal_snapshot_root=signal_snapshot_root,
             whatsapp_dir=whatsapp_dir,
@@ -197,11 +210,11 @@ def main() -> int:
                 # sync block's `beeper_data_dir:` field; see
                 # `_yaml` below.
                 "beeper": ("beeper", raw_root / "beeper"),
-                # Carddav: translate-only. `_yaml` omits the
-                # `sync:` block for type `carddav` so is_managed()
-                # returns false and extract skips this source —
-                # translate then reads vCards straight from
-                # `input_path`.
+                # Carddav file mode: extract walks `input_path` for
+                # `.vcf` files and lands them in the raw doltlite
+                # store using the same row shape CardDAV produces.
+                # Translate reads from the raw store — no more
+                # divergent "read from disk" path.
                 "tng_contacts": ("carddav", carddav_fx),
                 # Signal extract walks `snapshot_dir` (set in
                 # `_yaml` below), not `input_path`; we still set
@@ -211,6 +224,15 @@ def main() -> int:
                 # WhatsApp extract reads `backup_dir` (set in `_yaml`
                 # below); input_path is where the `wa_*` mirror lands.
                 "whatsapp": ("whatsapp_backup", raw_root / "whatsapp"),
+                # Email mbox: extract walks `input_path` directly
+                # (the `.mbox` file) and lands a raw doltlite store
+                # at `<data_root>/raw/<name>`. `_yaml` omits the
+                # `sync:` block for type `email` so is_managed()
+                # picks the mbox path, then attaches an `mbox:`
+                # block (account_id, display_name, …) so the
+                # synthesized `accounts` row matches what JMAP
+                # would produce for the same user.
+                "tng_email": ("email", email_mbox),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
@@ -316,11 +338,10 @@ def _yaml(
             if beeper_data_dir is not None:
                 lines.append(f"      beeper_data_dir: {beeper_data_dir}")
         elif type_str == "carddav":
-            # Translate-only. Omitting the `sync:` block flips
-            # is_managed() to false, so the extract pass skips
-            # carddav and translate reads vCards directly from
-            # `input_path`. This is the same shape claude_export
-            # uses for "drop a fixture, render it" sources.
+            # File-tree mode: no `sync:` block (otherwise we'd be in
+            # CardDAV-server mode). The extract phase walks
+            # `input_path` for `.vcf` files; translate reads the
+            # raw doltlite store.
             pass
         elif type_str == "signal_backup":
             # The signal extractor needs `snapshot_dir` (where the
@@ -332,6 +353,17 @@ def _yaml(
                 lines.append(f"      snapshot_dir: {signal_snapshot_root}")
             else:
                 lines.append("    sync: {}")
+        elif type_str == "email":
+            # Mbox mode: no `sync:` block (would otherwise trigger
+            # the JMAP path). Account metadata is supplied via the
+            # `mbox:` block at the source level so the synthesized
+            # `accounts` row carries display name + canonical
+            # address — same shape JMAP would produce.
+            lines.append("    mbox:")
+            lines.append("      account_id: picard@enterprise.starfleet")
+            lines.append("      display_name: Jean-Luc Picard")
+            lines.append("      email_address: picard@enterprise.starfleet")
+            lines.append("      is_personal: true")
         elif type_str == "whatsapp_backup":
             # WhatsApp extractor needs `backup_dir` (the dir containing
             # `Databases/msgstore.db.crypt15` + `Media/`). Root key

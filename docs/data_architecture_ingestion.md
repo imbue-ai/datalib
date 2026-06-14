@@ -107,8 +107,8 @@ Layout — one directory per source, one file per entity table:
 
 ```
 <data_root>/raw/<name>/events/
-  <table>.jsonl          # one line per upsert
-  blob_refs.jsonl
+  <table>.jsonl                       # one line per upsert
+  <provider>_<attachments>.jsonl      # the per-provider CAS edge table
 ```
 
 Each line is a small JSON object:
@@ -136,18 +136,15 @@ Three rules:
     wire-fidelity payload that the doltlite row gets. No second
     parse, no second normalize.
 
-> **Status (2026-06):** **Slack** wires the tape end-to-end today
-> via the per-row `write_event(s)_to_raw_storage_layer` chokepoints
-> in `slack/src/extract/db.rs`, attached by `sync` at run start;
-> see `sync/src/main.rs::attach_event_tape`. Every other provider's
-> extract path runs without tape integration — its
-> `attach_event_tape` dispatch is a documented no-op. The bulk
-> chokepoint (see [Bulk-upsert as the standard write
-> path](#bulk-upsert-as-the-standard-write-path)) is also a tape
-> chokepoint, so wire-shaped providers that adopt the bulk helper
-> automatically get the tape. Note the corollary: providers whose
-> rows do **not** come off a wire (e.g. mbox file imports) should
-> bypass the chokepoint entirely and call
+> **Status (2026-06):** **Slack** wires the tape end-to-end via the
+> per-row `write_event(s)_to_raw_storage_layer` chokepoints in
+> `slack/src/extract/db.rs`. **Email** wires it via the bulk
+> chokepoint (`bulk_upsert_events` / `bulk_upsert_with_tape` in
+> [Bulk-upsert as the standard write path](#bulk-upsert-as-the-standard-write-path)),
+> which is the path every other wire-shaped provider will get for
+> free as they adopt the bulk helper. Sources whose rows do **not**
+> come off a wire (mbox file imports, vcf file-tree imports, signal
+> backup) bypass the chokepoint entirely and call
 > `bulk_upsert_bookkeeping` directly — there is no upstream event
 > to mirror.
 
@@ -431,11 +428,16 @@ human-readable and inspectable. Concretely:
     itself. Storing them raw on disk would be "too raw" — the point
     of the raw store is that a human can `tail`/`grep`/`jq` it
     without a decoder in the loop.
-  - **File-imported sources** (mbox `.eml` bytes, WhatsApp `msgstore.db`,
-    Beeper `index.db`) keep the underlying file (or its blobs)
-    available — in CAS for `.eml`, on disk for sqlite — while
-    promoting the *semantic* content (typed columns, JSONB payloads)
-    into the entity tables.
+  - **File-imported sources** (mbox `.eml` bytes, vCard `.vcf` files,
+    WhatsApp `msgstore.db`, Beeper `index.db`) keep the underlying
+    file (or its blobs) available — in CAS for `.eml`, on disk for
+    sqlite — while promoting the *semantic* content (typed columns,
+    JSONB payloads) into the entity tables. **File-tree imports go
+    through extract** just like API-backed sources: a directory of
+    `.vcf` files lands in the same raw-store row shape CardDAV
+    produces, an mbox lands in the same shape JMAP produces.
+    Translate has exactly one input contract per provider regardless
+    of whether the data came over the wire or off disk.
 
 The rationale we keep coming back to: **if all we wanted was a copy
 of the upstream bytes, we'd just use `cp`.** The user already has
@@ -479,21 +481,22 @@ entity tables and the incremental cursors, refetch from scratch, and
 **let dolt's diff tell you what was missing**.
 
   - **`--reset-and-redownload`** wipes every entity table + its
-    `_bookkeeping` sidecar. `blob_refs` is preserved so already-fetched
-    blob bytes are not re-pulled. Missing-from-the-prior-pass blobs
-    are still picked up via the normal entity-walk → blob-fetch path.
-  - **`--refetch-blobs`** wipes `blob_refs` + `blob_refs_bookkeeping`,
-    forcing every attachment to re-download. The re-fetched bytes hash
-    to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a
-    no-op, no disk grows.
+    `_bookkeeping` sidecar. Per-provider CAS edge tables
+    (`<provider>_attachments`) are preserved so already-fetched blob
+    bytes are not re-pulled. Missing-from-the-prior-pass blobs are
+    still picked up via the normal entity-walk → blob-fetch path.
+  - **`--refetch-blobs`** clears the `blake3` column on the per-provider
+    edge tables, forcing every attachment to re-download. The re-fetched
+    bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects`
+    is a no-op, no disk grows.
   - Pass both for a full reset. Pass `--reset-and-redownload` alone for
     the common "check for entity gaps without burning bandwidth on
     blobs" case.
 
 The skip-check is keyed by the **upstream identifier** (known before
-fetch), not by content hash (only known after). That makes `blob_refs`
-a cache index over the CAS, and `--reset-and-redownload` is the
-"invalidate entity data, keep the cache" path.
+fetch), not by content hash (only known after). The per-provider edge
+table is the cache index over the CAS, and `--reset-and-redownload` is
+the "invalidate entity data, keep the cache" path.
 
 `cas_objects` has no reset path either way. Bytes are byte-stable;
 the only legitimate way to remove them is `blob_cas::gc_orphans()`.
@@ -751,8 +754,8 @@ The shared pieces, all in `frankweiler_etl`:
     `bulk_upsert_events`.
 
 The chokepoint is the right tool **only for tables whose rows came
-off a wire**. For everything else — `blob_refs`, sidecars,
-file-imported entities like mbox where there is no upstream
+off a wire**. For everything else — CAS edge tables, sidecars,
+file-imported entities like mbox or vcf where there is no upstream
 "event" — call `bulk_upsert_bookkeeping` directly inside the same
 tx and skip the tape. Synthesizing a fake wire payload just to feed
 the chokepoint would be making up data we don't have.
@@ -808,10 +811,9 @@ Where the pattern lives today:
 | Stage                       | Inputs hash                                                                | Stored as                                | Skip-check it powers                                                       |
 |-----------------------------|----------------------------------------------------------------------------|------------------------------------------|----------------------------------------------------------------------------|
 | Extract (snapshot-level)    | `(metadata, main, files)` triple of `(mtime, byte_size)` (Signal)          | `ingested_backups.fingerprint`           | "Have we already ingested this snapshot?" — before any decrypt/walk        |
-| Extract (per-payload)       | blake3 of the JSONB payload bytes                                          | `<entity_table>.payload_blake3`          | Input to translate's bucket fingerprint aggregation                        |
-| Extract (per-attachment)    | blake3 of the decrypted attachment bytes                                   | `<provider>_attachments.blake3`          | Input to translate's bucket fingerprint aggregation                        |
-| Translate (per document)    | blake3 of `group_concat(payload_blake3 + attachment.blake3)` over a bucket | sidecar `header.source_fingerprint`      | "Have we already rendered this document?" — before loading payloads        |
-| Load (per sidecar)          | the sidecar's own `source_fingerprint`                                     | `markdowns_loaded.source_fingerprint`    | "Have we already loaded this sidecar's rows?" — before re-applying rows    |
+| Extract (per-attachment)    | blake3 of the decrypted attachment bytes                                   | `<provider>_attachments.blake3`          | Edge-row dedupe; also the input to translate's bucket diff                 |
+| Translate (per source)      | doltlite HEAD commit hash at last successful render                        | `_render_cursor.json`                    | `dolt_diff_<table>` answers "which buckets changed?" — before loading rows |
+| Load (per sidecar)          | the sidecar's own `source_fingerprint` (a stable bucket UUID today)        | `markdowns_loaded.source_fingerprint`    | "Have we already loaded this sidecar's rows?" — before re-applying rows    |
 
 Where it still needs to land (aspirational; some not yet built):
 
@@ -844,14 +846,12 @@ Why this pattern matters:
     outputs produce matching fingerprints; the cached output stays.
     The render of an unchanged bucket is exactly the same bytes.
 
-### dolt_diff supersedes per-bucket fingerprints (ported providers)
+### dolt_diff supersedes per-bucket fingerprints
 
-Ported providers (chatgpt, anthropic, signal, slack, plus email)
-**replaced the per-bucket fingerprint pattern with
+The per-bucket fingerprint pattern has been **replaced with
 `dolt_diff_<table>` virtual tables driven by a per-source render
-cursor**. The translate-side fingerprint CTE is gone in those
-providers; doltlite's prolly-tree diff answers "what changed since
-last render?" directly.
+cursor**. The translate-side fingerprint CTE is gone; doltlite's
+prolly-tree diff answers "what changed since last render?" directly.
 
 Mechanism:
 
@@ -872,16 +872,13 @@ Mechanism:
 
 Sidecar `source_fingerprint` and the load-step compare stay — they
 still gate the load step ("have we already loaded this sidecar's
-rows?"). On the ported providers `source_fingerprint` is now just
-the stable bucket UUID (distinct per bucket, stable across re-renders
-of the same bucket).
+rows?"). `source_fingerprint` is now just the stable bucket UUID
+(distinct per bucket, stable across re-renders of the same bucket).
 
 This swap moves the "what's different?" decision from
 Rust-computed hash trees to doltlite's native diff, which it has to
 maintain anyway for `dolt diff`. The per-row `payload_blake3`
-columns are gone (their `WirePayloadRow` derive no longer emits
-them); unported providers still carry them but they're dead weight
-until the port lands.
+columns are gone — the `WirePayloadRow` derive no longer emits them.
 
 **Rule for new stages.** Any new derivation added to the pipeline
 (future Annotate step, future index shard, future projection)
@@ -914,9 +911,10 @@ No checkpoint files. The dedup index is the resume cursor.
 
 Attachment bytes are split out of the entity database into a sibling
 content-addressable store. Each source has both
-`raw/<name>.doltlite_db` (entities + per-source attachment metadata in
-`blob_refs`) and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed
-by blake3). Full schema + helpers in [port guide §7](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+`raw/<name>.doltlite_db` (entities + a per-provider
+`<provider>_attachments` edge table mapping `(owning, ref) → blake3`)
+and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed by blake3).
+Full schema + helpers in [port guide §7](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
 
 Two reasons the split matters:
 
@@ -930,12 +928,13 @@ Two reasons the split matters:
 
 ### Per-provider CAS edge tables
 
-The shared `blob_refs` table is **only used by unported providers**.
-Ported providers (chatgpt, anthropic, signal, slack, plus email and
-whatsapp via Shape A) each own a small four-column edge table that
-maps `(owning_id, ref_id) → blake3`. Bytes still live in the shared
-`cas_objects`; the edge table is provider-specific so providers
-that happen to use the same upstream id format don't collide.
+Every provider with attachments owns a small four-column edge table
+that maps `(owning_id, ref_id) → blake3`. Bytes still live in the
+shared `cas_objects`; the edge table is provider-specific so
+providers that happen to use the same upstream id format don't
+collide, and so per-provider semantics (refetch policies, dolt_diff
+fanout) don't bleed across sources. The legacy shared `blob_refs`
+table has been retired entirely.
 
 The four-column shape is universal — `id` (synth PK
 `{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the
@@ -980,9 +979,9 @@ other row.
 Contacts' photo bytes arrive inline in the vCard payload as base64,
 decoded once at parse time into `ContactPhoto { bytes, content_type }`,
 written straight to `blobs/<uid>.<ext>` at render. They never touch
-`blob_refs` or `cas_objects` because there's no separate fetch, no
-separate upstream id, and no skip-check semantics needed — the bytes
-are a property of the entity, not a separate resource.
+a CAS edge table or `cas_objects` because there's no separate fetch,
+no separate upstream id, and no skip-check semantics needed — the
+bytes are a property of the entity, not a separate resource.
 
 If a future provider has the same shape, inline-in-payload is fine;
 the shared CAS exists for the fetch-as-separate-resource pattern.
@@ -1068,19 +1067,20 @@ Five sub-rules:
     `last_error`; a failure bumps `attempt_count` and records
     `last_error`. Either way, the per-row paper trail exists.
 
-  - **Blobs follow the same shape.** `blob_refs` carries a nullable
-    `blake3` (NULL = not yet stored in CAS). The
-    `blob_refs_bookkeeping` sidecar records attempt count and last
-    error. A failed blob fetch leaves a `(ref_id, blake3=NULL,
-    last_error=…)` row that a retry walk picks up.
+  - **Blobs follow the same shape.** The per-provider
+    `<provider>_attachments` edge table carries a nullable `blake3`
+    (NULL = not yet stored in CAS); its `_bookkeeping` sidecar
+    records attempt count and last error. A failed blob fetch leaves
+    a `(ref_id, blake3=NULL, last_error=…)` edge row that a retry
+    walk picks up.
 
   - **Retry-on-by-default, with opt-out.** The orchestrator takes a
     flag — call it `--retry-failed` (default `true`) — that says
     "before any normal walk, re-fetch every row where
     `last_error IS NOT NULL` or `payload IS NULL AND attempt_count > 0`,
-    same for `blob_refs`." Pass `--no-retry-failed` to skip the
-    retry pass (useful when the upstream is known-flaky right now and
-    you want a fast incremental).
+    same for the per-provider CAS edge tables." Pass
+    `--no-retry-failed` to skip the retry pass (useful when the
+    upstream is known-flaky right now and you want a fast incremental).
 
   - **Retry policy is config, not code.** Per-source `sync:` blocks
     in `config.yaml` should support the same retry knobs as the
@@ -1278,8 +1278,9 @@ Two halves to this:
 
   - **Our internal schema** — the typed columns on raw entity tables,
     `grid_rows.yaml`, the sidecar `Sidecar` struct, the
-    `*_bookkeeping` sidecar tables, `blob_refs`. Today's de facto
-    answer to "I added a column" is `--reset-and-redownload`. That
+    `*_bookkeeping` sidecar tables, the per-provider CAS edge
+    tables. Today's de facto answer to "I added a column" is
+    `--reset-and-redownload`. That
     works for *rebakeable* sources (anything we can refetch from a
     live API) but breaks down for:
       - one-shot imports (Signal backup, archive ingestion) where
