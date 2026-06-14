@@ -28,9 +28,13 @@ One new provider crate at
 named `frankweiler-etl-google-takeout`. Local-file ingestion, no API,
 no auth.
 
-Follows the schema-first / shared-bulk-helpers conventions upstream
-landed alongside the email/mbox port: row structs and DDL constants
-live in `extract/schema_raw.rs`, deriving
+Follows the schema-first / shared-bulk-helpers conventions the
+architecture doc spells out under
+[Bulk-upsert as the standard write path](data_architecture_ingestion.md#bulk-upsert-as-the-standard-write-path)
+and
+[One writer per row](data_architecture_ingestion.md#one-writer-per-row-load-bearing-rule):
+row structs and DDL constants live in `extract/schema_raw.rs`,
+deriving
 [`WirePayloadRow`](../frankweiler/backend/etl/macros/src/lib.rs)
 and
 [`CasEdgeRow`](../frankweiler/backend/etl/src/blob_cas.rs) where
@@ -39,6 +43,12 @@ applicable; all bulk writes go through
 and
 [`flush_cas_edges`](../frankweiler/backend/etl/src/blob_cas.rs).
 There is **no provider-side bulk SQL**.
+
+This work also lands a new shared module
+[`frankweiler_etl::file_checkpoint`](../frankweiler/backend/etl/src/file_checkpoint.rs)
+that owns the `(scope, path, size_bytes, mtime_ns)` skip-cursor
+pattern the mbox extractor pioneered. Takeout's seven file-driven
+feeds were the trigger; mbox can migrate onto it as a follow-up.
 
 However we do want a resume cursor based one file properties, so that we don't re-process the same files over and over again.
 Size and mtime are fine.
@@ -142,12 +152,13 @@ pass.** When real data shows up, add a table + walker.
 | `chat_attachments`  | `(message_id, export_name)`                                         | inherits parent message    | `Google Chat/Groups/<dir>/{export_name}`              |
 
 Attached file bytes go in the sibling CAS db (`cas_objects` keyed by
-blake3). The `chat_attachments` table itself is the **per-provider
-CAS edge table** in the per-provider edge shape upstream landed when
-it retired the shared `blob_refs`: each row carries
+blake3). The `chat_attachments` table itself is a
+[per-provider CAS edge table](data_architecture_ingestion.md#per-provider-cas-edge-tables):
+each row carries
 `(message_id, export_name, blake3, content_type, byte_len, …)` and
 implements the [`CasEdgeRow`](../frankweiler/backend/etl/src/blob_cas.rs)
-trait so it flushes through the same shared `flush_cas_edges` helper
+trait so it flushes through the
+[shared attachment-flush primitives](data_architecture_ingestion.md#shared-attachment-flush-primitives)
 the other providers use.
 
 `unsentmessages.json` per user — empty in test data; populated case
@@ -209,8 +220,9 @@ prefix.
 
 Every write goes through the shared
 [`frankweiler_etl::bulk`](../frankweiler/backend/etl/src/bulk.rs)
-chokepoint that upstream landed alongside the email/mbox port. **No
-hand-rolled bulk SQL in this provider.**
+chokepoint — the doctrine is spelled out under
+[Bulk-upsert as the standard write path](data_architecture_ingestion.md#bulk-upsert-as-the-standard-write-path).
+**No hand-rolled bulk SQL in this provider.**
 
 For each entity table the walker:
 
@@ -311,46 +323,61 @@ pub const GOOGLE_TAKEOUT_NS: uuid::Uuid =
 
 ## Resume / monitoring
 
-  - **Resume**: per-feed `(path, size_bytes, mtime_ns)` file
-    checkpoint, copying the precedent the email/mbox extractor landed
-    upstream
-    ([`MBOX_FILES_CHECKPOINT_DDL`](../frankweiler/backend/etl/providers/email/src/extract/schema_raw.rs)).
-    Each enabled walker that consumes a file declares its own
-    checkpoint DDL in `extract/schema_raw.rs` — e.g.
-    `youtube_files_checkpoint`, `chat_files_checkpoint`,
-    `gemini_files_checkpoint`. Schema:
+  - **Resume**: shared `(path, size_bytes, mtime_ns)` file checkpoint
+    DB table, built **as part of this work**. The mbox extractor
+    already proved out the pattern
+    ([`MBOX_FILES_CHECKPOINT_DDL`](../frankweiler/backend/etl/providers/email/src/extract/schema_raw.rs)),
+    and Takeout's seven feeds would each need an equivalent — six
+    or seven copies of the same four-column DDL is the trigger for
+    pulling it into a shared module rather than copy-pasting again.
 
-    ```sql
-    CREATE TABLE IF NOT EXISTS <feed>_files_checkpoint (
-        path TEXT PRIMARY KEY,
-        size_bytes INTEGER NOT NULL,
-        mtime_ns INTEGER NOT NULL,
-        last_finished_at TEXT NOT NULL
-    )
-    ```
+    **New shared module:** `frankweiler_etl::file_checkpoint`,
+    alongside `bulk` and `render_cursor`. Surface:
 
-    Before opening a file, the walker stats it, looks up the row, and
-    skips on `(size_bytes, mtime_ns)` match. On mismatch (or
-    first-seen) it processes the file and UPSERTs the new tuple in
-    the same transaction that flushes the last row batch. Within a
-    processed file, `ON CONFLICT(id) DO UPDATE` keeps the row UPSERTs
-    idempotent.
+      - One `ingested_files` table shared across all consumers, with
+        a `scope` column that namespaces rows per (provider, feed)
+        so two scopes can claim the same on-disk path without
+        colliding:
 
-    Why mtime+size rather than content hash: cheap to check (one
-    `stat`), good enough for the Takeout shape ("download a new
-    export, point me at it"), and consistent with what mbox already
-    does in this codebase. A user who renames a file is fine because
-    the path is part of the cursor key.
+        ```sql
+        CREATE TABLE IF NOT EXISTS ingested_files (
+            scope TEXT NOT NULL,
+            path TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            mtime_ns INTEGER NOT NULL,
+            last_finished_at TEXT NOT NULL,
+            PRIMARY KEY (scope, path)
+        )
+        ```
 
-    **Follow-up worth noting:** Signal, WhatsApp, and Beeper all
-    ingest backup files where re-processing the same snapshot should
-    be a no-op. Signal today uses a content-blake3 of three files
-    ([`INGESTED_BACKUPS_DDL`](../frankweiler/backend/etl/providers/signal/src/extract/schema_raw.rs))
-    which is correct but pays a full read just to skip. Once we have
-    three providers (Takeout adds two: file-by-feed) carrying the
-    same four-column DDL by copy-paste, lifting it into a shared
-    `frankweiler_etl::file_checkpoint` module — alongside `bulk` and
-    `render_cursor` — is the obvious move. Not blocking this provider.
+      - `FileFingerprint::of(path) -> Result<FileFingerprint>` —
+        one `stat`; returns `(size_bytes, mtime_ns)`.
+      - `should_skip(tx, scope, path, fp) -> bool` — looks up the
+        row, returns `true` on match.
+      - `record_finished(tx, scope, path, fp, now)` — UPSERT,
+        called inside the same transaction that flushes the file's
+        last batch (so a crashed run doesn't leave a stamped row
+        for partially-ingested content).
+
+    Each Takeout walker calls `should_skip` with its own scope
+    (`google_takeout/<feed_name>`) before opening a file, and
+    `record_finished` at the end of the file's transaction. No
+    provider-specific checkpoint DDL.
+
+    **Migration follow-up (not blocking):** the email mbox extractor
+    keeps its `mbox_files_checkpoint` table for now. Migrating it
+    to the shared `ingested_files` (scope = `email/mbox`) is a
+    natural cleanup once Takeout is landed and proves the API. Same
+    for Signal's content-hash-based `INGESTED_BACKUPS_DDL` — it
+    serves a stricter equality goal so it shouldn't move under
+    `file_checkpoint` until the API grows a "content-hash fallback"
+    mode.
+
+    Why mtime+size rather than content hash: cheap to check, good
+    enough for the Takeout shape ("download a new export, point me
+    at it"), and consistent with what mbox already does. A user who
+    renames a file is fine because the path is part of the cursor
+    key.
   - **Monitor**: standard `obs::ObsArgs` flow. One progress bar per
     walker (`maps_reviews`, `youtube_watch_history`, …) with length
     set from a pre-pass count where cheap (JSON, CSV) or from a
@@ -384,8 +411,9 @@ providers/google_takeout/
       mod.rs                       # fetch() entry; per-feed dispatch
       schema_raw.rs                # row structs (#[derive(WirePayloadRow,
                                    # CasEdgeRow)]) + DDL constants + PK
-                                   # recipes + per-feed *_files_checkpoint
-                                   # DDLs + GOOGLE_TAKEOUT_NS
+                                   # recipes + GOOGLE_TAKEOUT_NS
+                                   # (no per-feed file-checkpoint DDLs —
+                                   #  goes through file_checkpoint module)
       db.rs                        # thin RawDb wrapper around the shared
                                    # bulk/checkpoint helpers; no SQL of
                                    # its own
