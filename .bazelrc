@@ -164,6 +164,19 @@ common --enable_platform_specific_config
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
 
+# rustfmt-check is **always on** for every bazel build/test. This
+# forbids `bazelisk test //...` from running against unformatted code,
+# which would otherwise mean: developer runs tests → fix-up `cargo fmt`
+# at commit time → bazel action cache invalidates → 30-40s of recompile
+# on every commit. With the aspect always active, `bazelisk test //...`
+# fails fast if any file is misformatted; dev runs `cargo fmt`; reruns
+# tests; the test compiles the final formatted bytes; commit hits cache.
+#
+# rustfmt check is a fast per-crate action; the cold-cache cost is
+# small and goes entirely to BuildBuddy's remote cache on shared work.
+build --aspects=@rules_rust//rust:defs.bzl%rustfmt_aspect
+build --output_groups=+rustfmt_checks
+
 # `--config=clippy` — run rules_rust's clippy aspect across the build
 # graph. Replaces `cargo clippy --all-targets --all-features --
 # -D warnings` in scripts/pre-commit because the cargo invocation has
@@ -173,7 +186,9 @@ build:linux --host_linkopt=-Wl,--as-needed
 # `bazelisk build --config=clippy //...` is sub-second.
 # Clippy aspect activation lives on `build:clippy` — only here do
 # we ask bazel to actually run the lint aspect and surface its
-# outputs.
+# outputs. (Unlike rustfmt above, clippy is opt-in because warnings
+# can be noisier and we wanted the gate to be commit-time, not
+# every-test-time.)
 build:clippy --aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect
 build:clippy --output_groups=+clippy_checks
 

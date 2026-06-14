@@ -28,7 +28,7 @@ use frankweiler_etl::progress::Progress;
 use tracing::{info, warn};
 
 use api::{CarddavError, Multistatus};
-use db::ContactRow;
+use db::{addressbook_pk, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
 /// other provider crate exposes.
@@ -76,13 +76,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     if opts.control.reset_and_redownload {
         db.reset().await?;
     }
-    if opts.control.refetch_blobs {
-        // Contacts doesn't populate `blob_refs` (photos travel inline in
-        // the vCard payload), but the table exists via SHARED_DDL — the
-        // wipe is a harmless no-op that keeps the flag uniform across
-        // providers.
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
-    }
+    // Contacts has no blob table at all (vCard PHOTO bytes ride inline
+    // in the payload column), so `refetch_blobs` is a no-op for this
+    // provider — explicitly nothing to do.
+    let _ = opts.control.refetch_blobs;
 
     let mut summary = FetchSummary::default();
     let account_id = host_for_account(&opts.server_url)?;
@@ -130,7 +127,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             }
         }
-        let book_id = RawDb::addressbook_pk(&account_id, &book.href);
+        let book_id = addressbook_pk(&account_id, &book.href);
         let prev_token = db.sync_token(&book_id).await?.unwrap_or_default();
         opts.progress
             .set_message(&format!("syncing addressbook {}", book.href));
@@ -275,15 +272,15 @@ async fn apply_multistatus(
         } else {
             summary.contacts_new += 1;
         }
-        rows.push(ContactRow {
-            addressbook_id: book_id.to_string(),
+        rows.push(ContactRow::new(
+            book_id.to_string(),
             uid,
-            href: href.clone(),
-            etag: etag.clone(),
-            display_name: api::vcard_fn(vcard),
-            revision: api::vcard_rev(vcard),
-            payload_vcard: vcard.clone(),
-        });
+            href.clone(),
+            etag.clone(),
+            api::vcard_fn(vcard),
+            api::vcard_rev(vcard),
+            vcard,
+        ));
     }
     db.upsert_contacts(&rows).await?;
 

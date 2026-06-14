@@ -139,14 +139,13 @@ pub struct FeedbackSurfaceColumnHeader {
     pub key: String,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("feedback", "FeedbackRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("feedback", "FeedbackRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("feedback", r#"CREATE TABLE IF NOT EXISTS feedback (
+pub const DDL: &[(&str, &str)] = &[(
+    "feedback",
+    r#"CREATE TABLE IF NOT EXISTS feedback (
     feedback_uuid VARCHAR(36) NOT NULL,
     created_at VARCHAR(40) NOT NULL,
     sentiment VARCHAR(8),
@@ -157,10 +156,21 @@ pub const DDL: &[(&str, &str)] = &[
     fixed_in_git_hash VARCHAR(40),
     notes TEXT,
     PRIMARY KEY (feedback_uuid)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("feedback", &["feedback_uuid", "created_at", "sentiment", "comment", "app_version", "git_hash", "context_json", "fixed_in_git_hash", "notes"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "feedback",
+    &[
+        "feedback_uuid",
+        "created_at",
+        "sentiment",
+        "comment",
+        "app_version",
+        "git_hash",
+        "context_json",
+        "fixed_in_git_hash",
+        "notes",
+    ],
+)];

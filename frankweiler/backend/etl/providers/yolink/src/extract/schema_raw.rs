@@ -34,7 +34,12 @@
 //!   this provider has to `GridRow.when_ts`. `yolink_devices` is
 //!   config-shaped, not event-shaped.
 
-use frankweiler_etl::doltlite_raw as dr;
+use frankweiler_etl::bulk::BulkUpsertable;
+use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use frankweiler_etl_macros::WirePayloadRow;
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::Sqlite;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -73,6 +78,38 @@ pub const YOLINK_DEVICES_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_devices 
     last_ts_ms INTEGER NULL
 )";
 
+/// Row matching [`YOLINK_DEVICES_DDL`]. Hand-rolled `BulkUpsertable`
+/// (no payload column — every field is a typed column). `last_ts_ms`
+/// is bumped separately via the `UPDATE yolink_devices SET
+/// last_ts_ms = …` cursor advance after each successful window, so
+/// it's NOT in the promoted-column list (bulk-upsert won't clobber
+/// the cursor).
+#[derive(Debug, Clone, Default)]
+pub struct YolinkDeviceRow {
+    pub id: String,
+    pub family_device_id: String,
+    pub kind: String,
+    pub start_ms: i64,
+}
+
+impl BulkUpsertable for YolinkDeviceRow {
+    const TABLE: &'static str = "yolink_devices";
+    const TYPED_COLUMNS: &'static [&'static str] = &["family_device_id", "kind", "start_ms"];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.family_device_id)
+            .bind(&self.kind)
+            .bind(self.start_ms)
+    }
+}
+
 /// `yolink_readings` — one row per sensor sample.
 ///
 /// YoLink's CSV format does not carry a per-sample id, so the PK is
@@ -81,8 +118,8 @@ pub const YOLINK_DEVICES_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_devices 
 /// Columns:
 /// - `id` — synthesized composite PK
 ///   (`"{device_name}#{ts_ms}#{metric}"`). Primary key.
-/// - `device_name` — FK into [`YOLINK_DEVICES_DDL`]`.id`, the
-///   user-chosen YAML `name:`.
+/// - `device_name` — FK into `yolink_devices.id`, the user-chosen
+///   YAML `name:`.
 /// - `ts_ms` — sample timestamp in Unix milliseconds (parsed from
 ///   the CSV's `Time` column). This is the event-shaped value the
 ///   translate / downstream side uses as `GridRow.when_ts`.
@@ -93,13 +130,51 @@ pub const YOLINK_DEVICES_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_devices 
 ///   `metric`; the parser enforces unit-suffix invariants
 ///   upstream so a `℃`-tagged column carrying a `℉` row gets
 ///   rejected, not silently converted.
-pub const YOLINK_READINGS_DDL: &str = "CREATE TABLE IF NOT EXISTS yolink_readings (
-    id TEXT PRIMARY KEY,
-    device_name TEXT NOT NULL,
-    ts_ms INTEGER NOT NULL,
-    metric TEXT NOT NULL,
-    value REAL NOT NULL
-)";
+/// - `payload` — JSON object mapping each column header from the
+///   source CSV row to its raw string value (e.g.
+///   `{"Time": "…", "Temperature(℃)": "-1.1℃", "Humidity(%RH)":
+///   "70.0"}`). YoLink's per-window signed URL is a wire fetch
+///   that nothing else preserves — if upstream prunes history,
+///   this column is the only place the raw record survives. Two
+///   readings derived from the same CSV row (e.g. the temperature
+///   and humidity rows) carry the same payload — that
+///   denormalization is the cost of staying in the "one row per
+///   metric" tall shape rather than splitting per-CSV-row out into
+///   its own table.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "yolink_readings")]
+pub struct YolinkReadingRow {
+    pub id_and_payload: WirePayload,
+    pub device_name: String,
+    pub ts_ms: i64,
+    pub metric: String,
+    pub value: f64,
+}
+
+impl YolinkReadingRow {
+    /// Mint a row with its synthesized PK plus the per-CSV-row
+    /// payload. `payload_json` is the JSON-encoded
+    /// `{header: value}` map of the source CSV row — see the DDL
+    /// docstring for the rationale.
+    pub fn new(
+        device_name: &str,
+        ts_ms: i64,
+        metric: &str,
+        value: f64,
+        payload_json: String,
+    ) -> Self {
+        Self {
+            id_and_payload: WirePayload {
+                id: reading_id_recipe(device_name, ts_ms, metric),
+                payload: payload_json,
+            },
+            device_name: device_name.to_string(),
+            ts_ms,
+            metric: metric.to_string(),
+            value,
+        }
+    }
+}
 
 /// Index on `yolink_readings(device_name, ts_ms)` — supports the
 /// "max ts for this device" cursor lookup and the "readings for
@@ -136,7 +211,7 @@ pub fn reading_id_recipe(device_name: &str, ts_ms: i64, metric: &str) -> String 
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         YOLINK_DEVICES_DDL.to_string(),
-        YOLINK_READINGS_DDL.to_string(),
+        YolinkReadingRow::ddl(),
         YOLINK_READINGS_BY_DEVICE_TS_INDEX_DDL.to_string(),
     ];
     for table in DATA_TABLES {

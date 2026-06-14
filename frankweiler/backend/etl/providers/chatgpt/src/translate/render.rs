@@ -5,13 +5,15 @@
 
 use std::collections::HashMap;
 
-use frankweiler_etl::blob_cas::{self, BlobReader};
+use anyhow::Context as _;
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
 
-use super::grid_rows::{fingerprint_for_conversation, rows_for_conversation, RENDER_VERSION};
+use super::grid_rows::{rows_for_conversation, RENDER_VERSION};
 use super::parse::{shred, OAAttachmentRef, OAMessageRow, ParsedChatGPTApi, ShreddedConversation};
 
 fn yaml_scalar(v: Option<&str>) -> String {
@@ -92,33 +94,45 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    progress.set_length(Some(parsed.conversations.len() as u64));
+    // Log how long the dolt_diff scan took. Logged on every render
+    // (including cold start) so the timing shows up in sync output
+    // without users having to crack the cursor open.
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_conversations = parsed
+            .scan
+            .changed_conversations
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_conversations.is_none(),
+        "[translate] chatgpt dolt_diff scan"
+    );
+
+    progress.set_length(Some(
+        (parsed.conversations.len() + parsed.docs_skipped) as u64,
+    ));
+    progress.inc(parsed.docs_skipped as u64);
     let mut written = Vec::new();
     for c in &parsed.conversations {
-        let fingerprint = fingerprint_for_conversation(&c.upstream_payload);
         let conv_id = &c.conv.conversation_id;
         let account_id = c.conv.account_id.as_deref().unwrap_or("unknown");
         let rel = conv_relative_path(account_id, conv_id);
         let abs = root.join(&rel);
+        // The per-doc `source_fingerprint` used to be a hash over the
+        // upstream payload. With dolt_diff driving the skip decision
+        // upstream of render, that compare is gone; use the
+        // conversation_id so the sidecar still has a stable
+        // identifier. The orchestrator's prior_fingerprints map is
+        // ignored by chatgpt now.
+        let fingerprint = conv_id.clone();
 
-        // Skip when the indexer has the same fingerprint AND the md
-        // file is still on disk (defends against `rm -rf rendered_md/`
-        // by hand). No shredding happens here — the upstream payload
-        // alone is enough to decide.
-        if prior_fingerprints.get(conv_id).map(String::as_str) == Some(fingerprint.as_str())
-            && abs.exists()
-        {
-            written.push(rel);
-            progress.inc(1);
-            continue;
-        }
-
-        // Changed (or first-time): walk the mapping into messages/parts.
         let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name, parsed.blobs.as_ref()) else {
+        let Some(r) = render_one(&shredded, source_name, &c.blobs) else {
             progress.inc(1);
             continue;
         };
@@ -130,8 +144,10 @@ pub fn render_all(
 
         // Order: blobs → md → sidecar → callback. The callback is the
         // commit point: an interrupted run leaves the indexer
-        // un-notified so next run re-tries.
-        materialize_conv_blobs(&shredded, parsed.blobs.as_ref(), page_dir)?;
+        // un-notified so next run re-tries. All sync now —
+        // `c.blobs.materialize_to_dir` is a pure-Rust loop over the
+        // pre-loaded bundle.
+        c.blobs.materialize_to_dir(&page_dir.join("blobs"))?;
 
         std::fs::write(&abs, &r.body)?;
 
@@ -161,6 +177,17 @@ pub fn render_all(
         written.push(rel);
         progress.inc(1);
     }
+
+    // Advance the render cursor only when everything succeeded AND we
+    // managed to read HEAD at scan time. Stock libsqlite3 leaves
+    // new_head as None → cursor stays unwritten → next run is another
+    // cold start, which is the right behavior since we have no way to
+    // anchor the diff.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(root, "chatgpt", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write chatgpt render cursor {}", cursor_path.display()))?;
+    }
     Ok(written)
 }
 
@@ -177,7 +204,7 @@ fn conv_relative_path(account_id: &str, conv_id: &str) -> std::path::PathBuf {
 pub fn render_one(
     shredded: &ShreddedConversation,
     _source_name: &str,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
 ) -> Option<Rendered> {
     let conv = &shredded.conv;
     let msgs: Vec<&OAMessageRow> = shredded.messages.iter().collect();
@@ -369,22 +396,6 @@ pub fn render_one(
     })
 }
 
-fn materialize_conv_blobs(
-    shredded: &ShreddedConversation,
-    blobs: &dyn BlobReader,
-    page_dir: &std::path::Path,
-) -> std::io::Result<()> {
-    let blobs_dir = page_dir.join("blobs");
-    blob_cas::materialize_refs(
-        blobs,
-        shredded
-            .messages
-            .iter()
-            .flat_map(|m| m.attachments.iter().map(|a| a.file_id.as_str())),
-        &blobs_dir,
-    )
-}
-
-fn attachment_md(a: &OAAttachmentRef, blobs: &dyn BlobReader) -> String {
-    blob_cas::attachment_md(blobs, &a.file_id, a.name.as_deref(), a.is_image)
+fn attachment_md(a: &OAAttachmentRef, blobs: &BlobBundle) -> String {
+    blobs.markdown_link(&a.file_id, a.name.as_deref(), a.is_image)
 }

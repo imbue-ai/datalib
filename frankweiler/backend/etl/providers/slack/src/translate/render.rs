@@ -1,51 +1,41 @@
 //! Per-thread Markdown render + sidecar emission.
 //!
 //! For each Slack thread we emit two co-located files under
-//! `<out>/rendered_md/slack/<team>/<channel>/threads/`:
+//! `<out>/rendered_md/slack/<team>/<channel>/threads/<thread_uuid>/`:
 //!
-//!   * `<thread_uuid>__<slug>.md` — human-readable + grid `qmd_path`
-//!     target. YAML frontmatter carries provider metadata and a
-//!     `source_fingerprint` that hashes the canonical Slack payload of
-//!     every message in the thread.
-//!   * `<thread_uuid>__<slug>.grid_rows.json` — structured rows for the
-//!     downstream loader. The loader reads this, not the markdown, so
-//!     it doesn't have to re-parse mrkdwn.
+//!   * `index.md` — human-readable + grid `qmd_path` target. YAML
+//!     frontmatter carries provider metadata + the `thread_uuid` as
+//!     `source_fingerprint`.
+//!   * `index.grid_rows.json` — structured rows for the downstream
+//!     loader.
 //!
-//! Incrementality: if a thread's `source_fingerprint` matches the one
-//! recorded in the existing `.md`, we skip the write entirely. The
-//! fingerprint is derived from the raw Slack JSON, so render-code
-//! changes alone do not invalidate prior outputs — bump the
-//! [`RENDER_VERSION`] constant when you need a forced rebake.
+//! Incrementality is driven upstream of render: `parse` consulted
+//! `dolt_diff_<table>` against the render cursor and only loaded
+//! threads that actually changed. Once we reach this module, every
+//! thread bucket in `parsed.threads` should be (re)rendered. The
+//! cursor is advanced on success.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use frankweiler_schema::grid_rows::GridRow;
-
-use std::collections::HashMap;
-
-use frankweiler_etl::blob_cas::{self, BlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl::section::msg_div_open;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
+use frankweiler_schema::grid_rows::GridRow;
 
 use super::mrkdwn::{emojize_shortcodes, resolve_user_mentions, to_commonmark};
-use super::{slack_link, Message, TranslatedSlack};
+use super::{slack_link, Message, ParsedSlack, SlackThreadBucket};
 
 /// Bump when the on-disk render layout changes in a way that must
-/// invalidate stale `.md` files even though their `source_fingerprint`
-/// would otherwise still match.
-// Bumped from 1 to 2 when the per-message wrapper switched to
-// `id="m-{uuid}" data-section-uuid="{uuid}"` (dropping
-// `data-msg-uuid` / `data-msg-index` / `data-provider`), matching the
-// Anthropic / ChatGPT convention.
+/// invalidate stale `.md` files.
 pub const RENDER_VERSION: u32 = 2;
 
 #[derive(Debug, Default)]
@@ -55,91 +45,82 @@ pub struct RenderSummary {
     pub threads_skipped: usize,
 }
 
-/// Render every thread in `t` under `out_dir`. Idempotent: threads
-/// whose fingerprint already matches the on-disk `.md` are left alone.
-///
-/// `source_name` is the config-level identifier for this Slack source
-/// (e.g. `tiny-slack`). Blob bytes are pulled from the source's
-/// doltlite db and materialized to a sibling `blobs/` directory next
-/// to each rendered `.md`; the markdown links them with relative
-/// `blobs/<file_name>` paths.
+/// Render every thread bucket in `parsed` under `out_dir`. Idempotent
+/// at the dolt_diff level — buckets the scan reported as unchanged
+/// don't appear in `parsed.threads` in the first place.
 pub fn render_all(
-    t: &TranslatedSlack,
+    parsed: &ParsedSlack,
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
-    // Per-thread cheap-probe value (`<MAX(fetched_at)>|<COUNT(*)>`)
-    // computed by the orchestrator before this call. Stamped into each
-    // [`RenderedMarkdown`] so the indexer records what the next run should
-    // compare against. Empty when callers don't have probe data —
-    // every render still works, just without the cheap-skip shortcut.
-    current_cursors: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let user_labels: BTreeMap<String, String> = t
+    // Log how long the dolt_diff scan took (matches chatgpt/anthropic).
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_threads = parsed
+            .scan
+            .changed_threads
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_threads.is_none(),
+        "[translate] slack dolt_diff scan"
+    );
+
+    let user_labels: BTreeMap<String, String> = parsed
         .users
         .iter()
         .map(|(id, u)| (id.clone(), u.label()))
         .collect();
 
-    // Group messages by thread_uuid.
-    let mut by_thread: BTreeMap<String, Vec<&Message>> = BTreeMap::new();
-    for m in t.messages.values() {
-        by_thread.entry(m.thread_uuid()).or_default().push(m);
-    }
-
     let mut summary = RenderSummary {
-        threads_total: by_thread.len(),
+        threads_total: parsed.threads.len() + parsed.docs_skipped,
+        threads_skipped: parsed.docs_skipped,
         ..Default::default()
     };
     progress.set_length(Some(summary.threads_total as u64));
+    progress.inc(parsed.docs_skipped as u64);
 
-    for (thread_uuid, mut msgs) in by_thread {
-        msgs.sort_by(|a, b| {
-            (a.ts_iso.as_str(), a.ts.as_str()).cmp(&(b.ts_iso.as_str(), b.ts.as_str()))
-        });
-        let root: &Message = msgs
+    for bucket in &parsed.threads {
+        let root: &Message = bucket
+            .messages
             .iter()
-            .copied()
             .find(|m| m.is_thread_root)
-            .unwrap_or(msgs[0]);
-        let channel = t.channels.get(&root.channel_id);
+            .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
+        let channel = parsed.channels.get(&root.channel_id);
         let cname = channel
             .and_then(|c| c.name.clone())
             .unwrap_or_else(|| root.channel_id.clone());
 
-        let fingerprint = compute_fingerprint(&msgs);
-        let (md_path, json_path) =
-            output_paths(out_dir, &root.team_id, &root.channel_id, &thread_uuid);
+        let (md_path, json_path) = output_paths(
+            out_dir,
+            &root.team_id,
+            &root.channel_id,
+            &bucket.thread_uuid,
+        );
 
-        // Skip when the indexer already saw this exact fingerprint
-        // AND the md file still exists. The on-disk check guards
-        // against someone deleting `rendered_md/` by hand: the index
-        // would still say "fingerprint X" and we'd skip forever.
-        if prior_fingerprints.get(&thread_uuid).map(String::as_str) == Some(fingerprint.as_str())
-            && md_path.exists()
-        {
-            summary.threads_skipped += 1;
-            progress.inc(1);
-            continue;
-        }
-
-        let rows = build_thread_rows(t, &thread_uuid, &msgs, root, &cname, &user_labels);
+        // The per-doc `source_fingerprint` is the thread_uuid itself
+        // — stable across re-renders, distinct across buckets. The
+        // skip decision now happens in `parse` via dolt_diff.
+        let fingerprint = bucket.thread_uuid.clone();
         let md_rel = md_path
             .strip_prefix(out_dir)
             .unwrap_or(&md_path)
             .to_path_buf();
+        let rows = build_thread_rows(parsed, bucket, root, &cname, &user_labels);
         let md = render_thread_md(
-            &thread_uuid,
+            &bucket.thread_uuid,
             &fingerprint,
             root,
             &cname,
-            &msgs,
+            &bucket.messages,
             &user_labels,
             source_name,
             &md_rel,
-            t.blobs.as_ref(),
+            &bucket.blobs,
         );
 
         let page_dir = md_path
@@ -147,17 +128,17 @@ pub fn render_all(
             .expect("output_paths always produces <page_dir>/index.md");
         fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
-        // Order: blobs first (per-file streamed from doltlite), then
-        // the md body, then the sidecar. The callback is invoked last,
-        // so if any earlier step fails the indexer never sees the new
-        // fingerprint — next run re-tries the whole doc.
-        materialize_thread_blobs(t.blobs.as_ref(), &msgs, page_dir)
-            .with_context(|| format!("materialize blobs for {}", thread_uuid))?;
+        // Order: blobs → md → sidecar → callback. The callback is the
+        // commit point.
+        bucket
+            .blobs
+            .materialize_to_dir(&page_dir.join("blobs"))
+            .with_context(|| format!("materialize blobs for {}", bucket.thread_uuid))?;
 
         fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
         emit_sidecar(
             &json_path,
-            &thread_uuid,
+            &bucket.thread_uuid,
             &fingerprint,
             RENDER_VERSION,
             &rows,
@@ -165,44 +146,31 @@ pub fn render_all(
         )?;
 
         on_doc_complete(RenderedMarkdown {
-            markdown_uuid: thread_uuid.clone(),
+            markdown_uuid: bucket.thread_uuid.clone(),
             source_name: source_name.to_string(),
             source_fingerprint: fingerprint,
-            upstream_cursor: current_cursors.get(&thread_uuid).cloned(),
+            upstream_cursor: None,
             md_path: md_path.clone(),
             render_version: RENDER_VERSION,
             rows,
             edges: Vec::new(),
         })
-        .with_context(|| format!("on_doc_complete {thread_uuid}"))?;
+        .with_context(|| format!("on_doc_complete {}", bucket.thread_uuid))?;
 
         summary.threads_rendered += 1;
         progress.inc(1);
     }
-    Ok(summary)
-}
 
-/// Hash of `(ts, canonical_json(raw_json))` pairs for every message in
-/// the thread, plus the render-version stamp. Stable across runs: the
-/// same source payload yields the same fingerprint.
-fn compute_fingerprint(msgs: &[&Message]) -> String {
-    let mut pairs: Vec<(String, String)> = msgs
-        .iter()
-        .map(|m| {
-            (
-                m.ts.clone(),
-                serde_json::to_string(&m.raw_json).unwrap_or_default(),
-            )
-        })
-        .collect();
-    pairs.sort();
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    for (ts, raw) in &pairs {
-        ts.hash(&mut h);
-        raw.hash(&mut h);
+    // Advance the render cursor only when everything succeeded AND
+    // we managed to read HEAD at scan time. Without HEAD, the next
+    // run is another cold start (the right behavior — we have no way
+    // to anchor the diff).
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(out_dir, "slack", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
     }
-    format!("{:016x}", h.finish())
+    Ok(summary)
 }
 
 fn output_paths(
@@ -211,11 +179,6 @@ fn output_paths(
     channel_id: &str,
     thread_uuid: &str,
 ) -> (PathBuf, PathBuf) {
-    // Page-dir layout: each thread is `<thread_uuid>/index.md` so its
-    // blobs can live in a sibling `blobs/` subdir under the same dir.
-    // Matches the chatgpt / anthropic / notion convention so the
-    // rendered tree is internally consistent and one thread's
-    // directory is sharable in isolation.
     let dir = out_dir
         .join("rendered_md")
         .join("slack")
@@ -245,11 +208,11 @@ fn render_thread_md(
     fingerprint: &str,
     root: &Message,
     channel_name: &str,
-    msgs: &[&Message],
+    msgs: &[Message],
     user_labels: &BTreeMap<String, String>,
     source_name: &str,
     md_rel_path: &Path,
-    blobs: &dyn BlobReader,
+    blobs: &BlobBundle,
 ) -> String {
     let title = thread_title(&root.text, user_labels);
     let team_id = &root.team_id;
@@ -293,10 +256,6 @@ fn render_thread_md(
             .and_then(|u| user_labels.get(u).cloned())
             .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
         let link = slack_link(team_id, channel_id, &m.ts, Some(&root.ts));
-        // Standard `<div>` wrapper via `section::msg_div_open` — same
-        // shape every other provider emits. The `data-section-uuid`
-        // matches the grid_row.uuid so row→preview navigation can
-        // resolve.
         p.push(msg_div_open(&m.uuid(), "slack"));
         p.push(String::new());
         p.push(format!("## {author}"));
@@ -309,13 +268,6 @@ fn render_thread_md(
         p.push(to_commonmark(m.text.trim_end(), user_labels));
         p.push(String::new());
 
-        // Files: link to the local copy materialized next to the
-        // rendered markdown at `blobs/<safe_filename>`. Image-typed
-        // files render as an inline image; everything else (PDFs, docs,
-        // etc.) as a plain text link with a `[file]` tag. The
-        // `url_private` URL is kept as a title-only fallback for files
-        // that the downloader skipped (external / tombstoned / errored),
-        // so the rendered markdown still surfaces *something* clickable.
         for f in files(&m.raw_json) {
             let alt = f
                 .title
@@ -334,7 +286,6 @@ fn render_thread_md(
             p.push(String::new());
         }
 
-        // Reactions: collapse to `:name: ×N` lines per emoji.
         let rxs = reactions(&m.raw_json);
         if !rxs.is_empty() {
             let parts: Vec<String> = rxs
@@ -365,23 +316,22 @@ fn render_thread_md(
 }
 
 fn build_thread_rows(
-    t: &TranslatedSlack,
-    thread_uuid: &str,
-    msgs: &[&Message],
+    parsed: &ParsedSlack,
+    bucket: &SlackThreadBucket,
     root: &Message,
     channel_name: &str,
     user_labels: &BTreeMap<String, String>,
 ) -> Vec<GridRow> {
-    let qmd = super::slack_qmd_path(&root.team_id, &root.channel_id, thread_uuid);
+    let qmd = super::slack_qmd_path(&root.team_id, &root.channel_id, &bucket.thread_uuid);
     let author = root
         .user_id
         .as_deref()
         .and_then(|u| user_labels.get(u).cloned())
         .or_else(|| root.user_id.clone());
 
-    let mut out = Vec::with_capacity(msgs.len() + 1);
+    let mut out = Vec::with_capacity(bucket.messages.len() + 1);
     out.push(GridRow {
-        uuid: thread_uuid.to_string(),
+        uuid: bucket.thread_uuid.clone(),
         provider: "slack".into(),
         kind: "Slack Thread".into(),
         source_label: "Slack".into(),
@@ -393,9 +343,9 @@ fn build_thread_rows(
         project: None,
         channel: Some(channel_name.to_string()),
         conversation_name: Some(format!("#{channel_name}")),
-        conversation_uuid: thread_uuid.to_string(),
+        conversation_uuid: bucket.thread_uuid.clone(),
         message_index: None,
-        entire_chat: format!("/slack/{thread_uuid}"),
+        entire_chat: format!("/slack/{}", bucket.thread_uuid),
         text: resolve_user_mentions(&root.text, user_labels),
         slack_link: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
         qmd_path: Some(qmd.clone()),
@@ -404,10 +354,10 @@ fn build_thread_rows(
         external_id: None,
         notion_page_uuid: None,
         notion_block_uuid: None,
-        markdown_uuid: Some(thread_uuid.to_string()),
+        markdown_uuid: Some(bucket.thread_uuid.clone()),
     });
-    let _ = t; // future: thread-level project, etc.
-    for (idx, m) in msgs.iter().enumerate() {
+    let _ = parsed;
+    for (idx, m) in bucket.messages.iter().enumerate() {
         let mauthor = m
             .user_id
             .as_deref()
@@ -426,9 +376,9 @@ fn build_thread_rows(
             project: None,
             channel: Some(channel_name.to_string()),
             conversation_name: Some(format!("#{channel_name}")),
-            conversation_uuid: thread_uuid.to_string(),
+            conversation_uuid: bucket.thread_uuid.clone(),
             message_index: Some(idx as i64),
-            entire_chat: format!("/slack/{thread_uuid}"),
+            entire_chat: format!("/slack/{}", bucket.thread_uuid),
             text: resolve_user_mentions(&m.text, user_labels),
             slack_link: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
             qmd_path: Some(qmd.clone()),
@@ -437,16 +387,14 @@ fn build_thread_rows(
             external_id: None,
             notion_page_uuid: None,
             notion_block_uuid: None,
-            markdown_uuid: Some(thread_uuid.to_string()),
+            markdown_uuid: Some(bucket.thread_uuid.clone()),
         });
     }
     out
 }
 
 // ---------------------------------------------------------------------------
-// File / reaction extraction from raw_json. These shapes match the
-// Slack API response verbatim; the downloader's `raw_json` capture
-// preserves them.
+// File / reaction extraction from raw_json.
 // ---------------------------------------------------------------------------
 
 struct FileRef {
@@ -491,43 +439,22 @@ fn files(raw: &Value) -> Vec<FileRef> {
         .unwrap_or_default()
 }
 
-/// Relative link from a thread's `index.md` to its locally-staged copy
-/// of `f`. The page-dir layout puts blobs at `<page_dir>/blobs/<file>`,
-/// so the link target is `blobs/<short-b3>.<ext>` (the universal CAS
-/// filename). Returns `None` for externals or files whose bytes aren't
-/// in the CAS yet, so the caller can fall back to the upstream URL.
-fn file_link(blobs: &dyn BlobReader, f: &FileRef) -> Option<String> {
+/// Relative path from a thread's `index.md` to its locally-staged
+/// copy of `f` (e.g. `"blobs/abc123.png"`). Returns `None` for
+/// externals or for files whose bytes aren't in the bundle, so the
+/// caller can fall back to the upstream URL. The caller wraps the
+/// returned path in `![alt](…)` / `[\[file\] alt](…)` itself, so this
+/// function must NOT pre-wrap — that's the bug the previous
+/// `bundle.markdown_link` call introduced.
+fn file_link(blobs: &BlobBundle, f: &FileRef) -> Option<String> {
     if f.external {
         return None;
     }
     let id = f.id.as_deref()?;
-    let view = blobs.read_by_ref_id(id).ok().flatten()?;
-    Some(format!("blobs/{}", view.rendered_filename()))
+    let blob = blobs.get(id)?;
+    Some(format!("blobs/{}", blob.rendered_filename()))
 }
 
-/// Write every blob this thread references into `<page_dir>/blobs/`.
-/// Filenames come from `BlobView::rendered_filename` so they match the
-/// link target `file_link` produces. Streams one blob at a time via
-/// [`BlobReader`] so peak RSS stays at a single attachment.
-fn materialize_thread_blobs(
-    blobs: &dyn BlobReader,
-    msgs: &[&super::Message],
-    page_dir: &Path,
-) -> Result<()> {
-    let mut wanted: HashSet<String> = HashSet::new();
-    for m in msgs {
-        for f in files(&m.raw_json) {
-            if let Some(id) = f.id {
-                wanted.insert(id);
-            }
-        }
-    }
-    let blobs_dir = page_dir.join("blobs");
-    blob_cas::materialize_refs(blobs, wanted.iter().map(String::as_str), &blobs_dir)
-        .map_err(anyhow::Error::from)
-}
-
-/// `[(name, count), ...]` in source order, summing user lists.
 fn reactions(raw: &Value) -> Vec<(String, usize)> {
     raw.get("reactions")
         .and_then(|v| v.as_array())
@@ -540,31 +467,30 @@ fn reactions(raw: &Value) -> Vec<(String, usize)> {
                         .and_then(|v| v.as_array())
                         .map(|a| a.len())
                         .unwrap_or(0);
-                    let count = r
-                        .get("count")
-                        .and_then(|v| v.as_u64())
-                        .map(|n| n as usize)
-                        .unwrap_or(users);
-                    Some((name, count))
+                    Some((name, users))
                 })
                 .collect()
         })
         .unwrap_or_default()
 }
 
-fn yaml_scalar(s: &str) -> String {
-    if s.is_empty() {
-        return "''".into();
+fn yaml_scalar(v: &str) -> String {
+    if v.is_empty() {
+        return "\"\"".into();
     }
-    let needs_quote = s.contains(':')
-        || s.contains('#')
-        || s.contains('\n')
-        || s.contains('"')
-        || s.contains('\'')
-        || s != s.trim();
+    let needs_quote = v.chars().any(|c| {
+        matches!(
+            c,
+            ':' | '#' | '\n' | '"' | '\'' | '[' | ']' | '{' | '}' | '&' | '*' | '!' | '|' | '>'
+        )
+    }) || v != v.trim();
     if needs_quote {
-        serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
+        serde_json::to_string(v).unwrap_or_else(|_| format!("\"{v}\""))
     } else {
-        s.to_string()
+        v.into()
     }
 }
+
+// Suppress unused-import warning if the unused-set arg is removed.
+#[allow(dead_code)]
+fn _used(_h: HashSet<String>) {}

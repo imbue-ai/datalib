@@ -1,31 +1,26 @@
 //! Doltlite-backed raw store for the Anthropic (Claude) provider.
 //!
-//! Replaces the JSON tree of `users.json` + `conversations.json`
-//! (with the conversations pre-normalized into export shape) with a
-//! single sqlite file at `<data_root>/raw/<name>.doltlite_db`.
+//! Four tables — `users`, `orgs`, `conversations`,
+//! `anthropic_attachments` — shared bookkeeping
+//! (`<table>_bookkeeping`, `sync_runs`, …) lives in
+//! [`frankweiler_etl::doltlite_raw`].
 //!
-//! Per the design discussion: we now store conversations as the **raw**
-//! `/api/...` response, *not* post-normalize. The translate step
-//! applies `normalize_to_export_shape` at read time. This keeps the
-//! raw store as close to the wire as possible — dolt diffs reflect
-//! actual upstream change rather than churn introduced by our
-//! normalizer's evolution.
-//!
-//! Shared bookkeeping tables (`blobs`, `sync_runs`)
-//! and open/blob plumbing live in [`frankweiler_etl::doltlite_raw`].
+//! Per the dolt_diff + per-provider CAS edge migration: attachment
+//! bytes still ride in the shared `cas_objects`, but the (file_uuid →
+//! blake3) mapping lives on `anthropic_attachments` rather than the
+//! shared `blob_refs`. Conversation payloads are stored as the **raw**
+//! `/api/...` response, post-normalization happening at read time in
+//! `translate`.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{
-    self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
-};
+use frankweiler_etl::blob_cas::BlobCas;
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES, MIGRATION_CONVERSATIONS_ADD_ORG_NAME};
@@ -38,35 +33,16 @@ pub struct RawDb {
     cas: BlobCas,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ConvState {
-    pub updated_at: Option<String>,
-    pub has_payload: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConversationDetail {
-    pub id: String,
-    pub org_uuid: String,
-    pub org_name: Option<String>,
-    pub name: Option<String>,
-    pub updated_at: Option<String>,
-    /// Raw upstream `/api/.../chat_conversations/{uuid}` payload.
-    pub payload: String,
-}
-
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         let pool = dr::open(db_path, &slices).await?;
-        // Idempotent migration for pre-org_name DBs. SQLite rejects the
-        // ADD COLUMN with "duplicate column" once it's been applied; we
-        // swallow that since the CREATE TABLE above already declares it.
+        // Idempotent migration for pre-org_name DBs.
         let _ = sqlx::query(MIGRATION_CONVERSATIONS_ADD_ORG_NAME)
             .execute(&pool)
             .await;
-        let cas = BlobCas::open(&blob_cas::cas_path_for(db_path)).await?;
+        let cas = BlobCas::open(&frankweiler_etl::blob_cas::cas_path_for(db_path)).await?;
         Ok(Self { pool, cas })
     }
 
@@ -78,40 +54,24 @@ impl RawDb {
         &self.cas
     }
 
-    /// Wipe every per-row table so the next fetch re-downloads
-    /// everything from upstream. See
-    /// [`frankweiler_etl::doltlite_raw::truncate_data_tables`].
     pub async fn reset(&self) -> Result<()> {
         dr::truncate_data_tables(&self.pool, DATA_TABLES).await
     }
 
+    /// Reset bytes-have-been-fetched state for `refetch_blobs`: clear
+    /// the per-provider `blake3` column on `anthropic_attachments` so
+    /// the next walk re-decodes and re-stores. The `(message_uuid,
+    /// file_uuid)` edge metadata is upstream-driven so we leave the
+    /// rows in place.
+    pub async fn clear_blob_hashes(&self) -> Result<()> {
+        sqlx::query("UPDATE anthropic_attachments SET blake3 = NULL")
+            .execute(&self.pool)
+            .await
+            .context("clear anthropic_attachments.blake3")?;
+        Ok(())
+    }
+
     // ── users ──────────────────────────────────────────────────────
-
-    /// Upsert one user row from a raw user object (matches the entries
-    /// in `users.json` from a bulk export, or what `/api/account`
-    /// returns).
-    pub async fn upsert_user(&self, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin user tx")?;
-        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        upsert_user_in(&mut tx, payload, &now).await?;
-        tx.commit().await.context("commit user tx")?;
-        Ok(())
-    }
-
-    /// Upsert a whole batch of users in a single transaction (e.g. a
-    /// bulk-export `users.json` array).
-    pub async fn upsert_users(&self, payloads: &[Value]) -> Result<()> {
-        if payloads.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin users batch tx")?;
-        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        for payload in payloads {
-            upsert_user_in(&mut tx, payload, &now).await?;
-        }
-        tx.commit().await.context("commit users batch tx")?;
-        Ok(())
-    }
 
     pub async fn has_any_user(&self) -> Result<bool> {
         let row = sqlx::query("SELECT 1 FROM users LIMIT 1")
@@ -126,7 +86,7 @@ impl RawDb {
     }
 
     /// First user's uuid, used to fill the `account.uuid` field on
-    /// normalized conversations. Returns `None` if no user rows exist.
+    /// normalized conversations.
     pub async fn first_user_uuid(&self) -> Result<Option<String>> {
         let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
             .fetch_optional(&self.pool)
@@ -135,128 +95,41 @@ impl RawDb {
         Ok(row.and_then(|r| r.try_get::<String, _>("id").ok()))
     }
 
-    // ── orgs ───────────────────────────────────────────────────────
+    // ── conversations: listing skip-check ──────────────────────────
 
-    pub async fn upsert_org(&self, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin org tx")?;
-        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        upsert_org_in(&mut tx, payload, &now).await?;
-        tx.commit().await.context("commit org tx")?;
-        Ok(())
-    }
-
-    /// Upsert a whole `/api/organizations` response in a single
-    /// transaction.
-    pub async fn upsert_orgs(&self, payloads: &[Value]) -> Result<()> {
-        if payloads.is_empty() {
-            return Ok(());
+    /// Bulk-read `(id → updated_at)` for the listed ids. Returns one
+    /// entry per *existing* row (with a non-null `updated_at`). Missing
+    /// ids are absent from the map — caller treats them as "we don't
+    /// have this conversation yet, fetch it." Used by the listing pass
+    /// to decide which conversations need a detail fetch. Rows only
+    /// exist post-detail-fetch, so "id in map" ↔ "payload present."
+    pub async fn existing_updated_at(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
         }
-        let mut tx = self.pool.begin().await.context("begin orgs batch tx")?;
-        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        for payload in payloads {
-            upsert_org_in(&mut tx, payload, &now).await?;
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, updated_at FROM conversations \
+              WHERE id IN ({placeholders}) AND updated_at IS NOT NULL"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in ids {
+            q = q.bind(*id);
         }
-        tx.commit().await.context("commit orgs batch tx")?;
-        Ok(())
-    }
-
-    // ── conversations ──────────────────────────────────────────────
-
-    /// Pre-seed listing-derived rows. Existing rows keep their
-    /// `payload` intact; only `updated_at` is refreshed so the
-    /// skip-check on the next run has the freshest signal.
-    pub async fn pre_seed_conversations(&self, items: &[(&str, &Value)]) -> Result<()> {
-        if items.is_empty() {
-            return Ok(());
-        }
-        let mut tx = self.pool.begin().await.context("begin pre_seed tx")?;
-        for (org_uuid, item) in items {
-            let Some(id) = item.get("uuid").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let name = item.get("name").and_then(|v| v.as_str());
-            let updated = item.get("updated_at").and_then(|v| v.as_str());
-            sqlx::query(
-                "INSERT INTO conversations (id, org_uuid, name, updated_at)
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(id) DO UPDATE SET
-                    org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
-                    name = COALESCE(excluded.name, conversations.name),
-                    updated_at = COALESCE(excluded.updated_at, conversations.updated_at)",
-            )
-            .bind(id)
-            .bind(org_uuid)
-            .bind(name)
-            .bind(updated)
-            .execute(&mut *tx)
+        let rows = q
+            .fetch_all(&self.pool)
             .await
-            .with_context(|| format!("pre_seed conv {id}"))?;
-            // Always-paired sidecar: ensure a bookkeeping row exists
-            // for this pre-seeded conversation, with attempt_count=0
-            // until the first fetch attempt.
-            sqlx::query("INSERT OR IGNORE INTO conversations_bookkeeping (id) VALUES (?)")
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("pre_seed conv bookkeeping {id}"))?;
-        }
-        tx.commit().await.context("commit pre_seed tx")?;
-        Ok(())
-    }
-
-    pub async fn conversation_states(&self) -> Result<HashMap<String, ConvState>> {
-        let rows = sqlx::query(
-            "SELECT id, updated_at, payload IS NOT NULL AS has_payload FROM conversations",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .context("conversation_states")?;
+            .context("existing_updated_at")?;
         let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
+        for r in &rows {
             let id: String = r.try_get("id").unwrap_or_default();
-            let updated_at: Option<String> = r.try_get("updated_at").ok();
-            let has: i64 = r.try_get("has_payload").unwrap_or(0);
-            out.insert(
-                id,
-                ConvState {
-                    updated_at,
-                    has_payload: has != 0,
-                },
-            );
+            if let Ok(ut) = r.try_get::<String, _>("updated_at") {
+                out.insert(id, ut);
+            }
         }
         Ok(out)
-    }
-
-    pub async fn upsert_conversation_detail(&self, row: &ConversationDetail) -> Result<()> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .context("begin upsert_conversation_detail tx")?;
-        sqlx::query(
-            "INSERT INTO conversations (id, org_uuid, org_name, name, updated_at, payload)
-             VALUES (?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                org_uuid = COALESCE(excluded.org_uuid, conversations.org_uuid),
-                org_name = COALESCE(excluded.org_name, conversations.org_name),
-                name = COALESCE(excluded.name, conversations.name),
-                updated_at = COALESCE(excluded.updated_at, conversations.updated_at),
-                payload = excluded.payload",
-        )
-        .bind(&row.id)
-        .bind(&row.org_uuid)
-        .bind(row.org_name.as_deref())
-        .bind(row.name.as_deref())
-        .bind(row.updated_at.as_deref())
-        .bind(&row.payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert conversation {}", row.id))?;
-        dr::record_object_attempt(&mut tx, "conversations", &row.id, None).await?;
-        tx.commit()
-            .await
-            .context("commit upsert_conversation_detail tx")?;
-        Ok(())
     }
 
     pub async fn record_conversation_error(&self, id: &str, err: &str) -> Result<()> {
@@ -278,7 +151,8 @@ impl RawDb {
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         let rows = sqlx::query(
-            "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id",
+            "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
+              WHERE payload IS NOT NULL ORDER BY id",
         )
         .fetch_all(&self.pool)
         .await
@@ -305,27 +179,17 @@ impl RawDb {
         Ok(out)
     }
 
-    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
-
-    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
-        blob_cas::ref_has_hash(&self.pool, ref_id).await
-    }
-
-    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
-    }
-
-    pub async fn record_blob_error(
-        &self,
-        ref_id: &str,
-        owning_id: &str,
-        slot: &str,
-        err: &str,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
-        tx.commit().await.context("commit blob error tx")?;
-        Ok(())
+    /// Snapshot `(file_uuid → blake3)` for every attachment whose
+    /// bytes have ever landed in the CAS. Loaded once at the start of
+    /// a fetch run; updated in-place as new downloads land. Replaces
+    /// the per-file SQL `attachment_has_bytes` lookup.
+    pub async fn load_attachment_blake3s(&self) -> Result<HashMap<String, String>> {
+        frankweiler_etl::blob_cas::load_blake3_index(
+            &self.pool,
+            "anthropic_attachments",
+            "file_uuid",
+        )
+        .await
     }
 }
 
@@ -334,103 +198,31 @@ pub struct LoadedConversation {
     pub id: String,
     pub org_uuid: String,
     pub org_name: Option<String>,
-    /// Raw API payload — the translate step calls
-    /// `normalize_to_export_shape` over this on read.
     pub payload: Value,
 }
 
-// ── private row-level upserts (shared by single + batch APIs) ──────────
-
-async fn upsert_user_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    payload: &Value,
-    _now: &str,
-) -> Result<()> {
-    let id = payload
-        .get("uuid")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("user entry missing uuid"))?;
-    let email = payload.get("email_address").and_then(|v| v.as_str());
-    let full_name = payload.get("full_name").and_then(|v| v.as_str());
-    let payload_str = serde_json::to_string(payload).context("serialize user")?;
-    sqlx::query(
-        "INSERT INTO users (id, email, full_name, payload)
-         VALUES (?, ?, ?, jsonb(?))
-         ON CONFLICT(id) DO UPDATE SET
-            email = COALESCE(excluded.email, users.email),
-            full_name = COALESCE(excluded.full_name, users.full_name),
-            payload = excluded.payload",
-    )
-    .bind(id)
-    .bind(email)
-    .bind(full_name)
-    .bind(&payload_str)
-    .execute(&mut **tx)
-    .await
-    .context("upsert user")?;
-    dr::record_object_attempt(tx, "users", id, None).await
-}
-
-async fn upsert_org_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    payload: &Value,
-    _now: &str,
-) -> Result<()> {
-    let id = payload
-        .get("uuid")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("org missing uuid"))?;
-    let name = payload.get("name").and_then(|v| v.as_str());
-    let payload_str = serde_json::to_string(payload).context("serialize org")?;
-    sqlx::query(
-        "INSERT INTO orgs (id, name, payload)
-         VALUES (?, ?, jsonb(?))
-         ON CONFLICT(id) DO UPDATE SET
-            name = COALESCE(excluded.name, orgs.name),
-            payload = excluded.payload",
-    )
-    .bind(id)
-    .bind(name)
-    .bind(&payload_str)
-    .execute(&mut **tx)
-    .await
-    .context("upsert org")?;
-    dr::record_object_attempt(tx, "orgs", id, None).await
-}
-
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub users: Vec<Value>,
     pub first_user_uuid: Option<String>,
     pub conversations: Vec<LoadedConversation>,
-    pub blobs: Arc<dyn BlobReader>,
 }
 
-impl Default for LoadedRaw {
-    fn default() -> Self {
-        Self {
-            users: Vec::new(),
-            first_user_uuid: None,
-            conversations: Vec::new(),
-            blobs: InMemoryBlobReader::empty_handle(),
-        }
-    }
-}
-
+/// Synchronous helper for tests that want a snapshot of every entity
+/// table at a fixed point in time. Production translate uses
+/// `crate::translate::parse::parse(..., last_render_hash)` instead;
+/// this one ignores the cursor and loads everything. Attachment bytes
+/// are NOT loaded here — tests that need them load a `BlobBundle`
+/// via `BlobBundle::load(...)` directly.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            let blobs: Arc<dyn BlobReader> = Arc::new(SqliteBlobReader::new(
-                db.pool().clone(),
-                db.cas().pool().clone(),
-            ));
             Ok::<_, anyhow::Error>(LoadedRaw {
                 users: db.load_users().await?,
                 first_user_uuid: db.first_user_uuid().await?,
                 conversations: db.load_conversations().await?,
-                blobs,
             })
         })
     })
@@ -439,38 +231,51 @@ pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extract::schema_raw::{OrgRow, UserRow};
+    use frankweiler_etl::bulk::bulk_upsert_in_tx;
+    use frankweiler_etl::doltlite_raw::WirePayload;
     use serde_json::json;
+
+    const NOW: &str = "2026-06-11T00:00:00-07:00";
+
+    fn make_user(id: &str, email: &str, name: &str) -> UserRow {
+        UserRow {
+            id_and_payload: WirePayload {
+                id: id.into(),
+                payload: serde_json::to_string(
+                    &json!({"uuid": id, "email_address": email, "full_name": name}),
+                )
+                .unwrap(),
+            },
+            email: Some(email.into()),
+            full_name: Some(name.into()),
+        }
+    }
+
+    fn make_org(id: &str, name: &str) -> OrgRow {
+        OrgRow {
+            id_and_payload: WirePayload {
+                id: id.into(),
+                payload: serde_json::to_string(&json!({"uuid": id, "name": name})).unwrap(),
+            },
+            name: Some(name.into()),
+        }
+    }
 
     #[tokio::test]
     async fn user_and_org_round_trip() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        db.upsert_user(&json!({"uuid": "u1", "email_address": "x@y", "full_name": "X"}))
-            .await
-            .unwrap();
-        db.upsert_org(&json!({"uuid": "org-a", "name": "A Org"}))
-            .await
-            .unwrap();
+        {
+            let mut tx = db.pool().begin().await.unwrap();
+            bulk_upsert_in_tx(&mut tx, &[make_user("u1", "x@y", "X")], NOW)
+                .await
+                .unwrap();
+            bulk_upsert_in_tx(&mut tx, &[make_org("org-a", "A Org")], NOW)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
         assert_eq!(db.first_user_uuid().await.unwrap(), Some("u1".into()));
-    }
-
-    #[tokio::test]
-    async fn conversation_round_trip() {
-        let d = tempfile::tempdir().unwrap();
-        let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        db.upsert_conversation_detail(&ConversationDetail {
-            id: "c1".into(),
-            org_uuid: "org-a".into(),
-            org_name: Some("A Org".into()),
-            name: Some("Hi".into()),
-            updated_at: Some("2026-01-01T00:00:00Z".into()),
-            payload: serde_json::to_string(&json!({"uuid":"c1","chat_messages":[]})).unwrap(),
-        })
-        .await
-        .unwrap();
-        let convs = db.load_conversations().await.unwrap();
-        assert_eq!(convs.len(), 1);
-        assert_eq!(convs[0].org_uuid, "org-a");
-        assert_eq!(convs[0].org_name.as_deref(), Some("A Org"));
     }
 }

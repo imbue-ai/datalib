@@ -24,6 +24,10 @@ rust_library(
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
+        "//frankweiler/backend/index_lib:frankweiler_index_lib",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "//frankweiler/backend/time:frankweiler_time",
         "//frankweiler/backend/whatsapp-backup:frankweiler_whatsapp_backup",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:serde",
@@ -34,6 +38,7 @@ rust_library(
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
         "@frankweiler_crates//:walkdir",
     ],
 )

@@ -1,13 +1,16 @@
 ---
-source: etl/providers/yolink/src/extract.rs
-expression: "parse(TH, \"thsensor\").unwrap()"
+source: etl/providers/yolink/src/extract/mod.rs
+expression: "parse(TH, \"temperature_humidity\").unwrap()"
 ---
 - ts_ms: 1775433724000
   metric: temperature_c
   value: -18.4
+  payload: "{\"Device Id\":\"d88b\",\"Humidity(%RH)\":\"70.0\",\"Temperature(℃)\":\"-18.4℃\",\"Time\":\"2026/04/05 17:02:04-0700\"}"
 - ts_ms: 1775433724000
   metric: humidity_pct
   value: 70
+  payload: "{\"Device Id\":\"d88b\",\"Humidity(%RH)\":\"70.0\",\"Temperature(℃)\":\"-18.4℃\",\"Time\":\"2026/04/05 17:02:04-0700\"}"
 - ts_ms: 1775433934000
   metric: temperature_c
   value: -18
+  payload: "{\"Device Id\":\"d88b\",\"Humidity(%RH)\":\"\",\"Temperature(℃)\":\"-18.0℃\",\"Time\":\"2026/04/05 17:05:34-0700\"}"

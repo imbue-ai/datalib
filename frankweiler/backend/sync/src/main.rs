@@ -57,7 +57,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
     load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
-    GithubApiSync, GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
+    GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
     SourceConfig, WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
@@ -1390,6 +1390,10 @@ enum ExtractKind {
         /// Optional `account_id` override; falls back to the mbox
         /// file stem.
         account_id_override: Option<String>,
+        /// Account-row display data (name / email / personal flag)
+        /// from the YAML `mbox:` block, piped through to the mbox
+        /// extractor so the synthesized `accounts` row matches JMAP.
+        account_config: MboxSync,
         blob_size_limit_bytes: Option<u64>,
     },
     Yolink {
@@ -1481,7 +1485,7 @@ impl ExtractPlan {
                 }
             }
             SourceConfig::ClaudeExport { .. } => return None,
-            SourceConfig::Email { sync, .. } => {
+            SourceConfig::Email { sync, mbox, .. } => {
                 let blob_size_limit_bytes = src.resolved_shared(cfg).blob_size_limit_bytes;
                 match sync.clone() {
                     Some(sync) => ExtractKind::Jmap {
@@ -1505,9 +1509,11 @@ impl ExtractPlan {
                             )));
                         }
                         out_dir = cfg.data_root.join("raw").join(&name);
+                        let mbox_cfg = mbox.clone().unwrap_or_default();
                         ExtractKind::EmailMbox {
                             input_path,
-                            account_id_override: None,
+                            account_id_override: mbox_cfg.account_id.clone(),
+                            account_config: mbox_cfg,
                             blob_size_limit_bytes,
                         }
                     }
@@ -1565,7 +1571,10 @@ impl ExtractPlan {
                         // input_path. In playback mode the genrule
                         // pre-seeds it there.
                         export_dir: Some(self.out_dir.clone()),
-                        overlap: sync.overlap.map(|v| v as usize).unwrap_or(usize::MAX),
+                        overlap: sync
+                            .refresh_most_recent_n_chat_count
+                            .map(|v| v as usize)
+                            .unwrap_or(0),
                         sleep_between: Duration::ZERO,
                         conv_uuids: sync.conv_uuids.clone(),
                         progress: progress.clone(),
@@ -1575,8 +1584,16 @@ impl ExtractPlan {
                 .await
                 .map(|s| {
                     format!(
-                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={}",
-                        s.fetched, s.skipped, s.errors, s.forbidden_orgs, s.total, s.requests,
+                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={} \
+                         forbidden_retry_attempts={} forbidden_retry_recoveries={}",
+                        s.fetched,
+                        s.skipped,
+                        s.errors,
+                        s.forbidden_orgs,
+                        s.total,
+                        s.requests,
+                        s.forbidden_retry_attempts,
+                        s.forbidden_retry_recoveries,
                     )
                 })
             }
@@ -1794,13 +1811,8 @@ impl ExtractPlan {
                 .await
                 .map(|s| {
                     format!(
-                        "devices={} windows={} touched={} unchanged={} errors={} requests={}",
-                        s.devices,
-                        s.windows,
-                        s.readings_touched,
-                        s.readings_unchanged,
-                        s.errors,
-                        s.requests,
+                        "devices={} windows={} readings={} errors={} requests={}",
+                        s.devices, s.windows, s.readings, s.errors, s.requests,
                     )
                 })
             }
@@ -1958,6 +1970,7 @@ impl ExtractPlan {
                 ExtractKind::EmailMbox {
                     input_path,
                     account_id_override,
+                    account_config,
                     blob_size_limit_bytes,
                 },
                 Some(DbHandle::Jmap(db)),
@@ -1967,6 +1980,13 @@ impl ExtractPlan {
                     db: Some(db),
                     input_path,
                     account_id_override,
+                    account_config:
+                        frankweiler_etl_email::extract::mbox::MboxAccountConfig {
+                            account_id: account_config.account_id,
+                            display_name: account_config.display_name,
+                            email_address: account_config.email_address,
+                            is_personal: account_config.is_personal,
+                        },
                     blob_size_limit_bytes,
                     progress: progress.clone(),
                     control: control.clone(),
@@ -2134,7 +2154,7 @@ fn translate_source(
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
-    prior_cursors: &std::collections::HashMap<String, String>,
+    _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
@@ -2146,112 +2166,51 @@ fn translate_source(
     );
     match src {
         SourceConfig::ClaudeApi { .. } | SourceConfig::ClaudeExport { .. } => {
-            use frankweiler_etl_anthropic::translate::{parse::parse_export, render::render_all};
-            let parsed = parse_export(&fixture)
-                .with_context(|| format!("anthropic parse {}", fixture.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
+            use frankweiler_etl_anthropic::translate::{parse::parse, render::render_all};
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "anthropic", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path).with_context(|| {
+                format!("read anthropic render cursor {}", cursor_path.display())
+            })?;
+            let parsed = parse(
+                &fixture,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("anthropic render_all")
-            .map(|_| ())
+            .with_context(|| format!("anthropic parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("anthropic render_all")
+                .map(|_| ())
         }
         SourceConfig::ChatgptApi { .. } => {
-            use frankweiler_etl_chatgpt::translate::{parse::parse_api_dir, render::render_all};
-            let parsed = parse_api_dir(&fixture)
-                .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
+            use frankweiler_etl_chatgpt::translate::{parse::parse, render::render_all};
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "chatgpt", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read chatgpt render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("chatgpt render_all")
-            .map(|_| ())
+            .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("chatgpt render_all")
+                .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
-            use frankweiler_etl_slack::extract::{
-                block_on_probe_thread_cursors, db_path_for as slack_db_path_for,
-            };
-            use frankweiler_etl_slack::translate::{
-                render::render_all, translate_raw_dir, translate_raw_dir_filtered,
-            };
-            // Cheap probe: `GROUP BY thread_root_uuid` against the
-            // existing index gives us (thread_uuid → cursor) without
-            // loading any message payloads. Threads whose cursor
-            // matches a prior render *and* whose md still sits on
-            // disk are pruned right here — their payloads never get
-            // pulled out of sqlite.
-            let slack_db = slack_db_path_for(&fixture);
-            if !slack_db.exists() {
-                // Fall back to the legacy JSONL path; no probe possible.
-                let t = translate_raw_dir(&fixture)
-                    .with_context(|| format!("slack translate_raw_dir {}", fixture.display()))?;
-                return render_all(
-                    &t,
-                    root,
-                    name,
-                    progress,
-                    prior_fingerprints,
-                    &std::collections::HashMap::new(),
-                    on_doc_complete,
-                )
-                .context("slack render_all")
-                .map(|_| ());
-            }
-            let current_cursors = block_on_probe_thread_cursors(&slack_db)
-                .with_context(|| format!("slack probe {}", slack_db.display()))?;
-            let threads_to_render: std::collections::HashSet<String> = current_cursors
-                .iter()
-                .filter(|(tid, cur)| {
-                    // Re-render when the cheap cursor changed OR the
-                    // md file is missing (defends against `rm -rf
-                    // rendered_md/`). We don't know the thread's
-                    // team_id / channel_id without parsing — checking
-                    // md existence happens inside render_all's per-doc
-                    // skip, which still runs after the filtered load.
-                    // Worst case: cursor matches, md missing → we
-                    // load this thread's payloads but render_all
-                    // skips on fingerprint-and-md-exists anyway.
-                    // That's a small unnecessary load, not a wrong
-                    // skip.
-                    prior_cursors.get(*tid).map(String::as_str) != Some(cur.as_str())
-                })
-                .map(|(tid, _)| tid.clone())
-                .collect();
-            let total_threads = current_cursors.len();
-            let changed = threads_to_render.len();
-            status_line!(
-                "[translate] slack cheap-probe: {changed}/{total_threads} threads need rendering",
-            );
-
-            if threads_to_render.is_empty() {
-                // Everything's up to date — skip the bulk load entirely.
-                progress.set_length(Some(0));
-                return Ok(());
-            }
-
-            let t =
-                translate_raw_dir_filtered(&fixture, &threads_to_render).with_context(|| {
-                    format!("slack translate_raw_dir_filtered {}", fixture.display())
-                })?;
-            render_all(
-                &t,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                &current_cursors,
-                on_doc_complete,
+            use frankweiler_etl_slack::translate::{parse::parse, render::render_all};
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "slack", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("slack render_all")
-            .map(|_| ())
+            .with_context(|| format!("slack parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("slack render_all")
+                .map(|_| ())
         }
         SourceConfig::GithubApi { .. } => {
             use frankweiler_etl_github::translate::{parse_api_dir, render_github};
@@ -2314,8 +2273,8 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::Email { sync, .. } => {
-            use frankweiler_etl_email::extract::block_on_load_all;
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
+            use frankweiler_etl_email::translate::parse::parse;
             use frankweiler_etl_email::translate::render::render_all;
 
             // Both JMAP-server and mbox sources land their data in
@@ -2336,18 +2295,19 @@ fn translate_source(
                 );
                 return Ok(());
             }
-            let parsed = block_on_load_all(&db)
-                .with_context(|| format!("email block_on_load_all {}", db.display()))?;
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("email render_all")
-            .map(|_| ())
+            // Two-phase parse driven by `dolt_diff_<table>`: phase 1
+            // asks doltlite which threads changed since the render
+            // cursor's commit; phase 2 loads only those threads.
+            // The orchestrator's `prior_fingerprints` map is ignored
+            // here — the cursor is the single source of truth.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "email", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read email render cursor {}", cursor_path.display()))?;
+            let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))
+                .with_context(|| format!("email parse {}", db.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("email render_all")
+                .map(|_| ())
         }
         SourceConfig::Perseus { .. } => {
             use frankweiler_etl_perseus::translate::{align, parse, render};
@@ -2380,18 +2340,24 @@ fn translate_source(
             use frankweiler_etl_signal::translate::{parse, render_all, Period};
             let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
                 .context("parse signal period")?;
-            let parsed = parse(&fixture, period)
-                .with_context(|| format!("signal parse {}", fixture.display()))?;
-            render_all(
-                &parsed,
-                root,
+            // Incremental skip is driven by the render cursor + a
+            // `dolt_diff_<table>` union, not by `prior_fingerprints`
+            // anymore. Read the cursor (a JSON file at the root of
+            // signal's render dir), hand its commit hash to `parse`,
+            // and let `render_all` advance the cursor on success.
+            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "signal", name);
+            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
+                .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
+            let parsed = parse(
+                &fixture,
+                period,
                 name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
+                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
             )
-            .context("signal render_all")
-            .map(|_| ())
+            .with_context(|| format!("signal parse {}", fixture.display()))?;
+            render_all(&parsed, root, name, progress, on_doc_complete)
+                .context("signal render_all")
+                .map(|_| ())
         }
         SourceConfig::Yolink { .. } => {
             // Extract-only provider. Time-series viz lives outside
@@ -2403,13 +2369,24 @@ fn translate_source(
             Ok(())
         }
         SourceConfig::WhatsAppBackup { .. } => {
-            // Extract-only for now — translate (render to QMD + grid_rows)
-            // lands in a follow-up. The verbatim `wa_*` mirror sits in
-            // the raw store as the durable artifact.
-            status_line!(
-                "[translate] {name} (whatsapp_backup): skipped (extract-only, no render path yet)"
-            );
-            Ok(())
+            use frankweiler_etl_whatsapp::translate::{parse, render_all, Period};
+            // WhatsApp doesn't expose a `period` knob on its sync block
+            // today — default to month bucketing, same as signal.
+            let period = Period::from_config(None).context("default whatsapp period")?;
+            let parsed = parse(&fixture, period, name)
+                .with_context(|| format!("whatsapp parse {}", fixture.display()))?;
+            render_all(
+                &parsed.chats,
+                &parsed.blobs_by_chat,
+                &fixture,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("whatsapp render_all")
+            .map(|_| ())
         }
     }
 }

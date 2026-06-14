@@ -8,10 +8,10 @@
 // returns a Teardown. The host (MillerView) mounts each card inside
 // its own Shadow DOM and runs the render function there.
 //
-// Structural operations — opening and closing columns — are host
+// Structural operations — opening and closing cards — are host
 // commands on the ctx, NOT bus messages. When the grid card wants a
-// document column to appear next to it, it calls
-// `ctx.host.openColumn('documentView("abcd…")')` with the source of
+// document card to appear next to it, it calls
+// `ctx.host.openCard('documentView("abcd…")')` with the source of
 // the new card. The bus is reserved for ambient cross-card events:
 // today, the document view advertises the edge under the cursor on
 // `edge.hover` so whichever card shows the destination doc can
@@ -28,19 +28,21 @@ export type Bus = {
 };
 
 // Commands a card can issue against the host. Each card gets its own
-// instance, pre-bound to that card's column.
+// instance, pre-bound to that card. What "opening" means is up to the
+// active layout: the miller layout opens a column to the right
+// (replacing everything further right), the tree layout spawns a
+// child node pointing from this card.
 export type HostCommands = {
-  // Open a new column directly to the right of this card, replacing
-  // any columns currently to its right (Miller semantics). `source` is
-  // the card source of the new column, e.g. `documentView("abcd…")`.
-  // Returns the new card's id.
-  openColumn(source: string): string;
-  // Close this card's column.
+  // Open a new card "from" this one; layout-dependent placement (see
+  // above). `source` is the card source of the new card, e.g.
+  // `documentView("abcd…")`. Returns the new card's id.
+  openCard(source: string): string;
+  // Close this card.
   close(): void;
   // Replace this card's persisted state string. The string is opaque
-  // to the host — it just lands in the column's URL segment
-  // (`code:state`); the card decides the format. Setting "" clears it
-  // (a column with empty state serializes as bare `code`).
+  // to the host — in the miller layout it lands in the card's URL
+  // segment (`code:state`); the card decides the format. Setting ""
+  // clears it (a column with empty state serializes as bare `code`).
   setState(state: string): void;
 };
 

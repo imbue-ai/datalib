@@ -8,6 +8,7 @@ members = [
     "obs",
     "time",
     "etl",
+    "etl/macros",
     "etl/providers/anthropic",
     "etl/providers/beeper",
     "etl/providers/chatgpt",
@@ -26,10 +27,11 @@ members = [
     "tauri-backend",
     "whatsapp-backup",
     "etl/providers/whatsapp",
+    "etl/chat-common",
 ]
 
 [workspace.package]
-version = "0.8.1"
+version = "0.10.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false

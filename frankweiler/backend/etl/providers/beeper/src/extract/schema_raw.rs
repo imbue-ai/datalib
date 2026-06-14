@@ -14,10 +14,18 @@
 //!   files). There is no remote cursor, no listing endpoint, and no
 //!   incremental "what changed since?" probe: every fetch walks the
 //!   current sqlite snapshot end-to-end and relies on UPSERT dedup
-//!   plus the shared `blob_refs` table to keep work bounded.
-//!   Consequently there is no provider-local cursor table here; the
-//!   shared bookkeeping sidecars are the only state we keep across
-//!   runs.
+//!   plus the per-provider CAS edge table to keep work bounded.
+//!   Consequently there is no provider-local cursor table here.
+//!
+//! - **The source `.db` files ARE the backup.** Per
+//!   `docs/data_architecture_ingestion.md` §"Schema first", a
+//!   provider whose upstream is already on disk doesn't need to
+//!   slavishly preserve every byte — re-running extract is cheap
+//!   and the source file remains untouched. So Beeper drops the
+//!   per-row `payload` JSONB column it used to keep: every field
+//!   render actually wants is already promoted to a typed column,
+//!   and a future read that wants something more obscure can
+//!   re-extract from `index.db` directly.
 //!
 //! - **Multi-sourced.** Rows can come from `beeper_index` (the
 //!   desktop app's unified cache, covering cloud bridges like Slack /
@@ -49,12 +57,16 @@
 //!   by `beeper_room_uuid` / `beeper_user_uuid` / `beeper_event_uuid`
 //!   in `crate::translate`, keyed off `(source, native_id)`. The
 //!   recipes live there because they're also consumed by the
-//!   translate-side cross-reference logic; the writer in
-//!   [`super::db`] calls into the same functions, so there is no
-//!   duplication to lift here. When P0.4 lands and per-provider
-//!   `uuid.rs` modules become standard, these will move there.
+//!   translate-side cross-reference logic; the writer here calls
+//!   into the same functions.
 
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
+use frankweiler_etl::bulk::BulkUpsertable;
 use frankweiler_etl::doltlite_raw as dr;
+use frankweiler_etl_macros::CasEdgeRow;
+use sqlx::query::Query;
+use sqlx::sqlite::SqliteArguments;
+use sqlx::Sqlite;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -62,7 +74,11 @@ use frankweiler_etl::doltlite_raw as dr;
 /// Used by `extract::db::RawDb::reset` to wipe per-row state without
 /// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
 /// asks the shared layer for paired `<table>_bookkeeping` DDLs.
-pub const DATA_TABLES: &[&str] = &["rooms", "users", "events"];
+pub const DATA_TABLES: &[&str] = &["rooms", "users", "events", "beeper_media_attachments"];
+
+// ─────────────────────────────────────────────────────────────────────
+// rooms
+// ─────────────────────────────────────────────────────────────────────
 
 /// `rooms` — one row per chat / channel / DM Beeper Texts knows
 /// about.
@@ -93,8 +109,7 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events"];
 ///   uniqueness key with `native_room_id`.
 /// - `network` — canonical chat network (`"signal"`, `"googlechat"`,
 ///   `"slack"`, `"imessage"`, …) for downstream filtering & dispatch.
-/// - `native_room_id` — Beeper-side room id (Matrix room id from
-///   index.db, `chat.guid` from chat.db).
+/// - `native_room_id` — Beeper-side room id.
 /// - `external_room_id` — upstream system's canonical room id.
 /// - `external_workspace_id` — upstream workspace / team / account
 ///   id; `NULL` for bridges with a flat per-account namespace.
@@ -106,8 +121,6 @@ pub const DATA_TABLES: &[&str] = &["rooms", "users", "events"];
 /// - `description` — denormalized room topic / description.
 /// - `is_dm` — 1 if a 1:1 chat, 0 otherwise.
 /// - `is_space` — 1 if a Matrix space (folder of rooms), 0 otherwise.
-/// - `payload` — full upstream record, e.g. the `thread` JSON for
-///   index.db (JSONB-encoded on disk).
 pub const ROOMS_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -120,8 +133,7 @@ pub const ROOMS_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
     title TEXT NULL,
     description TEXT NULL,
     is_dm INTEGER NOT NULL DEFAULT 0,
-    is_space INTEGER NOT NULL DEFAULT 0,
-    payload TEXT NULL
+    is_space INTEGER NOT NULL DEFAULT 0
 )";
 
 /// Unique index on `rooms(source, native_room_id)` — guarantees the
@@ -136,6 +148,68 @@ pub const ROOMS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 /// network" filter that translate / downstream tools use.
 pub const ROOMS_BY_NETWORK_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS rooms_by_network ON rooms(network)";
+
+/// Row matching [`ROOMS_DDL`]. Hand-rolled `BulkUpsertable` (no
+/// `payload` column — see the file-level docstring).
+#[derive(Debug, Clone, Default)]
+pub struct RoomRow {
+    pub id: String,
+    pub source: String,
+    pub network: String,
+    pub native_room_id: String,
+    pub external_room_id: Option<String>,
+    pub external_workspace_id: Option<String>,
+    pub account_id: Option<String>,
+    pub room_type: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub is_dm: bool,
+    pub is_space: bool,
+}
+
+impl BulkUpsertable for RoomRow {
+    const TABLE: &'static str = "rooms";
+    const TYPED_COLUMNS: &'static [&'static str] = &[
+        "source",
+        "network",
+        "native_room_id",
+        "external_room_id",
+        "external_workspace_id",
+        "account_id",
+        "room_type",
+        "title",
+        "description",
+        "is_dm",
+        "is_space",
+    ];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.source)
+            .bind(&self.network)
+            .bind(&self.native_room_id)
+            .bind(self.external_room_id.as_deref())
+            .bind(self.external_workspace_id.as_deref())
+            .bind(self.account_id.as_deref())
+            .bind(self.room_type.as_deref())
+            .bind(self.title.as_deref())
+            .bind(self.description.as_deref())
+            .bind(self.is_dm as i64)
+            .bind(self.is_space as i64)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// users
+// ─────────────────────────────────────────────────────────────────────
 
 /// `users` — one row per peer / participant Beeper Texts knows
 /// about, across every chat in a given `source` store.
@@ -162,9 +236,9 @@ pub const ROOMS_BY_NETWORK_INDEX_DDL: &str =
 ///   `display_name`.
 /// - `remote_id` — upstream system's canonical user id (Signal ACI,
 ///   Slack user id, …) when Beeper propagates it.
-/// - `avatar_blob_id` — blake3 ref into `blob_refs` for a cached
-///   profile image, when present.
-/// - `payload` — full upstream record (JSONB-encoded on disk).
+/// - `avatar_blob_id` — `ref_id` into
+///   [`beeper_media_attachments`](BeeperMediaAttachmentRow) for a
+///   cached profile image, when present.
 pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -173,8 +247,7 @@ pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
     display_name TEXT NULL,
     full_name TEXT NULL,
     remote_id TEXT NULL,
-    avatar_blob_id TEXT NULL,
-    payload TEXT NULL
+    avatar_blob_id TEXT NULL
 )";
 
 /// Unique index on `users(source, native_user_id)` — guarantees the
@@ -182,6 +255,56 @@ pub const USERS_DDL: &str = "CREATE TABLE IF NOT EXISTS users (
 /// minted from, and supports the writer-side dedup probe.
 pub const USERS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
     "CREATE UNIQUE INDEX IF NOT EXISTS users_by_source_native ON users(source, native_user_id)";
+
+/// Row matching [`USERS_DDL`]. Hand-rolled `BulkUpsertable` (no
+/// `payload` column).
+#[derive(Debug, Clone, Default)]
+pub struct UserRow {
+    pub id: String,
+    pub source: String,
+    pub network: Option<String>,
+    pub native_user_id: String,
+    pub display_name: Option<String>,
+    pub full_name: Option<String>,
+    pub remote_id: Option<String>,
+    pub avatar_blob_id: Option<String>,
+}
+
+impl BulkUpsertable for UserRow {
+    const TABLE: &'static str = "users";
+    const TYPED_COLUMNS: &'static [&'static str] = &[
+        "source",
+        "network",
+        "native_user_id",
+        "display_name",
+        "full_name",
+        "remote_id",
+        "avatar_blob_id",
+    ];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.source)
+            .bind(self.network.as_deref())
+            .bind(&self.native_user_id)
+            .bind(self.display_name.as_deref())
+            .bind(self.full_name.as_deref())
+            .bind(self.remote_id.as_deref())
+            .bind(self.avatar_blob_id.as_deref())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// events
+// ─────────────────────────────────────────────────────────────────────
 
 /// `events` — one row per message / reaction / membership /
 /// edit / hidden event Beeper Texts has cached.
@@ -231,7 +354,11 @@ pub const USERS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 ///   `event_type = "REACTION"` rows.
 /// - `reaction_target_native_event_id` — Matrix `mxid` the reaction
 ///   targets.
-/// - `payload` — full upstream record (JSONB-encoded on disk).
+///
+/// Attachment payloads (`IMAGE` / `FILE` events) are NOT stored
+/// here. Each attachment lands as one row in
+/// [`beeper_media_attachments`](BeeperMediaAttachmentRow), keyed by
+/// `(event_uuid, attachment_id)`, with the bytes in the sibling CAS.
 pub const EVENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
@@ -246,8 +373,7 @@ pub const EVENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS events (
     reply_to_native_event_id TEXT NULL,
     edit_of_native_event_id TEXT NULL,
     reaction_emoji TEXT NULL,
-    reaction_target_native_event_id TEXT NULL,
-    payload TEXT NULL
+    reaction_target_native_event_id TEXT NULL
 )";
 
 /// Index on `events(room_uuid, timestamp_ms)` — supports the "all
@@ -262,14 +388,144 @@ pub const EVENTS_BY_ROOM_TS_INDEX_DDL: &str =
 pub const EVENTS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS events_by_source_native ON events(source, native_event_id)";
 
+/// Row matching [`EVENTS_DDL`]. Hand-rolled `BulkUpsertable` (no
+/// `payload` column).
+///
+/// **Schema honesty caveat:** `reaction_emoji` and
+/// `reaction_target_native_event_id` are only meaningful when
+/// `event_type = 'REACTION'`; `text_content` and `reply_to_*` /
+/// `edit_of_*` make sense for `'TEXT'` / `'IMAGE'` / `'FILE'` rows
+/// but not for `'REACTION'` / `'MEMBERSHIP'` / `'HIDDEN'`. The DDL
+/// doesn't enforce these per-`event_type` subsets — it can't,
+/// without a per-type table split — and a reader of the schema has
+/// to consult this docstring (and the
+/// [`crate::translate::render`] taxonomy switch) to know which
+/// columns apply when.
+///
+/// We pay this cost deliberately to keep the
+/// "everything-on-one-timeline" rendering shape:
+/// `SELECT … FROM events WHERE room_uuid = ? ORDER BY timestamp_ms`
+/// in one indexed scan is the load-bearing operation for both
+/// period-bucketing and reaction-to-message attachment. A
+/// per-`event_type` split (`beeper_message` / `beeper_reaction` /
+/// `beeper_membership` / …) would force a `UNION` or a join-heavy
+/// rewrite of the bucket walker in
+/// [`crate::translate::parse`] and lose the chronological
+/// ordering convenience the unified table buys us.
+///
+/// If a future need pushes us toward stricter typing, the natural
+/// re-split is along `event_type` — the docstring above already
+/// lists the canonical taxonomy and most columns map cleanly to
+/// one or two subtables.
+#[derive(Debug, Clone, Default)]
+pub struct EventRow {
+    pub id: String,
+    pub source: String,
+    pub network: String,
+    pub room_uuid: String,
+    pub sender_uuid: Option<String>,
+    pub native_event_id: String,
+    pub external_event_id: Option<String>,
+    pub event_type: String,
+    pub timestamp_ms: i64,
+    pub text_content: Option<String>,
+    pub reply_to_native_event_id: Option<String>,
+    pub edit_of_native_event_id: Option<String>,
+    pub reaction_emoji: Option<String>,
+    pub reaction_target_native_event_id: Option<String>,
+}
+
+impl BulkUpsertable for EventRow {
+    const TABLE: &'static str = "events";
+    const TYPED_COLUMNS: &'static [&'static str] = &[
+        "source",
+        "network",
+        "room_uuid",
+        "sender_uuid",
+        "native_event_id",
+        "external_event_id",
+        "event_type",
+        "timestamp_ms",
+        "text_content",
+        "reply_to_native_event_id",
+        "edit_of_native_event_id",
+        "reaction_emoji",
+        "reaction_target_native_event_id",
+    ];
+    const PAYLOAD_COLUMN: Option<&'static str> = None;
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn bind_into<'q>(
+        &'q self,
+        q: Query<'q, Sqlite, SqliteArguments<'q>>,
+    ) -> Query<'q, Sqlite, SqliteArguments<'q>> {
+        q.bind(&self.id)
+            .bind(&self.source)
+            .bind(&self.network)
+            .bind(&self.room_uuid)
+            .bind(self.sender_uuid.as_deref())
+            .bind(&self.native_event_id)
+            .bind(self.external_event_id.as_deref())
+            .bind(&self.event_type)
+            .bind(self.timestamp_ms)
+            .bind(self.text_content.as_deref())
+            .bind(self.reply_to_native_event_id.as_deref())
+            .bind(self.edit_of_native_event_id.as_deref())
+            .bind(self.reaction_emoji.as_deref())
+            .bind(self.reaction_target_native_event_id.as_deref())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// beeper_media_attachments (CAS edge table)
+// ─────────────────────────────────────────────────────────────────────
+
+/// `beeper_media_attachments` — N:M edge between one Beeper event
+/// (`IMAGE` / `FILE` / avatar-bearing row) and a `cas_objects` blob.
+/// Replaces this provider's use of the shared `blob_refs` table —
+/// same universal four-column shape every other ported provider's
+/// edge table uses (see
+/// [`frankweiler_etl::blob_cas::CasEdgeRow`]).
+///
+/// PK choice: synthesized `"{event_uuid}#{ref_id}"` via the
+/// universal `CasEdgeRow::pk_recipe`. One row per attachment slot
+/// (a multi-image message becomes multiple rows, each with a
+/// distinct `ref_id` like `"{event_uuid}:0"`, `"{event_uuid}:1"`,
+/// …). Avatar attachments (one per user) reuse the shape with the
+/// user's UUID as the owning id.
+///
+/// Columns:
+/// - `id` — synthesized PK.
+/// - `event_uuid` — owning event FK (or user UUID for avatars).
+///   Indexed so the per-bucket
+///   [`frankweiler_etl::blob_cas::BlobBundle::load`] projection on
+///   the render side stays cheap.
+/// - `ref_id` — Beeper-side attachment id (the desktop app's
+///   `attachment.id`, typically a `mxc://…` URL). Indexed against
+///   `blake3` so the "have we got these bytes yet?" skip check is
+///   one row read.
+/// - `blake3` — CAS hash of the bytes, NULL until the file copy
+///   completes.
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "beeper_media_attachments")]
+pub struct BeeperMediaAttachmentRow {
+    pub id: String,
+    pub event_uuid: String,
+    pub ref_id: String,
+    pub blake3: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Composer
+// ─────────────────────────────────────────────────────────────────────
+
 /// Compose the full DDL list passed to
 /// [`frankweiler_etl::doltlite_raw::open`]: every entity table DDL,
-/// each entity's CREATE-INDEX statements, and the paired
-/// `<table>_bookkeeping` DDL produced by the shared layer.
-///
-/// Schema-local glue, kept here so the "what tables exist?" answer
-/// is one function call from this file. Heavier composition (e.g. a
-/// repo-wide bookkeeping macro) is deferred to P1.1.
+/// each entity's CREATE-INDEX statements, the CAS-edge DDLs, and the
+/// paired `<table>_bookkeeping` DDL produced by the shared layer.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         ROOMS_DDL.to_string(),
@@ -281,6 +537,7 @@ pub fn full_ddl() -> Vec<String> {
         EVENTS_BY_ROOM_TS_INDEX_DDL.to_string(),
         EVENTS_BY_SOURCE_NATIVE_INDEX_DDL.to_string(),
     ];
+    out.extend(BeeperMediaAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

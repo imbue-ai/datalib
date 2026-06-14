@@ -1,10 +1,18 @@
 //! Yolink download → doltlite. For-loop over devices, inner loop
-//! over forward-walking time windows: curl, parse, upsert. No
+//! over forward-walking time windows: curl, parse, bulk-upsert. No
 //! per-window `dolt_commit`: the sync orchestrator wraps the whole
 //! extract in one commit when [`fetch`] returns, which is the right
-//! grain (a sync run is a single "snapshot of upstream"). UPSERT
-//! still only writes when a value actually changed, so the trailing
-//! commit's diff is exactly the readings that moved this run.
+//! grain (a sync run is a single "snapshot of upstream"). `dolt
+//! diff` against that trailing commit shows exactly which readings
+//! moved this run — same source-of-truth pattern every other
+//! provider uses.
+//!
+//! Demo of how little this layer needs once the schema is in place
+//! — the row types and their `BulkUpsertable` impls live in
+//! [`schema_raw`]; this file is just curl / parse / loop, plus the
+//! per-device cursor-advance after each window. See
+//! [`docs/data_architecture_ingestion.md`] §"Schema first" for the
+//! principle this provider was kept simple to demonstrate.
 //!
 //! Strict CSV header check: a `℃` column with a `℉` row value is
 //! rejected, not coerced. The point is to notice unit flips
@@ -24,11 +32,12 @@ use tokio::process::Command;
 use tracing::{info, warn};
 
 use frankweiler_core::config::{YolinkDevice, YolinkSync};
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::doltlite_raw as dr;
 use frankweiler_etl::progress::Progress;
 
-use schema_raw::{full_ddl, reading_id_recipe, DATA_TABLES};
+use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow, DATA_TABLES};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -46,11 +55,20 @@ const DEFAULT_WINDOW_DAYS: i64 = 7;
 
 /// One parsed sample. Serializable so insta snapshot tests can
 /// pretty-print it.
+///
+/// `payload` is the JSON-encoded `{header: value}` map of the source
+/// CSV row this sample was derived from — the raw wire representation
+/// YoLink served. Two `Reading`s coming out of the same CSV row (e.g.
+/// the temperature + humidity pair from a `Temperature(℃) Humidity
+/// (%RH)` row) share an identical `payload` string; see the
+/// [`schema_raw::YolinkReadingRow`] docstring for why we keep this
+/// even though it costs a small amount of denormalization.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Reading {
     pub ts_ms: i64,
     pub metric: &'static str,
     pub value: f64,
+    pub payload: String,
 }
 
 /// Expected columns per device kind: `(header, metric, suffix)`.
@@ -99,6 +117,18 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
             .with_context(|| format!("row {}: bad ts {ts:?}", i + 2))?
             .inner()
             .timestamp_millis();
+        // Build the per-CSV-row payload once: `{header: value}` for
+        // every column in the source record. Every Reading derived
+        // from this CSV row carries the same payload string, so the
+        // raw wire representation survives even after the typed
+        // columns strip unit suffixes / parse numerics.
+        let payload = {
+            let mut m = serde_json::Map::with_capacity(headers.len());
+            for (h, v) in headers.iter().zip(rec.iter()) {
+                m.insert(h.to_string(), serde_json::Value::String(v.to_string()));
+            }
+            serde_json::Value::Object(m).to_string()
+        };
         for ((_, metric, suffix), &idx) in cols.iter().zip(&val_idxs) {
             let Some(raw) = rec.get(idx).filter(|s| !s.is_empty()) else {
                 continue;
@@ -119,6 +149,7 @@ pub fn parse(body: &str, kind: &str) -> Result<Vec<Reading>> {
                 ts_ms,
                 metric,
                 value,
+                payload: payload.clone(),
             });
         }
     }
@@ -155,37 +186,24 @@ impl RawDb {
     }
 }
 
-/// UPSERT one window's worth of readings. Returns
-/// `(touched, unchanged)` — touched is insert + value-change (what
-/// `dolt diff` will surface), unchanged is no-op PK conflicts.
-/// The `WHERE value <> excluded.value` guard means `rows_affected`
-/// counts only writes the DB actually performed; unchanged is
-/// `total - touched`.
-async fn upsert_readings(
-    pool: &SqlitePool,
-    device: &str,
-    readings: &[Reading],
-) -> Result<(usize, usize)> {
-    let mut tx = pool.begin().await?;
-    let mut touched: usize = 0;
-    for r in readings {
-        let res = sqlx::query(
-            "INSERT INTO yolink_readings (id, device_name, ts_ms, metric, value)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET value = excluded.value
-                WHERE yolink_readings.value <> excluded.value",
-        )
-        .bind(reading_id_recipe(device, r.ts_ms, r.metric))
-        .bind(device)
-        .bind(r.ts_ms)
-        .bind(r.metric)
-        .bind(r.value)
-        .execute(&mut *tx)
-        .await?;
-        touched += res.rows_affected() as usize;
+/// UPSERT one window's worth of readings through the shared
+/// [`bulk_upsert_in_tx`] helper. Same per-tx batching every other
+/// provider uses; `dolt diff` against the trailing
+/// orchestrator-level commit is the source of truth for what
+/// actually changed.
+async fn upsert_readings(pool: &SqlitePool, device: &str, readings: &[Reading]) -> Result<usize> {
+    if readings.is_empty() {
+        return Ok(0);
     }
+    let rows: Vec<YolinkReadingRow> = readings
+        .iter()
+        .map(|r| YolinkReadingRow::new(device, r.ts_ms, r.metric, r.value, r.payload.clone()))
+        .collect();
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool.begin().await?;
+    bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
     tx.commit().await?;
-    Ok((touched, readings.len() - touched))
+    Ok(readings.len())
 }
 
 // ── orchestrator ────────────────────────────────────────────────────
@@ -202,8 +220,10 @@ pub struct FetchOptions {
 pub struct FetchSummary {
     pub devices: usize,
     pub windows: usize,
-    pub readings_touched: usize,
-    pub readings_unchanged: usize,
+    /// Total readings seen across every window this run. To know what
+    /// actually CHANGED, check `dolt diff` against the prior commit —
+    /// that's the universal source of truth.
+    pub readings: usize,
     pub errors: usize,
     pub requests: usize,
 }
@@ -253,16 +273,16 @@ async fn fetch_device(
         .and_hms_opt(0, 0, 0)
         .map(|dt| Utc.from_utc_datetime(&dt).timestamp_millis())
         .unwrap();
-    sqlx::query(
-        "INSERT INTO yolink_devices (id, family_device_id, kind, start_ms) VALUES (?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET family_device_id=excluded.family_device_id, kind=excluded.kind, start_ms=excluded.start_ms",
-    )
-    .bind(&dev.name)
-    .bind(&dev.family_device_id)
-    .bind(&dev.kind)
-    .bind(start_ms)
-    .execute(db.pool())
-    .await?;
+    let device_row = YolinkDeviceRow {
+        id: dev.name.clone(),
+        family_device_id: dev.family_device_id.clone(),
+        kind: dev.kind.clone(),
+        start_ms,
+    };
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = db.pool().begin().await?;
+    bulk_upsert_in_tx(&mut tx, &[device_row], &now).await?;
+    tx.commit().await?;
 
     let watermark: Option<i64> =
         sqlx::query_scalar("SELECT last_ts_ms FROM yolink_devices WHERE id = ?")
@@ -292,11 +312,11 @@ async fn fetch_device(
             s.requests += 1;
             s.windows += 1;
             let rows = parse(&body, &dev.kind).context("parse")?;
-            let (touched, unchanged) = upsert_readings(db.pool(), &dev.name, &rows).await?;
-            Ok::<_, anyhow::Error>((touched, unchanged))
+            let upserted = upsert_readings(db.pool(), &dev.name, &rows).await?;
+            Ok::<_, anyhow::Error>(upserted)
         }
         .await;
-        let (touched, unchanged) = match window_result {
+        let upserted = match window_result {
             Ok(v) => {
                 consecutive_failures = 0;
                 v
@@ -320,9 +340,8 @@ async fn fetch_device(
                 continue;
             }
         };
-        s.readings_touched += touched;
-        s.readings_unchanged += unchanged;
-        info!(event = "yolink_window", device = %dev.name, cursor, end, touched, unchanged);
+        s.readings += upserted;
+        info!(event = "yolink_window", device = %dev.name, cursor, end, upserted);
         cursor = cursor.saturating_add(stride_ms).max(cursor + 1);
     }
 
@@ -453,7 +472,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upsert_distinguishes_new_changed_unchanged() {
+    async fn upsert_readings_lands_rows() {
         let dir = tempfile::tempdir().unwrap();
         let db = RawDb::open(&dir.path().join("yl.doltlite_db"))
             .await
@@ -463,24 +482,22 @@ mod tests {
             ts_ms: ts,
             metric: "water_meter_gal",
             value: v,
+            payload: "{}".to_string(),
         };
+        // Two readings land.
         assert_eq!(
             upsert_readings(pool, "v", &[r(100, 1.0), r(200, 2.0)])
                 .await
                 .unwrap(),
-            (2, 0)
+            2
         );
-        assert_eq!(
-            upsert_readings(pool, "v", &[r(100, 1.0), r(200, 2.0)])
-                .await
-                .unwrap(),
-            (0, 2)
-        );
-        assert_eq!(
-            upsert_readings(pool, "v", &[r(100, 1.5), r(200, 2.0)])
-                .await
-                .unwrap(),
-            (1, 1)
-        );
+        // Re-upsert is idempotent on row count (dolt diff is the
+        // authority on "did anything actually change?").
+        assert_eq!(upsert_readings(pool, "v", &[r(100, 1.5)]).await.unwrap(), 1);
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 2, "second upsert updates, doesn't duplicate");
     }
 }

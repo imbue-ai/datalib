@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// Miller-columns host. Every column IS a card: a slot holds the
-// card's source — a JS expression like `gridView()` or
+// Miller-columns layout host. Every column IS a card: a slot holds
+// the card's source — a JS expression like `gridView()` or
 // `documentView("abcd…")` — which is shown (and editable) in the
 // column's header bar and evaluated (cardSource.ts) to render the
-// column inside a Shadow DOM via ShadowCardColumn. Edit the source
-// and press Enter to re-run the card.
+// column inside a Shadow DOM via ShadowCard. Edit the source and
+// press Enter to re-run the card.
 //
 // URL: the path is a /-separated list of `code:state` segments, one
 // per column (see url.ts). `state` is an opaque per-card string —
@@ -12,7 +12,7 @@
 // it back via ctx.initialState; the host just round-trips it.
 //
 // Structural operations are host commands, not bus messages: a card
-// calls `ctx.host.openColumn(source)` to open a column to its right
+// calls `ctx.host.openCard(source)` to open a column to its right
 // (replacing everything further right — Miller semantics). The bus
 // carries ambient cross-card events only (e.g. edge hover).
 //
@@ -20,35 +20,17 @@
 // place the user types new card source. As soon as it gains code a
 // fresh blank appears after it; a run of several trailing blanks
 // collapses to one. Blank columns are not part of the URL.
-import { onMounted, ref, watch } from "vue";
+import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import ShadowCardColumn from "@/components/ShadowCardColumn.vue";
+import ShadowCard from "@/components/ShadowCard.vue";
+import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
-import { fetchHealth, fetchSearch, type Health } from "@/api";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
 const router = useRouter();
 const bus = createBus();
-
-// Backend status for the bottom status bar. Global (host-level) on
-// purpose: it describes the backend and its data root, not any one
-// card's query — with several grid cards it would otherwise repeat
-// per column.
-const health = ref<Health | null>(null);
-const indexedTotal = ref<number | null>(null);
-const healthError = ref<string | null>(null);
-onMounted(async () => {
-  try {
-    health.value = await fetchHealth();
-    // The backend's total_estimated is capped by the limit, so ask
-    // with a large limit to get the real index size.
-    indexedTotal.value = (await fetchSearch("", 100_000)).total_estimated;
-  } catch (e) {
-    healthError.value = (e as Error).message;
-  }
-});
 
 type Slot = {
   id: string;
@@ -189,7 +171,7 @@ function ctxFor(slot: Slot): CardCtx {
   if (!ctx) {
     const cardId = slot.id;
     const host: HostCommands = {
-      openColumn: (source) => openColumnAfter(cardId, source),
+      openCard: (source) => openColumnAfter(cardId, source),
       close: () => closeColumn(cardId),
       setState: (state) => setColumnState(cardId, state),
     };
@@ -221,18 +203,6 @@ function commitSource(slot: Slot, e: Event) {
 function aloneHref(slot: Slot): string {
   return encodeColumns([{ code: slot.source, state: slot.state }]);
 }
-
-// Auto-grow the source textarea to fit its (soft-wrapped) content —
-// both while typing and when the bound value changes from outside
-// (e.g. the grid opening a column with a long documentView source).
-function growSourceBox(el: HTMLTextAreaElement) {
-  el.style.height = "auto";
-  el.style.height = `${el.scrollHeight}px`;
-}
-const vAutoGrow = {
-  mounted: growSourceBox,
-  updated: growSourceBox,
-};
 
 // Drag a column's right edge to set its width. Captures the pointer
 // so the move tracks even when the cursor crosses other columns;
@@ -275,7 +245,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             rows="1"
             :value="slot.source"
             spellcheck="false"
-            placeholder="card source — e.g. documentView(&quot;uuid&quot;), Enter to run"
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
@@ -296,7 +265,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             ✕
           </button>
         </div>
-        <ShadowCardColumn
+        <ShadowCard
           class="miller-col-card"
           :source="slot.source"
           :ctx="ctxFor(slot)"
@@ -309,20 +278,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
         />
       </section>
     </div>
-    <div class="miller-statusbar">
-      <span v-if="healthError" class="miller-health--warn">
-        backend unreachable: {{ healthError }}
-      </span>
-      <span v-else-if="health">
-        backend ok<template v-if="indexedTotal != null">
-          · {{ indexedTotal }} conversations indexed</template
-        >
-        under <code>{{ health.root }}</code>
-        <span v-if="!health.root_exists" class="miller-health--warn">
-          (root does not exist)</span
-        >
-      </span>
-    </div>
   </div>
 </template>
 
@@ -330,15 +285,11 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-root {
   display: flex;
   flex-direction: column;
-  /* Fill whatever the shell's flex layout gives us (everything below
-     the header); basis 0 + min-height 0 so intrinsic content height
-     can't stretch the page. Negative margins bleed over the shell's
-     1rem padding on the right and bottom so the status bar sits
-     flush with the viewport bottom; the shell's left padding stays
-     as a gutter. */
+  /* Fill whatever the parent's flex layout gives us; basis 0 +
+     min-height 0 so intrinsic content height can't stretch the
+     page. */
   flex: 1 1 0;
   min-height: 0;
-  margin: 0 -1rem -1rem 0;
 }
 .miller-columns {
   flex: 1 1 auto;
@@ -422,26 +373,5 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col-card {
   flex: 1 1 auto;
   min-height: 0;
-}
-.miller-statusbar {
-  flex: 0 0 auto;
-  /* Bleed over the shell's left padding: the columns keep their
-     gutter, but the status bar spans the full viewport width. */
-  margin-left: -1rem;
-  padding: 0.3rem 0.8rem;
-  border-top: 1px solid #888;
-  background: rgba(0, 0, 0, 0.08);
-  font-size: 0.8rem;
-  opacity: 0.85;
-  min-height: 1.2rem;
-}
-.miller-statusbar code {
-  font-family: ui-monospace, monospace;
-  background: rgba(0, 0, 0, 0.12);
-  padding: 0 0.25rem;
-  border-radius: 2px;
-}
-.miller-health--warn {
-  color: #e35d6a;
 }
 </style>

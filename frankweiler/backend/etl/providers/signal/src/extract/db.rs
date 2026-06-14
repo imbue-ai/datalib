@@ -1,30 +1,16 @@
-//! Doltlite-backed raw store for the Signal provider.
+//! Open + non-DDL data-manipulation for the Signal raw store.
 //!
-//! Four object tables, keyed by Signal's natural ids so re-fetches
-//! across snapshots dedupe cleanly:
+//! [`RawDb`] owns the entity-db pool and the sibling CAS handle.
+//! The schema itself — every table DDL, every row struct + its
+//! `BulkUpsertable` impl, the resume cursor, and the per-table
+//! commentary — lives next door in [`super::schema_raw`].
 //!
-//!   * `account`    — one row, `id = 'self'`. The account proto frame.
-//!   * `recipients` — PK = the in-backup `recipient_id` (`uint64`).
-//!     Promoted columns: `identifier` (e164 / aci hex), `display_name`.
-//!   * `chats`      — PK = `chat_id`. `recipient_id` promoted for joins.
-//!   * `chat_items` — PK = `"{chat_id}#{author_id}#{date_sent}"`.
-//!     Promoted columns let SQL queries filter/sort without cracking
-//!     the protobuf payload open.
-//!
-//! Every `payload` column stores the raw prost-encoded `Frame` bytes
-//! verbatim as a BLOB. That keeps the diff between two snapshots
-//! exactly equal to what changed in Signal's wire-format frames,
-//! without forcing a schema-mapping step into Extract. The Translate
-//! pass (deferred) will crack frames open into `event_type` rows.
-//!
-//! Attachment bytes (when an Extract enhancement starts harvesting
-//! `Frame::Attachment` from the snapshot's `files/` tree) belong in
-//! the sibling per-source CAS file managed by
-//! [`frankweiler_etl::blob_cas`], with `blob_refs` rows in this entity
-//! db pointing into it. The CAS handle is opened in [`RawDb::open`]
-//! and exposed via [`RawDb::cas`] so that future code has the plumbing
-//! ready — the same shape every other media-bearing provider
-//! (slack, beeper, anthropic, chatgpt, notion, email) follows.
+//! What's here is the small set of things `schema_raw` can't be:
+//! `RawDb::open`, `reset`, the resume-cursor read/write methods
+//! (`snapshot_already_ingested`, `record_snapshot_ingested`,
+//! `last_ingested_snapshot`). Entity-table writes go through the
+//! generic `frankweiler_etl::bulk::bulk_upsert_in_tx<T>` helper
+//! from the caller (`super::mod`); they don't live on `RawDb`.
 
 use std::path::Path;
 
@@ -33,7 +19,7 @@ use frankweiler_time::IsoOffsetTimestamp;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use frankweiler_etl::blob_cas::{self, BlobCas, RefStub};
+use frankweiler_etl::blob_cas::{self, BlobCas};
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 use super::schema_raw::{full_ddl, DATA_TABLES};
@@ -78,12 +64,13 @@ impl RawDb {
 
     // ── ingested_backups (resume cursor) ────────────────────────────
 
-    /// Returns true if a row with this snapshot Blake3 already
-    /// exists. Callers use this to short-circuit before the
-    /// expensive decrypt + walk.
-    pub async fn snapshot_already_ingested(&self, blake3_hex: &str) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE blake3 = ? LIMIT 1")
-            .bind(blake3_hex)
+    /// Returns true if a row with this snapshot fingerprint already
+    /// exists. Cheap (single PK lookup against the fingerprint
+    /// computed from `stat()` alone, no body I/O) — callers use this
+    /// to short-circuit before any decrypt/blake3 work.
+    pub async fn snapshot_already_ingested(&self, fingerprint: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT 1 FROM ingested_backups WHERE fingerprint = ? LIMIT 1")
+            .bind(fingerprint)
             .fetch_optional(&self.pool)
             .await
             .context("snapshot_already_ingested")?;
@@ -95,6 +82,7 @@ impl RawDb {
     /// fail loudly.
     pub async fn record_snapshot_ingested(
         &self,
+        fingerprint: &str,
         blake3_hex: &str,
         snapshot_dir: &str,
         total_byte_size: u64,
@@ -102,9 +90,10 @@ impl RawDb {
         let now = IsoOffsetTimestamp::now_local().to_rfc3339_secs();
         sqlx::query(
             "INSERT OR IGNORE INTO ingested_backups
-                 (blake3, snapshot_dir, total_byte_size, ingested_at)
-             VALUES (?, ?, ?, ?)",
+                 (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at)
+             VALUES (?, ?, ?, ?, ?)",
         )
+        .bind(fingerprint)
         .bind(blake3_hex)
         .bind(snapshot_dir)
         .bind(total_byte_size as i64)
@@ -131,121 +120,5 @@ impl RawDb {
             let b: String = r.try_get("blake3").ok()?;
             Some((d.unwrap_or_default(), b))
         }))
-    }
-
-    // ── blobs (delegate to shared `blob_cas`) ───────────────────────
-
-    pub async fn blob_exists(&self, ref_id: &str) -> Result<bool> {
-        blob_cas::ref_has_hash(&self.pool, ref_id).await
-    }
-
-    pub async fn store_blob(&self, stub: &RefStub<'_>, bytes: &[u8]) -> Result<String> {
-        blob_cas::store_bytes(&self.pool, &self.cas, stub, bytes).await
-    }
-
-    pub async fn record_blob_error(
-        &self,
-        ref_id: &str,
-        owning_id: &str,
-        slot: &str,
-        err: &str,
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin blob error tx")?;
-        blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err).await?;
-        tx.commit().await.context("commit blob error tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_account(&self, payload: &[u8]) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin account tx")?;
-        sqlx::query(
-            "INSERT INTO account (id, payload) VALUES ('self', ?)
-             ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
-        )
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .context("upsert account")?;
-        dr::record_object_attempt(&mut tx, "account", "self", None).await?;
-        tx.commit().await.context("commit account tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_recipient(
-        &self,
-        id: &str,
-        identifier: Option<&str>,
-        display_name: Option<&str>,
-        payload: &[u8],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin recipient tx")?;
-        sqlx::query(
-            "INSERT INTO recipients (id, identifier, display_name, payload)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                identifier = excluded.identifier,
-                display_name = excluded.display_name,
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(identifier)
-        .bind(display_name)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert recipient {id}"))?;
-        dr::record_object_attempt(&mut tx, "recipients", id, None).await?;
-        tx.commit().await.context("commit recipient tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_chat(&self, id: &str, recipient_id: &str, payload: &[u8]) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin chat tx")?;
-        sqlx::query(
-            "INSERT INTO chats (id, recipient_id, payload) VALUES (?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                recipient_id = excluded.recipient_id,
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(recipient_id)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert chat {id}"))?;
-        dr::record_object_attempt(&mut tx, "chats", id, None).await?;
-        tx.commit().await.context("commit chat tx")?;
-        Ok(())
-    }
-
-    pub async fn upsert_chat_item(
-        &self,
-        id: &str,
-        chat_id: &str,
-        author_id: &str,
-        date_sent: i64,
-        payload: &[u8],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin chat_item tx")?;
-        sqlx::query(
-            "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload)
-             VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-                chat_id = excluded.chat_id,
-                author_id = excluded.author_id,
-                date_sent = excluded.date_sent,
-                payload = excluded.payload",
-        )
-        .bind(id)
-        .bind(chat_id)
-        .bind(author_id)
-        .bind(date_sent)
-        .bind(payload)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert chat_item {id}"))?;
-        dr::record_object_attempt(&mut tx, "chat_items", id, None).await?;
-        tx.commit().await.context("commit chat_item tx")?;
-        Ok(())
     }
 }

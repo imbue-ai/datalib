@@ -18,9 +18,13 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{discussion_pk_recipe, full_ddl, mr_pk_recipe, DATA_TABLES};
+use super::schema_raw::{
+    discussion_pk_recipe, full_ddl, mr_pk_recipe, DiscussionRow, MergeRequestRow, SelfIdentityRow,
+    DATA_TABLES,
+};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -59,31 +63,10 @@ impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("/user response missing id"))?;
-        let username = payload.get("username").and_then(|v| v.as_str());
-        let web_url = payload.get("web_url").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize /user")?;
+        let row = SelfIdentityRow::from_payload(payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
-        sqlx::query(
-            "INSERT INTO self_identity (id, username, web_url, payload)
-             VALUES (?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                username = COALESCE(excluded.username, self_identity.username),
-                web_url = COALESCE(excluded.web_url, self_identity.web_url),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(username)
-        .bind(web_url)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .context("upsert self_identity")?;
-        dr::record_object_attempt(&mut tx, "self_identity", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit self_identity tx")?;
         Ok(())
     }
@@ -104,59 +87,10 @@ impl RawDb {
     // ── merge_requests ──────────────────────────────────────────────
 
     pub async fn upsert_merge_request(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
-        let id = mr_pk(proj, iid);
-        let state = payload.get("state").and_then(|v| v.as_str());
-        let web_url = payload.get("web_url").and_then(|v| v.as_str());
-        let diff_refs = payload.get("diff_refs");
-        let head_sha = diff_refs
-            .and_then(|d| d.get("head_sha"))
-            .and_then(|v| v.as_str());
-        let base_sha = diff_refs
-            .and_then(|d| d.get("base_sha"))
-            .and_then(|v| v.as_str());
-        let start_sha = diff_refs
-            .and_then(|d| d.get("start_sha"))
-            .and_then(|v| v.as_str());
-        let source_branch = payload.get("source_branch").and_then(|v| v.as_str());
-        let target_branch = payload.get("target_branch").and_then(|v| v.as_str());
-        let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
-        let merged_at = payload.get("merged_at").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize MR")?;
+        let row = MergeRequestRow::from_payload(proj, iid, payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin merge_request tx")?;
-        sqlx::query(
-            "INSERT INTO merge_requests
-                (id, project_full_path, mr_iid, state, web_url, head_sha, base_sha, start_sha,
-                 source_branch, target_branch, updated_at, merged_at, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                state = COALESCE(excluded.state, merge_requests.state),
-                web_url = COALESCE(excluded.web_url, merge_requests.web_url),
-                head_sha = COALESCE(excluded.head_sha, merge_requests.head_sha),
-                base_sha = COALESCE(excluded.base_sha, merge_requests.base_sha),
-                start_sha = COALESCE(excluded.start_sha, merge_requests.start_sha),
-                source_branch = COALESCE(excluded.source_branch, merge_requests.source_branch),
-                target_branch = COALESCE(excluded.target_branch, merge_requests.target_branch),
-                updated_at = COALESCE(excluded.updated_at, merge_requests.updated_at),
-                merged_at = COALESCE(excluded.merged_at, merge_requests.merged_at),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(proj)
-        .bind(iid as i64)
-        .bind(state)
-        .bind(web_url)
-        .bind(head_sha)
-        .bind(base_sha)
-        .bind(start_sha)
-        .bind(source_branch)
-        .bind(target_branch)
-        .bind(updated_at)
-        .bind(merged_at)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert merge_request {id}"))?;
-        dr::record_object_attempt(&mut tx, "merge_requests", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit merge_request tx")?;
         Ok(())
     }
@@ -164,9 +98,10 @@ impl RawDb {
     // ── discussions ─────────────────────────────────────────────────
 
     pub async fn upsert_discussion(&self, proj: &str, iid: u32, payload: &Value) -> Result<()> {
-        let mut tx = self.pool.begin().await.context("begin discussion tx")?;
+        let row = DiscussionRow::from_payload(proj, iid, payload)?;
         let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
+        let mut tx = self.pool.begin().await.context("begin discussion tx")?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit discussion tx")?;
         Ok(())
     }
@@ -179,15 +114,17 @@ impl RawDb {
         if payloads.is_empty() {
             return Ok(());
         }
+        let rows: Vec<DiscussionRow> = payloads
+            .iter()
+            .map(|p| DiscussionRow::from_payload(proj, iid, p))
+            .collect::<Result<Vec<_>>>()?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self
             .pool
             .begin()
             .await
             .context("begin discussions batch tx")?;
-        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        for payload in payloads {
-            upsert_discussion_in(&mut tx, proj, iid, payload, &now).await?;
-        }
+        bulk_upsert_in_tx(&mut tx, &rows, &now).await?;
         tx.commit().await.context("commit discussions batch tx")?;
         Ok(())
     }
@@ -288,55 +225,6 @@ impl RawDb {
         }
         Ok(out)
     }
-}
-
-// ── private row-level upserts (shared by single + batch APIs) ──────────
-
-async fn upsert_discussion_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    proj: &str,
-    iid: u32,
-    payload: &Value,
-    _now: &str,
-) -> Result<()> {
-    let discussion_id = payload
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("discussion missing id"))?
-        .to_string();
-    let id = discussion_pk(proj, iid, &discussion_id);
-    let individual_note = payload.get("individual_note").and_then(|v| v.as_bool());
-    let max_note_updated_at = payload
-        .get("notes")
-        .and_then(|n| n.as_array())
-        .and_then(|arr| {
-            arr.iter()
-                .filter_map(|n| n.get("updated_at").and_then(|v| v.as_str()))
-                .max()
-                .map(|s| s.to_string())
-        });
-    let payload_str = serde_json::to_string(payload).context("serialize discussion")?;
-    sqlx::query(
-        "INSERT INTO discussions
-            (id, project_full_path, mr_iid, discussion_id, individual_note,
-             max_note_updated_at, payload)
-         VALUES (?, ?, ?, ?, ?, ?, jsonb(?))
-         ON CONFLICT(id) DO UPDATE SET
-            individual_note = COALESCE(excluded.individual_note, discussions.individual_note),
-            max_note_updated_at = COALESCE(excluded.max_note_updated_at, discussions.max_note_updated_at),
-            payload = excluded.payload",
-    )
-    .bind(&id)
-    .bind(proj)
-    .bind(iid as i64)
-    .bind(&discussion_id)
-    .bind(individual_note.map(|b| b as i64))
-    .bind(max_note_updated_at.as_deref())
-    .bind(&payload_str)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("upsert discussion {id}"))?;
-    dr::record_object_attempt(tx, "discussions", &id, None).await
 }
 
 #[derive(Debug, Clone)]

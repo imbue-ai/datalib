@@ -229,21 +229,18 @@ pub const WA_MESSAGE_ADD_ON_REACTION_DDL: &str =
     PRIMARY KEY (chat_jid, key_id, from_me)
 );";
 
-/// Registry of plaintext media files on disk.
-///
-/// `wa_message_media.file_path` joins to `relative_path`. The actual
-/// bytes live at `<media_root>/<relative_path>` — we don't import
-/// them into doltlite, since they're potentially hundreds of MB of
-/// media and doltlite stores blobs by content but doesn't dedup
-/// across rows; the on-disk tree is already content-organized by
-/// WhatsApp. We mirror just enough to verify presence + integrity:
-/// sha256, size, mtime.
+/// Catalog of plaintext media files from the source backup. Bytes
+/// live in the sibling CAS file (managed by `frankweiler_etl::blob_cas`);
+/// `wa_media_files.blake3` is the CAS key. `sha256` stays as the
+/// upstream identifier (matches `wa_message_media.file_hash`).
 pub const WA_MEDIA_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS wa_media_files (
     sha256 TEXT PRIMARY KEY,
     relative_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     mtime_unix INTEGER,
-    mime_type TEXT
+    mime_type TEXT,
+    blake3 TEXT NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
 );";
 
 /// All DDL statements in dependency-safe creation order.

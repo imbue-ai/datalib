@@ -36,10 +36,27 @@ function runCard() {
   tearDownCard();
   root.replaceChildren();
   if (props.source.trim() === "") {
+    // Sole onboarding text for an empty card — the source textarea
+    // above stays blank (no placeholder), so the how-to lives here.
     const div = document.createElement("div");
     div.style.cssText =
-      "opacity:.45;padding:12px;font:12px ui-monospace,monospace";
-    div.textContent = "empty card — type source above and press Enter";
+      "opacity:.45;padding:12px;font:12px ui-monospace,monospace;" +
+      "display:flex;flex-direction:column;gap:6px";
+    const intro = document.createElement("div");
+    intro.textContent =
+      "empty card — type source above and press Enter, e.g.:";
+    div.appendChild(intro);
+    const examples = [
+      "gridView()",
+      'documentView("uuid")',
+      '(root) => { root.textContent = "hello, world" }',
+    ];
+    for (const ex of examples) {
+      const code = document.createElement("code");
+      code.style.cssText = "margin-left:1em";
+      code.textContent = ex;
+      div.appendChild(code);
+    }
     root.appendChild(div);
     return;
   }
@@ -77,9 +94,9 @@ onBeforeUnmount(tearDownCard);
 </template>
 
 <style scoped>
-/* Height comes from the parent (flex sizing on .miller-col-card) — a
-   height: 100% here would resolve against the whole column including
-   its chrome bar and overflow the column by that much. */
+/* Height comes from the parent (flex sizing on the host's card slot)
+   — a height: 100% here would resolve against the whole column/node
+   including its chrome bar and overflow by that much. */
 .shadow-card-host {
   width: 100%;
   overflow: hidden;

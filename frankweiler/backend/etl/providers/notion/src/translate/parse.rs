@@ -20,7 +20,7 @@ pub const ENTITY_PAGE: &str = "notion_official_page";
 pub const ENTITY_BLOCK: &str = "notion_official_block";
 pub const ENTITY_COMMENT: &str = "notion_official_comment";
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ParsedNotionOfficial {
     pub pages: Vec<Value>,
     /// Blocks in BFS / insertion order, matching how the downloader
@@ -31,25 +31,16 @@ pub struct ParsedNotionOfficial {
     pub user_names: HashMap<String, String>,
     pub media_urls: HashMap<String, String>,
     pub bookmark_titles: HashMap<String, String>,
-    /// Streaming blob store keyed by owning block id (Notion's
-    /// convention — one blob per image/file block). Render fetches
-    /// each block's bytes on demand via `read_by_owner` and writes
-    /// them next to the rendered markdown.
-    pub blobs: std::sync::Arc<dyn frankweiler_etl::blob_cas::BlobReader>,
-}
-
-impl Default for ParsedNotionOfficial {
-    fn default() -> Self {
-        Self {
-            pages: Vec::new(),
-            blocks: Vec::new(),
-            comments: Vec::new(),
-            user_names: HashMap::new(),
-            media_urls: HashMap::new(),
-            bookmark_titles: HashMap::new(),
-            blobs: frankweiler_etl::blob_cas::InMemoryBlobReader::empty_handle(),
-        }
-    }
+    /// Per-page bag of image attachment bytes pre-loaded from the
+    /// sibling CAS via `BlobBundle::load` against
+    /// `notion_image_attachments`. Mirrors slack / whatsapp /
+    /// email's per-bucket BlobBundle shape — render calls
+    /// `bundle.materialize_to_dir(<page_dir>/blobs)` once per page
+    /// and walks blocks to set image `src`s from
+    /// `bundle.rendered_filename()`. Pages without image blocks have
+    /// no entry; render falls through to the upstream-URL
+    /// placeholder.
+    pub blobs_by_page: HashMap<String, frankweiler_etl::blob_cas::BlobBundle>,
 }
 
 /// Read raw payloads out of the doltlite DB. The `page_id` column of
@@ -65,7 +56,7 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotionOfficial> {
         pages,
         blocks,
         comments,
-        blobs,
+        blobs_by_page,
     } = block_on_load_all(&db_path)?;
 
     // Inject page_id into block/comment values so existing readers
@@ -97,7 +88,7 @@ pub fn parse_api_dir(path: &Path) -> Result<ParsedNotionOfficial> {
         user_names: HashMap::new(),
         media_urls: HashMap::new(),
         bookmark_titles: HashMap::new(),
-        blobs,
+        blobs_by_page,
     })
 }
 

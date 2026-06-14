@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::RefStub;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::http::{latchkey_curl, HttpRequest};
 use serde::Serialize;
@@ -143,21 +142,20 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
             summary.skipped_blobs += 1;
             continue;
         }
+        // `kind` (notion_hosted / notion_external) used to live on
+        // `blob_refs.kind`. We've retired blob_refs; the edge table
+        // only stores `(block_id, ref_id, blake3)`, so the kind tag
+        // is dropped. If a future query wants it, the block's payload
+        // still carries the `image.type` upstream.
+        let _ = kind;
         let req = HttpRequest::get("notion", &url);
         match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
-                let content_type = resp.header("content-type").map(String::from);
-                let stub = RefStub {
-                    ref_id: &blob_id,
-                    kind,
-                    owning_id: block_id,
-                    slot: "image",
-                    upstream_uuid: Some(block_id),
-                    upstream_name: None,
-                    source_url: Some(&url),
-                    content_type: content_type.as_deref(),
-                };
-                if let Err(e) = db.store_blob(&stub, &resp.body).await {
+                let content_type = resp.header("content-type");
+                if let Err(e) = db
+                    .store_blob(block_id, &blob_id, content_type, &resp.body)
+                    .await
+                {
                     tracing::warn!(blob = %blob_id, error = %e, "blob upsert failed");
                     summary.failed_blobs += 1;
                 } else {
@@ -167,13 +165,13 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
             Ok(resp) => {
                 let msg = format!("HTTP {}", resp.status);
                 tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch non-2xx");
-                let _ = db.record_blob_error(&blob_id, &msg).await;
+                let _ = db.record_blob_error(block_id, &blob_id).await;
                 summary.failed_blobs += 1;
             }
             Err(e) => {
                 let msg = format!("{e}");
                 tracing::warn!(blob = %blob_id, url = %url, error = %msg, "blob fetch failed");
-                let _ = db.record_blob_error(&blob_id, &msg).await;
+                let _ = db.record_blob_error(block_id, &blob_id).await;
                 summary.failed_blobs += 1;
             }
         }
@@ -628,9 +626,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.control.refetch_blobs {
         tracing::info!(event = "notion_refetch_blobs");
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
-            .await
-            .context("truncate blob_refs before refetch")?;
+        frankweiler_etl::doltlite_raw::truncate_data_tables(
+            db.pool(),
+            &["notion_image_attachments"],
+        )
+        .await
+        .context("truncate notion_image_attachments before refetch")?;
     }
     let run_config = json!({
         "subtree_pages": opts.subtree_pages,

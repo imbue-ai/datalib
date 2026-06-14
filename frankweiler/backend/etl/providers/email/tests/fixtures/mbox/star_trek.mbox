@@ -118,6 +118,38 @@ Book your next shore leave today and save 30%.</p>
 
 --boundary-risa--
 
+From 4000000000000000004@xxx Wed Jan 07 09:00:00 +0000 2026
+X-GM-THRID: 4000000000000000004
+X-Gmail-Labels: Inbox
+Delivered-To: picard@enterprise.starfleet
+Message-Id: <bridge-001@enterprise.starfleet>
+From: LCARS Status <lcars@enterprise.starfleet>
+To: Jean-Luc Picard <picard@enterprise.starfleet>
+Subject: Bridge status display
+Date: Wed, 7 Jan 2026 09:00:00 +0000
+Mime-Version: 1.0
+Content-Type: multipart/related; boundary="boundary-bridge"
+
+--boundary-bridge
+Content-Type: text/html; charset=utf-8
+
+<html><body>
+<p>Bridge status display below:</p>
+<p><img src="cid:lcars-glyph@enterprise" alt="LCARS"></p>
+<p>End of report.</p>
+</body></html>
+
+--boundary-bridge
+Content-Type: image/png
+Content-ID: <lcars-glyph@enterprise>
+Content-Transfer-Encoding: base64
+Content-Disposition: inline; filename="lcars.png"
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlPM
+0jRWQQAAAApJREFUeJxjYAAAAAIAAUivpHEAAAAASUVORK5CYII=
+
+--boundary-bridge--
+
 From 3000000000000000003@xxx Wed Jan 07 14:00:00 +0000 2026
 X-GM-THRID: 3000000000000000003
 X-Gmail-Labels: Sent,Important

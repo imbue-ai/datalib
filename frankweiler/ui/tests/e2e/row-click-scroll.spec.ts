@@ -58,7 +58,14 @@ test("row clicks highlight and scroll to the right message", async ({
   const data = (await resp.json()) as { rows: Row[] };
   const byConv = new Map<string, Row[]>();
   for (const r of data.rows) {
-    if (r.kind === "Chat") continue;
+    // Providers stamp chat-level rows with their own prefix ("Signal
+    // Chat", "WhatsApp Chat", "Beeper:Signal Chat"); accept any suffix
+    // ending in "Chat" / "Thread" / "Reaction" so we only walk
+    // per-message rows here. (Previously `=== "Chat"` was used, but it
+    // missed `WhatsApp Chat`; keep the broader pattern even now that
+    // the backend `null → 0` read-path bug is fixed, since the
+    // taxonomy is genuinely prefixed.)
+    if (/(Chat|Thread|Reaction)$/.test(r.kind)) continue;
     if (r.message_index == null) continue;
     const list = byConv.get(r.conversation_uuid) ?? [];
     list.push(r);

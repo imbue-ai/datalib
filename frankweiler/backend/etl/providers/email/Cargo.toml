@@ -18,6 +18,7 @@ path = "src/bin/jmap_download.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
+frankweiler-etl-macros = { path = "../../macros" }
 frankweiler-obs = { path = "../../../obs" }
 frankweiler-time = { path = "../../../time" }
 frankweiler-schema = { path = "../../../schema" }
@@ -33,14 +34,14 @@ clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
 sqlx = { workspace = true }
 sha2 = "0.10"
-# HTML → Markdown for rendering JMAP `text/html` email bodies. Prefers
-# HTML over `text/plain` when both are present so we get bare-URL
-# auto-linking, inline images via `<img src="cid:…">`, and proper list
-# / blockquote / formatting fidelity for the vast majority of mail
-# that's HTML-typed anyway. We pre-rewrite `cid:<id>` srcs to
-# `blobs/<materialized-filename>` before parsing so the resulting
-# `![](…)` link points at the on-disk byte-for-byte copy.
-html2md = "0.2"
+# HTML → Markdown for rendering JMAP `text/html` email bodies.
+# turndown.js-port; html5ever DOM walk; GFM tables; script/style/head
+# stripped via the builder. We pre-rewrite `cid:<id>` srcs to
+# `blobs/<materialized-filename>` so the resulting `![](…)` link
+# points at the on-disk byte-for-byte copy. Switched from `html2md`
+# 0.2, which blew up to multi-GB output on nested layout tables in
+# Gmail calendar invites.
+htmd = "0.5"
 tempfile = "3"
 # mbox / RFC 5322 parser used by `translate::mbox` to ingest Google
 # Takeout exports (the "All mail Including Spam and Trash.mbox" file)

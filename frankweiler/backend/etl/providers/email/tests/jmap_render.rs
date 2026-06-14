@@ -1,17 +1,18 @@
-//! End-to-end render test: build a tiny in-memory `LoadedRaw` whose
-//! `blobs` reader carries real RFC 5322 `.eml` bytes for each email,
-//! render it through `render_all`, and assert the on-disk layout +
-//! grid_rows sidecar shape. Doesn't need a real JMAP server or HTTP
-//! playback — exercises the renderer in isolation.
+//! End-to-end render test: build a tiny in-memory `ParsedEmail`
+//! whose per-bucket `BlobBundle` carries real RFC 5322 `.eml` bytes
+//! for each email, render it through `render_all`, and assert the
+//! on-disk layout + grid_rows sidecar shape. Doesn't need a real
+//! JMAP server or HTTP playback — exercises the renderer in
+//! isolation.
 
-use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::path::PathBuf;
 
-use frankweiler_etl::blob_cas::{blake3_hex, BlobView, InMemoryBlobReader};
+use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail, LoadedRaw};
+use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
+use frankweiler_etl_email::translate::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 use serde_json::json;
 
@@ -30,20 +31,11 @@ const EML_E2: &str = "From: Bob <b@x.test>\r\n\
                       \r\n\
                       reply body\r\n";
 
-fn insert_eml(reader: &mut InMemoryBlobReader, ref_id: &str, owning_id: &str, body: &[u8]) {
-    reader.insert(BlobView {
-        ref_id: ref_id.into(),
-        owning_id: owning_id.into(),
-        slot: "source".into(),
-        blake3: blake3_hex(body),
-        content_type: Some("message/rfc822".into()),
-        upstream_name: None,
-        source_url: None,
-        bytes: body.to_vec(),
-    });
+fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
+    bundle.add(ref_id, body.to_vec(), Some("message/rfc822".into()), None);
 }
 
-fn make_loaded() -> LoadedRaw {
+fn make_loaded() -> ParsedEmail {
     let account = json!({"id": "A1", "name": "thad@example.com", "isPersonal": true});
     let mailbox = json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"});
     let thread = json!({"id": "T1", "emailIds": ["E1", "E2"]});
@@ -55,11 +47,15 @@ fn make_loaded() -> LoadedRaw {
             thread_id: "T1".into(),
             blob_id: "B-eml-1".into(),
             message_id: None,
+            in_reply_to: None,
+            references: None,
             received_at: Some("2026-01-01T00:00:00Z".into()),
             sent_at: None,
             size: Some(EML_E1.len() as i64),
             subject: Some("Hello".into()),
             from_json: Some(r#"[{"name":"Alice","email":"a@x.test"}]"#.into()),
+            to_json: None,
+            cc_json: None,
             has_attachment: false,
         },
         LoadedEmail {
@@ -68,11 +64,15 @@ fn make_loaded() -> LoadedRaw {
             thread_id: "T1".into(),
             blob_id: "B-eml-2".into(),
             message_id: None,
+            in_reply_to: None,
+            references: None,
             received_at: Some("2026-01-02T00:00:00Z".into()),
             sent_at: None,
             size: Some(EML_E2.len() as i64),
             subject: Some("Re: Hello".into()),
             from_json: Some(r#"[{"name":"Bob","email":"b@x.test"}]"#.into()),
+            to_json: None,
+            cc_json: None,
             has_attachment: true,
         },
     ];
@@ -97,28 +97,33 @@ fn make_loaded() -> LoadedRaw {
         }],
     );
 
-    let mut reader = InMemoryBlobReader::new();
-    insert_eml(&mut reader, "B-eml-1", "E1", EML_E1.as_bytes());
-    insert_eml(&mut reader, "B-eml-2", "E2", EML_E2.as_bytes());
-    let att_bytes = b"hello-pdf-12";
-    reader.insert(BlobView {
-        ref_id: "B-att-1".into(),
-        owning_id: "E2".into(),
-        slot: "2".into(),
-        blake3: blake3_hex(att_bytes),
-        content_type: Some("application/pdf".into()),
-        upstream_name: Some("hello.pdf".into()),
-        source_url: None,
-        bytes: att_bytes.to_vec(),
-    });
+    let mut bundle = BlobBundle::new();
+    insert_eml(&mut bundle, "B-eml-1", EML_E1.as_bytes());
+    insert_eml(&mut bundle, "B-eml-2", EML_E2.as_bytes());
+    bundle.add(
+        "B-att-1",
+        b"hello-pdf-12".to_vec(),
+        Some("application/pdf".into()),
+        Some("hello.pdf".into()),
+    );
 
-    LoadedRaw {
+    ParsedEmail {
         accounts: vec![account],
         mailboxes: vec![mailbox],
         threads: vec![thread],
-        emails,
-        joins,
-        blobs: reader.into_handle(),
+        docs: vec![EmailThreadBucket {
+            account_id: "A1".into(),
+            thread_id: "T1".into(),
+            emails,
+            joins,
+            blobs: bundle,
+        }],
+        docs_skipped: 0,
+        scan: ScanResult {
+            changed_threads: None,
+            new_head: None,
+            scan_elapsed: None,
+        },
     }
 }
 
@@ -127,21 +132,13 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     let parsed = make_loaded();
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();
-    let prior: HashMap<String, String> = HashMap::new();
     let mut completed: Vec<RenderedMarkdown> = Vec::new();
     let mut on_done = |md: RenderedMarkdown| -> anyhow::Result<()> {
         completed.push(md);
         Ok(())
     };
-    let written = render_all(
-        &parsed,
-        tmp.path(),
-        "fastmail",
-        &progress,
-        &prior,
-        &mut on_done,
-    )
-    .expect("render_all");
+    let written =
+        render_all(&parsed, tmp.path(), "fastmail", &progress, &mut on_done).expect("render_all");
     assert_eq!(written.len(), 1, "one thread → one rendered md");
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 

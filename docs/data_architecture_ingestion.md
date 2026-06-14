@@ -9,8 +9,9 @@ for.
 
 The downstream stages — translate, load, indexing, annotation, and
 the UI's consumption of `grid_rows` — are mostly the subject of a
-separate document, *Data Architecture: Translation, Indexing,
-Annotation, and UI* (not yet written). Where understanding extract
+separate document,
+[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+Where understanding extract
 requires referring to a downstream concept (e.g. the sidecar contract
 that translate emits, the `GridRow` projection the UI reads), this
 document touches on it briefly. The bulk of the downstream-leaning
@@ -22,6 +23,58 @@ It is aspirational as much as descriptive: not every provider or stage
 fully honors every principle today, but a new provider, table, or
 transformation should be judged against this document, and divergences
 should be either justified or fixed.
+
+## Schema first — the tables _are_ the design
+
+> _"Show me your flowcharts and I will be confused. Show me your tables
+> and I won't need your flowcharts."_ — paraphrased from Fred Brooks
+
+The single most load-bearing principle of this whole document is
+that **the schema is the design**. When we port a provider, refactor a
+pipeline, or sketch a new feature, the **first** artifact is the
+table — its columns, its primary key, its uniqueness constraints, its
+foreign-key relationships, and a paragraph or two of prose explaining
+what each row _means_. Everything else — the extractor that fills the
+table, the renderer that reads it, the incremental cursor that
+re-syncs it, the test fixtures, the UI's projection — falls out of
+the schema mechanically. If those downstream pieces feel hard to
+write, that is almost always a signal that the schema is wrong, not
+that the code is wrong.
+
+Concretely, when starting any non-trivial piece of work in this
+codebase:
+
+1. **Write the DDL first** — even before reading the upstream API
+   docs in detail. A column you can't justify is a column the
+   upstream doesn't really give you, or a column nothing downstream
+   actually wants. Both are bugs in the schema.
+2. **Document each table _in the same file as the DDL_**. Per-provider
+   `schema_raw.rs` files (`etl/providers/<p>/src/extract/schema_raw.rs`)
+   are the canonical home for both the `CREATE TABLE` text and the
+   prose commentary on it. Tables without their prose are
+   half-finished.
+3. **Make the downstream code derive from the schema, not the other
+   way around.** The `WirePayloadRow` and `CasEdgeRow` derive macros
+   exist specifically so that the row struct and its DDL stay in
+   lockstep — change the struct, the DDL changes; change the DDL,
+   the compile breaks. If you find yourself writing helper code that
+   the schema "doesn't quite support," fix the schema, not the
+   helper.
+4. **When porting, the schema diff is the design review.** A clean
+   port shows up as a clean schema diff: tables added or removed,
+   columns added or removed, with prose explaining _why_. Code-level
+   diffs without a corresponding schema diff are nearly always
+   accidental complexity.
+
+The same principle applies one layer up: the **wire-event JSONL tape**
+(below) is "the schema, externalized" — one append-only line per
+upsert, exactly the row that landed in the table. If the schema is
+right, the tape is also right. If the tape is hard to read, the
+schema is too clever.
+
+This is the same discipline that, at a previous employer of one of the
+authors, took the form "write the protobuf first; everything else
+follows." Replace `protobuf` with `DDL` and we are in the same place.
 
 Pointers to the things that are **not** in this file:
 
@@ -83,6 +136,21 @@ Three rules:
     wire-fidelity payload that the doltlite row gets. No second
     parse, no second normalize.
 
+> **Status (2026-06):** **Slack** wires the tape end-to-end today
+> via the per-row `write_event(s)_to_raw_storage_layer` chokepoints
+> in `slack/src/extract/db.rs`, attached by `sync` at run start;
+> see `sync/src/main.rs::attach_event_tape`. Every other provider's
+> extract path runs without tape integration — its
+> `attach_event_tape` dispatch is a documented no-op. The bulk
+> chokepoint (see [Bulk-upsert as the standard write
+> path](#bulk-upsert-as-the-standard-write-path)) is also a tape
+> chokepoint, so wire-shaped providers that adopt the bulk helper
+> automatically get the tape. Note the corollary: providers whose
+> rows do **not** come off a wire (e.g. mbox file imports) should
+> bypass the chokepoint entirely and call
+> `bulk_upsert_bookkeeping` directly — there is no upstream event
+> to mirror.
+
 ## Shape of the system
 
 We have an ETL-shaped architecture that extracts raw data from many
@@ -91,14 +159,26 @@ verbatim** in versioned doltlite tables, with attachment **BLOBs in a
 content-addressable store** (also doltlite, but a separate sibling
 database per source).
 
-Each entity table has typed columns for the fields we need to query or index (`id`,
-`parent_id`, ordering columns, timestamps, foreign keys to other
-entities) plus a `payload` column that holds the raw upstream wire
-payload. On disk, `payload` is stored as JSONB (SQLite 3.45 binary
-JSON, via `jsonb(?)` on write and `json(payload)` on read; see [port
+Each entity table has a `payload` column that holds the raw upstream
+wire payload, plus a small number of typed columns the writer needs to
+populate at insert time (synthesized-PK components, FKs into parent
+tables that aren't in the payload, namespace discriminators). On disk,
+`payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)`
+on write and `json(payload)` on read; see [port
 guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
 in Rust the value round-trips as a text JSON string. JSONB is a storage
 encoding. The principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+
+**Fields that are derivable from the payload** (e.g. `updated_at`,
+`state`, `name`, `html_url`, `display_name`) — even when we want to
+query or index them — should **not** be duplicated as stored columns.
+Use either a `CREATE INDEX … ON t(payload->>'$.path')` expression
+index, or a `VIRTUAL` generated column plus an index over it. Both
+produce COVERING index plans in DoltLite v0.11.9; the VIRTUAL+index
+variant additionally restores `SELECT col FROM t` ergonomics. Either
+way, `ALTER TABLE ADD COLUMN … VIRTUAL` (or a new expression index)
+is a no-refetch additive change against existing user data. See
+[Schema evolution](#schema-evolution).
 
 The pipeline has three stages. All three run **in-process inside
 `frankweiler-sync`** — one binary, one process, one config-driven
@@ -169,6 +249,36 @@ denormalized fields visible inline. The plan landing this
 convention across the tree is in
 [`docs/data_architecture_plan.md`](data_architecture_plan.md)
 §P0.1.
+
+#### Events vs bookkeeping: where each column lives
+
+Every entity table `<t>` is paired with a sidecar `<t>_bookkeeping`.
+The split is load-bearing — three buckets to think about when adding
+a column:
+
+  1. **Upstream payload data** (a Slack `text`, a GitHub `state`, a
+     Notion `last_edited_time`) → lives inside `payload`. If we need
+     to query or index it, use a VIRTUAL generated column + index or
+     an expression index over `payload->>'$.path'`. Do **not** copy it
+     into a stored column.
+  2. **Writer-supplied identity / joins** (synthesized-PK
+     components, FK references to parent entities the walker knows
+     but the payload doesn't, namespace discriminators like beeper's
+     `source`/`network`) → stored typed columns on `<t>`. These are
+     the only typed columns the entity table should grow.
+  3. **Writer-supplied per-row state** (`fetched_at`, `attempt_count`,
+     `last_attempt_at`, `last_error`, per-row cursors like CardDAV
+     `etag`, ChatGPT `last_listing_update_time`, YoLink
+     `last_ts_ms`, server-supplied freshness markers like
+     `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
+
+The reason the split matters: bookkeeping changes on every
+attempt regardless of upstream change. Storing it on the entity
+table makes every `dolt diff` noisy, defeats the wire-fidelity
+property of `payload`, and forces re-renders of unchanged
+content downstream. Keeping it on the sidecar means `<t>`
+mutates only when upstream actually changed, and the sidecar
+churn stays out of any cross-stage fingerprint.
 
 ### Layering of concerns: extract is downstream-agnostic
 
@@ -304,14 +414,50 @@ X", and that drives the cursor pattern (see [Cursor / resume strategy](#cursor--
 
 ### Wire-fidelity of the raw store
 
-The raw store preserves upstream responses as we received them. Two
-load-bearing rules follow:
+The raw store preserves the **semantic content** of upstream responses
+verbatim — every field, every value, with no loss and no
+pre-shaping into our internal model. The on-disk *encoding* of that
+content is a separate question; we pick whichever encoding is
+human-readable and inspectable. Concretely:
 
-  - **Normalize at translate time, not extract time.** A lesson learned
-    on the anthropic port: we used to pre-normalize the API response
-    at fetch time. We don't anymore. The raw `payload` is the upstream
-    bytes, so `dolt diff` reflects *actual upstream change* rather than
-    churn from our normalizer evolving. Port guide §5 spells this out.
+  - **JSON-shaped sources** (HTTP API responses from Slack,
+    Anthropic, Notion, GitHub, etc.) store the response JSON
+    verbatim, as JSONB.
+  - **Binary-protocol sources** (Signal's encrypted protobuf
+    backup, future binary feeds) are **decoded** at extract time
+    into JSON of equal semantic content. Encryption layers, compression,
+    binary wire encodings, and other transport-level packaging are
+    artifacts of how the data got to us, not part of the wire data
+    itself. Storing them raw on disk would be "too raw" — the point
+    of the raw store is that a human can `tail`/`grep`/`jq` it
+    without a decoder in the loop.
+  - **File-imported sources** (mbox `.eml` bytes, WhatsApp `msgstore.db`,
+    Beeper `index.db`) keep the underlying file (or its blobs)
+    available — in CAS for `.eml`, on disk for sqlite — while
+    promoting the *semantic* content (typed columns, JSONB payloads)
+    into the entity tables.
+
+The rationale we keep coming back to: **if all we wanted was a copy
+of the upstream bytes, we'd just use `cp`.** The user already has
+those bytes on their disk for every file-imported source, and we
+can re-fetch them for live sources by hitting the API again. The
+raw store earns its keep by being *queryable and human-inspectable*
+in a way the original bytes aren't — JSONB rows, typed columns,
+predictable structure across providers. That's the criterion for
+"is this decoding step OK to do at extract time?" If the alternative
+to decoding is asking the user to install a special tool just to
+see what's in their own data, the decoding belongs in extract.
+
+Two load-bearing rules follow:
+
+  - **Normalize at translate time, not extract time.** A lesson
+    learned on the anthropic port: we used to pre-normalize the API
+    response (renaming fields, collapsing shapes, dropping subtrees)
+    at fetch time. We don't anymore. Decoding a binary wire encoding
+    to JSON of the **same** semantic content is **not normalization**
+    — every field upstream sent us is still present, with the same
+    values. Normalization means pre-shaping into our internal model
+    (renaming, collapsing, projecting), which we defer to translate.
   - **Don't pollute payloads with downloader-synthesized keys.**
     `_fetched_at`, `_listing_update_time` etc. are bookkeeping, not
     upstream data; promote them to real columns on the entity table
@@ -504,8 +650,253 @@ Two consequences:
 The only other commits allowed in a raw store are `rescue:` commits.
 Anything else is a bug.
 
+## One writer per row (load-bearing rule)
+
+**Each write to a raw entity row is complete as of that write.** The
+writer's job is to assemble everything it knows about the row —
+`payload` plus all writer-supplied identity columns — and emit it in
+one UPSERT. We do not have a notion of "partial" writes that leave
+NULL columns the writer chose not to populate, and we do not have
+multi-pass enrichment where writer A populates some columns and
+writer B fills in the rest. Both are anti-patterns.
+
+Consequences:
+
+  - **One `ON CONFLICT(id) DO UPDATE` shape, everywhere.** Every
+    column on the entity table (other than `id`) is updated with
+    `excluded.<col>`. No `COALESCE(excluded.<col>, <table>.<col>)` —
+    that pattern only exists to protect a stale-but-known value from
+    being clobbered by a fresh-but-incomplete write, and we don't
+    allow incomplete writes. The uniform shape is what lets the
+    generalized bulk-upsert helper (see [Bulk-upsert as the standard
+    write path](#bulk-upsert-as-the-standard-write-path)) cover every
+    table.
+  - **One writer per row, normally.** Typically each raw entity
+    table has a single producing extractor. If two producers can in
+    principle write the same id (e.g. a JMAP API extractor and an
+    mbox file-import both targeting the `emails` table), it is a
+    configuration error to enable both for the same destination, and
+    the semantics if you did are **last-writer-wins, not merged**.
+    The system is not built to maintain a hodgepodge of two writers'
+    partial knowledge of the same row.
+  - **Enrichment is a different operation, not a different writer.**
+    If you genuinely need to add information to a row after the fact
+    (resolving a backfill cross-reference, joining in a second
+    source's view of the same upstream entity), encode it as a
+    separate, explicit `UPDATE` statement — not a partial UPSERT.
+    The UPDATE is auditable, named, and obviously distinct from the
+    table's normal upsert path.
+  - **Pre-seeding is not an exception.** Pre-seeding writes
+    `(id, payload=NULL)` — that *is* a complete write as of the
+    moment we learn the id exists, because NULL is the writer's
+    honest answer when it doesn't have the bytes yet. The later
+    detail-fetch writes `(id, payload=<bytes>)`, also complete. The
+    payload column moving from NULL to a value across two writes is
+    fine; both writes are complete-as-of-their-time.
+
+Why the discipline matters: the alternative is per-column conflict
+policies (COALESCE on some columns, replace on others), which makes
+the UPSERT shape diverge per table, makes the chunked-multi-row
+helper proliferate variants, makes `dolt diff` harder to read, and
+makes "which writer last touched this row?" an ambiguous question.
+None of that is value we want to maintain.
+
+## Bulk-upsert as the standard write path
+
+Every extract is shaped the same at the bottom: for some entity
+table `<t>`, upsert N rows of `(id, payload, …extras)`, paired with
+N rows on `<t>_bookkeeping` for `(id, fetched_at, attempt_count,
+last_error)`, and (if the source produced blobs) M rows on the CAS
+of `(blake3, byte_len, content_type, bytes)`. Doltlite charges a
+prolly-tree manifest mutation per `BEGIN … COMMIT`, so the right
+shape is **one entity-pool tx + one CAS-pool tx per batch**, each
+containing chunked multi-row `INSERT … ON CONFLICT(id) DO UPDATE`
+statements. Email's mbox extractor proved this in practice: 25k
+emails dropped from many minutes to ~75 seconds at FLUSH_BATCH=2000.
+
+The principle: **every provider's extract uses shared
+chunked-multi-row helpers for the entity-table UPSERT, the
+`<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs
+are an anti-pattern outside ad-hoc maintenance code.
+
+The shared pieces, all in `frankweiler_etl`:
+
+  - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` /
+    `bulk::push_placeholder_list`** — chunking utilities the
+    provider's per-table multi-row `INSERT` builders use.
+  - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the
+    generic `<t>_bookkeeping` UPSERT. Call this directly inside
+    the provider's tx after the entity UPSERT.
+  - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id,
+    &payload)])` shape that load-bearing batch primitives share.
+  - **`blob_cas::BlobCas::put_many`** — chunked multi-row
+    `INSERT OR IGNORE` over `cas_objects`, one tx per call.
+  - **`doltlite_raw::bulk_upsert_events(tx, tape, &[EventBatch], now)`**
+    — the **wire-event** chokepoint. For tables whose rows came off
+    an actual wire and have a meaningful payload to mirror to
+    [the JSONL tape](#wire-event-tape-jsonl): caller has already
+    issued its multi-row entity UPSERTs inside `tx`; this call
+    stamps `<t>_bookkeeping` for every batch in the same tx, commits,
+    and (if a tape is attached) appends one JSONL line per row via
+    `EventTape::append_batch`. Tape errors log but don't fail the
+    upsert — doltlite is the source of truth.
+  - **`doltlite_raw::bulk_upsert_with_tape(pool, tape, rows,
+    payloads)`** — all-in-one variant. Open tx →
+    `bulk::bulk_upsert_in_tx` (entity rows + paired bookkeeping) →
+    commit → post-commit tape append. Use when the caller has a
+    `&[T: BulkUpsertable]` vec in hand (every `WirePayloadRow`-derived
+    provider does) and wants the tape mirror without manually
+    composing the tx + bookkeeping + commit + append sequence. Same
+    "doltlite is truth, tape is best-effort mirror" semantics as
+    `bulk_upsert_events`.
+
+The chokepoint is the right tool **only for tables whose rows came
+off a wire**. For everything else — `blob_refs`, sidecars,
+file-imported entities like mbox where there is no upstream
+"event" — call `bulk_upsert_bookkeeping` directly inside the same
+tx and skip the tape. Synthesizing a fake wire payload just to feed
+the chokepoint would be making up data we don't have.
+
+The `ON CONFLICT` clause is **the same shape on every table**: every
+non-PK column is set to `excluded.<col>`. The column list itself
+still varies per table (different writer-supplied extras — see
+[Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives)
+for which extras belong on the entity table vs the bookkeeping
+sidecar vs as VIRTUAL+index over payload), but the conflict policy
+does not vary — see [One writer per row](#one-writer-per-row-load-bearing-rule).
+That uniformity is what makes a single generic
+`bulk_upsert<T>(rows: &[T])` helper feasible (in flight): the only
+per-table input is the column list, which we can derive from the
+row type at compile time. What these shared helpers own today is the
+cross-provider boilerplate — chunked SQL, bookkeeping, commit, and
+(for the wire-event subset) the tape mirror.
+
+## Incremental update via content fingerprints (load-bearing rule)
+
+**Every derived artifact in the system carries a fingerprint of the
+inputs that produced it, and every re-derivation step compares its
+*current* inputs against the stored fingerprint before doing any
+work.** Structurally this is the same content-addressable cache
+pattern that Bazel and Nix use for build artifacts — derived
+outputs are keyed by a hash of their inputs; on re-run, if the
+inputs hash the same, the cached output is still valid. The
+difference is that Bazel and Nix make the user write build files;
+we hide the cache machinery inside each stage so the user just
+runs `frankweiler-sync`.
+
+The recipe at every stage:
+
+  1. **Each persisted artifact carries a `*_fingerprint` field**
+     that hashes the inputs that produced it.
+  2. **The inputs hash covers both content and dependencies** — the
+     payload bytes themselves plus the content hashes of every
+     entity this artifact reads from upstream stages (so a change to
+     an attachment's content invalidates the rendered doc that
+     references it; a change to a chat_item's payload invalidates
+     the bucket-fingerprint for its bucket; etc.).
+  3. **Before re-deriving the artifact, recompute the inputs hash
+     and compare.** Skip if equal. This compare-and-skip is the only
+     thing the re-run loop should be doing for the common steady
+     state.
+  4. **A `*_VERSION` constant is the explicit "invalidate everything
+     downstream" lever.** Bumping `RENDER_VERSION` is how we say
+     "the renderer schema changed; treat every prior fingerprint as
+     mismatched."
+
+Where the pattern lives today:
+
+| Stage                       | Inputs hash                                                                | Stored as                                | Skip-check it powers                                                       |
+|-----------------------------|----------------------------------------------------------------------------|------------------------------------------|----------------------------------------------------------------------------|
+| Extract (snapshot-level)    | `(metadata, main, files)` triple of `(mtime, byte_size)` (Signal)          | `ingested_backups.fingerprint`           | "Have we already ingested this snapshot?" — before any decrypt/walk        |
+| Extract (per-payload)       | blake3 of the JSONB payload bytes                                          | `<entity_table>.payload_blake3`          | Input to translate's bucket fingerprint aggregation                        |
+| Extract (per-attachment)    | blake3 of the decrypted attachment bytes                                   | `<provider>_attachments.blake3`          | Input to translate's bucket fingerprint aggregation                        |
+| Translate (per document)    | blake3 of `group_concat(payload_blake3 + attachment.blake3)` over a bucket | sidecar `header.source_fingerprint`      | "Have we already rendered this document?" — before loading payloads        |
+| Load (per sidecar)          | the sidecar's own `source_fingerprint`                                     | `markdowns_loaded.source_fingerprint`    | "Have we already loaded this sidecar's rows?" — before re-applying rows    |
+
+Where it still needs to land (aspirational; some not yet built):
+
+  - **Per-table extract commit hash.** Today the orchestrator
+    wraps each source in one commit per run; with finer-grained
+    table-level commit hashes we could skip downstream stages whose
+    inputs are unchanged at the table level even when other tables
+    changed.
+  - **Attachment-GC dependency tracking.** `gc_orphans` walks
+    references today; making it incremental requires a fingerprint
+    over "the union of referenced blake3s across providers."
+  - **qmd-index rebuild.** Currently rebuilt full; should derive an
+    inputs fingerprint per index shard.
+
+Why this pattern matters:
+
+  - **Re-runs are cheap.** A second sync run against an unchanged
+    source touches as little disk as possible at every stage. A
+    re-render against an unchanged bucket loads zero payloads off
+    disk (translate's two-phase parse short-circuits before reading
+    any chat_items in the unchanged bucket).
+  - **Bazel/Nix complexity, hidden.** The user does not write build
+    files. No DAG declaration, no explicit rule registration, no
+    `target` syntax to learn. Each stage's fingerprint recipe is
+    internal to that stage, and the orchestrator wires the
+    "previous fingerprints" map through automatically.
+  - **Correct-by-construction.** Two runs that should produce
+    different outputs produce different fingerprints (because their
+    inputs hash differently). Two runs that should produce identical
+    outputs produce matching fingerprints; the cached output stays.
+    The render of an unchanged bucket is exactly the same bytes.
+
+### dolt_diff supersedes per-bucket fingerprints (ported providers)
+
+Ported providers (chatgpt, anthropic, signal, slack, plus email)
+**replaced the per-bucket fingerprint pattern with
+`dolt_diff_<table>` virtual tables driven by a per-source render
+cursor**. The translate-side fingerprint CTE is gone in those
+providers; doltlite's prolly-tree diff answers "what changed since
+last render?" directly.
+
+Mechanism:
+
+  - On render success, the per-source render cursor stamps the
+    doltlite HEAD into
+    `<out>/rendered_md/<provider>/<source>/_render_cursor.json`.
+  - On the next render, `parse` reads that hash and runs the shared
+    `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec
+    { global_fanout_tables, bucket_query })`. The scan:
+      1. Reads HEAD via `dolt_log()`.
+      2. Cold-starts if any `dolt_diff_<global_fanout_tables[i]>` row
+         is non-`unchanged` (changes to those tables fan out to
+         "render everything").
+      3. Otherwise runs the per-bucket `bucket_query`, projecting the
+         bucket-key column across whichever per-table `dolt_diff_*`
+         vtabs contribute to that provider's natural bucket.
+  - Parse then loads payloads only for the surviving bucket keys.
+
+Sidecar `source_fingerprint` and the load-step compare stay — they
+still gate the load step ("have we already loaded this sidecar's
+rows?"). On the ported providers `source_fingerprint` is now just
+the stable bucket UUID (distinct per bucket, stable across re-renders
+of the same bucket).
+
+This swap moves the "what's different?" decision from
+Rust-computed hash trees to doltlite's native diff, which it has to
+maintain anyway for `dolt diff`. The per-row `payload_blake3`
+columns are gone (their `WirePayloadRow` derive no longer emits
+them); unported providers still carry them but they're dead weight
+until the port lands.
+
+**Rule for new stages.** Any new derivation added to the pipeline
+(future Annotate step, future index shard, future projection)
+follows the same recipe: declare what the inputs are (content +
+dependency hashes), compute a deterministic hash over them, store
+it alongside the output, compare on re-run. The compare-and-skip
+loop is what makes the system feel responsive on a laptop with
+months of accumulated data.
+
 ## Cursor / resume strategy
 
+Cursor / resume is the **extract-side specialization** of the
+[Incremental update](#incremental-update-via-content-fingerprints-load-bearing-rule)
+pattern: "what was the last upstream identifier we successfully
+recorded?" answers "what's the inputs hash for the next walk?"
 Two patterns in the tree, picked by upstream API shape:
 
   - **Forward-walk + refresh window** (slack, anthropic, chatgpt,
@@ -536,6 +927,53 @@ Two reasons the split matters:
     no-op via `INSERT OR IGNORE`. Intra-source dedup is automatic;
     cross-source dedup is one config change away (single-writer caveat
     in the port guide).
+
+### Per-provider CAS edge tables
+
+The shared `blob_refs` table is **only used by unported providers**.
+Ported providers (chatgpt, anthropic, signal, slack, plus email and
+whatsapp via Shape A) each own a small four-column edge table that
+maps `(owning_id, ref_id) → blake3`. Bytes still live in the shared
+`cas_objects`; the edge table is provider-specific so providers
+that happen to use the same upstream id format don't collide.
+
+The four-column shape is universal — `id` (synth PK
+`{owning}#{ref}`) + owning FK + ref id + nullable blake3 — so the
+declaration in `schema_raw.rs` is a single `#[derive(CasEdgeRow)]`
+struct. The derive emits the DDL, the two indices, the synth-PK
+recipe, and the `BulkUpsertable` impl. See
+[`provider_migration_dolt_diff_and_cas_edge.md`](provider_migration_dolt_diff_and_cas_edge.md)
+for the full recipe.
+
+### Shared attachment-flush primitives
+
+Per-bucket attachment-fetch flow is consolidated into three shared
+pieces in `frankweiler_etl::blob_cas`:
+
+  - **`load_blake3_index(pool, table, ref_id_column)`** — one SQL
+    scan at fetch entry produces the run-scoped `(ref_id → blake3)`
+    map. The per-file dedupe check is a HashMap hit, not a SQL
+    round trip queued behind preceding multi-MB CAS commits on the
+    single-connection doltlite pool.
+  - **`CasEdgeAccumulator`** — per-bucket walker. Three add paths:
+    `add_fetched`, `add_known`, `add_failed`. Tracks the
+    `BlobBundle`, the `(owning, ref)` edge list, and per-`ref_id`
+    error strings. Dedupes by `(owning, ref)`.
+  - **`flush_cas_edges(pool, cas, cas_inserts, rows, errors)`** — the
+    canonical 3-step end-of-bucket flush: CAS `put_many` →
+    `bulk_upsert_in_tx` the edge rows → stamp `last_error` on the
+    bookkeeping sidecar for every failed `(synth_pk, err)` pair →
+    commit. `CasEdgeAccumulator::flush` delegates to it via a
+    provider-supplied row-builder closure.
+
+The blake3 forward-stamp invariant: every edge row carries the
+actual content hash. When a file's bytes were already in CAS from a
+prior sync, the new `(this_bucket, file_id)` edge row gets the
+looked-up hash too — not NULL with the bytes only reachable through
+a sibling row keyed by a different bucket. This keeps the
+`<provider>_attachments` table self-describing: an edge row tells
+you what you need to fetch the bytes, without joining through any
+other row.
 
 ### Why contacts doesn't participate
 
@@ -596,21 +1034,33 @@ or report it still-failed without re-walking the entire upstream API.
 
 Five sub-rules:
 
-  - **Pre-seed before fetch.** Every entity row should be created in
-    the table the moment we *learn the upstream identifier exists*,
-    not when the detail fetch returns. A pre-seeded row carries the
-    PK, the `parent_id` / context needed to redo the fetch, and a
-    `NULL` payload. If the detail fetch then crashes, errors out, or
-    gets killed, the row is still there with `payload IS NULL` and
-    we know to retry it. This is the
-    `dr::ensure_object_row(&mut tx, table, id)` pattern.
+  - **No-preseed listing flow.** Earlier versions of this doc
+    advocated pre-seeding entity rows from the listing pass with
+    `payload IS NULL`, so a crashed detail fetch would leave a row
+    visible to the retry walk. We've reversed that decision: rows
+    only appear *after a successful detail fetch*. Reasons:
 
-    The aspiration is "pre-seed always." Today we do this where the
-    upstream API gives us a clean listing-then-detail split (Notion,
-    Anthropic). For providers whose upstream forces us to discover
-    IDs only inside the same call that fetches their content, we
-    can't pre-seed and have to fall back to "row appears at fetch
-    success."
+      1. A pre-seeded row is a tri-state shape (doesn't exist /
+         pre-seeded / fully fetched) that doesn't fit the
+         `WirePayloadRow` derive, and forces a parallel hand-rolled
+         UPSERT path that diverges from `bulk_upsert_in_tx`.
+      2. The skip-check works just as well without it. The listing
+         pass bulk-reads `(id → stored.update_time)` for every id it
+         saw, compares to the upstream's `update_time`, and routes
+         everything to one of `missing` / `stale` / `up_to_date`.
+         "missing" means "row doesn't exist yet, fetch it" — which
+         is exactly the retry behavior pre-seeding tried to enable
+         for crashed fetches: the next sync's listing surfaces them
+         again, and they fall in the `missing` bucket.
+      3. The forensic value of "last sync attempted this id but
+         crashed" was rarely consulted in practice and not worth
+         the schema complexity.
+
+    Failed detail fetches still record `last_error` in the
+    `<table>_bookkeeping` sidecar via `record_object_error`, so
+    explicit failures are visible. A *silently* dropped id (process
+    killed mid-fetch) leaves no row at all — that's fine; the next
+    listing surfaces it as missing.
 
   - **Always-paired bookkeeping.** Every object table has a sidecar
     `<table>_bookkeeping` carrying `attempt_count`, `last_attempt_at`,
@@ -846,6 +1296,18 @@ Two halves to this:
     Subtractive changes (renames, removals, type changes) get an
     explicit, named migration step. We aren't there yet.
 
+    The pattern that gets us closest, today: when the new "column"
+    is derivable from the payload (which is most of them — see
+    [Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives)),
+    add it as a `VIRTUAL` generated column over `payload->>'$.path'`
+    plus an index, or as a bare expression index. Both work in
+    DoltLite v0.11.9, both produce COVERING index plans, and
+    `ALTER TABLE ADD COLUMN … VIRTUAL` applies to existing rows
+    with no refetch and no payload rewrite. Reserve real stored
+    columns for the small set of writer-supplied fields that
+    genuinely aren't in the payload (synthesized PKs, FKs, namespace
+    discriminators).
+
   - **Upstream schema drift** — Slack adds a field, Notion changes a
     block type, GitHub renames `merged_by`. Because we preserve raw
     payloads verbatim (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)), the new bytes are captured for free —
@@ -883,8 +1345,9 @@ are load-bearing assumptions the rest of the design rests on:
 ## Downstream stages — pointer to the companion doc
 
 The material in this section is here as a placeholder for what will
-move into the companion document *Data Architecture: Translation,
-Indexing, Annotation, and UI*. It's included so this ingestion-focused
+move into the companion document
+[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+It's included so this ingestion-focused
 doc can still hand a reader enough of the downstream picture to
 understand the contracts extract has to honor.
 
@@ -1148,6 +1611,27 @@ they're listed here so they don't get lost.
     repo: this file, signal's `extract/mod.rs`, each provider's
     `EXTRACT.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
     and any AGENTS.md / README pointers.
+
+  - **VIRTUAL column projection from JSONB payload.** Each
+    `WirePayloadRow`-derived row currently stores a small set of
+    denormalized columns alongside the payload for cheap predicate
+    queries (`name`, `update_time`, `is_member`, etc.). On DoltLite
+    v0.11.9+ these are candidates for `VIRTUAL` generated columns
+    over `payload->>'$.x'` expressions, paired with expression
+    indexes. The denormalization stays queryable; the write cost
+    drops to zero and drift-vs-payload becomes impossible by
+    construction. The `WirePayloadRow` macro would need a per-field
+    attribute like `#[wire_payload_row(virtual = "$.profile.real_name")]`.
+    Several FIXMEs in `slack/src/extract/schema_raw.rs` (UserRow,
+    ChannelRow, MessageRow) flag the specific columns that would
+    convert cleanly.
+
+  - **`BulkUpsertable` derive for non-payload tables.** Several
+    provider tables (bookkeeping tables like slack's
+    `RepliesPagesRow`) hand-roll the `BulkUpsertable` impl because
+    they have no wire payload. The shape is mechanical — a
+    `#[derive(BulkUpsertable)]` macro with a per-field column-name
+    attribute would collapse each impl to the struct definition.
 
 ## What this document does not cover
 

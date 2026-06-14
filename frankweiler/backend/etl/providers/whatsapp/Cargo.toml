@@ -10,7 +10,12 @@ path = "src/lib.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
+frankweiler-etl-chat-common = { path = "../../chat-common" }
+frankweiler-time = { path = "../../../time" }
+frankweiler-schema = { path = "../../../schema" }
+frankweiler-index-lib = { path = "../../../index_lib" }
 frankweiler-whatsapp-backup = { path = "../../../whatsapp-backup" }
+uuid = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

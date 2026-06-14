@@ -35,7 +35,9 @@
 //!   the PK — upstream may re-arrange a block and we want the row at the
 //!   same UUID with the column updating.
 
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw as dr;
+use frankweiler_etl_macros::CasEdgeRow;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -190,9 +192,35 @@ pub const COMMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS comments (
 pub const COMMENTS_PAGE_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS comments_page ON comments(page_id)";
 
+/// `notion_image_attachments` — N:M edge between one Notion image
+/// block and a `cas_objects` blob. Replaces this provider's use of
+/// the shared `blob_refs` table. Universal CAS-edge shape:
+/// `id` (synth `"{block_id}#{ref_id}"`), owning FK (`block_id`,
+/// indexed so per-page loads on the render side stay cheap), upstream
+/// ref (`ref_id`, also indexed for the `blake3 IS NOT NULL`
+/// skip-check), `blake3` (null until the CAS write lands). See
+/// [`frankweiler_etl::blob_cas::CasEdgeRow`].
+///
+/// PK choice: the four-field synthesized PK every CAS edge table
+/// uses (`{owning_id}#{ref_id}`). For Notion the only attachment
+/// shape today is image blocks, where `ref_id = "{block_uuid}:image"`
+/// — one image per block, so `(block_id, ref_id)` is effectively
+/// 1:1 in practice. The two-column edge shape stays for symmetry
+/// with the other providers; a future audio/video block would
+/// slot in as a different `ref_id` suffix without re-shaping.
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "notion_image_attachments")]
+pub struct NotionImageAttachmentRow {
+    pub id: String,
+    pub block_id: String,
+    pub ref_id: String,
+    pub blake3: Option<String>,
+}
+
 /// Compose the full DDL list passed to
 /// [`frankweiler_etl::doltlite_raw::open`]: every entity table DDL,
-/// each entity's CREATE-INDEX statements, and the paired
+/// each entity's CREATE-INDEX statements, the
+/// [`NotionImageAttachmentRow`] edge-table DDLs, and the paired
 /// `<table>_bookkeeping` DDL produced by the shared layer.
 ///
 /// Schema-local glue, kept here so the "what tables exist?" answer
@@ -209,6 +237,7 @@ pub fn full_ddl() -> Vec<String> {
         COMMENTS_DDL.to_string(),
         COMMENTS_PAGE_INDEX_DDL.to_string(),
     ];
+    out.extend(NotionImageAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

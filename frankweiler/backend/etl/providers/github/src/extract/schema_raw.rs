@@ -47,7 +47,9 @@
 //!   "show me every review comment on file F" index can be built without
 //!   re-parsing payloads.
 
-use frankweiler_etl::doltlite_raw as dr;
+use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
+use frankweiler_etl_macros::WirePayloadRow;
+use serde_json::Value;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -80,12 +82,40 @@ pub const DATA_TABLES: &[&str] = &[
 /// - `payload` — raw `/user` response (JSONB-encoded on disk).
 ///
 /// Not event-shaped; no `when_ts` story.
-pub const SELF_IDENTITY_DDL: &str = "CREATE TABLE IF NOT EXISTS self_identity (
-    id TEXT PRIMARY KEY,
-    login TEXT NULL,
-    html_url TEXT NULL,
-    payload TEXT NULL
-)";
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "self_identity")]
+pub struct SelfIdentityRow {
+    pub id_and_payload: WirePayload,
+    pub login: Option<String>,
+    pub html_url: Option<String>,
+}
+
+impl SelfIdentityRow {
+    /// Build from the upstream `GET /user` payload. Errors when the
+    /// payload doesn't carry an `id` (i.e. we got back something we
+    /// didn't recognize as a user object).
+    pub fn from_payload(payload: &Value) -> anyhow::Result<Self> {
+        let id = payload
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .map(|n| n.to_string())
+            .ok_or_else(|| anyhow::anyhow!("/user response missing id"))?;
+        Ok(Self {
+            id_and_payload: WirePayload {
+                id,
+                payload: serde_json::to_string(payload)?,
+            },
+            login: payload
+                .get("login")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            html_url: payload
+                .get("html_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
 
 /// `pull_requests` — one row per PR we have ever fetched.
 ///
@@ -116,20 +146,71 @@ pub const SELF_IDENTITY_DDL: &str = "CREATE TABLE IF NOT EXISTS self_identity (
 /// - `merged_at` — upstream `payload.merged_at` ISO-8601 stamp, NULL
 ///   for unmerged PRs.
 /// - `payload` — raw PR-detail JSON (JSONB-encoded on disk).
-pub const PULL_REQUESTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pull_requests (
-    id TEXT PRIMARY KEY,
-    repo_full_name TEXT NOT NULL,
-    pr_number INTEGER NOT NULL,
-    state TEXT NULL,
-    html_url TEXT NULL,
-    head_sha TEXT NULL,
-    base_sha TEXT NULL,
-    head_ref TEXT NULL,
-    base_ref TEXT NULL,
-    updated_at TEXT NULL,
-    merged_at TEXT NULL,
-    payload TEXT NULL
-)";
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "pull_requests")]
+pub struct PullRequestRow {
+    pub id_and_payload: WirePayload,
+    pub repo_full_name: String,
+    pub pr_number: i64,
+    pub state: Option<String>,
+    pub html_url: Option<String>,
+    pub head_sha: Option<String>,
+    pub base_sha: Option<String>,
+    pub head_ref: Option<String>,
+    pub base_ref: Option<String>,
+    pub updated_at: Option<String>,
+    pub merged_at: Option<String>,
+}
+
+impl PullRequestRow {
+    /// Build from a `GET /repos/{owner}/{repo}/pulls/{num}` payload.
+    /// The composite PK `"{repo}#{num}"` is known from the search hit
+    /// — we don't have to crack the payload to learn it.
+    pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
+        let head = payload.get("head");
+        let base = payload.get("base");
+        Ok(Self {
+            id_and_payload: WirePayload {
+                id: pr_pk(repo, num),
+                payload: serde_json::to_string(payload)?,
+            },
+            repo_full_name: repo.to_string(),
+            pr_number: num as i64,
+            state: payload
+                .get("state")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            html_url: payload
+                .get("html_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            head_sha: head
+                .and_then(|h| h.get("sha"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            base_sha: base
+                .and_then(|b| b.get("sha"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            head_ref: head
+                .and_then(|h| h.get("ref"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            base_ref: base
+                .and_then(|b| b.get("ref"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            updated_at: payload
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            merged_at: payload
+                .get("merged_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
 
 /// Index on `pull_requests(repo_full_name, pr_number)` — supports the
 /// "all PRs for this repo" filter that translate / synthesize use, and
@@ -157,16 +238,52 @@ pub const PULL_REQUESTS_BY_REPO_INDEX_DDL: &str =
 ///   Sourced into `GridRow.when_ts` by translate.
 /// - `updated_at` — upstream `payload.updated_at` ISO-8601 stamp.
 /// - `payload` — raw comment JSON (JSONB-encoded on disk).
-pub const ISSUE_COMMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS issue_comments (
-    id TEXT PRIMARY KEY,
-    repo_full_name TEXT NOT NULL,
-    pr_number INTEGER NOT NULL,
-    html_url TEXT NULL,
-    user_login TEXT NULL,
-    created_at TEXT NULL,
-    updated_at TEXT NULL,
-    payload TEXT NULL
-)";
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "issue_comments")]
+pub struct IssueCommentRow {
+    pub id_and_payload: WirePayload,
+    pub repo_full_name: String,
+    pub pr_number: i64,
+    pub html_url: Option<String>,
+    pub user_login: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+impl IssueCommentRow {
+    pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
+        let id = payload
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .map(|n| n.to_string())
+            .ok_or_else(|| anyhow::anyhow!("issue_comment missing id"))?;
+        Ok(Self {
+            id_and_payload: WirePayload {
+                id,
+                payload: serde_json::to_string(payload)?,
+            },
+            repo_full_name: repo.to_string(),
+            pr_number: num as i64,
+            html_url: payload
+                .get("html_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            user_login: payload
+                .get("user")
+                .and_then(|u| u.get("login"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            created_at: payload
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            updated_at: payload
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
 
 /// Index on `issue_comments(repo_full_name, pr_number)` — supports the
 /// per-PR child join that translate uses to assemble one document per
@@ -197,17 +314,57 @@ pub const ISSUE_COMMENTS_BY_PR_INDEX_DDL: &str =
 ///   Sourced into `GridRow.when_ts` by translate.
 /// - `html_url` — denormalized `payload.html_url`.
 /// - `payload` — raw review JSON (JSONB-encoded on disk).
-pub const PR_REVIEWS_DDL: &str = "CREATE TABLE IF NOT EXISTS pr_reviews (
-    id TEXT PRIMARY KEY,
-    repo_full_name TEXT NOT NULL,
-    pr_number INTEGER NOT NULL,
-    state TEXT NULL,
-    commit_id TEXT NULL,
-    user_login TEXT NULL,
-    submitted_at TEXT NULL,
-    html_url TEXT NULL,
-    payload TEXT NULL
-)";
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "pr_reviews")]
+pub struct PrReviewRow {
+    pub id_and_payload: WirePayload,
+    pub repo_full_name: String,
+    pub pr_number: i64,
+    pub state: Option<String>,
+    pub commit_id: Option<String>,
+    pub user_login: Option<String>,
+    pub submitted_at: Option<String>,
+    pub html_url: Option<String>,
+}
+
+impl PrReviewRow {
+    pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
+        let id = payload
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .map(|n| n.to_string())
+            .ok_or_else(|| anyhow::anyhow!("pr_review missing id"))?;
+        Ok(Self {
+            id_and_payload: WirePayload {
+                id,
+                payload: serde_json::to_string(payload)?,
+            },
+            repo_full_name: repo.to_string(),
+            pr_number: num as i64,
+            state: payload
+                .get("state")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            commit_id: payload
+                .get("commit_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            user_login: payload
+                .get("user")
+                .and_then(|u| u.get("login"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            submitted_at: payload
+                .get("submitted_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            html_url: payload
+                .get("html_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
 
 /// Index on `pr_reviews(repo_full_name, pr_number)` — supports the
 /// per-PR child join.
@@ -245,23 +402,77 @@ pub const PR_REVIEWS_BY_PR_INDEX_DDL: &str =
 ///   Sourced into `GridRow.when_ts` by translate.
 /// - `updated_at` — upstream `payload.updated_at` ISO-8601 stamp.
 /// - `payload` — raw review-comment JSON (JSONB-encoded on disk).
-pub const PR_REVIEW_COMMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pr_review_comments (
-    id TEXT PRIMARY KEY,
-    repo_full_name TEXT NOT NULL,
-    pr_number INTEGER NOT NULL,
-    in_reply_to_id INTEGER NULL,
-    pull_request_review_id INTEGER NULL,
-    html_url TEXT NULL,
-    user_login TEXT NULL,
-    path TEXT NULL,
-    line INTEGER NULL,
-    original_line INTEGER NULL,
-    commit_id TEXT NULL,
-    original_commit_id TEXT NULL,
-    created_at TEXT NULL,
-    updated_at TEXT NULL,
-    payload TEXT NULL
-)";
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "pr_review_comments")]
+pub struct PrReviewCommentRow {
+    pub id_and_payload: WirePayload,
+    pub repo_full_name: String,
+    pub pr_number: i64,
+    pub in_reply_to_id: Option<i64>,
+    pub pull_request_review_id: Option<i64>,
+    pub html_url: Option<String>,
+    pub user_login: Option<String>,
+    pub path: Option<String>,
+    pub line: Option<i64>,
+    pub original_line: Option<i64>,
+    pub commit_id: Option<String>,
+    pub original_commit_id: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+impl PrReviewCommentRow {
+    pub fn from_payload(repo: &str, num: u32, payload: &Value) -> anyhow::Result<Self> {
+        let id = payload
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .map(|n| n.to_string())
+            .ok_or_else(|| anyhow::anyhow!("pr_review_comment missing id"))?;
+        Ok(Self {
+            id_and_payload: WirePayload {
+                id,
+                payload: serde_json::to_string(payload)?,
+            },
+            repo_full_name: repo.to_string(),
+            pr_number: num as i64,
+            in_reply_to_id: payload.get("in_reply_to_id").and_then(|v| v.as_i64()),
+            pull_request_review_id: payload
+                .get("pull_request_review_id")
+                .and_then(|v| v.as_i64()),
+            html_url: payload
+                .get("html_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            user_login: payload
+                .get("user")
+                .and_then(|u| u.get("login"))
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            path: payload
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            line: payload.get("line").and_then(|v| v.as_i64()),
+            original_line: payload.get("original_line").and_then(|v| v.as_i64()),
+            commit_id: payload
+                .get("commit_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            original_commit_id: payload
+                .get("original_commit_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            created_at: payload
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            updated_at: payload
+                .get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        })
+    }
+}
 
 /// Index on `pr_review_comments(repo_full_name, pr_number)` — supports
 /// the per-PR child join.
@@ -299,14 +510,14 @@ pub fn pr_pk(repo: &str, num: u32) -> String {
 /// repo-wide bookkeeping macro) is deferred to P1.1.
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
-        SELF_IDENTITY_DDL.to_string(),
-        PULL_REQUESTS_DDL.to_string(),
+        SelfIdentityRow::ddl(),
+        PullRequestRow::ddl(),
         PULL_REQUESTS_BY_REPO_INDEX_DDL.to_string(),
-        ISSUE_COMMENTS_DDL.to_string(),
+        IssueCommentRow::ddl(),
         ISSUE_COMMENTS_BY_PR_INDEX_DDL.to_string(),
-        PR_REVIEWS_DDL.to_string(),
+        PrReviewRow::ddl(),
         PR_REVIEWS_BY_PR_INDEX_DDL.to_string(),
-        PR_REVIEW_COMMENTS_DDL.to_string(),
+        PrReviewCommentRow::ddl(),
         PR_REVIEW_COMMENTS_BY_PR_INDEX_DDL.to_string(),
     ];
     for table in DATA_TABLES {

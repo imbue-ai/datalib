@@ -21,6 +21,9 @@ rust_library(
     ),
     crate_name = "frankweiler_etl_email",
     edition = "2021",
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
@@ -30,7 +33,7 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
-        "@frankweiler_crates//:html2md",
+        "@frankweiler_crates//:htmd",
         "@frankweiler_crates//:mail-parser",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
@@ -103,6 +106,7 @@ rust_test(
         ":frankweiler_etl_email",
         "//frankweiler/backend/etl:frankweiler_etl",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
         "@frankweiler_crates//:tokio",
     ],

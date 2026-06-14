@@ -30,7 +30,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::extract_run::ExtractRun;
+use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tracing::{debug, info, warn};
@@ -38,7 +40,77 @@ use tracing::{debug, info, warn};
 pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
-use db::{EmailRow, BLOB_KIND_ATTACHMENT, BLOB_KIND_EML};
+use db::refresh_email_joins;
+use schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
+
+/// Bulk-upsert one account row. Wraps the generic
+/// `bulk_upsert_in_tx<AccountRow>` so call sites don't have to spell
+/// out the row construction + tx ceremony.
+///
+/// `now` is the timestamp this fetch run stamps into every
+/// `<table>_bookkeeping.fetched_at` it touches — see [`fetch`] for
+/// where it's computed. Passing it down (rather than calling
+/// `IsoOffsetTimestamp::now_local()` per upsert) gives a single
+/// consistent "this run touched the row at" value across every
+/// table written in one sync, and keeps the bookkeeping sidecars'
+/// semantics honest: their stamp means "the sync that wrote this,"
+/// not "the millisecond the upsert query ran."
+async fn upsert_account(db: &RawDb, now: &str, id: &str, payload: &Value) -> Result<()> {
+    let row = AccountRow::from_jmap_payload(id, payload)?;
+    let mut tx = db.pool().begin().await.context("begin account tx")?;
+    bulk_upsert_in_tx(&mut tx, std::slice::from_ref(&row), now).await?;
+    tx.commit().await.context("commit account tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert a `Mailbox/get` `list` array under one account.
+async fn upsert_mailboxes(
+    db: &RawDb,
+    now: &str,
+    account_id: &str,
+    payloads: &[Value],
+) -> Result<()> {
+    if payloads.is_empty() {
+        return Ok(());
+    }
+    let rows: Vec<MailboxRow> = payloads
+        .iter()
+        .map(|p| MailboxRow::from_jmap_payload(account_id, p))
+        .collect::<Result<Vec<_>>>()?;
+    let mut tx = db.pool().begin().await.context("begin mailboxes tx")?;
+    bulk_upsert_in_tx(&mut tx, &rows, now).await?;
+    tx.commit().await.context("commit mailboxes tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert a batch of thread rows. Callers accumulate
+/// `Vec<ThreadRow>` across whatever JMAP `Thread/get` page boundary
+/// they're walking and flush once per batch — no per-row tx.
+async fn upsert_threads(db: &RawDb, now: &str, rows: &[ThreadRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool().begin().await.context("begin threads tx")?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
+    tx.commit().await.context("commit threads tx")?;
+    Ok(())
+}
+
+/// Bulk-upsert a batch of emails: the envelope rows go through
+/// `bulk_upsert_in_tx`, and each row's join tables get refreshed
+/// (delete-then-insert) inside the same transaction.
+async fn upsert_emails(db: &RawDb, now: &str, rows: &[EmailRow]) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.pool().begin().await.context("begin emails tx")?;
+    bulk_upsert_in_tx(&mut tx, rows, now).await?;
+    for row in rows {
+        refresh_email_joins(&mut tx, row).await?;
+    }
+    tx.commit().await.context("commit emails tx")?;
+    Ok(())
+}
 use session::Session;
 
 /// Batch size for `Email/get` detail fetches. JMAP servers typically
@@ -135,7 +207,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
+        // Phase 2: email no longer rides on the shared `blob_refs`
+        // table. Per-provider clear that sets `emails.blake3` and
+        // `email_attachments.blake3` back to NULL so the next
+        // sync_blobs walk re-downloads from scratch.
+        db.clear_blob_hashes().await?;
     }
 
     // Coarse per-phase progress so the bar moves even though we don't
@@ -190,6 +266,14 @@ async fn run_sync(
         ..Default::default()
     };
 
+    // One timestamp per fetch run, threaded into every
+    // `bulk_upsert_in_tx` call below. Goes into the bookkeeping
+    // sidecars' `fetched_at` / `last_attempt_at` columns; the value
+    // means "the sync that wrote this row," not "the millisecond the
+    // UPSERT query ran" — so consistency across tables matters more
+    // than sub-second freshness.
+    let now = IsoOffsetTimestamp::now_local().to_rfc3339();
+
     // Persist the account row.
     let account_payload = session
         .accounts
@@ -197,7 +281,7 @@ async fn run_sync(
         .find(|(k, _)| k == account_id)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| json!({}));
-    db.upsert_account(account_id, &account_payload).await?;
+    upsert_account(db, &now, account_id, &account_payload).await?;
 
     let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_ids.is_empty() {
         None
@@ -207,13 +291,14 @@ async fn run_sync(
 
     // ── mailboxes ───────────────────────────────────────────────────
     opts.progress.set_message("email: mailboxes");
-    sync_mailboxes(db, session, account_id, opts, &mut summary).await?;
+    sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
     opts.progress.inc(1);
 
     // ── emails (+ collect threadIds) ────────────────────────────────
     opts.progress.set_message("email: emails");
     let touched_threads = sync_emails(
         db,
+        &now,
         session,
         account_id,
         opts,
@@ -225,7 +310,15 @@ async fn run_sync(
 
     // ── threads ─────────────────────────────────────────────────────
     opts.progress.set_message("email: threads");
-    sync_threads(db, session, account_id, &touched_threads, &mut summary).await?;
+    sync_threads(
+        db,
+        &now,
+        session,
+        account_id,
+        &touched_threads,
+        &mut summary,
+    )
+    .await?;
     opts.progress.inc(1);
 
     // ── blobs ───────────────────────────────────────────────────────
@@ -252,6 +345,7 @@ async fn run_sync(
 
 async fn sync_mailboxes(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -264,7 +358,7 @@ async fn sync_mailboxes(
     };
 
     if let Some(since) = stored {
-        match incremental_mailboxes(db, session, account_id, &since, summary).await {
+        match incremental_mailboxes(db, now, session, account_id, &since, summary).await {
             Ok(()) => return Ok(()),
             Err(e) => warn!(
                 event = "jmap_mailbox_changes_fallback",
@@ -287,7 +381,7 @@ async fn sync_mailboxes(
         .cloned()
         .unwrap_or_default();
     summary.mailboxes_upserted += list.len();
-    db.upsert_mailboxes(account_id, &list).await?;
+    upsert_mailboxes(db, now, account_id, &list).await?;
     if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
         db.save_state(account_id, "Mailbox", state).await?;
     }
@@ -296,6 +390,7 @@ async fn sync_mailboxes(
 
 async fn incremental_mailboxes(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -327,7 +422,7 @@ async fn incremental_mailboxes(
                 .cloned()
                 .unwrap_or_default();
             summary.mailboxes_upserted += list.len();
-            db.upsert_mailboxes(account_id, &list).await?;
+            upsert_mailboxes(db, now, account_id, &list).await?;
         }
 
         if !destroyed.is_empty() {
@@ -359,6 +454,7 @@ async fn incremental_mailboxes(
 
 async fn sync_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     opts: &FetchOptions,
@@ -375,6 +471,7 @@ async fn sync_emails(
     if let Some(since) = stored {
         match incremental_emails(
             db,
+            now,
             session,
             account_id,
             &since,
@@ -395,6 +492,7 @@ async fn sync_emails(
 
     full_enumerate_emails(
         db,
+        now,
         session,
         account_id,
         mailbox_filter,
@@ -405,8 +503,10 @@ async fn sync_emails(
     Ok(touched_threads)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn incremental_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     since: &str,
@@ -437,6 +537,7 @@ async fn incremental_emails(
                 .unwrap_or_default();
             ingest_email_list(
                 db,
+                now,
                 account_id,
                 list,
                 mailbox_filter,
@@ -469,8 +570,10 @@ async fn incremental_emails(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn full_enumerate_emails(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     mailbox_filter: Option<&HashSet<String>>,
@@ -509,15 +612,15 @@ async fn full_enumerate_emails(
             .get("queryState")
             .and_then(|v| v.as_str())
             .map(String::from);
-        if let (Some(stored), Some(now)) = (&query_state, &page_state) {
-            if stored != now {
+        if let (Some(stored), Some(current)) = (&query_state, &page_state) {
+            if stored != current {
                 // Result set shifted underneath us; restart from page 0.
                 warn!(
                     event = "jmap_email_query_state_shift",
                     "queryState changed mid-pagination; restarting"
                 );
                 position = 0;
-                query_state = Some(now.clone());
+                query_state = Some(current.clone());
                 continue;
             }
         } else if query_state.is_none() {
@@ -547,6 +650,7 @@ async fn full_enumerate_emails(
                 .unwrap_or_default();
             ingest_email_list(
                 db,
+                now,
                 account_id,
                 list,
                 mailbox_filter,
@@ -589,8 +693,10 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ingest_email_list(
     db: &RawDb,
+    now: &str,
     account_id: &str,
     list: Vec<Value>,
     mailbox_filter: Option<&HashSet<String>>,
@@ -599,7 +705,7 @@ async fn ingest_email_list(
 ) -> Result<()> {
     let mut rows: Vec<EmailRow> = Vec::with_capacity(list.len());
     for envelope in list {
-        let Some(row) = EmailRow::from_envelope(account_id, &envelope) else {
+        let Some(row) = EmailRow::from_jmap_envelope(account_id, &envelope) else {
             continue;
         };
         if let Some(allow) = mailbox_filter {
@@ -614,7 +720,7 @@ async fn ingest_email_list(
         return Ok(());
     }
     summary.emails_upserted += rows.len();
-    db.upsert_emails(&rows).await
+    upsert_emails(db, now, &rows).await
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -623,6 +729,7 @@ async fn ingest_email_list(
 
 async fn sync_threads(
     db: &RawDb,
+    now: &str,
     session: &Session,
     account_id: &str,
     touched: &HashSet<String>,
@@ -644,13 +751,19 @@ async fn sync_threads(
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        for thread in list {
+        // Build the whole batch's worth of rows up front, then bulk-
+        // upsert in one tx. The per-thread `upsert_thread` call this
+        // replaced opened a fresh transaction per row, which made a
+        // 200-thread sync 200 sequential commits.
+        let mut rows: Vec<ThreadRow> = Vec::with_capacity(list.len());
+        for thread in &list {
             let Some(id) = thread.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            db.upsert_thread(id, account_id, &thread).await?;
-            summary.threads_upserted += 1;
+            rows.push(ThreadRow::from_jmap_payload(id, account_id, thread)?);
         }
+        summary.threads_upserted += rows.len();
+        upsert_threads(db, now, &rows).await?;
         if let Some(state) = resp.get("state").and_then(|v| v.as_str()) {
             db.save_state(account_id, "Thread", state).await?;
         }
@@ -662,6 +775,10 @@ async fn sync_threads(
 // Blobs
 // ─────────────────────────────────────────────────────────────────────
 
+/// Download the `.eml` for every email that doesn't have its
+/// blake3 set yet. After the eml-as-canonical port we no longer
+/// fetch attachments separately — the `.eml` is the complete
+/// backup, render mail-parses parts on demand.
 async fn sync_blobs(
     db: &RawDb,
     session: &Session,
@@ -671,122 +788,129 @@ async fn sync_blobs(
 ) -> Result<()> {
     let have_bytes = db.loaded_blob_ids().await?;
 
-    // Per-email .eml source + per-attachment blobs. We scan the emails
-    // table for what's needed; the rows hold the blobId and the
-    // attachments join table holds the per-part blobs + advertised
-    // sizes for the size-limit gate.
-    //
-    // BTreeMap so the dispatch order is stable; helps reading logs.
-    let mut wanted: BTreeMap<String, BlobJob> = BTreeMap::new();
-
-    // .eml source per email.
+    // Build the to-fetch worklist: per-email `.eml` source only.
+    // BTreeMap by blob_id dedupes (multiple emails can share the
+    // same blob_id in theory) and gives stable dispatch order.
+    let mut wanted: BTreeMap<String, EmlJob> = BTreeMap::new();
     for em in db.load_emails().await? {
-        if em.blob_id.is_empty() || have_bytes.contains(&em.blob_id) {
+        if em.blob_id.is_empty() || have_bytes.contains_key(&em.blob_id) {
             continue;
         }
         wanted.insert(
             em.blob_id.clone(),
-            BlobJob {
-                kind: BLOB_KIND_EML,
+            EmlJob {
                 owning_id: em.id.clone(),
-                slot: "source".to_string(),
                 advertised_size: em.size,
-                name: "message.eml".to_string(),
-                content_type: "message/rfc822".to_string(),
             },
         );
     }
 
-    // Attachments.
-    let joins = db.load_email_joins().await?;
-    for (email_id, atts) in &joins.attachments {
-        for a in atts {
-            if a.blob_id.is_empty() || have_bytes.contains(&a.blob_id) {
-                continue;
-            }
-            wanted.insert(
-                a.blob_id.clone(),
-                BlobJob {
-                    kind: BLOB_KIND_ATTACHMENT,
-                    owning_id: email_id.clone(),
-                    slot: a.part_id.clone(),
-                    advertised_size: a.size,
-                    name: a.name.clone().unwrap_or_else(|| "blob".to_string()),
-                    content_type: a
-                        .content_type
-                        .clone()
-                        .unwrap_or_else(|| "application/octet-stream".to_string()),
-                },
-            );
-        }
-    }
-
+    summary.blobs_skipped = have_bytes.len();
     if wanted.is_empty() {
         debug!(event = "jmap_blobs_up_to_date");
         return Ok(());
     }
     info!(event = "jmap_blobs_pending", count = wanted.len());
 
+    let mut cas_pending: Vec<PendingCas> = Vec::with_capacity(wanted.len());
+    let mut eml_updates: Vec<(String, String)> = Vec::new();
+    let mut errors: Vec<(String, String)> = Vec::new();
+
     for (blob_id, job) in wanted {
         if let Some(limit) = opts.blob_size_limit_bytes {
             if let Some(sz) = job.advertised_size {
                 if sz as u64 > limit {
                     summary.blobs_oversize += 1;
-                    // Pre-seed a stub row so the bookkeeping shows we
-                    // know about it; the blake3 column stays NULL.
-                    db.pre_seed_blob_stub(
-                        &blob_id,
-                        job.kind,
-                        &job.owning_id,
-                        &job.slot,
-                        Some(&job.content_type),
-                        None,
-                    )
-                    .await?;
+                    errors.push((
+                        job.owning_id.clone(),
+                        format!(".eml {blob_id} exceeds size_limit {limit}"),
+                    ));
                     continue;
                 }
             }
         }
 
-        let url = session.download_url_for(account_id, &blob_id, &job.name, &job.content_type);
+        let url = session.download_url_for(account_id, &blob_id, "message.eml", "message/rfc822");
         match api::download_bytes(&url, BLOB_TIMEOUT).await {
             Ok((bytes, content_type)) => {
-                let ct = content_type.as_deref().unwrap_or(job.content_type.as_str());
-                db.store_blob(
-                    &frankweiler_etl::blob_cas::RefStub {
-                        ref_id: &blob_id,
-                        kind: job.kind,
-                        owning_id: &job.owning_id,
-                        slot: &job.slot,
-                        upstream_uuid: Some(&blob_id),
-                        upstream_name: Some(job.name.as_str()),
-                        source_url: Some(&url),
-                        content_type: Some(ct),
-                    },
-                    &bytes,
-                )
-                .await?;
+                let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+                cas_pending.push(PendingCas {
+                    blake3: blake3.clone(),
+                    content_type: content_type.unwrap_or_else(|| "message/rfc822".to_string()),
+                    bytes,
+                });
+                eml_updates.push((job.owning_id, blake3));
                 summary.blobs_downloaded += 1;
             }
             Err(e) => {
                 summary.blobs_errored += 1;
                 warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e);
-                db.record_blob_error(&blob_id, &job.owning_id, &job.slot, &e.to_string())
-                    .await?;
+                errors.push((job.owning_id, e.to_string()));
             }
         }
     }
-    let _ = summary.blobs_skipped; // populated when we know-skip via cache later
+
+    flush_eml_batch(db, cas_pending, eml_updates, errors).await?;
     Ok(())
 }
 
-struct BlobJob {
-    kind: &'static str,
+struct EmlJob {
     owning_id: String,
-    slot: String,
     advertised_size: Option<i64>,
-    name: String,
+}
+
+struct PendingCas {
+    blake3: String,
     content_type: String,
+    bytes: Vec<u8>,
+}
+
+/// End-of-sync flush. CAS pool: chunked `INSERT OR IGNORE` via
+/// `BlobCas::put_many`. Entity pool: `UPDATE emails SET blake3 = ?`
+/// per (id, blake3) pair, plus per-row error stamps on
+/// `emails_bookkeeping` for oversize / download-failed `.eml`s.
+async fn flush_eml_batch(
+    db: &RawDb,
+    cas_pending: Vec<PendingCas>,
+    eml_updates: Vec<(String, String)>,
+    errors: Vec<(String, String)>,
+) -> Result<()> {
+    if cas_pending.is_empty() && errors.is_empty() {
+        return Ok(());
+    }
+    if !cas_pending.is_empty() {
+        let cas_inserts: Vec<frankweiler_etl::blob_cas::CasInsert<'_>> = cas_pending
+            .iter()
+            .map(|c| frankweiler_etl::blob_cas::CasInsert {
+                blake3: &c.blake3,
+                bytes: &c.bytes,
+                content_type: Some(c.content_type.as_str()),
+            })
+            .collect();
+        db.cas()
+            .put_many(&cas_inserts)
+            .await
+            .context("flush_eml_batch put_many")?;
+    }
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin flush_eml_batch tx")?;
+    for (id, blake3) in &eml_updates {
+        sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
+            .bind(blake3)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("update emails.blake3 for {id}"))?;
+    }
+    for (id, err) in &errors {
+        frankweiler_etl::doltlite_raw::record_object_attempt(&mut tx, "emails", id, Some(err))
+            .await?;
+    }
+    tx.commit().await.context("commit flush_eml_batch tx")?;
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────

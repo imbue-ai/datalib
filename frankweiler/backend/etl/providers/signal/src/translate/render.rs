@@ -18,20 +18,18 @@
 //! bucket plus one message-level grid_row (`Signal Message`) per
 //! chat item that surfaces in the search grid.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::render_cursor;
 use frankweiler_etl::section::section_attrs;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;
 use frankweiler_schema::grid_rows::GridRow;
 use frankweiler_time::IsoOffsetTimestamp;
-use sha2::{Digest, Sha256};
 
 use super::parse::{DocBucket, ParsedChat, ParsedChatItem, ParsedSignal};
 use super::{signal_chat_uuid, signal_markdown_uuid, signal_message_uuid};
@@ -68,20 +66,43 @@ pub fn render_all(
     out_dir: &Path,
     source_name: &str,
     progress: &Progress,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
+    // Log how long the dolt_diff scan took. Logged on every render
+    // (including cold start with `None`) so the timing shows up in
+    // sync output without the user having to crack the cursor open.
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_chats = parsed
+            .scan
+            .changed_chats
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_chats.is_none(),
+        "[translate] signal dolt_diff scan"
+    );
+
     let mut summary = RenderSummary {
-        docs_total: parsed.docs.len(),
+        // `docs` only contains the buckets that need re-rendering,
+        // so `docs_total = parsed.docs.len() + docs_skipped` is the
+        // count the orchestrator's progress bar wants. Skip count
+        // comes from parse — it counted chats whose dolt_diff entry
+        // was empty.
+        docs_total: parsed.docs.len() + parsed.docs_skipped,
+        docs_skipped: parsed.docs_skipped,
         ..Default::default()
     };
     progress.set_length(Some(summary.docs_total as u64));
+    // The parse-side skip-load has already filtered out unchanged
+    // buckets; report them all up front so the progress bar accounts
+    // for them too.
+    progress.inc(summary.docs_skipped as u64);
 
     for doc in &parsed.docs {
         let Some(chat) = parsed.chats.get(&doc.chat_id) else {
-            // Parser populates the chat map from the same db, so this
-            // is a "shouldn't happen" path — log and skip rather than
-            // abort the whole translate pass.
             tracing::warn!(
                 event = "signal_render_missing_chat",
                 chat_id = %doc.chat_id,
@@ -90,31 +111,30 @@ pub fn render_all(
             progress.inc(1);
             continue;
         };
-        let outcome = render_one(
-            chat,
-            doc,
-            parsed,
-            out_dir,
-            source_name,
-            prior_fingerprints,
-            on_doc_complete,
-        )?;
-        match outcome {
-            RenderOutcome::Rendered { messages, blobs } => {
-                summary.docs_rendered += 1;
-                summary.messages_rendered += messages;
-                summary.blobs_materialized += blobs;
-            }
-            RenderOutcome::Skipped => summary.docs_skipped += 1,
-        }
+        let RenderOutcome::Rendered { messages, blobs } =
+            render_one(chat, doc, parsed, out_dir, source_name, on_doc_complete)?;
+        summary.docs_rendered += 1;
+        summary.messages_rendered += messages;
+        summary.blobs_materialized += blobs;
         progress.inc(1);
+    }
+
+    // Advance the render cursor only when:
+    //   * every doc rendered without error (we're here, so true), AND
+    //   * we managed to read HEAD at scan time.
+    // A missing HEAD (stock libsqlite3 / non-doltlite db) leaves the
+    // cursor unwritten — next run is another cold start, which is the
+    // right behavior since we have no way to anchor the diff.
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(out_dir, "signal", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
     Ok(summary)
 }
 
 enum RenderOutcome {
     Rendered { messages: usize, blobs: usize },
-    Skipped,
 }
 
 fn render_one(
@@ -123,12 +143,20 @@ fn render_one(
     parsed: &ParsedSignal,
     out_dir: &Path,
     source_name: &str,
-    prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderOutcome> {
     let chat_uuid = signal_chat_uuid(source_name, &chat.id);
     let markdown_uuid = signal_markdown_uuid(&chat_uuid, &doc.period_key);
-    let fingerprint = compute_fingerprint(doc);
+    // The per-doc `source_fingerprint` used to be a content hash
+    // computed by the parse-side bucket-fingerprint CTE. With
+    // dolt_diff driving the skip decision, that compare doesn't
+    // happen anymore — but the load path still wants *some* stable
+    // identifier in the sidecar. Use the markdown_uuid: stable across
+    // re-renders of the same bucket, distinct between buckets,
+    // already in scope. The orchestrator's prior_fingerprints map is
+    // ignored by signal now (parse never reads it); this value just
+    // keeps the sidecar schema honest.
+    let fingerprint = markdown_uuid.clone();
 
     let recipient_display = parsed
         .recipients
@@ -147,32 +175,32 @@ fn render_one(
         &doc.period_key,
     );
 
-    if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
-        && md_path.exists()
-    {
-        return Ok(RenderOutcome::Skipped);
-    }
+    // No prior-fingerprint check here: parse already filtered out
+    // unchanged buckets before they reach render. Reaching this
+    // function means we have committed to writing this doc.
     fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     // Materialize attachment bytes into `<page_dir>/blobs/<short-b3>.<ext>`
     // before the .md is written, so the relative links the renderer
     // emits resolve to files that exist by the time the file appears
-    // on disk. Filename comes from `BlobView::rendered_filename` —
-    // same convention every other provider uses (slack, anthropic,
-    // notion, chatgpt, email), via the universal helper.
+    // on disk. Filename comes from `Blob::rendered_filename` — same
+    // convention every other provider uses (slack, anthropic, notion,
+    // chatgpt, email), via the shared `BlobBundle::materialize_to_dir`.
     let blobs_dir = page_dir.join("blobs");
-    let mut blobs_written = 0usize;
     let ref_ids: Vec<&str> = doc
         .items
         .iter()
         .flat_map(|it| it.attachments.iter().map(|a| a.ref_id.as_str()))
         .collect();
+    let mut blobs_written = 0usize;
     if !ref_ids.is_empty() {
-        blob_cas::materialize_refs(parsed.blobs.as_ref(), ref_ids.iter().copied(), &blobs_dir)
+        doc.blobs
+            .materialize_to_dir(&blobs_dir)
             .with_context(|| format!("materialize blobs into {}", blobs_dir.display()))?;
-        // Count what landed on disk so the summary matches what we wrote.
+        // Count what landed on disk so the summary matches what we
+        // wrote. The bundle lookup is sync now.
         for ref_id in &ref_ids {
-            if parsed.blobs.read_by_ref_id(ref_id).ok().flatten().is_some() {
+            if doc.blobs.get(ref_id).is_some() {
                 blobs_written += 1;
             }
         }
@@ -354,17 +382,13 @@ fn render_markdown(
             attrs = section_attrs(&msg_uuid),
         ));
         // One sub-bullet per attachment so multi-attachment messages
-        // stay readable. The link target is generated by the universal
-        // `blob_cas::attachment_md` helper — same image-vs-file split
-        // every other provider uses, with a "(not yet fetched)"
-        // placeholder when the bytes haven't been ingested.
+        // stay readable. The bundle gives us the same image-vs-file
+        // split with a "(not yet fetched)" placeholder when the bytes
+        // haven't been ingested.
         for att in &item.attachments {
-            let link = blob_cas::attachment_md(
-                parsed.blobs.as_ref(),
-                &att.ref_id,
-                att.file_name.as_deref(),
-                att.is_image,
-            );
+            let link = doc
+                .blobs
+                .markdown_link(&att.ref_id, att.file_name.as_deref(), att.is_image);
             s.push_str("    - ");
             s.push_str(&link);
             s.push('\n');
@@ -488,24 +512,6 @@ fn iso_ts(date_sent_ms: i64) -> String {
             );
             "1970-01-01T00:00:00+00:00".to_string()
         })
-}
-
-fn compute_fingerprint(doc: &DocBucket) -> String {
-    let mut h = Sha256::new();
-    h.update(doc.chat_id.as_bytes());
-    h.update(b"|");
-    h.update(doc.period_key.as_bytes());
-    for item in &doc.items {
-        h.update(b"\n");
-        h.update(item.author_id.as_bytes());
-        h.update(b"|");
-        h.update(item.date_sent.to_string().as_bytes());
-        h.update(b"|");
-        h.update(item.outgoing.to_string().as_bytes());
-        h.update(b"|");
-        h.update(item.text.as_deref().unwrap_or("").as_bytes());
-    }
-    format!("{:x}", h.finalize())
 }
 
 fn slugify(s: &str) -> String {

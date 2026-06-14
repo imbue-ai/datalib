@@ -25,11 +25,15 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::{self as dr};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
-use super::schema_raw::{full_ddl, pr_pk, DATA_TABLES};
+use super::schema_raw::{
+    full_ddl, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
+    DATA_TABLES,
+};
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -58,31 +62,10 @@ impl RawDb {
     // ── self_identity ───────────────────────────────────────────────
 
     pub async fn upsert_self_identity(&self, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("/user response missing id"))?;
-        let login = payload.get("login").and_then(|v| v.as_str());
-        let html_url = payload.get("html_url").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize /user")?;
+        let row = SelfIdentityRow::from_payload(payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin self_identity tx")?;
-        sqlx::query(
-            "INSERT INTO self_identity (id, login, html_url, payload)
-             VALUES (?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                login = COALESCE(excluded.login, self_identity.login),
-                html_url = COALESCE(excluded.html_url, self_identity.html_url),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(login)
-        .bind(html_url)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .context("upsert self_identity")?;
-        dr::record_object_attempt(&mut tx, "self_identity", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit self_identity tx")?;
         Ok(())
     }
@@ -103,51 +86,10 @@ impl RawDb {
     // ── pull_requests ───────────────────────────────────────────────
 
     pub async fn upsert_pull_request(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let id = pr_pk(repo, num);
-        let state = payload.get("state").and_then(|v| v.as_str());
-        let html_url = payload.get("html_url").and_then(|v| v.as_str());
-        let head = payload.get("head");
-        let base = payload.get("base");
-        let head_sha = head.and_then(|h| h.get("sha")).and_then(|v| v.as_str());
-        let head_ref = head.and_then(|h| h.get("ref")).and_then(|v| v.as_str());
-        let base_sha = base.and_then(|b| b.get("sha")).and_then(|v| v.as_str());
-        let base_ref = base.and_then(|b| b.get("ref")).and_then(|v| v.as_str());
-        let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
-        let merged_at = payload.get("merged_at").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize PR")?;
+        let row = PullRequestRow::from_payload(repo, num, payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin pull_request tx")?;
-        sqlx::query(
-            "INSERT INTO pull_requests
-                (id, repo_full_name, pr_number, state, html_url, head_sha, base_sha,
-                 head_ref, base_ref, updated_at, merged_at, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                state = COALESCE(excluded.state, pull_requests.state),
-                html_url = COALESCE(excluded.html_url, pull_requests.html_url),
-                head_sha = COALESCE(excluded.head_sha, pull_requests.head_sha),
-                base_sha = COALESCE(excluded.base_sha, pull_requests.base_sha),
-                head_ref = COALESCE(excluded.head_ref, pull_requests.head_ref),
-                base_ref = COALESCE(excluded.base_ref, pull_requests.base_ref),
-                updated_at = COALESCE(excluded.updated_at, pull_requests.updated_at),
-                merged_at = COALESCE(excluded.merged_at, pull_requests.merged_at),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(repo)
-        .bind(num as i64)
-        .bind(state)
-        .bind(html_url)
-        .bind(head_sha)
-        .bind(base_sha)
-        .bind(head_ref)
-        .bind(base_ref)
-        .bind(updated_at)
-        .bind(merged_at)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert pull_request {id}"))?;
-        dr::record_object_attempt(&mut tx, "pull_requests", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pull_request tx")?;
         Ok(())
     }
@@ -155,90 +97,19 @@ impl RawDb {
     // ── issue_comments / pr_reviews / pr_review_comments ────────────
 
     pub async fn upsert_issue_comment(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("issue_comment missing id"))?;
-        let html_url = payload.get("html_url").and_then(|v| v.as_str());
-        let user_login = payload
-            .get("user")
-            .and_then(|u| u.get("login"))
-            .and_then(|v| v.as_str());
-        let created_at = payload.get("created_at").and_then(|v| v.as_str());
-        let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize issue_comment")?;
+        let row = IssueCommentRow::from_payload(repo, num, payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin issue_comment tx")?;
-        sqlx::query(
-            "INSERT INTO issue_comments
-                (id, repo_full_name, pr_number, html_url, user_login, created_at, updated_at,
-                 payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                html_url = COALESCE(excluded.html_url, issue_comments.html_url),
-                user_login = COALESCE(excluded.user_login, issue_comments.user_login),
-                created_at = COALESCE(excluded.created_at, issue_comments.created_at),
-                updated_at = COALESCE(excluded.updated_at, issue_comments.updated_at),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(repo)
-        .bind(num as i64)
-        .bind(html_url)
-        .bind(user_login)
-        .bind(created_at)
-        .bind(updated_at)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert issue_comment {id}"))?;
-        dr::record_object_attempt(&mut tx, "issue_comments", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit issue_comment tx")?;
         Ok(())
     }
 
     pub async fn upsert_pr_review(&self, repo: &str, num: u32, payload: &Value) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("pr_review missing id"))?;
-        let state = payload.get("state").and_then(|v| v.as_str());
-        let commit_id = payload.get("commit_id").and_then(|v| v.as_str());
-        let user_login = payload
-            .get("user")
-            .and_then(|u| u.get("login"))
-            .and_then(|v| v.as_str());
-        let submitted_at = payload.get("submitted_at").and_then(|v| v.as_str());
-        let html_url = payload.get("html_url").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize pr_review")?;
+        let row = PrReviewRow::from_payload(repo, num, payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self.pool.begin().await.context("begin pr_review tx")?;
-        sqlx::query(
-            "INSERT INTO pr_reviews
-                (id, repo_full_name, pr_number, state, commit_id, user_login, submitted_at,
-                 html_url, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                state = COALESCE(excluded.state, pr_reviews.state),
-                commit_id = COALESCE(excluded.commit_id, pr_reviews.commit_id),
-                user_login = COALESCE(excluded.user_login, pr_reviews.user_login),
-                submitted_at = COALESCE(excluded.submitted_at, pr_reviews.submitted_at),
-                html_url = COALESCE(excluded.html_url, pr_reviews.html_url),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(repo)
-        .bind(num as i64)
-        .bind(state)
-        .bind(commit_id)
-        .bind(user_login)
-        .bind(submitted_at)
-        .bind(html_url)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert pr_review {id}"))?;
-        dr::record_object_attempt(&mut tx, "pr_reviews", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pr_review tx")?;
         Ok(())
     }
@@ -249,72 +120,14 @@ impl RawDb {
         num: u32,
         payload: &Value,
     ) -> Result<()> {
-        let id = payload
-            .get("id")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.to_string())
-            .ok_or_else(|| anyhow::anyhow!("pr_review_comment missing id"))?;
-        let in_reply_to_id = payload.get("in_reply_to_id").and_then(|v| v.as_i64());
-        let pull_request_review_id = payload
-            .get("pull_request_review_id")
-            .and_then(|v| v.as_i64());
-        let html_url = payload.get("html_url").and_then(|v| v.as_str());
-        let user_login = payload
-            .get("user")
-            .and_then(|u| u.get("login"))
-            .and_then(|v| v.as_str());
-        let path = payload.get("path").and_then(|v| v.as_str());
-        let line = payload.get("line").and_then(|v| v.as_i64());
-        let original_line = payload.get("original_line").and_then(|v| v.as_i64());
-        let commit_id = payload.get("commit_id").and_then(|v| v.as_str());
-        let original_commit_id = payload.get("original_commit_id").and_then(|v| v.as_str());
-        let created_at = payload.get("created_at").and_then(|v| v.as_str());
-        let updated_at = payload.get("updated_at").and_then(|v| v.as_str());
-        let payload_str = serde_json::to_string(payload).context("serialize pr_review_comment")?;
+        let row = PrReviewCommentRow::from_payload(repo, num, payload)?;
+        let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
         let mut tx = self
             .pool
             .begin()
             .await
             .context("begin pr_review_comment tx")?;
-        sqlx::query(
-            "INSERT INTO pr_review_comments
-                (id, repo_full_name, pr_number, in_reply_to_id, pull_request_review_id,
-                 html_url, user_login, path, line, original_line, commit_id, original_commit_id,
-                 created_at, updated_at, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, jsonb(?))
-             ON CONFLICT(id) DO UPDATE SET
-                in_reply_to_id = COALESCE(excluded.in_reply_to_id, pr_review_comments.in_reply_to_id),
-                pull_request_review_id = COALESCE(excluded.pull_request_review_id, pr_review_comments.pull_request_review_id),
-                html_url = COALESCE(excluded.html_url, pr_review_comments.html_url),
-                user_login = COALESCE(excluded.user_login, pr_review_comments.user_login),
-                path = COALESCE(excluded.path, pr_review_comments.path),
-                line = COALESCE(excluded.line, pr_review_comments.line),
-                original_line = COALESCE(excluded.original_line, pr_review_comments.original_line),
-                commit_id = COALESCE(excluded.commit_id, pr_review_comments.commit_id),
-                original_commit_id = COALESCE(excluded.original_commit_id, pr_review_comments.original_commit_id),
-                created_at = COALESCE(excluded.created_at, pr_review_comments.created_at),
-                updated_at = COALESCE(excluded.updated_at, pr_review_comments.updated_at),
-                payload = excluded.payload",
-        )
-        .bind(&id)
-        .bind(repo)
-        .bind(num as i64)
-        .bind(in_reply_to_id)
-        .bind(pull_request_review_id)
-        .bind(html_url)
-        .bind(user_login)
-        .bind(path)
-        .bind(line)
-        .bind(original_line)
-        .bind(commit_id)
-        .bind(original_commit_id)
-        .bind(created_at)
-        .bind(updated_at)
-        .bind(&payload_str)
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("upsert pr_review_comment {id}"))?;
-        dr::record_object_attempt(&mut tx, "pr_review_comments", &id, None).await?;
+        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
         tx.commit().await.context("commit pr_review_comment tx")?;
         Ok(())
     }

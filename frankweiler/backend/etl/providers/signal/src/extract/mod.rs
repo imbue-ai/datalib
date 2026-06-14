@@ -16,15 +16,16 @@ pub mod schema_raw;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
 use frankweiler_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
-use prost::Message;
 use serde::Serialize;
+use sqlx::Row;
 use tracing::{info, warn};
 
 pub use db::{db_path_for, RawDb};
+pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
 const DEFAULT_AEP_ENV: &str = "SIGNAL_PASSPHRASE";
 
@@ -82,7 +83,8 @@ pub struct FetchSummary {
     pub blobs_skipped: usize,
     /// Attachments we couldn't decrypt/read (file missing, MAC fail,
     /// LocatorInfo without a local key, …). Surfaces as warn-level
-    /// log lines; details land on `blob_refs_bookkeeping.last_error`.
+    /// log lines; details land on
+    /// `chat_item_attachments_bookkeeping.last_error`.
     pub blob_errors: usize,
     pub snapshot: String,
     /// Blake3 hex of the snapshot (see `schema_raw::SNAPSHOT_BLAKE3_RECIPE_DOC`).
@@ -102,10 +104,20 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        // Signal doesn't extract attachments into the CAS yet, but
-        // the flag flows through uniformly so the day attachment
-        // ingest lands no wiring is needed.
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool()).await?;
+        // Wipe the attachment edge table + its bookkeeping so the
+        // next walk re-decrypts every attachment. `cas_objects`
+        // itself is never wiped — re-decrypted bytes hash to the
+        // same blake3 and the `INSERT OR IGNORE` on the CAS side
+        // is a no-op. This is the Signal-specific equivalent of the
+        // per-provider equivalent for `refetch_blobs`.
+        sqlx::query("DELETE FROM chat_item_attachments")
+            .execute(db.pool())
+            .await
+            .context("truncate chat_item_attachments")?;
+        sqlx::query("DELETE FROM chat_item_attachments_bookkeeping")
+            .execute(db.pool())
+            .await
+            .context("truncate chat_item_attachments_bookkeeping")?;
     }
 
     let aep_env_var = opts
@@ -136,20 +148,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         files_root = %files_root.display(),
     );
 
-    // Resume cursor: hash the snapshot's three files before we do any
-    // crypto work. If we've already ingested these bytes, return
-    // early with a marker summary.
-    let snapshot_dir_for_hash = snapshot_dir.clone();
-    let (snapshot_blake3, total_byte_size) =
-        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
-            .await
-            .context("join snapshot hash task")?
-            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
-    if db.snapshot_already_ingested(&snapshot_blake3).await? {
+    // Resume cursor — fast path. Build a stat-derived fingerprint
+    // (three `(mtime_ns, byte_size)` pairs joined by `:`) and look
+    // it up against `ingested_backups`. No body I/O on the skip,
+    // no crypto, no decrypt. See `schema_raw::snapshot_fingerprint`.
+    let fingerprint = schema_raw::snapshot_fingerprint(&snapshot_dir)
+        .with_context(|| format!("snapshot fingerprint {}", snapshot_dir.display()))?;
+    if db.snapshot_already_ingested(&fingerprint).await? {
         info!(
             event = "signal_snapshot_already_ingested",
             snapshot = %snapshot_dir.display(),
-            blake3 = %snapshot_blake3,
+            fingerprint = %fingerprint,
             note = "skipping decrypt + walk; pass --reset-and-redownload to re-ingest",
         );
         return Ok(FetchSummary {
@@ -157,11 +166,22 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            snapshot_blake3,
+            snapshot_blake3: String::new(),
             already_ingested: true,
             ..Default::default()
         });
     }
+
+    // Fingerprint missed. Compute the forensic blake3 (used to fill
+    // the `blake3` column on a successful record) before we open the
+    // decrypted snapshot. Streams in 64KiB chunks; tens of MB → a
+    // few hundred ms.
+    let snapshot_dir_for_hash = snapshot_dir.clone();
+    let (snapshot_blake3, total_byte_size) =
+        tokio::task::spawn_blocking(move || compute_snapshot_blake3(&snapshot_dir_for_hash))
+            .await
+            .context("join snapshot hash task")?
+            .with_context(|| format!("hash snapshot {}", snapshot_dir.display()))?;
 
     // Heavy crypto work — gunzip + AES on tens of MB — runs in a
     // blocking thread so we don't block the tokio runtime.
@@ -183,6 +203,45 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         ..Default::default()
     };
 
+    // Accumulate entity rows in memory and bulk-upsert via the
+    // generic `bulk_upsert_in_tx` helper at the end. Every table
+    // (including singleton `account` and the new attachment table)
+    // goes through the same code path — see
+    // `docs/data_architecture_ingestion.md` §"One writer per row"
+    // and §"Bulk-upsert as the standard write path". Attachment
+    // bytes are decrypted during the frame walk (per-attachment
+    // AES-256) but the CAS + entity-table writes are batched via
+    // `PendingAttachments` and flushed once at the end.
+    let mut accounts: Vec<AccountRow> = Vec::new();
+    let mut recipients: Vec<RecipientRow> = Vec::new();
+    let mut chats: Vec<ChatRow> = Vec::new();
+    let mut chat_items: Vec<ChatItemRow> = Vec::new();
+    let mut pending_attachments = PendingAttachments::default();
+
+    // Skip-check map: pre-load `(media_name → blake3)` for every
+    // attachment we have already decrypted in a prior run. Lets us
+    // skip the AES decrypt step for media files that appear in this
+    // snapshot but were already processed in an earlier one (common
+    // when two snapshots share an unchanged photo). One query,
+    // O(N) memory, vs. N per-row queries during the walk. After
+    // `--refetch-blobs` the table is empty so the map is empty and
+    // every attachment gets re-decrypted.
+    let already_decrypted: std::collections::HashMap<String, String> = {
+        let rows = sqlx::query(
+            "SELECT ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(db.pool())
+        .await
+        .context("preload already-decrypted attachments")?;
+        rows.iter()
+            .filter_map(|r| {
+                let ref_id: String = r.try_get("ref_id").ok()?;
+                let blake3: String = r.try_get("blake3").ok()?;
+                Some((ref_id, blake3))
+            })
+            .collect()
+    };
+
     for frame in snap.frames() {
         let frame = match frame {
             Ok(f) => f,
@@ -191,22 +250,35 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             }
         };
-        let raw = frame.encode_to_vec();
-        match frame.item {
-            Some(backup::frame::Item::Account(_)) => {
-                db.upsert_account(&raw).await?;
+        match &frame.item {
+            Some(backup::frame::Item::Account(a)) => {
+                let payload = serde_json::to_string(a).context("serialize account frame")?;
+                accounts.push(AccountRow {
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload {
+                        id: "self".to_string(),
+                        payload,
+                    },
+                });
             }
             Some(backup::frame::Item::Recipient(r)) => {
                 let id = r.id.to_string();
-                let (identifier, name) = recipient_pretty(&r);
-                db.upsert_recipient(&id, identifier.as_deref(), name.as_deref(), &raw)
-                    .await?;
+                let (identifier, name) = recipient_pretty(r);
+                let payload = serde_json::to_string(r).context("serialize recipient frame")?;
+                recipients.push(RecipientRow {
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id, payload },
+                    identifier,
+                    display_name: name,
+                });
                 summary.recipients += 1;
             }
             Some(backup::frame::Item::Chat(c)) => {
                 let id = c.id.to_string();
                 let rid = c.recipient_id.to_string();
-                db.upsert_chat(&id, &rid, &raw).await?;
+                let payload = serde_json::to_string(c).context("serialize chat frame")?;
+                chats.push(ChatRow {
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id, payload },
+                    recipient_id: rid,
+                });
                 summary.chats += 1;
             }
             Some(backup::frame::Item::ChatItem(ci)) => {
@@ -214,19 +286,36 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 let author_id = ci.author_id.to_string();
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
-                db.upsert_chat_item(&pk, &chat_id, &author_id, date_sent, &raw)
-                    .await?;
-                summary.chat_items += 1;
 
-                // Walk attachments + push their bytes into the CAS.
-                // Pattern matches every other media-bearing provider:
-                // `db.store_blob(&RefStub { .. }, &bytes)` with a
-                // skip-check that lets re-extracts stay cheap.
+                // Walk attachments: decrypt synchronously (AES-256
+                // can't be batched), then queue the entity-row +
+                // CAS bytes into `PendingAttachments` for the
+                // end-of-fetch bulk flush. Re-extracts skip cheaply
+                // via the new `chat_item_attachments` table's
+                // `(ref_id, blake3)` index — see
+                // [`schema_raw::CHAT_ITEM_ATTACHMENTS_DDL`].
                 if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
                     for (idx, att) in sm.attachments.iter().enumerate() {
-                        ingest_attachment(&db, &files_root, &pk, idx, att, &mut summary).await?;
+                        ingest_attachment(
+                            &files_root,
+                            &pk,
+                            idx,
+                            att,
+                            &already_decrypted,
+                            &mut pending_attachments,
+                            &mut summary,
+                        );
                     }
                 }
+
+                let payload = serde_json::to_string(ci).context("serialize chat_item frame")?;
+                chat_items.push(ChatItemRow {
+                    id_and_payload: frankweiler_etl::doltlite_raw::WirePayload { id: pk, payload },
+                    chat_id,
+                    author_id,
+                    date_sent,
+                });
+                summary.chat_items += 1;
             }
             _ => {
                 // StickerPack, AdHocCall, NotificationProfile,
@@ -235,7 +324,38 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
     }
 
+    // One generic UPSERT path per table — same call, different row
+    // type. All four batches land in their own tx; an inner crash
+    // never leaves a half-applied snapshot because the snapshot-level
+    // commit happens in the orchestrator (see §"Commit lifecycle").
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    {
+        let mut tx = db.pool().begin().await.context("begin account tx")?;
+        bulk_upsert_in_tx(&mut tx, &accounts, &now).await?;
+        tx.commit().await.context("commit account tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin recipients tx")?;
+        bulk_upsert_in_tx(&mut tx, &recipients, &now).await?;
+        tx.commit().await.context("commit recipients tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin chats tx")?;
+        bulk_upsert_in_tx(&mut tx, &chats, &now).await?;
+        tx.commit().await.context("commit chats tx")?;
+    }
+    {
+        let mut tx = db.pool().begin().await.context("begin chat_items tx")?;
+        bulk_upsert_in_tx(&mut tx, &chat_items, &now).await?;
+        tx.commit().await.context("commit chat_items tx")?;
+    }
+    // Attachment bulk-flush: one CAS-pool tx (`put_many`) + one
+    // entity-pool tx (chat_item_attachments + bookkeeping + per-row
+    // error annotations).
+    flush_attachments(&db, pending_attachments).await?;
+
     db.record_snapshot_ingested(
+        &fingerprint,
         &snapshot_blake3,
         &snapshot_dir.to_string_lossy(),
         total_byte_size,
@@ -277,8 +397,39 @@ fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
     Ok((hasher.finalize().to_hex().to_string(), total))
 }
 
+/// Accumulator threaded through the frame walk. Per-attachment work
+/// (decrypt + hash) happens during the walk; the actual CAS +
+/// entity-table writes are batched and flushed once at the end of
+/// [`fetch`]. See [`flush_attachments`] for the flush.
+#[derive(Default)]
+struct PendingAttachments {
+    /// One row per attempted attachment slot (success + failure
+    /// alike). On success carries `blake3 = Some(hex)`; on
+    /// failure (file missing, decrypt failed) carries
+    /// `blake3 = None` + an `errors` entry below.
+    rows: Vec<schema_raw::ChatItemAttachmentRow>,
+    /// Plaintext bytes ready for the CAS, paired with their hash
+    /// and content_type. One entry per successful attachment.
+    /// Decrypted bytes can be large; we accumulate them in memory
+    /// only between the frame walk and the end-of-fetch flush, then
+    /// drop them — no per-row buffer outlives the flush.
+    cas_items: Vec<DecryptedCas>,
+    /// Per-row error messages to record in
+    /// `chat_item_attachments_bookkeeping` after the entity-table
+    /// bulk flush. Keyed by the attachment row id.
+    errors: Vec<(String, String)>,
+}
+
+struct DecryptedCas {
+    blake3: String,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
+
 /// Decrypt one `MessageAttachment`'s bytes out of the shared
-/// `<files_root>/XX/<media_name>` tree and stash them in the CAS.
+/// `<files_root>/XX/<media_name>` tree and queue them for batched
+/// CAS + entity-table writes via the `PendingAttachments`
+/// accumulator.
 ///
 /// Quietly does nothing when the attachment doesn't carry the
 /// fields we need to locate it on disk (no `LocatorInfo`, no
@@ -287,25 +438,27 @@ fn compute_snapshot_blake3(snapshot_dir: &Path) -> Result<(String, u64)> {
 /// states for valid attachments — they just mean we don't have the
 /// local plaintext to surface, so the Translate pass renders the
 /// message text without an inline link.
-async fn ingest_attachment(
-    db: &RawDb,
+#[allow(clippy::too_many_arguments)]
+fn ingest_attachment(
     files_root: &Path,
     chat_item_pk: &str,
     slot_idx: usize,
     att: &backup::MessageAttachment,
+    already_decrypted: &std::collections::HashMap<String, String>,
+    pending: &mut PendingAttachments,
     summary: &mut FetchSummary,
-) -> Result<()> {
+) {
     let Some(ptr) = att.pointer.as_ref() else {
-        return Ok(());
+        return;
     };
     let Some(li) = ptr.locator_info.as_ref() else {
-        return Ok(());
+        return;
     };
     let Some(local_key_bytes) = li.local_key.as_deref() else {
-        return Ok(());
+        return;
     };
     if local_key_bytes.len() != 64 {
-        return Ok(());
+        return;
     }
     let plaintext_hash = match li.integrity_check.as_ref() {
         Some(backup::file_pointer::locator_info::IntegrityCheck::PlaintextHash(h))
@@ -313,21 +466,28 @@ async fn ingest_attachment(
         {
             h.clone()
         }
-        _ => return Ok(()),
+        _ => return,
     };
     let mut local_key = [0u8; 64];
     local_key.copy_from_slice(local_key_bytes);
 
     let media_name = local_media_name(&plaintext_hash, &local_key);
-    let slot_str = slot_idx.to_string();
+    let attachment_id = schema_raw::chat_item_attachment_id_recipe(chat_item_pk, slot_idx);
 
-    // Skip-check: same shape every other provider uses. The
-    // `blob_refs.blake3 IS NOT NULL` lookup keyed on `ref_id` makes
-    // re-extracts a no-op for already-ingested attachments — see
-    // `docs/ETL_general_shape.md` "Blobs and the CAS split".
-    if db.blob_exists(&media_name).await.unwrap_or(false) {
+    // Skip-check: if a prior run already decrypted this media_name
+    // (anywhere in any chat_item), we know the blake3 without
+    // re-decrypting. The CAS already has the bytes
+    // (`cas_objects` survives `--reset-and-redownload`), so we
+    // just record the new (chat_item_id, slot) → blake3 edge.
+    if let Some(blake3) = already_decrypted.get(&media_name) {
+        pending.rows.push(schema_raw::ChatItemAttachmentRow {
+            id: attachment_id,
+            chat_item_id: chat_item_pk.to_string(),
+            ref_id: media_name,
+            blake3: Some(blake3.clone()),
+        });
         summary.blobs_skipped += 1;
-        return Ok(());
+        return;
     }
 
     let shard = &media_name[..2];
@@ -341,16 +501,17 @@ async fn ingest_attachment(
                 path = %enc_path.display(),
                 error = %e,
             );
-            let _ = db
-                .record_blob_error(
-                    &media_name,
-                    chat_item_pk,
-                    &slot_str,
-                    &format!("read {}: {e}", enc_path.display()),
-                )
-                .await;
+            pending.rows.push(schema_raw::ChatItemAttachmentRow {
+                id: attachment_id.clone(),
+                chat_item_id: chat_item_pk.to_string(),
+                ref_id: media_name,
+                blake3: None,
+            });
+            pending
+                .errors
+                .push((attachment_id, format!("read {}: {e}", enc_path.display())));
             summary.blob_errors += 1;
-            return Ok(());
+            return;
         }
     };
 
@@ -362,35 +523,58 @@ async fn ingest_attachment(
                 media_name = %media_name,
                 error = %e,
             );
-            let _ = db
-                .record_blob_error(
-                    &media_name,
-                    chat_item_pk,
-                    &slot_str,
-                    &format!("decrypt: {e}"),
-                )
-                .await;
+            pending.rows.push(schema_raw::ChatItemAttachmentRow {
+                id: attachment_id.clone(),
+                chat_item_id: chat_item_pk.to_string(),
+                ref_id: media_name,
+                blake3: None,
+            });
+            pending
+                .errors
+                .push((attachment_id, format!("decrypt: {e}")));
             summary.blob_errors += 1;
-            return Ok(());
+            return;
         }
     };
 
-    db.store_blob(
-        &RefStub {
-            ref_id: &media_name,
-            kind: "signal_attachment",
-            owning_id: chat_item_pk,
-            slot: &slot_str,
-            upstream_uuid: Some(&media_name),
-            upstream_name: ptr.file_name.as_deref(),
-            source_url: None,
-            content_type: ptr.content_type.as_deref(),
-        },
-        &plaintext,
-    )
-    .await?;
+    let blake3 = frankweiler_etl::blob_cas::blake3_hex(&plaintext);
+    pending.rows.push(schema_raw::ChatItemAttachmentRow {
+        id: attachment_id,
+        chat_item_id: chat_item_pk.to_string(),
+        ref_id: media_name,
+        blake3: Some(blake3.clone()),
+    });
+    pending.cas_items.push(DecryptedCas {
+        blake3,
+        content_type: ptr.content_type.clone(),
+        bytes: plaintext,
+    });
     summary.blobs += 1;
-    Ok(())
+}
+
+/// End-of-fetch flush. Delegates to the shared
+/// [`frankweiler_etl::blob_cas::flush_cas_edges`] primitive: CAS
+/// `put_many` for newly-decrypted bytes → bulk UPSERT
+/// `chat_item_attachments` → bookkeeping `last_error` stamps.
+async fn flush_attachments(db: &RawDb, pending: PendingAttachments) -> Result<()> {
+    use frankweiler_etl::blob_cas::CasInsert;
+    let cas_inserts: Vec<CasInsert<'_>> = pending
+        .cas_items
+        .iter()
+        .map(|c| CasInsert {
+            blake3: &c.blake3,
+            bytes: &c.bytes,
+            content_type: c.content_type.as_deref(),
+        })
+        .collect();
+    frankweiler_etl::blob_cas::flush_cas_edges(
+        db.pool(),
+        db.cas(),
+        &cas_inserts,
+        &pending.rows,
+        &pending.errors,
+    )
+    .await
 }
 
 /// Pick the newest `signal-backup-*` subdir under `root`. Signal's

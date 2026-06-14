@@ -263,6 +263,7 @@ crate.from_cargo(
         "//frankweiler/backend/tauri-backend:Cargo.toml",
         "//frankweiler/backend/whatsapp-backup:Cargo.toml",
         "//frankweiler/backend/etl/providers/whatsapp:Cargo.toml",
+        "//frankweiler/backend/etl/chat-common:Cargo.toml",
     ],
 )
 use_repo(crate, "frankweiler_crates")

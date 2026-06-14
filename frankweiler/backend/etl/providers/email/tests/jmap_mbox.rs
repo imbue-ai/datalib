@@ -10,8 +10,9 @@ use std::path::PathBuf;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{block_on_load_all, RawDb};
+use frankweiler_etl_email::extract::db::{db_path_for, RawDb};
 use frankweiler_etl_email::extract::mbox;
+use frankweiler_etl_email::translate::parse::parse;
 use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
 
 fn fixture_path() -> PathBuf {
@@ -50,8 +51,8 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     let mailboxes = db.load_mailboxes().await.unwrap();
     let joins = db.load_email_joins().await.unwrap();
 
-    assert_eq!(emails.len(), 5);
-    assert_eq!(threads.len(), 3);
+    assert_eq!(emails.len(), 6);
+    assert_eq!(threads.len(), 4);
 
     let briefing = threads
         .iter()
@@ -74,9 +75,11 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         .find(|e| e.id == "briefing-003@enterprise.starfleet")
         .expect("geordi present");
     assert!(geordi.has_attachment);
-    let atts = &joins.attachments[&geordi.id];
-    assert_eq!(atts.len(), 1);
-    assert_eq!(atts[0].name.as_deref(), Some("warp_diagnostics.txt"));
+    // Attachment payloads now live inside the `.eml` itself (see
+    // `extract_attachments_from_emls` at parse time) — not in a
+    // dedicated email_attachments row. We only assert the
+    // `has_attachment` flag here; the rendered-blobs test exercises
+    // the parse-time mail-parsing path.
 
     // Geordi tagged Unread → no $seen (and possibly no keyword row at all if
     // Unread was the only label that mapped to a keyword).
@@ -91,8 +94,21 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert!(kws.iter().any(|k| k == "$important"));
     assert!(kws.iter().any(|k| k == "$seen"));
 
-    // .eml bytes are in the CAS keyed by blob_id.
-    assert!(db.blob_exists(&hayes.blob_id).await.unwrap());
+    // .eml bytes are in the CAS keyed by emails.blake3 (which mbox
+    // sets to the .eml's content hash at flush time).
+    let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM emails WHERE id = ?")
+        .bind(&hayes.id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let blake3 = blake3.expect("emails.blake3 set by mbox flush");
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
+            .bind(&blake3)
+            .fetch_one(db.cas().pool())
+            .await
+            .unwrap();
+    assert!(exists);
 
     // Re-running is idempotent: same email ids on a second pass.
     let pool = db.pool().clone();
@@ -120,17 +136,16 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
-    let raw = block_on_load_all(&db_path).expect("load_all");
+    let parsed = parse(&db_path_for(&db_path), None).expect("parse cold start");
 
     let tmp = tempfile::tempdir().unwrap();
     let progress = Progress::noop();
     let mut docs: Vec<RenderedMarkdown> = Vec::new();
     render_all(
-        &raw,
+        &parsed,
         tmp.path(),
         "star-trek-mbox",
         &progress,
-        &HashMap::new(),
         &mut |doc| {
             docs.push(doc);
             Ok(())
@@ -139,7 +154,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     .expect("render_all");
 
     // One rendered document per thread.
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 4);
 
     // Briefing thread has the attachment materialized.
     let briefing_tuid = thread_uuid("enterprise", "1000000000000000001");
@@ -181,7 +196,7 @@ async fn star_trek_mbox_renders_through_render_all() {
     }
 
     // Risa promo thread prefers the HTML body — `**jewel of the
-    // Alpha Quadrant**` appears in the html2md output.
+    // Alpha Quadrant**` appears in the htmd output.
     let risa_tuid = thread_uuid("enterprise", "2000000000000000002");
     let risa_md = std::fs::read_to_string(
         tmp.path()
@@ -193,5 +208,48 @@ async fn star_trek_mbox_renders_through_render_all() {
     assert!(
         risa_md.contains("jewel of the Alpha Quadrant"),
         "expected html-rendered body in risa thread"
+    );
+
+    // Bridge-status thread has a `multipart/related` with an inline
+    // PNG referenced as `<img src="cid:lcars-glyph@enterprise">`. The
+    // renderer should materialize the PNG and rewrite the cid to a
+    // `blobs/<hash>.png` link — regression test for the Fastmail
+    // JMAP case where the inline image isn't in the `attachments`
+    // array but is sitting in the .eml MIME tree.
+    let bridge_tuid = thread_uuid("enterprise", "4000000000000000004");
+    let bridge_dir = tmp
+        .path()
+        .join("rendered_md/jmap/enterprise")
+        .join(&bridge_tuid);
+    let bridge_md = std::fs::read_to_string(bridge_dir.join("index.md")).unwrap();
+    let bridge_blobs = bridge_dir.join("blobs");
+    assert!(bridge_blobs.is_dir(), "bridge thread blobs/ dir missing");
+    let png_files: Vec<_> = std::fs::read_dir(&bridge_blobs)
+        .unwrap()
+        .flatten()
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|x| x == "png")
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        png_files.len(),
+        1,
+        "expected exactly one .png in {}",
+        bridge_blobs.display()
+    );
+    let png_name = png_files[0].file_name().to_string_lossy().into_owned();
+    assert!(
+        bridge_md.contains(&format!("(blobs/{png_name})")),
+        "expected `blobs/{png_name}` markdown link in bridge thread, got:\n{bridge_md}"
+    );
+    // The raw cid URL should be gone — htmd should see the rewritten
+    // `src="blobs/…"` and emit `![…](blobs/…)`, not `cid:…`.
+    assert!(
+        !bridge_md.contains("cid:lcars-glyph"),
+        "raw cid: reference leaked into bridge thread md:\n{bridge_md}"
     );
 }

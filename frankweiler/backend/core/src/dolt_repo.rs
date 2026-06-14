@@ -174,7 +174,16 @@ impl MirrorRepo for DoltRepo {
             let uuid: String = r.try_get("uuid").unwrap_or_default();
             let kind: String = r.try_get("kind").unwrap_or_default();
             let source_label: String = r.try_get("source_label").unwrap_or_default();
-            let when_ts: Option<String> = r.try_get("when_ts").ok();
+            // sqlx-sqlite has a load-bearing gotcha: `try_get::<T>` for a
+            // SQL NULL column does NOT return Err — it silently returns
+            // `T::default()` (0 for i64, "" for String). That means
+            // `try_get(…).ok()` with an `Option<T>` LHS gives `Some(0)` /
+            // `Some("")` for NULL, NOT `None`. To distinguish NULL from
+            // an actual default value, the type passed to `try_get` must
+            // itself be `Option<T>`. Pattern: `try_get::<Option<T>, _>(…)
+            // .ok().flatten()`. See `tests/fixture_db_snapshot.rs` for
+            // the canonical example.
+            let when_ts: Option<String> = r.try_get::<Option<String>, _>("when_ts").ok().flatten();
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();
@@ -183,8 +192,12 @@ impl MirrorRepo for DoltRepo {
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
-            let markdown_uuid: Option<String> = r.try_get("markdown_uuid").ok();
-            let message_index: Option<i64> = r.try_get("message_index").ok();
+            let markdown_uuid: Option<String> = r
+                .try_get::<Option<String>, _>("markdown_uuid")
+                .ok()
+                .flatten();
+            let message_index: Option<i64> =
+                r.try_get::<Option<i64>, _>("message_index").ok().flatten();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             let text: String = r.try_get("text").unwrap_or_default();
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();
@@ -342,7 +355,12 @@ impl MirrorRepo for DoltRepo {
             let uuid: String = r.try_get("uuid").unwrap_or_default();
             let kind: String = r.try_get("kind").unwrap_or_default();
             let source_label: String = r.try_get("source_label").unwrap_or_default();
-            let when_ts: Option<String> = r.try_get("when_ts").ok();
+            // See the `search` function above for the load-bearing
+            // `try_get::<Option<T>, _>(…).ok().flatten()` pattern.
+            // sqlx-sqlite silently returns `T::default()` for NULL
+            // columns when the target type is non-Optional, so the
+            // explicit `Option<T>` generic is required.
+            let when_ts: Option<String> = r.try_get::<Option<String>, _>("when_ts").ok().flatten();
             let author: String = r.try_get("author").unwrap_or_default();
             let account: String = r.try_get("account").unwrap_or_default();
             let project: String = r.try_get("project").unwrap_or_default();
@@ -351,8 +369,12 @@ impl MirrorRepo for DoltRepo {
             let channel: String = r.try_get("channel").unwrap_or_default();
             let conversation_name: String = r.try_get("conversation_name").unwrap_or_default();
             let conversation_uuid: String = r.try_get("conversation_uuid").unwrap_or_default();
-            let markdown_uuid: Option<String> = r.try_get("markdown_uuid").ok();
-            let message_index: Option<i64> = r.try_get("message_index").ok();
+            let markdown_uuid: Option<String> = r
+                .try_get::<Option<String>, _>("markdown_uuid")
+                .ok()
+                .flatten();
+            let message_index: Option<i64> =
+                r.try_get::<Option<i64>, _>("message_index").ok().flatten();
             let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
             let text: String = r.try_get("text").unwrap_or_default();
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();

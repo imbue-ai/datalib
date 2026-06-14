@@ -37,8 +37,19 @@ use serde_json::Value;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
-use super::db::{EventRow, RawDb, RoomRow, UserRow};
+use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
+use crate::translate::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
+
+/// In-memory accumulator the per-thread walkers push into; flushed
+/// once in three chunked multi-row INSERTs at the end of [`ingest`].
+#[derive(Default)]
+struct PendingBatch {
+    rooms: Vec<RoomRow>,
+    users: Vec<UserRow>,
+    events: Vec<EventRow>,
+}
 
 /// `source` tag stamped on every row this module emits. Distinguishes
 /// `beeper_index` rows from future `macos_imessage` rows so the same
@@ -189,16 +200,25 @@ pub async fn ingest(
     progress.set_length(Some(target_rooms.len() as u64));
 
     let mut seen_users: HashSet<String> = HashSet::new();
+    let mut batch = PendingBatch::default();
     for (thread_id, network, thread_json) in &target_rooms {
         let account_id = thread_json
             .pointer("/accountID")
             .and_then(|v| v.as_str())
             .map(String::from);
         let room_row = build_room_row(thread_id, network, account_id.as_deref(), thread_json);
-        dst.upsert_room(&room_row).await?;
+        batch.rooms.push(room_row);
         summary.rooms += 1;
 
-        ingest_participants(db_path, dst, thread_id, network, &mut seen_users, summary).await?;
+        ingest_participants(
+            db_path,
+            thread_id,
+            network,
+            &mut seen_users,
+            &mut batch,
+            summary,
+        )
+        .await?;
         ingest_messages(
             db_path,
             dst,
@@ -206,10 +226,11 @@ pub async fn ingest(
             thread_id,
             network,
             download_media,
+            &mut batch,
             summary,
         )
         .await?;
-        ingest_reactions(db_path, dst, thread_id, network, summary).await?;
+        ingest_reactions(db_path, thread_id, network, &mut batch, summary).await?;
 
         progress.inc(1);
         progress.set_message(&format!(
@@ -217,6 +238,15 @@ pub async fn ingest(
             summary.rooms, summary.events, summary.users, summary.blobs
         ));
     }
+
+    // One bulk-flush per entity table — each a chunked multi-row
+    // INSERT with bookkeeping in the same tx. Attachments are already
+    // landed in the CAS at this point (their `blob_refs.owning_id`
+    // points at the event's UUID which we computed eagerly above; the
+    // events row lands now to complete the picture).
+    dst.bulk_upsert_rooms(&batch.rooms).await?;
+    dst.bulk_upsert_users(&batch.users).await?;
+    dst.bulk_upsert_events(&batch.events).await?;
     Ok(())
 }
 
@@ -263,6 +293,7 @@ fn build_room_row(
         .and_then(|v| v.as_str())
         .map(String::from);
     RoomRow {
+        id: beeper_room_uuid(SOURCE, thread_id),
         source: SOURCE.to_string(),
         network: network.to_string(),
         native_room_id: thread_id.to_string(),
@@ -274,7 +305,6 @@ fn build_room_row(
         description,
         is_dm,
         is_space,
-        payload: thread_json.clone(),
     }
 }
 
@@ -288,10 +318,10 @@ fn sql_quote(s: &str) -> String {
 
 async fn ingest_participants(
     db_path: &Path,
-    dst: &RawDb,
     thread_id: &str,
     network: &str,
     seen_users: &mut HashSet<String>,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -314,7 +344,8 @@ async fn ingest_participants(
             .and_then(|v| v.as_str())
             .map(String::from);
         let nickname = r.get("nickname").and_then(|v| v.as_str()).map(String::from);
-        let row = UserRow {
+        batch.users.push(UserRow {
+            id: beeper_user_uuid(SOURCE, &user_id),
             source: SOURCE.to_string(),
             network: Some(network.to_string()),
             native_user_id: user_id,
@@ -322,14 +353,13 @@ async fn ingest_participants(
             full_name,
             remote_id: None,
             avatar_blob_id: None,
-            payload: r.clone(),
-        };
-        dst.upsert_user(&row).await?;
+        });
         summary.users += 1;
     }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ingest_messages(
     db_path: &Path,
     dst: &RawDb,
@@ -337,6 +367,7 @@ async fn ingest_messages(
     thread_id: &str,
     network: &str,
     download_media: bool,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -410,16 +441,20 @@ async fn ingest_messages(
             (None, None)
         };
 
+        let event_uuid = beeper_event_uuid(SOURCE, &event_id);
+        let room_uuid = beeper_room_uuid(SOURCE, thread_id);
+        let sender_uuid = sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s));
         let row = EventRow {
+            id: event_uuid.clone(),
             source: SOURCE.to_string(),
             network: network.to_string(),
-            native_room_id: thread_id.to_string(),
+            room_uuid,
+            sender_uuid,
             native_event_id: event_id.clone(),
             // Beeper Texts doesn't propagate native message ids
             // into index.db (we checked). Future readers (e.g.
             // local megabridge.db) can populate this.
             external_event_id: None,
-            sender_native_user_id: sender,
             event_type,
             timestamp_ms,
             text_content: text,
@@ -427,9 +462,8 @@ async fn ingest_messages(
             edit_of_native_event_id: edit_of,
             reaction_emoji,
             reaction_target_native_event_id: reaction_target,
-            payload: message_json.clone(),
         };
-        let event_uuid = dst.upsert_event(&row).await?;
+        batch.events.push(row);
         summary.events += 1;
 
         if let Some(attachments) = message_json
@@ -463,9 +497,9 @@ async fn ingest_messages(
 
 async fn ingest_reactions(
     db_path: &Path,
-    dst: &RawDb,
     thread_id: &str,
     network: &str,
+    batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
     let sql = format!(
@@ -494,20 +528,19 @@ async fn ingest_reactions(
             .and_then(|v| v.as_str())
             .map(String::from);
         let timestamp_ms = r.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
-        let row = EventRow {
+        batch.events.push(EventRow {
+            id: beeper_event_uuid(SOURCE, &reaction_id),
             source: SOURCE.to_string(),
             network: network.to_string(),
-            native_room_id: thread_id.to_string(),
+            room_uuid: beeper_room_uuid(SOURCE, thread_id),
+            sender_uuid: sender.as_deref().map(|s| beeper_user_uuid(SOURCE, s)),
             native_event_id: reaction_id,
-            sender_native_user_id: sender,
             event_type: "REACTION".to_string(),
             timestamp_ms,
             reaction_emoji: emoji,
             reaction_target_native_event_id: Some(target_event),
-            payload: Value::Null,
             ..EventRow::default()
-        };
-        dst.upsert_event(&row).await?;
+        });
         summary.events += 1;
     }
     Ok(())
@@ -563,7 +596,13 @@ async fn ingest_attachment(
     let slot_str = file_name
         .clone()
         .unwrap_or_else(|| format!("attachment_{slot}"));
-    let blob_id = format!("{owning_event_uuid}:{slot}");
+    // `ref_id` encodes both the per-event slot ordering and the
+    // display filename. The `|` separator lets parse split them
+    // back out — render uses the filename as the markdown link's
+    // alt text. Mirrors how WhatsApp's wa_media_files.relative_path
+    // doubles as a display label.
+    let blob_id = format!("{slot}|{slot_str}");
+    let _ = (&src_url,);
 
     let Some((_scheme, _server, media_id, dir_name)) = parse_attachment_id(att_id) else {
         debug!(event = "beeper_attachment_unknown_scheme", id = %att_id);
@@ -571,46 +610,54 @@ async fn ingest_attachment(
     };
     let path: PathBuf = media_root.join(&dir_name).join(media_id);
 
-    let stub = frankweiler_etl::blob_cas::RefStub {
-        ref_id: &blob_id,
-        kind: "beeper_media",
-        owning_id: owning_event_uuid,
-        slot: &slot_str,
-        upstream_uuid: Some(att_id),
-        upstream_name: file_name.as_deref(),
-        source_url: Some(&src_url),
-        content_type: mime.as_deref(),
-    };
-
     if !download_media {
-        let mut tx = dst.pool().begin().await.context("begin pre_seed_blob tx")?;
-        frankweiler_etl::blob_cas::pre_seed_ref(&mut tx, &stub).await?;
-        tx.commit().await.context("commit pre_seed_blob tx")?;
+        // Record the edge with NULL blake3 — "we know about this
+        // attachment but haven't fetched bytes yet." Render will emit
+        // the "(not yet fetched)" placeholder for any ref_id whose
+        // bundle entry is missing bytes.
+        let edge = BeeperMediaAttachmentRow {
+            id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+            event_uuid: owning_event_uuid.to_string(),
+            ref_id: blob_id,
+            blake3: None,
+        };
+        dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+            .await?;
         return Ok(());
     }
 
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) => b,
         Err(e) => {
-            let mut tx = dst
-                .pool()
-                .begin()
-                .await
-                .context("begin record_blob_error tx")?;
-            frankweiler_etl::blob_cas::record_ref_error(
-                &mut tx,
-                &blob_id,
-                owning_event_uuid,
-                &slot_str,
-                &format!("media file not found at {}: {e}", path.display()),
-            )
-            .await?;
-            tx.commit().await.context("commit record_blob_error tx")?;
+            warn!(
+                event = "beeper_attachment_read_failed",
+                event_uuid = %owning_event_uuid,
+                path = %path.display(),
+                error = %e,
+            );
+            // Still record the edge so a future re-run (with the
+            // file present) can spot the gap and re-ingest.
+            let edge = BeeperMediaAttachmentRow {
+                id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+                event_uuid: owning_event_uuid.to_string(),
+                ref_id: blob_id,
+                blake3: None,
+            };
+            dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+                .await?;
             summary.blob_errors += 1;
             return Ok(());
         }
     };
-    frankweiler_etl::blob_cas::store_bytes(dst.pool(), dst.cas(), &stub, &bytes).await?;
+    let blake3 = dst.cas().put(&bytes, mime.as_deref()).await?;
+    let edge = BeeperMediaAttachmentRow {
+        id: BeeperMediaAttachmentRow::pk_recipe(owning_event_uuid, &blob_id),
+        event_uuid: owning_event_uuid.to_string(),
+        ref_id: blob_id,
+        blake3: Some(blake3),
+    };
+    dst.bulk_upsert_media_attachments(std::slice::from_ref(&edge))
+        .await?;
     summary.blobs += 1;
     Ok(())
 }

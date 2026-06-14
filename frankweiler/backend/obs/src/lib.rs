@@ -74,7 +74,11 @@ pub struct ObsArgs {
 
     /// `tracing-subscriber` env filter directive. Same grammar as
     /// `$RUST_LOG`, which is also honored if this flag isn't set.
-    #[arg(long, env = "RUST_LOG", default_value = "info,sqlx=warn,hyper=warn")]
+    #[arg(
+        long,
+        env = "RUST_LOG",
+        default_value = "info,sqlx=warn,hyper=warn,html5ever=error"
+    )]
     pub log_level: String,
 
     /// OTLP/gRPC endpoint (e.g. `http://localhost:4317`). When set,
@@ -88,7 +92,7 @@ impl Default for ObsArgs {
     fn default() -> Self {
         Self {
             log_format: LogFormat::default(),
-            log_level: "info,sqlx=warn,hyper=warn".into(),
+            log_level: "info,sqlx=warn,hyper=warn,html5ever=error".into(),
             otlp_endpoint: None,
         }
     }

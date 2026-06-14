@@ -109,9 +109,22 @@ def main() -> int:
     # extractor will scan this dir for `signal-backup-*` subdirs and
     # pick the newest one — same code path as a real user's
     # `~/backups/SignalBackups`.
+    #
+    # Skip regen if a snapshot already exists. The signal resume cursor
+    # is `(mtime_ns, byte_size)`-keyed (see
+    # `providers/signal/src/extract/schema_raw.rs::INGESTED_BACKUPS_DDL`),
+    # so re-running `signal_make_fixture_bin` would touch the files
+    # and defeat the cursor across pipeline runs sharing the same
+    # workspace.
     signal_snapshot_root = workspace / "signal_snapshots"
     signal_snapshot_root.mkdir(exist_ok=True)
-    _run([str(signal_make_fixture_bin), str(signal_spec), str(signal_snapshot_root)])
+    existing_signal_snaps = [
+        p for p in signal_snapshot_root.iterdir() if p.name.startswith("signal-backup-")
+    ]
+    if not existing_signal_snaps:
+        _run(
+            [str(signal_make_fixture_bin), str(signal_spec), str(signal_snapshot_root)]
+        )
 
     # WhatsApp: same idea — expand the spec into a `WhatsApp/` backup
     # dir under the workspace. The extractor's `WhatsAppSync.backup_dir`

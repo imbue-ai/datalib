@@ -5,11 +5,10 @@
 //! per conversation, and per attached file. See `db.rs` for the schema
 //! and `frankweiler_etl::doltlite_raw` for the design rationale.
 //!
-//! The `_fetched_at` / `_listing_update_time` synthetic keys that the
-//! Python downloader stamped into per-conversation JSON files have
-//! been promoted to real columns (`fetched_at`,
-//! `last_listing_update_time`) — the stored payload is now the raw
-//! upstream response byte-for-byte.
+//! The `_fetched_at` synthetic key that the Python downloader stamped
+//! into per-conversation JSON files has been promoted to a real
+//! bookkeeping column (`conversations_bookkeeping.fetched_at`) — the
+//! stored payload is now the raw upstream response byte-for-byte.
 //!
 //! Auth + Cloudflare clearance is still delegated to `latchkey curl`
 //! with `LATCHKEY_CURL=/path/to/curl_impersonate-chrome`.
@@ -22,7 +21,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::blob_cas::RefStub;
+use frankweiler_etl::bulk::bulk_upsert_in_tx;
+use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 use frankweiler_time::IsoOffsetTimestamp;
@@ -32,7 +32,9 @@ use tokio::time::sleep;
 use tracing::{info, info_span, instrument, warn, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
-pub use db::{block_on_load_all, db_path_for, LoadedConversation, LoadedRaw, RawDb};
+pub use db::{db_path_for, LoadedConversation, LoadedRaw, RawDb};
+use frankweiler_etl::blob_cas::CasEdgeRow as _;
+use schema_raw::{ConversationAttachmentRow, ConversationRow as ConversationRowSchema, MeRow};
 
 /// Inter-fetch sleep. ChatGPT doesn't appear to throttle us at any
 /// polite rate; 100ms keeps us from looking like a tight loop without
@@ -100,9 +102,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     if opts.control.refetch_blobs {
         tracing::info!(event = "chatgpt_refetch_blobs");
-        frankweiler_etl::doltlite_raw::truncate_blob_refs(db.pool())
+        db.clear_blob_hashes()
             .await
-            .context("truncate blob_refs before refetch")?;
+            .context("clear chatgpt_attachments.blake3 before refetch")?;
     }
 
     let run_config = json!({
@@ -112,7 +114,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     });
     let run = ExtractRun::start(db.pool(), &run_config).await?;
 
-    let _started_at = opts
+    // One `now` per fetch — threaded into every bulk upsert so all
+    // `<table>_bookkeeping.fetched_at` stamps from a single sync share
+    // a timestamp. The sync orchestrator passes its `--now` here so
+    // deterministic builds get a stable stamp.
+    let now = opts
         .fetched_at
         .clone()
         .unwrap_or_else(|| IsoOffsetTimestamp::now_local().to_rfc3339());
@@ -120,13 +126,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut client = ChatGPTClient::new();
     let mut summary = FetchSummary::default();
 
+    // Run-scoped `(file_id → blake3)` cache: loaded once up-front so
+    // the per-file dedupe check inside `fetch_attachments_for` is a
+    // HashMap hit instead of a SQLite round trip. Successful
+    // downloads insert into it so files referenced by multiple
+    // conversations in the same run hit the cache on every reference
+    // after the first.
+    let mut blake3_by_file = db.load_attachment_blake3s().await?;
+
     let work = async {
         // /me — cheap, also pins the account id we report under.
         let me = client
             .me()
             .await
             .map_err(|e| anyhow::anyhow!("fetch /me: {e}"))?;
-        db.upsert_me(&me).await.context("upsert me")?;
+        upsert_me(&db, &me, &now).await?;
         info!(
             event = "chatgpt_me",
             email = me.get("email").and_then(|v| v.as_str()).unwrap_or(""),
@@ -144,16 +158,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         let (title, update_time) = title_and_update_time(&full);
                         let payload =
                             serde_json::to_string(&full).context("serialize conversation")?;
-                        db.upsert_conversation_detail(&db::ConversationDetail {
-                            id: target.clone(),
-                            title,
-                            update_time,
-                            last_listing_update_time: None,
-                            payload,
-                        })
+                        upsert_conversations(
+                            &db,
+                            &[ConversationUpsert {
+                                id: target.clone(),
+                                title,
+                                update_time,
+                                payload,
+                            }],
+                            &now,
+                        )
                         .await?;
                         summary.fetched += 1;
-                        fetch_attachments_for(&mut client, &db, &full, &mut summary).await;
+                        fetch_attachments_for(
+                            &mut client,
+                            &db,
+                            &full,
+                            &mut summary,
+                            &mut blake3_by_file,
+                            &now,
+                        )
+                        .await;
                         info!(event = "chatgpt_fetch_single_ok", raw = raw, id = %target);
                     }
                     Err(e) => {
@@ -172,18 +197,25 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(event = "chatgpt_listing", convs = listing.len());
         summary.listing = listing.len();
 
-        // Pre-seed every listed conversation so a later sync's skip
-        // check has a fresh `last_listing_update_time` to compare
-        // against, even if the detail fetch never gets a chance to
-        // land (rate limit, network hiccup).
-        let listing_refs: Vec<&Value> = listing.iter().collect();
-        db.pre_seed_conversations(&listing_refs).await?;
-
-        let states = db.conversation_states().await?;
+        // Skip-check: bulk-read existing `(id, update_time)` for every
+        // listed id, then compare to the listing's update_time. Rows
+        // we don't have at all → missing. Rows whose stored update_time
+        // differs from the listing's → stale. Both fall into the work
+        // queue; everything else is up-to-date and skipped.
+        //
+        // No pre-seed: we only ever write a row after a successful
+        // detail fetch. The next sync's listing is the source of truth
+        // for "what should exist." A previously-failed fetch is
+        // naturally retried because no row exists yet.
+        let listed_ids: Vec<&str> = listing
+            .iter()
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+            .collect();
+        let existing = db.existing_update_times(&listed_ids).await?;
 
         // Prioritize: missing > stale > already-good. Same intent as
-        // the JSONL implementation's "spend our 429 budget on new work"
-        // ordering.
+        // the JSONL implementation's "spend our 429 budget on new
+        // work" ordering.
         let mut missing: Vec<&Value> = Vec::new();
         let mut stale: Vec<&Value> = Vec::new();
         let mut up_to_date: usize = 0;
@@ -191,17 +223,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let api_ut = item.get("update_time").cloned().unwrap_or(Value::Null);
-            match states.get(cid) {
-                Some(s) if s.has_payload => {
-                    let prev = s.last_listing_update_time.clone().unwrap_or(Value::Null);
-                    if prev == api_ut {
-                        up_to_date += 1;
-                    } else {
-                        stale.push(item);
-                    }
-                }
-                _ => missing.push(item),
+            // JSON-encode the listing's update_time so its byte shape
+            // matches the stored value (the listing can emit a number,
+            // string, or null depending on the conversation).
+            let api_ut_str = item
+                .get("update_time")
+                .map(|v| serde_json::to_string(v).unwrap_or_default());
+            match (existing.get(cid), api_ut_str.as_deref()) {
+                (Some(stored), Some(api)) if stored == api => up_to_date += 1,
+                (Some(_), _) => stale.push(item),
+                (None, _) => missing.push(item),
             }
         }
         info!(
@@ -210,11 +241,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             stale = stale.len(),
             up_to_date = up_to_date,
         );
-        // Surface the skip count in the summary (the field exists on
-        // FetchSummary but was previously never assigned; without this
-        // the run-2 incrementality snapshot misleadingly showed
-        // `skipped=0` even when most conversations matched their
-        // stored `last_listing_update_time`).
         summary.skipped += up_to_date;
 
         let ordered: Vec<&Value> = missing.into_iter().chain(stale).collect();
@@ -231,7 +257,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 continue;
             };
             opts.progress.set_message(cid);
-            let api_ut = item.get("update_time").cloned().unwrap_or(Value::Null);
             match client.get_conversation(cid).await {
                 Ok(full) => {
                     let (title, update_time) = title_and_update_time(&full);
@@ -243,16 +268,27 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                             continue;
                         }
                     };
-                    db.upsert_conversation_detail(&db::ConversationDetail {
-                        id: cid.to_string(),
-                        title,
-                        update_time,
-                        last_listing_update_time: Some(api_ut),
-                        payload,
-                    })
+                    upsert_conversations(
+                        &db,
+                        &[ConversationUpsert {
+                            id: cid.to_string(),
+                            title,
+                            update_time,
+                            payload,
+                        }],
+                        &now,
+                    )
                     .await?;
                     summary.fetched += 1;
-                    fetch_attachments_for(&mut client, &db, &full, &mut summary).await;
+                    fetch_attachments_for(
+                        &mut client,
+                        &db,
+                        &full,
+                        &mut summary,
+                        &mut blake3_by_file,
+                        &now,
+                    )
+                    .await;
                     if opts.sleep_between > Duration::ZERO {
                         sleep(opts.sleep_between).await;
                     }
@@ -296,15 +332,96 @@ fn title_and_update_time(full: &Value) -> (Option<String>, Option<String>) {
     (title, update_time)
 }
 
+/// Internal row shape used by [`upsert_conversations`] — same fields
+/// `ConversationDetail` used to carry, before the migration to the
+/// generic `bulk_upsert_in_tx` path.
+#[derive(Debug, Clone)]
+struct ConversationUpsert {
+    id: String,
+    title: Option<String>,
+    update_time: Option<String>,
+    payload: String,
+}
+
+/// Build a `MeRow` and bulk-upsert it. Same `now` everywhere so the
+/// `me_bookkeeping.fetched_at` stamp matches the rest of the fetch.
+async fn upsert_me(db: &RawDb, payload: &Value, now: &str) -> Result<()> {
+    let id = payload
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("/me response missing id"))?;
+    let email = payload
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let name = payload
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let payload_str = serde_json::to_string(payload).context("serialize /me")?;
+    let row = MeRow {
+        id_and_payload: WirePayload {
+            id: id.to_string(),
+            payload: payload_str,
+        },
+        email,
+        name,
+    };
+    let mut tx = db.pool().begin().await.context("begin upsert_me tx")?;
+    bulk_upsert_in_tx(&mut tx, &[row], now).await?;
+    tx.commit().await.context("commit upsert_me tx")?;
+    Ok(())
+}
+
+/// Build a batch of `ConversationRow` values and bulk-upsert. Today
+/// we still flush one-at-a-time because each detail fetch is its own
+/// network round trip — but the path goes through the same shared
+/// machinery every other ported provider uses.
+async fn upsert_conversations(db: &RawDb, rows: &[ConversationUpsert], now: &str) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let built: Vec<ConversationRowSchema> = rows
+        .iter()
+        .map(|r| ConversationRowSchema {
+            id_and_payload: WirePayload {
+                id: r.id.clone(),
+                payload: r.payload.clone(),
+            },
+            title: r.title.clone(),
+            update_time: r.update_time.clone(),
+        })
+        .collect();
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin upsert_conversations tx")?;
+    bulk_upsert_in_tx(&mut tx, &built, now).await?;
+    tx.commit()
+        .await
+        .context("commit upsert_conversations tx")?;
+    Ok(())
+}
+
 /// Walk a conversation tree and pull every attachment + asset-pointer
 /// blob into the DB. Per the design doc we skip when we already have
 /// bytes (signed URLs rotate; bytes don't). Failures bump
 /// `attempt_count` and record `last_error`; they don't fail the sync.
+///
+/// Pending state accumulates in a [`BlobBundle`] — successful fetches
+/// go through `bundle.add(...)`, failures through `bundle.add_error(...)`.
+/// One flush at end-of-conversation drains the bundle into the CAS
+/// (via `BlobCas::put_many`) + the per-provider `chatgpt_attachments`
+/// edge table (via `bulk_upsert_in_tx`) + the bookkeeping sidecar
+/// (`record_object_error`).
 async fn fetch_attachments_for(
     client: &mut ChatGPTClient,
     db: &RawDb,
     conv: &Value,
     summary: &mut FetchSummary,
+    blake3_by_file: &mut std::collections::HashMap<String, String>,
+    now: &str,
 ) {
     let Some(cid) = conv
         .get("conversation_id")
@@ -372,38 +489,62 @@ async fn fetch_attachments_for(
             }
         }
     }
+    let mut attach = frankweiler_etl::blob_cas::CasEdgeAccumulator::new();
     for (file_id, name, mime) in targets {
-        if db.blob_exists(&file_id).await.unwrap_or(false) {
+        if let Some(blake3) = blake3_by_file.get(&file_id) {
+            attach.add_known(cid, &file_id, blake3.clone());
             summary.skipped_blobs += 1;
             continue;
         }
-        match download_one_file(client, db, &file_id, cid, name.as_deref(), mime.as_deref()).await {
-            Ok(true) => summary.new_blobs += 1,
-            Ok(false) => summary.failed_blobs += 1,
+        match download_one_file(client, &file_id, name.as_deref(), mime.as_deref()).await {
+            Ok(Some((bytes, content_type))) => {
+                let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
+                blake3_by_file.insert(file_id.clone(), blake3);
+                attach.add_fetched(cid, &file_id, bytes, content_type, name.clone());
+                summary.new_blobs += 1;
+            }
+            Ok(None) => {
+                attach.add_failed(cid, &file_id, "no bytes");
+                summary.failed_blobs += 1;
+            }
             Err(e) => {
                 warn!(event = "chatgpt_media_unexpected_err", file_id = %file_id, error = %e);
-                let _ = db
-                    .record_blob_error(&file_id, cid, "attachment", &e.to_string())
-                    .await;
+                attach.add_failed(cid, &file_id, e.to_string());
                 summary.failed_blobs += 1;
             }
         }
     }
+
+    let flush_result = attach
+        .flush(db.pool(), db.cas(), |conv_id, file_id, blake3| {
+            ConversationAttachmentRow {
+                id: ConversationAttachmentRow::pk_recipe(conv_id, file_id),
+                conversation_id: conv_id.to_string(),
+                file_id: file_id.to_string(),
+                blake3: blake3.map(String::from),
+            }
+        })
+        .await;
+    if let Err(e) = flush_result {
+        warn!(event = "chatgpt_attachment_flush_err", conv = %cid, error = %e);
+    }
+    let _ = now;
 }
 
 /// Fetch one attachment's bytes via the two-hop dance: metadata via
 /// latchkey (auth attached), then `latchkey curl -fSL` on the signed
-/// URL (no auth — Azure rejects the chatgpt cookie). On success the
-/// bytes land in `blobs.bytes`; on failure we record an error row.
+/// URL (no auth — Azure rejects the chatgpt cookie). On success returns
+/// `(bytes, content_type)` for the caller to feed into the
+/// per-conversation [`BlobBundle`]. `Ok(None)` means "no bytes for
+/// this file" — caller logs a stub edge row + bookkeeping error.
 async fn download_one_file(
     client: &mut ChatGPTClient,
-    db: &RawDb,
     file_id: &str,
-    cid: &str,
     name: Option<&str>,
     mime: Option<&str>,
-) -> Result<bool> {
-    // Step 1: metadata fetch.
+) -> Result<Option<(Vec<u8>, Option<String>)>> {
+    let _ = name; // upstream_name is no longer stored on the edge row
+                  // Step 1: metadata fetch.
     let meta = match client
         .get(&format!("/backend-api/files/{file_id}/download"))
         .await
@@ -415,20 +556,14 @@ async fn download_one_file(
                 file_id = file_id,
                 error = %e,
             );
-            let _ = db
-                .record_blob_error(file_id, cid, "attachment", &format!("meta: {e}"))
-                .await;
-            return Ok(false);
+            return Ok(None);
         }
     };
     let signed = match meta.get("download_url").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
             warn!(event = "chatgpt_media_no_download_url", file_id = file_id);
-            let _ = db
-                .record_blob_error(file_id, cid, "attachment", "no download_url")
-                .await;
-            return Ok(false);
+            return Ok(None);
         }
     };
 
@@ -460,32 +595,14 @@ async fn download_one_file(
         warn!(
             event = "chatgpt_media_failed",
             file_id = file_id,
-            name = name.unwrap_or(""),
             exit = proc.status.code().unwrap_or(-1),
             stderr = %tail.trim(),
         );
-        let _ = db
-            .record_blob_error(file_id, cid, "attachment", tail.trim())
-            .await;
-        return Ok(false);
+        return Ok(None);
     }
     let bytes =
         std::fs::read(tmp.path()).with_context(|| format!("read tempfile for {file_id}"))?;
-    db.store_blob(
-        &RefStub {
-            ref_id: file_id,
-            kind: "attachment",
-            owning_id: cid,
-            slot: "attachment",
-            upstream_uuid: Some(file_id),
-            upstream_name: name,
-            source_url: Some(&signed),
-            content_type: mime,
-        },
-        &bytes,
-    )
-    .await?;
-    Ok(true)
+    Ok(Some((bytes, mime.map(String::from))))
 }
 
 #[instrument(skip(client))]

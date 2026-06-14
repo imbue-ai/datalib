@@ -143,8 +143,13 @@ fn default_true() -> bool {
 pub struct ClaudeApiSync {
     #[serde(default)]
     pub refresh_window_days: Option<i64>,
+    /// Force-refetch the N most-recently-updated conversations in
+    /// each org on every run, even if the listing's `updated_at`
+    /// matches what we already have on disk. Catches the case where
+    /// upstream adds messages without bumping `updated_at`, and
+    /// keeps the chat you're actively using fresh. Default 0.
     #[serde(default)]
-    pub overlap: Option<i64>,
+    pub refresh_most_recent_n_chat_count: Option<i64>,
     /// When non-empty, restrict the fetch to exactly these conversation
     /// UUIDs. Accepts either the bare UUID or a paste-able browser URL
     /// (`https://claude.ai/chat/<uuid>`); URLs are normalized to the
@@ -314,6 +319,35 @@ pub struct BeeperSync {
     /// itself landed.
     #[serde(default)]
     pub period: Option<String>,
+}
+
+/// Account-row data for the mbox extract path. The sync orchestrator
+/// pipes these fields through to `frankweiler_etl_email::mbox` so the
+/// synthesized `accounts` row matches JMAP's shape (display name,
+/// canonical email address, personal-vs-shared flag).
+///
+/// All fields are optional. Defaults: `account_id` falls back to the
+/// mbox file stem; `display_name` ← `account_id`; `is_personal` ←
+/// `true`. Provided primarily so YAML for an mbox-backed source can
+/// say "this Google Takeout export is for alice@example.com" without
+/// having to encode that info in the file path.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct MboxSync {
+    /// Account id used as the PK in `accounts` and the FK from every
+    /// `emails`/`mailboxes`/`threads` row. Stable; renaming re-keys.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// Human-readable label for the account (e.g. "Alice's Gmail").
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Canonical email address for the account.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// `true` if this is a personal account (the default); `false`
+    /// for a shared inbox / mailing list archive.
+    #[serde(default)]
+    pub is_personal: Option<bool>,
 }
 
 /// Tunables for the email provider. Today this is JMAP-backed
@@ -529,6 +563,11 @@ pub enum SourceConfig {
         common: SourceCommon,
         #[serde(default)]
         sync: Option<EmailSync>,
+        /// Account-row config for the mbox path (display name, email
+        /// address, is_personal). Ignored when `sync:` is present
+        /// (JMAP carries that info itself). See [`MboxSync`].
+        #[serde(default)]
+        mbox: Option<MboxSync>,
     },
     Beeper {
         #[serde(flatten)]
@@ -652,7 +691,9 @@ impl SourceConfig {
             // path. Both are "managed" in that we own the raw doltlite
             // store. The orchestrator's `ExtractPlan::for_source` decides
             // which extractor to dispatch.
-            SourceConfig::Email { sync, common } => sync.is_some() || common.input_path.is_some(),
+            SourceConfig::Email { sync, common, .. } => {
+                sync.is_some() || common.input_path.is_some()
+            }
             SourceConfig::Beeper { sync, .. } => sync.is_some(),
             SourceConfig::Carddav { sync, .. } => sync.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
@@ -1077,7 +1118,7 @@ sources:
     type: claude_export
   - name: claude-api
     type: claude_api
-    sync: {refresh_window_days: 14, overlap: 2}
+    sync: {refresh_window_days: 14, refresh_most_recent_n_chat_count: 2}
   - name: chatgpt
     type: chatgpt_api
     sync: {max_pages: 5}

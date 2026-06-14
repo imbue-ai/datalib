@@ -169,6 +169,89 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     )
 }
 
+/// The two columns every wire-payload entity table requires: `id` PK
+/// and the `payload` JSONB blob holding the upstream wire bytes. Embed
+/// this struct as the **first** field of any row type that maps to a
+/// wire-payload table; the `#[derive(WirePayloadRow)]` macro (in
+/// `frankweiler-etl-macros`) recognizes it by *type*, not by field
+/// name, so a rename or typo is a compile error rather than a runtime
+/// SQL mismatch.
+///
+/// Per-row content fingerprints used to live next to these as a
+/// `payload_blake3` hex hash, hand-maintained by every extract site
+/// and consumed by translate to drive incremental skip. That column is
+/// gone: translate now asks doltlite directly via `dolt_diff_<table>`
+/// what changed since the last render, which is both cheaper (the
+/// prolly-tree diff is already in dolt's hot path) and the single
+/// source of truth — see [`crate::render_cursor`] and the per-provider
+/// `translate::parse` for the new shape.
+///
+/// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
+/// or — for the canonical path — the derive macro, which generates
+/// the DDL straight off the row struct's field list.
+#[derive(Debug, Clone)]
+pub struct WirePayload {
+    pub id: String,
+    pub payload: String,
+}
+
+/// Implemented for any row type whose table shape is "wire-payload":
+/// id + payload + a handful of promoted columns. The single method
+/// returns the table's DDL, suitable for splicing into a provider's
+/// `full_ddl()` vector.
+///
+/// Hand-implementing this trait is possible but unusual; the
+/// `#[derive(WirePayloadRow)]` macro in `frankweiler-etl-macros`
+/// generates it (and the matching `BulkUpsertable` impl) from a row
+/// struct in one shot. See `signal::extract::schema_raw` for the
+/// canonical applications.
+pub trait WirePayloadRow {
+    /// `CREATE TABLE IF NOT EXISTS …` for this row type's table.
+    /// Equivalent to calling [`wire_payload_table_ddl`] with the
+    /// promoted-column declarations derived from the struct's
+    /// non-`WirePayload` fields.
+    fn ddl() -> String;
+}
+
+/// Build a `CREATE TABLE` statement for an event-shaped raw table
+/// that stores its upstream wire bytes as a `payload` JSONB blob.
+/// Every such table shares the same shape — the `id`/`payload` pair
+/// at the top, the entity's promoted columns underneath:
+///
+/// ```sql
+/// CREATE TABLE IF NOT EXISTS <table> (
+///     id             TEXT PRIMARY KEY,
+///     payload        TEXT NULL,
+///     <promoted columns>
+/// )
+/// ```
+///
+/// Callers pass `promoted_columns` as one column-declaration per slice
+/// entry, *without* commas — the helper joins them and handles the
+/// splicing so individual call sites can't drift on the comma/newline
+/// convention. Pass `&[]` when the entity has no promoted columns
+/// (`account`'s single-row case).
+///
+/// A per-row `payload_blake3` hex column used to live here for
+/// fingerprint-driven incremental render skips; it's been removed in
+/// favor of `dolt_diff_<table>`-driven incremental render, which uses
+/// doltlite's prolly-tree diff as the single source of truth. Existing
+/// rows on disk still carry the column as dead weight — `--reset-and-
+/// redownload` cleans it up.
+pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
+    let promoted_block = if promoted_columns.is_empty() {
+        String::new()
+    } else {
+        format!(",\n    {}", promoted_columns.join(",\n    "))
+    };
+    format!(
+        "CREATE TABLE IF NOT EXISTS {table} (
+    id             TEXT PRIMARY KEY,
+    payload        TEXT NULL{promoted_block}
+)"
+    )
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Shared DDL
 // ─────────────────────────────────────────────────────────────────────
@@ -198,15 +281,11 @@ pub const SYNC_SCOPE_STATE_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_scope_st
 )";
 
 /// DDL every provider gets for free. Concatenated after the
-/// provider-specific table list inside [`open`].
-pub const SHARED_DDL: &[&str] = &[
-    SYNC_RUNS_DDL,
-    crate::blob_cas::BLOB_REFS_DDL,
-    crate::blob_cas::BLOB_REFS_BLAKE3_INDEX_DDL,
-    crate::blob_cas::BLOB_REFS_OWNING_INDEX_DDL,
-    crate::blob_cas::BLOB_REFS_BOOKKEEPING_DDL,
-    SYNC_SCOPE_STATE_DDL,
-];
+/// provider-specific table list inside [`open`]. The legacy
+/// `blob_refs` + `blob_refs_bookkeeping` tables used to live here —
+/// they were retired once every provider moved to per-provider CAS
+/// edge tables (`CasEdgeRow`); see git history for the old shape.
+pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL];
 
 // ─────────────────────────────────────────────────────────────────────
 // Path helper
@@ -522,27 +601,6 @@ pub async fn truncate_data_tables(pool: &SqlitePool, data_tables: &[&str]) -> Re
     Ok(())
 }
 
-/// Wipe `blob_refs` + `blob_refs_bookkeeping`. NOT called by
-/// [`truncate_data_tables`] (entity reset preserves the ref index so
-/// the next extract skips re-fetching bytes we already have in the
-/// sibling CAS). Use this when the user explicitly asks to invalidate
-/// the cache key — driven by `--refetch-blobs` at the CLI.
-///
-/// The sibling `cas_objects` file is never touched: bytes are
-/// byte-stable; only the
-/// [`crate::blob_cas::gc_orphans`] sweep should delete from it.
-pub async fn truncate_blob_refs(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin().await.context("begin truncate blob_refs tx")?;
-    for sql in ["DELETE FROM blob_refs", "DELETE FROM blob_refs_bookkeeping"] {
-        sqlx::query(sql)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("truncate {sql}"))?;
-    }
-    tx.commit().await.context("commit truncate blob_refs tx")?;
-    Ok(())
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // Generic object-table ops
 // ─────────────────────────────────────────────────────────────────────
@@ -709,6 +767,268 @@ pub async fn write_events_to_raw_storage_layer(
     Ok(())
 }
 
+// `EventBatch` is the per-table batch shape — defined in
+// `crate::bulk` because it is a load-bearing primitive of the bulk
+// write path. The tape side (`EventTape::append_batch`) is a
+// best-effort sidecar that uses the same struct. Re-exported here
+// because providers reach for it next to the chokepoint.
+pub use crate::bulk::EventBatch;
+
+/// Chokepoint for the **successful bulk write** path against an
+/// event-shaped table (i.e. one whose rows came off a wire and have
+/// a meaningful payload to mirror). The provider has already issued
+/// its chunked multi-row entity-table UPSERTs inside `tx`; this call:
+///
+///   1. stamps `<table>_bookkeeping` for every id (via
+///      [`crate::bulk::bulk_upsert_bookkeeping`]) in the same tx,
+///      one bookkeeping batch per `EventBatch`;
+///   2. commits `tx`;
+///   3. after the commit succeeds, appends one JSONL line per row to
+///      the tape (if attached), one
+///      [`crate::event_tape::EventTape::append_batch`] call per batch.
+///
+/// Post-commit tape errors log at `error!` but do not fail the call.
+/// The doltlite rows are already persisted and are the source of
+/// truth; the tape is a write-only mirror, so failing the caller
+/// would be lying about whether the data landed (same contract as
+/// [`write_events_to_raw_storage_layer`]).
+///
+/// Not the right tool for non-event tables (blob_refs, sidecars,
+/// file-imported data with no wire) — those want
+/// [`crate::bulk::bulk_upsert_bookkeeping`] called directly inside
+/// the caller's tx, with no tape.
+///
+/// See `docs/data_architecture_ingestion.md` § "Bulk-upsert as the
+/// standard write path" for why this is the standard chokepoint for
+/// wire-event extracts.
+pub async fn bulk_upsert_events(
+    mut tx: sqlx::Transaction<'_, sqlx::Sqlite>,
+    tape: Option<&crate::event_tape::EventTape>,
+    batches: &[EventBatch<'_>],
+    now: &str,
+) -> Result<()> {
+    for b in batches {
+        crate::bulk::bulk_upsert_bookkeeping(
+            &mut tx,
+            b.table,
+            b.rows.iter().map(|(id, _)| *id),
+            now,
+        )
+        .await?;
+    }
+    tx.commit().await.context("commit bulk_upsert_events tx")?;
+    if let Some(t) = tape {
+        for b in batches {
+            if b.rows.is_empty() {
+                continue;
+            }
+            if let Err(e) = t.append_batch(b) {
+                tracing::error!(
+                    event = "event_tape_append_failed",
+                    table = b.table,
+                    count = b.rows.len(),
+                    error = %format!("{e:#}"),
+                    "event tape append_batch failed after doltlite commit; rows ARE persisted, tape is missing lines — investigate"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// All-in-one entity-bulk-write chokepoint paired with a JSONL
+/// wire-tape mirror. Use this when the caller already has a
+/// [`crate::bulk::BulkUpsertable`] row vec in hand (every ported
+/// extract path does), since [`bulk_upsert_events`] above only
+/// handles bookkeeping + tape and assumes the entity rows were
+/// written elsewhere in the tx.
+///
+/// Flow:
+///   1. Open a tx.
+///   2. [`crate::bulk::bulk_upsert_in_tx`] — entity rows + paired
+///      `<T::TABLE>_bookkeeping` stamps.
+///   3. Commit.
+///   4. If `tape` is `Some`, fire one
+///      [`crate::event_tape::EventTape::append_batch`] for `(table,
+///      payloads)` post-commit. Errors log at `error!` but don't
+///      fail the call (same contract as
+///      [`write_events_to_raw_storage_layer`]).
+///
+/// `payloads` carries one `(id, &Value)` per row so the tape line
+/// can mirror the upstream JSON. The caller already has these from
+/// constructing the [`crate::bulk::BulkUpsertable`] rows.
+pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
+    pool: &sqlx::SqlitePool,
+    tape: Option<&crate::event_tape::EventTape>,
+    rows: &[T],
+    payloads: &[(&str, &serde_json::Value)],
+) -> Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+    let mut tx = pool
+        .begin()
+        .await
+        .with_context(|| format!("begin bulk_upsert_with_tape {} tx", T::TABLE))?;
+    crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit bulk_upsert_with_tape {} tx", T::TABLE))?;
+    if let Some(t) = tape {
+        let batch = EventBatch {
+            table: T::TABLE,
+            rows: payloads,
+        };
+        if let Err(e) = t.append_batch(&batch) {
+            tracing::error!(
+                event = "event_tape_append_failed",
+                table = T::TABLE,
+                count = payloads.len(),
+                error = %format!("{e:#}"),
+                "event tape append_batch failed after doltlite commit; rows ARE persisted, tape is missing lines — investigate"
+            );
+        }
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// dolt_diff incremental-render scan
+// ─────────────────────────────────────────────────────────────────────
+
+/// Result of a [`scan_buckets`] dolt_diff scan. Same shape every
+/// per-provider parse step used to hand-roll; consolidated here so
+/// each `parse_doltlite_async` is a one-liner against the scan.
+#[derive(Debug, Clone, Default)]
+pub struct DiffScan {
+    /// `Some(set)` → render only the buckets whose key is in `set`.
+    /// `None` → cold start (no prior render cursor, a globally-
+    /// fanning table changed, the bucket query errored, or the
+    /// doltlite extension is unavailable). Render everything.
+    pub changed_buckets: Option<std::collections::HashSet<String>>,
+    /// HEAD commit hash at scan time, ready to stamp into the render
+    /// cursor on success. `None` if `dolt_log()` was unavailable
+    /// (e.g. stock libsqlite3); cursor stays unwritten in that case
+    /// so the next run cold-starts again.
+    pub new_head: Option<String>,
+    /// Wall-clock time spent in the union query. `None` if we
+    /// cold-started before running it (first run or global-fanout
+    /// hit).
+    pub scan_elapsed: Option<std::time::Duration>,
+}
+
+/// Spec for [`scan_buckets`]. Names the dolt_diff vtabs that fan
+/// out to "render everything" and the SQL that projects bucket keys
+/// for the per-bucket changed set.
+pub struct DiffScanSpec<'a> {
+    /// Bare entity-table names whose changes mean "render every
+    /// bucket" — typically tables that appear in every rendered
+    /// doc's frontmatter or header (`workspaces`, `users`,
+    /// `channels`, `me`, `recipients`, etc.). Any non-`unchanged`
+    /// row in `dolt_diff_<table>` for any of these short-circuits
+    /// the scan and returns `changed_buckets: None`.
+    pub global_fanout_tables: &'a [&'a str],
+    /// SQL that projects bucket keys for changed rows. The query is
+    /// run with `last_render_hash` bound at parameter index 1;
+    /// column 0 of each returned row is the bucket key.
+    ///
+    /// Convention: `UNION` across the relevant
+    /// `dolt_diff_<table>` vtabs with the standard
+    /// `WHERE from_ref = ?1 AND to_ref = 'HEAD' AND
+    /// diff_type != 'unchanged'` clause, projecting whichever
+    /// column on each table maps to the provider's bucket key
+    /// (`thread_root_uuid` for slack, `conversation_id` for
+    /// chatgpt, `chat_id` for signal, …). See provider parse.rs
+    /// for examples.
+    pub bucket_query: &'a str,
+}
+
+/// Two-phase dolt_diff scan. Looks up HEAD, checks
+/// [`DiffScanSpec::global_fanout_tables`] for any change, then runs
+/// [`DiffScanSpec::bucket_query`] to project the per-bucket changed
+/// set. On any failure short of "no last hash" we fall back to cold
+/// start — render-everything is always safe, partial-render against
+/// stale dolt_diff is not.
+///
+/// Same control flow every per-provider scan_diff used to hand-roll;
+/// consolidating it makes "what does the scan promise?" a one-stop
+/// answer.
+pub async fn scan_buckets(
+    pool: &sqlx::SqlitePool,
+    last_render_hash: Option<&str>,
+    spec: &DiffScanSpec<'_>,
+) -> Result<DiffScan> {
+    let new_head: Option<String> =
+        sqlx::query_scalar("SELECT commit_hash FROM dolt_log() ORDER BY date DESC LIMIT 1")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
+    let Some(from_ref) = last_render_hash else {
+        return Ok(DiffScan {
+            changed_buckets: None,
+            new_head,
+            scan_elapsed: None,
+        });
+    };
+
+    for table in spec.global_fanout_tables {
+        let sql = format!(
+            "SELECT 1 FROM dolt_diff_{table} \
+              WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged' LIMIT 1"
+        );
+        let any: Option<i64> = sqlx::query_scalar(&sql)
+            .bind(from_ref)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+        if any.is_some() {
+            return Ok(DiffScan {
+                changed_buckets: None,
+                new_head,
+                scan_elapsed: None,
+            });
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let res = sqlx::query(spec.bucket_query)
+        .bind(from_ref)
+        .fetch_all(pool)
+        .await;
+    let elapsed = started.elapsed();
+    let rows = match res {
+        Ok(r) => r,
+        Err(e) => {
+            // `dolt_diff_<table>` can fail to resolve on a brand-new
+            // working set (extract ran but no commit yet), or when
+            // doltlite extensions aren't linked. Fall back to
+            // cold-start so we don't return "nothing changed" when
+            // we can't tell.
+            tracing::info!(
+                error = %e,
+                "dolt_diff scan failed — falling back to cold-start (render everything)"
+            );
+            return Ok(DiffScan {
+                changed_buckets: None,
+                new_head,
+                scan_elapsed: Some(elapsed),
+            });
+        }
+    };
+    use sqlx::Row;
+    let set: std::collections::HashSet<String> =
+        rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    Ok(DiffScan {
+        changed_buckets: Some(set),
+        new_head,
+        scan_elapsed: Some(elapsed),
+    })
+}
+
 /// Convenience: failure branch of [`record_object_attempt`].
 /// Kept for callsite readability — same semantics as
 /// `record_object_attempt(tx, table, id, Some(err))`.
@@ -844,10 +1164,6 @@ mod tests {
         let pool = open_test(&p).await;
         // Shared tables exist.
         sqlx::query("SELECT COUNT(*) FROM sync_runs")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        sqlx::query("SELECT COUNT(*) FROM blob_refs")
             .fetch_one(&pool)
             .await
             .unwrap();

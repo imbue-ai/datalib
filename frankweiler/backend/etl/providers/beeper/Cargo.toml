@@ -18,6 +18,7 @@ path = "src/bin/beeper_inspect.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
+frankweiler-etl-macros = { path = "../../macros" }
 frankweiler-obs = { path = "../../../obs" }
 frankweiler-time = { path = "../../../time" }
 frankweiler-schema = { path = "../../../schema" }

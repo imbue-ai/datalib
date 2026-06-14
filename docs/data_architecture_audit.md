@@ -3,6 +3,16 @@
 Audit of the ETL codebase against [`data_architecture_ingestion.md`](data_architecture_ingestion.md),
 produced 2026-06-09.
 
+> **2026-06-12 superseded findings**: every "pre-seed before fetch" /
+> "missing pre-seed" finding in this audit is now obsolete. The
+> "Retry and fetch durability" principle was reversed (see
+> `data_architecture_ingestion.md` §"No-preseed listing flow"):
+> entity rows now only exist after a successful detail fetch.
+> Skip-check happens via bulk-read of stored `update_time` /
+> `updated_at` compared to the listing's value. Findings about
+> missing pre-seed on slack messages, github discussions, yolink
+> devices, notion blocks/comments, etc. are no longer violations.
+
 For each provider plus the shared/orchestrator layer, four buckets are
 called out: principle violations, dead patterns to remove, simplification
 opportunities, and cross-source sharing opportunities. The final

@@ -22,14 +22,13 @@ pub struct EdgeRow {
     pub label: Option<String>,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("edges", "EdgeRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("edges", "EdgeRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("edges", r#"CREATE TABLE IF NOT EXISTS edges (
+pub const DDL: &[(&str, &str)] = &[(
+    "edges",
+    r#"CREATE TABLE IF NOT EXISTS edges (
     edge_uuid VARCHAR(96) NOT NULL,
     src_markdown_uuid VARCHAR(96) NOT NULL,
     src_anchor_uuid VARCHAR(96),
@@ -37,10 +36,18 @@ pub const DDL: &[(&str, &str)] = &[
     dst_anchor_uuid VARCHAR(96),
     label VARCHAR(64),
     PRIMARY KEY (edge_uuid)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("edges", &["edge_uuid", "src_markdown_uuid", "src_anchor_uuid", "dst_markdown_uuid", "dst_anchor_uuid", "label"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "edges",
+    &[
+        "edge_uuid",
+        "src_markdown_uuid",
+        "src_anchor_uuid",
+        "dst_markdown_uuid",
+        "dst_anchor_uuid",
+        "label",
+    ],
+)];

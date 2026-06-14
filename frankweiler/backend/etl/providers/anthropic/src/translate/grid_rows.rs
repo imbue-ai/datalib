@@ -3,8 +3,6 @@
 //! message, plus a row per `thinking` / `tool_use` / `tool_result`
 //! block — same row set the Python ingest emits.
 
-use std::hash::{Hash, Hasher};
-
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
@@ -249,98 +247,5 @@ fn chat_row(conv: &ConversationRow) -> GridRow {
         notion_page_uuid: None,
         notion_block_uuid: None,
         markdown_uuid: Some(conv.conversation_uuid.clone()),
-    }
-}
-
-/// Stable hash over the conversation's full upstream payload (the
-/// normalized-to-export-shape JSON, with `chat_messages` intact).
-/// Canonicalized (sorted keys) so cosmetic JSON reordering doesn't
-/// invalidate the fingerprint.
-///
-/// One conversation = one document = one fingerprint, computed without
-/// shredding `chat_messages`. Renderer skips against this before
-/// deciding whether to walk the messages at all.
-pub fn fingerprint_for_conversation(upstream_payload: &Value) -> String {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    RENDER_VERSION.hash(&mut h);
-    canonical_json(upstream_payload).hash(&mut h);
-    format!("{:016x}", h.finish())
-}
-
-fn canonical_json(v: &Value) -> String {
-    serde_json::to_string(&canonicalize(v)).unwrap_or_default()
-}
-
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
-            }
-            Value::Object(out)
-        }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::time::{Duration, Instant};
-
-    // Regression test for the quadratic fingerprint/render flow that
-    // used to walk all global messages + content_blocks + attachments
-    // for each conversation. The new flow fingerprints the upstream
-    // payload of one conversation at a time.
-    //
-    // At C=400 conversations × M=40 messages each, the old code burned
-    // a few hundred ms in release; the new code is ~10 ms. 500 ms
-    // gives comfortable headroom.
-    #[test]
-    fn fingerprint_loop_is_linear_in_conversations() {
-        const C: usize = 400;
-        const M: usize = 40;
-        let mut payloads: Vec<Value> = Vec::with_capacity(C);
-        for ci in 0..C {
-            let mut msgs = Vec::with_capacity(M);
-            for mi in 0..M {
-                msgs.push(json!({
-                    "uuid": format!("m-{ci:04}-{mi:04}"),
-                    "sender": if mi % 2 == 0 { "human" } else { "assistant" },
-                    "text": format!("hi {mi}"),
-                    "created_at": format!("2026-01-01T00:{mi:02}:00Z"),
-                    "content": [{"type": "text", "text": format!("body {mi}")}],
-                }));
-            }
-            payloads.push(json!({
-                "uuid": format!("c-{ci:04}"),
-                "name": format!("conv {ci}"),
-                "account": {"uuid": "acct-1"},
-                "chat_messages": msgs,
-            }));
-        }
-
-        let start = Instant::now();
-        let mut h: u64 = 0;
-        for p in &payloads {
-            let fp = fingerprint_for_conversation(p);
-            h ^= fp.bytes().next().unwrap_or(0) as u64;
-        }
-        let elapsed = start.elapsed();
-        assert!(h != u64::MAX);
-        // Budget is generous (5s) on purpose. We only want to catch a
-        // genuine O(N²) regression — under the old implementation this
-        // workload took >30s. The linear path is sub-100ms on a fast
-        // box, but bazel-sandboxed CI / loaded laptops drift up to a
-        // few hundred ms; mirrors the chatgpt-side bump in 541920c.
-        assert!(
-            elapsed < Duration::from_secs(5),
-            "fingerprint loop took {elapsed:?} for {C} conversations × {M} msgs — likely regressed to O(N²)",
-        );
     }
 }

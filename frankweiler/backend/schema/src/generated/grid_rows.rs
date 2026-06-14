@@ -244,14 +244,13 @@ pub struct GridRow {
     pub markdown_uuid: Option<String>,
 }
 
-pub const TABLES: &[(&str, &str)] = &[
-    ("grid_rows", "GridRow"),
-];
+pub const TABLES: &[(&str, &str)] = &[("grid_rows", "GridRow")];
 
 /// Portable CREATE TABLE statements for every table this schema
 /// defines. Same SQL subset accepted by Dolt, MySQL, and SQLite.
-pub const DDL: &[(&str, &str)] = &[
-    ("grid_rows", r#"CREATE TABLE IF NOT EXISTS grid_rows (
+pub const DDL: &[(&str, &str)] = &[(
+    "grid_rows",
+    r#"CREATE TABLE IF NOT EXISTS grid_rows (
     uuid VARCHAR(96) NOT NULL,
     provider VARCHAR(32) NOT NULL,
     kind VARCHAR(32) NOT NULL,
@@ -277,10 +276,36 @@ pub const DDL: &[(&str, &str)] = &[
     notion_block_uuid VARCHAR(96),
     markdown_uuid VARCHAR(96),
     PRIMARY KEY (uuid)
-)"#),
-];
+)"#,
+)];
 
 /// Column names per table, in declaration order.
-pub const COLUMNS: &[(&str, &[&str])] = &[
-    ("grid_rows", &["uuid", "provider", "kind", "source_label", "when_ts", "author", "account", "project", "org_uuid", "org_name", "channel", "conversation_name", "conversation_uuid", "message_index", "entire_chat", "text", "slack_link", "qmd_path", "source_url", "git_sha", "external_id", "notion_page_uuid", "notion_block_uuid", "markdown_uuid"]),
-];
+pub const COLUMNS: &[(&str, &[&str])] = &[(
+    "grid_rows",
+    &[
+        "uuid",
+        "provider",
+        "kind",
+        "source_label",
+        "when_ts",
+        "author",
+        "account",
+        "project",
+        "org_uuid",
+        "org_name",
+        "channel",
+        "conversation_name",
+        "conversation_uuid",
+        "message_index",
+        "entire_chat",
+        "text",
+        "slack_link",
+        "qmd_path",
+        "source_url",
+        "git_sha",
+        "external_id",
+        "notion_page_uuid",
+        "notion_block_uuid",
+        "markdown_uuid",
+    ],
+)];

@@ -85,6 +85,13 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && rm -rf /root/.bun \
     && bun --version
 
+# uv — `precommit_test` drives ruff / pyright through `uv run`, so the
+# image needs `uv` on PATH for the in-bazel pre-commit check to work
+# in CI. Pull the static binary from astral's official image rather
+# than running their install script: no curl-to-bash, no networked
+# install step, and bumping the version is a single tag edit.
+COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
+
 # bazelisk reads `.bazelversion` and downloads the matching bazel, so
 # we only pin bazelisk here.
 ARG BAZELISK_VERSION=1.22.0

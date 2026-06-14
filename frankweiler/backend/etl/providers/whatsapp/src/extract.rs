@@ -14,7 +14,7 @@
 //! plaintext copy of those is ever made.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -23,6 +23,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use frankweiler_etl::blob_cas::{self, blake3_hex, BlobCas, CasInsert};
 use frankweiler_etl::doltlite_raw;
 use frankweiler_whatsapp_backup::decrypt_file;
 
@@ -52,16 +53,28 @@ pub struct IngestSummary {
 #[derive(Clone, Debug)]
 pub struct RawDb {
     pool: SqlitePool,
+    /// Path on disk of the doltlite file the pool wraps. Kept so
+    /// `frankweiler_etl::blob_cas::cas_path_for` can derive the
+    /// sibling CAS file location without the caller threading two
+    /// paths around in parallel.
+    db_path: PathBuf,
 }
 
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = doltlite_raw::open(db_path, ALL_DDL).await?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            db_path: db_path.to_path_buf(),
+        })
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn db_path(&self) -> &Path {
+        &self.db_path
     }
 }
 
@@ -86,14 +99,22 @@ pub async fn ingest(
 /// the sync orchestrator, which opens the pool up front (so SIGINT can
 /// flush) and threads it through.
 pub async fn fetch(backup_dir: &Path, root_key: &[u8; 32], db: &RawDb) -> Result<IngestSummary> {
-    fetch_with_pool(backup_dir, root_key, db.pool().clone()).await
+    fetch_with_pool(backup_dir, root_key, db.pool().clone(), db.db_path()).await
 }
 
 async fn fetch_with_pool(
     backup_dir: &Path,
     root_key: &[u8; 32],
     dst_pool: SqlitePool,
+    target_db_path: &Path,
 ) -> Result<IngestSummary> {
+    // `backup_dir` lives inside the `sync:` block (not on
+    // SourceCommon.input_path), so core's load-time tilde expansion
+    // doesn't touch it — it lands here as a literal `~/...` if the
+    // user wrote `backup_dir: ~/backups/WhatsApp` in YAML. Expand
+    // here, same way signal handles `snapshot_dir`.
+    let backup_dir = expand_tilde(backup_dir);
+    let backup_dir = backup_dir.as_path();
     let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
     tracing::info!(
         crypt_path = %crypt_path.display(),
@@ -139,7 +160,7 @@ async fn fetch_with_pool(
 
     let media_root = backup_dir.join("Media");
     if media_root.is_dir() {
-        mirror_media_files(&dst_pool, &media_root, &mut summary).await?;
+        mirror_media_files(&dst_pool, target_db_path, &media_root, &mut summary).await?;
     } else {
         tracing::info!(
             media_root = %media_root.display(),
@@ -370,11 +391,23 @@ async fn mirror_message(
         let from_me: i64 = r.get("from_me");
         let key_id: String = r.get("key_id");
         let Some(chat_jid) = chat_map.get(&chat_row_id).cloned() else {
-            tracing::warn!(
-                message_id = id,
-                chat_row_id,
-                "wa_message: chat_row_id not in chat map; dropping row"
-            );
+            // Every msgstore ships with a synthetic seed row at
+            // `_id=1` with `chat_row_id=-1` and `key_id="-1"` —
+            // it's an Android-side schema artifact, not a real
+            // message. Drop it silently. Other orphan rows
+            // (real `key_id`, missing chat) still WARN because
+            // they're worth flagging — maybe a chat row was
+            // pruned, maybe the source is corrupted.
+            if chat_row_id == -1 && key_id == "-1" {
+                tracing::debug!(message_id = id, "wa_message: dropping msgstore seed row");
+            } else {
+                tracing::warn!(
+                    message_id = id,
+                    chat_row_id,
+                    key_id,
+                    "wa_message: chat_row_id not in chat map; dropping row"
+                );
+            }
             continue;
         };
         let sender_jid_row_id: Option<i64> = r.get("sender_jid_row_id");
@@ -727,20 +760,33 @@ async fn mirror_message_add_on_reaction(
     Ok(())
 }
 
-/// Walk `media_root` and register every regular file by sha256.
+/// Walk `media_root`, register every regular file in `wa_media_files`,
+/// and put its bytes into the sibling blob_cas keyed by blake3. Translate
+/// resolves attachments by joining `wa_message_media.file_path` →
+/// `wa_media_files.sha256` → `wa_media_files.blake3` → `cas_objects.bytes`.
 ///
 /// Skips dot-prefixed dirs (`.Thumbs`, `.Shared`, `.trash`, `.wamocache`,
 /// …) — those are local WhatsApp scratch state, not message media.
 async fn mirror_media_files(
     dst: &SqlitePool,
+    target_db_path: &Path,
     media_root: &Path,
     summary: &mut IngestSummary,
 ) -> Result<()> {
-    let media_root = media_root.to_path_buf();
-    // Hashing is CPU+IO work — do it on a blocking pool so we don't
-    // starve the sqlx async runtime.
+    let media_root_owned = media_root.to_path_buf();
+    // Hashing + reading bytes are CPU+IO work — do them on the blocking
+    // pool so we don't starve the sqlx async runtime.
     let entries: Vec<MediaEntry> =
-        tokio::task::spawn_blocking(move || scan_media(&media_root)).await??;
+        tokio::task::spawn_blocking(move || scan_media(&media_root_owned)).await??;
+
+    // Precompute blake3 for every file; cheap relative to the disk read
+    // we already paid for, and lets us batch the CAS insert + the
+    // metadata UPDATE.
+    let blake3s: Vec<String> = entries.iter().map(|e| blake3_hex(&e.content)).collect();
+
+    // Insert metadata rows with blake3 = NULL up front. Drop-and-rebuild
+    // truncates this table on every run, so we don't risk clobbering
+    // a previously-good blake3.
     let mut tx = dst.begin().await.context("begin wa_media_files tx")?;
     let mut n = 0u64;
     for e in &entries {
@@ -759,6 +805,43 @@ async fn mirror_media_files(
         n += 1;
     }
     tx.commit().await.context("commit wa_media_files tx")?;
+
+    // Bulk CAS put — one transaction for the whole batch.
+    let cas_path = blob_cas::cas_path_for(target_db_path);
+    let cas = BlobCas::open(&cas_path)
+        .await
+        .with_context(|| format!("open blob_cas at {}", cas_path.display()))?;
+    let cas_inserts: Vec<CasInsert<'_>> = entries
+        .iter()
+        .zip(blake3s.iter())
+        .map(|(e, b)| CasInsert {
+            blake3: b.as_str(),
+            bytes: &e.content,
+            content_type: e.mime_type.as_deref(),
+        })
+        .collect();
+    cas.put_many(&cas_inserts)
+        .await
+        .context("blob_cas put_many wa_media_files")?;
+
+    // Stamp blake3 onto each metadata row now that the bytes are
+    // durable in the CAS.
+    let mut tx = dst
+        .begin()
+        .await
+        .context("begin wa_media_files blake3 tx")?;
+    for (e, b) in entries.iter().zip(blake3s.iter()) {
+        sqlx::query("UPDATE wa_media_files SET blake3 = ? WHERE sha256 = ?")
+            .bind(b)
+            .bind(&e.sha256)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("update wa_media_files.blake3 for {}", e.sha256))?;
+    }
+    tx.commit()
+        .await
+        .context("commit wa_media_files blake3 tx")?;
+
     summary.media_files = n;
     Ok(())
 }
@@ -769,6 +852,11 @@ struct MediaEntry {
     size_bytes: u64,
     mtime_unix: Option<i64>,
     mime_type: Option<String>,
+    /// Raw file bytes. Kept in memory between scan and the blob_cas
+    /// put so a single walk over `Media/` produces both the metadata
+    /// rows and the CAS contents in one pass. Released immediately
+    /// after the put.
+    content: Vec<u8>,
 }
 
 fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
@@ -806,6 +894,7 @@ fn scan_media(media_root: &Path) -> Result<Vec<MediaEntry>> {
             relative_path: rel.to_string_lossy().into_owned(),
             size_bytes,
             mtime_unix,
+            content: bytes,
             mime_type,
         });
     }
@@ -829,6 +918,15 @@ fn mime_from_ext(path: &Path) -> Option<String> {
         "pdf" => "application/pdf".to_string(),
         _ => return None,
     })
+}
+
+fn expand_tilde(p: &Path) -> PathBuf {
+    if let Ok(rest) = p.strip_prefix("~") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    p.to_path_buf()
 }
 
 /// Stamp the doltlite db with one `dolt_commit('-Am', '…')`. Returns

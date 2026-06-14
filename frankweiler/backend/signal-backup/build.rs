@@ -36,8 +36,20 @@ fn main() -> std::io::Result<()> {
     unsafe {
         std::env::set_var("PROTOC", protobuf_src::protoc());
     }
-    prost_build::Config::new().compile_protos(
-        &["proto/Backup.proto", "proto/LocalArchive.proto"],
-        &["proto"],
-    )
+    // Generate prost types with serde derive so the extract path
+    // can write `serde_json::to_string(&frame)?` directly. See
+    // `docs/data_architecture_ingestion.md` §"Wire-fidelity": the
+    // raw store records semantic content as JSON; the transcoding
+    // from prost wire bytes is lossless and not a normalization.
+    //
+    // TODO(follow-up): bytes fields currently serialize as JSON
+    // arrays of u8 numbers (the serde default for `Vec<u8>`).
+    // Polish to base64/hex via `field_attribute` once we enumerate
+    // the relevant field paths.
+    prost_build::Config::new()
+        .type_attribute(".", "#[derive(::serde::Serialize, ::serde::Deserialize)]")
+        .compile_protos(
+            &["proto/Backup.proto", "proto/LocalArchive.proto"],
+            &["proto"],
+        )
 }

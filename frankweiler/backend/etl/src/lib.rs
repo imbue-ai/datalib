@@ -20,6 +20,7 @@
 //! subsequent runs.
 
 pub mod blob_cas;
+pub mod bulk;
 pub mod control;
 pub mod doltlite_raw;
 pub mod event_store;
@@ -33,6 +34,7 @@ pub mod load;
 pub mod periodize;
 pub mod progress;
 pub mod raw_store;
+pub mod render_cursor;
 pub mod scope_state;
 pub mod section;
 pub mod synthesize;

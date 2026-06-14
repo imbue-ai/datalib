@@ -233,10 +233,18 @@ either call `db.pre_seed_blob_stub` (no bytes yet) or `db.store_blob`
 guaranteed, but the `gc_orphans` sweep reconciles any orphan CAS
 rows. Failed fetches go through `db.record_blob_error`.
 
-Read path: `LoadedRaw.blobs` is an `Arc<dyn BlobReader>`. Construct
-it from the per-source pools in `block_on_load_all` via
-`Arc::new(SqliteBlobReader::new(db.pool().clone(), db.cas().pool().clone()))`.
-For unit tests, use `InMemoryBlobReader::new()` + `insert(BlobView { … })`.
+Read path: parse builds per-bucket
+[`BlobBundle`](../etl/src/blob_cas.rs)s — one bag of `(ref_id → bytes
++ blake3 + content_type)` per rendered doc — by issuing one
+[`BlobBundle::load`](../etl/src/blob_cas.rs) per bucket against the
+provider's CAS-edge table joined to the sibling `cas_objects` pool.
+The shape of every per-provider edge table is the same
+[`CasEdgeRow`](../etl/src/blob_cas.rs) derive (id PK, owning FK, ref
+column, nullable blake3). Render is then a sync transformer: `bundle.
+materialize_to_dir(<page_dir>/blobs)` writes bytes, `bundle.get
+(ref_id)` returns one entry, `bundle.markdown_link(ref_id, …)` emits
+the `![…](blobs/…)` link. For unit tests, build the bundle directly
+with `BlobBundle::add(ref_id, bytes, content_type, upstream_name)`.
 
 ### 8. sync_runs (log table)
 
@@ -265,10 +273,10 @@ Don't re-implement these in your provider:
 | Blob write (pre-seed) | `blob_cas::pre_seed_ref(&mut tx, &RefStub { ... })` |
 | Blob write (fetched bytes) | `cas.put(bytes, ct)` + `blob_cas::attach_hash(&mut tx, stub, &hash)`, wrapped as `blob_cas::store_bytes(entity_pool, cas, stub, bytes)` |
 | Blob error | `blob_cas::record_ref_error(&mut tx, ref_id, owning_id, slot, err)` |
-| Blob read trait | `blob_cas::BlobReader` (`read_by_ref_id` / `read_by_owner` / `read_by_hash`) |
-| Blob reader impls | `SqliteBlobReader::new(refs_pool, cas_pool)` / `InMemoryBlobReader` |
-| Universal markdown link | `blob_cas::attachment_md(reader, ref_id, display, is_image)` |
-| Universal file write | `blob_cas::materialize_refs(reader, ref_ids, &blobs_dir)` |
+| Per-provider CAS-edge table DDL | `#[derive(CasEdgeRow)] struct <X>AttachmentRow { id, owning, ref, blake3 }` + `<X>AttachmentRow::all_ddl()` |
+| Per-bucket blob bag | `blob_cas::BlobBundle::load(refs_pool, cas_pool, projection_sql, &ref_ids)` |
+| Per-bucket file write | `bundle.materialize_to_dir(&page_dir.join("blobs"))` |
+| Universal markdown link | `bundle.markdown_link(ref_id, display, is_image)` |
 
 The shared module ships shared DDL constants too — `BLOB_REFS_DDL`
 (+ its indexes), `SYNC_RUNS_DDL` — appended to your provider's DDL
@@ -289,9 +297,7 @@ plumbing delegated).
 1. **`src/extract/db.rs`** — provider-specific tables only. Shape:
 
    ```rust
-   use frankweiler_etl::blob_cas::{
-       self, BlobCas, BlobReader, InMemoryBlobReader, RefStub, SqliteBlobReader,
-   };
+   use frankweiler_etl::blob_cas::{self, BlobBundle, BlobCas, RefStub};
    use frankweiler_etl::doltlite_raw::{self as dr};
    pub use frankweiler_etl::doltlite_raw::db_path_for;
 
@@ -362,23 +368,25 @@ plumbing delegated).
    works. Factor shared row-walking logic so both readers produce
    byte-identical output.
 
-   Add a `blobs: Arc<dyn frankweiler_etl::blob_cas::BlobReader>` field
-   to the `Parsed*` struct. Default to
-   `InMemoryBlobReader::empty_handle()`.
+   Build a per-bucket
+   `HashMap<bucket_key, frankweiler_etl::blob_cas::BlobBundle>` (or
+   attach `pub blobs: BlobBundle` to each bucket struct, as slack
+   does) by issuing one `BlobBundle::load(...)` per bucket against
+   the provider's CAS-edge table joined to the sibling CAS pool. The
+   default is an empty bundle / empty map.
 
 5. **`src/translate/render.rs`** — restructure to **page-dir layout**:
 
    - `Rendered::relative_path()` returns `<entity_id>/index.md` (NOT
      `<entity_id>.md`). One directory per renderable entity.
    - Materializer is a single call to
-     `blob_cas::materialize_refs(reader, ref_ids_iter, &page_dir.join("blobs"))`.
-     Filenames come from `BlobView::rendered_filename`
-     (`<short-b3>.<ext>`) so collisions and "what extension?" go away.
-   - Attachment-link emitter uses the universal helper
-     `blob_cas::attachment_md(reader, ref_id, display, is_image)` for
-     the image-or-file shape. Providers with a non-standard
-     decoration around the link build it themselves and call
-     `view.rendered_filename()` directly.
+     `bundle.materialize_to_dir(&page_dir.join("blobs"))`. Filenames
+     come from `Blob::rendered_filename` (`<short-b3>.<ext>`) so
+     collisions and "what extension?" go away.
+   - Attachment-link emitter uses `bundle.markdown_link(ref_id,
+     display, is_image)` for the image-or-file shape. Providers with
+     a non-standard decoration around the link build it themselves
+     and call `blob.rendered_filename()` directly.
    - Inside `render_all()`, the per-entity loop becomes:
      `mkdir(page_dir)` → `materialize_conv_blobs(...)` → write
      `index.md` → write `index.grid_rows.json` (use
