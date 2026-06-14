@@ -111,7 +111,20 @@ pub fn load_at(dir: &Path) -> Result<Option<FsindexYaml>> {
     let path = dir.join(BREADCRUMB_FILENAME);
     let bytes = match fs::read(&path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // `NotFound` is the common "this dir has no breadcrumb" case.
+        // `NotADirectory` means the caller passed a non-directory path
+        // (file, socket, …) whose join with `.fsindex.yaml` is a
+        // path that can't exist by definition. The cascade builder
+        // overshoots ancestor walks by one frame for files, so this
+        // is expected and silent — see [`ancestor_chain`] in walker.rs.
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None)
+        }
         Err(e) => {
             return Err(anyhow::Error::new(e)).with_context(|| format!("read {}", path.display()))
         }

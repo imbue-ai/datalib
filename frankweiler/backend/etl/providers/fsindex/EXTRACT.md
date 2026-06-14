@@ -97,11 +97,17 @@ the cache too" — force a full rehash of every file even if the
 verifying nothing has silently drifted.
 
 Caveat: the `<t>_bookkeeping` sidecars get truncated along with
-the entity tables, so `attempt_count` resets to 1 on every scan
-and cross-scan history is lost. For fsindex this is acceptable
-because the upstream is the local filesystem — there's no
-upstream API quota to protect or transient-failure budget to
-track across scans. A future provider where bookkeeping history
+the entity tables, so the running `attempt_count` visible at HEAD
+resets to 1 on every scan. The per-commit history is NOT lost —
+dolt preserves every prior commit's bookkeeping rows, queryable
+via `SELECT … AS OF 'HEAD~N'` and the `dolt_diff_<t>_bookkeeping`
+virtual table — so "did this row error on the previous scan?"
+is still answerable, just not via a single SELECT against HEAD.
+What's gone is the running-total semantic ("this row has failed
+across 5 sync runs" as a single column value). For fsindex this
+is acceptable because the upstream is the local filesystem —
+there's no API quota to protect or transient-failure budget to
+track across scans. A future provider where the running total
 matters would need a different reconciliation strategy.
 
 ## The fast-rescan trick

@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use futures::TryStreamExt;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -30,9 +31,16 @@ use frankweiler_etl::doltlite_raw as dr;
 
 use super::schema_raw::{full_ddl, FileRow, FileStatsRow, ScanMetaRow, StampKind, DATA_TABLES};
 
-/// Default write chunk size for `bulk_write_scan`. Keeps any one
-/// transaction small enough that an interrupt loses bounded work.
-const SCAN_WRITE_CHUNK: usize = 5_000;
+/// The Unison fast-rescan cache, loaded once before truncate-and-rebuild.
+/// Keyed by root-relative path. Only `kind='file'` rows are loaded —
+/// dirs and symlinks always recompute their hash, so they never consult
+/// this cache (see `stamp::decide` callers in walker.rs).
+pub struct PrevCache {
+    /// Prior `(mtime, size, inode, dev, stamp_kind)` per file path.
+    pub stats: HashMap<String, FileStatsRow>,
+    /// Prior blake3 hex per file path, reused when the stat triple matches.
+    pub blake3s: HashMap<String, String>,
+}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -79,88 +87,109 @@ impl RawDb {
         }
     }
 
-    /// Load the prior scan's `file_stats` rows keyed by id, for the
-    /// fast-rescan compare. FIXME(load-all-stats): at the
-    /// tens-of-millions design target this is ~80 B/entry × 50M ≈
-    /// 4 GB. Acceptable on dev hardware; a future streaming-cursor
-    /// path may be needed.
-    pub async fn load_prev_stats(&self) -> Result<HashMap<String, FileStatsRow>> {
-        let rows = sqlx::query(
-            "SELECT id, mtime_ns, size, stamp_kind, inode, dev, ctime_ns FROM file_stats",
+    /// Load the Unison fast-rescan cache in ONE streamed pass.
+    ///
+    /// A single `file_stats JOIN files` query (filtered to
+    /// `kind='file'`, the only rows the rescan compare consults)
+    /// feeds both maps. We `fetch` a stream and consume by **column
+    /// index**, not by name: `fetch_all` materializes every row into
+    /// an owned `Vec<SqliteRow>` first, and `try_get(name)` re-resolves
+    /// the column name per call — at a million rows those two costs
+    /// dominate (observed: minutes vs the engine's ~2 s for the same
+    /// query under the `doltlite` CLI). Streaming + positional access
+    /// keeps it linear and allocation-light.
+    pub async fn load_prev_cache(&self) -> Result<PrevCache> {
+        let mut stats: HashMap<String, FileStatsRow> = HashMap::new();
+        let mut blake3s: HashMap<String, String> = HashMap::new();
+        let mut rows = sqlx::query(
+            "SELECT fs.id, fs.mtime_ns, fs.size, fs.stamp_kind, fs.inode, fs.dev, fs.ctime_ns, f.blake3 \
+             FROM file_stats fs JOIN files f ON f.id = fs.id WHERE f.kind = 'file'",
         )
-        .fetch_all(&self.pool)
-        .await
-        .context("select file_stats")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").context("read file_stats.id")?;
-            let stamp_str: String = r
-                .try_get("stamp_kind")
-                .unwrap_or_else(|_| "rescan".to_string());
+        .fetch(&self.pool);
+        while let Some(r) = rows.try_next().await.context("stream prev cache")? {
+            let id: String = r.try_get(0).context("read id")?;
+            let mtime_ns: i64 = r.try_get(1).unwrap_or(0);
+            let size: i64 = r.try_get(2).unwrap_or(0);
+            let stamp_str: String = r.try_get(3).unwrap_or_else(|_| "rescan".to_string());
+            let inode: Option<i64> = r.try_get(4).ok();
+            let dev: Option<i64> = r.try_get(5).ok();
+            let ctime_ns: Option<i64> = r.try_get(6).ok();
+            let blake3: Option<String> = r.try_get(7).ok();
             let stamp_kind = match stamp_str.as_str() {
                 "inode" => StampKind::Inode,
                 "nostamp" => StampKind::NoStamp,
                 _ => StampKind::Rescan,
             };
-            let row = FileStatsRow {
-                id: id.clone(),
-                mtime_ns: r.try_get("mtime_ns").unwrap_or(0),
-                size: r.try_get("size").unwrap_or(0),
-                stamp_kind,
-                inode: r.try_get("inode").ok(),
-                dev: r.try_get("dev").ok(),
-                ctime_ns: r.try_get("ctime_ns").ok(),
-            };
-            out.insert(id, row);
+            if let Some(b) = blake3 {
+                blake3s.insert(id.clone(), b);
+            }
+            stats.insert(
+                id.clone(),
+                FileStatsRow {
+                    id,
+                    mtime_ns,
+                    size,
+                    stamp_kind,
+                    inode,
+                    dev,
+                    ctime_ns,
+                },
+            );
         }
-        Ok(out)
+        Ok(PrevCache { stats, blake3s })
     }
 
-    /// Write the whole scan in chunked transactions. Each chunk
-    /// commits independently so a mid-write interrupt loses bounded
-    /// work. `bulk_upsert_in_tx` auto-stamps `<table>_bookkeeping`.
-    pub async fn bulk_write_scan(
+    /// Producer-consumer write path: one batch of file+stat rows
+    /// (matched 1:1 by `id`) lands in a SINGLE transaction covering
+    /// both `files` and `file_stats` (plus their auto-stamped
+    /// `_bookkeeping` sidecars). One commit per batch, not two —
+    /// doltlite charges a prolly-tree manifest mutation per commit
+    /// and accumulates immutable chunk novelty per commit (reclaimed
+    /// only by [`Self::gc`]), so halving the commit count directly
+    /// halves transient write amplification during a large scan.
+    /// Returns the commit wall time so the orchestrator can attribute
+    /// time to the write phase.
+    pub async fn write_batch(
         &self,
         files: &[FileRow],
         stats: &[FileStatsRow],
-        scan_meta: &ScanMetaRow,
         now: &str,
-    ) -> Result<()> {
-        for chunk in files.chunks(SCAN_WRITE_CHUNK) {
-            let mut tx = self.pool.begin().await.context("begin files tx")?;
-            bulk_upsert_in_tx(&mut tx, chunk, now).await?;
-            tx.commit().await.context("commit files tx")?;
+    ) -> Result<std::time::Duration> {
+        let started = std::time::Instant::now();
+        if files.is_empty() && stats.is_empty() {
+            return Ok(started.elapsed());
         }
-        for chunk in stats.chunks(SCAN_WRITE_CHUNK) {
-            let mut tx = self.pool.begin().await.context("begin file_stats tx")?;
-            bulk_upsert_in_tx(&mut tx, chunk, now).await?;
-            tx.commit().await.context("commit file_stats tx")?;
+        let mut tx = self.pool.begin().await.context("begin batch tx")?;
+        if !files.is_empty() {
+            bulk_upsert_in_tx(&mut tx, files, now).await?;
         }
-        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
-        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(scan_meta), now).await?;
-        tx.commit().await.context("commit scan_meta tx")?;
-        Ok(())
+        if !stats.is_empty() {
+            bulk_upsert_in_tx(&mut tx, stats, now).await?;
+        }
+        tx.commit().await.context("commit batch tx")?;
+        Ok(started.elapsed())
     }
 
-    /// Load `(id → blake3)` for every prior `files` row whose `kind`
-    /// is `'file'`. This is the cache the fast-rescan trick reads
-    /// against: when `stamp::decide` says ReuseHash, the walker
-    /// looks up the cached blake3 here instead of reopening the
-    /// file. Dirs are excluded because their hash always recomputes
-    /// from children; symlinks are excluded because re-hashing the
-    /// target string is free.
-    pub async fn load_prev_file_blake3s(&self) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query("SELECT id, blake3 FROM files WHERE kind = 'file'")
-            .fetch_all(&self.pool)
+    /// Compact the doltlite chunk store via `dolt_gc()`, reclaiming the
+    /// immutable-chunk novelty accumulated across the scan's per-batch
+    /// commits. Without this a large scan's on-disk size is dominated
+    /// by write amplification (observed ~7 KB/row across hundreds of
+    /// commits, vs ~1 KB/row of actual data). Returns the wall time.
+    pub async fn gc(&self) -> Result<std::time::Duration> {
+        let started = std::time::Instant::now();
+        sqlx::query("SELECT dolt_gc()")
+            .execute(&self.pool)
             .await
-            .context("select files (file kind)")?;
-        let mut out = HashMap::with_capacity(rows.len());
-        for r in rows {
-            let id: String = r.try_get("id").context("read files.id")?;
-            let blake3: String = r.try_get("blake3").context("read files.blake3")?;
-            out.insert(id, blake3);
-        }
-        Ok(out)
+            .context("dolt_gc")?;
+        Ok(started.elapsed())
+    }
+
+    /// Upsert the (single) `scan_meta` row for the source.
+    pub async fn write_scan_meta(&self, row: &ScanMetaRow, now: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), now).await?;
+        tx.commit().await.context("commit scan_meta tx")?;
+        Ok(())
     }
 
     /// Convenience wrapper around [`dr::record_object_error`] inside

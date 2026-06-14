@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-time = { path = "../../../time" }
+frankweiler-obs = { path = "../../../obs" }
+clap = { version = "4.5", features = ["derive", "env"] }
 sqlx = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
@@ -22,6 +24,7 @@ blake3 = { version = "1", default-features = false, features = ["std", "pure", "
 walkdir = { workspace = true }
 ignore = { workspace = true }
 hex = "0.4"
+futures = "0.3"
 
 [dev-dependencies]
 insta = { version = "1.41", features = ["json"] }

@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
@@ -17,6 +17,7 @@ rust_library(
         "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:blake3",
+        "@frankweiler_crates//:futures",
         "@frankweiler_crates//:hex",
         "@frankweiler_crates//:ignore",
         "@frankweiler_crates//:serde",
@@ -26,6 +27,22 @@ rust_library(
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:uuid",
         "@frankweiler_crates//:walkdir",
+    ],
+)
+
+rust_binary(
+    name = "fsindex",
+    srcs = ["src/bin/fsindex.rs"],
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        ":frankweiler_etl_fsindex",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
     ],
 )
 

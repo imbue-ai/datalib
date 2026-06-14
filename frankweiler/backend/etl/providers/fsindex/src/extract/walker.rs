@@ -27,15 +27,25 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use tracing::warn;
 use walkdir::WalkDir;
 
 use super::hash::{hash_file, hash_symlink_target, hash_tree, TreeChild};
+use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, OptionsCascade, BREADCRUMB_FILENAME};
 use super::schema_raw::{FileKind, FileRow, FileStatsRow, StampKind};
 use super::stamp::{self, FreshStat, StampDecision};
+
+/// Soft upper bound on the size of one streamed batch. The walker
+/// flushes the batch via the callback when it reaches this many
+/// rows. Larger batches mean fewer doltlite commits, which directly
+/// reduces transient write-amplification on a big scan (each commit
+/// accrues immutable chunk novelty); 20k rows is ~7 MB of buffered
+/// `ScanResult`, well within the streaming memory budget.
+pub const BATCH_SIZE: usize = 20_000;
 
 /// Output row pair from the walk. The walker emits these in
 /// post-order (children before their containing dir) so directory
@@ -80,33 +90,46 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// Walk the tree. Returns the flat scan-result list, walker
-    /// errors, and a summary. The walker NEVER writes — stamping is
-    /// the orchestrator's job (see [`super::fetch`]).
+    /// Convenience: collect every scan-result into a `Vec<ScanResult>`
+    /// in memory. Suitable for tests and the stamping orchestrator
+    /// path, NOT for production large-tree scans (memory grows with
+    /// row count). Production calls `collect_streaming` directly.
     pub fn collect(&self) -> Result<(Vec<ScanResult>, Vec<WalkerError>, WalkerSummary)> {
+        let mut out: Vec<ScanResult> = Vec::new();
+        let counters = WalkerCounters::default();
+        let (errors, summary) = self.collect_streaming(&counters, |batch| {
+            out.extend(batch);
+            Ok(())
+        })?;
+        Ok((out, errors, summary))
+    }
+
+    /// Streaming walk. Emits batches of at most [`BATCH_SIZE`] rows
+    /// via the `emit_batch` callback so memory stays O(batch_size +
+    /// tree_depth) rather than O(total_entries). The callback's
+    /// `Err` short-circuits the walk.
+    ///
+    /// The walker never writes the filesystem. Stamping (which does
+    /// write) is the orchestrator's job and happens either before
+    /// the walk (preferred, so the walker sees the new breadcrumbs)
+    /// or after a separate in-memory `collect()` call (legacy
+    /// path).
+    pub fn collect_streaming<F>(
+        &self,
+        counters: &WalkerCounters,
+        mut emit_batch: F,
+    ) -> Result<(Vec<WalkerError>, WalkerSummary)>
+    where
+        F: FnMut(Vec<ScanResult>) -> Result<()>,
+    {
         let root_canonical = self.root.to_path_buf();
-
-        let mut entries: Vec<walkdir::DirEntry> = Vec::new();
-        for e in WalkDir::new(&root_canonical)
-            .follow_links(false)
-            .contents_first(true)
-            .sort_by_file_name()
-        {
-            match e {
-                Ok(e) => entries.push(e),
-                Err(err) => {
-                    warn!(event = "fsindex_walk_entry_error", error = %err);
-                }
-            }
-        }
-
-        let mut results: Vec<ScanResult> = Vec::new();
         let mut errors: Vec<WalkerError> = Vec::new();
         let mut summary = WalkerSummary {
             rehashed: 0,
             reused: 0,
         };
 
+        let mut buf: Vec<ScanResult> = Vec::with_capacity(BATCH_SIZE);
         let mut dir_children: HashMap<PathBuf, Vec<TreeChild>> = HashMap::new();
         let mut dir_sizes: HashMap<PathBuf, i64> = HashMap::new();
         let mut dir_visible: HashMap<PathBuf, bool> = HashMap::new();
@@ -118,7 +141,21 @@ impl<'a> Walker<'a> {
         // apply by walking up the path. The simpler alternative
         // (push-on-descent) doesn't fit `contents_first=true` cleanly.
 
-        for entry in &entries {
+        let walker_iter = WalkDir::new(&root_canonical)
+            .follow_links(false)
+            .contents_first(true)
+            .sort_by_file_name();
+
+        for entry_result in walker_iter {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(err) => {
+                    counters.stat_errors.fetch_add(1, Ordering::Relaxed);
+                    warn!(event = "fsindex_walk_entry_error", error = %err);
+                    continue;
+                }
+            };
+            let entry = &entry;
             let path = entry.path();
             let is_root = path == root_canonical;
             let rel = if is_root {
@@ -128,6 +165,7 @@ impl<'a> Walker<'a> {
                     Ok(r) => match r.to_str() {
                         Some(s) => s.replace('\\', "/"),
                         None => {
+                            counters.non_utf8_paths.fetch_add(1, Ordering::Relaxed);
                             warn!(
                                 event = "fsindex_skip_non_utf8_path",
                                 path = %r.display(),
@@ -153,6 +191,7 @@ impl<'a> Walker<'a> {
             let meta = match entry.metadata() {
                 Ok(m) => m,
                 Err(err) => {
+                    counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                     errors.push(WalkerError {
                         id: rel.clone(),
                         message: format!("stat: {err}"),
@@ -189,6 +228,7 @@ impl<'a> Walker<'a> {
                     &root_canonical,
                 )
             {
+                counters.ignored_entries.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
@@ -196,6 +236,7 @@ impl<'a> Walker<'a> {
 
             let (size, blake3_hex, symlink_target_str) = match kind {
                 FileKind::File => {
+                    counters.files_visited.fetch_add(1, Ordering::Relaxed);
                     let prev = self.prev_stats.get(&rel);
                     let decision = stamp::decide(prev, &fresh);
                     // Reuse only if stamp::decide says so AND we have a
@@ -206,23 +247,54 @@ impl<'a> Walker<'a> {
                         StampDecision::ReuseHash => match self.prev_file_blake3s.get(&rel) {
                             Some(cached) => {
                                 summary.reused += 1;
+                                counters.files_reused.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .bytes_skipped_cache
+                                    .fetch_add(meta.len(), Ordering::Relaxed);
                                 cached.clone()
                             }
                             None => {
                                 summary.rehashed += 1;
-                                hash_file(path, meta.len())
-                                    .with_context(|| format!("hash file {}", path.display()))?
+                                counters.files_rehashed.fetch_add(1, Ordering::Relaxed);
+                                counters
+                                    .bytes_hashed
+                                    .fetch_add(meta.len(), Ordering::Relaxed);
+                                match hash_file(path, meta.len()) {
+                                    Ok(h) => h,
+                                    Err(e) => {
+                                        counters.read_errors.fetch_add(1, Ordering::Relaxed);
+                                        errors.push(WalkerError {
+                                            id: rel.clone(),
+                                            message: format!("hash: {e:#}"),
+                                        });
+                                        continue;
+                                    }
+                                }
                             }
                         },
                         StampDecision::Rehash => {
                             summary.rehashed += 1;
-                            hash_file(path, meta.len())
-                                .with_context(|| format!("hash file {}", path.display()))?
+                            counters.files_rehashed.fetch_add(1, Ordering::Relaxed);
+                            counters
+                                .bytes_hashed
+                                .fetch_add(meta.len(), Ordering::Relaxed);
+                            match hash_file(path, meta.len()) {
+                                Ok(h) => h,
+                                Err(e) => {
+                                    counters.read_errors.fetch_add(1, Ordering::Relaxed);
+                                    errors.push(WalkerError {
+                                        id: rel.clone(),
+                                        message: format!("hash: {e:#}"),
+                                    });
+                                    continue;
+                                }
+                            }
                         }
                     };
                     (meta.len() as i64, hex, None)
                 }
                 FileKind::Symlink => {
+                    counters.symlinks_visited.fetch_add(1, Ordering::Relaxed);
                     let target = std::fs::read_link(path)
                         .with_context(|| format!("read_link {}", path.display()))?;
                     let target_bytes = target.as_os_str().to_string_lossy();
@@ -235,6 +307,7 @@ impl<'a> Walker<'a> {
                     )
                 }
                 FileKind::Dir => {
+                    counters.dirs_visited.fetch_add(1, Ordering::Relaxed);
                     let kids = dir_children.remove(path).unwrap_or_default();
                     let hex = hash_tree(&kids);
                     let size = dir_sizes.remove(path).unwrap_or(0);
@@ -312,16 +385,28 @@ impl<'a> Walker<'a> {
                 },
                 ctime_ns: fresh.ctime_ns,
             };
-            results.push(ScanResult { file_row, stat_row });
+            buf.push(ScanResult { file_row, stat_row });
+            counters.rows_emitted.fetch_add(1, Ordering::Relaxed);
 
             // Silence dead-stores in the suppressor maps for entries
             // we processed but didn't recurse into.
             let _ = &mut cascade;
             let _ = &mut cascade_pushed;
             let _ = &mut dir_visible;
+
+            if buf.len() >= BATCH_SIZE {
+                counters.batches_emitted.fetch_add(1, Ordering::Relaxed);
+                let drained = std::mem::replace(&mut buf, Vec::with_capacity(BATCH_SIZE));
+                emit_batch(drained)?;
+            }
         }
 
-        Ok((results, errors, summary))
+        if !buf.is_empty() {
+            counters.batches_emitted.fetch_add(1, Ordering::Relaxed);
+            emit_batch(buf)?;
+        }
+
+        Ok((errors, summary))
     }
 
     /// Build a fresh cascade for an entry by loading every
