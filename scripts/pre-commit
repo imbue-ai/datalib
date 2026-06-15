@@ -76,6 +76,13 @@ if [ -d frankweiler/backend ]; then
     # rationale and the flag wiring (clippy.toml + -D warnings + the
     # `disallowed_macros` enable).
     bazelisk build --config=clippy //...
+
+    # Guard: every rust_library must have a rust_test(crate=...) target,
+    # else its inline #[cfg(test)] tests silently never run under
+    # `bazel test //...`. Catches the gap that left fsindex's stamp.rs /
+    # hash.rs tests dormant.
+    echo "[rust] unit-test target coverage"
+    "$REPO_ROOT/tools/check_rust_unit_tests.sh"
 fi
 
 echo "All pre-commit checks passed."
