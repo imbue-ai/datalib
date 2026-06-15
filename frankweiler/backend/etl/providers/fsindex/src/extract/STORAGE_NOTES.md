@@ -22,6 +22,10 @@ doltlite version during this work: **v0.11.9 → v0.11.12**.
    cross-tree dedup**, not just for clean `dolt diff`. Keep it.
 4. **`dolt_commit` must run before `dolt_gc`** on a connection, and gc
    needs ~2× the db size in free disk.
+5. **The store carries zero secondary indexes** — only the two path
+   primary keys. The store is for durable storage + prolly-tree diff;
+   all analysis is a whole-corpus scan done in RAM. An on-disk
+   secondary index nearly doubles per-row size and buys nothing here.
 
 ## 1. The `DEFAULT`-clause O(n²) commit bug
 
@@ -76,21 +80,40 @@ Reading this:
 - **blake3 as 64-char hex wastes ~35 B/row** vs a 32-byte BLOB (×2: in
   the table and its index).
 
-The current fsindex schema (`files` + 1 blake3 index + `file_stats`)
-lands at **~557 B/file** on realistic paths → **~5.5 GB / 10M**.
-
 ### Decisions taken from this
 
 - **blake3 stored as a 32-byte `BLOB`, not 64-char hex.** Rendered as hex
   only for human output (test snapshots, ad-hoc `hex(blake3)` queries).
   The directory tree-hash also concatenates raw 32-byte child digests.
-- **Only `blake3` is indexed.** Dropped `files_by_kind` (3-value,
-  low-cardinality, and the one hot query — the rescan cache JOIN — is
-  PK-driven anyway) and `files_by_identity_uuid` (almost entirely NULL).
-  Both are additive to re-add if a real workload wants them.
+- **Zero secondary indexes — only the two path primary keys.** We first
+  dropped `files_by_kind` (3-value, low-cardinality; the one hot query,
+  the rescan cache JOIN, is PK-driven) and `files_by_identity_uuid`
+  (almost entirely NULL), then dropped `files_by_blake3` too. The store's
+  only jobs are durable content-addressed storage and prolly-tree diff
+  between commits/branches — *neither touches a secondary index* (diff
+  walks the PK-ordered chunks). Every analysis query — dup clustering
+  (`GROUP BY blake3`), fork/move detection, even the cross-branch sync
+  diff (`m.blake3 IS NOT l.blake3`) — is a whole-corpus scan, so the
+  intended workflow streams the full table into RAM once (it's sized to
+  fit) and indexes it there. A secondary index only earns its keep for
+  *selective point lookups against the on-disk store without a full
+  scan*, which this store never does — and it costs ~131 B/row (it
+  re-stores the path as its back-reference), nearly doubling per-row
+  size. Re-adding any is a one-line `CREATE INDEX` if a SQL-side,
+  too-big-for-RAM workload ever materializes.
 
-Net: 1M synth db **453 MB → 218 MB**; realistic-path projection
-~700 → ~557 B/file.
+The current fsindex schema (`files` + `file_stats`, no secondary indexes)
+lands at **~340 B/file** on realistic paths → **~3.4 GB / 10M**.
+
+Net of all three storage changes (blake3 BLOB, no bookkeeping sidecars,
+no secondary indexes): 1M synth db **453 MB → ~215 MB**.
+
+### Measured index cost (why we dropped the last one)
+
+The blake3 index alone, at 1M rows: **215 MB → 346 MB** (+131 B/row, blob
+back-reference). That's roughly the size of the entire rest of the row —
+indexes were the second-biggest space cost after the path itself. With
+no on-disk query that needs it, that's pure overhead.
 
 ### The ~1 GB / 10M target needs cross-path compression
 

@@ -177,30 +177,29 @@ pub const DATA_TABLES: &[&str] = &["files", "file_stats", "scan_meta"];
 /// Columns:
 /// - `id` — root-relative posix path. Primary key. See "PK choice"
 ///   in the module docstring.
-/// - `kind` — `'file'` | `'dir'` | `'symlink'`. Not indexed (3-value,
-///   low-cardinality; the hot rescan-cache JOIN is PK-driven). See
-///   `STORAGE_NOTES.md` §2 for why we dropped this index.
+/// - `kind` — `'file'` | `'dir'` | `'symlink'`. Not indexed (no column
+///   is — see the "ZERO secondary indexes" note above `FileRow`).
 /// - `size` — bytes. For a file, the byte length of its contents.
 ///   For a directory, the sum of the sizes of its visible children
 ///   (recursive). For a symlink, the byte length of the link
 ///   target.
 /// - `blake3` — the raw 32-byte blake3 digest, stored as a `BLOB`
-///   (not 64-char hex — saves ~35 B/row in the table and again in its
-///   index; see `STORAGE_NOTES.md` §2). For files: of the file bytes.
-///   For directories: of the canonical tree encoding (see "Directory
-///   tree-hash canonicalization" in the module docstring). For
-///   symlinks: of the link target bytes (so a retarget registers as a
-///   content change). The one index we keep; powers within-scan
-///   duplicate detection and across-scan / across-branch move
-///   detection.
+///   (not 64-char hex — saves ~35 B/row; see `STORAGE_NOTES.md` §2).
+///   For files: of the file bytes. For directories: of the canonical
+///   tree encoding (see "Directory tree-hash canonicalization" in the
+///   module docstring). For symlinks: of the link target bytes (so a
+///   retarget registers as a content change). Not indexed; dup
+///   detection (`GROUP BY blake3`) and cross-branch move/sync diffs are
+///   whole-corpus scans done in RAM, not point lookups — see the
+///   "ZERO secondary indexes" note above `FileRow`.
 /// - `symlink_target` — link target string. NULL unless
 ///   `kind = 'symlink'`.
 /// - `identity_uuid` — directory breadcrumb UUID. NULL for
 ///   unstamped directories and for every file/symlink row. Not
-///   indexed (almost entirely NULL). Re-add an index if a workload
-///   leans on fork detection
-///   (`GROUP BY identity_uuid HAVING COUNT(*) > 1`) or
-///   move-across-rename detection (`JOIN … USING(identity_uuid)`).
+///   indexed. Fork detection
+///   (`GROUP BY identity_uuid HAVING COUNT(*) > 1`) and
+///   move-across-rename detection (`JOIN … USING(identity_uuid)`) run
+///   in RAM after a full load.
 pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL,
@@ -210,21 +209,28 @@ pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
     identity_uuid   TEXT NULL
 )";
 
-/// The one secondary index we keep: `blake3` powers within-scan
-/// duplicate detection and across-scan / across-branch move detection,
-/// which is the whole point of storing hashes.
-///
-/// We deliberately do NOT index `kind` or `identity_uuid`. Each
-/// secondary index on a TEXT-PK table re-stores the full path as its
-/// row back-reference (~130–166 B/row measured at 60-char paths), so
-/// indexes are the second-biggest space cost after the path itself.
-/// `kind` has three values — a low-cardinality index that the only
-/// hot query (the rescan cache JOIN) doesn't actually need (it's
-/// PK-driven). `identity_uuid` is almost entirely NULL (only stamped
-/// dirs) and only feeds rare ad-hoc fork/move queries. Both are
-/// additive to re-add later if a real workload wants them.
-pub const FILES_BY_BLAKE3_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS files_by_blake3 ON files(blake3)";
+// fsindex carries ZERO secondary indexes — only the two path primary
+// keys (on `files` and `file_stats`), which in dolt are the clustered
+// storage order and the row identity, not optional indexes.
+//
+// The raw store's only jobs are durable content-addressed storage and
+// prolly-tree diff between commits/branches; neither touches a secondary
+// index (diff walks the PK-ordered chunks). Every analysis query —
+// dup clustering (`GROUP BY blake3`), fork/move detection
+// (`GROUP BY identity_uuid`, JOIN on blake3), even the cross-branch sync
+// diff (`m.blake3 IS NOT l.blake3`) — is a whole-corpus scan, so the
+// intended workflow streams the full table into RAM once and indexes it
+// there. A secondary index only earns its keep for selective point
+// lookups against the on-disk store without a full scan, which this
+// store never does.
+//
+// And the cost is steep: each secondary index on a TEXT-PK table
+// re-stores the full path as its row back-reference (~130–166 B/row at
+// 60-char paths — about the size of the rest of the row), so even one
+// blake3 index nearly doubled the per-row footprint (215 MB → 346 MB at
+// 1M rows). See `STORAGE_NOTES.md` §2. Re-adding any of these is a
+// one-line `CREATE INDEX` if a SQL-side, too-big-for-RAM workload ever
+// materializes.
 
 /// One row in [`FILES_DDL`].
 #[derive(Debug, Clone)]
@@ -519,7 +525,6 @@ impl BulkUpsertable for ScanMetaRow {
 pub fn full_ddl() -> Vec<String> {
     vec![
         FILES_DDL.to_string(),
-        FILES_BY_BLAKE3_INDEX_DDL.to_string(),
         FILE_STATS_DDL.to_string(),
         SCAN_META_DDL.to_string(),
     ]
