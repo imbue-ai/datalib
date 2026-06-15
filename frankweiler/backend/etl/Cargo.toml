@@ -48,6 +48,11 @@ runfiles = "0.2"
 # `grid_rows_load` binary.
 clap = { version = "4.5", features = ["derive", "env"] }
 tracing = "0.1"
+# Terminal progress bars. The `indicatif_progress` module wraps these
+# into a `ProgressSink` so every CLI (and sync) renders the same bar
+# attached to obs's shared `MultiProgress`. Version pinned to match
+# `frankweiler-obs` so the shared MP type is identical.
+indicatif = "0.18"
 
 # Curl-compatible TLS-impersonating HTTP client. Used by
 # `latchkey-curl-shim`; gated by a feature in case downstream

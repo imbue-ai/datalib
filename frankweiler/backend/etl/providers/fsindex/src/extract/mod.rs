@@ -279,6 +279,11 @@ async fn streaming_pipeline(
     let progress_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The total file count is unknown up front, so the bar runs in
+        // spinner mode; advancing its position by the files-visited
+        // delta each tick gives a live count + a files/sec throughput
+        // readout, while the message carries the richer breakdown.
+        let mut last_files = 0u64;
         loop {
             interval.tick().await;
             if progress_stop.load(Ordering::Relaxed) {
@@ -292,6 +297,8 @@ async fn streaming_pipeline(
                 .bytes_skipped_cache
                 .load(Ordering::Relaxed)
                 / 1_000_000;
+            progress_sink.inc(files.saturating_sub(last_files));
+            last_files = files;
             progress_sink.set_message(&format!(
                 "scanned {dirs} dirs / {files} files / {reused} cached / {mb_hashed} MB hashed / {mb_saved} MB saved",
             ));

@@ -27,6 +27,7 @@ rust_library(
         "@frankweiler_crates//:blake3",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:indicatif",
         "@frankweiler_crates//:runfiles",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",

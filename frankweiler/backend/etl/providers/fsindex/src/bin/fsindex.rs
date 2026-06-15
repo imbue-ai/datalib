@@ -71,6 +71,11 @@ async fn main() -> Result<()> {
     // Open the db ourselves so we can issue the single end-of-scan
     // commit after `fetch` returns.
     let db = RawDb::open(&args.db).await?;
+    // Live terminal bar attached to obs's shared MultiProgress (same
+    // wiring frankweiler-sync gives each source). Falls back to
+    // tracing-only when obs::init didn't publish a MultiProgress. Held
+    // here so we can stamp a final summary line on it after the scan.
+    let progress = Progress::indicatif(args.source_name.clone());
     let opts = FetchOptions {
         db_path: args.db.clone(),
         db: Some(db.clone()),
@@ -78,7 +83,7 @@ async fn main() -> Result<()> {
         root: args.root.clone(),
         target_doltlite_branch: args.branch.clone(),
         no_stamp: args.no_stamp,
-        progress: Progress::default(),
+        progress: progress.clone(),
         control: ExtractControl {
             reset_and_redownload: args.reset,
             ..Default::default()
@@ -86,6 +91,10 @@ async fn main() -> Result<()> {
     };
 
     let summary = extract::fetch(opts).await?;
+    progress.finish(&format!(
+        "done — scanned {} (reused {}, rehashed {}, errors {})",
+        summary.entries_scanned, summary.entries_reused, summary.entries_rehashed, summary.errors,
+    ));
 
     // Orchestrator tail: commit THEN gc, in that order. `dolt_commit`
     // first seals the working set into one `dolt_log` entry (and leaves
