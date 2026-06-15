@@ -5,7 +5,7 @@ exports_files(["Cargo.toml"])
 # Shared timestamp utilities. Every `now()` and every inbound-string
 # parse in the workspace funnels through here so the architectural
 # rules ("local-tz offset, not UTC", "never fabricate") live in one
-# place. See `src/lib.rs` and `docs/data_architecture_plan.md` §P0.5.
+# place. See `src/lib.rs` and `docs/dev/data_architecture_plan.md` §P0.5.
 rust_library(
     name = "frankweiler_time",
     srcs = ["src/lib.rs"],

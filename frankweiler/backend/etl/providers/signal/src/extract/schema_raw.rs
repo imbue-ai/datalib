@@ -1,8 +1,8 @@
 //! Raw-store schema for the Signal provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! ## Five object tables
@@ -62,7 +62,7 @@
 //!   `tools/prost_toolchain/BUILD.bazel`) and store the resulting
 //!   JSON. The decode is lossless: every field upstream sent is
 //!   present in the JSON. See
-//!   `docs/data_architecture_ingestion.md` §"Wire-fidelity of the
+//!   `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity of the
 //!   raw store" for the principle. The `jsonb(?)` / `json(payload)`
 //!   round-trip used by JSON-shaped providers (anthropic, chatgpt,
 //!   notion, …) applies here too.

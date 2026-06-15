@@ -3,7 +3,7 @@
 A short, per-source cheat sheet for how to get a copy of your data onto
 disk so the sync pipeline can ingest it. This doc is just about
 *acquisition* — for credential setup, config, and running the sync, see
-the [first-time user guide](first_time_user.md).
+the [first-time user guide](/docs/user/first_time_user.md).
 
 Conventions below: exports land under `~/backups/`. Adjust paths to taste
 and point the matching source stanza in your config at them.

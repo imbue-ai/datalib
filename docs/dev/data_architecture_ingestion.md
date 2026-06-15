@@ -10,7 +10,7 @@ for.
 The downstream stages — translate, load, indexing, annotation, and
 the UI's consumption of `grid_rows` — are mostly the subject of a
 separate document,
-[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+[`docs/dev/post_ingestion_architecture.md`](post_ingestion_architecture.md).
 Where understanding extract
 requires referring to a downstream concept (e.g. the sidecar contract
 that translate emits, the `GridRow` projection the UI reads), this
@@ -79,14 +79,14 @@ follows." Replace `protobuf` with `DDL` and we are in the same place.
 Pointers to the things that are **not** in this file:
 
   - The raw store's table-and-blob shape, primary-key rules,
-    `sync_runs` bookkeeping: [`backend/etl/DOLTLITE_RAW_PORT_GUIDE.md`](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md).
+    `sync_runs` bookkeeping: [`backend/etl/DOLTLITE_RAW_PORT_GUIDE.md`](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md).
     (See [Deferred work](#deferred-work) — this doc should move under
     `//docs/` and be reframed away from its porting-guide flavor.)
-  - Reading the dolt history of a raw store: [`docs/doltlite.md`](doltlite.md).
+  - Reading the dolt history of a raw store: [`docs/dev/doltlite.md`](doltlite.md).
     (See [Deferred work](#deferred-work) — this doc should be renamed
     `docs/doltlite_tips.md`.)
   - Per-provider auth, API surface, resume strategy: each provider's
-    `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
+    `EXTRACT.md` (e.g. [`providers/slack/EXTRACT.md`](../../frankweiler/backend/etl/providers/slack/EXTRACT.md)).
 
 ## Wire-event tape (JSONL)
 
@@ -162,7 +162,7 @@ populate at insert time (synthesized-PK components, FKs into parent
 tables that aren't in the payload, namespace discriminators). On disk,
 `payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)`
 on write and `json(payload)` on read; see [port
-guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
+guide §6a](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
 in Rust the value round-trips as a text JSON string. JSONB is a storage
 encoding. The principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
 
@@ -202,13 +202,13 @@ Today they aren't on the production path.)
      table for the UI and for the qmd index.
 
 Each provider is its own crate at
-[`frankweiler/backend/etl/providers/<name>/`](../frankweiler/backend/etl/providers/),
+[`frankweiler/backend/etl/providers/<name>/`](../../frankweiler/backend/etl/providers/),
 named `frankweiler-etl-<name>`. The provider crate owns its Extract +
 Translate code, its bins, its integration tests, and the sample
 fixtures the tests run against — keeping sample data next to the code
 under test serves as documentation of "what this provider's wire
 format looks like." Load is provider-agnostic and lives at
-[`src/load.rs`](../frankweiler/backend/etl/src/load.rs); a new provider
+[`src/load.rs`](../../frankweiler/backend/etl/src/load.rs); a new provider
 needs no Load-side changes.
 
 ### Per-provider schema layout
@@ -244,7 +244,7 @@ paths inside every provider tells you what each one stores and
 what it emits, with the wire-fidelity columns, PK recipes, and
 denormalized fields visible inline. The plan landing this
 convention across the tree is in
-[`docs/data_architecture_plan.md`](data_architecture_plan.md)
+[`docs/dev/data_architecture_plan.md`](data_architecture_plan.md)
 §P0.1.
 
 #### Events vs bookkeeping: where each column lives
@@ -299,7 +299,7 @@ load   ← translate   ← extract   ← upstream
     `extract::schema_raw` is part of the contract translate
     consumes.
   - **`load`** is provider-agnostic; it lives at
-    [`src/load.rs`](../frankweiler/backend/etl/src/load.rs) in the
+    [`src/load.rs`](../../frankweiler/backend/etl/src/load.rs) in the
     shared `frankweiler_etl` crate and depends on no provider's
     extract or translate. Its input contract is the sidecar tree.
 
@@ -349,7 +349,7 @@ The first sync from a given source is often very long (hours to days,
 many GB). Every stage must surface progress in a way the user can
 watch in real time.
 
-  - Every binary flattens [`obs::ObsArgs`](../frankweiler/backend/obs/src/lib.rs)
+  - Every binary flattens [`obs::ObsArgs`](../../frankweiler/backend/obs/src/lib.rs)
     into its clap parser, so every stage takes the same logging / OTLP
     / progress-bar flags. On a TTY, pretty log lines on stderr;
     otherwise, NDJSON events on stderr. Log emissions are routed
@@ -387,7 +387,7 @@ The dedup index *is* the resume cursor:
     crashed run, it stamps a `rescue:` commit before any DDL (Data
     Definition Language — `CREATE TABLE`, `ALTER TABLE`, etc.; the
     `IF NOT EXISTS` statements every doltlite open runs) — see
-    [`docs/doltlite.md`](doltlite.md#rescue-commits-on-every-rust-side-open).
+    [`docs/dev/doltlite.md`](doltlite.md#rescue-commits-on-every-rust-side-open).
 
 ### Efficiently incremental
 
@@ -914,7 +914,7 @@ content-addressable store. Each source has both
 `raw/<name>.doltlite_db` (entities + a per-provider
 `<provider>_attachments` edge table mapping `(owning, ref) → blake3`)
 and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed by blake3).
-Full schema + helpers in [port guide §7](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+Full schema + helpers in [port guide §7](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
 
 Two reasons the split matters:
 
@@ -991,13 +991,13 @@ the shared CAS exists for the fetch-as-separate-resource pattern.
 Two patterns:
 
   - **Most providers**: shell out to `latchkey curl` (see
-    [`backend/etl/src/latchkey.rs`](../frankweiler/backend/etl/src/latchkey.rs)).
+    [`backend/etl/src/latchkey.rs`](../../frankweiler/backend/etl/src/latchkey.rs)).
     Auth lives in the latchkey keyring, indexed by URL host. The
     provider's HTTP transport never sees the bearer token.
   - **Yolink**: latchkey doesn't know about `us.yosmart.com`, and the
     consumer download path isn't bearer-authed — the URL itself is
     signed (`build_signed_url` in
-    [`providers/yolink/src/extract.rs`](../frankweiler/backend/etl/providers/yolink/src/extract.rs)).
+    [`providers/yolink/src/extract.rs`](../../frankweiler/backend/etl/providers/yolink/src/extract.rs)).
     Per-device secrets live in config (REDACT before publishing).
 
 If you add a new provider with a new auth shape, prefer extending
@@ -1157,7 +1157,7 @@ machine.
 
 The TNG fixtures catch code-level regressions; the **live-golden
 e2e** catches what happens against the actual world. The target is
-[`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
+[`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
 (tagged `manual` + `external` + `no-sandbox`; runs the full sync
 pipeline against `configs/thad_tiny.yaml`, every source, against
 live upstreams using host-side latchkey credentials). It snapshots
@@ -1202,7 +1202,7 @@ public-facing version of this problem.
 ## Adding new sources is meant to be easy
 
 A new provider is a sibling crate under
-[`frankweiler/backend/etl/providers/`](../frankweiler/backend/etl/providers/),
+[`frankweiler/backend/etl/providers/`](../../frankweiler/backend/etl/providers/),
 named `frankweiler-etl-<name>`.
 
 ### Pick a template to copy from
@@ -1239,11 +1239,11 @@ Reach for the simplest existing provider that's shaped like yours,
 4. Implement `extract::fetch(...)` (the in-process entry point sync
    calls) and `<name>::translate::...`. The translate side must emit
    `*.grid_rows.json` sidecars matching
-   [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs).
+   [`Sidecar`](../../frankweiler/backend/etl/src/sidecar.rs).
 5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
    (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
 6. Add the new source's `type:` discriminator to the `SourceConfig`
-   variants in [`backend/core/src/config.rs`](../frankweiler/backend/core/src/config.rs)
+   variants in [`backend/core/src/config.rs`](../../frankweiler/backend/core/src/config.rs)
    and wire `extract::fetch(...)` into `sync/src/main.rs`'s per-type
    dispatch.
 
@@ -1326,7 +1326,7 @@ are load-bearing assumptions the rest of the design rests on:
     (extract) and one reader (translate, after extract has exited).
     Journal mode is `DELETE`, not WAL, specifically so we get a
     single-file byte-stable artifact suitable for golden snapshots
-    ([port guide §4](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#4-journal-mode-delete-not-wal)).
+    ([port guide §4](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#4-journal-mode-delete-not-wal)).
     Cross-source CAS sharing is one config change away, but the
     single-writer caveat carries over.
   - **Single-user, single-laptop.** No multi-tenancy, no replication,
@@ -1347,7 +1347,7 @@ are load-bearing assumptions the rest of the design rests on:
 
 The material in this section is here as a placeholder for what will
 move into the companion document
-[`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
+[`docs/dev/post_ingestion_architecture.md`](post_ingestion_architecture.md).
 It's included so this ingestion-focused
 doc can still hand a reader enough of the downstream picture to
 understand the contracts extract has to honor.
@@ -1363,7 +1363,7 @@ document, Translate emits two co-located files —
 
   - `<id>.md` — human-readable, with YAML frontmatter.
   - `<id>.grid_rows.json` — the
-    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs):
+    [`Sidecar`](../../frankweiler/backend/etl/src/sidecar.rs):
 
     ```jsonc
     {
@@ -1409,7 +1409,7 @@ display, threading, attachments, exports) shares code paths and stays
 consistent.
 
 Where unification actually happens **today**: the `GridRow` projection
-([`schemas/grid_rows.yaml`](../schemas/grid_rows.yaml), codegen'd into
+([`schemas/grid_rows.yaml`](../../schemas/grid_rows.yaml), codegen'd into
 the Rust struct at `frankweiler/backend/schema/src/generated/grid_rows.rs`).
 Every searchable entity from every provider collapses into rows of one
 schema with `provider` + `kind` discriminators. The grid backend
@@ -1579,7 +1579,7 @@ a checked-in input. The flow is: synth reads JSONL → emits HTTP
 playback responses → extract reads playback → writes the runtime
 `.doltlite_db`.
 
-This is stated in [port guide §3](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
+This is stated in [port guide §3](../../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
 but it's a project-wide invariant that belongs at the architecture
 level too.
 
@@ -1605,7 +1605,7 @@ they're listed here so they don't get lost.
     `.doltlite_db` once and threw it away"); the durable content
     inside it — the design rules, the table-and-blob shape, the
     shared utilities — should be lifted into a stable reference.
-  - **Rename `docs/doltlite.md` → `docs/doltlite_tips.md`** to make
+  - **Rename `docs/dev/doltlite.md` → `docs/doltlite_tips.md`** to make
     its scope (operational tips and dolt-history reading) explicit
     against the new patterns doc above.
   - Both of the above require updating inbound links across the
@@ -1639,7 +1639,7 @@ they're listed here so they don't get lost.
   - The specific table DDL of any provider — see the port guide and
     each provider's source.
   - The UI and how it consumes `grid_rows` — see the frontend docs.
-  - The qmd index and how it's built — see [`docs/edges.md`](edges.md)
+  - The qmd index and how it's built — see [`docs/dev/edges.md`](edges.md)
     and the `qmd_indexer` crate.
   - Anything about hosting, multi-user, or replication — explicitly
     out of scope. This is a single-user, single-laptop system.

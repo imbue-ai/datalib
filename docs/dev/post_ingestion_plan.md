@@ -38,7 +38,7 @@ plan, this one hasn't absorbed a round of inline comments yet.
 
 **Today**: the sidecar envelope and its invariants exist only as
 Rust doc-comments (`index_lib/src/lib.rs`, `load.rs:340-345`);
-[`schemas/grid_rows.schema.json`](../schemas/grid_rows.schema.json)
+[`schemas/grid_rows.schema.json`](../../schemas/grid_rows.schema.json)
 covers rows but not the envelope. An external author must read Rust
 to learn what makes re-runs converge.
 

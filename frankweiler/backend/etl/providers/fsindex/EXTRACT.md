@@ -8,7 +8,7 @@ This document covers what's load-bearing and provider-specific.
 For the framework contracts every provider honors —
 schema-first, bulk-upsert chokepoints, commit lifecycle,
 bookkeeping sidecars, `--reset-and-redownload` semantics —
-see [`docs/data_architecture_ingestion.md`](../../../../docs/data_architecture_ingestion.md).
+see [`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md).
 For the row-level schema, see
 [`src/extract/schema_raw.rs`](src/extract/schema_raw.rs).
 
@@ -43,7 +43,7 @@ split:
 
 This split is orthogonal to the framework's events-vs-bookkeeping
 split (see
-[`docs/data_architecture_ingestion.md`](../../../../docs/data_architecture_ingestion.md)
+[`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md)
 §"Events vs bookkeeping"). Both `files` and `file_stats` are
 **entity** tables in the framework's sense, and each gets its own
 `<t>_bookkeeping` sidecar via `dr::bookkeeping_ddl_for` for
@@ -313,7 +313,7 @@ contract not a tease:
   them.
 - No JSONL wire-event tape. There is no upstream wire to mirror —
   file-imported sources skip the chokepoint by design (see
-  [`docs/data_architecture_ingestion.md`](../../../../docs/data_architecture_ingestion.md)
+  [`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md)
   §"Bulk-upsert as the standard write path"). The filesystem
   itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
@@ -330,7 +330,7 @@ contract not a tease:
   because the existing `#[derive(WirePayloadRow)]` macro is
   specifically for the JSONB-payload shape and doesn't fit our
   typed-column tables. The doc's
-  [§"Deferred work"](../../../../docs/data_architecture_ingestion.md)
+  [§"Deferred work"](../../../../docs/dev/data_architecture_ingestion.md)
   calls out exactly this gap. Tracked in a follow-up issue; when
   it lands, each `BulkUpsertable` impl in this file collapses to
   its struct definition. Tracked at

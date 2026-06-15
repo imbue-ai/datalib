@@ -318,7 +318,7 @@ jobs:
   #
   # This image is the user-facing way to run frankweiler on Linux
   # without trusting the bare binaries to your host shell — see
-  # docs/docker.md for the bind-mount + security model. The build is
+  # docs/dev/docker.md for the bind-mount + security model. The build is
   # NOT gated on the macOS matrix entry: a darwin-only build failure
   # shouldn't block publishing the Linux image.
   docker-publish:

@@ -231,7 +231,7 @@ programs against:
   `sectionUuid`. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
-  (see `docs/edges.md`); clicking either opens the destination via
+  (see `docs/dev/edges.md`); clicking either opens the destination via
   `host.openCard`.
 
 Adding a view = adding a factory to `ViewLibs` in

@@ -143,7 +143,7 @@ impl BlobCas {
     /// The caller must precompute the blake3 hex hash of each item
     /// (use [`blake3_hex`]) — `put_many` does not re-hash.
     ///
-    /// See `docs/data_architecture_ingestion.md` § "Bulk-upsert as
+    /// See `docs/dev/data_architecture_ingestion.md` § "Bulk-upsert as
     /// the standard write path" for why CAS writes share the same
     /// batching shape as entity writes. No-op if `items` is empty.
     pub async fn put_many(&self, items: &[CasInsert<'_>]) -> Result<()> {

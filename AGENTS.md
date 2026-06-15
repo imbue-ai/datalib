@@ -1,6 +1,6 @@
 # mixed-up-files — agent runbook
 
-Quick references for AI/human contributors. See `docs/grid_rows.md` for
+Quick references for AI/human contributors. See `docs/dev/grid_rows.md` for
 the union-table architecture behind the grid.
 
 ## Repo layout
@@ -8,7 +8,7 @@ the union-table architecture behind the grid.
 ```
 schemas/         cross-language source of truth. Each *.schema.json gets
                  codegen-emitted Rust (struct + const DDL) and TypeScript
-                 artifacts. See docs/grid_rows.md.
+                 artifacts. See docs/dev/grid_rows.md.
 frankweiler/
   backend/     Rust workspace. ETL (extract/translate/load), HTTP API,
                qmd_indexer, Tauri backend. Per-provider crates under
@@ -17,7 +17,7 @@ frankweiler/
   ui/         Vue + AG Grid frontend.
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
-docs/          architecture notes (grid_rows.md, ...).
+docs/          dev/ architecture notes (dev/grid_rows.md, ...); user/ user-facing guides + config_examples/.
 third-party/   vendored upstream code (see below).
 ```
 
@@ -74,7 +74,7 @@ tables. The Rust backend (`frankweiler/backend/core/src/db.rs`) issues
 *one* SELECT against `grid_rows` to render the grid — no per-provider
 branches in the query path. Schema (column names, types, per-provider
 mappings) lives in `schemas/grid_rows.schema.json`; codegen produces
-matching Python/Rust/TypeScript types. See `docs/grid_rows.md` for the
+matching Python/Rust/TypeScript types. See `docs/dev/grid_rows.md` for the
 full architecture.
 
 When you add or change a `grid_rows` column:
@@ -178,7 +178,7 @@ you actually ran instead.
 
 **Coverage** uses `bazelisk coverage` with a one-shot wrapper that
 captures Rust-subprocess hit counts too — see
-[`docs/coverage.md`](docs/coverage.md). The short form:
+[`docs/dev/coverage.md`](docs/dev/coverage.md). The short form:
 
 ```bash
 tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \

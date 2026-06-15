@@ -134,7 +134,7 @@ genrule(
 #   2. `bazelisk coverage` collects coverage on `frankweiler_sync_bin`
 #      and `signal_make_fixture` through this test's `data` deps —
 #      rules_rust's coverage transition propagates through `data`,
-#      not just `deps`. See //docs/coverage.md for the full workflow.
+#      not just `deps`. See //docs/dev/coverage.md for the full workflow.
 #   3. The test runs the pipeline THREE times against one data root
 #      (fresh / steady-state / --reset-and-redownload) to exercise
 #      signal's `ingested_backups` Blake3 resume cursor and the

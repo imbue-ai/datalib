@@ -200,7 +200,7 @@ sources:
 
   # Decrypts the newest `signal-backup-*` snapshot under `snapshot_dir`
   # using the AEP read from the named env var at extract time. See
-  # docs/getting_your_data.md for pulling the backup off the phone.
+  # docs/user/getting_your_data.md for pulling the backup off the phone.
   - name: signal
     type: signal_backup
     sync:

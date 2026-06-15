@@ -195,7 +195,7 @@ Transitions are committed via `CALL DOLT_COMMIT('-Am', 'sync_job: <id>
 
 All four schemas live as `schemas/*.schema.json` and are codegen'd to
 Python + Rust + TypeScript per the existing pattern (see
-`docs/grid_rows.md`).
+`docs/dev/grid_rows.md`).
 
 ## Components
 

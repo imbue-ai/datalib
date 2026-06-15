@@ -15,7 +15,7 @@
 //!
 //! `RawDb::attach_event_tape` wires a JSONL mirror of every entity
 //! upsert. The tape append fires after the doltlite commit succeeds;
-//! see [`docs/data_architecture_ingestion.md`] § "Wire-event tape
+//! see [`docs/dev/data_architecture_ingestion.md`] § "Wire-event tape
 //! (JSONL)".
 
 use std::collections::HashMap;

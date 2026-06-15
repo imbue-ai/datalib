@@ -41,7 +41,7 @@ pub struct SharedConfig {
     /// Append a JSONL line per upsert into
     /// `<data_root>/raw/<name>/events/<table>.jsonl`. Write-only mirror
     /// of the raw store, never read by the pipeline. See
-    /// `docs/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
+    /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
 }
@@ -50,7 +50,7 @@ pub struct SharedConfig {
 #[serde(deny_unknown_fields)]
 pub struct EventTapeConfig {
     /// Tape is on unless explicitly disabled. See
-    /// `docs/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" — the
+    /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" — the
     /// tape is a plain-text mirror of the raw store, intended to be
     /// always present so a human can `tail -f` the wire payload off
     /// any source without opening doltlite.

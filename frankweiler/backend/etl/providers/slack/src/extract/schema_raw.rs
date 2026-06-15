@@ -1,8 +1,8 @@
 //! Raw-store schema for the Slack provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/provider_migration_dolt_diff_and_cas_edge.md`] for the
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`] for the
 //! conventions every `schema_raw.rs` follows.
 //!
 //! Slack-specific notes:
@@ -34,7 +34,7 @@
 //!
 //! Rows only exist after a successful detail fetch (history, replies,
 //! users.list, conversations.list, auth.test). See
-//! [`docs/data_architecture_ingestion.md`] §"No-preseed listing flow".
+//! [`docs/dev/data_architecture_ingestion.md`] §"No-preseed listing flow".
 //!
 //! ## Attachment bytes
 //!

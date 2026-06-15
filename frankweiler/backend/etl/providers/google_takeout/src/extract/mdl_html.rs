@@ -17,7 +17,7 @@
 //! ```
 //!
 //! We pre-load the whole file (the file is at worst tens of MB in
-//! practice — see `docs/google_takeout_ingestion.md` § "Watch-history
+//! practice — see `docs/dev/google_takeout_ingestion.md` § "Watch-history
 //! (and Gemini Apps HTML) at scale" for the math) and walk it with
 //! `str::find` for the `<div class="outer-cell` boundaries. No
 //! `scraper` / `html5ever` dependency.

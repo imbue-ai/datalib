@@ -94,7 +94,7 @@ can't see into a subprocess. The setup below makes it work.
    `bazelisk coverage` invocation is the instrumented one. This Just
    Works in rules_rust 0.70 — no custom transition, no
    `rustc_flags = select(...)`, no second binary target. The audit
-   trail of how we found this out is in `docs/data_architecture_ingestion.md`'s
+   trail of how we found this out is in `docs/dev/data_architecture_ingestion.md`'s
    commit history.
 
 2. **LLVM tools are on PATH where bazel can find them.** The bazel

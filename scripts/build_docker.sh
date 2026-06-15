@@ -93,7 +93,7 @@ fetch_tarball() {
         # `gh release download` instead of curl: the repo is private, so
         # plain HTTPS GETs against releases/download/<tag>/<file> return
         # 404 to anonymous clients. `gh` handles auth via the host
-        # config from `gh auth login`. See docs/first_time_user.md for
+        # config from `gh auth login`. See docs/user/first_time_user.md for
         # the same pattern.
         echo "build_docker: gh release download v${VERSION} ${name} (repo ${REPO})"
         gh release download "v${VERSION}" \

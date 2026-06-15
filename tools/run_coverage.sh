@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tools/run_coverage.sh — drive `bazelisk coverage` and produce an
 # lcov report that includes Rust subprocesses launched as test data
-# deps. See //docs/coverage.md for the why.
+# deps. See //docs/dev/coverage.md for the why.
 #
 # Usage:
 #   tools/run_coverage.sh <test-target> [<test-target> ...] -- <rust-binary> [<rust-binary> ...]

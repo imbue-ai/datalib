@@ -38,7 +38,7 @@ fn main() -> std::io::Result<()> {
     }
     // Generate prost types with serde derive so the extract path
     // can write `serde_json::to_string(&frame)?` directly. See
-    // `docs/data_architecture_ingestion.md` §"Wire-fidelity": the
+    // `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity": the
     // raw store records semantic content as JSON; the transcoding
     // from prost wire bytes is lossless and not a normalization.
     //

@@ -9,7 +9,7 @@
 //! mutates per-row `identity_uuid` after the walk so it can't stream
 //! today. Toggle via `opts.no_stamp` or `--no-stamp` on the CLI.
 //!
-//! See [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
+//! See [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //! §"Commit lifecycle" — `fetch` returns and the caller decides
 //! whether to `dolt_commit`.
 

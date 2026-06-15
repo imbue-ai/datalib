@@ -1,8 +1,8 @@
 //! Raw-store schema for the ChatGPT provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! ChatGPT-specific notes: upstream supplies stable string ids for
@@ -20,7 +20,7 @@
 //! goes through `bulk_upsert_in_tx`. Skip-check on subsequent syncs
 //! compares the listing's `update_time` to the stored
 //! `conversations.update_time` (both JSON-encoded). See
-//! `docs/data_architecture_ingestion.md` §"No-preseed listing flow"
+//! `docs/dev/data_architecture_ingestion.md` §"No-preseed listing flow"
 //! for the rationale.
 //!
 //! ## Row structs and the bulk-upsert path

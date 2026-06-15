@@ -1,8 +1,8 @@
 //! Raw-store schema for the GitLab provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! GitLab-specific notes:
@@ -20,7 +20,7 @@
 //!   `"<project_full_path>!<mr_iid>#<discussion_id>"` for discussions.
 //!   See [`mr_pk_recipe`] and [`discussion_pk_recipe`]. The
 //!   Ship-of-Theseus UUIDv5 recipes from
-//!   [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
+//!   [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //!   §"Object identity" (e.g. `uuidv5(GITLAB_NS, "gitlab:{proj}:mr:{iid}")`,
 //!   `uuidv5(GITLAB_NS, "gitlab:{proj}:note:{id}")` keyed off
 //!   `note.web_url`-style ids) live in `crate::translate::parse`

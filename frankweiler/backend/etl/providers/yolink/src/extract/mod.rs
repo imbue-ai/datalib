@@ -11,7 +11,7 @@
 //! — the row types and their `BulkUpsertable` impls live in
 //! [`schema_raw`]; this file is just curl / parse / loop, plus the
 //! per-device cursor-advance after each window. See
-//! [`docs/data_architecture_ingestion.md`] §"Schema first" for the
+//! [`docs/dev/data_architecture_ingestion.md`] §"Schema first" for the
 //! principle this provider was kept simple to demonstrate.
 //!
 //! Strict CSV header check: a `℃` column with a `℉` row value is

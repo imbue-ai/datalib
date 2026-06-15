@@ -1,7 +1,7 @@
 //! Raw-store schema for the `fsindex` provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //! §"Schema first" for the conventions every `schema_raw.rs` follows.
 //!
 //! ## What this provider is
@@ -24,7 +24,7 @@
 //!    [`dr::bookkeeping_ddl_for`]. This split is orthogonal to the
 //!    framework's events-vs-bookkeeping split (which is about
 //!    attempt tracking, not about content-vs-cursor); see
-//!    [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
+//!    [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //!    §"Events vs bookkeeping" for the framework's axis, and the
 //!    sibling [`EXTRACT.md`](../../EXTRACT.md) §"Why two entity tables"
 //!    for ours.
@@ -145,7 +145,7 @@
 //! `BulkUpsertable` impls below follow the same pattern slack's
 //! `RepliesPagesRow` uses. The right long-term fix is a
 //! `#[derive(BulkUpsertable)]` macro for non-payload tables, called
-//! out in [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
+//! out in [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //! §"Deferred work" — when that lands, every impl in this file
 //! collapses to its struct definition.
 

@@ -62,7 +62,7 @@ If upstream qmd intentionally moved the cache, update:
   * tests/fixtures/build_qmd_index.py        (models_dir)
   * tests/fixtures/materialize_tng_root.sh   (SHARED_MODELS)
   * .github/workflows/release.yml            (mkdir step)
-  * README.md / docs/first_time_user.md
+  * README.md / docs/user/first_time_user.md
 …then re-run this test.
 EOF
     exit 1

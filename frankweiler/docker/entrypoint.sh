@@ -16,7 +16,7 @@
 # Linux box with an auto-unlocked keyring — it protects against
 # accidental disclosure of `credentials.json.enc` alone, but offers
 # nothing against an attacker who can read both files. See
-# docs/docker.md for the full caveat.
+# docs/dev/docker.md for the full caveat.
 #
 # Behavior:
 #   * If `LATCHKEY_ENCRYPTION_KEY` is already set in the env, do nothing

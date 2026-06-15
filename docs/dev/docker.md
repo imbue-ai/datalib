@@ -8,8 +8,8 @@ from a single self-contained container instead of dropping arbitrary
 binaries onto your host PATH.
 
 Published for `linux/amd64` and `linux/arm64`. The build is driven by
-[`frankweiler/docker/Dockerfile`](../frankweiler/docker/Dockerfile) and
-published from [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+[`frankweiler/docker/Dockerfile`](../../frankweiler/docker/Dockerfile) and
+published from [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 on every `v*` tag.
 
 ## 🛑 Why this exists — and why you should care 🛑
@@ -42,16 +42,16 @@ LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
 DATA_ROOT="$HOME/mixed_up_files"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
-# Drop a config.yaml into the data root (see docs/config_examples/sample_config.yaml
+# Drop a config.yaml into the data root (see docs/user/config_examples/sample_config.yaml
 # in the repo; copy + edit `sources:` to taste).
-cp docs/config_examples/sample_config.yaml "$DATA_ROOT/config.yaml"
+cp docs/user/config_examples/sample_config.yaml "$DATA_ROOT/config.yaml"
 
 # 1. Register a self-hosted service entry.
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
     latchkey services register claude-ai --base-api-url=https://claude.ai/
 
 # 2. Store the credential. Paste your live session cookie value into
-#    your clipboard first (see docs/first_time_user.md section 2 for
+#    your clipboard first (see docs/user/first_time_user.md section 2 for
 #    where to copy it from).
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
     sh -c 'latchkey auth set claude-ai -H "Cookie: sessionKey=$(cat)"'
@@ -96,7 +96,7 @@ neither is available — there's no Secret Service running in a minimal
 Ubuntu container. To avoid asking every user to invent and
 persist a key by hand (lose the key, lose the credentials), the
 container entrypoint
-([`frankweiler/docker/entrypoint.sh`](../frankweiler/docker/entrypoint.sh))
+([`frankweiler/docker/entrypoint.sh`](../../frankweiler/docker/entrypoint.sh))
 auto-provisions one on first run:
 
 - If `LATCHKEY_ENCRYPTION_KEY` is already set in the env when you `docker
@@ -151,7 +151,7 @@ store, and only ever populate it via `docker run …  latchkey auth set
 The CI release pipeline runs an end-to-end roundtrip
 (`services register` → `auth set` → `auth list`) inside the freshly built
 image on every tag push. If you ever see that smoke step fail in
-[release.yml](../.github/workflows/release.yml), latchkey's
+[release.yml](../../.github/workflows/release.yml), latchkey's
 encryption-at-rest behavior has changed and this whole flow needs
 revisiting.
 
@@ -164,7 +164,7 @@ revisiting.
   values you need are documented in the `frankweiler-sync` error output
   when a service is missing credentials, in each provider's `EXTRACT.md`
   under `frankweiler/backend/etl/providers/<name>/`, and in
-  [docs/first_time_user.md](first_time_user.md).
+  [docs/user/first_time_user.md](/docs/user/first_time_user.md).
 - **Tauri desktop UI / Vite dev server.** This image is the backend
   only. To serve the UI in a browser, run `frankweiler-http` (port
   8731) and point the upstream openhost UI container or a local

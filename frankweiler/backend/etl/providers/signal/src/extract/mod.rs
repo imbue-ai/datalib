@@ -207,7 +207,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // generic `bulk_upsert_in_tx` helper at the end. Every table
     // (including singleton `account` and the new attachment table)
     // goes through the same code path — see
-    // `docs/data_architecture_ingestion.md` §"One writer per row"
+    // `docs/dev/data_architecture_ingestion.md` §"One writer per row"
     // and §"Bulk-upsert as the standard write path". Attachment
     // bytes are decrypted during the frame walk (per-attachment
     // AES-256) but the CAS + entity-table writes are batched via

@@ -1286,7 +1286,7 @@ impl DbHandle {
 
     /// Attach a JSONL event tape to the inner `RawDb`. Today only the
     /// slack provider's `RawDb` supports this; the rest are no-ops
-    /// until they grow the same hook (see `docs/data_architecture_ingestion.md`
+    /// until they grow the same hook (see `docs/dev/data_architecture_ingestion.md`
     /// § "Wire-event tape (JSONL)").
     fn attach_event_tape(&mut self, tape: Arc<frankweiler_etl::event_tape::EventTape>) {
         match self {

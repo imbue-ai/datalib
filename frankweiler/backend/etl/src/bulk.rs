@@ -1,7 +1,7 @@
 //! Shared building blocks for chunked multi-row INSERT / UPSERT
 //! against doltlite raw stores.
 //!
-//! See `docs/data_architecture_ingestion.md` §"One writer per row"
+//! See `docs/dev/data_architecture_ingestion.md` §"One writer per row"
 //! and §"Bulk-upsert as the standard write path" for the principle
 //! this module enforces:
 //!
@@ -152,7 +152,7 @@ where
 ///     references, namespace discriminators). Plain `?` binds.
 ///   - `payload` — JSON text, stored as JSONB via `jsonb(?)` on
 ///     write. The full upstream message, losslessly transcoded if
-///     necessary (see `docs/data_architecture_ingestion.md`
+///     necessary (see `docs/dev/data_architecture_ingestion.md`
 ///     §"Wire-fidelity of the raw store").
 ///
 /// **Some tables have no payload column** — N:M edge / attachment
@@ -177,7 +177,7 @@ where
 /// runtime.
 ///
 /// **One writer per row.** Per
-/// `docs/data_architecture_ingestion.md` §"One writer per row," the
+/// `docs/dev/data_architecture_ingestion.md` §"One writer per row," the
 /// ON CONFLICT clause is uniform across all tables: every non-PK
 /// column is set to `excluded.<col>`. There is no per-table or
 /// per-column override.
@@ -199,7 +199,7 @@ pub trait BulkUpsertable: Sync {
 
     /// PK value for this row. The PK column is always named `id` in
     /// every raw entity table (see
-    /// `docs/data_architecture_ingestion.md` §"Object identity").
+    /// `docs/dev/data_architecture_ingestion.md` §"Object identity").
     fn id(&self) -> &str;
 
     /// Bind the id, then each value in [`Self::TYPED_COLUMNS`] order,

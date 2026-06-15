@@ -1,5 +1,5 @@
 //! Parse-and-validate the checked-in example configs under
-//! `docs/config_examples/`.
+//! `docs/user/config_examples/`.
 //!
 //! `SourceConfig` is `#[serde(deny_unknown_fields)]`, so this test fails
 //! the moment a documented stanza drifts from the real schema — a
@@ -13,12 +13,12 @@
 
 use frankweiler_core::config::load_config;
 
-/// Resolve a `docs/config_examples/<name>` file from the test's runfiles
+/// Resolve a `docs/user/config_examples/<name>` file from the test's runfiles
 /// tree (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles
 /// lookup in `fixture_db_snapshot.rs`.
 fn example_config(name: &str) -> std::path::PathBuf {
     let r = runfiles::Runfiles::create().expect("runfiles tree");
-    let rel = format!("_main/docs/config_examples/{name}");
+    let rel = format!("_main/docs/user/config_examples/{name}");
     let path = r
         .rlocation(&rel)
         .unwrap_or_else(|| panic!("rlocation for {rel}"));

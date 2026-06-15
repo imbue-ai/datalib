@@ -3,7 +3,7 @@
 This document describes the principles we are striving towards for
 everything **after the extract stage** — translate, load, indexing,
 annotation, and presentation. It is the companion to
-[`docs/data_architecture_ingestion.md`](data_architecture_ingestion.md),
+[`docs/dev/data_architecture_ingestion.md`](data_architecture_ingestion.md),
 which covers how raw data lands on disk; this one covers what the
 system does with raw data once it has it, and how users (and their
 tools) are meant to participate.
@@ -30,21 +30,21 @@ has the full table):
     emits a **sidecar tree** under `rendered_md/<provider>/...`: one
     human-readable `<id>.md` per document, plus a machine-readable
     `<id>.grid_rows.json`
-    ([`Sidecar`](../frankweiler/backend/index_lib/src/lib.rs)) carrying
+    ([`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs)) carrying
     a header (`markdown_uuid`, `source_fingerprint`, `render_version`)
-    and an array of [`GridRow`](../schemas/grid_rows.schema.json)s,
+    and an array of [`GridRow`](../../schemas/grid_rows.schema.json)s,
     optionally with edges.
   - **Load** (provider-agnostic,
-    [`src/load.rs`](../frankweiler/backend/etl/src/load.rs)) walks the
+    [`src/load.rs`](../../frankweiler/backend/etl/src/load.rs)) walks the
     sidecar tree and applies it to `<data_root>/backend_index.doltlite_db`:
     the `grid_rows` union table, the
-    [`markdowns`](../schemas/markdowns.schema.json) registry of
-    rendered documents, the [`edges`](../schemas/edges.schema.json)
-    link table (see [`docs/edges.md`](edges.md)), and the
+    [`markdowns`](../../schemas/markdowns.schema.json) registry of
+    rendered documents, the [`edges`](../../schemas/edges.schema.json)
+    link table (see [`docs/dev/edges.md`](edges.md)), and the
     `markdowns_loaded` fingerprint bookkeeping.
   - **Presentation**: the UI is a stack of miller columns where every
     column is a **card** — a JS expression the user can read and edit
-    (see [`docs/cards.md`](cards.md)). The built-in views query the
+    (see [`docs/dev/cards.md`](cards.md)). The built-in views query the
     backend, which issues single SELECTs against `grid_rows` and
     serves rendered markdown bodies by `markdown_uuid`.
 
@@ -148,10 +148,10 @@ What exists today:
     document it was shredded from; `markdowns.md_path` resolves the
     uuid to a file.
   - **Document/span → document/span**: the
-    [`edges`](../schemas/edges.schema.json) table —
+    [`edges`](../../schemas/edges.schema.json) table —
     `(src_markdown_uuid, src_anchor_uuid?, dst_markdown_uuid,
     dst_anchor_uuid?, label?)`, with a UUIDv5 PK over the canonical
-    tuple so re-ingest is idempotent. See [`docs/edges.md`](edges.md).
+    tuple so re-ingest is idempotent. See [`docs/dev/edges.md`](edges.md).
   - **Row → blob**: `blob_refs` in each raw store, keyed by blake3.
 
 What's missing, and aspirational:
@@ -208,7 +208,7 @@ The contract, not the implementation, is what's specified:
   - **Output**, at either of two conformance levels:
       1. **A conforming sidecar tree** — `.md` + `.grid_rows.json`
          files matching the
-         [`Sidecar`](../frankweiler/backend/index_lib/src/lib.rs)
+         [`Sidecar`](../../frankweiler/backend/index_lib/src/lib.rs)
          contract. This is *full participation*, and it works
          **today** with zero new machinery: Load is
          provider-agnostic and never knows or cares whether Rust or
@@ -303,8 +303,8 @@ The same opinionated-kernel / open-world split applies to the UI:
     it speaks none.
   - **Views are user-editable code.** Every miller column is a card
     whose source is a JS expression the user can read and edit in
-    place ([`docs/cards.md`](cards.md),
-    [`cardSource.ts`](../frankweiler/ui/src/cards/cardSource.ts)).
+    place ([`docs/dev/cards.md`](cards.md),
+    [`cardSource.ts`](../../frankweiler/ui/src/cards/cardSource.ts)).
     Allowing arbitrary JS here is deliberate: presentation is domain
     meaning, and domain meaning lives in user space.
   - **Bring-your-own-UI is fully supported** — see
@@ -436,18 +436,18 @@ the data root or repo, with the UI reading from there. Undecided.
 ### Sharing user code
 
 Card sources travel in URLs today
-(see [`docs/cards.md`](cards.md)); sharing a URL is sharing code
+(see [`docs/dev/cards.md`](cards.md)); sharing a URL is sharing code
 execution. Fine under the current single-user trust model; needs a
 real answer before any sharing or sync feature ships.
 
 ## What this document does not cover
 
   - The extract stage and the raw store — see
-    [`docs/data_architecture_ingestion.md`](data_architecture_ingestion.md).
+    [`docs/dev/data_architecture_ingestion.md`](data_architecture_ingestion.md).
   - The concrete `grid_rows` / `edges` / `markdowns` schemas — see
-    [`docs/grid_rows.md`](grid_rows.md), [`docs/edges.md`](edges.md),
-    and [`schemas/`](../schemas/).
-  - The card/view machinery in detail — see [`docs/cards.md`](cards.md).
+    [`docs/dev/grid_rows.md`](grid_rows.md), [`docs/dev/edges.md`](edges.md),
+    and [`schemas/`](../../schemas/).
+  - The card/view machinery in detail — see [`docs/dev/cards.md`](cards.md).
   - qmd index internals.
   - Hosting, multi-user, replication — explicitly out of scope; this
     is a single-user, single-laptop system.

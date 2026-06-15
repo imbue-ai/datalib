@@ -23,7 +23,7 @@ rust_prost_toolchain(
     # Generate the prost types with serde Serialize/Deserialize so the
     # extract path can call `serde_json::to_string(&frame)?` directly.
     # The raw store records semantic content as JSON; see
-    # `docs/data_architecture_ingestion.md` §"Wire-fidelity of the raw
+    # `docs/dev/data_architecture_ingestion.md` §"Wire-fidelity of the raw
     # store". Each entry becomes one `--prost_opt=<entry>` on the
     # protoc-gen-prost command line.
     # protoc-gen-prost splits a single --prost_opt on `,`, so we

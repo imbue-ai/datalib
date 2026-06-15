@@ -1,8 +1,8 @@
 //! Raw-store schema for the GitHub provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! GitHub-specific notes:
@@ -18,7 +18,7 @@
 //!   …) are UUIDv5-derived in `crate::translate::parse`
 //!   (`github_pr_uuid`, `github_issue_comment_uuid`,
 //!   `github_review_uuid`, `github_review_comment_uuid`) — see
-//!   `docs/data_architecture_ingestion.md` §"Object identity". Those are
+//!   `docs/dev/data_architecture_ingestion.md` §"Object identity". Those are
 //!   translate concerns and don't appear in the raw store; the raw PKs
 //!   here use the upstream-id strings directly.
 //! - **Child-row PKs are globally-unique upstream ids.** `issue_comments`,

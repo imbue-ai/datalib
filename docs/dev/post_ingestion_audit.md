@@ -26,14 +26,14 @@ a principle with no implementation yet. The plan
 ### What holds
 
 - **Doc/span edges work end-to-end.** The `edges` table
-  ([`schemas/edges.schema.json`](../schemas/edges.schema.json)) is
+  ([`schemas/edges.schema.json`](../../schemas/edges.schema.json)) is
   created by load
-  ([`load.rs:320-337`](../frankweiler/backend/etl/src/load.rs)),
+  ([`load.rs:320-337`](../../frankweiler/backend/etl/src/load.rs)),
   written from sidecars (`insert_edge`, load.rs:758-777), read by
   the backend (`outgoing_edges` in
-  [`dolt_repo.rs`](../frankweiler/backend/core/src/dolt_repo.rs),
+  [`dolt_repo.rs`](../../frankweiler/backend/core/src/dolt_repo.rs),
   served on `/api/chat/{uuid}` at
-  [`http/src/lib.rs:379-383`](../frankweiler/backend/http/src/lib.rs)),
+  [`http/src/lib.rs:379-383`](../../frankweiler/backend/http/src/lib.rs)),
   and rendered by the UI (`ChatBody.ce.vue:219-245` decorates
   `[data-section-uuid]` matches; hover-highlight across columns at
   lines 40-65; click opens the destination column). The "fiber"
@@ -80,7 +80,7 @@ a principle with no implementation yet. The plan
 ### What holds
 
 - **An authored-data precedent already exists: `feedback`.**
-  [`schemas/feedback.schema.json`](../schemas/feedback.schema.json)
+  [`schemas/feedback.schema.json`](../../schemas/feedback.schema.json)
   — user-filed feedback rows, written by `POST /api/feedback`
   (http/src/lib.rs:436-478) with a per-row
   `DOLT_COMMIT('-Am', 'feedback: <uuid>')` for an audit trail
@@ -137,7 +137,7 @@ a principle with no implementation yet. The plan
 ### Gaps
 
 - **No way to register an external translate step.** `SourceConfig`
-  ([`config.rs:480-588`](../frankweiler/backend/core/src/config.rs))
+  ([`config.rs:480-588`](../../frankweiler/backend/core/src/config.rs))
   has only built-in provider variants — no `External` / `Script` /
   `Command` type. Translate dispatch is one hardcoded match over
   providers (`sync/src/main.rs:2147-2400`). The only path to a
@@ -148,12 +148,12 @@ a principle with no implementation yet. The plan
   there is no "run translate for source X only" invocation, which
   both humans iterating on a renderer and external tools need.
 - **The sidecar contract is not documented Rust-free.**
-  [`schemas/grid_rows.schema.json`](../schemas/grid_rows.schema.json)
+  [`schemas/grid_rows.schema.json`](../../schemas/grid_rows.schema.json)
   covers the rows, but there is **no schema or doc for the sidecar
   envelope** (`header` + `rows` + `edges`); the semantics of
   `markdown_uuid` determinism, `source_fingerprint` (opaque skip
   token), and `render_version` live only in Rust doc-comments
-  ([`index_lib/src/lib.rs:9-77`](../frankweiler/backend/index_lib/src/lib.rs),
+  ([`index_lib/src/lib.rs:9-77`](../../frankweiler/backend/index_lib/src/lib.rs),
   load.rs:340-345). A Python author can get the row shape from the
   JSON schema but must read Rust to learn the invariants that make
   re-runs converge.

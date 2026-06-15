@@ -1,8 +1,8 @@
 //! Raw-store schema for the Beeper provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
-//! and [`docs/data_architecture_plan.md`](../../../../../docs/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! Beeper-specific notes:
@@ -18,7 +18,7 @@
 //!   Consequently there is no provider-local cursor table here.
 //!
 //! - **The source `.db` files ARE the backup.** Per
-//!   `docs/data_architecture_ingestion.md` §"Schema first", a
+//!   `docs/dev/data_architecture_ingestion.md` §"Schema first", a
 //!   provider whose upstream is already on disk doesn't need to
 //!   slavishly preserve every byte — re-running extract is cheap
 //!   and the source file remains untouched. So Beeper drops the
@@ -39,7 +39,7 @@
 //!   `crate::translate`].
 //!
 //! - **Chat-human family with Slack / Signal.** Per
-//!   `docs/data_architecture_ingestion.md` §"Shared schemas across similar
+//!   `docs/dev/data_architecture_ingestion.md` §"Shared schemas across similar
 //!   sources", Beeper is part of the chat-human cluster: `rooms` is
 //!   the channel/thread/DM entity, `users` is the peer, `events` is
 //!   the message-shaped child. `events.timestamp_ms` is the
@@ -47,7 +47,7 @@
 //!   (Unix milliseconds, matching what Beeper / Matrix natively
 //!   carry); sub-items lacking their own timestamp get a
 //!   µs-bumped value derived from the parent per
-//!   `docs/data_architecture_ingestion.md`.
+//!   `docs/dev/data_architecture_ingestion.md`.
 //!
 //! - **`rooms` / `users` are not event-shaped.** They have no
 //!   `when_ts` column; translate leaves `GridRow.when_ts` empty for

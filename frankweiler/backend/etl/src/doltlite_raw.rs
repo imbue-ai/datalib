@@ -710,7 +710,7 @@ pub async fn record_object_attempt(
 /// table-specific `INSERT … ON CONFLICT(id) DO UPDATE` has run inside
 /// `tx`. It exists so a provider author thinks about "write one event
 /// to the raw storage layer" as one operation, not three steps that
-/// have to be kept in lockstep — see `docs/data_architecture_ingestion.md`
+/// have to be kept in lockstep — see `docs/dev/data_architecture_ingestion.md`
 /// § "Wire-event tape (JSONL)" for why doltlite and the tape are both
 /// parts of "the raw storage layer."
 ///
@@ -798,7 +798,7 @@ pub use crate::bulk::EventBatch;
 /// [`crate::bulk::bulk_upsert_bookkeeping`] called directly inside
 /// the caller's tx, with no tape.
 ///
-/// See `docs/data_architecture_ingestion.md` § "Bulk-upsert as the
+/// See `docs/dev/data_architecture_ingestion.md` § "Bulk-upsert as the
 /// standard write path" for why this is the standard chokepoint for
 /// wire-event extracts.
 pub async fn bulk_upsert_events(

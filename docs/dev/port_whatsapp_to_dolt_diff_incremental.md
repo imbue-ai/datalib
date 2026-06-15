@@ -69,7 +69,7 @@ on two tables.
 | `2273227` | Email phase 2: per-provider CAS edge columns, batched `BlobCas::put_many`, `EmailBlobReader`, `clear_blob_hashes`, drop `blob_refs` writes. **Read this carefully** — phase 1 of the WhatsApp port is the same pattern applied to `wa_media_files`. |
 | `4de94cc` | Signal's introduction of the per-provider `chat_item_attachments` edge table, retiring `blob_refs`. Closest precedent for a per-provider attachment table with a `blake3` column. |
 | `6d1fbba` | Email phase 3: two-phase parse + bucket-fingerprint SQL. **Skim this** to see the shape of the two-phase parse output (`ParsedFoo` + `FooBucket` + `docs_skipped` + `blobs`). You'll mirror the *shape* but use the `dolt_diff_<table>` query in place of the bucket-fingerprint CTE. |
-| `docs/doltlite.md` | Inventory of what `dolt_*` SQL functions and vtabs exist. Confirms `dolt_diff_<table>` is a registered vtab, with `from_<col>`/`to_<col>`/`diff_type` columns. |
+| `docs/dev/doltlite.md` | Inventory of what `dolt_*` SQL functions and vtabs exist. Confirms `dolt_diff_<table>` is a registered vtab, with `from_<col>`/`to_<col>`/`diff_type` columns. |
 
 Also read end-to-end:
 

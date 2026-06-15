@@ -82,11 +82,12 @@ form is `slug-uuid` (e.g.
 ├── MODULE.bazel              Bzlmod root (rules_python + rules_rust)
 ├── BUILD.bazel               :all_tests aggregator
 ├── schemas/                  cross-language source of truth
-│   ├── grid_rows.schema.json union row shape backing the grid (see docs/grid_rows.md)
+│   ├── grid_rows.schema.json union row shape backing the grid (see docs/dev/grid_rows.md)
 │   ├── codegen.py            JSON Schema → Rust/TS types + DDL
 │   └── BUILD.bazel           genrules per language
-├── docs/                     architecture notes
-│   └── grid_rows.md          how the grid_rows union table works
+├── docs/                     dev/ architecture notes · user/ guides + config_examples
+│   ├── dev/grid_rows.md      how the grid_rows union table works
+│   └── user/                 first_time_user.md, getting_your_data.md, config_examples/
 ├── tests/fixtures/           checked-in fixture JSON + ingested_tng genrule
 └── frankweiler/
     ├── backend/              Cargo workspace

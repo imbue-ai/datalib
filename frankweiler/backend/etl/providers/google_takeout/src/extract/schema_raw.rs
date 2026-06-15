@@ -29,7 +29,7 @@
 //!
 //! ## Identity
 //!
-//! See `docs/google_takeout_ingestion.md` § "Identity / Ship-of-Theseus"
+//! See `docs/dev/google_takeout_ingestion.md` § "Identity / Ship-of-Theseus"
 //! for the per-table PK recipes. Where Google gives us a stable id
 //! (Chat `message_id`, YouTube `Channel Id`, photo file-stem) we use
 //! it verbatim; where it doesn't we synthesize a uuidv5 from the

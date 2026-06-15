@@ -18,13 +18,13 @@ covered:
   - Gemini Apps chat history (from "My Activity")
 
 Email is **out of scope** — the existing mbox extractor
-([`providers/email/src/extract/mbox.rs`](../frankweiler/backend/etl/providers/email/src/extract/mbox.rs))
+([`providers/email/src/extract/mbox.rs`](../../frankweiler/backend/etl/providers/email/src/extract/mbox.rs))
 already handles Takeout-exported Gmail.
 
 ## Shape of the provider
 
 One new provider crate at
-[`frankweiler/backend/etl/providers/google_takeout/`](../frankweiler/backend/etl/providers/),
+[`frankweiler/backend/etl/providers/google_takeout/`](../../frankweiler/backend/etl/providers/),
 named `frankweiler-etl-google-takeout`. Local-file ingestion, no API,
 no auth.
 
@@ -35,17 +35,17 @@ and
 [One writer per row](data_architecture_ingestion.md#one-writer-per-row-load-bearing-rule):
 row structs and DDL constants live in `extract/schema_raw.rs`,
 deriving
-[`WirePayloadRow`](../frankweiler/backend/etl/macros/src/lib.rs)
+[`WirePayloadRow`](../../frankweiler/backend/etl/macros/src/lib.rs)
 and
-[`CasEdgeRow`](../frankweiler/backend/etl/src/blob_cas.rs) where
+[`CasEdgeRow`](../../frankweiler/backend/etl/src/blob_cas.rs) where
 applicable; all bulk writes go through
-[`frankweiler_etl::bulk`](../frankweiler/backend/etl/src/bulk.rs)
+[`frankweiler_etl::bulk`](../../frankweiler/backend/etl/src/bulk.rs)
 and
-[`flush_cas_edges`](../frankweiler/backend/etl/src/blob_cas.rs).
+[`flush_cas_edges`](../../frankweiler/backend/etl/src/blob_cas.rs).
 There is **no provider-side bulk SQL**.
 
 This work also lands a new shared module
-[`frankweiler_etl::file_checkpoint`](../frankweiler/backend/etl/src/file_checkpoint.rs)
+[`frankweiler_etl::file_checkpoint`](../../frankweiler/backend/etl/src/file_checkpoint.rs)
 that owns the `(scope, path, size_bytes, mtime_ns)` skip-cursor
 pattern the mbox extractor pioneered. Takeout's seven file-driven
 feeds were the trigger; mbox can migrate onto it as a follow-up.
@@ -156,7 +156,7 @@ blake3). The `chat_attachments` table itself is a
 [per-provider CAS edge table](data_architecture_ingestion.md#per-provider-cas-edge-tables):
 each row carries
 `(message_id, export_name, blake3, content_type, byte_len, …)` and
-implements the [`CasEdgeRow`](../frankweiler/backend/etl/src/blob_cas.rs)
+implements the [`CasEdgeRow`](../../frankweiler/backend/etl/src/blob_cas.rs)
 trait so it flushes through the
 [shared attachment-flush primitives](data_architecture_ingestion.md#shared-attachment-flush-primitives)
 the other providers use.
@@ -219,7 +219,7 @@ prefix.
 ## Bulk-write idiom (shared helpers)
 
 Every write goes through the shared
-[`frankweiler_etl::bulk`](../frankweiler/backend/etl/src/bulk.rs)
+[`frankweiler_etl::bulk`](../../frankweiler/backend/etl/src/bulk.rs)
 chokepoint — the doctrine is spelled out under
 [Bulk-upsert as the standard write path](data_architecture_ingestion.md#bulk-upsert-as-the-standard-write-path).
 **No hand-rolled bulk SQL in this provider.**
@@ -228,21 +228,21 @@ For each entity table the walker:
 
   1. Declares its row struct in `extract/schema_raw.rs` next to the
      table's DDL constant, deriving
-     [`WirePayloadRow`](../frankweiler/backend/etl/macros/src/lib.rs)
+     [`WirePayloadRow`](../../frankweiler/backend/etl/macros/src/lib.rs)
      for the common `(id, payload, …extra columns)` shape. The derive
      macro emits the `BulkUpsertable` impl; no provider-side SQL.
   2. Per-walker `Accumulator` collects rows in memory.
   3. At `FLUSH_BATCH = 2000` rows, hands the `Vec<Row>` to
-     [`frankweiler_etl::bulk::bulk_upsert_in_tx`](../frankweiler/backend/etl/src/bulk.rs),
+     [`frankweiler_etl::bulk::bulk_upsert_in_tx`](../../frankweiler/backend/etl/src/bulk.rs),
      which writes chunked multi-row UPSERTs and bumps the paired
      `<table>_bookkeeping` sidecar in one entity-pool transaction.
   4. For CAS-edge tables (`maps_photos`, `chat_attachments`,
      `gemini_attachments`), the per-row struct implements
-     [`CasEdgeRow`](../frankweiler/backend/etl/src/blob_cas.rs) and
+     [`CasEdgeRow`](../../frankweiler/backend/etl/src/blob_cas.rs) and
      flushes through
-     [`CasEdgeAccumulator`](../frankweiler/backend/etl/src/blob_cas.rs)
+     [`CasEdgeAccumulator`](../../frankweiler/backend/etl/src/blob_cas.rs)
      +
-     [`flush_cas_edges`](../frankweiler/backend/etl/src/blob_cas.rs),
+     [`flush_cas_edges`](../../frankweiler/backend/etl/src/blob_cas.rs),
      which writes one entity-pool tx for the edge rows + bookkeeping
      and one CAS-pool tx for the `cas_objects` bytes.
 
@@ -284,7 +284,7 @@ write, `json(payload)` on read).
 ## Timestamps
 
 Routed through
-[`frankweiler-time`](../frankweiler/backend/time/) per the
+[`frankweiler-time`](../../frankweiler/backend/time/) per the
 [doc's rule](data_architecture_ingestion.md#time-and-ordering-discipline).
 Two parsers we need to add (in `provider::time`):
 
@@ -326,7 +326,7 @@ pub const GOOGLE_TAKEOUT_NS: uuid::Uuid =
   - **Resume**: shared `(path, size_bytes, mtime_ns)` file checkpoint
     DB table, built **as part of this work**. The mbox extractor
     already proved out the pattern
-    ([`MBOX_FILES_CHECKPOINT_DDL`](../frankweiler/backend/etl/providers/email/src/extract/schema_raw.rs)),
+    ([`MBOX_FILES_CHECKPOINT_DDL`](../../frankweiler/backend/etl/providers/email/src/extract/schema_raw.rs)),
     and Takeout's seven feeds would each need an equivalent — six
     or seven copies of the same four-column DDL is the trigger for
     pulling it into a shared module rather than copy-pasting again.
@@ -445,13 +445,13 @@ providers/google_takeout/
 ## Sync wiring
 
   1. Add `SourceConfig::GoogleTakeout` variant to
-     [`core/src/config.rs`](../frankweiler/backend/core/src/config.rs)
+     [`core/src/config.rs`](../../frankweiler/backend/core/src/config.rs)
      with the `sync:` struct above.
   2. Dispatch in
-     [`sync/src/main.rs`](../frankweiler/backend/sync/src/main.rs)
+     [`sync/src/main.rs`](../../frankweiler/backend/sync/src/main.rs)
      to `frankweiler_etl_google_takeout::extract::fetch(...)`.
   3. Add crate to workspace `members =` in
-     [`backend/Cargo.toml`](../frankweiler/backend/Cargo.toml) and to
+     [`backend/Cargo.toml`](../../frankweiler/backend/Cargo.toml) and to
      `crate.from_cargo` in `MODULE.bazel`.
 
 Load needs no changes (it's provider-agnostic and there are no
