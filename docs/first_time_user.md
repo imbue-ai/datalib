@@ -64,6 +64,11 @@ Verify:
 
 ## 2. Get access to some data
 
+The options below cover the sources wired into the sample config. For a
+fuller per-source cheat sheet on getting your data onto disk — including
+Signal and WhatsApp backups off an Android phone — see
+[**getting your data**](getting_your_data.md).
+
 > 🛑 **RED WARNING — READ BEFORE PROCEEDING** 🛑
 >
 > The commands in this section store live session cookies for `claude.ai`
