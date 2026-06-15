@@ -290,42 +290,47 @@ async fn streaming_pipeline(
     let progress_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // The total file count is unknown up front, so the bar runs in
-        // spinner mode; advancing its position by the files-visited
-        // delta each tick gives a live count + a files/sec throughput
-        // readout, while the message carries the richer breakdown.
+        // The bar is the only progress surface — no per-tick log spam.
+        // The total file count is unknown up front, so it runs as a
+        // spinner; we advance its position by the files-visited delta so
+        // the headline shows a live count, and put the full breakdown in
+        // the message. Hashing rates are computed from per-tick deltas.
         let mut last_files = 0u64;
+        let mut last_files_hashed = 0u64;
+        let mut last_bytes_hashed = 0u64;
+        let mut last_tick = Instant::now();
         loop {
             interval.tick().await;
             if progress_stop.load(Ordering::Relaxed) {
                 break;
             }
+            let now = Instant::now();
+            let dt = now.duration_since(last_tick).as_secs_f64().max(1e-3);
+            last_tick = now;
+
             let dirs = progress_counters.dirs_visited.load(Ordering::Relaxed);
             let files = progress_counters.files_visited.load(Ordering::Relaxed);
-            let reused = progress_counters.files_reused.load(Ordering::Relaxed);
-            let mb_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed) / 1_000_000;
-            let mb_saved = progress_counters
-                .bytes_skipped_cache
-                .load(Ordering::Relaxed)
-                / 1_000_000;
+            let files_hashed = progress_counters.files_rehashed.load(Ordering::Relaxed);
+            let bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed);
+            let bytes_total = bytes_hashed
+                + progress_counters
+                    .bytes_skipped_cache
+                    .load(Ordering::Relaxed);
+
+            let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
+            let mb_hashed_per_s =
+                bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
+            last_files_hashed = files_hashed;
+            last_bytes_hashed = bytes_hashed;
+
             progress_sink.inc(files.saturating_sub(last_files));
             last_files = files;
             progress_sink.set_message(&format!(
-                "scanned {dirs} dirs / {files} files / {reused} cached / {mb_hashed} MB hashed / {mb_saved} MB saved",
+                "dirs={dirs} files={files} total={} | hashed {files_hashed} files / {} \
+                 @ {files_hashed_per_s:.0} files/s {mb_hashed_per_s:.0} MB/s",
+                human_bytes(bytes_total),
+                human_bytes(bytes_hashed),
             ));
-            info!(
-                event = "fsindex_progress",
-                dirs = dirs,
-                files = files,
-                files_reused = reused,
-                bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed),
-                bytes_saved = progress_counters
-                    .bytes_skipped_cache
-                    .load(Ordering::Relaxed),
-                ignored = progress_counters.ignored_entries.load(Ordering::Relaxed),
-                stat_errors = progress_counters.stat_errors.load(Ordering::Relaxed),
-                read_errors = progress_counters.read_errors.load(Ordering::Relaxed),
-            );
         }
     });
 
@@ -453,6 +458,22 @@ async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> 
 /// UUIDv7: time-ordered, so breadcrumb UUIDs sort chronologically.
 fn new_uuid() -> String {
     uuid::Uuid::now_v7().to_string()
+}
+
+/// Human-readable byte count, decimal (1000-based) units to match the
+/// `MB/s` throughput readouts (which divide by 1_000_000).
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if n < 1000 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1000.0 && i < UNITS.len() - 1 {
+        v /= 1000.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", UNITS[i])
 }
 
 fn build_root_cascade(root: &std::path::Path) -> OptionsCascade {
