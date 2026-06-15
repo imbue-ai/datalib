@@ -4,7 +4,7 @@
 //! `input_path`, decrypts them via [`frankweiler_signal_backup`], and
 //! UPSERTs per-recipient / per-chat / per-chat-item rows into a
 //! doltlite raw store. The AEP (Account Entropy Pool) is read from the
-//! `SIGNAL_PASSPHRASE` env var at extract time — never persisted.
+//! `SIGNAL_BACKUP_PASSPHRASE` env var at extract time — never persisted.
 //!
 //! Translate (frames → markdown + grid_rows) is a follow-up.
 

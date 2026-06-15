@@ -42,9 +42,9 @@ LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
 DATA_ROOT="$HOME/mixed_up_files"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
-# Drop a config.yaml into the data root (see sample_config.yaml at the
-# repo root; copy + edit `sources:` to taste).
-cp sample_config.yaml "$DATA_ROOT/config.yaml"
+# Drop a config.yaml into the data root (see docs/config_examples/sample_config.yaml
+# in the repo; copy + edit `sources:` to taste).
+cp docs/config_examples/sample_config.yaml "$DATA_ROOT/config.yaml"
 
 # 1. Register a self-hosted service entry.
 docker run --rm -it -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \

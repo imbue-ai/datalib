@@ -64,6 +64,11 @@ Verify:
 
 ## 2. Get access to some data
 
+The options below cover the sources wired into the sample config. For a
+fuller per-source cheat sheet on getting your data onto disk — including
+Signal and WhatsApp backups off an Android phone — see
+[**getting your data**](getting_your_data.md).
+
 > 🛑 **RED WARNING — READ BEFORE PROCEEDING** 🛑
 >
 > The commands in this section store live session cookies for `claude.ai`
@@ -171,7 +176,7 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 
 ## 3. Sample configuration
 
-Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config.yaml)
+Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/config_examples/sample_config.yaml)
 into your working dir.
 
 This config enables the Slack source, the Claude API source, and an
@@ -186,8 +191,12 @@ It's the `data_root` configuration parameter at the top.
 You can also feel free to comment out some of the YAML stanzas that identify different synchronization sources.
 
 If you only want to mirror your Claude conversations, download
-[**sample_config_claude_only.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/sample_config_claude_only.yaml)
+[**claude_only.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/config_examples/claude_only.yaml)
 instead — it has just the `claude_api` stanza.
+
+For a reference listing every supported source type with realistic
+defaults (including both input modes for email and contacts), see
+[**all_sources.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/config_examples/all_sources.yaml).
 
 ## 4. Run the sync
 
