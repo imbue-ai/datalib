@@ -298,6 +298,7 @@ async fn streaming_pipeline(
         let mut last_files = 0u64;
         let mut last_files_hashed = 0u64;
         let mut last_bytes_hashed = 0u64;
+        let mut last_errors = 0u64;
         let mut last_tick = Instant::now();
         loop {
             interval.tick().await;
@@ -317,6 +318,23 @@ async fn streaming_pipeline(
                     .bytes_skipped_cache
                     .load(Ordering::Relaxed);
 
+            // The only log line the scan emits per tick — and only when
+            // new errors have appeared since the last tick, so a clean
+            // scan stays silent and an error doesn't spam every 500ms.
+            let stat_errors = progress_counters.stat_errors.load(Ordering::Relaxed);
+            let read_errors = progress_counters.read_errors.load(Ordering::Relaxed);
+            let errors = stat_errors + read_errors;
+            if errors > last_errors {
+                warn!(
+                    event = "fsindex_scan_errors",
+                    stat_errors = stat_errors,
+                    read_errors = read_errors,
+                    "fsindex: {errors} entr{} could not be read",
+                    if errors == 1 { "y" } else { "ies" },
+                );
+                last_errors = errors;
+            }
+
             let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
             let mb_hashed_per_s =
                 bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
@@ -327,7 +345,7 @@ async fn streaming_pipeline(
             last_files = files;
             progress_sink.set_message(&format!(
                 "dirs={dirs} files={files} total={} | hashed {files_hashed} files / {} \
-                 @ {files_hashed_per_s:.0} files/s {mb_hashed_per_s:.0} MB/s",
+                 @ {files_hashed_per_s:.0} files/s {mb_hashed_per_s:.1} MB/s",
                 human_bytes(bytes_total),
                 human_bytes(bytes_hashed),
             ));
