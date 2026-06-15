@@ -63,7 +63,7 @@ cc_library(
         # at the top of doltlite.c, but we set them explicitly so the
         # intent is visible at this layer too.
         "-DDOLTLITE_PROLLY=1",
-        "-DDOLTLITE_VERSION=\\\"0.11.9\\\"",
+        "-DDOLTLITE_VERSION=\\\"0.11.13\\\"",
         "-DSQLITE_CORE",
         # SQLite vtable extensions doltlite enables by default; we
         # repeat them here so the amalgamation's extension init code
