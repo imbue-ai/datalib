@@ -2,49 +2,39 @@
 
 ## Introduction and Context
 
-We have an incremental, resumable ETL-shaped architecture that extracts raw data from many
-upstream sources and stores it as **JSON API responses preserved
-verbatim** in versioned doltlite tables, with attachment **BLOBs in a
-content-addressable store** (also doltlite, but a separate sibling
-database per source).
+We have an incremental, resumable ETL-shaped architecture that extracts raw
+data from many upstream sources and stores it as **JSON API responses
+preserved verbatim** in versioned doltlite tables, with attachment **BLOBs in
+a content-addressable store** (also doltlite, but a separate sibling database
+per source).
 
-This is not novel. It's the same shape as many Flume / Apache Beam /
-Dask / Prefect / Airflow pipelines.
+This is not novel — it's the same shape as many Flume / Apache Beam / Dask /
+Prefect / Airflow pipelines. What we optimize for that those tools don't,
+**for a single user on a single laptop**:
 
-What we're optimizing for that
-those tools don't, **for a single user on a single laptop**:
+* Easy to install, configure, run, and monitor.
+* **No cluster, no scheduler service, no DAG server. One config file, one
+  orchestrator binary, one local data directory.**
 
-* Easy to install
-* Easy to configure
-* Easy to run
-* Easy to monitor
-
-**No cluster, no scheduler service, no DAG server. One config file,
-one orchestrator binary, one local data directory.**
-
-This document describes the principles we are striving towards for the
-**ingestion (extract) side** of the data layer of this project — how
-raw data lands on disk from upstream sources, what shape it has at
-rest, and the operational properties (monitorable, stoppable,
-resumable, incrementally cheap, verifiable) the extract stage aims
-for.
-
-It is aspirational as much as descriptive: a new provider, table, or
-transformation should be judged against this document, and divergences
-should be either justified or fixed.
+This document describes the principles we strive towards for the **ingestion
+(extract) side**: how raw data lands on disk, what shape it has at rest, and
+the operational properties (monitorable, stoppable, resumable, incrementally
+cheap, verifiable) the extract stage aims for. It is aspirational as much as
+descriptive: a new provider, table, or transformation should be judged
+against it, and divergences should be either justified or fixed.
 
 ### Related documents
 
-The downstream stages — translate, load, indexing, view, annotation — \
-are mostly the subject of a separate document,
+The downstream stages — translate, load, indexing, view, annotation — are
+mostly the subject of
 [`docs/post_ingestion_architecture.md`](post_ingestion_architecture.md).
-Where understanding extract
-requires referring to a downstream concept (e.g. the sidecar contract
-that translate emits, the `GridRow` projection the UI reads), this
-document touches on it briefly. The bulk of the downstream-leaning
-material that used to live here has been pulled into [Downstream
-stages — pointer to the companion doc](#downstream-stages--pointer-to-the-companion-doc)
-near the end, pending the split.
+Where understanding extract requires a downstream concept (the sidecar
+contract translate emits, the `GridRow` projection the UI reads), this
+document touches on it briefly.
+
+Practitioner-facing material — how we test, how to add a provider, how the
+schema evolves, and the open questions — lives in the companion
+[`data_architecture_ingestion_practices.md`](data_architecture_ingestion_practices.md).
 
 ## Schema first — the tables _are_ the design
 
@@ -69,15 +59,19 @@ codebase:
 
 ## Extract schemas should be simple
 
-The extract portion of our system is meant to capture raw data from sources in its native format with as little translation as possible. 
-What this typically means is JSON payloads as they arrived off the wire, with some level of indexing so that related payloads can be updated and grouped together.
+The extract portion of our system captures raw data from sources in its
+native format with as little translation as possible: typically JSON payloads
+as they arrived off the wire, with enough indexing that related payloads can
+be updated and grouped together. So extract schemas should often be extremely
+simple — just a stable primary key and a JSONB payload column.
 
-This means the extract schemas should often be extremely simple: just a stable primary key and a JSONB payload column.
+Two cases justify more schema:
 
-However, there are some cases where is often useful to have more schema.
-
-* In some cases, the JSON payload is missing contextual data that the requester knew, which should be stored alongside the payload.  This can be done by appending extra columns to the table with such a payload.
-* In the case of attachments, which we store in a separate blob CAS, it is useful to know which attachments belong with which payloads.  We do this by creating tables that link together event payloads and blobs in a many-to-many relationship. 
+* When the JSON payload is missing contextual data the requester knew, store
+  it alongside the payload as extra columns on the table.
+* For attachments (stored in a separate blob CAS), we need to know which
+  attachments belong with which payloads. We link event payloads and blobs in
+  a many-to-many relationship via a dedicated edge table.
 
 ## Wire-event tape (JSONL)
 
@@ -125,30 +119,29 @@ Rules:
 
 ## Schema details
 
-Each entity table has a `payload` column that holds the raw upstream
-wire payload, plus a small number of typed columns the writer needs to
-populate at insert time (synthesized-PK components, FKs into parent
-tables that aren't in the payload, namespace discriminators). On disk,
-`payload` is stored as JSONB (SQLite 3.45 binary JSON, via `jsonb(?)`
-on write and `json(payload)` on read; see [port
-guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads));
-in Rust the value round-trips as a text JSON string. JSONB is a storage
-encoding. The principle is wire-fidelity (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)).
+Each entity table has a `payload` column holding the raw upstream wire
+payload, plus a small number of typed columns the writer must populate at
+insert time (synthesized-PK components, FKs into parent tables that aren't in
+the payload, namespace discriminators). On disk `payload` is stored as JSONB
+(SQLite 3.45 binary JSON, via `jsonb(?)` on write and `json(payload)` on
+read; see [port
+guide §6a](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#6a-jsonb-storage-for-payloads)) —
+purely a storage encoding; the principle is wire-fidelity (see [Wire-fidelity
+of the raw store](#wire-fidelity-of-the-raw-store)).
 
-**Fields that are derivable from the payload** (e.g. `updated_at`,
-`state`, `name`, `html_url`, `display_name`) — even when we want to
-query or index them — should **not** be duplicated as stored columns.
-Use either a `CREATE INDEX … ON t(payload->>'$.path')` expression
-index, or a `VIRTUAL` generated column plus an index over it. Both
-produce COVERING index plans in DoltLite v0.11.9; the VIRTUAL+index
-variant additionally restores `SELECT col FROM t` ergonomics. Either
-way, `ALTER TABLE ADD COLUMN … VIRTUAL` (or a new expression index)
-is a no-refetch additive change against existing user data. See
-[Schema evolution](#schema-evolution).
+**Fields derivable from the payload** (`updated_at`, `state`, `name`,
+`html_url`, `display_name`) — even when we want to query or index them —
+should **not** be duplicated as stored columns. Use either a
+`CREATE INDEX … ON t(payload->>'$.path')` expression index or a `VIRTUAL`
+generated column plus an index over it. Both produce COVERING index plans in
+DoltLite v0.11.9; the VIRTUAL+index variant additionally restores
+`SELECT col FROM t` ergonomics. Either way, `ALTER TABLE ADD COLUMN … VIRTUAL`
+(or a new expression index) is a no-refetch additive change against existing
+user data. See [Schema evolution](data_architecture_ingestion_practices.md#schema-evolution).
 
-The pipeline has three stages. All three run **in-process inside
-`frankweiler-sync`** — one binary, one process, one config-driven
-walk over enabled sources. 
+The pipeline has three stages, all running **in-process inside
+`frankweiler-sync`** — one binary, one process, one config-driven walk over
+enabled sources:
 
   1. **Extract** — pull from upstream, UPSERT into
      `<data_root>/raw/<name>.doltlite_db` (entities) and
@@ -172,31 +165,26 @@ needs no Load-side changes.
 
 ### Per-provider schema layout
 
-Within each provider crate the bytes-at-rest schema is its own
-file, deliberately declarations-only:
+Within each provider crate the bytes-at-rest schema is its own file,
+deliberately declarations-only:
 
-  - **`providers/<name>/src/extract/schema_raw.rs`** — the
-    raw-store schema. DDL constants (one per table / index /
-    bookkeeping sidecar), schema-evolution migration constants
-    co-located with the table they touch, any synthesized-PK
-    recipe functions, and a tiny `full_ddl()` composer that
-    splices in `dr::bookkeeping_ddl_for(table)` for each entity.
-    **No manipulation code** — `RawDb`, UPSERTs, SELECTs,
-    parameter binding stay in `extract/db.rs` and import the
-    constants and helpers from `schema_raw`. The convention is
-    proto/pydantic-flavored: opening 12 `schema_raw.rs` files at
-    the same fixed path is meant to answer "what does the world
-    look like at rest?" without opening anything else.
-  - **`providers/<name>/src/translate/schema_translate.rs`**
-    (aspirational, landing per provider) — the normalized
-    representation translate emits. Mostly serde-shaped Rust
-    types, not SQL DDL: the in-memory POD form before it's
-    shredded into sidecar rows. One provider may have multiple
-    `schema_translate_<family>.rs` files when it projects into
-    more than one normalized shape. Where a shape is shared
-    across providers (chat-human, code-review, time-series, …)
-    the canonical type lives in a shared crate and the
-    per-provider file re-exports.
+  - **`providers/<name>/src/extract/schema_raw.rs`** — the raw-store schema:
+    DDL constants (one per table / index / bookkeeping sidecar),
+    schema-evolution migration constants co-located with the table they
+    touch, any synthesized-PK recipe functions, and a tiny `full_ddl()`
+    composer that splices in `dr::bookkeeping_ddl_for(table)` for each
+    entity. **No manipulation code** — `RawDb`, UPSERTs, SELECTs, and
+    parameter binding stay in `extract/db.rs` and import from `schema_raw`.
+    The convention is proto/pydantic-flavored: opening the `schema_raw.rs`
+    files at the same fixed path answers "what does the world look like at
+    rest?" without opening anything else.
+  - **`providers/<name>/src/translate/schema_translate.rs`** (aspirational,
+    landing per provider) — the normalized representation translate emits:
+    mostly serde-shaped Rust types, not SQL DDL, the in-memory POD form
+    before it's shredded into sidecar rows. A provider may have multiple
+    `schema_translate_<family>.rs` files; where a shape is shared across
+    providers (chat-human, code-review, time-series, …) the canonical type
+    lives in a shared crate and the per-provider file re-exports.
 
 #### Events vs bookkeeping: where each column lives
 
@@ -220,13 +208,12 @@ a column:
      `last_ts_ms`, server-supplied freshness markers like
      `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
 
-The reason the split matters: bookkeeping changes on every
-attempt regardless of upstream change. Storing it on the entity
-table makes every `dolt diff` noisy, defeats the wire-fidelity
-property of `payload`, and forces re-renders of unchanged
-content downstream. Keeping it on the sidecar means `<t>`
-mutates only when upstream actually changed, and the sidecar
-churn stays out of any cross-stage fingerprint.
+The split matters because bookkeeping changes on every attempt regardless of
+upstream change. Storing it on the entity table makes every `dolt diff` noisy,
+defeats the wire-fidelity of `payload`, and forces re-renders of unchanged
+content. Keeping it on the sidecar means `<t>` mutates only when upstream
+actually changed, and the sidecar churn stays out of any cross-stage
+fingerprint.
 
 ### Layering of concerns: extract is downstream-agnostic
 
@@ -238,61 +225,48 @@ load   ← translate   ← extract   ← upstream
        (provider-agnostic)
 ```
 
-  - **`extract`** owns the bytes-at-rest. It knows how to fetch from
-    upstream and persist into `<data_root>/raw/<name>.doltlite_db`,
-    and nothing else. It must NOT depend on `translate`,
-    `render`, `frankweiler_schema::grid_rows::GridRow`, sidecar
-    types, or the qmd index. The per-provider `schema_raw.rs`
-    rustdoc deliberately avoids describing how translate consumes
-    the tables — downstream stages are not extract's concern.
-  - **`translate`** depends on `extract` (it reads the raw store
-    and projects to the normalized POD + sidecar shape).
-    `extract::schema_raw` is part of the contract translate
-    consumes.
+  - **`extract`** owns the bytes-at-rest. It fetches from upstream and
+    persists into `<data_root>/raw/<name>.doltlite_db`, and nothing else. It
+    must NOT depend on `translate`, `render`,
+    `frankweiler_schema::grid_rows::GridRow`, sidecar types, or the qmd
+    index. The per-provider `schema_raw.rs` rustdoc deliberately avoids
+    describing how translate consumes the tables.
+  - **`translate`** depends on `extract` (it reads the raw store and projects
+    to the normalized POD + sidecar shape). `extract::schema_raw` is part of
+    the contract translate consumes.
   - **`load`** is provider-agnostic; it lives at
-    [`src/load.rs`](../frankweiler/backend/etl/src/load.rs) in the
-    shared `frankweiler_etl` crate and depends on no provider's
-    extract or translate. Its input contract is the sidecar tree.
+    [`src/load.rs`](../frankweiler/backend/etl/src/load.rs) and depends on no
+    provider's extract or translate. Its input contract is the sidecar tree.
 
-Why the discipline matters:
-
-  - Extract is its own deliverable. A user can run extract, stop,
-    inspect the raw store, and have something useful — even if
-    translate has bugs or hasn't been written yet.
-  - Translate can be re-implemented, replaced, or extended (e.g.
-    additional `schema_translate_<family>.rs` projections) without
-    touching extract.
-  - Disabling a translate path or render version for one provider
-    doesn't disturb that provider's extract.
+Why the discipline matters: extract is its own deliverable — a user can run
+it, stop, inspect the raw store, and have something useful even if translate
+has bugs or hasn't been written yet. Translate can then be re-implemented or
+extended without touching extract, and disabling a translate path for one
+provider doesn't disturb that provider's extract.
 
 ## Operational principles
 
 ### Monitorable
 
-The first sync from a given source is often very long (hours to days,
-many GB). Every stage must surface progress in a way the user can
-watch in real time.
+The first sync from a given source is often very long (hours to days, many
+GB). Every stage must surface progress the user can watch in real time.
 
   - Every binary flattens [`obs::ObsArgs`](../frankweiler/backend/obs/src/lib.rs)
-    into its clap parser, so every stage takes the same logging / OTLP
-    / progress-bar flags. On a TTY, pretty log lines on stderr;
-    otherwise, NDJSON events on stderr. Log emissions are routed
-    through an `IndicatifWriter` that coordinates with the shared
-    `MultiProgress` exposed by `frankweiler_obs::shared_multi()` so
-    progress bars attached by callers (e.g. sync's per-source bars)
-    don't get stomped by log lines.
-  - `--otlp-endpoint http://host:4317` exports spans + events via OTLP,
-    so a single Tempo/Jaeger collector can ingest every stage. (See
-    [the privacy-boundary unresolved question](#observability-and-the-privacy-boundary) for the privacy contract that constrains what may be in those
-    spans.)
-  - Each stage emits `*_start`, `*_complete`, and per-document
-    progress events with a stable provider-prefixed name
-    (`slack_download_*`, `grid_rows_load_*`, …). The `*Summary`
-    structs are `Serialize`, so a web UI can consume the final stats
-    line without knowing which provider produced it.
-  - Long-running operations must report something visible at least
-    every few seconds; an extract that walks 100k items silently for
-    an hour is a bug.
+    into its clap parser, so every stage takes the same logging / OTLP /
+    progress-bar flags. On a TTY, pretty log lines on stderr; otherwise NDJSON
+    events. Log emissions route through an `IndicatifWriter` coordinating with
+    the shared `MultiProgress` (`frankweiler_obs::shared_multi()`) so caller
+    progress bars don't get stomped by log lines.
+  - `--otlp-endpoint http://host:4317` exports spans + events via OTLP, so a
+    single Tempo/Jaeger collector can ingest every stage. (See [the
+    privacy-boundary unresolved question](data_architecture_ingestion_practices.md#observability-and-the-privacy-boundary)
+    for the contract that constrains what may be in those spans.)
+  - Each stage emits `*_start`, `*_complete`, and per-document progress events
+    with a stable provider-prefixed name (`slack_download_*`,
+    `grid_rows_load_*`, …). The `*Summary` structs are `Serialize`, so a web
+    UI can consume the final stats line provider-agnostically.
+  - Long-running operations must report something visible every few seconds;
+    an extract that walks 100k items silently for an hour is a bug.
 
 ### Stoppable and resumable
 
@@ -361,16 +335,13 @@ human-readable and inspectable. Concretely:
     Translate has exactly one input contract per provider regardless
     of whether the data came over the wire or off disk.
 
-The rationale we keep coming back to: **if all we wanted was a copy
-of the upstream bytes, we'd just use `cp`.** The user already has
-those bytes on their disk for every file-imported source, and we
-can re-fetch them for live sources by hitting the API again. The
-raw store earns its keep by being *queryable and human-inspectable*
-in a way the original bytes aren't — JSONB rows, typed columns,
-predictable structure across providers. That's the criterion for
-"is this decoding step OK to do at extract time?" If the alternative
-to decoding is asking the user to install a special tool just to
-see what's in their own data, the decoding belongs in extract.
+The rationale: **if all we wanted was a copy of the upstream bytes, we'd just
+use `cp`.** The raw store earns its keep by being *queryable and
+human-inspectable* in a way the original bytes aren't — JSONB rows, typed
+columns, predictable structure across providers. That's the criterion for "is
+this decoding step OK at extract time?" If the alternative to decoding is
+asking the user to install a special tool to see their own data, the decoding
+belongs in extract.
 
 Two load-bearing rules follow:
 
@@ -528,28 +499,21 @@ to accidentally violate it:
 
 ### Entities without a time-shape
 
-Some upstream object types genuinely don't have a meaningful
-timestamp:
+Some upstream object types genuinely don't have a meaningful timestamp:
 
-  - **Contacts (vCards).** A person doesn't have a creation event in
-    the upstream system; they exist. The vCard's `REV` field is
-    sometimes set, but most contacts don't have one.
+  - **Contacts (vCards).** A person doesn't have a creation event; they
+    exist. The vCard's `REV` field is sometimes set, but most contacts lack
+    one.
   - **Perseus texts and other immutable corpora.** The corpus is
     upstream-frozen; per-section "timestamps" would be nonsense.
-  - **Workspace/account metadata** (Slack `team`, GitHub `org`):
-    arguably has a creation date, but it isn't shown in any
-    time-ordered view.
+  - **Workspace/account metadata** (Slack `team`, GitHub `org`): arguably has
+    a creation date, but it isn't shown in any time-ordered view.
 
-For these we accept that `when_ts` is **null**. They don't
-participate in temporal views and that's fine — the principle is
-"**event-shaped** rows get real timestamps," not "every row
-everywhere." Synthesizing a placeholder (the upstream's earliest
-reachable date, an epoch fallback, etc.) would be making up data
-we don't have; null is the honest answer and the consumer query
-filters it out of time-ordered views.
-
-A new provider should decide explicitly which of its row types are
-event-shaped and document the source of `when_ts` for each.
+For these `when_ts` is **null** and the consumer query filters them out of
+time-ordered views — the principle is "**event-shaped** rows get real
+timestamps," not "every row everywhere." A new provider should decide
+explicitly which of its row types are event-shaped and document the source of
+`when_ts` for each.
 
 ## Commit lifecycle (load-bearing rule)
 
@@ -628,35 +592,30 @@ are an anti-pattern outside ad-hoc maintenance code.
 
 The shared pieces, all in `frankweiler_etl`:
 
-FIXME: Audit this, is it still correct?  We should mention BlobBundle?
   - **`bulk::SQL_CHUNK` + `bulk::push_placeholders` /
-    `bulk::push_placeholder_list`** — chunking utilities the
-    provider's per-table multi-row `INSERT` builders use.
-  - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the
-    generic `<t>_bookkeeping` UPSERT. Call this directly inside
-    the provider's tx after the entity UPSERT.
-  - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id,
-    &payload)])` shape that load-bearing batch primitives share.
-  - **`blob_cas::BlobCas::put_many`** — chunked multi-row
-    `INSERT OR IGNORE` over `cas_objects`, one tx per call.
-  - **`doltlite_raw::bulk_upsert_events(tx, tape, &[EventBatch], now)`**
-    — the **wire-event** chokepoint. For tables whose rows came off
-    an actual wire and have a meaningful payload to mirror to
-    [the JSONL tape](#wire-event-tape-jsonl): caller has already
-    issued its multi-row entity UPSERTs inside `tx`; this call
-    stamps `<t>_bookkeeping` for every batch in the same tx, commits,
-    and (if a tape is attached) appends one JSONL line per row via
-    `EventTape::append_batch`. Tape errors log but don't fail the
-    upsert — doltlite is the source of truth.
-  - **`doltlite_raw::bulk_upsert_with_tape(pool, tape, rows,
-    payloads)`** — all-in-one variant. Open tx →
-    `bulk::bulk_upsert_in_tx` (entity rows + paired bookkeeping) →
-    commit → post-commit tape append. Use when the caller has a
-    `&[T: BulkUpsertable]` vec in hand (every `WirePayloadRow`-derived
-    provider does) and wants the tape mirror without manually
-    composing the tx + bookkeeping + commit + append sequence. Same
-    "doltlite is truth, tape is best-effort mirror" semantics as
-    `bulk_upsert_events`.
+    `bulk::push_placeholder_list`** — chunking utilities the provider's
+    per-table multi-row `INSERT` builders use.
+  - **`bulk::bulk_upsert_bookkeeping(tx, table, ids, now)`** — the generic
+    `<t>_bookkeeping` UPSERT. Call directly inside the provider's tx after
+    the entity UPSERT.
+  - **`bulk::EventBatch<'a>`** — the per-table `(table, &[(id, &payload)])`
+    shape the batch primitives share.
+  - **`blob_cas::BlobCas::put_many`** — chunked multi-row `INSERT OR IGNORE`
+    over `cas_objects`, one tx per call. The per-doc `blob_cas::BlobBundle`
+    accumulates a document's attachments during extract (`add` / `add_error`)
+    and exports its `cas_inserts()` and edge rows for these writes; the same
+    bundle is reloaded at parse and consumed at render.
+  - **`doltlite_raw::bulk_upsert_events(tx, tape, &[EventBatch], now)`** — the
+    **wire-event** chokepoint. The caller has already issued its multi-row
+    entity UPSERTs inside `tx`; this stamps `<t>_bookkeeping` for every batch
+    in the same tx, commits, and (if a tape is attached) appends one JSONL
+    line per row via `EventTape::append_batch`. Tape errors log but don't
+    fail the upsert — doltlite is the source of truth.
+  - **`doltlite_raw::bulk_upsert_with_tape(pool, tape, rows, payloads)`** —
+    all-in-one variant (open tx → `bulk_upsert_in_tx` → commit → tape
+    append). Use when the caller has a `&[T: BulkUpsertable]` vec in hand
+    (every `WirePayloadRow`-derived provider does). Same "doltlite is truth,
+    tape is best-effort mirror" semantics.
 
 The chokepoint is the right tool **only for tables whose rows came
 off a wire**. For everything else — CAS edge tables, sidecars,
@@ -735,55 +694,41 @@ Where it still needs to land (aspirational; some not yet built):
 
 Why this pattern matters:
 
-  - **Re-runs are cheap.** A second sync run against an unchanged
-    source touches as little disk as possible at every stage. A
-    re-render against an unchanged bucket loads zero payloads off
-    disk (translate's two-phase parse short-circuits before reading
-    any chat_items in the unchanged bucket).
-  - **Bazel/Nix complexity, hidden.** The user does not write build
-    files. No DAG declaration, no explicit rule registration, no
-    `target` syntax to learn. Each stage's fingerprint recipe is
-    internal to that stage, and the orchestrator wires the
-    "previous fingerprints" map through automatically.
-  - **Correct-by-construction.** Two runs that should produce
-    different outputs produce different fingerprints (because their
-    inputs hash differently). Two runs that should produce identical
-    outputs produce matching fingerprints; the cached output stays.
-    The render of an unchanged bucket is exactly the same bytes.
+  - **Re-runs are cheap.** A second sync against an unchanged source touches
+    as little disk as possible at every stage; a re-render against an
+    unchanged bucket loads zero payloads (translate's two-phase parse
+    short-circuits before reading any chat_items in it).
+  - **Bazel/Nix complexity, hidden.** No build files, no DAG declaration, no
+    rule registration. Each stage's fingerprint recipe is internal to it, and
+    the orchestrator wires the "previous fingerprints" map through
+    automatically.
+  - **Correct-by-construction.** Runs that should differ hash differently;
+    runs that should match produce matching fingerprints and reuse the cached
+    output, byte-for-byte.
 
 ### dolt_diff supersedes per-bucket fingerprints
 
 The per-bucket fingerprint pattern has been **replaced with
-`dolt_diff_<table>` virtual tables driven by a per-source render
-cursor**. The translate-side fingerprint CTE is gone; doltlite's
-prolly-tree diff answers "what changed since last render?" directly.
+`dolt_diff_<table>` virtual tables driven by a per-source render cursor**.
+The translate-side fingerprint CTE is gone; doltlite's prolly-tree diff
+answers "what changed since last render?" directly.
 
-Mechanism:
+Mechanism: on render success, the per-source render cursor stamps the
+doltlite HEAD into `_render_cursor.json`. On the next render, `parse` reads
+that hash and runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec
+{ global_fanout_tables, bucket_query })`, which cold-starts if any
+`dolt_diff_<global_fanout_table>` row is non-`unchanged` (those fan out to
+"render everything"), otherwise runs the per-bucket `bucket_query` across the
+relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the
+surviving bucket keys.
 
-  - On render success, the per-source render cursor stamps the
-    doltlite HEAD into
-    `<out>/rendered_md/<provider>/<source>/_render_cursor.json`.
-  - On the next render, `parse` reads that hash and runs the shared
-    `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec
-    { global_fanout_tables, bucket_query })`. The scan:
-      1. Reads HEAD via `dolt_log()`.
-      2. Cold-starts if any `dolt_diff_<global_fanout_tables[i]>` row
-         is non-`unchanged` (changes to those tables fan out to
-         "render everything").
-      3. Otherwise runs the per-bucket `bucket_query`, projecting the
-         bucket-key column across whichever per-table `dolt_diff_*`
-         vtabs contribute to that provider's natural bucket.
-  - Parse then loads payloads only for the surviving bucket keys.
-
-Sidecar `source_fingerprint` and the load-step compare stay — they
-still gate the load step ("have we already loaded this sidecar's
-rows?"). `source_fingerprint` is now just the stable bucket UUID
-(distinct per bucket, stable across re-renders of the same bucket).
-
-This swap moves the "what's different?" decision from
-Rust-computed hash trees to doltlite's native diff, which it has to
-maintain anyway for `dolt diff`. The per-row `payload_blake3`
-columns are gone — the `WirePayloadRow` derive no longer emits them.
+Sidecar `source_fingerprint` and the load-step compare stay — they still gate
+the load step ("have we already loaded this sidecar's rows?").
+`source_fingerprint` is now just the stable bucket UUID. This swap moves the
+"what's different?" decision from Rust-computed hash trees to doltlite's
+native diff, which it maintains anyway for `dolt diff`. The per-row
+`payload_blake3` columns are gone — the `WirePayloadRow` derive no longer
+emits them.
 
 **Rule for new stages.** Any new derivation added to the pipeline
 (future Annotate step, future index shard, future projection)
@@ -938,33 +883,20 @@ or report it still-failed without re-walking the entire upstream API.
 
 Five sub-rules:
 
-  - **No-preseed listing flow.** Earlier versions of this doc
-    advocated pre-seeding entity rows from the listing pass with
-    `payload IS NULL`, so a crashed detail fetch would leave a row
-    visible to the retry walk. We've reversed that decision: rows
-    only appear *after a successful detail fetch*. Reasons:
-
-      1. A pre-seeded row is a tri-state shape (doesn't exist /
-         pre-seeded / fully fetched) that doesn't fit the
-         `WirePayloadRow` derive, and forces a parallel hand-rolled
-         UPSERT path that diverges from `bulk_upsert_in_tx`.
-      2. The skip-check works just as well without it. The listing
-         pass bulk-reads `(id → stored.update_time)` for every id it
-         saw, compares to the upstream's `update_time`, and routes
-         everything to one of `missing` / `stale` / `up_to_date`.
-         "missing" means "row doesn't exist yet, fetch it" — which
-         is exactly the retry behavior pre-seeding tried to enable
-         for crashed fetches: the next sync's listing surfaces them
-         again, and they fall in the `missing` bucket.
-      3. The forensic value of "last sync attempted this id but
-         crashed" was rarely consulted in practice and not worth
-         the schema complexity.
-
-    Failed detail fetches still record `last_error` in the
-    `<table>_bookkeeping` sidecar via `record_object_error`, so
-    explicit failures are visible. A *silently* dropped id (process
-    killed mid-fetch) leaves no row at all — that's fine; the next
-    listing surfaces it as missing.
+  - **No-preseed listing flow.** Earlier versions pre-seeded entity rows from
+    the listing pass with `payload IS NULL` so a crashed detail fetch left a
+    row visible to the retry walk. We reversed that: rows appear only *after a
+    successful detail fetch*. A pre-seeded row is a tri-state shape (doesn't
+    exist / pre-seeded / fully fetched) that doesn't fit the `WirePayloadRow`
+    derive and forces a hand-rolled UPSERT path diverging from
+    `bulk_upsert_in_tx`, and the skip-check works just as well without it: the
+    listing pass bulk-reads `(id → stored.update_time)`, compares to
+    upstream's `update_time`, and routes each id to `missing` / `stale` /
+    `up_to_date`. "missing" already covers crashed fetches — the next sync's
+    listing re-surfaces them. Failed detail fetches still record `last_error`
+    in `<table>_bookkeeping` via `record_object_error`; a silently dropped id
+    (process killed mid-fetch) leaves no row, which is fine — the next listing
+    surfaces it as missing.
 
   - **Always-paired bookkeeping.** Every object table has a sidecar
     `<table>_bookkeeping` carrying `attempt_count`, `last_attempt_at`,
@@ -1011,16 +943,14 @@ a different mark:
 
 ### Intra-run backoff
 
-FIXME: Is this still a thing if we don't pre-seed?
-
-The retry-failed flow above is *between* runs — durable evidence
-survives sync exit. **Within** a single run, transient signals can
-also drive intra-run backoff: Slack's 429 handling implements
-`Retry-After` + exponential backoff before giving up and moving on,
-and that pattern generalizes. Providers should prefer intra-run
-backoff for fast-recoverable failures (rate limits) and fall through
-to the durable-evidence path only for failures that need a fresh run
-to clear.
+The retry-failed flow above is *between* runs — durable evidence survives sync
+exit. **Within** a single run, transient signals also drive intra-run
+backoff: Slack's 429 handling (in `extract/api.rs`) implements `Retry-After` +
+exponential backoff before giving up and moving on, and that pattern
+generalizes. This is an HTTP-transport concern, independent of the
+no-preseed change. Providers should prefer intra-run backoff for
+fast-recoverable failures (rate limits) and fall through to the
+durable-evidence path only for failures that need a fresh run to clear.
 
 ### Bounded backlog
 
@@ -1031,465 +961,11 @@ attempts" knob is what bounds this. Beyond that, periodic cleanup
 of rows whose `last_attempt_at` is older than the retention window
 keeps the backlog from growing unboundedly.
 
-## Testing with TNG fixtures
-
-We try to have test coverage for as much of the ETL code as possible
-using **checked-in, fictional Star Trek: TNG data sets** as fixtures.
-The fixtures supply data with the same wire-format shape as real
-upstream APIs, but no real user data, so they can live in the repo and
-be the source-of-truth for "what does this provider's payload look
-like."
-
-Each provider crate owns its own `tests/fixtures/` tree. **Build and
-test through bazel:**
-
-```bash
-bazelisk test //...                                        # everything
-bazelisk test //frankweiler/backend/etl/providers/<name>/...  # one provider
-```
-
-Bazel is the only supported build and test driver. It gets caching,
-sandboxing, and remote-execution right; raw `cargo build` /
-`cargo test` invocations bypass that and risk producing artifacts
-that disagree with what CI sees. If your inner loop feels slow,
-*fix the bazel target*, don't shell out to cargo.
-
-`bazelisk test //...` runs both the unit tests and the fixture-backed
-integration tests — no `manual` tag, no special invocation. The only
-tests tagged `manual` are the per-provider `*_live` tests, which hit
-real upstream APIs and require latchkey credentials from the host
-machine.
-
-### The live-golden e2e test
-
-The TNG fixtures catch code-level regressions; the **live-golden
-e2e** catches what happens against the actual world. The target is
-[`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
-(tagged `manual` + `external` + `no-sandbox`; runs the full sync
-pipeline against `configs/thad_tiny.yaml`, every source, against
-live upstreams using host-side latchkey credentials). It snapshots
-three things into `frankweiler/backend/sync/tests/snapshots/`:
-
-  - `sync_summary.snap` — the per-source `FetchSummary` JSON the
-    orchestrator emits at end of run.
-  - `manifest.snap` — the file-tree manifest of `raw/` +
-    `rendered_md/`. Catches additions or removals of entire files
-    without having to diff every per-file snapshot.
-  - Per-file snapshots of every `.doltlite_db`, every rendered `.md`,
-    every `.grid_rows.json` sidecar, and every blob materialized
-    under `blobs/`. The doltlite-db snaps are byte-count summaries
-    (always change on re-fetch); the rest are content snapshots.
-
-Why this is uniquely useful:
-
-  - It's the only test that catches **render-side drift against real
-    payloads** — upstream shape changes, schema-projection bugs,
-    timestamp-fabrication bugs (see the contacts `when_ts` story
-    above), attachment-handling gaps (e.g. attachment slots that
-    extract isn't walking), etc.
-  - The diff is human-readable. `git diff
-    frankweiler/backend/sync/tests/snapshots/` after an update is the
-    same shape as a code review.
-  - After any change to extract schema, translate render, or the
-    sidecar contract, refresh the goldens with:
-    ```sh
-    bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
-    ```
-    and review the diff before committing. Treat each cluster of
-    changes as a finding: deliberate (commit), accidental
-    (investigate), or noise (block on a fix).
-
-The trade-off is that the goldens necessarily capture **real user
-data** — they live inside private workspaces. Acceptable here
-because the data root is single-user / single-laptop and the
-snapshots stay in a private repo; see the
-[fixture-hygiene unresolved question](#fixture-hygiene) for the
-public-facing version of this problem.
-
-## Adding new sources is meant to be easy
-
-A new provider is a sibling crate under
-[`frankweiler/backend/etl/providers/`](../frankweiler/backend/etl/providers/),
-named `frankweiler-etl-<name>`.
-
-### Pick a template to copy from
-
-Reach for the simplest existing provider that's shaped like yours,
-*not* the most feature-complete one. In rough order of "simple first":
-
-  1. **`signal`** — Backup-file
-     ingestion shape (no auth, no live API, no token refresh, no rate-limit
-     dance), so the auth and resume machinery you'd need to understand
-     for live providers stays out of the way while you learn the
-     extract / translate / sidecar shape.
-  2. **`anthropic`** (Claude) — first choice if your provider *is* a
-     live API. Single-account, simple bearer auth via latchkey, clean
-     forward-walk cursor. Most of the "what does extract / translate /
-     blob-CAS look like for an API-backed provider" is here without
-     the multi-workspace / multi-channel complexity of chat.
-  3. **`slack`** — The most elaborate provider: multiple
-     entity tables (channels, users, messages, replies, files), JSONL
-     event streams in synth, workspace-wide redaction in live-golden,
-     thread-aware `source_fingerprint`. Copy from here only if you
-     genuinely need its shape; otherwise it'll drag in complexity you
-     don't want.
-
-### The recipe
-
-1. Copy your chosen template into `providers/<name>/`, then strip out
-   the provider-specific code.
-2. Rename the package in its `Cargo.toml` to `frankweiler-etl-<name>`,
-   lib name `frankweiler_etl_<name>`.
-3. Add `etl/providers/<name>` to the workspace `members =` list in
-   `frankweiler/backend/Cargo.toml` and to the `crate.from_cargo`
-   manifest list in `MODULE.bazel`.
-4. Implement `extract::fetch(...)` (the in-process entry point sync
-   calls) and `<name>::translate::...`. The translate side must emit
-   `*.grid_rows.json` sidecars matching
-   [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs).
-5. Drop sample wire-format data into `providers/<name>/tests/fixtures/`
-   (TNG cast — see [Testing with TNG fixtures](#testing-with-tng-fixtures)) and write integration tests next to it.
-6. Add the new source's `type:` discriminator to the `SourceConfig`
-   variants in [`backend/core/src/config.rs`](../frankweiler/backend/core/src/config.rs)
-   and wire `extract::fetch(...)` into `sync/src/main.rs`'s per-type
-   dispatch.
-
-Load needs no per-provider changes — `grid_rows_load` (in-process)
-picks up the new sidecars on its next run.
-
-### Worked examples beyond the chat shape
-
-The framework has stretched in a few directions; these are useful
-references when your provider doesn't look like chat:
-
-  - **yolink** — time-windowed sampling, signed-URL auth, time-series
-    data shape.
-  - **perseus** — the corpus (Perseus Digital Library TEI editions) is
-    *immutable upstream*, so perseus deliberately doesn't use the
-    incremental-fetch / cursor / refresh-window machinery. It uses the
-    framework for the typed `GridRow` schema coupling, the unified
-    `bazel run //...:sync` UX, the obs/progress contract, and the
-    bazel test rig. A useful reminder that the framework is valuable
-    for more than just incremental delta-fetching.
-
-## Schema evolution
-
-The principle we aspire to: **our schema is allowed to evolve, and an
-evolution should never strand existing user data.** A new column on a
-raw entity table, a new entity table, a new `GridRow` field, a new
-fingerprint input, a new `RENDER_VERSION` — all of these should be
-deployable to a user who has months of accumulated data, without
-asking them to refetch from upstream.
-
-Two halves to this:
-
-  - **Our internal schema** — the typed columns on raw entity tables,
-    `grid_rows.yaml`, the sidecar `Sidecar` struct, the
-    `*_bookkeeping` sidecar tables, the per-provider CAS edge
-    tables. Today's de facto answer to "I added a column" is
-    `--reset-and-redownload`. That
-    works for *rebakeable* sources (anything we can refetch from a
-    live API) but breaks down for:
-      - one-shot imports (Signal backup, archive ingestion) where
-        the upstream is no longer reachable;
-      - sources whose first sync is expensive enough in time / API
-        quota / bandwidth that a refetch is genuinely costly;
-      - changes to the projection layer (`grid_rows`) where the
-        source-of-truth (raw) is fine but the projection is stale —
-        these *shouldn't* require an upstream refetch, just a
-        re-translate.
-
-    The principle we want: **additive schema changes (new columns,
-    new tables, new fields) are no-downtime, no-refetch.**
-    Subtractive changes (renames, removals, type changes) get an
-    explicit, named migration step. We aren't there yet.
-
-    The pattern that gets us closest, today: when the new "column"
-    is derivable from the payload (which is most of them — see
-    [Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives)),
-    add it as a `VIRTUAL` generated column over `payload->>'$.path'`
-    plus an index, or as a bare expression index. Both work in
-    DoltLite v0.11.9, both produce COVERING index plans, and
-    `ALTER TABLE ADD COLUMN … VIRTUAL` applies to existing rows
-    with no refetch and no payload rewrite. Reserve real stored
-    columns for the small set of writer-supplied fields that
-    genuinely aren't in the payload (synthesized PKs, FKs, namespace
-    discriminators).
-
-  - **Upstream schema drift** — Slack adds a field, Notion changes a
-    block type, GitHub renames `merged_by`. Because we preserve raw
-    payloads verbatim (see [Wire-fidelity of the raw store](#wire-fidelity-of-the-raw-store)), the new bytes are captured for free —
-    a translate-side bug is the worst case, never data loss. The
-    principle: **upstream change should fail loudly at translate
-    time, not silently at extract time.** No automated drift detector
-    exists today; see [Detecting upstream shape drift](#detecting-upstream-shape-drift).
-
-### Translate and downstream stages
-
-After extract, we run translations for display and indexing — render
-to markdown with YAML frontmatter, index the markdown with qmd, derive
-`grid_rows` for the UI.
-
-The cross-provider contract is the **sidecar**: for every rendered
-document, Translate emits two co-located files —
-
-  - `<id>.md` — human-readable, with YAML frontmatter.
-  - `<id>.grid_rows.json` — the
-    [`Sidecar`](../frankweiler/backend/etl/src/sidecar.rs):
-
-    ```jsonc
-    {
-      "header": {
-        "document_uuid": "…",       // primary key for the document
-        "source_fingerprint": "…",  // hash of upstream payload
-        "render_version": 1         // renderer-side schema stamp
-      },
-      "rows": [GridRow, …]
-    }
-    ```
-
-Load reads the sidecar tree — **it never re-parses markdown**. The
-markdown is for humans; the JSON sidecar is the machine-readable
-projection.
-
-This part of the pipeline aspires to the same properties as extract:
-
-  - **Monitorable**: same `obs` flags, same progress-bar contract.
-  - **Incremental**: the sidecar `source_fingerprint` short-circuits
-    re-render. Load reads `(qmd_path, source_fingerprint)` from
-    `markdowns_loaded` and skips unchanged sidecars.
-  - **Resumable in the steady state**: a translate pass that gets
-    re-run after producing N of M sidecars will skip those N via the
-    fingerprint check and continue from where it stopped. We do not,
-    however, guarantee crash-mid-write atomicity per file; a partial
-    `.md` left by a SIGKILL during a write may have a fingerprint that
-    no longer matches the file body and will be regenerated next run.
-    That's good enough for our use case but is not a separately
-    engineered property.
-
-Less attention has been paid to translate-side observability and to
-making partial-progress visible to the user than to the same on
-extract; this is an area where the implementation trails the
-principle.
-
-### Shared schemas across similar sources
-
-When several sources are shaped similarly enough (a matter of taste,
-but largely driven by schema and UI overlap), they should be massaged
-into a **shared canonical schema** so the rest of the pipeline (search,
-display, threading, attachments, exports) shares code paths and stays
-consistent.
-
-Where unification actually happens **today**: the `GridRow` projection
-([`schemas/grid_rows.yaml`](../schemas/grid_rows.yaml), codegen'd into
-the Rust struct at `frankweiler/backend/schema/src/generated/grid_rows.rs`).
-Every searchable entity from every provider collapses into rows of one
-schema with `provider` + `kind` discriminators. The grid backend
-reads it with a single query and renders it without knowing which
-provider produced any given row.
-
-Unification should **never** happen in the raw store.
-For example, Slack, Beeper, Signal, Anthropic, ChatGPT each have their own raw tables and even separate doltlite 
- DBs (`slack_messages`, `beeper_messages`, …)
-
- However, once we start translating data, we should aspire to share as much as possible.
- For example, we should translate raw data into unified schemas where appropriate, then send
- that unified data through common code paths for interpretation, rendering, and indexing.
-
-Examples where schema and data handling should be unified:
-
-  1. **Chat (human)** — Slack, Beeper, Signal. "Messages in
-     channels/DMs between humans with attachments and threading."
-     Unified at `GridRow`; per-provider raw + render.
-  2. **Chat (LLM)** — Claude, ChatGPT, Gemini (planned). Same chat
-     shape but with assistant turns, thinking, and tool-use surfaced.
-     Unified at `GridRow` via `kind = 'User Input' | 'LLM Response' |
-     'LLM Thinking' | 'Tool Call'`.
-  3. **Code review threads** — GitHub PR discussions, GitLab MR
-     discussions. Threaded inline comments on diffs. Unified at
-     `GridRow`; `git_sha` and `external_id` columns are specifically
-     there to serve this family.
-  4. **Document-comment threads** — Notion. Very similar in shape to
-     (3); may eventually share more than just `GridRow` projection.
-  5. **Time-series sensor data** — yolink today; Garmin fitness and
-     IQ Air air quality planned. Per-device samples over time with a
-     small fixed set of value channels. Not yet projected to
-     `GridRow`; this family hasn't picked its shared schema yet.
-
-A new provider that fits a family should at minimum project to the
-family's `GridRow` shape rather than inventing a new `kind` taxonomy.
-A provider that doesn't fit may motivate a new family; opening one
-should be deliberate.
-
-## Unresolved questions
-
-These are gaps we noticed while writing this doc — places the
-principles either aren't yet articulated, aren't yet verified to be
-true in code, or genuinely haven't been decided. They're listed here
-as desired principles where we know what we want, and as open
-questions where we don't. The audit that follows this document will
-measure against these alongside the resolved principles above.
-
-### Backup, restore, and portability
-
-**Desired principle**: the data root is a self-contained, portable
-artifact. `cp -r <data_root>` (or `rsync`) on one machine and dropping
-it on another should reconstitute the system byte-for-byte, with no
-re-fetch, re-render, or re-index step needed.
-
-### Removing a source
-
-Note: This is not yet handled in a meaningful way.  We haven't decided yet what it should mean.
-
-**Desired principle**: removing a `sources:` entry should leave the
-system clean. A single GC pass should reclaim the source's raw store,
-its blob CAS contribution, its `rendered_md/<name>/` tree, and its
-`grid_rows` rows — without disturbing other sources that share the CAS.
-
-**Open**: today we have `blob_cas::gc_orphans()` for the blob side, but
-no top-level "uninstall this source" path. If a user removes Slack
-from their config, what is the expected sequence of operations?
-
-
-### Multi-account / multi-instance within a provider type
-
-**Desired principle**: the framework supports N instances of the same
-provider type (two Slack workspaces, three GitHub orgs, two ChatGPT
-accounts) by virtue of each having its own `sources:` entry with a
-distinct `name:`. `GridRow.account` and the per-account segments in
-`rendered_md/<provider>/<account>/...` exist to keep them disjoint.
-
-**Open**: this should be documented as a first-class case, not an
-incidental side effect of "each `name:` gets its own raw store." Are
-there shared-secret or shared-state pitfalls that bite when you have
-two instances of one provider type? Latchkey is keyed by URL host,
-which collapses two GitHub orgs to one credential slot — is that the
-right shape?
-
-### Observability and the privacy boundary
-
-**Desired principle**: observability (logs, NDJSON events, OTLP
-spans) carries timing, counters, stable IDs, and error metadata only.
-**No item *contents***. A user shipping spans to a Tempo/Jaeger
-collector outside their laptop must not thereby leak Slack DM text,
-Signal message bodies, or email contents.
-
-**Open**: this isn't verified. The `--otlp-endpoint` flag is documented
-but the data-stays-local guarantee (see [Operating assumptions](#operating-assumptions)) is not extended to it. We
-should audit what `tracing` spans actually carry, redact at the
-source, and state the rule explicitly.
-
-### Detecting upstream shape drift
-
-**Desired principle**: when an upstream changes the shape of its
-responses (new field, removed field, renamed field, type change), we
-detect it as part of a sync run and surface it to the user with
-enough context to decide whether to ignore, file a bug, or block
-further syncs.
-
-**Open**: not implemented today, and we don't know yet what we want.
-A previous attempt (`endpoint_shapes`) was deleted; see commit history.
-
-### Quantitative bound on "fast incremental"
-
-**Desired principle**: a second sync run immediately after a
-successful one, with no upstream changes, completes in time bounded
-by *upstream API walk time*, not by local work. Concretely: tens of
-seconds for a small source, low single-digit minutes for a large one
-— never tens of minutes, never re-doing the first-sync cost.
-
-**Open**: we don't currently measure this. We should add a mechanism to roughly compute "sync time / size of sync delta" on each sync for each provider, so that we can get a handle on where the slowness it.
-
-### Fixture hygiene
-
-**Desired principle**: no real user data, ever, in any checked-in
-fixture or any insta snapshot. TNG is the cover story — Picard,
-Riker, Worf, Enterprise stardates, etc. Live-golden snapshots that
-capture real workspace data must be redacted before they land in git.
-
-**Open**: how is this enforced? There's a `SKIP_PATH_SEGMENTS`
-convention for the Slack live golden but no project-wide pre-commit
-check for "looks like real data." A regex over names / emails /
-domains / known channel patterns is the obvious low-cost mitigation.
-
-### Translate-side partial-progress visibility
-
-**Desired principle**: a long-running translate pass — first run after
-a big initial extract, or a `RENDER_VERSION` bump that invalidates
-every sidecar — must be as monitorable and as stoppable-resumable as
-extract is. The user sees "rendered 12,347 / 89,201" with an ETA;
-^C-then-rerun resumes from 12,347 not 0.
-
-**Open**: the fingerprint-skip *does* give resumability in the steady
-state (see [Translate and downstream stages](#translate-and-downstream-stages)), but translate-side progress reporting is less developed
-than extract-side. Worth measuring.
-
-### The fixtures → playback → doltlite chain
-
-**Desired principle**: the artifact a human edits and reviews in PRs
-is always JSON/JSONL — diffable, language-agnostic, no doltlite
-version skew. The doltlite db is always a *produced* artifact, never
-a checked-in input. The flow is: synth reads JSONL → emits HTTP
-playback responses → extract reads playback → writes the runtime
-`.doltlite_db`.
-
-This is stated in [port guide §3](../frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#3-synth-reads-checked-in-fixtures-extract-writes-doltlite),
-but it's a project-wide invariant that belongs at the architecture
-level too.
-
-### grid_rows itself lives in doltlite
-
-The `grid_rows` table (the projection consumed by the UI) lives in
-`<data_root>/backend_index.doltlite_db`, just like raw stores. The
-"doltlite is our storage layer" claim should apply to every store
-the system writes — raw, blob CAS, and the backend index — not just
-to raw. Worth saying explicitly somewhere, probably in [Shape of the system](#shape-of-the-system).
-
-## Deferred work
-
-Edits to this doc and its neighbors that we've agreed to do, but
-haven't yet. Each is intentionally not blocking the audit thread —
-they're listed here so they don't get lost.
-
-  - **Move `frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md` →
-    `docs/doltlite_patterns.md`**, and reframe it from a porting
-    guide into "shape of how we use doltlite." The current doc reads
-    as one-time migration instructions (which JSONL-tree raw stores
-    looked like, the porting checklist, "we tried checking in a
-    `.doltlite_db` once and threw it away"); the durable content
-    inside it — the design rules, the table-and-blob shape, the
-    shared utilities — should be lifted into a stable reference.
-  - **Rename `docs/doltlite.md` → `docs/doltlite_tips.md`** to make
-    its scope (operational tips and dolt-history reading) explicit
-    against the new patterns doc above.
-  - Both of the above require updating inbound links across the
-    repo: this file, signal's `extract/mod.rs`, each provider's
-    `EXTRACT.md` and `DOLTLITE_RAW.md`, the etl crate's module docs,
-    and any AGENTS.md / README pointers.
-
-  - **VIRTUAL column projection from JSONB payload.** Each
-    `WirePayloadRow`-derived row currently stores a small set of
-    denormalized columns alongside the payload for cheap predicate
-    queries (`name`, `update_time`, `is_member`, etc.). On DoltLite
-    v0.11.9+ these are candidates for `VIRTUAL` generated columns
-    over `payload->>'$.x'` expressions, paired with expression
-    indexes. The denormalization stays queryable; the write cost
-    drops to zero and drift-vs-payload becomes impossible by
-    construction. The `WirePayloadRow` macro would need a per-field
-    attribute like `#[wire_payload_row(virtual = "$.profile.real_name")]`.
-    Several FIXMEs in `slack/src/extract/schema_raw.rs` (UserRow,
-    ChannelRow, MessageRow) flag the specific columns that would
-    convert cleanly.
-
-  - **`BulkUpsertable` derive for non-payload tables.** Several
-    provider tables (bookkeeping tables like slack's
-    `RepliesPagesRow`) hand-roll the `BulkUpsertable` impl because
-    they have no wire payload. The shape is mechanical — a
-    `#[derive(BulkUpsertable)]` macro with a per-field column-name
-    attribute would collapse each impl to the struct definition.
-
 ## What this document does not cover
 
+  - Testing, adding a new provider, schema evolution, the downstream
+    translate/load contract, and the open questions — see the companion
+    [`data_architecture_ingestion_practices.md`](data_architecture_ingestion_practices.md).
   - The specific table DDL of any provider — see the port guide and
     each provider's source.
   - The UI and how it consumes `grid_rows` — see the frontend docs.
