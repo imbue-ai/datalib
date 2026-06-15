@@ -5,9 +5,14 @@
 //! producer that pushes row batches over an mpsc channel to a writer
 //! task, periodically emit progress + metrics, then write scan_meta.
 //!
-//! Stamping uses a legacy in-memory path (no producer-consumer) — it
-//! mutates per-row `identity_uuid` after the walk so it can't stream
-//! today. Toggle via `opts.no_stamp` or `--no-stamp` on the CLI.
+//! There is **one** scan engine — the streaming producer/consumer
+//! pipeline. Stamping (writing UUID breadcrumb files into the tree;
+//! opt-in via `stamp_me_with_uuid` in a `.fsindex.yaml`) never swaps
+//! the engine: it runs as a small post-write enrichment pass over the
+//! directory rows the stream already wrote, dropping breadcrumbs and
+//! `UPDATE`-ing `identity_uuid` in the same pre-commit working tree.
+//! Toggle the pass with `opts.no_stamp` / `--no-stamp`; the scan
+//! itself — and its progress reporting — is identical either way.
 //!
 //! See [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
 //! §"Commit lifecycle" — `fetch` returns and the caller decides
@@ -37,7 +42,7 @@ pub use db::RawDb;
 
 use metrics::WalkerCounters;
 use options::{EffectiveOptions, FsindexYaml, Identity, OptionsCascade};
-use schema_raw::{FileKind, FileRow, FileStatsRow, ScanMetaRow, StampKind};
+use schema_raw::{FileRow, FileStatsRow, ScanMetaRow, StampKind};
 
 /// One batch sent over the producer→consumer channel. files[i] and
 /// stats[i] always match by id; they're emitted as a pair.
@@ -66,11 +71,30 @@ pub struct FetchOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct FetchSummary {
+    /// Total entries visited. Decomposes exactly as
+    /// `files_reused + files_hashed + dirs + symlinks`.
     pub entries_scanned: usize,
-    pub entries_rehashed: usize,
-    pub entries_reused: usize,
+    /// Files served from the rescan cache — stat matched, **no content
+    /// read**. The whole point of the incremental cache.
+    pub files_reused: usize,
+    /// Files whose **content was actually re-read and blake3'd** this
+    /// scan (new or changed). This — not `entries_scanned` — is what
+    /// `bytes_hashed` measures.
+    pub files_hashed: usize,
+    /// Directories visited. Each one's tree-hash is recomputed from its
+    /// children's hashes — **no file I/O, no bytes hashed**.
+    pub dirs: usize,
+    /// Symlinks visited. Each one's target *path string* is hashed (a
+    /// handful of bytes); never a file-content read.
+    pub symlinks: usize,
     pub stamped_directories: usize,
     pub errors: usize,
+    /// Total bytes fed through blake3 this scan — i.e. the content of
+    /// the `files_hashed` files only.
+    pub bytes_hashed: u64,
+    /// Total bytes we did NOT hash because the rescan cursor let us
+    /// reuse a cached digest — the work the incremental cache saved.
+    pub bytes_skipped: u64,
 }
 
 /// Run one extract pass against `opts.root`.
@@ -85,23 +109,41 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     let _ = opts.control.refetch_blobs;
 
-    opts.progress
-        .set_message(&format!("indexing {}", opts.root.display()));
-
     let load_start = Instant::now();
-    let (prev_stats, prev_file_blake3s) = if opts.control.reset_and_redownload {
-        (Default::default(), Default::default())
+    let prev = if opts.control.reset_and_redownload {
+        db::PrevCache::default()
     } else {
-        let cache = db.load_prev_cache().await?;
+        // Loading the rescan cache for a large tree can take a while, and
+        // it happens before the walk's per-entry progress bar exists — so
+        // announce it (start log + live message) so it's clearly working,
+        // not hung, on both a TTY and the NDJSON log sink.
+        info!(
+            event = "fsindex_load_cache_start",
+            root = %opts.root.display(),
+            "loading rescan cache from prior scan (every entry + child index) before the walk",
+        );
+        opts.progress.set_message(&format!(
+            "loading rescan cache for {} …",
+            opts.root.display()
+        ));
+        let cache = db.load_prev_cache(&opts.progress).await?;
         info!(
             event = "fsindex_load_cache_done",
-            file_rows = cache.stats.len(),
+            entry_rows = cache.stats.len(),
+            cached_hashes = cache.blake3s.len(),
+            parent_dirs = cache.children.len(),
             elapsed_ms = load_start.elapsed().as_millis() as u64,
+            "loaded {} prior entries ({} files with a reusable hash) and {} dir child-lists from the rescan cursor",
+            cache.stats.len(),
+            cache.blake3s.len(),
+            cache.children.len(),
         );
-        (cache.stats, cache.blake3s)
+        cache
     };
     let phase_load = load_start.elapsed();
 
+    opts.progress
+        .set_message(&format!("indexing {}", opts.root.display()));
     let truncate_start = Instant::now();
     db.reset().await?;
     let phase_truncate = truncate_start.elapsed();
@@ -114,28 +156,33 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
 
-    let (summary, walker_errors, counters, phase_walk, phase_write_total) = if opts.no_stamp {
-        streaming_pipeline(
-            opts.root.clone(),
-            default_stamp_kind,
-            prev_stats,
-            prev_file_blake3s,
-            db.clone(),
-            now.clone(),
-            opts.progress.clone(),
-        )
-        .await?
-    } else {
-        legacy_inmemory(
-            &opts,
-            default_stamp_kind,
-            prev_stats,
-            prev_file_blake3s,
-            &db,
-            &now,
-        )
-        .await?
-    };
+    let (mut summary, walker_errors, counters, phase_walk, phase_write_total) = streaming_pipeline(
+        opts.root.clone(),
+        default_stamp_kind,
+        prev,
+        db.clone(),
+        now.clone(),
+        opts.progress.clone(),
+    )
+    .await?;
+
+    // Stamping is a post-write enrichment pass, never a separate scan
+    // engine. The stream has already written every row; here we walk
+    // the directory rows and, for any dir whose `.fsindex.yaml` cascade
+    // opts in, drop a UUID breadcrumb and UPDATE its `identity_uuid` —
+    // all in the same pre-commit working tree, so it lands in the one
+    // scan commit the orchestrator makes.
+    if !opts.no_stamp {
+        summary.stamped_directories = stamp_directories(&db, &opts.root).await?;
+        if summary.stamped_directories > 0 {
+            warn!(
+                event = "fsindex_stamping_active",
+                stamped = summary.stamped_directories,
+                message =
+                    "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
+            );
+        }
+    }
 
     // ── scan_meta ────────────────────────────────────────────────────
     let root_cascade = build_root_cascade(&opts.root);
@@ -161,19 +208,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.write_scan_meta(&scan_meta, &now).await?;
     let phase_scan_meta = scan_meta_start.elapsed();
 
-    // Walker errors → durable bookkeeping trail on `files`.
+    // Walker errors (unreadable entries, non-utf8 names, …). fsindex
+    // has no `_bookkeeping` sidecar to record them in — and there's no
+    // retry model that would consult one. They're logged here and
+    // counted in the `fsindex_phase_breakdown` event (`stat_errors`,
+    // `read_errors`, `non_utf8_paths`), which is all the durable
+    // evidence the scanner needs.
     for err in &walker_errors {
-        db.record_error("files", &err.id, &err.message)
-            .await
-            .with_context(|| format!("record walker error for {}", err.id))?;
+        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message);
     }
 
-    // Compact: reclaim the immutable-chunk novelty accrued across all
-    // the per-batch commits. Turns the on-disk size from
-    // write-amplification-dominated (~7 KB/row) back down toward the
-    // actual data size (~1 KB/row).
-    opts.progress.set_message("compacting (dolt_gc)");
-    let phase_gc = db.gc().await?;
+    // NB: the commit + gc happen in the ORCHESTRATOR (the standalone
+    // binary), not here. Order is load-bearing: `dolt_commit` must run
+    // BEFORE `dolt_gc` on a given connection. Running gc first and then
+    // committing on the same sqlx connection fails with "failed to
+    // flush" at scale (reproduced at 1M rows; fine at 100k). Committing
+    // first records the working set; gc then reclaims the per-batch
+    // chunk novelty against the committed tree. `fetch` stays
+    // commit-free per the framework's commit-lifecycle rule.
 
     let total_elapsed = total_start.elapsed();
 
@@ -198,8 +250,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         walk_ms = phase_walk.as_millis() as u64,
         write_total_ms = phase_write_total.as_millis() as u64,
         scan_meta_ms = phase_scan_meta.as_millis() as u64,
-        gc_ms = phase_gc.as_millis() as u64,
         dirs = counters.dirs_visited.load(Ordering::Relaxed),
+        dirs_readdir_skipped = counters.dirs_readdir_skipped.load(Ordering::Relaxed),
         files = counters.files_visited.load(Ordering::Relaxed),
         symlinks = counters.symlinks_visited.load(Ordering::Relaxed),
         files_reused = counters.files_reused.load(Ordering::Relaxed),
@@ -217,6 +269,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     Ok(FetchSummary {
         errors: walker_errors.len(),
+        bytes_hashed,
+        bytes_skipped: bytes_saved,
         ..summary
     })
 }
@@ -229,8 +283,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn streaming_pipeline(
     root: PathBuf,
     default_stamp_kind: StampKind,
-    prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, String>,
+    prev: db::PrevCache,
     db: RawDb,
     now: String,
     progress: Progress,
@@ -241,11 +294,25 @@ async fn streaming_pipeline(
     Duration,
     Duration,
 )> {
+    let db::PrevCache {
+        stats: prev_stats,
+        blake3s: prev_file_blake3s,
+        children: prev_children,
+    } = prev;
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
     let stop_progress = Arc::new(AtomicBool::new(false));
 
     // ── Writer task ──────────────────────────────────────────────────
+    // One sqlite transaction PER BATCH. We deliberately do NOT fold the
+    // whole scan into a single transaction: doltlite buffers an open
+    // transaction's working-set delta in memory, and a single tx over a
+    // multi-million-row tree OOMs (confirmed at 4.5M rows × the table
+    // set). Per-batch flushing bounds that buffer. The cost is
+    // write-amplification (each sqlite COMMIT lays down fresh prolly
+    // chunk novelty), reclaimed by the `dolt_gc` the orchestrator runs
+    // after the single `dolt_commit`. `BATCH_SIZE` (see walker) is the
+    // knob that trades memory against amplification.
     let writer_db = db.clone();
     let writer_now = now.clone();
     let writer_handle = tokio::spawn(async move {
@@ -266,35 +333,80 @@ async fn streaming_pipeline(
     let progress_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The bar is the only progress surface — no per-tick log spam.
+        // It's a message-only spinner (no indicatif `{pos}`/`{per_sec}`
+        // headline); every counter and rate lives, labeled, in the
+        // message. Rates are computed from per-tick deltas.
+        let mut last_files = 0u64;
+        let mut last_files_hashed = 0u64;
+        let mut last_bytes_hashed = 0u64;
+        let mut last_errors = 0u64;
+        let scan_start = Instant::now();
+        let mut last_tick = scan_start;
         loop {
             interval.tick().await;
             if progress_stop.load(Ordering::Relaxed) {
                 break;
             }
+            let now = Instant::now();
+            let dt = now.duration_since(last_tick).as_secs_f64().max(1e-3);
+            last_tick = now;
+
             let dirs = progress_counters.dirs_visited.load(Ordering::Relaxed);
+            let dirs_skipped = progress_counters
+                .dirs_readdir_skipped
+                .load(Ordering::Relaxed);
             let files = progress_counters.files_visited.load(Ordering::Relaxed);
-            let reused = progress_counters.files_reused.load(Ordering::Relaxed);
-            let mb_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed) / 1_000_000;
-            let mb_saved = progress_counters
+            let files_hashed = progress_counters.files_rehashed.load(Ordering::Relaxed);
+            let bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed);
+            let bytes_skipped = progress_counters
                 .bytes_skipped_cache
-                .load(Ordering::Relaxed)
-                / 1_000_000;
+                .load(Ordering::Relaxed);
+            let bytes_total = bytes_hashed + bytes_skipped;
+
+            // The only log line the scan emits per tick — and only when
+            // new errors have appeared since the last tick, so a clean
+            // scan stays silent and an error doesn't spam every 500ms.
+            let stat_errors = progress_counters.stat_errors.load(Ordering::Relaxed);
+            let read_errors = progress_counters.read_errors.load(Ordering::Relaxed);
+            let errors = stat_errors + read_errors;
+            if errors > last_errors {
+                warn!(
+                    event = "fsindex_scan_errors",
+                    stat_errors = stat_errors,
+                    read_errors = read_errors,
+                    "fsindex: {errors} entr{} could not be read",
+                    if errors == 1 { "y" } else { "ies" },
+                );
+                last_errors = errors;
+            }
+
+            // Instantaneous rates from this tick's delta.
+            let files_per_s = files.saturating_sub(last_files) as f64 / dt;
+            let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
+            let mb_hashed_per_s =
+                bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
+            // Cumulative averages over the whole run so far — each total
+            // divided by total elapsed, not just this tick's delta.
+            let total_secs = scan_start.elapsed().as_secs_f64().max(1e-3);
+            let files_per_s_avg = files as f64 / total_secs;
+            let files_hashed_per_s_avg = files_hashed as f64 / total_secs;
+            let mb_hashed_per_s_avg = bytes_hashed as f64 / total_secs / 1_000_000.0;
+            last_files = files;
+            last_files_hashed = files_hashed;
+            last_bytes_hashed = bytes_hashed;
+
             progress_sink.set_message(&format!(
-                "scanned {dirs} dirs / {files} files / {reused} cached / {mb_hashed} MB hashed / {mb_saved} MB saved",
+                "dirs={dirs} ({dirs_skipped} readdir-skipped) files={files} \
+                 ({files_per_s:.1} files/s, avg {files_per_s_avg:.1}) total={} | \
+                 hashed {files_hashed} files / {} @ \
+                 {files_hashed_per_s:.1} files/s (avg {files_hashed_per_s_avg:.1}) \
+                 {mb_hashed_per_s:.1} MB/s (avg {mb_hashed_per_s_avg:.1}) \
+                 | skipped {}",
+                human_bytes(bytes_total),
+                human_bytes(bytes_hashed),
+                human_bytes(bytes_skipped),
             ));
-            info!(
-                event = "fsindex_progress",
-                dirs = dirs,
-                files = files,
-                files_reused = reused,
-                bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed),
-                bytes_saved = progress_counters
-                    .bytes_skipped_cache
-                    .load(Ordering::Relaxed),
-                ignored = progress_counters.ignored_entries.load(Ordering::Relaxed),
-                stat_errors = progress_counters.stat_errors.load(Ordering::Relaxed),
-                read_errors = progress_counters.read_errors.load(Ordering::Relaxed),
-            );
         }
     });
 
@@ -308,6 +420,7 @@ async fn streaming_pipeline(
                 &walker_root,
                 &prev_stats,
                 &prev_file_blake3s,
+                &prev_children,
                 default_stamp_kind,
             );
             let (errs, summ) = walker.collect_streaming(&walker_counters, |batch| {
@@ -348,12 +461,21 @@ async fn streaming_pipeline(
 
     let entries_scanned = (walker_summary.rehashed + walker_summary.reused)
         + counters.non_utf8_paths.load(Ordering::Relaxed) as usize;
+    // Decompose the "non-reused" bucket (walker_summary.rehashed) into
+    // its real parts: file-content rehashes vs dirs vs symlinks. Only
+    // file rehashes read bytes; dirs/symlinks recompute their hash for
+    // free, so lumping them under one "rehashed" number is misleading.
     let summary = FetchSummary {
         entries_scanned,
-        entries_rehashed: walker_summary.rehashed,
-        entries_reused: walker_summary.reused,
+        files_reused: counters.files_reused.load(Ordering::Relaxed) as usize,
+        files_hashed: counters.files_rehashed.load(Ordering::Relaxed) as usize,
+        dirs: counters.dirs_visited.load(Ordering::Relaxed) as usize,
+        symlinks: counters.symlinks_visited.load(Ordering::Relaxed) as usize,
         stamped_directories: 0,
         errors: 0, // filled in by caller
+        // byte totals are stamped onto the summary by `fetch` from the
+        // counters after this returns.
+        ..Default::default()
     };
 
     Ok((
@@ -365,119 +487,56 @@ async fn streaming_pipeline(
     ))
 }
 
-/// Legacy collect-all-then-write path. Used when stamping is enabled
-/// because stamping mutates each dir's `identity_uuid` after the walk.
-async fn legacy_inmemory(
-    opts: &FetchOptions,
-    default_stamp_kind: StampKind,
-    prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, String>,
-    db: &RawDb,
-    now: &str,
-) -> Result<(
-    FetchSummary,
-    Vec<walker::WalkerError>,
-    Arc<WalkerCounters>,
-    Duration,
-    Duration,
-)> {
-    let counters = Arc::new(WalkerCounters::default());
-    let walk_start = Instant::now();
-    let walker = walker::Walker::new(
-        &opts.root,
-        &prev_stats,
-        &prev_file_blake3s,
-        default_stamp_kind,
-    );
-    let (mut scan_results, walker_errors, walker_summary) = {
-        let mut out: Vec<walker::ScanResult> = Vec::new();
-        let (errs, summ) = walker.collect_streaming(&counters, |batch| {
-            out.extend(batch);
-            Ok(())
-        })?;
-        (out, errs, summ)
-    };
-    let phase_walk = walk_start.elapsed();
-
-    let stamped = stamp_directories(&opts.root, &mut scan_results).await?;
-    if stamped > 0 {
-        warn!(
-            event = "fsindex_stamping_active",
-            stamped = stamped,
-            message =
-                "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
-        );
-    }
-
-    let entries_scanned = scan_results.len();
-    let files: Vec<_> = scan_results.iter().map(|r| r.file_row.clone()).collect();
-    let stats: Vec<_> = scan_results.iter().map(|r| r.stat_row.clone()).collect();
-    let write_start = Instant::now();
-    db.write_batch(&files, &stats, now).await?;
-    let phase_write_total = write_start.elapsed();
-
-    let summary = FetchSummary {
-        entries_scanned,
-        entries_rehashed: walker_summary.rehashed,
-        entries_reused: walker_summary.reused,
-        stamped_directories: stamped,
-        errors: 0,
-    };
-
-    Ok((
-        summary,
-        walker_errors,
-        counters,
-        phase_walk,
-        phase_write_total,
-    ))
-}
-
-async fn stamp_directories(
-    root: &std::path::Path,
-    scan_results: &mut [walker::ScanResult],
-) -> Result<usize> {
+/// Post-write stamping pass. The scan has already streamed every row
+/// into `files`; here we walk the directory rows and, for any dir
+/// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
+/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
+///
+/// Returns the number of dirs **newly** stamped (a fresh breadcrumb
+/// written). Dirs that already carried an identity still get their
+/// `identity_uuid` column set, but don't count — matching the
+/// historical `stamped_directories` semantics.
+///
+/// Bounded by the directory count, so the extra SELECT + per-dir
+/// UPDATEs are cheap next to the file walk. Runs in the same working
+/// tree as the scan, so the stamps land in the orchestrator's single
+/// commit.
+async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
     let mut count = 0_usize;
-    for sr in scan_results.iter_mut() {
-        if !matches!(sr.file_row.kind, FileKind::Dir) {
-            continue;
-        }
-        let dir = if sr.file_row.id.is_empty() {
+    for id in db.dir_ids().await? {
+        let dir = if id.is_empty() {
             root.to_path_buf()
         } else {
-            root.join(&sr.file_row.id)
+            root.join(&id)
         };
         let cascade = build_dir_cascade(root, &dir);
-        let eff = cascade.effective();
-        if !eff.stamp_me_with_uuid {
+        if !cascade.effective().stamp_me_with_uuid {
             continue;
         }
         let mut yaml = options::load_at(&dir)?.unwrap_or_default();
-        if let Some(id) = &yaml.identity {
-            sr.file_row.identity_uuid = Some(id.uuid.clone());
-            continue;
-        }
-        let uuid = new_uuid();
-        let stamped_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let originally_at = dir
-            .strip_prefix(root)
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned());
-        yaml.identity = Some(Identity {
-            uuid: uuid.clone(),
-            stamped_at,
-            stamper_version: 1,
-            originally_at,
-        });
-        options::write_breadcrumb(&dir, &yaml)
-            .with_context(|| format!("write breadcrumb {}", dir.display()))?;
-        sr.file_row.identity_uuid = Some(uuid.clone());
-        info!(
-            event = "fsindex_stamped",
-            path = %dir.display(),
-            uuid = %uuid,
-        );
-        count += 1;
+        let uuid = match &yaml.identity {
+            Some(identity) => identity.uuid.clone(),
+            None => {
+                let uuid = new_uuid();
+                let stamped_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+                let originally_at = dir
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned());
+                yaml.identity = Some(Identity {
+                    uuid: uuid.clone(),
+                    stamped_at,
+                    stamper_version: 1,
+                    originally_at,
+                });
+                options::write_breadcrumb(&dir, &yaml)
+                    .with_context(|| format!("write breadcrumb {}", dir.display()))?;
+                info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid);
+                count += 1;
+                uuid
+            }
+        };
+        db.set_identity_uuid(&id, &uuid).await?;
     }
     Ok(count)
 }
@@ -485,6 +544,22 @@ async fn stamp_directories(
 /// UUIDv7: time-ordered, so breadcrumb UUIDs sort chronologically.
 fn new_uuid() -> String {
     uuid::Uuid::now_v7().to_string()
+}
+
+/// Human-readable byte count, decimal (1000-based) units to match the
+/// `MB/s` throughput readouts (which divide by 1_000_000).
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
+    if n < 1000 {
+        return format!("{n} B");
+    }
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1000.0 && i < UNITS.len() - 1 {
+        v /= 1000.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", UNITS[i])
 }
 
 fn build_root_cascade(root: &std::path::Path) -> OptionsCascade {

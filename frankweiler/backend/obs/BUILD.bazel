@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
 
@@ -26,4 +26,15 @@ rust_library(
         "@frankweiler_crates//:tracing-opentelemetry",
         "@frankweiler_crates//:tracing-subscriber",
     ],
+)
+
+# Runs this crate's inline `#[cfg(test)]` unit tests under `bazel test`.
+# Present (even with no tests today) so that the moment one is added it
+# actually runs, and to satisfy the repo-wide invariant enforced by
+# //tools/check_rust_unit_tests.sh.
+rust_test(
+    name = "frankweiler_obs_unittests",
+    size = "small",
+    crate = ":frankweiler_obs",
+    edition = "2021",
 )

@@ -235,7 +235,7 @@ table, and write it into the spec.)
 ### P1.5 Reframe the ingestion doc's shared-schema families
 
 Per the architecture doc's stance section: edit
-[`data_architecture_ingestion.md` §Shared schemas](data_architecture_ingestion.md#shared-schemas-across-similar-sources)
+[`data_architecture_ingestion_practices.md` §Shared schemas](data_architecture_ingestion_practices.md#shared-schemas-across-similar-sources)
 from *requirement* ("should be massaged into a shared canonical
 schema") to *convention with benefits* (the `grid_rows` profile and
 family shapes are what you opt into for the union grid, search, and

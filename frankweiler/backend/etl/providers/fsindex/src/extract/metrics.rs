@@ -13,6 +13,11 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 #[derive(Debug, Default)]
 pub struct WalkerCounters {
     pub dirs_visited: AtomicU64,
+    /// Directories whose own mtime matched the cache, so we enumerated
+    /// their children from the in-memory cache and skipped the
+    /// `readdir` syscall entirely (Unison's `unchangedChildren` fast
+    /// path). Children are still `lstat`ed to catch in-place edits.
+    pub dirs_readdir_skipped: AtomicU64,
     pub files_visited: AtomicU64,
     pub symlinks_visited: AtomicU64,
     pub files_reused: AtomicU64,

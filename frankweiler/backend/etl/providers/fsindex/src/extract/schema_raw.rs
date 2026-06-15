@@ -19,9 +19,12 @@
 //!    `files` carries the semantic content (kind, size, blake3,
 //!    symlink target, optional identity uuid) and `file_stats`
 //!    carries the cursor data Unison uses for fast-rescan decisions
-//!    (mtime, inode, dev). Both are entity tables in the framework
-//!    sense — each gets its own `_bookkeeping` sidecar via
-//!    [`dr::bookkeeping_ddl_for`]. This split is orthogonal to the
+//!    (mtime, inode, dev). Both are plain entity tables; fsindex runs
+//!    the bookkeeping-free write path (no `_bookkeeping` sidecars —
+//!    truncate-and-rebuild plus a single `dolt_commit` per scan is its
+//!    attempt model). Keeping the two tables *split* is also what
+//!    preserves cross-tree prolly dedup — see `STORAGE_NOTES.md` §3.
+//!    This split is orthogonal to the
 //!    framework's events-vs-bookkeeping split (which is about
 //!    attempt tracking, not about content-vs-cursor); see
 //!    [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
@@ -98,8 +101,10 @@
 //! `SELECT identity_uuid, COUNT(*) FROM files
 //!  WHERE identity_uuid IS NOT NULL
 //!  GROUP BY identity_uuid HAVING COUNT(*) > 1`. The path remains
-//! the PK; the UUID is a *secondary identity hint* indexed for
-//! move/fork queries.
+//! the PK; the UUID is a *secondary identity hint*. It is not
+//! indexed today (the column is almost entirely NULL — see
+//! `STORAGE_NOTES.md` §2); add an index if a real move/fork workload
+//! needs it.
 //!
 //! ## Directory tree-hash canonicalization
 //!
@@ -108,7 +113,7 @@
 //! The encoding for each child is:
 //!
 //! ```text
-//!   name_bytes ‖ 0x00 ‖ kind_tag ‖ child_blake3_hex_bytes ‖ 0x0a
+//!   name_bytes ‖ 0x00 ‖ kind_tag ‖ child_blake3 (32 raw bytes) ‖ 0x0a
 //! ```
 //!
 //! where `kind_tag` is one ASCII byte: `F` (file), `D` (directory),
@@ -150,7 +155,6 @@
 //! collapses to its struct definition.
 
 use frankweiler_etl::bulk::BulkUpsertable;
-use frankweiler_etl::doltlite_raw as dr;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
@@ -173,42 +177,60 @@ pub const DATA_TABLES: &[&str] = &["files", "file_stats", "scan_meta"];
 /// Columns:
 /// - `id` — root-relative posix path. Primary key. See "PK choice"
 ///   in the module docstring.
-/// - `kind` — `'file'` | `'dir'` | `'symlink'`. Indexed.
+/// - `kind` — `'file'` | `'dir'` | `'symlink'`. Not indexed (no column
+///   is — see the "ZERO secondary indexes" note above `FileRow`).
 /// - `size` — bytes. For a file, the byte length of its contents.
 ///   For a directory, the sum of the sizes of its visible children
 ///   (recursive). For a symlink, the byte length of the link
 ///   target.
-/// - `blake3` — lowercase hex of the blake3 hash. For files: of
-///   the file bytes. For directories: of the canonical tree
-///   encoding (see "Directory tree-hash canonicalization" in the
-///   module docstring). For symlinks: of the link target bytes
-///   (so a retarget registers as a content change). Indexed;
-///   powers within-scan duplicate detection and across-scan /
-///   across-branch move detection.
+/// - `blake3` — the raw 32-byte blake3 digest, stored as a `BLOB`
+///   (not 64-char hex — saves ~35 B/row; see `STORAGE_NOTES.md` §2).
+///   For files: of the file bytes. For directories: of the canonical
+///   tree encoding (see "Directory tree-hash canonicalization" in the
+///   module docstring). For symlinks: of the link target bytes (so a
+///   retarget registers as a content change). Not indexed; dup
+///   detection (`GROUP BY blake3`) and cross-branch move/sync diffs are
+///   whole-corpus scans done in RAM, not point lookups — see the
+///   "ZERO secondary indexes" note above `FileRow`.
 /// - `symlink_target` — link target string. NULL unless
 ///   `kind = 'symlink'`.
 /// - `identity_uuid` — directory breadcrumb UUID. NULL for
-///   unstamped directories and for every file/symlink row.
-///   Indexed; powers fork detection
+///   unstamped directories and for every file/symlink row. Not
+///   indexed. Fork detection
 ///   (`GROUP BY identity_uuid HAVING COUNT(*) > 1`) and
-///   move-across-rename detection
-///   (`JOIN … USING(identity_uuid)`).
+///   move-across-rename detection (`JOIN … USING(identity_uuid)`) run
+///   in RAM after a full load.
 pub const FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS files (
     id              TEXT PRIMARY KEY,
     kind            TEXT NOT NULL,
     size            INTEGER NOT NULL,
-    blake3          TEXT NOT NULL,
+    blake3          BLOB NOT NULL,
     symlink_target  TEXT NULL,
     identity_uuid   TEXT NULL
 )";
 
-pub const FILES_BY_BLAKE3_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS files_by_blake3 ON files(blake3)";
-
-pub const FILES_BY_KIND_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS files_by_kind ON files(kind)";
-
-pub const FILES_BY_IDENTITY_UUID_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS files_by_identity_uuid ON files(identity_uuid)";
+// fsindex carries ZERO secondary indexes — only the two path primary
+// keys (on `files` and `file_stats`), which in dolt are the clustered
+// storage order and the row identity, not optional indexes.
+//
+// The raw store's only jobs are durable content-addressed storage and
+// prolly-tree diff between commits/branches; neither touches a secondary
+// index (diff walks the PK-ordered chunks). Every analysis query —
+// dup clustering (`GROUP BY blake3`), fork/move detection
+// (`GROUP BY identity_uuid`, JOIN on blake3), even the cross-branch sync
+// diff (`m.blake3 IS NOT l.blake3`) — is a whole-corpus scan, so the
+// intended workflow streams the full table into RAM once and indexes it
+// there. A secondary index only earns its keep for selective point
+// lookups against the on-disk store without a full scan, which this
+// store never does.
+//
+// And the cost is steep: each secondary index on a TEXT-PK table
+// re-stores the full path as its row back-reference (~130–166 B/row at
+// 60-char paths — about the size of the rest of the row), so even one
+// blake3 index nearly doubled the per-row footprint (215 MB → 346 MB at
+// 1M rows). See `STORAGE_NOTES.md` §2. Re-adding any of these is a
+// one-line `CREATE INDEX` if a SQL-side, too-big-for-RAM workload ever
+// materializes.
 
 /// One row in [`FILES_DDL`].
 #[derive(Debug, Clone)]
@@ -216,7 +238,9 @@ pub struct FileRow {
     pub id: String,
     pub kind: FileKind,
     pub size: i64,
-    pub blake3: String,
+    /// Raw 32-byte blake3 digest, stored as a BLOB. See
+    /// [`super::hash::Blake3`].
+    pub blake3: super::hash::Blake3,
     pub symlink_target: Option<String>,
     pub identity_uuid: Option<String>,
 }
@@ -255,7 +279,7 @@ impl BulkUpsertable for FileRow {
         q.bind(&self.id)
             .bind(self.kind.as_str())
             .bind(self.size)
-            .bind(&self.blake3)
+            .bind(&self.blake3[..])
             .bind(self.symlink_target.as_deref())
             .bind(self.identity_uuid.as_deref())
     }
@@ -476,23 +500,32 @@ impl BulkUpsertable for ScanMetaRow {
 // Composer
 // ─────────────────────────────────────────────────────────────────────
 
-/// Full DDL block. Splices in `<t>_bookkeeping` sidecars for every
-/// entity table via [`dr::bookkeeping_ddl_for`], matching the
-/// pattern every other provider uses. The bookkeeping sidecars are
-/// the framework's attempt-tracking layer (`attempt_count`,
-/// `last_attempt_at`, `last_error`); they're orthogonal to the
-/// content-vs-cursor split between `files` and `file_stats`.
+/// Full DDL block.
+///
+/// **No `<t>_bookkeeping` sidecars.** Unlike every other provider,
+/// fsindex deliberately omits the framework's per-row attempt-tracking
+/// sidecars (`attempt_count`, `last_attempt_at`, `last_error`). Two
+/// reasons:
+///
+/// 1. **There's no retry/attempt model to track.** A `read(2)` either
+///    succeeds or it's a real error; there's no flaky upstream API to
+///    re-poll. Unreadable entries are logged + counted (`read_errors`,
+///    `stat_errors` in the `fsindex_phase_breakdown` event), which is
+///    all the durable evidence we need.
+/// 2. **They double the row count.** Each sidecar mirrors its parent
+///    1:1, so keeping them roughly doubles the bytes written and
+///    committed at the tens-of-millions-of-rows design scale — and the
+///    extra prolly-tree novelty makes `dolt_gc` (the only thing that
+///    reclaims write-amplification) materially harder on a full disk.
+///
+/// fsindex therefore writes through
+/// [`frankweiler_etl::bulk::bulk_upsert_entity_in_tx`] (no bookkeeping
+/// stamp) and resets via a bookkeeping-free truncate (see
+/// `extract::db::RawDb::reset`).
 pub fn full_ddl() -> Vec<String> {
-    let mut out: Vec<String> = vec![
+    vec![
         FILES_DDL.to_string(),
-        FILES_BY_BLAKE3_INDEX_DDL.to_string(),
-        FILES_BY_KIND_INDEX_DDL.to_string(),
-        FILES_BY_IDENTITY_UUID_INDEX_DDL.to_string(),
         FILE_STATS_DDL.to_string(),
         SCAN_META_DDL.to_string(),
-    ];
-    for table in DATA_TABLES {
-        out.push(dr::bookkeeping_ddl_for(table));
-    }
-    out
+    ]
 }

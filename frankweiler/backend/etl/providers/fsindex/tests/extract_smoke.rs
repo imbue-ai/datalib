@@ -52,7 +52,9 @@ async fn dump_files(db_path: &Path) -> String {
         let id: String = r.try_get("id").unwrap();
         let kind: String = r.try_get("kind").unwrap();
         let size: i64 = r.try_get("size").unwrap();
-        let blake3: String = r.try_get("blake3").unwrap();
+        // blake3 is a 32-byte BLOB; render as hex for the snapshot.
+        let blake3_bytes: Vec<u8> = r.try_get("blake3").unwrap();
+        let blake3: String = blake3_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let symlink_target: Option<String> = r.try_get("symlink_target").unwrap();
         let identity_uuid: Option<String> = r.try_get("identity_uuid").unwrap();
         out.push_str(&format!(
@@ -123,6 +125,17 @@ fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
     }
 }
 
+/// Read a directory row's `identity_uuid` from the `files` table.
+async fn dir_identity_uuid(db_path: &Path, id: &str) -> Option<String> {
+    let db = RawDb::open(db_path).await.unwrap();
+    let row = sqlx::query("SELECT identity_uuid FROM files WHERE id = ? AND kind = 'dir'")
+        .bind(id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    row.try_get::<Option<String>, _>("identity_uuid").unwrap()
+}
+
 #[tokio::test]
 async fn initial_scan_and_incremental_rescan() {
     let tmp = TempDir::new().unwrap();
@@ -138,7 +151,7 @@ async fn initial_scan_and_incremental_rescan() {
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
-    assert_eq!(summary_a.entries_reused, 0, "nothing cached yet");
+    assert_eq!(summary_a.files_reused, 0, "nothing cached yet");
     assert_eq!(
         summary_a.stamped_directories, 0,
         "no_stamp=true, no breadcrumbs written"
@@ -170,12 +183,19 @@ async fn initial_scan_and_incremental_rescan() {
         assert_eq!(summary_a2.entries_scanned, 7);
         // 4 files (hello, empty, another, nested) reuse from cache.
         assert_eq!(
-            summary_a2.entries_reused, 4,
+            summary_a2.files_reused, 4,
             "fast-rescan cache should reuse every unchanged file's blake3; \
              got summary {summary_a2:?}",
         );
-        // Symlink (1) + dirs (2) always recompute. = 3 rehashes.
-        assert_eq!(summary_a2.entries_rehashed, 3);
+        // No file content is re-read on an unchanged rescan; the symlink
+        // and the two dirs recompute their hash for free (no bytes).
+        assert_eq!(summary_a2.files_hashed, 0, "no file content re-read");
+        assert_eq!(summary_a2.dirs, 2);
+        assert_eq!(summary_a2.symlinks, 1);
+        assert_eq!(
+            summary_a2.bytes_hashed, 0,
+            "zero bytes hashed when nothing changed"
+        );
     }
 
     // ── Phase B: edits + incremental rescan ─────────────────────────
@@ -206,8 +226,13 @@ async fn initial_scan_and_incremental_rescan() {
     #[cfg(unix)]
     {
         assert_eq!(summary_b.entries_scanned, 7);
-        assert_eq!(summary_b.entries_reused, 1);
-        assert_eq!(summary_b.entries_rehashed, 6);
+        // another.txt is the only unchanged file → reused.
+        assert_eq!(summary_b.files_reused, 1);
+        // hello.txt (mtime bump), nested.txt (content), added.txt (new)
+        // → 3 files actually re-read and hashed.
+        assert_eq!(summary_b.files_hashed, 3);
+        assert_eq!(summary_b.dirs, 2);
+        assert_eq!(summary_b.symlinks, 1);
     }
 
     let dump_b = dump_files(&db_path).await;
@@ -217,4 +242,71 @@ async fn initial_scan_and_incremental_rescan() {
         "empty.txt was deleted but row survives: \n{dump_b}",
     );
     insta::assert_snapshot!("after_edits", dump_b);
+}
+
+/// Stamping is the same streaming scan plus a post-write enrichment
+/// pass: a dir whose cascade enables `stamp_me_with_uuid` gets a UUID
+/// breadcrumb written into it and its `files.identity_uuid` set. A
+/// second scan is idempotent — it reuses the existing breadcrumb and
+/// writes no new ones. This is the path that used to be the untested
+/// `legacy_inmemory` branch.
+#[tokio::test]
+async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("tree");
+    fs::create_dir(&root).unwrap();
+    let db_path = tmp.path().join("fsindex.doltlite_db");
+
+    // `subdir` opts into stamping via its own `.fsindex.yaml`; the rest
+    // of the tree does not.
+    write(&root.join("hello.txt"), b"hello world\n");
+    write(
+        &root.join("subdir/.fsindex.yaml"),
+        b"stamp_me_with_uuid: true\n",
+    );
+    write(&root.join("subdir/nested.txt"), b"nested");
+
+    let mut opts = fetch_opts(&db_path, &root);
+    opts.no_stamp = false;
+    let summary = extract::fetch(opts).await.expect("stamping fetch");
+    assert_eq!(summary.errors, 0);
+    assert_eq!(
+        summary.stamped_directories, 1,
+        "exactly `subdir` should be newly stamped"
+    );
+
+    // The breadcrumb file now carries an identity block...
+    let breadcrumb = fs::read_to_string(root.join("subdir/.fsindex.yaml")).unwrap();
+    assert!(
+        breadcrumb.contains("identity:") && breadcrumb.contains("uuid:"),
+        "breadcrumb missing identity block:\n{breadcrumb}",
+    );
+    assert!(
+        breadcrumb.contains("stamp_me_with_uuid:"),
+        "breadcrumb must preserve the user's stamp_me_with_uuid key:\n{breadcrumb}",
+    );
+
+    // ...and the `subdir` row carries the matching identity_uuid, while
+    // an un-opted-in dir (root) stays NULL.
+    let stamped = dir_identity_uuid(&db_path, "subdir").await;
+    assert!(stamped.is_some(), "subdir row should carry identity_uuid");
+    assert_eq!(
+        dir_identity_uuid(&db_path, "").await,
+        None,
+        "root opted out, so its identity_uuid stays NULL"
+    );
+
+    // Second scan: idempotent. No new breadcrumb, same UUID reused.
+    let mut opts2 = fetch_opts(&db_path, &root);
+    opts2.no_stamp = false;
+    let summary2 = extract::fetch(opts2).await.expect("rescan");
+    assert_eq!(
+        summary2.stamped_directories, 0,
+        "rescan reuses the existing breadcrumb — nothing newly stamped"
+    );
+    assert_eq!(
+        dir_identity_uuid(&db_path, "subdir").await,
+        stamped,
+        "rescan must keep the same identity_uuid"
+    );
 }
