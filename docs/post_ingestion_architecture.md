@@ -410,7 +410,7 @@ while sync runs — what do we promise?
 If `grid_rows` is a profile rather than the output, does its curated
 `kind` taxonomy stay curated or become open-vocabulary? The ingestion
 doc's
-[shared-schema families](data_architecture_ingestion.md#shared-schemas-across-similar-sources)
+[shared-schema families](data_architecture_ingestion_practices.md#shared-schemas-across-similar-sources)
 section should be reframed from requirement to convention once this
 doc's stance lands.
 
