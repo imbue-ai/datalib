@@ -38,7 +38,7 @@ Args (positional):
                       `signal-make-fixture` against it to materialize
                       an encrypted snapshot dir for extract to walk.
                       AEP is the public 64-zero fixture passphrase
-                      (`SIGNAL_PASSPHRASE` env var set below).
+                      (`SIGNAL_BACKUP_PASSPHRASE` env var set below).
     15: whatsapp_tng  JSON spec for the TNG WhatsApp backup. Same
                       idea: we expand to a `WhatsApp/` backup dir
                       under the workspace, with root key = 64 zeros
@@ -269,7 +269,7 @@ def main() -> int:
     # genrule's env.
     extract_env = {
         **os.environ,
-        "SIGNAL_PASSPHRASE": FIXTURE_SIGNAL_AEP,
+        "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }
     extract_argv = [
@@ -347,7 +347,7 @@ def _yaml(
             # The signal extractor needs `snapshot_dir` (where the
             # `signal-backup-*` subdirs live) in addition to the raw
             # store under `input_path`. AEP comes from the
-            # SIGNAL_PASSPHRASE env var injected by main().
+            # SIGNAL_BACKUP_PASSPHRASE env var injected by main().
             if signal_snapshot_root is not None:
                 lines.append("    sync:")
                 lines.append(f"      snapshot_dir: {signal_snapshot_root}")

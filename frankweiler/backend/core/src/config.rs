@@ -465,7 +465,7 @@ pub struct SignalSync {
     /// the raw doltlite store and defaults to `${data_root}/raw/<name>`.
     pub snapshot_dir: PathBuf,
     /// Env var holding the AEP (Account Entropy Pool). Defaults to
-    /// `SIGNAL_PASSPHRASE` when omitted. Overridable so a multi-account
+    /// `SIGNAL_BACKUP_PASSPHRASE` when omitted. Overridable so a multi-account
     /// setup can scope per-account secrets at the shell layer.
     #[serde(default)]
     pub aep_env_var: Option<String>,

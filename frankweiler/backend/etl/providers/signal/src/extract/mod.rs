@@ -2,7 +2,7 @@
 //!
 //! Discovers the latest `signal-backup-*` snapshot under
 //! `opts.snapshot_root`, decrypts it with the AEP read from
-//! `opts.aep_env_var` (default `SIGNAL_PASSPHRASE`), iterates frames,
+//! `opts.aep_env_var` (default `SIGNAL_BACKUP_PASSPHRASE`), iterates frames,
 //! and UPSERTs them into the doltlite raw store. One backup snapshot
 //! per fetch — older snapshots are ignored; cleaning them up is the
 //! user's problem.
@@ -27,7 +27,7 @@ use tracing::{info, warn};
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
-const DEFAULT_AEP_ENV: &str = "SIGNAL_PASSPHRASE";
+const DEFAULT_AEP_ENV: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -46,9 +46,9 @@ pub struct FetchOptions {
     /// files tree (e.g. on a different volume) without symlinking.
     pub files_root: Option<PathBuf>,
     /// Name of the env var holding the AEP. Defaults to
-    /// `SIGNAL_PASSPHRASE`. Letting the user override means a single
+    /// `SIGNAL_BACKUP_PASSPHRASE`. Letting the user override means a single
     /// process can keep AEPs for multiple Signal accounts segregated
-    /// at the shell level (`SIGNAL_PASSPHRASE_PERSONAL`, …).
+    /// at the shell level (`SIGNAL_BACKUP_PASSPHRASE_PERSONAL`, …).
     pub aep_env_var: Option<String>,
     pub progress: Progress,
     pub control: ExtractControl,

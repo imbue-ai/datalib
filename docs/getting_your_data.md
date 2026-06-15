@@ -45,6 +45,8 @@ adb pull /sdcard/Signal/SignalBackups ~/backups/SignalBackups
 ```
 
 You'll also need the 30-digit passphrase shown when you enabled backups.
+The provider reads it from the `SIGNAL_BACKUP_PASSPHRASE` env var (override
+per source with `aep_env_var`).
 
 ## WhatsApp
 
@@ -54,6 +56,10 @@ phone. Pull them off the device over `adb`:
 ```sh
 adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/ ~/backups/WhatsApp/
 ```
+
+You'll also need the 64-character hex backup key. The provider reads it
+from the `WHATSAPP_BACKUP_DECRYPTION_KEY` env var (override per source with
+`key_env_var`).
 
 ## Other sources
 

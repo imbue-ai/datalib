@@ -112,7 +112,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // SAFETY: bazel test runs each test target in a fresh process, so
     // mutating the env here is hermetic — no other test sees it.
     unsafe {
-        std::env::set_var("SIGNAL_PASSPHRASE", FIXTURE_AEP);
+        std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
 
     let summary = extract::fetch(FetchOptions {
@@ -120,7 +120,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         db: None,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
-        aep_env_var: None, // defaults to SIGNAL_PASSPHRASE
+        aep_env_var: None, // defaults to SIGNAL_BACKUP_PASSPHRASE
         progress: Progress::noop(),
         control: ExtractControl::default(),
     })

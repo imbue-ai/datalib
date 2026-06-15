@@ -1,0 +1,220 @@
+# Boilerplate config enumerating EVERY supported data source.
+#
+# This is a reference, not a turn-key config. It lists one stanza per
+# source `type` with realistic-looking defaults for paths, hostnames,
+# and identifiers so you can copy the stanza you need and fill in your
+# own values. Running it as-is would try to sync everything at once —
+# most stanzas need credentials (via latchkey), a backup pulled off a
+# phone, or an export on disk. Delete the sources you don't want, or set
+# `enabled: false` on them.
+#
+# Sources that support more than one input mode include a stanza for
+# each: `email` (JMAP server vs. Google Takeout .mbox) and `carddav`
+# contacts (CalDAV server vs. local .vcf files).
+#
+# REDACT: several stanzas below carry device-history secrets (yolink) or
+# would, if filled in, hold tokens/keys. Never commit a real one.
+
+data_root: ~/mixed_up_files  # Base dir; everything is written under here. `~` is expanded.
+
+# Global default applied to every source unless overridden per-source.
+blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
+
+sources:
+  # --- Claude / Anthropic ---------------------------------------------------
+
+  # Claude.ai conversation mirror over the web API. Credentials come from
+  # latchkey at runtime (see first_time_user.md). Bare `sync: {}` fetches
+  # every conversation across every org; the knobs bound incremental work.
+  - name: claude-api
+    type: claude_api
+    sync:
+      refresh_window_days: 7              # treat anything older than this as cold
+      refresh_most_recent_n_chat_count: 3 # force-refetch top-N by updated_at
+      # conv_uuids:                       # or: fetch only these (UUIDs or paste-able URLs)
+      #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
+
+  # Translate-only mode for a Claude data export already on disk. No
+  # network, no credentials — just points at the unpacked export.
+  - name: claude-export
+    type: claude_export
+    input_path: ~/backups/claude-export
+
+  # --- ChatGPT --------------------------------------------------------------
+
+  # ChatGPT conversation mirror. Credentials via latchkey.
+  - name: chatgpt
+    type: chatgpt_api
+    sync:
+      refresh_window_days: 7
+      max_pages: 20        # pagination cap on listing
+      limit: 100           # records per page
+      sleep_between: 0.5   # seconds between requests (be polite)
+      # conv_uuids:
+      #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789
+
+  # --- Slack ----------------------------------------------------------------
+
+  # Slack workspace mirror. Credentials via latchkey. Omit `channels`
+  # (or set `all_channels: true`) to mirror every channel the account sees.
+  - name: slack
+    type: slack_api
+    blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
+    sync:
+      media: true            # pull file attachments into blobs
+      all_channels: false
+      channels:
+        - project-data-liberation
+        - general
+      # refresh_window_days: 30
+
+  # --- GitHub ---------------------------------------------------------------
+
+  # GitHub PR mirror. Credentials via latchkey. With `pull_requests` set,
+  # discovery is skipped and only those PRs are fetched; entries are
+  # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
+  - name: github
+    type: github_api
+    sync:
+      refresh_window_days: 30
+      max_prs: 50
+      pull_requests:
+        - imbue-ai/mixed_up_files#40
+        - https://github.com/imbue-ai/mixed_up_files/pull/41
+
+  # --- GitLab ---------------------------------------------------------------
+
+  # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
+  # are `namespace/project!IID` or a gitlab.com MR URL.
+  - name: gitlab
+    type: gitlab_api
+    sync:
+      refresh_window_days: 30
+      max_mrs: 50
+      merge_requests:
+        - mygroup/myproject!100
+        - https://gitlab.com/mygroup/myproject/-/merge_requests/101
+
+  # --- Notion ---------------------------------------------------------------
+
+  # Notion mirror. Credentials via latchkey. At least one of `inbox`
+  # (enabled) or `subtrees.pages` must be present.
+  - name: notion
+    type: notion_api
+    sync:
+      refresh_window_days: 7
+      inbox:
+        enabled: true
+        mirror_referenced_pages: true
+      subtrees:
+        max_pages: 200
+        pages:
+          - https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef
+
+  # --- Email: two input modes -----------------------------------------------
+
+  # Mode A — JMAP server (Fastmail or any RFC 8620/8621 server). The
+  # presence of `sync:` selects JMAP mode; `hostname` is required.
+  # Credentials via latchkey.
+  - name: fastmail
+    type: email
+    sync:
+      hostname: api.fastmail.com
+      # account_id: u12345678        # defaults to the session's primary mail account
+      only_mailbox_ids: []           # empty = every mailbox the account exposes
+      full_resync: false
+
+  # Mode B — Google Takeout .mbox on disk. No `sync:` block → translate-only
+  # mbox mode, reading the file at `input_path`. The `mbox:` block just
+  # labels the synthesized account row.
+  - name: gmail-takeout
+    type: email
+    input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+    mbox:
+      account_id: gmail_alice
+      display_name: Alice's Gmail
+      email_address: alice@gmail.com
+      is_personal: true
+
+  # --- Contacts (CardDAV): two input modes ----------------------------------
+
+  # Mode A — CalDAV/CardDAV server. The presence of `sync:` selects server
+  # mode; `server_url` is required. Credentials via latchkey. Omit
+  # `addressbooks` to sync every addressbook under the principal.
+  - name: icloud-contacts
+    type: carddav
+    sync:
+      server_url: https://contacts.icloud.com/
+      addressbooks:
+        - Contacts
+
+  # Mode B — local vCard files. No `sync:` block → reads `.vcf` files from
+  # the directory at `input_path`.
+  - name: vcard-contacts
+    type: carddav
+    input_path: ~/backups/contacts_vcf
+
+  # --- Beeper ---------------------------------------------------------------
+
+  # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
+  # chat networks to ingest (at least one required).
+  - name: beeper
+    type: beeper
+    sync:
+      sources:
+        - signal
+        - googlechat
+      media: true
+      period: month   # month (default) | day | year | all
+      # beeper_data_dir: ~/Library/Application Support/BeeperTexts  # macOS default
+
+  # --- Perseus Digital Library ----------------------------------------------
+
+  # TEI editions from PerseusDL/canonical-greekLit. Bare `sync: {}` pulls
+  # the default Thucydides Histories pair; list `files` to pick others.
+  - name: perseus
+    type: perseus
+    input_path: ~/backups/perseus
+    sync:
+      files: []
+
+  # --- YoLink sensors -------------------------------------------------------
+
+  # Per-device CSV history. `devices` is required and validated: `kind`
+  # must be `temperature_humidity` or `watermeter`, `start` is YYYY-MM-DD,
+  # and both IDs are exactly 32 lowercase-hex chars.
+  # REDACT: family_device_id + device_udid are non-rotatable read secrets.
+  - name: yolink
+    type: yolink
+    sync:
+      window_days: 7
+      overlap_minutes: 5
+      devices:
+        - name: basement_freezer
+          kind: temperature_humidity
+          start: 2026-01-01
+          family_device_id: 0123456789abcdef0123456789abcdef
+          device_udid: fedcba9876543210fedcba9876543210
+
+  # --- Signal (Android backup) ----------------------------------------------
+
+  # Decrypts the newest `signal-backup-*` snapshot under `snapshot_dir`
+  # using the AEP read from the named env var at extract time. See
+  # docs/getting_your_data.md for pulling the backup off the phone.
+  - name: signal
+    type: signal_backup
+    sync:
+      snapshot_dir: ~/backups/SignalBackups
+      aep_env_var: SIGNAL_BACKUP_PASSPHRASE   # default if omitted
+      period: month
+
+  # --- WhatsApp (Android crypt15 backup) ------------------------------------
+
+  # Points at the `WhatsApp/` dir pulled off the phone (containing
+  # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
+  # key is hex-encoded in the named env var.
+  - name: whatsapp
+    type: whatsapp_backup
+    sync:
+      backup_dir: ~/backups/WhatsApp
+      key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted

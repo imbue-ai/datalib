@@ -1,0 +1,4 @@
+# Example sync configs, surfaced as Bazel targets so a parse test can
+# assert they stay in sync with the `frankweiler_core::config` schema
+# (which is `deny_unknown_fields`, so any drift breaks the load).
+exports_files(glob(["*.yaml"]))
