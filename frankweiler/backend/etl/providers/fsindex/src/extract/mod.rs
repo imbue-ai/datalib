@@ -5,9 +5,14 @@
 //! producer that pushes row batches over an mpsc channel to a writer
 //! task, periodically emit progress + metrics, then write scan_meta.
 //!
-//! Stamping uses a legacy in-memory path (no producer-consumer) — it
-//! mutates per-row `identity_uuid` after the walk so it can't stream
-//! today. Toggle via `opts.no_stamp` or `--no-stamp` on the CLI.
+//! There is **one** scan engine — the streaming producer/consumer
+//! pipeline. Stamping (writing UUID breadcrumb files into the tree;
+//! opt-in via `stamp_me_with_uuid` in a `.fsindex.yaml`) never swaps
+//! the engine: it runs as a small post-write enrichment pass over the
+//! directory rows the stream already wrote, dropping breadcrumbs and
+//! `UPDATE`-ing `identity_uuid` in the same pre-commit working tree.
+//! Toggle the pass with `opts.no_stamp` / `--no-stamp`; the scan
+//! itself — and its progress reporting — is identical either way.
 //!
 //! See [`docs/data_architecture_ingestion.md`](../../../../../docs/data_architecture_ingestion.md)
 //! §"Commit lifecycle" — `fetch` returns and the caller decides
@@ -37,7 +42,7 @@ pub use db::RawDb;
 
 use metrics::WalkerCounters;
 use options::{EffectiveOptions, FsindexYaml, Identity, OptionsCascade};
-use schema_raw::{FileKind, FileRow, FileStatsRow, ScanMetaRow, StampKind};
+use schema_raw::{FileRow, FileStatsRow, ScanMetaRow, StampKind};
 
 /// One batch sent over the producer→consumer channel. files[i] and
 /// stats[i] always match by id; they're emitted as a pair.
@@ -114,28 +119,34 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
 
-    let (summary, walker_errors, counters, phase_walk, phase_write_total) = if opts.no_stamp {
-        streaming_pipeline(
-            opts.root.clone(),
-            default_stamp_kind,
-            prev_stats,
-            prev_file_blake3s,
-            db.clone(),
-            now.clone(),
-            opts.progress.clone(),
-        )
-        .await?
-    } else {
-        legacy_inmemory(
-            &opts,
-            default_stamp_kind,
-            prev_stats,
-            prev_file_blake3s,
-            &db,
-            &now,
-        )
-        .await?
-    };
+    let (mut summary, walker_errors, counters, phase_walk, phase_write_total) = streaming_pipeline(
+        opts.root.clone(),
+        default_stamp_kind,
+        prev_stats,
+        prev_file_blake3s,
+        db.clone(),
+        now.clone(),
+        opts.progress.clone(),
+    )
+    .await?;
+
+    // Stamping is a post-write enrichment pass, never a separate scan
+    // engine. The stream has already written every row; here we walk
+    // the directory rows and, for any dir whose `.fsindex.yaml` cascade
+    // opts in, drop a UUID breadcrumb and UPDATE its `identity_uuid` —
+    // all in the same pre-commit working tree, so it lands in the one
+    // scan commit the orchestrator makes.
+    if !opts.no_stamp {
+        summary.stamped_directories = stamp_directories(&db, &opts.root).await?;
+        if summary.stamped_directories > 0 {
+            warn!(
+                event = "fsindex_stamping_active",
+                stamped = summary.stamped_directories,
+                message =
+                    "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
+            );
+        }
+    }
 
     // ── scan_meta ────────────────────────────────────────────────────
     let root_cascade = build_root_cascade(&opts.root);
@@ -385,119 +396,56 @@ async fn streaming_pipeline(
     ))
 }
 
-/// Legacy collect-all-then-write path. Used when stamping is enabled
-/// because stamping mutates each dir's `identity_uuid` after the walk.
-async fn legacy_inmemory(
-    opts: &FetchOptions,
-    default_stamp_kind: StampKind,
-    prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, hash::Blake3>,
-    db: &RawDb,
-    now: &str,
-) -> Result<(
-    FetchSummary,
-    Vec<walker::WalkerError>,
-    Arc<WalkerCounters>,
-    Duration,
-    Duration,
-)> {
-    let counters = Arc::new(WalkerCounters::default());
-    let walk_start = Instant::now();
-    let walker = walker::Walker::new(
-        &opts.root,
-        &prev_stats,
-        &prev_file_blake3s,
-        default_stamp_kind,
-    );
-    let (mut scan_results, walker_errors, walker_summary) = {
-        let mut out: Vec<walker::ScanResult> = Vec::new();
-        let (errs, summ) = walker.collect_streaming(&counters, |batch| {
-            out.extend(batch);
-            Ok(())
-        })?;
-        (out, errs, summ)
-    };
-    let phase_walk = walk_start.elapsed();
-
-    let stamped = stamp_directories(&opts.root, &mut scan_results).await?;
-    if stamped > 0 {
-        warn!(
-            event = "fsindex_stamping_active",
-            stamped = stamped,
-            message =
-                "stamping is on — set `--no-stamp` or remove `stamp_me_with_uuid: true` to disable",
-        );
-    }
-
-    let entries_scanned = scan_results.len();
-    let files: Vec<_> = scan_results.iter().map(|r| r.file_row.clone()).collect();
-    let stats: Vec<_> = scan_results.iter().map(|r| r.stat_row.clone()).collect();
-    let write_start = Instant::now();
-    db.write_batch(&files, &stats, now).await?;
-    let phase_write_total = write_start.elapsed();
-
-    let summary = FetchSummary {
-        entries_scanned,
-        entries_rehashed: walker_summary.rehashed,
-        entries_reused: walker_summary.reused,
-        stamped_directories: stamped,
-        errors: 0,
-    };
-
-    Ok((
-        summary,
-        walker_errors,
-        counters,
-        phase_walk,
-        phase_write_total,
-    ))
-}
-
-async fn stamp_directories(
-    root: &std::path::Path,
-    scan_results: &mut [walker::ScanResult],
-) -> Result<usize> {
+/// Post-write stamping pass. The scan has already streamed every row
+/// into `files`; here we walk the directory rows and, for any dir
+/// whose `.fsindex.yaml` cascade enables `stamp_me_with_uuid`, ensure
+/// it carries a UUID breadcrumb and `UPDATE` its `identity_uuid`.
+///
+/// Returns the number of dirs **newly** stamped (a fresh breadcrumb
+/// written). Dirs that already carried an identity still get their
+/// `identity_uuid` column set, but don't count — matching the
+/// historical `stamped_directories` semantics.
+///
+/// Bounded by the directory count, so the extra SELECT + per-dir
+/// UPDATEs are cheap next to the file walk. Runs in the same working
+/// tree as the scan, so the stamps land in the orchestrator's single
+/// commit.
+async fn stamp_directories(db: &RawDb, root: &std::path::Path) -> Result<usize> {
     let mut count = 0_usize;
-    for sr in scan_results.iter_mut() {
-        if !matches!(sr.file_row.kind, FileKind::Dir) {
-            continue;
-        }
-        let dir = if sr.file_row.id.is_empty() {
+    for id in db.dir_ids().await? {
+        let dir = if id.is_empty() {
             root.to_path_buf()
         } else {
-            root.join(&sr.file_row.id)
+            root.join(&id)
         };
         let cascade = build_dir_cascade(root, &dir);
-        let eff = cascade.effective();
-        if !eff.stamp_me_with_uuid {
+        if !cascade.effective().stamp_me_with_uuid {
             continue;
         }
         let mut yaml = options::load_at(&dir)?.unwrap_or_default();
-        if let Some(id) = &yaml.identity {
-            sr.file_row.identity_uuid = Some(id.uuid.clone());
-            continue;
-        }
-        let uuid = new_uuid();
-        let stamped_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-        let originally_at = dir
-            .strip_prefix(root)
-            .ok()
-            .map(|p| p.to_string_lossy().into_owned());
-        yaml.identity = Some(Identity {
-            uuid: uuid.clone(),
-            stamped_at,
-            stamper_version: 1,
-            originally_at,
-        });
-        options::write_breadcrumb(&dir, &yaml)
-            .with_context(|| format!("write breadcrumb {}", dir.display()))?;
-        sr.file_row.identity_uuid = Some(uuid.clone());
-        info!(
-            event = "fsindex_stamped",
-            path = %dir.display(),
-            uuid = %uuid,
-        );
-        count += 1;
+        let uuid = match &yaml.identity {
+            Some(identity) => identity.uuid.clone(),
+            None => {
+                let uuid = new_uuid();
+                let stamped_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+                let originally_at = dir
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned());
+                yaml.identity = Some(Identity {
+                    uuid: uuid.clone(),
+                    stamped_at,
+                    stamper_version: 1,
+                    originally_at,
+                });
+                options::write_breadcrumb(&dir, &yaml)
+                    .with_context(|| format!("write breadcrumb {}", dir.display()))?;
+                info!(event = "fsindex_stamped", path = %dir.display(), uuid = %uuid);
+                count += 1;
+                uuid
+            }
+        };
+        db.set_identity_uuid(&id, &uuid).await?;
     }
     Ok(count)
 }

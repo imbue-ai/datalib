@@ -125,6 +125,17 @@ fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
     }
 }
 
+/// Read a directory row's `identity_uuid` from the `files` table.
+async fn dir_identity_uuid(db_path: &Path, id: &str) -> Option<String> {
+    let db = RawDb::open(db_path).await.unwrap();
+    let row = sqlx::query("SELECT identity_uuid FROM files WHERE id = ? AND kind = 'dir'")
+        .bind(id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    row.try_get::<Option<String>, _>("identity_uuid").unwrap()
+}
+
 #[tokio::test]
 async fn initial_scan_and_incremental_rescan() {
     let tmp = TempDir::new().unwrap();
@@ -219,4 +230,71 @@ async fn initial_scan_and_incremental_rescan() {
         "empty.txt was deleted but row survives: \n{dump_b}",
     );
     insta::assert_snapshot!("after_edits", dump_b);
+}
+
+/// Stamping is the same streaming scan plus a post-write enrichment
+/// pass: a dir whose cascade enables `stamp_me_with_uuid` gets a UUID
+/// breadcrumb written into it and its `files.identity_uuid` set. A
+/// second scan is idempotent — it reuses the existing breadcrumb and
+/// writes no new ones. This is the path that used to be the untested
+/// `legacy_inmemory` branch.
+#[tokio::test]
+async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path().join("tree");
+    fs::create_dir(&root).unwrap();
+    let db_path = tmp.path().join("fsindex.doltlite_db");
+
+    // `subdir` opts into stamping via its own `.fsindex.yaml`; the rest
+    // of the tree does not.
+    write(&root.join("hello.txt"), b"hello world\n");
+    write(
+        &root.join("subdir/.fsindex.yaml"),
+        b"stamp_me_with_uuid: true\n",
+    );
+    write(&root.join("subdir/nested.txt"), b"nested");
+
+    let mut opts = fetch_opts(&db_path, &root);
+    opts.no_stamp = false;
+    let summary = extract::fetch(opts).await.expect("stamping fetch");
+    assert_eq!(summary.errors, 0);
+    assert_eq!(
+        summary.stamped_directories, 1,
+        "exactly `subdir` should be newly stamped"
+    );
+
+    // The breadcrumb file now carries an identity block...
+    let breadcrumb = fs::read_to_string(root.join("subdir/.fsindex.yaml")).unwrap();
+    assert!(
+        breadcrumb.contains("identity:") && breadcrumb.contains("uuid:"),
+        "breadcrumb missing identity block:\n{breadcrumb}",
+    );
+    assert!(
+        breadcrumb.contains("stamp_me_with_uuid:"),
+        "breadcrumb must preserve the user's stamp_me_with_uuid key:\n{breadcrumb}",
+    );
+
+    // ...and the `subdir` row carries the matching identity_uuid, while
+    // an un-opted-in dir (root) stays NULL.
+    let stamped = dir_identity_uuid(&db_path, "subdir").await;
+    assert!(stamped.is_some(), "subdir row should carry identity_uuid");
+    assert_eq!(
+        dir_identity_uuid(&db_path, "").await,
+        None,
+        "root opted out, so its identity_uuid stays NULL"
+    );
+
+    // Second scan: idempotent. No new breadcrumb, same UUID reused.
+    let mut opts2 = fetch_opts(&db_path, &root);
+    opts2.no_stamp = false;
+    let summary2 = extract::fetch(opts2).await.expect("rescan");
+    assert_eq!(
+        summary2.stamped_directories, 0,
+        "rescan reuses the existing breadcrumb — nothing newly stamped"
+    );
+    assert_eq!(
+        dir_identity_uuid(&db_path, "subdir").await,
+        stamped,
+        "rescan must keep the same identity_uuid"
+    );
 }

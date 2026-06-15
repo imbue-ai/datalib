@@ -218,6 +218,33 @@ impl RawDb {
         Ok(started.elapsed())
     }
 
+    /// Root-relative ids of every directory row, in id order. Used by
+    /// the post-write stamping pass to decide which dirs need a UUID
+    /// breadcrumb — bounded by the directory count, which is tiny next
+    /// to the file count.
+    pub async fn dir_ids(&self) -> Result<Vec<String>> {
+        let ids =
+            sqlx::query_scalar::<_, String>("SELECT id FROM files WHERE kind = 'dir' ORDER BY id")
+                .fetch_all(&self.pool)
+                .await
+                .context("select dir ids")?;
+        Ok(ids)
+    }
+
+    /// Stamp one already-written directory row with its breadcrumb
+    /// UUID. The row was written by the streaming pass; this is the
+    /// explicit enrichment UPDATE the stamping pass issues after the
+    /// breadcrumb file lands (see [`super`] stamping notes).
+    pub async fn set_identity_uuid(&self, id: &str, uuid: &str) -> Result<()> {
+        sqlx::query("UPDATE files SET identity_uuid = ? WHERE id = ?")
+            .bind(uuid)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("update files.identity_uuid")?;
+        Ok(())
+    }
+
     /// Upsert the (single) `scan_meta` row for the source.
     pub async fn write_scan_meta(&self, row: &ScanMetaRow, _now: &str) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin scan_meta tx")?;
