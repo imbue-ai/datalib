@@ -8,7 +8,7 @@ This document covers what's load-bearing and provider-specific.
 For the framework contracts every provider honors —
 schema-first, bulk-upsert chokepoints, commit lifecycle,
 bookkeeping sidecars, `--reset-and-redownload` semantics —
-see [`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md).
+see [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md).
 For the row-level schema, see
 [`src/extract/schema_raw.rs`](src/extract/schema_raw.rs).
 
@@ -43,7 +43,7 @@ split:
 
 This split is orthogonal to the framework's events-vs-bookkeeping
 split (see
-[`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md)
+[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 §"Events vs bookkeeping"). Both `files` and `file_stats` are
 **entity** tables in the framework's sense, and each gets its own
 `<t>_bookkeeping` sidecar via `dr::bookkeeping_ddl_for` for
@@ -260,6 +260,35 @@ WHERE m.blake3 IS NOT n.blake3;
 `target_doltlite_branch` defaults to `main`, so a single-root
 configuration needs nothing extra.
 
+## Inspecting a scan: what changed?
+
+Each scan is one `dolt_commit`, so "what did this scan change?" is a
+diff between the last two commits. The `dolt_diff_files` vtab answers
+it at the row level — and because it's a prolly-tree diff, it only
+descends into changed subtrees, so it stays fast even on a
+million-entry tree (≈10 s on a 1.7 M-entry index):
+
+```sh
+doltlite -readonly -box <name>.doltlite_db \
+  "SELECT diff_type, from_id, to_id, hex(to_blake3) AS to_blake3
+     FROM dolt_diff_files
+    WHERE from_ref = 'HEAD^1' AND to_ref = 'HEAD'
+      AND diff_type != 'unchanged';"
+```
+
+Filter the diff vtabs with `from_ref` / `to_ref` (branch names,
+`HEAD`, `HEAD^1`, `HEAD~N`, or commit hashes all work) — **not**
+`from_commit` / `to_commit`, even though the result columns are
+`from_*` / `to_*`. Related:
+
+- `SELECT * FROM dolt_diff_stat('HEAD^1', 'HEAD', 'files');` — per-table
+  added/modified/removed counts (call it with 3 args; the vtab form
+  rejects `WHERE`).
+- `SELECT * FROM dolt_log();` — the commit history (one row per scan).
+
+See [`docs/dev/doltlite.md`](/docs/dev/doltlite.md) for the full set
+of history/diff system tables.
+
 ## Options file
 
 Per-directory `.fsindex.yaml`. Options cascade root → leaf; a child
@@ -313,7 +342,7 @@ contract not a tease:
   them.
 - No JSONL wire-event tape. There is no upstream wire to mirror —
   file-imported sources skip the chokepoint by design (see
-  [`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md)
+  [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
   §"Bulk-upsert as the standard write path"). The filesystem
   itself is the human-inspectable tape.
 - No retry semantics for transient failures. A `read(2)` either
@@ -330,8 +359,22 @@ contract not a tease:
   because the existing `#[derive(WirePayloadRow)]` macro is
   specifically for the JSONB-payload shape and doesn't fit our
   typed-column tables. The doc's
-  [§"Deferred work"](../../../../docs/dev/data_architecture_ingestion.md)
+  [§"Deferred work"](/docs/dev/data_architecture_ingestion.md)
   calls out exactly this gap. Tracked in a follow-up issue; when
   it lands, each `BulkUpsertable` impl in this file collapses to
   its struct definition. Tracked at
   [imbue-ai/mixed_up_files#41](https://github.com/imbue-ai/mixed_up_files/issues/41).
+
+- **Rescan-cache load is sqlx-bound, not engine-bound.** On a
+  1.7 M-entry index the in-memory cache load takes ~29 s, but the
+  doltlite engine scans the same two tables in ~6 s (measured with
+  `SELECT COUNT(*), SUM(LENGTH(id)), … FROM file_stats` / `… FROM
+  files`). The ~4.5× gap is Rust-side per-row marshalling: sqlx
+  allocates a `SqliteRow` and runs `try_get` type-dispatch per
+  column (~10 M calls), plus a `String`/`Vec`/struct allocation and
+  a `HashMap` insert per row. Cheap win: pre-size the maps from
+  `COUNT(*)`. The real win is a lower-level read path — a raw
+  doltlite C-API column scan like [`docs/dev/doltlite.md`](/docs/dev/doltlite.md)
+  §"`sqlite3_open_v2`" already uses for open — bypassing sqlx's
+  per-row overhead. Even bigger: don't full-slurp the cache every
+  run (drive the rescan from `dolt_diff` against the prior commit).

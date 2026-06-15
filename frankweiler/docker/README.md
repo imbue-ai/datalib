@@ -4,7 +4,7 @@ Source for the multi-arch image published to
 `ghcr.io/imbue-ai/mixed_up_files:<tag>` on every `v*` tag push.
 
 - **User docs** (how to bind-mount, register services, run a sync):
-  [`docs/dev/docker.md`](../../docs/dev/docker.md).
+  [`docs/dev/docker.md`](/docs/dev/docker.md).
 - **CI publish path:** the `docker-publish` job in
   [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
   downloads the per-triple Linux tarballs from the just-created GitHub
@@ -60,7 +60,7 @@ is what puts them there.
 ## Running locally
 
 Once the image is loaded (`--load`), the bind-mount contract from
-[`docs/dev/docker.md`](../../docs/dev/docker.md) applies unchanged. Quick
+[`docs/dev/docker.md`](/docs/dev/docker.md) applies unchanged. Quick
 shorthand for iterating:
 
 ```sh

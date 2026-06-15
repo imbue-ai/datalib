@@ -1,7 +1,7 @@
 //! Raw-store schema for the Slack provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //! and [`docs/dev/provider_migration_dolt_diff_and_cas_edge.md`] for the
 //! conventions every `schema_raw.rs` follows.
 //!

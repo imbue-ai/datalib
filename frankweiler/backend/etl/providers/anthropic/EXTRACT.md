@@ -93,7 +93,7 @@ the schema docs describe but easy to miss in code review.
 
 **Why extract doesn't pre-seed `blob_refs` rows for
 `attachments[]`**: `blob_refs` is a cache index over the CAS (see
-[`docs/dev/data_architecture_ingestion.md`](../../../../docs/dev/data_architecture_ingestion.md)
+[`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 §"Blobs and the CAS split"). The `attachments[]` content lives
 inline in `conversations.payload` as `extracted_content`; there's
 no separate fetch, no skip-check semantics, and no bytes to land

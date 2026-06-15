@@ -14,7 +14,7 @@
 //! Toggle the pass with `opts.no_stamp` / `--no-stamp`; the scan
 //! itself — and its progress reporting — is identical either way.
 //!
-//! See [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! See [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //! §"Commit lifecycle" — `fetch` returns and the caller decides
 //! whether to `dolt_commit`.
 

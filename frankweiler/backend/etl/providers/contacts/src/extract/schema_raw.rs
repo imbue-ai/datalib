@@ -1,8 +1,8 @@
 //! Raw-store schema for the CardDAV (contacts) provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](/docs/dev/data_architecture_plan.md)
 //! §"Schema first" for the conventions every `schema_raw.rs` follows.
 //!
 //! Contacts-specific notes:

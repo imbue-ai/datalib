@@ -1,8 +1,8 @@
 //! Raw-store schema for the Signal provider.
 //!
 //! Declarations-only, proto-flavored. See
-//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
-//! and [`docs/dev/data_architecture_plan.md`](../../../../../docs/dev/data_architecture_plan.md)
+//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
+//! and [`docs/dev/data_architecture_plan.md`](/docs/dev/data_architecture_plan.md)
 //! §P0.1 for the conventions every `schema_raw.rs` follows.
 //!
 //! ## Five object tables

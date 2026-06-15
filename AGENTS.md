@@ -178,7 +178,7 @@ you actually ran instead.
 
 **Coverage** uses `bazelisk coverage` with a one-shot wrapper that
 captures Rust-subprocess hit counts too — see
-[`docs/dev/coverage.md`](docs/dev/coverage.md). The short form:
+[`docs/dev/coverage.md`](/docs/dev/coverage.md). The short form:
 
 ```bash
 tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \

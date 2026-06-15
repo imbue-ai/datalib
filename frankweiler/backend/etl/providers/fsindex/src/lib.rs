@@ -15,7 +15,7 @@
 //! follow-up commits. Translate is deliberately out of scope until
 //! we know how filesystem entries project into the `GridRow` family
 //! (they're not chat-shaped; closer to contacts-shaped — see
-//! [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //! §"Entities without a time-shape").
 //!
 //! ## What this provider does that no other does
@@ -26,7 +26,7 @@
 //!   framework is read-only against its upstream. See
 //!   [`EXTRACT.md`](../EXTRACT.md) §"Stamping policy."
 //! - **No JSONL tape, no CAS sibling.** Per
-//!   [`docs/dev/data_architecture_ingestion.md`](../../../../../docs/dev/data_architecture_ingestion.md)
+//!   [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //!   §"Bulk-upsert as the standard write path," file-imported
 //!   sources skip the wire-event chokepoint and write through
 //!   `bulk_upsert_bookkeeping` directly. There is no upstream wire
