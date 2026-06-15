@@ -158,11 +158,24 @@ pub const COL_LAST_ERROR: &str = "last_error";
 /// NULL; the first fetch attempt updates them via
 /// [`record_object_attempt`].
 pub fn bookkeeping_ddl_for(table: &str) -> String {
+    // NB: `attempt_count` is deliberately `INTEGER NOT NULL` WITHOUT a
+    // `DEFAULT` clause. A column with ANY `DEFAULT <const>` triggers an
+    // O(n²) `dolt_commit` in doltlite v0.11.9 — committing a working set
+    // with a few hundred thousand rows in such a table takes minutes,
+    // and a million rows effectively never finishes. The minimal repro
+    // is a single `CREATE TABLE t (id TEXT PRIMARY KEY, a INTEGER
+    // DEFAULT 0)` + bulk insert + commit (≈1.3s at 40k, ~0s without the
+    // default; quadratic from there). The default was never load-bearing
+    // anyway: `bulk_upsert_bookkeeping` always binds `attempt_count = 1`
+    // explicitly on insert, so dropping `DEFAULT 0` is a semantic no-op.
+    // See the fsindex perf investigation (2026-06) and the upstream
+    // doltlite issue. DO NOT re-add a DEFAULT here without re-checking
+    // commit performance at scale.
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
             fetched_at TEXT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
+            attempt_count INTEGER NOT NULL,
             last_attempt_at TEXT NULL,
             last_error TEXT NULL
         )"
@@ -632,8 +645,12 @@ pub async fn ensure_object_row(
         .execute(&mut **tx)
         .await
         .with_context(|| format!("ensure_object_row data {table}={id}"))?;
-    let bk_sql =
-        format!("INSERT INTO {table}_bookkeeping (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
+    // `attempt_count` is supplied explicitly (0) rather than via a
+    // column DEFAULT: see [`bookkeeping_ddl_for`] for why the schema
+    // carries no `DEFAULT` clause (it makes `dolt_commit` O(n²)).
+    let bk_sql = format!(
+        "INSERT INTO {table}_bookkeeping (id, attempt_count) VALUES (?, 0) ON CONFLICT(id) DO NOTHING"
+    );
     sqlx::query(&bk_sql)
         .bind(id)
         .execute(&mut **tx)
@@ -1491,7 +1508,7 @@ mod tests {
             let mut errs: Vec<String> = Vec::new();
             for sql in [
                 "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at) VALUES ('w1', '2026-06-03T00:00:00Z')",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at, attempt_count) VALUES ('w1', '2026-06-03T00:00:00Z', 0)",
             ] {
                 if let Err(e) = try_exec(sql).await {
                     errs.push(format!("setup `{sql}`: {e}"));
@@ -1511,7 +1528,7 @@ mod tests {
                 "DELETE FROM widgets",
                 "DELETE FROM widgets_bookkeeping",
                 "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at) VALUES ('w1', '2026-06-03T00:00:05Z')",
+                "INSERT INTO widgets_bookkeeping (id, fetched_at, attempt_count) VALUES ('w1', '2026-06-03T00:00:05Z', 0)",
             ] {
                 if let Err(e) = try_exec(sql).await {
                     errs.push(format!("reset `{sql}`: {e}"));

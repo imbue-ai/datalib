@@ -33,19 +33,25 @@ use anyhow::{Context, Result};
 use tracing::warn;
 use walkdir::WalkDir;
 
-use super::hash::{hash_file, hash_symlink_target, hash_tree, TreeChild};
+use super::hash::{hash_file, hash_symlink_target, hash_tree, Blake3, TreeChild};
 use super::metrics::WalkerCounters;
 use super::options::{self, EffectiveOptions, OptionsCascade, BREADCRUMB_FILENAME};
 use super::schema_raw::{FileKind, FileRow, FileStatsRow, StampKind};
 use super::stamp::{self, FreshStat, StampDecision};
 
 /// Soft upper bound on the size of one streamed batch. The walker
-/// flushes the batch via the callback when it reaches this many
-/// rows. Larger batches mean fewer doltlite commits, which directly
-/// reduces transient write-amplification on a big scan (each commit
-/// accrues immutable chunk novelty); 20k rows is ~7 MB of buffered
-/// `ScanResult`, well within the streaming memory budget.
-pub const BATCH_SIZE: usize = 20_000;
+/// flushes the batch via the callback when it reaches this many rows.
+///
+/// This is the memory-vs-amplification knob. Each batch is one sqlite
+/// transaction: larger batches mean fewer transactions, which means
+/// less write-amplification (every COMMIT lays down fresh prolly chunk
+/// novelty that only `dolt_gc` reclaims). But a batch is also buffered
+/// in memory — both as `ScanResult`s in our process and as the open
+/// transaction's working-set delta inside doltlite — so it can't grow
+/// unbounded (a single all-in-one transaction OOMs at multi-million-row
+/// scale). 100k rows is ~35 MB of `ScanResult` and keeps the
+/// transaction count to ~50 even on a 5M-file tree.
+pub const BATCH_SIZE: usize = 100_000;
 
 /// Output row pair from the walk. The walker emits these in
 /// post-order (children before their containing dir) so directory
@@ -71,7 +77,7 @@ pub struct WalkerSummary {
 pub struct Walker<'a> {
     root: &'a Path,
     prev_stats: &'a HashMap<String, FileStatsRow>,
-    prev_file_blake3s: &'a HashMap<String, String>,
+    prev_file_blake3s: &'a HashMap<String, Blake3>,
     default_stamp_kind: StampKind,
 }
 
@@ -79,7 +85,7 @@ impl<'a> Walker<'a> {
     pub fn new(
         root: &'a Path,
         prev_stats: &'a HashMap<String, FileStatsRow>,
-        prev_file_blake3s: &'a HashMap<String, String>,
+        prev_file_blake3s: &'a HashMap<String, Blake3>,
         default_stamp_kind: StampKind,
     ) -> Self {
         Self {
@@ -234,7 +240,7 @@ impl<'a> Walker<'a> {
 
             let fresh = fresh_stat_for(&meta);
 
-            let (size, blake3_hex, symlink_target_str) = match kind {
+            let (size, blake3, symlink_target_str) = match kind {
                 FileKind::File => {
                     counters.files_visited.fetch_add(1, Ordering::Relaxed);
                     let prev = self.prev_stats.get(&rel);
@@ -251,7 +257,7 @@ impl<'a> Walker<'a> {
                                 counters
                                     .bytes_skipped_cache
                                     .fetch_add(meta.len(), Ordering::Relaxed);
-                                cached.clone()
+                                *cached
                             }
                             None => {
                                 summary.rehashed += 1;
@@ -348,7 +354,7 @@ impl<'a> Walker<'a> {
                         .push(TreeChild {
                             name: name_bytes,
                             kind: kind_for_tree,
-                            blake3_hex: blake3_hex.clone(),
+                            blake3,
                         });
                     *dir_sizes.entry(parent.to_path_buf()).or_insert(0) += size;
                     dir_visible.insert(parent.to_path_buf(), true);
@@ -364,7 +370,7 @@ impl<'a> Walker<'a> {
                 id: id_to_use.clone(),
                 kind,
                 size,
-                blake3: blake3_hex,
+                blake3,
                 symlink_target: symlink_target_str,
                 identity_uuid,
             };

@@ -3,6 +3,13 @@
 //! Walks a local root, hashes everything visible, and lands the
 //! result in a doltlite raw store. See the crate's `EXTRACT.md` for
 //! the design.
+//!
+//! This binary is fsindex's own orchestrator: it opens the raw db,
+//! runs `extract::fetch` (which writes + gc's), and then issues the
+//! single per-scan `dolt_commit`. Committing here (rather than inside
+//! `fetch`) keeps the provider's extract code commit-free per the
+//! framework's commit-lifecycle rule, while still leaving a clean
+//! working tree so the next open skips the rescue commit.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -11,7 +18,7 @@ use anyhow::Result;
 use clap::Parser;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_fsindex::extract::{self, FetchOptions};
+use frankweiler_etl_fsindex::extract::{self, FetchOptions, RawDb};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::info;
 
@@ -60,9 +67,13 @@ async fn main() -> Result<()> {
     let _guard = init_obs(&args.obs, "fsindex")?;
 
     let started = Instant::now();
+
+    // Open the db ourselves so we can issue the single end-of-scan
+    // commit after `fetch` returns.
+    let db = RawDb::open(&args.db).await?;
     let opts = FetchOptions {
         db_path: args.db.clone(),
-        db: None,
+        db: Some(db.clone()),
         source_name: args.source_name.clone(),
         root: args.root.clone(),
         target_doltlite_branch: args.branch.clone(),
@@ -75,8 +86,39 @@ async fn main() -> Result<()> {
     };
 
     let summary = extract::fetch(opts).await?;
-    let elapsed = started.elapsed();
 
+    // Orchestrator tail: commit THEN gc, in that order. `dolt_commit`
+    // first seals the working set into one `dolt_log` entry (and leaves
+    // a clean tree so the next open skips the rescue commit); `dolt_gc`
+    // then reclaims the per-batch chunk novelty against the committed
+    // tree. The reverse order (gc-then-commit on one connection) fails
+    // with "failed to flush" at scale — see `extract::fetch`.
+    let commit_ms = db
+        .commit(&format!(
+            "fsindex {}: scanned={} reused={} rehashed={} errors={}",
+            args.source_name,
+            summary.entries_scanned,
+            summary.entries_reused,
+            summary.entries_rehashed,
+            summary.errors,
+        ))
+        .await?
+        .as_secs_f64()
+        * 1000.0;
+    // gc is best-effort: a successful scan + commit is the durable
+    // result. dolt_gc can fail (e.g. "gc sweep phase failed") when the
+    // un-compacted store is very large relative to free disk; that
+    // leaves a bigger-than-ideal db but does not lose data, so we warn
+    // rather than fail the run.
+    let gc_ms = match db.gc().await {
+        Ok(d) => d.as_secs_f64() * 1000.0,
+        Err(e) => {
+            tracing::warn!(event = "fsindex_gc_failed", error = %format!("{e:#}"));
+            -1.0
+        }
+    };
+
+    let elapsed = started.elapsed();
     info!(
         event = "fsindex_done",
         entries_scanned = summary.entries_scanned,
@@ -84,6 +126,8 @@ async fn main() -> Result<()> {
         entries_reused = summary.entries_reused,
         stamped_directories = summary.stamped_directories,
         errors = summary.errors,
+        commit_ms = commit_ms,
+        gc_ms = gc_ms,
         wall_seconds = elapsed.as_secs_f64(),
     );
     // CLI summary to stdout: this binary is a pipe-friendly tool, so a

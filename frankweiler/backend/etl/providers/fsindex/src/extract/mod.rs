@@ -161,19 +161,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     db.write_scan_meta(&scan_meta, &now).await?;
     let phase_scan_meta = scan_meta_start.elapsed();
 
-    // Walker errors → durable bookkeeping trail on `files`.
+    // Walker errors (unreadable entries, non-utf8 names, …). fsindex
+    // has no `_bookkeeping` sidecar to record them in — and there's no
+    // retry model that would consult one. They're logged here and
+    // counted in the `fsindex_phase_breakdown` event (`stat_errors`,
+    // `read_errors`, `non_utf8_paths`), which is all the durable
+    // evidence the scanner needs.
     for err in &walker_errors {
-        db.record_error("files", &err.id, &err.message)
-            .await
-            .with_context(|| format!("record walker error for {}", err.id))?;
+        warn!(event = "fsindex_entry_error", id = %err.id, error = %err.message);
     }
 
-    // Compact: reclaim the immutable-chunk novelty accrued across all
-    // the per-batch commits. Turns the on-disk size from
-    // write-amplification-dominated (~7 KB/row) back down toward the
-    // actual data size (~1 KB/row).
-    opts.progress.set_message("compacting (dolt_gc)");
-    let phase_gc = db.gc().await?;
+    // NB: the commit + gc happen in the ORCHESTRATOR (the standalone
+    // binary), not here. Order is load-bearing: `dolt_commit` must run
+    // BEFORE `dolt_gc` on a given connection. Running gc first and then
+    // committing on the same sqlx connection fails with "failed to
+    // flush" at scale (reproduced at 1M rows; fine at 100k). Committing
+    // first records the working set; gc then reclaims the per-batch
+    // chunk novelty against the committed tree. `fetch` stays
+    // commit-free per the framework's commit-lifecycle rule.
 
     let total_elapsed = total_start.elapsed();
 
@@ -198,7 +203,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         walk_ms = phase_walk.as_millis() as u64,
         write_total_ms = phase_write_total.as_millis() as u64,
         scan_meta_ms = phase_scan_meta.as_millis() as u64,
-        gc_ms = phase_gc.as_millis() as u64,
         dirs = counters.dirs_visited.load(Ordering::Relaxed),
         files = counters.files_visited.load(Ordering::Relaxed),
         symlinks = counters.symlinks_visited.load(Ordering::Relaxed),
@@ -230,7 +234,7 @@ async fn streaming_pipeline(
     root: PathBuf,
     default_stamp_kind: StampKind,
     prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, String>,
+    prev_file_blake3s: std::collections::HashMap<String, hash::Blake3>,
     db: RawDb,
     now: String,
     progress: Progress,
@@ -246,6 +250,15 @@ async fn streaming_pipeline(
     let stop_progress = Arc::new(AtomicBool::new(false));
 
     // ── Writer task ──────────────────────────────────────────────────
+    // One sqlite transaction PER BATCH. We deliberately do NOT fold the
+    // whole scan into a single transaction: doltlite buffers an open
+    // transaction's working-set delta in memory, and a single tx over a
+    // multi-million-row tree OOMs (confirmed at 4.5M rows × the table
+    // set). Per-batch flushing bounds that buffer. The cost is
+    // write-amplification (each sqlite COMMIT lays down fresh prolly
+    // chunk novelty), reclaimed by the `dolt_gc` the orchestrator runs
+    // after the single `dolt_commit`. `BATCH_SIZE` (see walker) is the
+    // knob that trades memory against amplification.
     let writer_db = db.clone();
     let writer_now = now.clone();
     let writer_handle = tokio::spawn(async move {
@@ -371,7 +384,7 @@ async fn legacy_inmemory(
     opts: &FetchOptions,
     default_stamp_kind: StampKind,
     prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, String>,
+    prev_file_blake3s: std::collections::HashMap<String, hash::Blake3>,
     db: &RawDb,
     now: &str,
 ) -> Result<(

@@ -52,7 +52,9 @@ async fn dump_files(db_path: &Path) -> String {
         let id: String = r.try_get("id").unwrap();
         let kind: String = r.try_get("kind").unwrap();
         let size: i64 = r.try_get("size").unwrap();
-        let blake3: String = r.try_get("blake3").unwrap();
+        // blake3 is a 32-byte BLOB; render as hex for the snapshot.
+        let blake3_bytes: Vec<u8> = r.try_get("blake3").unwrap();
+        let blake3: String = blake3_bytes.iter().map(|b| format!("{b:02x}")).collect();
         let symlink_target: Option<String> = r.try_get("symlink_target").unwrap();
         let identity_uuid: Option<String> = r.try_get("identity_uuid").unwrap();
         out.push_str(&format!(

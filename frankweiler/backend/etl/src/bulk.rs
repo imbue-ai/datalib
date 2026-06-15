@@ -233,6 +233,25 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     rows: &[T],
     now: &str,
 ) -> Result<()> {
+    bulk_upsert_entity_in_tx(tx, rows).await?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    bulk_upsert_bookkeeping(tx, T::TABLE, rows.iter().map(|r| r.id()), now).await
+}
+
+/// The entity-table half of [`bulk_upsert_in_tx`], WITHOUT the paired
+/// `<t>_bookkeeping` stamp. Use this for tables that deliberately have
+/// no bookkeeping sidecar — e.g. `frankweiler-etl-fsindex`, where the
+/// sidecars (a) aren't needed (the scanner has no retry/attempt model)
+/// and (b) roughly double the row count, which matters at the
+/// tens-of-millions-of-rows design scale. The framework default is
+/// still [`bulk_upsert_in_tx`] (always-paired bookkeeping); opting out
+/// is a deliberate per-provider choice.
+pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
+    tx: &mut Transaction<'_, Sqlite>,
+    rows: &[T],
+) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -299,7 +318,7 @@ pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
             .await
             .with_context(|| format!("bulk_upsert {table}"))?;
     }
-    bulk_upsert_bookkeeping(tx, table, rows.iter().map(|r| r.id()), now).await
+    Ok(())
 }
 
 #[cfg(test)]
