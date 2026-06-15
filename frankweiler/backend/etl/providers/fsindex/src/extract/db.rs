@@ -48,6 +48,16 @@ pub struct RawDb {
     pool: SqlitePool,
 }
 
+/// Per-`diff_type` row counts for the `files` table between a scan's
+/// commit and its parent. `unchanged` rows are not counted here — they
+/// fall out as `total_scanned - added - modified` at the call site.
+#[derive(Debug, Default, Clone)]
+pub struct DiffCounts {
+    pub added: u64,
+    pub modified: u64,
+    pub removed: u64,
+}
+
 impl RawDb {
     pub async fn open(db_path: &Path) -> Result<Self> {
         let owned = full_ddl();
@@ -243,6 +253,40 @@ impl RawDb {
             .await
             .context("update files.identity_uuid")?;
         Ok(())
+    }
+
+    /// Summarize what the most recent commit changed in `files`
+    /// relative to its parent commit, read from doltlite's
+    /// `dolt_diff_files` system table. Because the scan
+    /// truncate-and-rebuilds, a row deleted and re-inserted identically
+    /// hashes to the same prolly-tree entry and shows as `unchanged`
+    /// (so it isn't counted) — only genuinely changed files surface as
+    /// added/modified/removed.
+    ///
+    /// Returns `None` when there's no parent commit to diff against
+    /// (the very first scan) or the diff can't otherwise be resolved.
+    /// Best-effort — never fails the run.
+    pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
+        let rows = sqlx::query(
+            "SELECT diff_type, COUNT(*) AS n FROM dolt_diff_files \
+              WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD' \
+                AND diff_type != 'unchanged' GROUP BY diff_type",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .ok()?;
+        let mut c = DiffCounts::default();
+        for r in rows {
+            let diff_type: String = r.try_get("diff_type").ok()?;
+            let n: i64 = r.try_get("n").unwrap_or(0);
+            match diff_type.as_str() {
+                "added" => c.added = n as u64,
+                "modified" => c.modified = n as u64,
+                "removed" => c.removed = n as u64,
+                _ => {}
+            }
+        }
+        Some(c)
     }
 
     /// Upsert the (single) `scan_meta` row for the source.

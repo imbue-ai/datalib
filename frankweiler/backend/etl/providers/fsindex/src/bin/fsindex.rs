@@ -114,6 +114,25 @@ async fn main() -> Result<()> {
         .await?
         .as_secs_f64()
         * 1000.0;
+    // What did this scan actually change, vs the last committed scan?
+    // Read straight from the dolt diff now that the commit has landed.
+    // Best-effort: the first scan has no parent to diff against.
+    if let Some(diff) = db.diff_counts_since_parent().await {
+        let unchanged = (summary.entries_scanned as u64).saturating_sub(diff.added + diff.modified);
+        info!(
+            event = "fsindex_diff_summary",
+            added = diff.added,
+            modified = diff.modified,
+            removed = diff.removed,
+            unchanged = unchanged,
+            "vs last scan: {} added, {} modified, {} removed, {} unchanged",
+            diff.added,
+            diff.modified,
+            diff.removed,
+            unchanged,
+        );
+    }
+
     // gc is best-effort: a successful scan + commit is the durable
     // result. dolt_gc can fail (e.g. "gc sweep phase failed") when the
     // un-compacted store is very large relative to free disk; that
@@ -135,6 +154,8 @@ async fn main() -> Result<()> {
         entries_reused = summary.entries_reused,
         stamped_directories = summary.stamped_directories,
         errors = summary.errors,
+        bytes_hashed = summary.bytes_hashed,
+        bytes_skipped = summary.bytes_skipped,
         commit_ms = commit_ms,
         gc_ms = gc_ms,
         wall_seconds = elapsed.as_secs_f64(),
@@ -145,12 +166,15 @@ async fn main() -> Result<()> {
     #[allow(clippy::disallowed_macros)]
     {
         println!(
-            "fsindex: scanned={} rehashed={} reused={} stamped={} errors={} wall={:.2}s",
+            "fsindex: scanned={} rehashed={} reused={} stamped={} errors={} \
+             hashed={} skipped={} wall={:.2}s",
             summary.entries_scanned,
             summary.entries_rehashed,
             summary.entries_reused,
             summary.stamped_directories,
             summary.errors,
+            extract::human_bytes(summary.bytes_hashed),
+            extract::human_bytes(summary.bytes_skipped),
             elapsed.as_secs_f64(),
         );
     }

@@ -76,6 +76,12 @@ pub struct FetchSummary {
     pub entries_reused: usize,
     pub stamped_directories: usize,
     pub errors: usize,
+    /// Total bytes fed through blake3 this scan (files actually
+    /// rehashed).
+    pub bytes_hashed: u64,
+    /// Total bytes we did NOT hash because the rescan cursor let us
+    /// reuse a cached digest — the work the incremental cache saved.
+    pub bytes_skipped: u64,
 }
 
 /// Run one extract pass against `opts.root`.
@@ -101,7 +107,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         info!(
             event = "fsindex_load_cache_done",
             file_rows = cache.stats.len(),
+            cached_hashes = cache.blake3s.len(),
             elapsed_ms = load_start.elapsed().as_millis() as u64,
+            "loaded {} prior file rows ({} with a reusable hash) from the rescan cursor",
+            cache.stats.len(),
+            cache.blake3s.len(),
         );
         (cache.stats, cache.blake3s)
     };
@@ -232,6 +242,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     Ok(FetchSummary {
         errors: walker_errors.len(),
+        bytes_hashed,
+        bytes_skipped: bytes_saved,
         ..summary
     })
 }
@@ -312,10 +324,10 @@ async fn streaming_pipeline(
             let files = progress_counters.files_visited.load(Ordering::Relaxed);
             let files_hashed = progress_counters.files_rehashed.load(Ordering::Relaxed);
             let bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed);
-            let bytes_total = bytes_hashed
-                + progress_counters
-                    .bytes_skipped_cache
-                    .load(Ordering::Relaxed);
+            let bytes_skipped = progress_counters
+                .bytes_skipped_cache
+                .load(Ordering::Relaxed);
+            let bytes_total = bytes_hashed + bytes_skipped;
 
             // The only log line the scan emits per tick — and only when
             // new errors have appeared since the last tick, so a clean
@@ -344,9 +356,11 @@ async fn streaming_pipeline(
 
             progress_sink.set_message(&format!(
                 "dirs={dirs} files={files} ({files_per_s:.1} files/s) total={} | \
-                 hashed {files_hashed} files / {} @ {files_hashed_per_s:.1} files/s {mb_hashed_per_s:.1} MB/s",
+                 hashed {files_hashed} files / {} @ {files_hashed_per_s:.1} files/s {mb_hashed_per_s:.1} MB/s \
+                 | skipped {}",
                 human_bytes(bytes_total),
                 human_bytes(bytes_hashed),
+                human_bytes(bytes_skipped),
             ));
         }
     });
@@ -407,6 +421,9 @@ async fn streaming_pipeline(
         entries_reused: walker_summary.reused,
         stamped_directories: 0,
         errors: 0, // filled in by caller
+        // byte totals are stamped onto the summary by `fetch` from the
+        // counters after this returns.
+        ..Default::default()
     };
 
     Ok((
@@ -479,7 +496,7 @@ fn new_uuid() -> String {
 
 /// Human-readable byte count, decimal (1000-based) units to match the
 /// `MB/s` throughput readouts (which divide by 1_000_000).
-fn human_bytes(n: u64) -> String {
+pub fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KB", "MB", "GB", "TB", "PB"];
     if n < 1000 {
         return format!("{n} B");
