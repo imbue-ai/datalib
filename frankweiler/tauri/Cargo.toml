@@ -1,0 +1,40 @@
+[package]
+name = "frankweiler-tauri"
+version = "0.10.0"
+edition = "2021"
+rust-version = "1.83"
+publish = false
+
+# Standalone workspace, deliberately NOT a member of frankweiler/backend's
+# workspace: Bazel's crate_universe (`crate.from_cargo` in MODULE.bazel)
+# ingests that workspace, and the tauri dependency tree is cargo-only.
+# This crate is driven by `cargo tauri` / `pnpm dlx @tauri-apps/cli`, not
+# Bazel — see README.md.
+[workspace]
+
+# `time` is held at 0.3.47 in Cargo.lock: 0.3.48's new
+# `format_item::ModifierValue` blanket impl breaks coherence (E0119) for
+# the `impl<T: Into<..>> From<T>` impls in tauri-utils 2.9 and cookie
+# 0.18. If `cargo update` drags `time` forward and the build breaks,
+# re-pin with `cargo update -p time --precise 0.3.47` (or whatever
+# release restores coherence).
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+# The embedded backend: frankweiler-http's router serves both the
+# rust-embed'd UI bundle and /api/*. The shell binds it to an ephemeral
+# localhost port and points the window at it. axum/tokio are needed
+# directly for `axum::serve` + `TcpListener::bind`; tauri's async
+# runtime is the same tokio underneath.
+frankweiler-core = { path = "../backend/core" }
+frankweiler-http = { path = "../backend/http" }
+frankweiler-tauri-backend = { path = "../backend/tauri-backend" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

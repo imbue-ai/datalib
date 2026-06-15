@@ -25,3 +25,6 @@ test-results/
 # the dev shell via `direnv`/`set -a; source .envrc.private`. Anything
 # that should ship in the repo belongs in `.envrc` (committed), not here.
 .envrc.private
+
+# Tauri-build regenerated capability schemas (frankweiler/tauri/gen/schemas).
+frankweiler/tauri/gen/

@@ -1035,8 +1035,14 @@ const gridOptions: GridOptions<SearchRow> = {
   position: relative;
 }
 .grid {
-  width: 100%;
-  height: 100%;
+  /* Fill the positioned .grid-wrap absolutely instead of with
+     height:100%. WebKit (Safari + the Tauri WKWebView) resolves a
+     percentage height against a flex-sized parent with no explicit
+     height as `auto`, collapsing the grid to its row-group panel
+     (~50px) while Chromium gives it the full flexed height — the
+     Chromium-only e2e suite never sees this. */
+  position: absolute;
+  inset: 0;
   transition: filter 120ms ease-out;
 }
 .grid--loading {
