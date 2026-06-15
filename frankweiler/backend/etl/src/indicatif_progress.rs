@@ -38,6 +38,11 @@ pub struct IndicatifSink {
     // via `child(...)`. Used to indent the prefix column so nested bars
     // visually belong to their parent.
     depth: usize,
+    // When true the bar renders only `{prefix} {spinner} {msg}` — no
+    // `{pos}`/`{per_sec}` headline. For callers whose message already
+    // carries every counter and rate (fsindex's scan dashboard), where
+    // the headline would just duplicate them unlabeled.
+    message_only: bool,
 }
 
 impl IndicatifSink {
@@ -46,6 +51,7 @@ impl IndicatifSink {
             bar,
             multi,
             depth: 0,
+            message_only: false,
         }
     }
 
@@ -56,6 +62,11 @@ impl IndicatifSink {
 
 impl ProgressSink for IndicatifSink {
     fn set_length(&self, total: Option<u64>) {
+        // A message-only bar has no headline counters, so `{pos}`/`{len}`
+        // are irrelevant — leave the template alone.
+        if self.message_only {
+            return;
+        }
         // Also swap the template. Without this, indicatif's
         // length-unset state renders `{len}` in lockstep with `{pos}`
         // (visually "1185/1185, 1241/1241, ..."), which is misleading —
@@ -89,11 +100,16 @@ impl ProgressSink for IndicatifSink {
     }
     fn child(&self, prefix: &str) -> Arc<dyn ProgressSink> {
         let depth = self.depth + 1;
-        let child_bar = make_bar_at_depth(&self.multi, prefix.to_string(), depth);
+        let child_bar = if self.message_only {
+            make_message_only_bar_at_depth(&self.multi, prefix.to_string(), depth)
+        } else {
+            make_bar_at_depth(&self.multi, prefix.to_string(), depth)
+        };
         Arc::new(IndicatifSink {
             bar: child_bar,
             multi: self.multi.clone(),
             depth,
+            message_only: self.message_only,
         })
     }
 }
@@ -110,15 +126,34 @@ impl Progress {
     /// structured event stream is identical either way; only the
     /// terminal bar is conditional.
     pub fn indicatif(prefix: impl Into<String>) -> Progress {
-        let prefix = prefix.into();
+        Self::indicatif_inner(prefix.into(), false)
+    }
+
+    /// Like [`Progress::indicatif`] but the bar is a bare
+    /// `{prefix} {spinner} {msg}` — no `{pos}`/`{per_sec}` headline. For
+    /// callers whose `set_message` string already carries every counter
+    /// and rate (e.g. fsindex's scan dashboard), where the headline
+    /// would only duplicate them, unlabeled.
+    pub fn indicatif_message_only(prefix: impl Into<String>) -> Progress {
+        Self::indicatif_inner(prefix.into(), true)
+    }
+
+    fn indicatif_inner(prefix: String, message_only: bool) -> Progress {
         let tracing: Arc<dyn ProgressSink> = Arc::new(TracingSink::new(prefix.clone()));
         match frankweiler_obs::shared_multi() {
             Some(multi) => {
-                let bar = make_bar(&multi, prefix);
-                let sinks = vec![
-                    Arc::new(IndicatifSink::new(bar, multi)) as Arc<dyn ProgressSink>,
-                    tracing,
-                ];
+                let bar = if message_only {
+                    make_message_only_bar(&multi, prefix)
+                } else {
+                    make_bar(&multi, prefix)
+                };
+                let sink = IndicatifSink {
+                    bar,
+                    multi,
+                    depth: 0,
+                    message_only,
+                };
+                let sinks = vec![Arc::new(sink) as Arc<dyn ProgressSink>, tracing];
                 Progress::new(Arc::new(FanOut::new(sinks)))
             }
             None => Progress::new(tracing),
@@ -157,6 +192,24 @@ pub fn make_bar_at_depth(
     // Start in spinner mode — `set_length(Some(_))` flips to the
     // determinate template later if/when the caller learns the total.
     bar.set_style(spinner_style(depth, prefix_width));
+    bar.set_prefix(prefix.into());
+    bar.enable_steady_tick(std::time::Duration::from_millis(120));
+    bar
+}
+
+/// A bar that renders only `{prefix} {spinner} {msg}` — no headline
+/// counters. The message is the whole display.
+pub fn make_message_only_bar(multi: &MultiProgress, prefix: impl Into<String>) -> ProgressBar {
+    make_message_only_bar_at_depth(multi, prefix, 0)
+}
+
+fn make_message_only_bar_at_depth(
+    multi: &MultiProgress,
+    prefix: impl Into<String>,
+    depth: usize,
+) -> ProgressBar {
+    let bar = multi.add(ProgressBar::new_spinner());
+    bar.set_style(message_only_style(depth, prefix_width_at_depth(depth)));
     bar.set_prefix(prefix.into());
     bar.enable_steady_tick(std::time::Duration::from_millis(120));
     bar
@@ -211,5 +264,13 @@ fn spinner_style(depth: usize, prefix_width: usize) -> ProgressStyle {
     let template = format!(
         "{leading}{{prefix:>{prefix_width}}} {{spinner}} {{pos:>5}} {{per_sec:>10}} {{msg}}"
     );
+    ProgressStyle::with_template(&template).unwrap()
+}
+
+/// Message-only template — `{prefix} {spinner} {msg}`, no headline
+/// counters. The caller's message owns the entire readout.
+fn message_only_style(depth: usize, prefix_width: usize) -> ProgressStyle {
+    let leading = leading_at_depth(depth);
+    let template = format!("{leading}{{prefix:>{prefix_width}}} {{spinner}} {{msg}}");
     ProgressStyle::with_template(&template).unwrap()
 }

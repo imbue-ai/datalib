@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
     // wiring frankweiler-sync gives each source). Falls back to
     // tracing-only when obs::init didn't publish a MultiProgress. Held
     // here so we can stamp a final summary line on it after the scan.
-    let progress = Progress::indicatif(args.source_name.clone());
+    let progress = Progress::indicatif_message_only(args.source_name.clone());
     let opts = FetchOptions {
         db_path: args.db.clone(),
         db: Some(db.clone()),

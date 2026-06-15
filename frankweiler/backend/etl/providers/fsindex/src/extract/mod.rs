@@ -291,10 +291,9 @@ async fn streaming_pipeline(
         let mut interval = tokio::time::interval(Duration::from_millis(PROGRESS_INTERVAL_MS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // The bar is the only progress surface — no per-tick log spam.
-        // The total file count is unknown up front, so it runs as a
-        // spinner; we advance its position by the files-visited delta so
-        // the headline shows a live count, and put the full breakdown in
-        // the message. Hashing rates are computed from per-tick deltas.
+        // It's a message-only spinner (no indicatif `{pos}`/`{per_sec}`
+        // headline); every counter and rate lives, labeled, in the
+        // message. Rates are computed from per-tick deltas.
         let mut last_files = 0u64;
         let mut last_files_hashed = 0u64;
         let mut last_bytes_hashed = 0u64;
@@ -335,17 +334,17 @@ async fn streaming_pipeline(
                 last_errors = errors;
             }
 
+            let files_per_s = files.saturating_sub(last_files) as f64 / dt;
             let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
             let mb_hashed_per_s =
                 bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
+            last_files = files;
             last_files_hashed = files_hashed;
             last_bytes_hashed = bytes_hashed;
 
-            progress_sink.inc(files.saturating_sub(last_files));
-            last_files = files;
             progress_sink.set_message(&format!(
-                "dirs={dirs} files={files} total={} | hashed {files_hashed} files / {} \
-                 @ {files_hashed_per_s:.0} files/s {mb_hashed_per_s:.1} MB/s",
+                "dirs={dirs} files={files} ({files_per_s:.1} files/s) total={} | \
+                 hashed {files_hashed} files / {} @ {files_hashed_per_s:.1} files/s {mb_hashed_per_s:.1} MB/s",
                 human_bytes(bytes_total),
                 human_bytes(bytes_hashed),
             ));
