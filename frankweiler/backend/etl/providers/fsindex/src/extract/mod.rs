@@ -71,13 +71,26 @@ pub struct FetchOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct FetchSummary {
+    /// Total entries visited. Decomposes exactly as
+    /// `files_reused + files_hashed + dirs + symlinks`.
     pub entries_scanned: usize,
-    pub entries_rehashed: usize,
-    pub entries_reused: usize,
+    /// Files served from the rescan cache — stat matched, **no content
+    /// read**. The whole point of the incremental cache.
+    pub files_reused: usize,
+    /// Files whose **content was actually re-read and blake3'd** this
+    /// scan (new or changed). This — not `entries_scanned` — is what
+    /// `bytes_hashed` measures.
+    pub files_hashed: usize,
+    /// Directories visited. Each one's tree-hash is recomputed from its
+    /// children's hashes — **no file I/O, no bytes hashed**.
+    pub dirs: usize,
+    /// Symlinks visited. Each one's target *path string* is hashed (a
+    /// handful of bytes); never a file-content read.
+    pub symlinks: usize,
     pub stamped_directories: usize,
     pub errors: usize,
-    /// Total bytes fed through blake3 this scan (files actually
-    /// rehashed).
+    /// Total bytes fed through blake3 this scan — i.e. the content of
+    /// the `files_hashed` files only.
     pub bytes_hashed: u64,
     /// Total bytes we did NOT hash because the rescan cursor let us
     /// reuse a cached digest — the work the incremental cache saved.
@@ -96,27 +109,41 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
     let _ = opts.control.refetch_blobs;
 
-    opts.progress
-        .set_message(&format!("indexing {}", opts.root.display()));
-
     let load_start = Instant::now();
-    let (prev_stats, prev_file_blake3s) = if opts.control.reset_and_redownload {
-        (Default::default(), Default::default())
+    let prev = if opts.control.reset_and_redownload {
+        db::PrevCache::default()
     } else {
-        let cache = db.load_prev_cache().await?;
+        // Loading the rescan cache for a large tree can take a while, and
+        // it happens before the walk's per-entry progress bar exists — so
+        // announce it (start log + live message) so it's clearly working,
+        // not hung, on both a TTY and the NDJSON log sink.
+        info!(
+            event = "fsindex_load_cache_start",
+            root = %opts.root.display(),
+            "loading rescan cache from prior scan (every entry + child index) before the walk",
+        );
+        opts.progress.set_message(&format!(
+            "loading rescan cache for {} …",
+            opts.root.display()
+        ));
+        let cache = db.load_prev_cache(&opts.progress).await?;
         info!(
             event = "fsindex_load_cache_done",
-            file_rows = cache.stats.len(),
+            entry_rows = cache.stats.len(),
             cached_hashes = cache.blake3s.len(),
+            parent_dirs = cache.children.len(),
             elapsed_ms = load_start.elapsed().as_millis() as u64,
-            "loaded {} prior file rows ({} with a reusable hash) from the rescan cursor",
+            "loaded {} prior entries ({} files with a reusable hash) and {} dir child-lists from the rescan cursor",
             cache.stats.len(),
             cache.blake3s.len(),
+            cache.children.len(),
         );
-        (cache.stats, cache.blake3s)
+        cache
     };
     let phase_load = load_start.elapsed();
 
+    opts.progress
+        .set_message(&format!("indexing {}", opts.root.display()));
     let truncate_start = Instant::now();
     db.reset().await?;
     let phase_truncate = truncate_start.elapsed();
@@ -132,8 +159,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (mut summary, walker_errors, counters, phase_walk, phase_write_total) = streaming_pipeline(
         opts.root.clone(),
         default_stamp_kind,
-        prev_stats,
-        prev_file_blake3s,
+        prev,
         db.clone(),
         now.clone(),
         opts.progress.clone(),
@@ -225,6 +251,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         write_total_ms = phase_write_total.as_millis() as u64,
         scan_meta_ms = phase_scan_meta.as_millis() as u64,
         dirs = counters.dirs_visited.load(Ordering::Relaxed),
+        dirs_readdir_skipped = counters.dirs_readdir_skipped.load(Ordering::Relaxed),
         files = counters.files_visited.load(Ordering::Relaxed),
         symlinks = counters.symlinks_visited.load(Ordering::Relaxed),
         files_reused = counters.files_reused.load(Ordering::Relaxed),
@@ -256,8 +283,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn streaming_pipeline(
     root: PathBuf,
     default_stamp_kind: StampKind,
-    prev_stats: std::collections::HashMap<String, FileStatsRow>,
-    prev_file_blake3s: std::collections::HashMap<String, hash::Blake3>,
+    prev: db::PrevCache,
     db: RawDb,
     now: String,
     progress: Progress,
@@ -268,6 +294,11 @@ async fn streaming_pipeline(
     Duration,
     Duration,
 )> {
+    let db::PrevCache {
+        stats: prev_stats,
+        blake3s: prev_file_blake3s,
+        children: prev_children,
+    } = prev;
     let (tx, mut rx) = mpsc::channel::<Batch>(BATCH_CHANNEL_CAPACITY);
     let counters = Arc::new(WalkerCounters::default());
     let stop_progress = Arc::new(AtomicBool::new(false));
@@ -310,7 +341,8 @@ async fn streaming_pipeline(
         let mut last_files_hashed = 0u64;
         let mut last_bytes_hashed = 0u64;
         let mut last_errors = 0u64;
-        let mut last_tick = Instant::now();
+        let scan_start = Instant::now();
+        let mut last_tick = scan_start;
         loop {
             interval.tick().await;
             if progress_stop.load(Ordering::Relaxed) {
@@ -321,6 +353,9 @@ async fn streaming_pipeline(
             last_tick = now;
 
             let dirs = progress_counters.dirs_visited.load(Ordering::Relaxed);
+            let dirs_skipped = progress_counters
+                .dirs_readdir_skipped
+                .load(Ordering::Relaxed);
             let files = progress_counters.files_visited.load(Ordering::Relaxed);
             let files_hashed = progress_counters.files_rehashed.load(Ordering::Relaxed);
             let bytes_hashed = progress_counters.bytes_hashed.load(Ordering::Relaxed);
@@ -346,17 +381,27 @@ async fn streaming_pipeline(
                 last_errors = errors;
             }
 
+            // Instantaneous rates from this tick's delta.
             let files_per_s = files.saturating_sub(last_files) as f64 / dt;
             let files_hashed_per_s = files_hashed.saturating_sub(last_files_hashed) as f64 / dt;
             let mb_hashed_per_s =
                 bytes_hashed.saturating_sub(last_bytes_hashed) as f64 / dt / 1_000_000.0;
+            // Cumulative averages over the whole run so far — each total
+            // divided by total elapsed, not just this tick's delta.
+            let total_secs = scan_start.elapsed().as_secs_f64().max(1e-3);
+            let files_per_s_avg = files as f64 / total_secs;
+            let files_hashed_per_s_avg = files_hashed as f64 / total_secs;
+            let mb_hashed_per_s_avg = bytes_hashed as f64 / total_secs / 1_000_000.0;
             last_files = files;
             last_files_hashed = files_hashed;
             last_bytes_hashed = bytes_hashed;
 
             progress_sink.set_message(&format!(
-                "dirs={dirs} files={files} ({files_per_s:.1} files/s) total={} | \
-                 hashed {files_hashed} files / {} @ {files_hashed_per_s:.1} files/s {mb_hashed_per_s:.1} MB/s \
+                "dirs={dirs} ({dirs_skipped} readdir-skipped) files={files} \
+                 ({files_per_s:.1} files/s, avg {files_per_s_avg:.1}) total={} | \
+                 hashed {files_hashed} files / {} @ \
+                 {files_hashed_per_s:.1} files/s (avg {files_hashed_per_s_avg:.1}) \
+                 {mb_hashed_per_s:.1} MB/s (avg {mb_hashed_per_s_avg:.1}) \
                  | skipped {}",
                 human_bytes(bytes_total),
                 human_bytes(bytes_hashed),
@@ -375,6 +420,7 @@ async fn streaming_pipeline(
                 &walker_root,
                 &prev_stats,
                 &prev_file_blake3s,
+                &prev_children,
                 default_stamp_kind,
             );
             let (errs, summ) = walker.collect_streaming(&walker_counters, |batch| {
@@ -415,10 +461,16 @@ async fn streaming_pipeline(
 
     let entries_scanned = (walker_summary.rehashed + walker_summary.reused)
         + counters.non_utf8_paths.load(Ordering::Relaxed) as usize;
+    // Decompose the "non-reused" bucket (walker_summary.rehashed) into
+    // its real parts: file-content rehashes vs dirs vs symlinks. Only
+    // file rehashes read bytes; dirs/symlinks recompute their hash for
+    // free, so lumping them under one "rehashed" number is misleading.
     let summary = FetchSummary {
         entries_scanned,
-        entries_rehashed: walker_summary.rehashed,
-        entries_reused: walker_summary.reused,
+        files_reused: counters.files_reused.load(Ordering::Relaxed) as usize,
+        files_hashed: counters.files_rehashed.load(Ordering::Relaxed) as usize,
+        dirs: counters.dirs_visited.load(Ordering::Relaxed) as usize,
+        symlinks: counters.symlinks_visited.load(Ordering::Relaxed) as usize,
         stamped_directories: 0,
         errors: 0, // filled in by caller
         // byte totals are stamped onto the summary by `fetch` from the

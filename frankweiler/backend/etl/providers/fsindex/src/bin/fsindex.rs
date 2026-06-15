@@ -96,8 +96,14 @@ async fn main() -> Result<()> {
 
     let summary = extract::fetch(opts).await?;
     progress.finish(&format!(
-        "done — scanned {} (reused {}, rehashed {}, errors {})",
-        summary.entries_scanned, summary.entries_reused, summary.entries_rehashed, summary.errors,
+        "done — scanned {}: {} files cached, {} files hashed ({}), {} dirs, {} symlinks, {} errors",
+        summary.entries_scanned,
+        summary.files_reused,
+        summary.files_hashed,
+        extract::human_bytes(summary.bytes_hashed),
+        summary.dirs,
+        summary.symlinks,
+        summary.errors,
     ));
 
     // Orchestrator tail: commit THEN gc, in that order. `dolt_commit`
@@ -156,8 +162,10 @@ async fn main() -> Result<()> {
     info!(
         event = "fsindex_done",
         entries_scanned = summary.entries_scanned,
-        entries_rehashed = summary.entries_rehashed,
-        entries_reused = summary.entries_reused,
+        files_reused = summary.files_reused,
+        files_hashed = summary.files_hashed,
+        dirs = summary.dirs,
+        symlinks = summary.symlinks,
         stamped_directories = summary.stamped_directories,
         errors = summary.errors,
         bytes_hashed = summary.bytes_hashed,
@@ -172,11 +180,13 @@ async fn main() -> Result<()> {
     #[allow(clippy::disallowed_macros)]
     {
         println!(
-            "fsindex: scanned={} rehashed={} reused={} stamped={} errors={} \
-             hashed={} skipped={} wall={:.2}s",
+            "fsindex: scanned={} files_reused={} files_hashed={} dirs={} symlinks={} \
+             stamped={} errors={} hashed={} skipped={} wall={:.2}s",
             summary.entries_scanned,
-            summary.entries_rehashed,
-            summary.entries_reused,
+            summary.files_reused,
+            summary.files_hashed,
+            summary.dirs,
+            summary.symlinks,
             summary.stamped_directories,
             summary.errors,
             extract::human_bytes(summary.bytes_hashed),
@@ -201,8 +211,8 @@ fn commit_message(
     summary: &extract::FetchSummary,
 ) -> String {
     format!(
-        "fsindex {source}: {scanned} entries, hashed {hashed} ({rehashed} files), \
-         reused {reused}\n\
+        "fsindex {source}: {scanned} entries, hashed {files_hashed} files ({hashed}), \
+         reused {files_reused}\n\
          \n\
          host: {host}\n\
          user: {user}\n\
@@ -210,15 +220,18 @@ fn commit_message(
          started: {started_at}\n\
          finished: {finished_at}\n\
          duration: {scan_secs:.2}s\n\
-         scanned: {scanned} (rehashed {rehashed}, reused {reused})\n\
-         hashed: {hashed} across {rehashed} files\n\
+         scanned: {scanned} (= {files_reused} files reused + {files_hashed} files hashed \
+         + {dirs} dirs + {symlinks} symlinks)\n\
+         hashed: {hashed} across {files_hashed} files\n\
          skipped: {skipped} (reused from rescan cursor)\n\
          stamped_dirs: {stamped}\n\
          errors: {errors}\n",
         source = source_name,
         scanned = summary.entries_scanned,
-        rehashed = summary.entries_rehashed,
-        reused = summary.entries_reused,
+        files_reused = summary.files_reused,
+        files_hashed = summary.files_hashed,
+        dirs = summary.dirs,
+        symlinks = summary.symlinks,
         hashed = extract::human_bytes(summary.bytes_hashed),
         skipped = extract::human_bytes(summary.bytes_skipped),
         stamped = summary.stamped_directories,

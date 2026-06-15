@@ -47,6 +47,21 @@ rust_binary(
     ],
 )
 
+# Inline `#[cfg(test)]` unit tests living in the library sources
+# (stamp.rs, hash.rs, walker.rs). This `crate = ":..."` target is what
+# actually compiles and runs them under `bazel test` — without it the
+# inline tests are silently never executed. Every other library in the
+# repo has the equivalent target; fsindex was missing it.
+rust_test(
+    name = "fsindex_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_fsindex",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
 # Hermetic smoke test: build a small tree in a tempdir, scan it, snapshot
 # `files`, edit the tree, re-scan, snapshot again. Catches drift in the
 # canonical tree-hash, the symlink shape, and the cascaded ignore filter.

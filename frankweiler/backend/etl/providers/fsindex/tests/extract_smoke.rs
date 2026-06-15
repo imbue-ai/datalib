@@ -151,7 +151,7 @@ async fn initial_scan_and_incremental_rescan() {
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
-    assert_eq!(summary_a.entries_reused, 0, "nothing cached yet");
+    assert_eq!(summary_a.files_reused, 0, "nothing cached yet");
     assert_eq!(
         summary_a.stamped_directories, 0,
         "no_stamp=true, no breadcrumbs written"
@@ -183,12 +183,19 @@ async fn initial_scan_and_incremental_rescan() {
         assert_eq!(summary_a2.entries_scanned, 7);
         // 4 files (hello, empty, another, nested) reuse from cache.
         assert_eq!(
-            summary_a2.entries_reused, 4,
+            summary_a2.files_reused, 4,
             "fast-rescan cache should reuse every unchanged file's blake3; \
              got summary {summary_a2:?}",
         );
-        // Symlink (1) + dirs (2) always recompute. = 3 rehashes.
-        assert_eq!(summary_a2.entries_rehashed, 3);
+        // No file content is re-read on an unchanged rescan; the symlink
+        // and the two dirs recompute their hash for free (no bytes).
+        assert_eq!(summary_a2.files_hashed, 0, "no file content re-read");
+        assert_eq!(summary_a2.dirs, 2);
+        assert_eq!(summary_a2.symlinks, 1);
+        assert_eq!(
+            summary_a2.bytes_hashed, 0,
+            "zero bytes hashed when nothing changed"
+        );
     }
 
     // ── Phase B: edits + incremental rescan ─────────────────────────
@@ -219,8 +226,13 @@ async fn initial_scan_and_incremental_rescan() {
     #[cfg(unix)]
     {
         assert_eq!(summary_b.entries_scanned, 7);
-        assert_eq!(summary_b.entries_reused, 1);
-        assert_eq!(summary_b.entries_rehashed, 6);
+        // another.txt is the only unchanged file → reused.
+        assert_eq!(summary_b.files_reused, 1);
+        // hello.txt (mtime bump), nested.txt (content), added.txt (new)
+        // → 3 files actually re-read and hashed.
+        assert_eq!(summary_b.files_hashed, 3);
+        assert_eq!(summary_b.dirs, 2);
+        assert_eq!(summary_b.symlinks, 1);
     }
 
     let dump_b = dump_files(&db_path).await;
