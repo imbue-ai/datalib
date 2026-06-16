@@ -48,6 +48,9 @@ import slackIconUrl from "@/assets/slack.svg";
 import githubIconUrl from "@/assets/github.svg";
 import gitlabIconUrl from "@/assets/gitlab.svg";
 import notionIconUrl from "@/assets/notion.svg";
+import whatsappIconUrl from "@/assets/whatsapp.svg";
+import signalIconUrl from "@/assets/signal.svg";
+import emailIconUrl from "@/assets/email.svg";
 import { encodeColumns } from "@/router/columns";
 import type { CardCtx } from "./types";
 
@@ -58,6 +61,9 @@ const SOURCE_ICONS: Record<string, string> = {
   GitHub: githubIconUrl,
   GitLab: gitlabIconUrl,
   Notion: notionIconUrl,
+  WhatsApp: whatsappIconUrl,
+  Signal: signalIconUrl,
+  Mail: emailIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);
