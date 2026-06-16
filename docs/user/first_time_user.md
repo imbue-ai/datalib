@@ -96,7 +96,7 @@ You don't necessarily need to install `latchkey` — the commands below invoke i
 `npx`, which fetches it on demand (the `node` install from step 0 ships
 with `npx`).
 
-### Option 1: Download some Google Takeout data
+### Option 1: Download some Google Takeout data (no Latchkey necessary)
 
 Google Takeout (<https://takeout.google.com>) lets you export your own
 data out of Google's silos. Useful targets for this project:
