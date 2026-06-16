@@ -22,7 +22,7 @@ Liberate your data from silos. Run SOTA AI and data tools on it, on your own ter
 > you're doing when you run an agentic harness on this data.**</span>
 
  <span style="color:red">**Deletes might not actually delete from your local copy.
- We use Doltlite (a version of SQLite)to keep versions of your data as it changes over time. 
+ We use Doltlite (a version of SQLite) to keep versions of your data as it changes over time. 
  This can help you recover from unintended data loss, but is a double-edged sword.
  Deletions in your data sources, even if they propagate into the current
  version of your data, as stored and presented by our tools, are still in theory recoverable from
