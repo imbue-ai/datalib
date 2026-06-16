@@ -21,6 +21,15 @@ Liberate your data from silos. Run SOTA AI and data tools on it, on your own ter
 > OK with me sending them to Anthropic, OpenAI, or Google?"  Because that's exactly what
 > you're doing when you run an agentic harness on this data.**</span>
 
+ <span style="color:red">**Deletes might not actually delete from your local copy.
+ We use Doltlite (a version of SQLite)to keep versions of your data as it changes over time. 
+ This can help you recover from unintended data loss, but is a double-edged sword.
+ Deletions in your data sources, even if they propagate into the current
+ version of your data, as stored and presented by our tools, are still in theory recoverable from
+ the version history.  If you truly need to delete, you'll have to remove the whole doltlite_db file,
+ not just delete from the data source.
+ **</span>
+
 Codenames in this project (`frankweiler`, etc.) are inspired by
 [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
 
