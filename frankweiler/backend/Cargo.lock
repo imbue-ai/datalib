@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1323,7 +1323,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-anthropic"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1377,7 +1377,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-beeper"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-chat-common"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "frankweiler-etl",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-chatgpt"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-contacts"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1466,7 +1466,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-email"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-fsindex"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-github"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1544,7 +1544,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-gitlab"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1571,7 +1571,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-google-takeout"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-macros"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-notion"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-perseus"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -1652,7 +1652,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-signal"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-slack"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1704,7 +1704,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-whatsapp"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "frankweiler-etl",
@@ -1727,7 +1727,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-yolink"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-http"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -1776,7 +1776,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-index-lib"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "frankweiler-schema",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-obs"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-qmd-indexer"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "frankweiler-obs",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-schema"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-signal-backup"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "aes",
  "anyhow",
@@ -1844,7 +1844,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-sync"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",
@@ -1889,7 +1889,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-time"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-whatsapp-backup"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "aes",
  "anyhow",
