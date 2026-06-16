@@ -253,6 +253,7 @@ fn render_one(
             &markdown_uuid,
             &chat_uuid,
             &chat_title,
+            &recipient_display,
             &author,
             text,
             idx as i64,
@@ -414,6 +415,11 @@ fn chat_grid_row(
         None,
         Some(when_ts.to_string()),
         title.to_string(),
+        // Drive the Channel column off the bare chat name (the recipient
+        // display), mirroring WhatsApp where channel == the chat's
+        // display name. Title carries the "Signal · …" prefix, so use
+        // recipient_display here, not `title`.
+        Some(recipient_display.to_string()),
         qmd_rel.to_string(),
         markdown_uuid.to_string(),
     )
@@ -425,6 +431,7 @@ fn message_grid_row(
     markdown_uuid: &str,
     chat_uuid: &str,
     title: &str,
+    recipient_display: &str,
     author: &str,
     text: &str,
     idx: i64,
@@ -440,6 +447,10 @@ fn message_grid_row(
         Some(idx),
         Some(when_ts.to_string()),
         title.to_string(),
+        // Channel == the chat name (recipient display), same value the
+        // chat-level row carries, so every Signal row populates the
+        // Channel column the way WhatsApp rows do.
+        Some(recipient_display.to_string()),
         qmd_rel.to_string(),
         markdown_uuid.to_string(),
     )
@@ -455,6 +466,7 @@ fn base_row(
     message_index: Option<i64>,
     when_ts: Option<String>,
     conversation_name: String,
+    channel: Option<String>,
     qmd_path: String,
     markdown_uuid: String,
 ) -> GridRow {
@@ -469,7 +481,7 @@ fn base_row(
         project: None,
         org_uuid: None,
         org_name: None,
-        channel: None,
+        channel,
         conversation_name: Some(conversation_name),
         conversation_uuid: conversation_uuid.clone(),
         message_index,

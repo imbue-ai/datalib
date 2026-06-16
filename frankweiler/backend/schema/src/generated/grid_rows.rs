@@ -133,12 +133,14 @@ pub struct GridRow {
     /// Per-provider mapping:
     ///   anthropic: anthropic_conversations._source.org_name
     pub org_name: Option<String>,
-    /// Slack channel display name (e.g. 'bridge', 'engineering'). Null for non-Slack rows. Drives the Channel column and a future channel: filter.
+    /// Channel display name. For Slack this is the channel (e.g. 'bridge', 'engineering'); for chat providers it is the chat's display name (group subject or 1:1 counterpart). Null for providers without a channel/chat concept. Drives the Channel column and a future channel: filter.
     ///
     /// Per-provider mapping:
     ///   anthropic: null
     ///   openai: null
     ///   slack: slack_channels.channel_name
+    ///   whatsapp: chat display name (wa_chat.subject for groups, JID label for 1:1)
+    ///   signal: chat name (recipients.display_name / phone number)
     ///   github: null
     ///   gitlab: null
     pub channel: Option<String>,

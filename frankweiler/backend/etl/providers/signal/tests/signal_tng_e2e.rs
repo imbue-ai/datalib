@@ -257,6 +257,19 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // 1 chat-level row + 4 message-level rows = 5 grid rows.
     assert_eq!(doc.rows.len(), 5, "1 chat row + 4 message rows");
 
+    // Channel column: every row — chat-level and message-level — carries
+    // the bare chat name (the recipient display), mirroring WhatsApp
+    // where `channel` == the chat's display name. This is what drives the
+    // "Channel" field in the UI grid; the "Signal · …" prefix lives only
+    // in the title/conversation_name, never in `channel`.
+    assert!(
+        doc.rows
+            .iter()
+            .all(|r| r.channel.as_deref() == Some("Will Riker")),
+        "every Signal grid row should set channel to the chat name, got: {:?}",
+        doc.rows.iter().map(|r| &r.channel).collect::<Vec<_>>()
+    );
+
     let sidecar_path = doc.md_path.with_extension("grid_rows.json");
     assert!(sidecar_path.exists(), "sidecar written next to md");
 
