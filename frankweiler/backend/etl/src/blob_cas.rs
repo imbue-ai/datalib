@@ -133,6 +133,7 @@ impl BlobCas {
         .execute(&self.pool)
         .await
         .context("cas put")?;
+        crate::extract_metrics::record_upserts("cas_objects", 1);
         Ok(hash)
     }
 
@@ -172,6 +173,11 @@ impl BlobCas {
                 .context("bulk insert cas_objects")?;
         }
         tx.commit().await.context("commit cas put_many tx")?;
+        // Tally CAS writes against the current source's extract metrics
+        // (no-op outside an extract scope). Counts attempts; some are
+        // INSERT-OR-IGNORE dupes, so rows_after - rows_before is the
+        // real net-new figure.
+        crate::extract_metrics::record_upserts("cas_objects", items.len());
         Ok(())
     }
 

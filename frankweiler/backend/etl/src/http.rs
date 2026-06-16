@@ -198,6 +198,13 @@ impl Mode {
 /// the live (`latchkey curl`) and playback (disk-fixture) implementations
 /// based on `FRANKWEILER_HTTP_PLAYBACK`.
 pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
+    // Count every outbound request against the current source's extract
+    // metrics (no-op outside an extract scope). This is the single
+    // transport chokepoint every provider's API call funnels through, so
+    // the per-source API-call total is captured here with zero
+    // provider-side code. File-based ingestion never reaches this path,
+    // so it correctly reports zero requests.
+    crate::extract_metrics::record_api_request();
     match Mode::current() {
         Mode::Live => live::send(req).await,
         Mode::Playback(root) => playback::lookup(req, &root).await,

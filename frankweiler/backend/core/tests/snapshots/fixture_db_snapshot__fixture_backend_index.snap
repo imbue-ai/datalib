@@ -465,7 +465,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Me",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -615,7 +615,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Data Soong",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -865,7 +865,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Me",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -1090,7 +1090,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Beverly Crusher",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -1215,7 +1215,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Data Soong",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -1715,7 +1715,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Geordi La Forge",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -1790,7 +1790,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Worf Rozhenko",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -1990,7 +1990,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Deanna Troi",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -2090,7 +2090,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Me",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -2165,7 +2165,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Will Riker",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",
@@ -2890,7 +2890,7 @@ expression: snapshot
     {
       "account": null,
       "author": "Will Riker",
-      "channel": null,
+      "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker (2364-04)",
       "conversation_uuid": "8047c185-16c7-562a-9f2f-55565ca61367",
       "entire_chat": "/chat/f3cec598-54d7-5c4a-b828-4c2e978d7fd7",

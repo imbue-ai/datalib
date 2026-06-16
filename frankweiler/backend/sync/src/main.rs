@@ -235,8 +235,12 @@ async fn main() {
         if tokio::signal::ctrl_c().await.is_ok() {
             status_line!("[frankweiler-sync] caught Ctrl-C; committing partial state…");
             interrupt_commit_all(&c_sig).await;
+            // Re-snapshot each source's files (post-commit) and record
+            // what changed, even on an interrupted run.
+            let reports = interrupt_build_reports(&c_sig).await;
             let mut s = s_sig.lock().unwrap();
             s.interrupted = true;
+            s.interrupted_extract_reports = reports;
             s.finalize(start);
             match s.write() {
                 Ok(Some(p)) => {
@@ -321,6 +325,41 @@ struct CtrlcState {
     /// pools directly — no `commit_run_at_path` reopen race because
     /// these are the *same* connections the extract workers are using.
     extract_pools: Vec<ExtractPoolEntry>,
+    /// Per-source report contexts (paths, before-snapshots, live
+    /// counters), registered alongside `extract_pools`. On Ctrl-C —
+    /// after the pools are committed — the handler re-snapshots each
+    /// source's files and assembles a report from these, so an
+    /// interrupted run still records what changed.
+    extract_reports: Vec<ReportCtx>,
+}
+
+/// Everything needed to assemble a source's [`ExtractReport`] after the
+/// fact: the entity-db path (the CAS path is derived), the before-extract
+/// snapshots, and the live counters. Held by both `run_extract_phase`
+/// (for the clean-completion path) and [`CtrlcState`] (for the interrupt
+/// path).
+#[derive(Clone)]
+struct ReportCtx {
+    name: String,
+    entity_path: PathBuf,
+    before_events: frankweiler_etl::extract_metrics::DbSnapshot,
+    before_blobs: frankweiler_etl::extract_metrics::DbSnapshot,
+    metrics: Arc<frankweiler_etl::extract_metrics::ExtractMetrics>,
+}
+
+impl ReportCtx {
+    /// Re-snapshot the source's files (the "after" endpoint) and fold in
+    /// the live counters. Safe once the source has committed + released
+    /// its writer; the snapshot uses an independent read-only connection.
+    async fn assemble(&self) -> frankweiler_etl::extract_metrics::ExtractReport {
+        frankweiler_etl::extract_metrics::assemble_report(
+            &self.entity_path,
+            &self.before_events,
+            &self.before_blobs,
+            &self.metrics,
+        )
+        .await
+    }
 }
 
 /// Entry in [`CtrlcState::extract_pools`] — the source's display name
@@ -362,6 +401,32 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
             ),
         }
     }
+}
+
+/// Build per-source extract reports on a Ctrl-C interrupt. Call *after*
+/// [`interrupt_commit_all`] so the after-snapshots see committed rows.
+/// Logs a one-line summary per source as it goes and returns the
+/// `(name, report)` pairs for the JSON summary. Best-effort: empty
+/// reports (file-tree-backed sources, sources that never started) are
+/// dropped.
+async fn interrupt_build_reports(
+    state: &Arc<Mutex<CtrlcState>>,
+) -> Vec<(String, frankweiler_etl::extract_metrics::ExtractReport)> {
+    let ctxs = { state.lock().unwrap().extract_reports.clone() };
+    let mut out = Vec::new();
+    for ctx in ctxs {
+        let report = ctx.assemble().await;
+        if report.is_empty() {
+            continue;
+        }
+        status_line!(
+            "[frankweiler-sync] extract {} (interrupted): {}",
+            ctx.name,
+            report.summary_line()
+        );
+        out.push((ctx.name.clone(), report));
+    }
+    out
 }
 
 /// Walk the anyhow error chain top-to-bottom (so the user reads
@@ -634,6 +699,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 error: None,
                 error_kind: None,
                 stats: Some("skipped (--skip-extract)".into()),
+                report: None,
             });
         }
     } else {
@@ -754,6 +820,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 error: None,
                 error_kind: None,
                 stats: Some("skipped (extract failed)".into()),
+                report: None,
             });
             continue;
         }
@@ -1058,6 +1125,30 @@ async fn run_extract_phase(
         }
     }
 
+    // Snapshot every source's raw-store files BEFORE any writer opens,
+    // so each source's report has an honest before/after baseline for
+    // bytes and per-table row counts. Keyed by source name; the same
+    // contexts are registered with the SIGINT state so an interrupted
+    // run can still produce reports. Sources with no doltlite store
+    // (file-tree-backed) snapshot as empty and get dropped later when
+    // the report turns out empty.
+    let mut report_ctxs: std::collections::HashMap<String, ReportCtx> =
+        std::collections::HashMap::new();
+    for plan in &plans {
+        let entity_path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
+        let (before_events, before_blobs) =
+            frankweiler_etl::extract_metrics::snapshot_source(&entity_path).await;
+        let ctx = ReportCtx {
+            name: plan.name.clone(),
+            entity_path,
+            before_events,
+            before_blobs,
+            metrics: plan.metrics.clone(),
+        };
+        report_ctxs.insert(plan.name.clone(), ctx.clone());
+        ctrlc.lock().unwrap().extract_reports.push(ctx);
+    }
+
     // Open every doltlite-backed source's writable pool BEFORE
     // starting any download. A source whose pool open fails is
     // recorded as a phase error and dropped from the work set —
@@ -1141,7 +1232,16 @@ async fn run_extract_phase(
             std::sync::Arc::new(IndicatifSink::new(bar, multi.clone())),
             std::sync::Arc::new(TracingSink::new(plan.name.clone())),
         ];
-        plan.progress = Progress::new(std::sync::Arc::new(FanOut::new(sinks)));
+        let fanout: std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink> =
+            std::sync::Arc::new(FanOut::new(sinks));
+        // Let live counter updates re-render the bar's `api=… rows[…]`
+        // suffix, then wrap so the provider's own `set_message` carries
+        // that suffix too. Children (per-unit inner bars) stay unwrapped.
+        plan.metrics.attach_bar(fanout.clone());
+        let sink: std::sync::Arc<dyn frankweiler_etl::progress::ProgressSink> = std::sync::Arc::new(
+            frankweiler_etl::extract_metrics::MetricsSink::new(fanout, plan.metrics.clone()),
+        );
+        plan.progress = Progress::new(sink);
     }
 
     if cfg.sync.parallel {
@@ -1169,7 +1269,8 @@ async fn run_extract_phase(
         while let Some(joined) = set.join_next().await {
             match joined {
                 Ok((name, type_str, r)) => {
-                    outcomes.push(summary::outcome_from(&name, type_str, r));
+                    let outcome = summary::outcome_from(&name, type_str, r);
+                    outcomes.push(finalize_extract_outcome(outcome, &report_ctxs).await);
                 }
                 Err(e) => {
                     // Task panicked — we don't know which source. Record
@@ -1197,7 +1298,8 @@ async fn run_extract_phase(
                     "extract: FAIL"
                 ),
             };
-            outcomes.push(summary::outcome_from(&name, type_str, r));
+            let outcome = summary::outcome_from(&name, type_str, r);
+            outcomes.push(finalize_extract_outcome(outcome, &report_ctxs).await);
         }
     }
 
@@ -1220,6 +1322,29 @@ async fn run_extract_phase(
             .unwrap_or(fallback_pos)
     });
     outcomes
+}
+
+/// Attach the general "what changed" report to a just-finished source's
+/// outcome. Runs at join time — the source has already committed, closed
+/// its writer, and cleared its progress bar — so the after-snapshot is
+/// lock-safe and the INFO line lands "as the bar goes away". A no-op for
+/// sources with no registered context (e.g. a `<unknown>` panic record).
+async fn finalize_extract_outcome(
+    outcome: PhaseOutcome,
+    report_ctxs: &std::collections::HashMap<String, ReportCtx>,
+) -> PhaseOutcome {
+    let Some(ctx) = report_ctxs.get(&outcome.name) else {
+        return outcome;
+    };
+    let report = ctx.assemble().await;
+    if !report.is_empty() {
+        tracing::info!(
+            source = %outcome.name,
+            summary = %report.summary_line(),
+            "extract: report"
+        );
+    }
+    outcome.with_report(report)
 }
 
 /// One source's extract closure. Holds owned data so it can be moved
@@ -1245,6 +1370,12 @@ struct ExtractPlan {
     /// source (or the global default) has `event_tape: { enabled: true }`.
     /// Attached to the provider's `RawDb` after `open_extract_db`.
     event_tape: Option<Arc<frankweiler_etl::event_tape::EventTape>>,
+    /// Live "what changed" counters for this source, installed as the
+    /// ambient extract-metrics context for the duration of `run()` so the
+    /// shared write/HTTP chokepoints record into it. Shared (via the
+    /// `Arc`) with the orchestrator's report-assembly and the Ctrl-C
+    /// handler.
+    metrics: Arc<frankweiler_etl::extract_metrics::ExtractMetrics>,
 }
 
 /// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
@@ -1564,6 +1695,7 @@ impl ExtractPlan {
             control: control.clone(),
             db: None,
             event_tape,
+            metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
         }))
     }
 
@@ -1571,7 +1703,17 @@ impl ExtractPlan {
     /// shape — what makes it onto stderr is whatever's interesting for
     /// that source (slack media outcomes including `error` counts, claude
     /// fetched/skipped/errors, etc).
+    ///
+    /// Installs this source's [`ExtractMetrics`] as the ambient task-local
+    /// context so the shared write/HTTP chokepoints record into it for the
+    /// whole download. Everything is awaited on this one task, so the
+    /// context is visible to every chokepoint the provider reaches.
     async fn run(self) -> Result<String> {
+        let metrics = self.metrics.clone();
+        frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()).await
+    }
+
+    async fn run_inner(self) -> Result<String> {
         let progress = self.progress.clone();
         let name = self.name.clone();
         let control = self.control.clone();
@@ -2054,7 +2196,11 @@ impl ExtractPlan {
             // be a bug in `open_extract_db`. We don't try to recover.
             _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
         };
-        progress.finish("done");
+        // Remove the per-source bar from the live list rather than
+        // leaving a finished one behind — the orchestrator logs the
+        // metrics-rich INFO line as the bar goes away (see the join
+        // path in `run_extract_phase`).
+        progress.finish_and_clear();
         // One commit per source at the end of extract, against the
         // *same* pool the worker just used. No reopen — under doltlite
         // a second pool against the same file would race the writer's
@@ -2672,6 +2818,7 @@ mod interrupt_tests {
                 name: "source_a".to_string(),
                 pool: extract_pool.clone(),
             }],
+            extract_reports: Vec::new(),
         }));
 
         // Invoke the same function the SIGINT handler invokes.

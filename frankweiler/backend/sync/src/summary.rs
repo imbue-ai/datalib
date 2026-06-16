@@ -79,6 +79,12 @@ pub struct PhaseOutcome {
     /// skipped=M ...`). Free-form because providers don't share a
     /// schema.
     pub stats: Option<String>,
+    /// General per-source "what changed" report: API call count plus the
+    /// before/after byte and per-table row counts of the raw-store db
+    /// files. `None` for translate outcomes and for sources with no
+    /// doltlite store. Built source-agnostically from the shared
+    /// chokepoints + db-file snapshots.
+    pub report: Option<frankweiler_etl::extract_metrics::ExtractReport>,
 }
 
 impl PhaseOutcome {
@@ -90,6 +96,7 @@ impl PhaseOutcome {
             error: None,
             error_kind: None,
             stats: Some(stats),
+            report: None,
         }
     }
 
@@ -107,7 +114,17 @@ impl PhaseOutcome {
             error: Some(chain_text),
             error_kind: Some(kind),
             stats: None,
+            report: None,
         }
+    }
+
+    /// Attach a general extract report (no-op for an empty one, e.g. a
+    /// file-tree-backed source with no doltlite store).
+    pub fn with_report(mut self, report: frankweiler_etl::extract_metrics::ExtractReport) -> Self {
+        if !report.is_empty() {
+            self.report = Some(report);
+        }
+        self
     }
 
     fn to_json(&self) -> Value {
@@ -119,6 +136,7 @@ impl PhaseOutcome {
             "error_kind": self.error_kind.map(|k| k.as_str()),
             "intermittent": self.error_kind.map(|k| k.is_intermittent()),
             "stats": self.stats,
+            "report": self.report.as_ref().map(|r| r.to_json()),
         })
     }
 }
@@ -188,6 +206,11 @@ pub struct SyncSummary {
     /// qmd has no `--json` mode for `status`, so this is human-readable
     /// text.
     pub qmd_status: Option<String>,
+    /// Per-source extract reports captured on a Ctrl-C interrupt, when
+    /// the extract phase never returned its normal `extract` outcomes.
+    /// Empty on a clean run (the reports ride along inside each
+    /// [`PhaseOutcome::report`] instead).
+    pub interrupted_extract_reports: Vec<(String, frankweiler_etl::extract_metrics::ExtractReport)>,
 }
 
 impl SyncSummary {
@@ -205,6 +228,7 @@ impl SyncSummary {
             load: None,
             qmd_index: None,
             qmd_status: None,
+            interrupted_extract_reports: Vec::new(),
         }
     }
 
@@ -263,6 +287,15 @@ impl SyncSummary {
             "load": load,
             "qmd_index": self.qmd_index.as_ref().map(PhaseOutcome::to_json),
             "qmd_status": self.qmd_status,
+            "interrupted_extract_reports": if self.interrupted_extract_reports.is_empty() {
+                Value::Null
+            } else {
+                self.interrupted_extract_reports
+                    .iter()
+                    .map(|(name, r)| json!({ "name": name, "report": r.to_json() }))
+                    .collect::<Vec<_>>()
+                    .into()
+            },
         })
     }
 
