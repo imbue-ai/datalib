@@ -85,11 +85,11 @@ impl RawDb {
     /// have this conversation yet, fetch it." Used by the listing pass
     /// to decide which conversations need a detail fetch.
     ///
-    /// `update_time` is JSON-encoded — same encoding the upstream
-    /// listing returns (a number for chatgpt, but we round-trip
-    /// through `serde_json::to_string` for comparison-stability
-    /// against `string` / `null` variants the API has been known to
-    /// emit).
+    /// `update_time` comes back as the JSON-encoded text we wrote: the
+    /// *detail* endpoint's Unix-epoch float. The caller does not compare
+    /// it to the *listing* value (an ISO-8601 string) byte-for-byte —
+    /// both sides are canonicalized to whole-second epoch first (see
+    /// `extract::update_time_secs`).
     pub async fn existing_update_times(&self, ids: &[&str]) -> Result<HashMap<String, String>> {
         if ids.is_empty() {
             return Ok(HashMap::new());
@@ -270,8 +270,9 @@ mod tests {
                     payload: serde_json::to_string(&json!({"id":"c1","mapping":{}})).unwrap(),
                 },
                 title: Some("T".into()),
-                // upstream listing emits update_time as a number; we
-                // JSON-encode for comparison-stability.
+                // Stored as the detail endpoint's JSON-encoded float;
+                // this test only checks the storage round-trip, not the
+                // cross-shape comparison (see extract::update_time_secs).
                 update_time: Some("1.0".into()),
             }],
             "2026-06-11T00:00:00-07:00",

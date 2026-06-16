@@ -76,6 +76,21 @@ rust_test(
 )
 
 rust_test(
+    name = "chatgpt_incremental_skip",
+    srcs = ["tests/incremental_skip.rs"],
+    crate_root = "tests/incremental_skip.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_chatgpt",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)
+
+rust_test(
     name = "chatgpt_unittests",
     size = "small",
     crate = ":frankweiler_etl_chatgpt",

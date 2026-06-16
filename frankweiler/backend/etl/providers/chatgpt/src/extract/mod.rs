@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use chrono::DateTime;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
@@ -223,16 +224,24 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
-            // JSON-encode the listing's update_time so its byte shape
-            // matches the stored value (the listing can emit a number,
-            // string, or null depending on the conversation).
-            let api_ut_str = item
-                .get("update_time")
-                .map(|v| serde_json::to_string(v).unwrap_or_default());
-            match (existing.get(cid), api_ut_str.as_deref()) {
-                (Some(stored), Some(api)) if stored == api => up_to_date += 1,
-                (Some(_), _) => stale.push(item),
-                (None, _) => missing.push(item),
+            match existing.get(cid) {
+                None => missing.push(item),
+                // Canonicalize both sides to a whole-second epoch before
+                // comparing. The stored value is the *detail* endpoint's
+                // Unix-epoch float; `item`'s is the *listing* endpoint's
+                // ISO-8601 string — comparing the raw JSON encodings
+                // never matches, so every conversation looks stale and
+                // gets re-fetched (see `update_time_secs`). Either side
+                // failing to canonicalize falls through to `stale`, the
+                // safe (re-fetch) direction.
+                Some(stored) => {
+                    let stored_secs = stored_update_time_secs(stored);
+                    let api_secs = item.get("update_time").and_then(update_time_secs);
+                    match (stored_secs, api_secs) {
+                        (Some(a), Some(b)) if a == b => up_to_date += 1,
+                        _ => stale.push(item),
+                    }
+                }
             }
         }
         info!(
@@ -322,14 +331,53 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
 fn title_and_update_time(full: &Value) -> (Option<String>, Option<String>) {
     let title = full.get("title").and_then(|v| v.as_str()).map(String::from);
-    // `update_time` in the detail response is a Unix-epoch float; the
-    // listing endpoint returns the same value as a number. We store
-    // its JSON string form so the column stays comparable across both
-    // shapes ("1737.5" vs "1737.5").
+    // `update_time` in the detail response is a Unix-epoch float, which
+    // we store JSON-encoded ("1710959331.420159"). Note the *listing*
+    // endpoint reports the same instant as an ISO-8601 string, so the
+    // skip-check can't compare the stored text byte-for-byte against the
+    // listing value — it canonicalizes both via `update_time_secs`.
     let update_time = full
         .get("update_time")
         .map(|v| serde_json::to_string(v).unwrap_or_default());
     (title, update_time)
+}
+
+/// Reduce an `update_time` value to a whole-second Unix epoch for the
+/// listing skip-check.
+///
+/// The two endpoints disagree on shape: the `/conversations` listing
+/// returns `update_time` as an ISO-8601 string
+/// (`"2024-03-20T18:28:51.420159+00:00"`) while `/conversation/{id}`
+/// returns it as a Unix-epoch float (`1710959331.420159`). We store the
+/// detail float in `conversations.update_time`, then compare it against
+/// the listing string on the next sync — so a raw byte comparison never
+/// matches and every conversation looks stale, defeating incremental
+/// resume (this regressed the Python-era fix in commit 1fc3ee8).
+/// Canonicalizing both sides to whole seconds restores a like-for-like
+/// comparison. Sub-second precision is dropped on purpose: a
+/// conversation's `update_time` only advances when it gains a message,
+/// so seconds suffice to spot real changes and we side-step float/ISO
+/// sub-second formatting noise.
+fn update_time_secs(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_f64().map(|f| f.floor() as i64),
+        Value::String(s) if !s.is_empty() => DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp())
+            // Tolerate a stringified epoch just in case the API ever
+            // quotes the number.
+            .or_else(|| s.parse::<f64>().ok().map(|f| f.floor() as i64)),
+        _ => None,
+    }
+}
+
+/// Canonicalize the *stored* column, which SQLite hands back as the
+/// JSON-encoded text we wrote (`1710959331.420159` for a float,
+/// `"…iso…"` for a string). Re-parse to recover the value's shape, then
+/// reduce to seconds via [`update_time_secs`].
+fn stored_update_time_secs(json_encoded: &str) -> Option<i64> {
+    let v: Value = serde_json::from_str(json_encoded).ok()?;
+    update_time_secs(&v)
 }
 
 /// Internal row shape used by [`upsert_conversations`] — same fields
@@ -654,4 +702,56 @@ async fn list_all_conversations(
         sleep(SLEEP_BETWEEN).await;
     }
     Ok(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Derive the ISO-8601 string the *listing* endpoint would report
+    /// for a given detail-endpoint epoch float, using the same format
+    /// the live API emits (microseconds, explicit `+00:00`).
+    fn iso_for_epoch(epoch: f64) -> String {
+        let micros = (epoch * 1_000_000.0).round() as i64;
+        DateTime::from_timestamp_micros(micros)
+            .unwrap()
+            .format("%Y-%m-%dT%H:%M:%S%.6f+00:00")
+            .to_string()
+    }
+
+    #[test]
+    fn update_time_secs_matches_across_listing_and_detail_shapes() {
+        // The exact bug this guards: the detail endpoint hands back a
+        // Unix-epoch float, the listing endpoint the same instant as an
+        // ISO-8601 string. Both must canonicalize to the same second.
+        let epoch = 1_710_959_331.420159_f64;
+        let detail = json!(epoch);
+        let listing = json!(iso_for_epoch(epoch));
+        assert_eq!(update_time_secs(&detail), Some(1_710_959_331));
+        assert_eq!(update_time_secs(&detail), update_time_secs(&listing));
+    }
+
+    #[test]
+    fn stored_update_time_secs_reparses_json_encoded_text() {
+        // The column comes back as the JSON text we wrote. Float and ISO
+        // encodings of the same instant must reduce to the same second.
+        let epoch = 1_710_959_331.420159_f64;
+        let float_text = serde_json::to_string(&json!(epoch)).unwrap();
+        let iso_text = serde_json::to_string(&json!(iso_for_epoch(epoch))).unwrap();
+        assert_eq!(stored_update_time_secs(&float_text), Some(1_710_959_331));
+        assert_eq!(
+            stored_update_time_secs(&float_text),
+            stored_update_time_secs(&iso_text)
+        );
+        // Sub-second drift between the two endpoints is collapsed away.
+        let jittered = serde_json::to_string(&json!(epoch + 0.4)).unwrap();
+        assert_eq!(
+            stored_update_time_secs(&jittered),
+            stored_update_time_secs(&float_text)
+        );
+        // Unparseable text is `None` → caller treats the row as stale.
+        assert_eq!(stored_update_time_secs("garbage"), None);
+        assert_eq!(update_time_secs(&Value::Null), None);
+    }
 }

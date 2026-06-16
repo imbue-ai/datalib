@@ -19,7 +19,10 @@
 //! We've dropped it: writes only happen post-detail-fetch, every write
 //! goes through `bulk_upsert_in_tx`. Skip-check on subsequent syncs
 //! compares the listing's `update_time` to the stored
-//! `conversations.update_time` (both JSON-encoded). See
+//! `conversations.update_time` — but the two endpoints disagree on
+//! shape (listing = ISO-8601 string, detail = Unix-epoch float), so the
+//! comparison canonicalizes both to whole-second epoch via
+//! `extract::update_time_secs` rather than matching the JSON text. See
 //! `docs/dev/data_architecture_ingestion.md` §"No-preseed listing flow"
 //! for the rationale.
 //!
@@ -80,13 +83,12 @@ pub struct MeRow {
 /// - `id` — upstream conversation id. Primary key.
 /// - `title` — denormalized conversation title for cheap listing
 ///   queries; the payload remains authoritative.
-/// - `update_time` — upstream `payload.update_time`, JSON-encoded
-///   (the upstream value can be a string, number, or sometimes null,
-///   so we round-trip through `serde_json::to_string` for
-///   comparison-stability against the listing endpoint's matching
-///   value). Used both as the listing-derived skip-check cursor
-///   (extract side) and as the source for `GridRow.when_ts`
-///   (translate side).
+/// - `update_time` — the detail endpoint's `payload.update_time`
+///   (a Unix-epoch float), JSON-encoded. The skip-check compares it
+///   against the listing endpoint's value, which arrives as an
+///   ISO-8601 string, by canonicalizing both to whole-second epoch
+///   (`extract::update_time_secs`) rather than matching JSON text. Also
+///   the source for `GridRow.when_ts` (translate side).
 /// - `payload` — raw upstream conversation JSON (JSONB on disk).
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "conversations")]
