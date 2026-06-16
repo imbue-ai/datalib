@@ -90,8 +90,7 @@ Signal and WhatsApp backups off an Android phone — see
 > and your identity on these services.
 >
 > Only run these steps on a machine you trust, and be aware that *every*
-> local agent (including this one) inherits this authority for as long
-> as the cookies remain valid.
+> local agent inherits this authority for as long as the cookies remain valid.
 
 You don't necessarily need to install `latchkey` — the commands below invoke it via
 `npx`, which fetches it on demand (the `node` install from step 0 ships
