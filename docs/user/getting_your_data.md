@@ -103,16 +103,36 @@ per source with `aep_env_var`).
 
 ## WhatsApp
 
-WhatsApp keeps its media and message databases under app storage on the
-phone. Pull them off the device over `adb`:
+The provider ingests the end-to-end-encrypted `msgstore.db.crypt15`
+database — the newest backup format, and the only one we support. The
+older password-based backups are *not* decryptable offline, so don't use
+that path.
+
+**Get the key.** This is the part that usually trips people up, and no
+root is needed. In WhatsApp, go to Settings → Chats → Chat backup →
+End-to-end encrypted backup. Turn it on and choose the **64-digit key**
+option (not a password). Write that key down — that *is* the key. If you
+already enabled E2EE with a password, turn it off and re-enable with the
+64-digit option, or you'll be stuck.
+
+The provider reads the 64-digit hex key from the
+`WHATSAPP_BACKUP_DECRYPTION_KEY` env var (override per source with
+`key_env_var`).
+
+**Pull the encrypted database.** Trigger a fresh local backup first
+(Settings → Chats → Chat backup → Back Up) so the file is current, then
+plug the phone in with USB debugging on and pull it off over `adb`:
+
+```sh
+adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/Databases/msgstore.db.crypt15 .
+```
+
+Or copy it through MTP / a file manager. To also bring over media, pull
+the whole backup directory instead:
 
 ```sh
 adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/ ~/backups/WhatsApp/
 ```
-
-You'll also need the 64-character hex backup key. The provider reads it
-from the `WHATSAPP_BACKUP_DECRYPTION_KEY` env var (override per source with
-`key_env_var`).
 
 ## Other sources
 
