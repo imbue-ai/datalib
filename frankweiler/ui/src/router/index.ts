@@ -19,6 +19,11 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
+      path: "/setup",
+      name: "setup",
+      component: () => import("@/views/SetupView.vue"),
+    },
+    {
       path: "/sync",
       name: "sync",
       component: () => import("@/views/SyncView.vue"),
