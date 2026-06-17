@@ -21,6 +21,7 @@ rust_library(
         "@frankweiler_crates//:opentelemetry",
         "@frankweiler_crates//:opentelemetry-otlp",
         "@frankweiler_crates//:opentelemetry_sdk",
+        "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",
         "@frankweiler_crates//:tracing-indicatif",
         "@frankweiler_crates//:tracing-opentelemetry",

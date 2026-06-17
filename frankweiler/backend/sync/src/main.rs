@@ -345,18 +345,21 @@ struct ReportCtx {
     before_events: frankweiler_etl::extract_metrics::DbSnapshot,
     before_blobs: frankweiler_etl::extract_metrics::DbSnapshot,
     metrics: Arc<frankweiler_etl::extract_metrics::ExtractMetrics>,
+    diagnostics: Arc<frankweiler_obs::diagnostics::Diagnostics>,
 }
 
 impl ReportCtx {
     /// Re-snapshot the source's files (the "after" endpoint) and fold in
-    /// the live counters. Safe once the source has committed + released
-    /// its writer; the snapshot uses an independent read-only connection.
+    /// the live counters and captured diagnostics. Safe once the source has
+    /// committed + released its writer; the snapshot uses an independent
+    /// read-only connection.
     async fn assemble(&self) -> frankweiler_etl::extract_metrics::ExtractReport {
         frankweiler_etl::extract_metrics::assemble_report(
             &self.entity_path,
             &self.before_events,
             &self.before_blobs,
             &self.metrics,
+            &self.diagnostics,
         )
         .await
     }
@@ -1144,6 +1147,7 @@ async fn run_extract_phase(
             before_events,
             before_blobs,
             metrics: plan.metrics.clone(),
+            diagnostics: plan.diagnostics.clone(),
         };
         report_ctxs.insert(plan.name.clone(), ctx.clone());
         ctrlc.lock().unwrap().extract_reports.push(ctx);
@@ -1381,6 +1385,12 @@ struct ExtractPlan {
     /// duration of `run()` so the shared HTTP chokepoint enforces them for
     /// every provider, without provider-side code.
     extract_params: frankweiler_core::config::ExtractParams,
+    /// Per-source WARN/ERROR capture buffer, installed as the ambient
+    /// diagnostics context for the duration of `run()` so the global
+    /// [`frankweiler_obs::diagnostics`] layer collects every warning/error
+    /// (wire + provider-internal) into it. Shared (via the `Arc`) with the
+    /// report-assembly and Ctrl-C paths, exactly like `metrics`.
+    diagnostics: Arc<frankweiler_obs::diagnostics::Diagnostics>,
 }
 
 /// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
@@ -1702,6 +1712,7 @@ impl ExtractPlan {
             event_tape,
             metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
             extract_params: src.resolved_shared(cfg).extract_params,
+            diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
         }))
     }
 
@@ -1716,15 +1727,20 @@ impl ExtractPlan {
     /// context is visible to every chokepoint the provider reaches.
     async fn run(self) -> Result<String> {
         let metrics = self.metrics.clone();
-        // Install both ambient contexts for the whole source extract on this
-        // one task: the metrics counters and the rate-limit give-up guard.
-        // The shared HTTP chokepoint resolves the guard via
-        // `retry::current_or_default()` and enforces the bounds for every
-        // provider, with no provider-side code.
+        let diagnostics = self.diagnostics.clone();
+        // Install all three ambient contexts for the whole source extract on
+        // this one task: the metrics counters, the rate-limit give-up guard,
+        // and the WARN/ERROR diagnostics buffer. The shared HTTP chokepoint
+        // resolves the guard via `retry::current_or_default()`; the global
+        // tracing layer funnels warnings/errors into the diagnostics buffer —
+        // both enforced for every provider with no provider-side code.
         let guard = frankweiler_etl::retry::RetryGuard::from_params(&self.extract_params);
-        frankweiler_etl::retry::scope(
-            guard,
-            frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()),
+        frankweiler_obs::diagnostics::scope(
+            diagnostics,
+            frankweiler_etl::retry::scope(
+                guard,
+                frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()),
+            ),
         )
         .await
     }

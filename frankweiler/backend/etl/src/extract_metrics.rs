@@ -380,31 +380,61 @@ impl DbFileReport {
     }
 }
 
-/// The full per-source extract report: API call count plus the
-/// before/after picture of each raw-store db file.
+/// The full per-source extract report: API call count, the before/after
+/// picture of each raw-store db file, and every WARN/ERROR the source
+/// emitted during the extract.
 #[derive(Debug, Clone)]
 pub struct ExtractReport {
     pub api_requests: u64,
     pub rows_upserted_total: u64,
     pub dbs: Vec<DbFileReport>,
+    /// WARN/ERROR `tracing` events captured during this source's extract
+    /// (wire-level + provider-internal), in emission order. Collected by
+    /// the [`frankweiler_obs::diagnostics`] layer; surfaced so the JSON
+    /// sync summary records exactly what went wrong per source.
+    pub diagnostics: Vec<frankweiler_obs::diagnostics::DiagnosticEntry>,
+    /// Diagnostics discarded after hitting the per-source retention cap.
+    pub diagnostics_dropped: usize,
 }
 
 impl ExtractReport {
+    /// `(warnings, errors)` counts over the captured diagnostics.
+    pub fn diagnostic_counts(&self) -> (usize, usize) {
+        let errors = self
+            .diagnostics
+            .iter()
+            .filter(|d| d.level == "ERROR")
+            .count();
+        (self.diagnostics.len() - errors, errors)
+    }
+
     pub fn to_json(&self) -> Value {
         json!({
             "api_requests": self.api_requests,
             "rows_upserted_total": self.rows_upserted_total,
             "dbs": self.dbs.iter().map(DbFileReport::to_json).collect::<Vec<_>>(),
+            "diagnostics": self
+                .diagnostics
+                .iter()
+                .map(|d| json!({
+                    "level": d.level,
+                    "target": d.target,
+                    "message": d.message,
+                }))
+                .collect::<Vec<_>>(),
+            "diagnostics_dropped": self.diagnostics_dropped,
         })
     }
 
-    /// True when nothing was measured (no files, no api) — e.g. a
-    /// file-tree-backed source with no doltlite store. The caller can
-    /// drop the report entirely in that case.
+    /// True when nothing was measured (no files, no api, no diagnostics) —
+    /// e.g. a file-tree-backed source with no doltlite store and a clean
+    /// run. The caller can drop the report entirely in that case.
     pub fn is_empty(&self) -> bool {
         self.api_requests == 0
             && self.rows_upserted_total == 0
             && self.dbs.iter().all(DbFileReport::is_empty)
+            && self.diagnostics.is_empty()
+            && self.diagnostics_dropped == 0
     }
 
     /// A compact one-line summary for the INFO log emitted as a source's
@@ -417,6 +447,13 @@ impl ExtractReport {
             parts.push(format!(
                 "{}(bytes {}->{} rows_net={:+} upserted={})",
                 db.label, db.bytes_before, db.bytes_after, net, upserted
+            ));
+        }
+        let (warnings, errors) = self.diagnostic_counts();
+        if warnings > 0 || errors > 0 || self.diagnostics_dropped > 0 {
+            parts.push(format!(
+                "diag(warn={warnings} err={errors} dropped={})",
+                self.diagnostics_dropped
             ));
         }
         parts.join(" ")
@@ -461,14 +498,16 @@ fn build_db_file_report(
 }
 
 /// Assemble the final report: re-snapshot the source's files (the
-/// "after" endpoint) and fold in the live counters. Safe to call once
-/// the source has committed and released its writer — the after-snapshot
-/// uses an independent read-only connection.
+/// "after" endpoint) and fold in the live counters plus the captured
+/// diagnostics. Safe to call once the source has committed and released
+/// its writer — the after-snapshot uses an independent read-only
+/// connection.
 pub async fn assemble_report(
     entity_path: &Path,
     before_events: &DbSnapshot,
     before_blobs: &DbSnapshot,
     metrics: &ExtractMetrics,
+    diagnostics: &frankweiler_obs::diagnostics::Diagnostics,
 ) -> ExtractReport {
     let blobs_path = crate::blob_cas::cas_path_for(entity_path);
     let after_events = snapshot_db_file(entity_path).await;
@@ -487,6 +526,8 @@ pub async fn assemble_report(
             ),
             build_db_file_report("blobs", &blobs_path, before_blobs, &after_blobs, &upserts),
         ],
+        diagnostics: diagnostics.snapshot(),
+        diagnostics_dropped: diagnostics.dropped(),
     }
 }
 

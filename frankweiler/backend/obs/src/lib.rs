@@ -52,6 +52,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 
+pub mod diagnostics;
+
 /// `--log-format` selector. `Auto` (the default) emits pretty on a TTY,
 /// JSON otherwise — exactly what you'd want from a CLI that doubles as
 /// a pipeline step.
@@ -192,7 +194,14 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     // Pretty vs JSON differ only in the `.json()` toggle. Each branch
     // builds its own fmt layer because the two builder chains end in
     // different concrete types that can't share a variable.
-    let registry = tracing_subscriber::registry().with(filter).with(otel_layer);
+    // The diagnostics layer captures every WARN/ERROR event into the
+    // ambient per-source buffer (when one is installed via
+    // `diagnostics::scope`) so the sync orchestrator can fold them into
+    // the per-source summary. It's a no-op on tasks without a buffer.
+    let registry = tracing_subscriber::registry()
+        .with(filter)
+        .with(otel_layer)
+        .with(diagnostics::DiagnosticsLayer);
     if use_json {
         registry
             .with(

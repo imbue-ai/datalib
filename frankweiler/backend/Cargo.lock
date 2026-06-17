@@ -1796,6 +1796,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "tokio",
  "tracing",
  "tracing-indicatif",
  "tracing-opentelemetry",
