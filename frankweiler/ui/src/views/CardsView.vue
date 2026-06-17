@@ -1,26 +1,29 @@
 <script setup lang="ts">
-// Routed view for the card surface. Owns the chrome both layouts
+// Routed view for the card surface. Owns the chrome the layouts
 // share — the bottom status bar and the layout toggle — and keeps
 // each layout host alive across toggles (v-show, not v-if) so
 // switching back doesn't lose its cards.
 //
-// The two layouts are deliberately independent: the miller layout
-// syncs its column stack with the URL (see MillerView), the tree
-// layout is in-memory only, and cards are NOT carried across when
-// toggling. The tree host is mounted lazily on first use so the
-// default columns experience doesn't pay for a hidden grid card.
+// The layouts are deliberately independent: the miller layout syncs
+// its column stack with the URL (see MillerView), the tree and tiling
+// layouts are in-memory only, and cards are NOT carried across when
+// toggling. The non-default hosts are mounted lazily on first use so
+// the default columns experience doesn't pay for hidden grid cards.
 import { onMounted, ref } from "vue";
 import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
+import TilingView from "@/views/TilingView.vue";
 import { fetchHealth, fetchSearch, type Health } from "@/api";
 
-type Layout = "columns" | "tree";
+type Layout = "columns" | "tree" | "tiling";
 const layout = ref<Layout>("columns");
 const treeMounted = ref(false);
+const tilingMounted = ref(false);
 
 function setLayout(next: Layout) {
   layout.value = next;
   if (next === "tree") treeMounted.value = true;
+  if (next === "tiling") tilingMounted.value = true;
 }
 
 // Backend status for the bottom status bar. Global (host-level) on
@@ -46,6 +49,7 @@ onMounted(async () => {
   <div class="cards-root">
     <MillerView v-show="layout === 'columns'" />
     <TreeView v-if="treeMounted" v-show="layout === 'tree'" />
+    <TilingView v-if="tilingMounted" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
       <span v-if="healthError" class="cards-health--warn">
         backend unreachable: {{ healthError }}
@@ -74,6 +78,13 @@ onMounted(async () => {
           @click="setLayout('tree')"
         >
           tree
+        </button>
+        <button
+          :class="{ 'is-active': layout === 'tiling' }"
+          title="tiling window manager (in-memory only, not in the URL)"
+          @click="setLayout('tiling')"
+        >
+          tiling
         </button>
       </div>
     </div>
