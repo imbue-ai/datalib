@@ -29,6 +29,8 @@
 //!   `wa_message_media` rows can point at the same file (forwards,
 //!   re-sends); the registry is the dedup.
 
+use uuid::Uuid;
+
 /// Names of the data tables in the order they should be wiped before
 /// each rebuild. Children before parents so foreign-key-style references
 /// aren't briefly dangling (we don't declare FK constraints but the
@@ -254,3 +256,43 @@ pub const ALL_DDL: &[&str] = &[
     WA_MESSAGE_ADD_ON_REACTION_DDL,
     WA_MEDIA_FILES_DDL,
 ];
+
+/// v5 namespace for every UUID this provider mints. The bytes spell
+/// `whatsapp:msgstr:` to keep it human-recognizable in dumps.
+pub const WHATSAPP_UUID_NS: Uuid = Uuid::from_bytes([
+    0x77, 0xa7, 0x59, 0xc0, 0xba, 0xc1, 0x4e, 0x6f, 0x9f, 0x8a, 0x73, 0x16, 0xc7, 0xba, 0xc7, 0xc0,
+]);
+
+pub fn whatsapp_chat_uuid(source: &str, chat_jid: &str) -> String {
+    Uuid::new_v5(
+        &WHATSAPP_UUID_NS,
+        format!("whatsapp:chat:{source}:{chat_jid}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn whatsapp_message_uuid(source: &str, chat_jid: &str, key_id: &str, from_me: i64) -> String {
+    Uuid::new_v5(
+        &WHATSAPP_UUID_NS,
+        format!("whatsapp:msg:{source}:{chat_jid}:{key_id}:{from_me}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn whatsapp_reaction_uuid(source: &str, chat_jid: &str, key_id: &str, from_me: i64) -> String {
+    Uuid::new_v5(
+        &WHATSAPP_UUID_NS,
+        format!("whatsapp:react:{source}:{chat_jid}:{key_id}:{from_me}").as_bytes(),
+    )
+    .to_string()
+}
+
+/// Per-bucket document UUID. Stable for the lifetime of a
+/// `(chat, period_key)` pair regardless of how many times we re-render.
+pub fn whatsapp_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
+    Uuid::new_v5(
+        &WHATSAPP_UUID_NS,
+        format!("whatsapp:doc:{chat_uuid}:{period_key}").as_bytes(),
+    )
+    .to_string()
+}

@@ -14,48 +14,13 @@
 pub mod parse;
 pub mod render;
 
-use uuid::Uuid;
-
-/// v5 namespace for every UUID this provider mints. The bytes spell
-/// `signal:backup:` to keep it human-recognizable in dumps.
-pub const SIGNAL_UUID_NS: Uuid = Uuid::from_bytes([
-    0x51, 0x91, 0xa1, 0x00, 0xba, 0xc1, 0x4e, 0x6f, 0x9f, 0x8a, 0x53, 0x16, 0xa1, 0xba, 0xc1, 0x4e,
-]);
-
-pub fn signal_chat_uuid(source: &str, chat_id: &str) -> String {
-    Uuid::new_v5(
-        &SIGNAL_UUID_NS,
-        format!("signal:chat:{source}:{chat_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn signal_recipient_uuid(source: &str, recipient_id: &str) -> String {
-    Uuid::new_v5(
-        &SIGNAL_UUID_NS,
-        format!("signal:recipient:{source}:{recipient_id}").as_bytes(),
-    )
-    .to_string()
-}
-
-pub fn signal_message_uuid(source: &str, chat_id: &str, author_id: &str, date_sent: i64) -> String {
-    Uuid::new_v5(
-        &SIGNAL_UUID_NS,
-        format!("signal:msg:{source}:{chat_id}:{author_id}:{date_sent}").as_bytes(),
-    )
-    .to_string()
-}
-
-/// Per-bucket document UUID. Stable for the lifetime of a
-/// `(chat, period_key)` pair regardless of how many times we
-/// re-render — the load step foreign-keys against this consistently.
-pub fn signal_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
-    Uuid::new_v5(
-        &SIGNAL_UUID_NS,
-        format!("signal:doc:{chat_uuid}:{period_key}").as_bytes(),
-    )
-    .to_string()
-}
+// The UUIDv5 identity recipes live in `extract::schema_raw` (identity
+// recipes belong next to the schema). Re-export so existing
+// `crate::translate::signal_*` callers keep resolving.
+pub use super::extract::schema_raw::{
+    signal_chat_uuid, signal_markdown_uuid, signal_message_uuid, signal_recipient_uuid,
+    SIGNAL_UUID_NS,
+};
 
 pub use frankweiler_etl::periodize::Period;
 pub use parse::{parse, parse_raw_dir, ParsedSignal};

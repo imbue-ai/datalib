@@ -88,6 +88,7 @@
 use frankweiler_etl::blob_cas::CasEdgeRow as _;
 use frankweiler_etl::doltlite_raw::{self as dr, WirePayload, WirePayloadRow};
 use frankweiler_etl_macros::{CasEdgeRow, WirePayloadRow};
+use uuid::Uuid;
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -332,6 +333,47 @@ pub fn snapshot_fingerprint(snapshot_dir: &std::path::Path) -> anyhow::Result<St
 /// a sibling `uuid.rs` or leave it inline.
 pub fn chat_item_id_recipe(chat_id: &str, author_id: &str, date_sent: i64) -> String {
     format!("{chat_id}#{author_id}#{date_sent}")
+}
+
+/// v5 namespace for every UUID this provider mints. The bytes spell
+/// `signal:backup:` to keep it human-recognizable in dumps.
+pub const SIGNAL_UUID_NS: Uuid = Uuid::from_bytes([
+    0x51, 0x91, 0xa1, 0x00, 0xba, 0xc1, 0x4e, 0x6f, 0x9f, 0x8a, 0x53, 0x16, 0xa1, 0xba, 0xc1, 0x4e,
+]);
+
+pub fn signal_chat_uuid(source: &str, chat_id: &str) -> String {
+    Uuid::new_v5(
+        &SIGNAL_UUID_NS,
+        format!("signal:chat:{source}:{chat_id}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn signal_recipient_uuid(source: &str, recipient_id: &str) -> String {
+    Uuid::new_v5(
+        &SIGNAL_UUID_NS,
+        format!("signal:recipient:{source}:{recipient_id}").as_bytes(),
+    )
+    .to_string()
+}
+
+pub fn signal_message_uuid(source: &str, chat_id: &str, author_id: &str, date_sent: i64) -> String {
+    Uuid::new_v5(
+        &SIGNAL_UUID_NS,
+        format!("signal:msg:{source}:{chat_id}:{author_id}:{date_sent}").as_bytes(),
+    )
+    .to_string()
+}
+
+/// Per-bucket document UUID. Stable for the lifetime of a
+/// `(chat, period_key)` pair regardless of how many times we
+/// re-render — the load step foreign-keys against this consistently.
+pub fn signal_markdown_uuid(chat_uuid: &str, period_key: &str) -> String {
+    Uuid::new_v5(
+        &SIGNAL_UUID_NS,
+        format!("signal:doc:{chat_uuid}:{period_key}").as_bytes(),
+    )
+    .to_string()
 }
 
 /// Compose the full DDL list passed to
