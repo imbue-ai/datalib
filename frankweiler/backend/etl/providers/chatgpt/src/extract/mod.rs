@@ -302,11 +302,11 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                         sleep(opts.sleep_between).await;
                     }
                 }
-                Err(ChatGPTError::RateLimited { path, waited_secs }) => {
+                Err(ChatGPTError::RateLimited { path, reason }) => {
                     warn!(
                         event = "chatgpt_rate_limit_giveup",
                         path = %path,
-                        waited_secs = waited_secs,
+                        reason = %reason,
                         fetched = summary.fetched,
                     );
                     break;

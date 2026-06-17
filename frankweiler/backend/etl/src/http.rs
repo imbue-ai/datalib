@@ -19,6 +19,19 @@
 //!
 //! The same `HttpResponse` shape flows out of both modes, so callers
 //! cannot tell the difference and tests double as playback exercisers.
+//!
+//! ## Rate limits and retries
+//!
+//! [`latchkey_curl`] is also the single place rate-limit handling lives.
+//! On an HTTP 429 it waits the `Retry-After` the server asked for (else
+//! backs off exponentially); transient transport failures and 5xx are
+//! retried the same way. How long it keeps trying before giving up is
+//! governed by the per-source [`crate::retry::RetryGuard`] the orchestrator
+//! installs (resolved from each source's `extract_params`), so the give-up
+//! policy is enforced once, centrally, rather than re-implemented in every
+//! provider. Providers whose rate-limit signal isn't visible by status code
+//! (Slack's HTTP-200 `ratelimited` body, GitHub's primary-limit 403) feed
+//! the same loop via a custom classifier — see [`latchkey_curl_classified`].
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -173,6 +186,16 @@ pub enum HttpError {
     PlaybackMiss(String),
     #[error("playback fixture invalid: {0}")]
     PlaybackInvalid(String),
+    /// The shared retry loop respected rate limits / backed off but the
+    /// orchestrator's give-up policy ([`crate::retry::RetryGuard`]) tripped
+    /// before the request ever succeeded. Terminal — the caller should
+    /// surface it as a hard error for this source.
+    #[error("{provider}: gave up retrying ({url}): {reason}")]
+    GaveUp {
+        provider: &'static str,
+        url: String,
+        reason: String,
+    },
 }
 
 /// Environment variable a caller (genrule, hermetic test, dev loop) can
@@ -194,20 +217,145 @@ impl Mode {
     }
 }
 
-/// Issue an HTTP request and return the full response. Dispatches between
-/// the live (`latchkey curl`) and playback (disk-fixture) implementations
-/// based on `FRANKWEILER_HTTP_PLAYBACK`.
+/// A single `Retry-After` wait is capped here so one pathological header
+/// (or a far-future `x-ratelimit-reset`) can't park a source for hours. The
+/// give-up policy ([`crate::retry::RetryGuard`]) still bounds total effort;
+/// this just keeps any *single* sleep sane. Realistic values (seconds to a
+/// few minutes) are respected exactly.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
+
+/// What the retry loop should do with one completed attempt's response.
+/// Returned by the response classifier passed to [`latchkey_curl_classified`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Retryability {
+    /// Definitive — hand the response back to the caller unchanged (any 2xx,
+    /// and 4xx the caller wants to inspect like 401/404).
+    Accept,
+    /// Rate-limited / transient — back off and retry, honoring `retry_after`
+    /// (from `Retry-After` or a provider-specific reset header) when known.
+    Retry { retry_after: Option<Duration> },
+}
+
+/// Default response classifier: HTTP 429 and 502–504 are retryable
+/// (honoring `Retry-After`); everything else is accepted. This is what
+/// [`latchkey_curl`] uses. Providers whose rate-limit signal isn't visible
+/// by status code (Slack's HTTP-200 `error:"ratelimited"` body, GitHub's
+/// `403 + x-ratelimit-remaining:0`) wrap this with their own classifier and
+/// call [`latchkey_curl_classified`].
+pub fn default_retryability(resp: &HttpResponse) -> Retryability {
+    match resp.status {
+        429 | 502 | 503 | 504 => Retryability::Retry {
+            retry_after: parse_retry_after(resp.header("retry-after")),
+        },
+        _ => Retryability::Accept,
+    }
+}
+
+/// Parse a `Retry-After` header value into a wait duration. Supports the
+/// delta-seconds form (`"120"`) and the HTTP-date form
+/// (`"Wed, 21 Oct 2015 07:28:00 GMT"`). Capped at [`MAX_RETRY_AFTER`].
+/// Returns `None` when absent or unparseable (the loop then backs off).
+pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
+    let v = value?.trim();
+    if let Ok(secs) = v.parse::<u64>() {
+        return Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER));
+    }
+    if let Ok(when) = chrono::DateTime::parse_from_rfc2822(v) {
+        let delta = when.with_timezone(&chrono::Utc) - chrono::Utc::now();
+        let secs = delta.num_seconds().max(0) as u64;
+        return Some(Duration::from_secs(secs).min(MAX_RETRY_AFTER));
+    }
+    None
+}
+
+/// Issue an HTTP request and return the full response, with the shared
+/// retry policy applied (429 + 5xx + transient-transport, honoring
+/// `Retry-After` else exponential backoff, bounded by the ambient
+/// [`crate::retry::RetryGuard`]). Dispatches between the live
+/// (`latchkey curl`) and playback (disk-fixture) implementations based on
+/// `FRANKWEILER_HTTP_PLAYBACK`. This is the entry point for every provider
+/// whose rate-limit signal is expressible by status code.
 pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
-    // Count every outbound request against the current source's extract
-    // metrics (no-op outside an extract scope). This is the single
-    // transport chokepoint every provider's API call funnels through, so
-    // the per-source API-call total is captured here with zero
-    // provider-side code. File-based ingestion never reaches this path,
-    // so it correctly reports zero requests.
-    crate::extract_metrics::record_api_request();
-    match Mode::current() {
-        Mode::Live => live::send(req).await,
-        Mode::Playback(root) => playback::lookup(req, &root).await,
+    latchkey_curl_classified(req, default_retryability).await
+}
+
+/// Like [`latchkey_curl`], but the caller supplies a response classifier so
+/// a provider can mark responses the status code alone can't (e.g. Slack's
+/// HTTP-200 `ratelimited` body) as retryable. Transport-level transients
+/// (curl exit 7/28/35/56, timeouts) are always retried regardless of the
+/// classifier, since there is no response to classify.
+pub async fn latchkey_curl_classified<F>(
+    req: &HttpRequest,
+    classify: F,
+) -> Result<HttpResponse, HttpError>
+where
+    F: Fn(&HttpResponse) -> Retryability,
+{
+    // Resolve the current source's give-up guard (or a default-bounded
+    // throwaway outside any extract scope). It owns both the give-up limits
+    // and the backoff schedule.
+    let guard = crate::retry::current_or_default();
+    let mut backoff = guard.initial_backoff();
+    loop {
+        // Count every outbound *attempt* against the current source's
+        // extract metrics (no-op outside an extract scope). This is the
+        // single transport chokepoint every provider's API call funnels
+        // through, so the per-source API-call total is captured here with
+        // zero provider-side code. File-based ingestion never reaches this
+        // path, so it correctly reports zero requests.
+        crate::extract_metrics::record_api_request();
+        let outcome = match Mode::current() {
+            Mode::Live => live::send(req).await,
+            Mode::Playback(root) => playback::lookup(req, &root).await,
+        };
+
+        // Decide whether this attempt is retryable. `None` = accept (success
+        // or a definitive response/error → hand back to the caller as-is);
+        // `Some(retry_after)` = retryable failure.
+        let retry: Option<Option<Duration>> = match &outcome {
+            Ok(resp) => match classify(resp) {
+                Retryability::Accept => None,
+                Retryability::Retry { retry_after } => Some(retry_after),
+            },
+            // Transient transport failures: retry without a server-specified
+            // delay. (7 couldn't connect, 28 timeout, 35 TLS, 56 recv error.)
+            Err(HttpError::Timeout { .. }) => Some(None),
+            Err(HttpError::Curl { exit, .. }) if matches!(*exit, 7 | 28 | 35 | 56) => Some(None),
+            // Spawn / Malformed / Playback* / GaveUp: terminal, return as-is.
+            Err(_) => None,
+        };
+
+        let Some(retry_after) = retry else {
+            // Accepted — record forward progress and hand the response (or
+            // terminal error) back to the caller untouched.
+            guard.on_progress();
+            return outcome;
+        };
+
+        // Retryable failure: consult the give-up guard before sleeping.
+        if let crate::retry::GuardVerdict::GiveUp(reason) = guard.on_failure() {
+            let detail = match &outcome {
+                Ok(resp) => format!("HTTP {}", resp.status),
+                Err(e) => e.to_string(),
+            };
+            return Err(HttpError::GaveUp {
+                provider: req.provider,
+                url: req.url.clone(),
+                reason: format!("{reason}; last attempt: {detail}"),
+            });
+        }
+
+        let wait = retry_after
+            .map(|d| d.min(MAX_RETRY_AFTER))
+            .unwrap_or(backoff);
+        tracing::warn!(
+            provider = req.provider,
+            url = %req.url,
+            wait_ms = wait.as_millis() as u64,
+            "rate-limited / transient; backing off then retrying",
+        );
+        tokio::time::sleep(wait).await;
+        backoff = std::cmp::min(backoff * 2, guard.max_backoff());
     }
 }
 
@@ -530,5 +678,84 @@ mod tests {
         assert_eq!(got.status, 200);
         assert_eq!(got.header("content-type"), Some("application/json"));
         assert_eq!(got.body_str(), r#"{"ok":true,"team":"Test"}"#);
+    }
+
+    #[test]
+    fn parse_retry_after_handles_seconds_and_garbage() {
+        assert_eq!(parse_retry_after(Some("7")), Some(Duration::from_secs(7)));
+        assert_eq!(
+            parse_retry_after(Some("  12 ")),
+            Some(Duration::from_secs(12))
+        );
+        // Capped at MAX_RETRY_AFTER.
+        assert_eq!(parse_retry_after(Some("100000")), Some(MAX_RETRY_AFTER));
+        assert_eq!(parse_retry_after(None), None);
+        assert_eq!(parse_retry_after(Some("soon")), None);
+    }
+
+    #[test]
+    fn default_retryability_classifies_status() {
+        let mk = |status: u16, ra: Option<&str>| {
+            let mut headers = BTreeMap::new();
+            if let Some(v) = ra {
+                headers.insert("retry-after".to_string(), v.to_string());
+            }
+            HttpResponse {
+                status,
+                headers,
+                body: Vec::new(),
+                duration_ms: 0,
+            }
+        };
+        assert_eq!(default_retryability(&mk(200, None)), Retryability::Accept);
+        assert_eq!(default_retryability(&mk(404, None)), Retryability::Accept);
+        assert_eq!(
+            default_retryability(&mk(429, Some("5"))),
+            Retryability::Retry {
+                retry_after: Some(Duration::from_secs(5))
+            }
+        );
+        assert_eq!(
+            default_retryability(&mk(503, None)),
+            Retryability::Retry { retry_after: None }
+        );
+    }
+
+    /// A playback fixture that always returns 429 should be retried until
+    /// the ambient guard's sequential-failure limit trips, then surface as
+    /// `GaveUp`. Uses near-zero backoff so the test is fast.
+    #[tokio::test]
+    async fn retries_429_then_gives_up_per_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get("slack", "https://slack.com/api/auth.test");
+        let key = fixture_key(&req);
+        let provider_dir = dir.path().join("slack");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: b"slow down".to_vec(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(&key),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+
+        std::env::set_var(PLAYBACK_ENV, dir.path());
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast);
+        let err = crate::retry::scope(guard, async { latchkey_curl(&req).await })
+            .await
+            .unwrap_err();
+        std::env::remove_var(PLAYBACK_ENV);
+        match err {
+            HttpError::GaveUp { reason, .. } => {
+                assert!(reason.contains("sequential failed requests"), "{reason}");
+                assert!(reason.contains("HTTP 429"), "{reason}");
+            }
+            other => panic!("expected GaveUp, got {other:?}"),
+        }
     }
 }

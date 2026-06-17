@@ -17,9 +17,6 @@ use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
 
 pub const BASE: &str = "https://www.notion.so/api/v3";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(180);
-const RETRY_MAX: u32 = 6;
-const RETRY_INITIAL_BACKOFF_MS: u64 = 2_000;
-const RETRY_MAX_BACKOFF_MS: u64 = 60_000;
 
 #[derive(thiserror::Error, Debug)]
 pub enum NotionUnofficialError {
@@ -59,58 +56,40 @@ impl NotionUnofficialClient {
     async fn post(&self, method: &str, body: &Value) -> Result<Value, NotionUnofficialError> {
         let url = format!("{BASE}/{method}");
         let payload = body.to_string().into_bytes();
-        let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
-        for attempt in 0..=RETRY_MAX {
-            let req = HttpRequest::post_json("notion_unofficial", &url, payload.clone())
-                .header("Accept", "application/json")
-                .timeout(LATCHKEY_TIMEOUT);
-            let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
-                NotionUnofficialError::Permanent(format!("{method}: {e}"))
-            })?;
-            self.network_ms
-                .fetch_add(resp.duration_ms, Ordering::Relaxed);
-            self.requests.fetch_add(1, Ordering::Relaxed);
+        // 429 / 5xx retry (with `Retry-After` / backoff) is handled centrally
+        // in `latchkey_curl`; this issues the request once and parses the
+        // definitive response.
+        let req = HttpRequest::post_json("notion_unofficial", &url, payload)
+            .header("Accept", "application/json")
+            .timeout(LATCHKEY_TIMEOUT);
+        let resp = latchkey_curl(&req)
+            .await
+            .map_err(|e: HttpError| NotionUnofficialError::Permanent(format!("{method}: {e}")))?;
+        self.network_ms
+            .fetch_add(resp.duration_ms, Ordering::Relaxed);
+        self.requests.fetch_add(1, Ordering::Relaxed);
 
-            let resp_text = resp.body_str().into_owned();
-            let status = resp.status;
-            if status == 200 {
-                let value: Value = serde_json::from_str(&resp_text).map_err(|e| {
-                    let preview: String = resp_text.chars().take(200).collect();
-                    NotionUnofficialError::Permanent(format!(
-                        "{method}: HTTP 200 but non-JSON: {e}; body[:200]={preview:?}"
-                    ))
-                })?;
-                events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
-                return Ok(value);
-            }
-            if status == 403 {
-                return Err(NotionUnofficialError::Forbidden(format!(
-                    "{method} -> HTTP 403"
-                )));
-            }
-            if matches!(status, 429 | 502 | 503 | 504) {
-                if attempt == RETRY_MAX {
-                    return Err(NotionUnofficialError::Permanent(format!(
-                        "{method}: HTTP {status} after {attempt} retries"
-                    )));
-                }
-                tracing::warn!(
-                    method,
-                    status,
-                    backoff_ms,
-                    attempt = attempt + 1,
-                    "transient; sleeping"
-                );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms * 2).min(RETRY_MAX_BACKOFF_MS);
-                continue;
-            }
-            let preview: String = resp_text.chars().take(300).collect();
-            return Err(NotionUnofficialError::Permanent(format!(
-                "{method}: HTTP {status} body={preview:?}"
+        let resp_text = resp.body_str().into_owned();
+        let status = resp.status;
+        if status == 200 {
+            let value: Value = serde_json::from_str(&resp_text).map_err(|e| {
+                let preview: String = resp_text.chars().take(200).collect();
+                NotionUnofficialError::Permanent(format!(
+                    "{method}: HTTP 200 but non-JSON: {e}; body[:200]={preview:?}"
+                ))
+            })?;
+            events::item_fetched(&url, resp.body.len() as u64, resp.duration_ms);
+            return Ok(value);
+        }
+        if status == 403 {
+            return Err(NotionUnofficialError::Forbidden(format!(
+                "{method} -> HTTP 403"
             )));
         }
-        unreachable!()
+        let preview: String = resp_text.chars().take(300).collect();
+        Err(NotionUnofficialError::Permanent(format!(
+            "{method}: HTTP {status} body={preview:?}"
+        )))
     }
 
     pub async fn load_user_content(&self) -> Result<Value, NotionUnofficialError> {

@@ -82,9 +82,11 @@ notion-download --out ~/backups/notion --page <page_id>
 
 ## Reliability
 
-`api.notion.com` responses are retried on `429`/`502`/`503`/`504` with
-exponential backoff (2s → 60s, six tries). Per-page errors are logged
-and the BFS continues — one bad page doesn't kill the whole mirror.
+`429`/`502`/`503`/`504` responses are retried (with `Retry-After` /
+exponential backoff) centrally by the shared `latchkey_curl` chokepoint,
+bounded by the source's `extract_params` give-up policy. Per-page errors
+are logged and the BFS continues — one bad page doesn't kill the whole
+mirror.
 
 ## Schema
 

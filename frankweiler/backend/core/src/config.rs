@@ -44,6 +44,72 @@ pub struct SharedConfig {
     /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
+    /// Cross-source extract knobs (rate-limit give-up bounds). Settable
+    /// globally and overridable per-source; merged field-by-field. See
+    /// [`ExtractParams`]; consumed by the shared HTTP retry guard
+    /// (`frankweiler_etl::retry`).
+    #[serde(default)]
+    pub extract_params: ExtractParams,
+}
+
+/// Bounds on how hard a source's Extract step retries before the
+/// orchestrator gives up on it. The shared HTTP chokepoint
+/// (`frankweiler_etl::http::latchkey_curl`) respects `Retry-After` on 429s
+/// and otherwise backs off exponentially; these two knobs decide *when to
+/// stop* — so the give-up policy lives in one place rather than in every
+/// provider. Both default when unset, so an empty `extract_params:` (or
+/// none at all) still yields sane behavior.
+///
+/// Attach globally (top-level `extract_params:`) and/or per-source (an
+/// `extract_params:` on a source entry); the source's `Some` fields win,
+/// `None` falls through to the global, and an unset field falls through to
+/// the built-in default. Mirrors the global→per-source layering of the
+/// rest of [`SharedConfig`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExtractParams {
+    /// Give up on a source once this many minutes pass with no successful
+    /// request. `None` → [`ExtractParams::DEFAULT_MAX_MINUTES_NO_PROGRESS`].
+    #[serde(default)]
+    pub maximum_time_without_progress_in_minutes: Option<u64>,
+    /// Give up after this many consecutive retryable failures with no
+    /// success in between. `None` →
+    /// [`ExtractParams::DEFAULT_MAX_SEQUENTIAL_FAILURES`].
+    #[serde(default)]
+    pub maximum_sequential_failed_requests: Option<u64>,
+}
+
+impl ExtractParams {
+    pub const DEFAULT_MAX_MINUTES_NO_PROGRESS: u64 = 30;
+    pub const DEFAULT_MAX_SEQUENTIAL_FAILURES: u64 = 50;
+
+    /// Merge `self` (a global default) with a per-source override.
+    /// Source-level `Some(...)` wins; `None` falls through. Mirrors
+    /// [`SharedConfig::merge`].
+    pub fn merge(&self, source: &ExtractParams) -> ExtractParams {
+        ExtractParams {
+            maximum_time_without_progress_in_minutes: source
+                .maximum_time_without_progress_in_minutes
+                .or(self.maximum_time_without_progress_in_minutes),
+            maximum_sequential_failed_requests: source
+                .maximum_sequential_failed_requests
+                .or(self.maximum_sequential_failed_requests),
+        }
+    }
+
+    /// Resolved "max time without progress", applying the default.
+    pub fn max_time_without_progress(&self) -> std::time::Duration {
+        let mins = self
+            .maximum_time_without_progress_in_minutes
+            .unwrap_or(Self::DEFAULT_MAX_MINUTES_NO_PROGRESS);
+        std::time::Duration::from_secs(mins.saturating_mul(60))
+    }
+
+    /// Resolved "max sequential failed requests", applying the default.
+    pub fn max_sequential_failures(&self) -> u64 {
+        self.maximum_sequential_failed_requests
+            .unwrap_or(Self::DEFAULT_MAX_SEQUENTIAL_FAILURES)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +140,7 @@ impl SharedConfig {
                 .event_tape
                 .clone()
                 .or_else(|| self.event_tape.clone()),
+            extract_params: self.extract_params.merge(&source.extract_params),
         }
     }
 }
@@ -121,6 +188,8 @@ pub struct SourceCommon {
     pub blob_size_limit_bytes: Option<u64>,
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
+    #[serde(default)]
+    pub extract_params: ExtractParams,
 }
 
 impl SourceCommon {
@@ -130,6 +199,7 @@ impl SourceCommon {
         SharedConfig {
             blob_size_limit_bytes: self.blob_size_limit_bytes,
             event_tape: self.event_tape.clone(),
+            extract_params: self.extract_params.clone(),
         }
     }
 }
@@ -1416,6 +1486,58 @@ sources:
         assert_eq!(
             cfg.sources[0].resolved_shared(&cfg).blob_size_limit_bytes,
             None
+        );
+    }
+
+    #[test]
+    fn extract_params_default_when_unset() {
+        let ep = ExtractParams::default();
+        assert_eq!(
+            ep.max_time_without_progress(),
+            std::time::Duration::from_secs(30 * 60)
+        );
+        assert_eq!(ep.max_sequential_failures(), 50);
+    }
+
+    #[test]
+    fn extract_params_source_overrides_one_field_only() {
+        // Global sets both; the source overrides only the failure count.
+        // The unset (minutes) field must fall through to the global, and a
+        // sibling source inherits both globals.
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+extract_params:
+  maximum_time_without_progress_in_minutes: 10
+  maximum_sequential_failed_requests: 5
+sources:
+  - name: slack
+    type: slack_api
+    extract_params:
+      maximum_sequential_failed_requests: 99
+    sync: {channels: ['c']}
+  - name: gh
+    type: github_api
+    sync: {}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
+        let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
+
+        let slack_ep = slack.resolved_shared(&cfg).extract_params;
+        assert_eq!(slack_ep.max_sequential_failures(), 99);
+        // field the source omitted falls through to the global (10 min)
+        assert_eq!(
+            slack_ep.max_time_without_progress(),
+            std::time::Duration::from_secs(10 * 60)
+        );
+
+        // sibling inherits both globals
+        let gh_ep = gh.resolved_shared(&cfg).extract_params;
+        assert_eq!(gh_ep.max_sequential_failures(), 5);
+        assert_eq!(
+            gh_ep.max_time_without_progress(),
+            std::time::Duration::from_secs(10 * 60)
         );
     }
 

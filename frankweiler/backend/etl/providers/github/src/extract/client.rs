@@ -15,16 +15,34 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 
-use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest, HttpResponse};
+use frankweiler_etl::http::{
+    default_retryability, latchkey_curl_classified, HttpError, HttpRequest, HttpResponse,
+    Retryability,
+};
 
 pub const BASE: &str = "https://api.github.com";
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const PER_PAGE: u32 = 100;
-const RETRY_MAX: u32 = 7;
-const RETRY_INITIAL_BACKOFF_MS: u64 = 2_000;
-const RETRY_MAX_BACKOFF_MS: u64 = 120_000;
 
 static LINK_NEXT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<([^>]+)>;\s*rel="next""#).unwrap());
+
+/// GitHub-specific retry classifier. The default classifier already treats
+/// the *secondary* rate limit (HTTP 429) and 5xx as retryable; GitHub's
+/// *primary* rate limit is instead a `403` with `x-ratelimit-remaining: 0`
+/// plus an `x-ratelimit-reset` epoch telling us when the window resets. Map
+/// that to a retry with the computed wait so the shared loop respects it.
+fn github_retryability(resp: &HttpResponse) -> Retryability {
+    if resp.status == 403 && resp.header("x-ratelimit-remaining") == Some("0") {
+        let retry_after = resp.header("x-ratelimit-reset").and_then(|reset| {
+            reset.parse::<i64>().ok().map(|ts| {
+                let now = chrono::Utc::now().timestamp();
+                Duration::from_secs(((ts - now).max(0) as u64).saturating_add(1))
+            })
+        });
+        return Retryability::Retry { retry_after };
+    }
+    default_retryability(resp)
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum GitHubError {
@@ -57,7 +75,11 @@ impl GitHubClient {
 
     async fn request_once(&self, url: &str) -> Result<HttpResponse, GitHubError> {
         let req = HttpRequest::get("github", url).timeout(LATCHKEY_TIMEOUT);
-        let resp = latchkey_curl(&req)
+        // Rate-limit (429 + primary-limit 403) and 5xx retry — including the
+        // `Retry-After` / `x-ratelimit-reset` waits — is handled centrally in
+        // the shared chokepoint via `github_retryability`. A `GaveUp` here is
+        // terminal and maps to `Permanent`.
+        let resp = latchkey_curl_classified(&req, github_retryability)
             .await
             .map_err(|e: HttpError| GitHubError::Permanent(e.to_string()))?;
         self.network_ms
@@ -66,79 +88,34 @@ impl GitHubClient {
         Ok(resp)
     }
 
-    /// GET with exponential backoff on rate-limit / transient failures.
-    /// Returns the parsed JSON body and response headers so callers can
-    /// walk the `Link: rel=next` pagination chain. The HashMap type is
-    /// preserved (rather than passing the http module's BTreeMap up) so
-    /// callers in `mod.rs` need no change.
+    /// GET the definitive response (the chokepoint has already waited out any
+    /// rate-limit / transient) and parse it. Returns the JSON body and
+    /// response headers so callers can walk the `Link: rel=next` pagination
+    /// chain. The HashMap type is preserved (rather than passing the http
+    /// module's BTreeMap up) so callers in `mod.rs` need no change.
     pub async fn get(&self, url: &str) -> Result<(Value, HashMap<String, String>), GitHubError> {
-        let mut backoff_ms = RETRY_INITIAL_BACKOFF_MS;
-        for attempt in 0..=RETRY_MAX {
-            let resp = self.request_once(url).await?;
-            let body = resp.body_str().into_owned();
-            if resp.status >= 200 && resp.status < 300 {
-                let value: Value = if body.trim().is_empty() {
-                    Value::Null
-                } else {
-                    serde_json::from_str(&body).map_err(|e| {
-                        let preview: String = body.chars().take(200).collect();
-                        GitHubError::Permanent(format!(
-                            "{url}: HTTP {} but non-JSON: {e}; body[:200]={preview:?}",
-                            resp.status
-                        ))
-                    })?
-                };
-                let headers: HashMap<String, String> = resp.headers.into_iter().collect();
-                return Ok((value, headers));
-            }
-            // 403 + x-ratelimit-remaining: 0  → primary rate limit (retry)
-            // 429                              → secondary rate limit (retry)
-            // 5xx                              → transient
-            let is_rate_limit = resp.status == 429
-                || (resp.status == 403
-                    && resp
-                        .header("x-ratelimit-remaining")
-                        .map(|v| v == "0")
-                        .unwrap_or(false));
-            let is_transient = matches!(resp.status, 502..=504);
-            if is_rate_limit || is_transient {
-                if attempt == RETRY_MAX {
-                    return Err(GitHubError::Permanent(format!(
-                        "{url}: HTTP {} after {attempt} retries",
+        let resp = self.request_once(url).await?;
+        let body = resp.body_str().into_owned();
+        if (200..300).contains(&resp.status) {
+            let value: Value = if body.trim().is_empty() {
+                Value::Null
+            } else {
+                serde_json::from_str(&body).map_err(|e| {
+                    let preview: String = body.chars().take(200).collect();
+                    GitHubError::Permanent(format!(
+                        "{url}: HTTP {} but non-JSON: {e}; body[:200]={preview:?}",
                         resp.status
-                    )));
-                }
-                let mut sleep_ms = backoff_ms;
-                if let Some(retry_after) = resp.header("retry-after") {
-                    if let Ok(s) = retry_after.parse::<u64>() {
-                        sleep_ms = sleep_ms.max(s * 1000);
-                    }
-                } else if let Some(reset) = resp.header("x-ratelimit-reset") {
-                    if let Ok(ts) = reset.parse::<i64>() {
-                        let now = chrono::Utc::now().timestamp();
-                        let delta_s = (ts - now).max(0) as u64;
-                        sleep_ms = sleep_ms.max(delta_s.saturating_add(1) * 1000);
-                    }
-                }
-                sleep_ms = sleep_ms.min(RETRY_MAX_BACKOFF_MS);
-                tracing::warn!(
-                    url,
-                    status = resp.status,
-                    attempt = attempt + 1,
-                    sleep_ms,
-                    "rate-limited/transient; sleeping"
-                );
-                tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
-                backoff_ms = (backoff_ms * 2).min(RETRY_MAX_BACKOFF_MS);
-                continue;
-            }
-            let preview: String = body.chars().take(300).collect();
-            return Err(GitHubError::Permanent(format!(
-                "{url}: HTTP {} body={preview:?}",
-                resp.status
-            )));
+                    ))
+                })?
+            };
+            let headers: HashMap<String, String> = resp.headers.into_iter().collect();
+            return Ok((value, headers));
         }
-        unreachable!()
+        let preview: String = body.chars().take(300).collect();
+        Err(GitHubError::Permanent(format!(
+            "{url}: HTTP {} body={preview:?}",
+            resp.status
+        )))
     }
 
     /// Walk `Link: rel=next` pagination until exhausted, accumulating items.

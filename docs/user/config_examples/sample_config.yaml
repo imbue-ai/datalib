@@ -1,5 +1,13 @@
 data_root: ~/mixed_up_files  # Where the downloaded data gets written.
 
+# Optional: bound how long a source keeps retrying upstream rate limits
+# before the orchestrator gives up on it. The shared HTTP layer always
+# honors a 429 `Retry-After` (else backs off exponentially); these decide
+# when to stop. Defaults shown; overridable per source. Omit to take them.
+# extract_params:
+#   maximum_time_without_progress_in_minutes: 30
+#   maximum_sequential_failed_requests: 50
+
 sources:
   # Google Takeout Gmail export. `sync:` is intentionally omitted —
   # that puts the email provider in translate-only mbox mode, reading

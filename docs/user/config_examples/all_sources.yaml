@@ -20,6 +20,16 @@ data_root: ~/mixed_up_files  # Base dir; everything is written under here. `~` i
 # Global default applied to every source unless overridden per-source.
 blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
 
+# How hard a source's download retries upstream rate limits before the
+# orchestrator gives up on it. The shared HTTP layer always respects a
+# `Retry-After` on a 429 (and otherwise backs off exponentially); these two
+# knobs only decide *when to stop*. Both are optional — omit the block (or
+# any field) to take the built-in defaults shown here. Overridable per
+# source (see the slack stanza below).
+extract_params:
+  maximum_time_without_progress_in_minutes: 30  # give up after this long with no successful request
+  maximum_sequential_failed_requests: 50         # ...or this many failures in a row
+
 sources:
   # --- Claude / Anthropic ---------------------------------------------------
 
@@ -60,6 +70,11 @@ sources:
   - name: slack
     type: slack_api
     blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
+    # Per-source override of the global extract_params: Slack rate-limits
+    # aggressively, so tolerate more failures in a row before giving up.
+    # Unset fields (here, the time budget) fall through to the global.
+    extract_params:
+      maximum_sequential_failed_requests: 100
     sync:
       media: true            # pull file attachments into blobs
       all_channels: false

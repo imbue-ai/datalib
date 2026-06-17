@@ -1376,6 +1376,11 @@ struct ExtractPlan {
     /// `Arc`) with the orchestrator's report-assembly and the Ctrl-C
     /// handler.
     metrics: Arc<frankweiler_etl::extract_metrics::ExtractMetrics>,
+    /// Resolved (global ⊕ per-source) rate-limit give-up bounds. Installed
+    /// as the ambient [`frankweiler_etl::retry::RetryGuard`] for the
+    /// duration of `run()` so the shared HTTP chokepoint enforces them for
+    /// every provider, without provider-side code.
+    extract_params: frankweiler_core::config::ExtractParams,
 }
 
 /// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
@@ -1696,6 +1701,7 @@ impl ExtractPlan {
             db: None,
             event_tape,
             metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
+            extract_params: src.resolved_shared(cfg).extract_params,
         }))
     }
 
@@ -1710,7 +1716,17 @@ impl ExtractPlan {
     /// context is visible to every chokepoint the provider reaches.
     async fn run(self) -> Result<String> {
         let metrics = self.metrics.clone();
-        frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()).await
+        // Install both ambient contexts for the whole source extract on this
+        // one task: the metrics counters and the rate-limit give-up guard.
+        // The shared HTTP chokepoint resolves the guard via
+        // `retry::current_or_default()` and enforces the bounds for every
+        // provider, with no provider-side code.
+        let guard = frankweiler_etl::retry::RetryGuard::from_params(&self.extract_params);
+        frankweiler_etl::retry::scope(
+            guard,
+            frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()),
+        )
+        .await
     }
 
     async fn run_inner(self) -> Result<String> {

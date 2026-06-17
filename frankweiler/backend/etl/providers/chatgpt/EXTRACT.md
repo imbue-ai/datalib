@@ -133,12 +133,12 @@ progress rather than revalidating cache hits.
 ## Rate limits
 
 ChatGPT returns `429` with a `Retry-After` header during enforced
-backoff. `api::ChatGPTClient::get` honors that header, then falls
-back to exponential backoff (5 · 2^n seconds, capped at 60s) if
-absent. After `RATE_LIMIT_GIVE_UP_AFTER` (300s) of cumulative wait
-without a 200, the request returns `ChatGPTError::RateLimited` and
-the run stops — the user resumes later from the same incremental
-checkpoint.
+backoff. Honoring it (and exponential backoff when it's absent) is
+handled centrally by the shared `latchkey_curl` chokepoint, bounded by
+the source's `extract_params` give-up policy. When the chokepoint gives
+up, `api::ChatGPTClient::get` maps the resulting `HttpError::GaveUp` to
+`ChatGPTError::RateLimited` so the run stops cleanly — the user resumes
+later from the same incremental checkpoint.
 
 ## Sample data
 

@@ -9,12 +9,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use tokio::time::sleep;
 use tracing::{debug, instrument, warn};
 
 use frankweiler_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use frankweiler_etl::events;
-use frankweiler_etl::http::{latchkey_curl, HttpError, HttpRequest};
+use frankweiler_etl::http::{
+    default_retryability, latchkey_curl_classified, parse_retry_after, HttpError, HttpRequest,
+    HttpResponse, Retryability,
+};
 use frankweiler_etl::latchkey::latchkey_tokio_command;
 
 use super::db::RawDb;
@@ -22,18 +24,27 @@ use super::schema_raw::{slack_message_uuid, SlackAttachmentRow};
 
 pub const LATCHKEY_TIMEOUT: Duration = Duration::from_secs(60);
 pub const LATCHKEY_FILE_TIMEOUT: Duration = Duration::from_secs(600);
-pub const RATE_LIMIT_MAX_RETRIES: u32 = 7;
-pub const RATE_LIMIT_INITIAL_BACKOFF: Duration = Duration::from_secs(2);
-pub const RATE_LIMIT_MAX_BACKOFF: Duration = Duration::from_secs(60);
 
 #[derive(thiserror::Error, Debug)]
 pub enum SlackError {
-    #[error("rate limited: {0}")]
-    RateLimited(String),
-    #[error("transient: {0}")]
-    Transient(String),
     #[error("{0}")]
     Permanent(String),
+}
+
+/// Slack-specific retry classifier. Slack signals a rate limit either as a
+/// plain HTTP 429 (newer Web API tiers — covered by the default classifier)
+/// or, on older methods, as **HTTP 200** with
+/// `{"ok":false,"error":"ratelimited"}` in the body. The status-code
+/// chokepoint can't see the latter, so detect it here and surface it as
+/// retryable; the shared loop then honors any `Retry-After` header and the
+/// orchestrator's give-up bounds.
+fn slack_retryability(resp: &HttpResponse) -> Retryability {
+    if resp.status == 200 && resp.body_str().contains("\"error\":\"ratelimited\"") {
+        return Retryability::Retry {
+            retry_after: parse_retry_after(resp.header("retry-after")),
+        };
+    }
+    default_retryability(resp)
 }
 
 /// Successful Slack API call plus wall-clock duration of the underlying
@@ -74,15 +85,16 @@ async fn call_slack_once(
 ) -> Result<Value, SlackError> {
     let url = build_url(method, params);
     let req = HttpRequest::get("slack", &url).timeout(LATCHKEY_TIMEOUT);
-    let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
-        HttpError::Timeout { .. } => SlackError::Transient(format!("{method}: {e}")),
-        HttpError::Curl {
-            exit: 7 | 28 | 35 | 56,
-            ..
-        } => SlackError::Transient(format!("{method}: {e}")),
-        HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
-        _ => SlackError::Permanent(format!("{method}: {e}")),
-    })?;
+    // Rate-limit (429 + the HTTP-200 `ratelimited` body) and transient
+    // retry is handled centrally in the shared chokepoint via
+    // `slack_retryability`; a terminal error here (incl. `GaveUp` after the
+    // guard tripped) is mapped straight to `Permanent`.
+    let resp = latchkey_curl_classified(&req, slack_retryability)
+        .await
+        .map_err(|e: HttpError| match e {
+            HttpError::PlaybackMiss(msg) => SlackError::Permanent(format!("{method}: {msg}")),
+            _ => SlackError::Permanent(format!("{method}: {e}")),
+        })?;
 
     if resp.status != 200 {
         return Err(SlackError::Permanent(format!(
@@ -98,13 +110,13 @@ async fn call_slack_once(
     })?;
     let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if !ok {
+        // `ratelimited` is retried by the chokepoint, so reaching here with
+        // `ok:false` means a genuine API error (or the guard gave up — which
+        // surfaces as `GaveUp` → `Permanent` above, never as a parsed body).
         let err = data
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        if err == "ratelimited" {
-            return Err(SlackError::RateLimited(method.to_string()));
-        }
         return Err(SlackError::Permanent(format!(
             "{}: ok=false error={:?}",
             method, err
@@ -118,54 +130,15 @@ pub async fn call_slack(
     method: &str,
     params: &BTreeMap<String, String>,
 ) -> Result<SlackCall, SlackError> {
-    let mut backoff = RATE_LIMIT_INITIAL_BACKOFF;
-    for attempt in 0..=RATE_LIMIT_MAX_RETRIES {
-        let t0 = std::time::Instant::now();
-        match call_slack_once(method, params).await {
-            Ok(v) => {
-                let duration_ms = t0.elapsed().as_millis() as u64;
-                let bytes = v.to_string().len() as u64;
-                events::item_fetched(&format!("slack.api/{}", method), bytes, duration_ms);
-                return Ok(SlackCall {
-                    response: v,
-                    duration_ms,
-                });
-            }
-            Err(SlackError::RateLimited(_)) => {
-                if attempt == RATE_LIMIT_MAX_RETRIES {
-                    return Err(SlackError::Permanent(format!(
-                        "{}: rate-limited after {} retries",
-                        method, attempt
-                    )));
-                }
-                warn!(
-                    event = "slack_rate_limited",
-                    method = method,
-                    attempt = attempt + 1,
-                    max_retries = RATE_LIMIT_MAX_RETRIES,
-                    backoff_ms = backoff.as_millis() as u64,
-                );
-            }
-            Err(SlackError::Transient(msg)) => {
-                if attempt == RATE_LIMIT_MAX_RETRIES {
-                    return Err(SlackError::Permanent(msg));
-                }
-                warn!(
-                    event = "slack_transient_error",
-                    method = method,
-                    error = %msg,
-                    backoff_ms = backoff.as_millis() as u64,
-                );
-            }
-            Err(e @ SlackError::Permanent(_)) => return Err(e),
-        }
-        sleep(backoff).await;
-        backoff = std::cmp::min(backoff * 2, RATE_LIMIT_MAX_BACKOFF);
-    }
-    Err(SlackError::Permanent(format!(
-        "{}: exhausted retries",
-        method
-    )))
+    let t0 = std::time::Instant::now();
+    let response = call_slack_once(method, params).await?;
+    let duration_ms = t0.elapsed().as_millis() as u64;
+    let bytes = response.to_string().len() as u64;
+    events::item_fetched(&format!("slack.api/{}", method), bytes, duration_ms);
+    Ok(SlackCall {
+        response,
+        duration_ms,
+    })
 }
 
 // ---------------------------------------------------------------------------

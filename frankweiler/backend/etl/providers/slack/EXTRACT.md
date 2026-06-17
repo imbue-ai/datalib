@@ -58,10 +58,13 @@ cheap.
 
 ## Rate limits
 
-Slack returns `429 Retry-After`; `api::call_slack` honors the header
-and backs off. Persistent failures bubble up as `SlackError`. There's
-no in-process rate limiter beyond that — Slack's own headers are
-the contract.
+Slack signals a rate limit either as `429 Retry-After` or, on older
+methods, as HTTP `200` with an `{"ok":false,"error":"ratelimited"}`
+body. Both are handled centrally by the shared `latchkey_curl`
+chokepoint — `api::slack_retryability` teaches it to recognize the
+200-body form, after which it honors `Retry-After` / backs off and
+enforces the source's `extract_params` give-up policy. When it gives
+up, the call surfaces as `SlackError::Permanent`.
 
 ## Sample data
 
