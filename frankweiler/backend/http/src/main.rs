@@ -83,30 +83,74 @@ async fn main() -> anyhow::Result<()> {
 
     let root = Arc::new(root);
     let repo = build_repo(root.clone()).await?;
-    // Startup is hard-fail on any qmd setup error: a silent fallback to
-    // per-call CLI or LIKE-based search masks a broken install with a
-    // dramatically worse experience that users may not notice. If qmd
-    // can't run at all, the user should see that explicitly at startup
-    // rather than discover it via "search is weirdly bad."
-    let daemon = QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))
-        .map_err(|e| anyhow::anyhow!("qmd daemon: cannot start ({e:#})"))?;
-    let daemon = Arc::new(daemon);
-    // `qmd pull` ensures embedding + query-expansion + reranker models are
-    // on disk before the first user query, so we don't pay a multi-hundred-
-    // MB huggingface download on the interactive path. Cache-checked, so
-    // a re-run on a warm box is free.
-    eprintln!("qmd: pulling models…");
-    let pull_cfg = daemon.config().clone();
-    match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
-        Ok(Ok(())) => eprintln!("qmd: models ready"),
-        Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
-        Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
-    }
-    let qmd_daemon = Some(daemon);
+
+    // Search runs on the qmd index. On a brand-new / empty data root the
+    // index doesn't exist yet — that's the self-contained bootstrap case
+    // (the whole point of "start from an empty root and sync from the
+    // UI"), not an error. So we start *without* the daemon and let search
+    // fall back (LIKE / per-call CLI) until the first sync builds the
+    // index. A non-empty root with a genuinely *broken* qmd is still a
+    // hard fail: a silent fallback there masks a bad install behind a
+    // dramatically worse search the user may not notice.
+    let index_path = frankweiler_core::qmd::qmd_index_path(&root);
+    let qmd_daemon = if index_path.exists() {
+        let daemon = QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))
+            .map_err(|e| anyhow::anyhow!("qmd daemon: cannot start ({e:#})"))?;
+        let daemon = Arc::new(daemon);
+        // `qmd pull` ensures embedding + query-expansion + reranker models
+        // are on disk before the first user query, so we don't pay a
+        // multi-hundred-MB huggingface download on the interactive path.
+        // Cache-checked, so a re-run on a warm box is free.
+        eprintln!("qmd: pulling models…");
+        let pull_cfg = daemon.config().clone();
+        match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
+            Ok(Ok(())) => eprintln!("qmd: models ready"),
+            Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
+            Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
+        }
+        Some(daemon)
+    } else {
+        eprintln!(
+            "qmd: no index at {} yet — starting in search-fallback mode. \
+             Set up a config + run a sync from the UI; restart for full \
+             vector/hybrid search once the index is built.",
+            index_path.display()
+        );
+        None
+    };
+
+    // Self-contained config: the app reads/writes `<root>/config.yaml`,
+    // so a fresh data root needs no external `~/.config` file. The Setup
+    // tab creates it; the worker drives `frankweiler-sync` against it.
+    let config_path = Arc::new(frankweiler_core::config::root_config_path(&root));
+    eprintln!("config: {}", config_path.display());
+
+    // Live progress fan-out: the worker + enqueue/cancel handlers publish
+    // here, `GET /api/sync/stream` subscribes. Buffer a few hundred events
+    // so a briefly-stalled client lags rather than blocks the worker.
+    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
+
+    // Background sync worker: drains the `sync_jobs` queue the UI fills.
+    // Resolve the `frankweiler-sync` binary up front so the startup log
+    // makes it obvious whether UI-triggered syncs will actually run.
+    let sync_bin = frankweiler_http::worker::resolve_sync_bin();
+    let worker_cfg = frankweiler_http::worker::WorkerConfig {
+        root: root.clone(),
+        config_path: (*config_path).clone(),
+        sync_bin,
+        progress_tx: progress_tx.clone(),
+    };
+    let worker_repo = repo.clone();
+    tokio::spawn(async move {
+        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
+    });
+
     let state = AppState {
         root,
+        config_path,
         repo,
         qmd_daemon,
+        progress_tx,
     };
     axum::serve(listener, router(state)).await?;
     Ok(())
