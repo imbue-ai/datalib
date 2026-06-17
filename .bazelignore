@@ -1,3 +1,9 @@
 frankweiler/ui/node_modules
 frankweiler/ui/dist
 frankweiler/backend/target
+# Agent worktrees (Claude Code `isolation: worktree` / spawned tasks) live
+# here; each carries its own `bazel-*` convenience symlinks into the bazel
+# cache. Without this, `bazel ...` target expansion descends into a nested
+# worktree's symlinked external repos and fails to load (`@rules_license`,
+# `zlib+`, …).
+.claude
