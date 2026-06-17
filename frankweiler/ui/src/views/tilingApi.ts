@@ -19,6 +19,11 @@ export type TilingApi = {
   setActive(split: TileSplit, index: number): void;
   // Switch a container's arrangement (the per-container h/v/tab control).
   setDir(split: TileSplit, dir: Dir): void;
+  // Register (or, with null, drop) the DOM slot a leaf's card teleports
+  // into. The host keeps the cards in a flat pool and teleports each
+  // into its slot, so restructuring the tree moves a card's DOM without
+  // remounting it (see TilingView).
+  setSlot(id: string, el: HTMLElement | null): void;
   // Append a fresh blank card at the end of a container (the "add"
   // button / drop area).
   addCard(containerId: string): void;

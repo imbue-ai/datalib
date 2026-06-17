@@ -19,9 +19,20 @@
 // collapses and promotes that child. Dividers between siblings drag to
 // reweight them.
 //
+// Persistent cards: the recursive TilingNode tree renders only the
+// structure and chrome — where a card goes it leaves an empty slot. The
+// cards themselves live in one flat, id-keyed pool here (`tiles`) and
+// are <Teleport>ed into their slots. Because the pool never reorders or
+// re-parents a card, restructuring the tree (drag, wrap, arrangement
+// switch) MOVES a card's DOM to its new slot instead of remounting it —
+// preserving its shadow root, scroll, fetches, and (crucially) not
+// re-running a grid card's selection restore, which would otherwise
+// spawn a duplicate document.
+//
 // Like the tree layout this is in-memory only — no URL sync — and
 // cards are not carried across when toggling layouts (see CardsView).
-import { provide, ref, watch } from "vue";
+import { computed, provide, reactive, ref, watch } from "vue";
+import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { encodeColumns } from "@/router/columns";
 import type { CardCtx, HostCommands } from "@/cards/types";
@@ -57,14 +68,31 @@ function freshId(): string {
 // never draggable or collapsible.
 const root = ref<TileNode>(makeRoot(freshId(), makeTile(freshId(), "gridView()")));
 
+// Every live tile, flat. Drives the persistent card pool below.
+const tiles = computed(() => listTiles(root.value));
+
+// The DOM slot each leaf's card teleports into, registered by the leaf
+// (see TilingNode's `tiling-card` div). Reactive so the teleport
+// re-targets when the tree restructures and a leaf's slot element is
+// replaced. Null registrations are ignored; stale ids are pruned below.
+const slots = reactive(new Map<string, HTMLElement>());
+function setSlot(id: string, el: HTMLElement | null) {
+  if (el) slots.set(id, el);
+}
+
 // One CardCtx per tile id, pruned to the live tiles whenever the tree
 // changes structurally (reassigned root). In-place weight/state/source
-// mutations keep the same tiles, so they don't churn the cache.
+// mutations keep the same tiles, so they don't churn the cache. The
+// slot map is pruned the same way (a closed leaf's TilingNode unmounts
+// with a null ref, which we ignore, so its entry lingers until here).
 const ctxCache = new Map<string, CardCtx>();
 watch(root, (tree) => {
   const live = new Set(listTiles(tree).map((p) => p.id));
   for (const id of [...ctxCache.keys()]) {
     if (!live.has(id)) ctxCache.delete(id);
+  }
+  for (const id of [...slots.keys()]) {
+    if (!live.has(id)) slots.delete(id);
   }
 });
 
@@ -279,6 +307,7 @@ const api: TilingApi = {
   startResize,
   setActive,
   setDir,
+  setSlot,
   addCard,
   startDrag,
   isRoot,
@@ -292,6 +321,26 @@ provide(TILING_API, api);
 <template>
   <div class="tiling-root" :class="{ 'tiling-root--dragging': draggingId !== null }">
     <TilingNode_ :node="root" :style="{ flex: '1 1 0' }" />
+    <!-- Persistent card pool: one ShadowCard per leaf, kept in this
+         flat keyed list (never remounted by tree restructuring) and
+         teleported into the leaf's slot in the tree above. While a
+         leaf's slot isn't registered yet the teleport is disabled and
+         the card renders here, hidden, then moves once the slot
+         appears — so the card mounts at most once. -->
+    <div class="tiling-card-pool" aria-hidden="true">
+      <Teleport
+        v-for="leaf in tiles"
+        :key="leaf.id"
+        :to="slots.get(leaf.id)"
+        :disabled="!slots.get(leaf.id)"
+      >
+        <ShadowCard
+          class="tiling-mounted-card"
+          :source="leaf.source"
+          :ctx="ctxFor(leaf)"
+        />
+      </Teleport>
+    </div>
   </div>
 </template>
 
@@ -311,5 +360,17 @@ provide(TILING_API, api);
 .tiling-root--dragging {
   cursor: grabbing;
   user-select: none;
+}
+/* The pool only ever holds not-yet-teleported (transient) cards;
+   teleported ones live in their slots. Hidden so the transient state
+   never flashes. */
+.tiling-card-pool {
+  display: none;
+}
+/* A teleported card fills its slot (a flex container in TilingNode). */
+.tiling-mounted-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
 }
 </style>

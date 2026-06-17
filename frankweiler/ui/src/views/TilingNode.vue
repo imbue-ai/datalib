@@ -1,15 +1,17 @@
 <script setup lang="ts">
 // Recursive renderer for the tile tree (see TilingView.vue and
-// tilingTree.ts). A leaf renders the card chrome + ShadowCard; a
-// container renders a bar (grip + h/v/tab switch) over its children,
-// with a draggable divider between each pair and an "add" button at
-// its end. Both leaves and (non-root) containers carry a grip strip
-// you can drag to reparent them. Everything structural — ctx, source
-// edits, close, resize, tabs, arrangement, add, drag — comes from the
-// host through the injected TilingApi, so this component only takes a
-// `node` prop and recurses.
+// tilingTree.ts) — structure and chrome only. A leaf renders the card
+// chrome plus an empty slot div the host teleports the card into (the
+// card itself lives in the host's persistent pool, never here, so it
+// isn't remounted when the tree restructures). A container renders a
+// bar (grip + h/v/tab switch) over its children, with a draggable
+// divider between each pair and an "add" button at its end. Both leaves
+// and (non-root) containers carry a grip strip you can drag to reparent
+// them. Everything structural — slot registration, source edits, close,
+// resize, tabs, arrangement, add, drag — comes from the host through
+// the injected TilingApi, so this component only takes a `node` prop
+// and recurses.
 import { inject } from "vue";
-import ShadowCard from "@/components/ShadowCard.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { TILING_API } from "./tilingApi";
 import type { TileNode, TileSplit } from "./tilingTree";
@@ -17,9 +19,9 @@ import type { TileNode, TileSplit } from "./tilingTree";
 defineProps<{ node: TileNode }>();
 const api = inject(TILING_API)!;
 
-// In the container branches `node` is a TileSplit, but the template
-// type checker doesn't narrow the prop across v-if/v-else-if/v-else;
-// this casts it back for the resize / tab / arrangement handlers.
+// In the container branch `node` is a TileSplit, but the template type
+// checker doesn't narrow the prop across the v-if/v-else; this casts it
+// back for the resize / tab / arrangement handlers.
 const asSplit = (n: TileNode) => n as TileSplit;
 
 // Tab-bar label for a child: the card's source for a tile, or a
@@ -69,15 +71,25 @@ const tabLabel = (child: TileNode) =>
         ✕
       </button>
     </div>
-    <ShadowCard class="tiling-card" :source="node.source" :ctx="api.ctxFor(node)" />
+    <!-- Empty slot: the host teleports this leaf's persistent card here
+         (keyed by id), so it isn't remounted when the tree restructures
+         around it. -->
+    <div
+      class="tiling-card"
+      :ref="(el) => api.setSlot(node.id, el as HTMLElement | null)"
+    />
   </section>
 
-  <!-- Tab group: a bar (grip + arrangement switch), then a tab bar,
-       then the active child; the rest stay mounted (v-show) so
-       switching tabs preserves their cards. -->
+  <!-- Container (any arrangement). One rendering for h / v / tab: the
+       child <TilingNode>s live in the same v-for under the same body
+       element regardless of `dir`, so `dir` only changes the body's
+       flex direction, whether a tab bar / dividers show, and which
+       children are visible (v-show). Switching arrangement therefore
+       never remounts a child card — it keeps its DOM, its state, and
+       (crucially) doesn't re-run a grid card's selection restore. -->
   <div
-    v-else-if="node.dir === 'tab'"
-    class="tiling-tabs"
+    v-else
+    class="tiling-split"
     :class="{ 'is-dragging': api.isDragging(node.id) }"
   >
     <div class="tiling-cbar">
@@ -89,18 +101,33 @@ const tabLabel = (child: TileNode) =>
       />
       <div v-else class="tiling-cbar-spacer" />
       <div class="tiling-dirs" role="group" aria-label="container layout">
-        <button title="lay out horizontally" @click="api.setDir(asSplit(node), 'h')">
+        <button
+          :class="{ 'is-active': node.dir === 'h' }"
+          title="lay out horizontally"
+          @click="api.setDir(asSplit(node), 'h')"
+        >
           ⬌
         </button>
-        <button title="lay out vertically" @click="api.setDir(asSplit(node), 'v')">
+        <button
+          :class="{ 'is-active': node.dir === 'v' }"
+          title="lay out vertically"
+          @click="api.setDir(asSplit(node), 'v')"
+        >
           ⬍
         </button>
-        <button class="is-active" title="lay out as tabs" @click="api.setDir(asSplit(node), 'tab')">
+        <button
+          :class="{ 'is-active': node.dir === 'tab' }"
+          title="lay out as tabs"
+          @click="api.setDir(asSplit(node), 'tab')"
+        >
           ▭
         </button>
       </div>
     </div>
-    <div class="tiling-tabbar" role="tablist">
+
+    <!-- Tab bar — only in tab mode. The active child shows in the body
+         below; the rest stay mounted but hidden. -->
+    <div v-if="node.dir === 'tab'" class="tiling-tabbar" role="tablist">
       <div
         v-for="(child, i) in node.children"
         :key="child.id"
@@ -130,61 +157,16 @@ const tabLabel = (child: TileNode) =>
         ＋
       </div>
     </div>
-    <div class="tiling-tab-bodies">
-      <TilingNode
-        v-for="(child, i) in node.children"
-        v-show="i === (node.active ?? 0)"
-        :key="child.id"
-        :node="child"
-        :style="{ flex: '1 1 0' }"
-      />
-    </div>
-  </div>
 
-  <!-- Split: a bordered container — a bar (grip + arrangement switch),
-       then the children laid out along `dir` with dividers, then an
-       add button. -->
-  <div
-    v-else
-    class="tiling-split"
-    :class="{ 'is-dragging': api.isDragging(node.id) }"
-  >
-    <div class="tiling-cbar">
-      <div
-        v-if="!api.isRoot(node.id)"
-        class="tiling-grip tiling-grip--container"
-        title="drag to move this group"
-        @pointerdown="(e) => api.startDrag(node.id, e)"
-      />
-      <div v-else class="tiling-cbar-spacer" />
-      <div class="tiling-dirs" role="group" aria-label="container layout">
-        <button
-          :class="{ 'is-active': node.dir === 'h' }"
-          title="lay out horizontally"
-          @click="api.setDir(asSplit(node), 'h')"
-        >
-          ⬌
-        </button>
-        <button
-          :class="{ 'is-active': node.dir === 'v' }"
-          title="lay out vertically"
-          @click="api.setDir(asSplit(node), 'v')"
-        >
-          ⬍
-        </button>
-        <button title="lay out as tabs" @click="api.setDir(asSplit(node), 'tab')">
-          ▭
-        </button>
-      </div>
-    </div>
-    <div
-      class="tiling-split-body"
-      :class="node.dir === 'h' ? 'tiling-split-body--h' : 'tiling-split-body--v'"
-    >
+    <div class="tiling-body" :class="`tiling-body--${node.dir}`">
       <template v-for="(child, i) in node.children" :key="child.id">
-        <TilingNode :node="child" :style="{ flexGrow: child.weight }" />
+        <TilingNode
+          v-show="node.dir !== 'tab' || i === (node.active ?? 0)"
+          :node="child"
+          :style="node.dir === 'tab' ? { flex: '1 1 0' } : { flexGrow: child.weight }"
+        />
         <div
-          v-if="i < node.children.length - 1"
+          v-if="node.dir !== 'tab' && i < node.children.length - 1"
           class="tiling-divider"
           role="separator"
           :aria-orientation="node.dir === 'h' ? 'vertical' : 'horizontal'"
@@ -192,6 +174,7 @@ const tabLabel = (child: TileNode) =>
         />
       </template>
       <div
+        v-if="node.dir !== 'tab'"
         class="tiling-add"
         :class="[
           node.dir === 'h' ? 'tiling-add--h' : 'tiling-add--v',
@@ -213,8 +196,7 @@ const tabLabel = (child: TileNode) =>
    the drag grips all use it, so they read as one family. A muted brown
    (not the blue accent, which looked like a text selection). */
 .tiling-leaf,
-.tiling-split,
-.tiling-tabs {
+.tiling-split {
   --tiling-edge: #9c6b43;
   flex-basis: 0;
   min-width: 0;
@@ -233,8 +215,7 @@ const tabLabel = (child: TileNode) =>
 /* Containers (internal nodes) get a visible brown border and a little
    inset padding, so the nesting structure reads at a glance — each box
    sits just inside its parent. */
-.tiling-split,
-.tiling-tabs {
+.tiling-split {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -242,17 +223,21 @@ const tabLabel = (child: TileNode) =>
   border: 2px solid var(--tiling-edge);
   border-radius: 6px;
 }
-.tiling-split-body {
+.tiling-body {
   flex: 1 1 auto;
   display: flex;
   min-width: 0;
   min-height: 0;
 }
-.tiling-split-body--h {
+.tiling-body--h {
   flex-direction: row;
 }
-.tiling-split-body--v {
+.tiling-body--v {
   flex-direction: column;
+}
+/* Tab mode: only the active child is shown (v-show), and it fills. */
+.tiling-body--tab {
+  flex-direction: row;
 }
 
 /* Container bar: drag grip (or a spacer on the root) + the h/v/tab
@@ -330,8 +315,7 @@ const tabLabel = (child: TileNode) =>
    (the accent only appears mid-drag, so it can't be mistaken for a
    persistent border). */
 .tiling-leaf.is-dragging,
-.tiling-split.is-dragging,
-.tiling-tabs.is-dragging {
+.tiling-split.is-dragging {
   opacity: 0.4;
 }
 .tiling-leaf.is-drop {
@@ -426,12 +410,6 @@ const tabLabel = (child: TileNode) =>
 .tiling-tab-close:hover {
   opacity: 1;
 }
-.tiling-tab-bodies {
-  flex: 1 1 auto;
-  display: flex;
-  min-height: 0;
-}
-
 /* Divider: a thin transparent grab strip with a centered hairline.
    Negative margins let it straddle the gap between tiles without
    stealing layout space from them. */
@@ -445,24 +423,24 @@ const tabLabel = (child: TileNode) =>
   position: absolute;
   background: #888;
 }
-.tiling-split-body--h > .tiling-divider {
+.tiling-body--h > .tiling-divider {
   width: 8px;
   margin: 0 -4px;
   cursor: col-resize;
 }
-.tiling-split-body--h > .tiling-divider::before {
+.tiling-body--h > .tiling-divider::before {
   top: 0;
   bottom: 0;
   left: 50%;
   width: 1px;
   transform: translateX(-0.5px);
 }
-.tiling-split-body--v > .tiling-divider {
+.tiling-body--v > .tiling-divider {
   height: 8px;
   margin: -4px 0;
   cursor: row-resize;
 }
-.tiling-split-body--v > .tiling-divider::before {
+.tiling-body--v > .tiling-divider::before {
   left: 0;
   right: 0;
   top: 50%;
@@ -521,8 +499,11 @@ const tabLabel = (child: TileNode) =>
 .tiling-close:hover {
   opacity: 1;
 }
+/* Slot the host teleports the card into; a flex container so the
+   mounted card fills it. */
 .tiling-card {
   flex: 1 1 auto;
   min-height: 0;
+  display: flex;
 }
 </style>
