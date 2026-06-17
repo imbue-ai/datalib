@@ -51,10 +51,10 @@ onMounted(async () => {
     <TreeView v-if="treeMounted" v-show="layout === 'tree'" />
     <TilingView v-if="tilingMounted" v-show="layout === 'tiling'" />
     <div class="cards-statusbar">
-      <span v-if="healthError" class="cards-health--warn">
+      <span v-if="healthError" class="cards-status-msg cards-health--warn">
         backend unreachable: {{ healthError }}
       </span>
-      <span v-else-if="health">
+      <span v-else-if="health" class="cards-status-msg">
         backend ok<template v-if="indexedTotal != null">
           · {{ indexedTotal }} conversations indexed</template
         >
@@ -63,7 +63,6 @@ onMounted(async () => {
           (root does not exist)</span
         >
       </span>
-      <span class="cards-statusbar-spacer" />
       <div class="cards-layout-toggle" role="group" aria-label="card layout">
         <button
           :class="{ 'is-active': layout === 'columns' }"
@@ -129,10 +128,21 @@ onMounted(async () => {
 .cards-health--warn {
   color: #e35d6a;
 }
-.cards-statusbar-spacer {
-  flex: 1 1 auto;
+/* The status message takes whatever width is left and ellipsis-
+   truncates; min-width:0 lets it shrink below its content (flex items
+   default to min-width:auto, which would otherwise squeeze the picker
+   instead). */
+.cards-status-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cards-layout-toggle {
+  /* Always claim full intrinsic width (never shrink), and sit flush
+     right — the message before it absorbs any slack via min-width:0. */
+  flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   border: 1px solid var(--fw-border);
   border-radius: 4px;
