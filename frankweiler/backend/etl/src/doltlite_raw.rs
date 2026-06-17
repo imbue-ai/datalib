@@ -171,13 +171,24 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
     // See the fsindex perf investigation (2026-06) and the upstream
     // doltlite issue. DO NOT re-add a DEFAULT here without re-checking
     // commit performance at scale.
+    //
+    // `volatile_payload` holds the per-fetch *bookkeeping* fields split
+    // out of the object table's content `payload` (see
+    // [`split_volatile`] / [`overlay`]). It's a nullable JSONB blob:
+    // NULL for the common case (provider declared no volatile paths, or
+    // this row had none), an object of the split-out fields otherwise.
+    // Living on the sidecar keeps it out of the data diff, so churn in
+    // fields like Slack's channel `updated` doesn't show up as a
+    // content change. As with the other columns: NO `DEFAULT` (the
+    // O(n²)-commit caveat above); writers bind it explicitly.
     format!(
         "CREATE TABLE IF NOT EXISTS {table}_bookkeeping (
             id TEXT PRIMARY KEY,
             fetched_at TEXT NULL,
             attempt_count INTEGER NOT NULL,
             last_attempt_at TEXT NULL,
-            last_error TEXT NULL
+            last_error TEXT NULL,
+            volatile_payload TEXT NULL
         )"
     )
 }
@@ -263,6 +274,124 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
     payload        TEXT NULL{promoted_block}
 )"
     )
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Volatile-field split / overlay
+// ─────────────────────────────────────────────────────────────────────
+//
+// Some upstream payloads carry per-fetch *bookkeeping* fields that
+// describe the fetch rather than the object's state — e.g. Slack's
+// channel `updated` millis, which Slack bumps spuriously so it churns
+// on every re-fetch even when nothing about the channel changed.
+// Leaving such a field in the object table's `payload` makes
+// `dolt_diff_<table>` report a change on every re-download, which both
+// defeats incremental render and breaks the `--reset-and-redownload`
+// "did anything actually change?" guarantee.
+//
+// The fix mirrors how `fetched_at` is handled: split the volatile
+// fields OUT of the content payload and into the `<table>_bookkeeping`
+// sidecar's `volatile_payload` JSONB (see [`bookkeeping_ddl_for`]),
+// which is not part of the data diff. Overlaying the sidecar back onto
+// the content payload reconstructs exactly what came off the wire.
+//
+// Which fields are volatile is declared per-provider next to the row's
+// table definition (see `slack::extract::schema_raw`) as a slice of
+// [`VolatilePath`]s.
+
+/// One volatile field path: object keys from the payload root down to
+/// the field to split out. `&["updated"]` is a top-level field;
+/// `&["topic", "last_set"]` reaches a nested field.
+pub type VolatilePath<'a> = &'a [&'a str];
+
+/// Partition `payload` into `(base, volatile)`:
+///   - `base` is `payload` with every `paths` entry removed,
+///   - `volatile` is an object holding ONLY those removed fields,
+///     rebuilt at the same nesting, or `None` if nothing was removed.
+///
+/// The split is the inverse of [`overlay`]: `overlay(&base, &volatile)`
+/// reproduces `payload` exactly (including null-valued fields and array
+/// contents). A path that doesn't exist in `payload` — or that would
+/// descend through a non-object — is silently skipped, so declaring a
+/// volatile field that some objects lack is harmless.
+pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option<Value>) {
+    let mut base = payload.clone();
+    let mut volatile = serde_json::Map::new();
+    let mut any = false;
+    for path in paths {
+        if path.is_empty() {
+            continue;
+        }
+        if let Some(taken) = remove_path(&mut base, path) {
+            insert_path(&mut volatile, path, taken);
+            any = true;
+        }
+    }
+    (base, any.then(|| Value::Object(volatile)))
+}
+
+/// Deep-merge `volatile` onto `base`, returning the combined value.
+/// Plain recursive object overlay and the inverse of [`split_volatile`]
+/// — NOT RFC 7386 JSON Merge-Patch: a `null` in `volatile` sets the key
+/// to `null`, it does not delete it (Slack payloads legitimately carry
+/// nulls, e.g. `parent_conversation`). Where both sides hold an object
+/// at the same key the merge recurses; otherwise `volatile` wins.
+pub fn overlay(base: &Value, volatile: &Value) -> Value {
+    match (base, volatile) {
+        (Value::Object(b), Value::Object(v)) => {
+            let mut out = b.clone();
+            for (k, vv) in v {
+                let merged = match out.get(k) {
+                    Some(existing) => overlay(existing, vv),
+                    None => vv.clone(),
+                };
+                out.insert(k.clone(), merged);
+            }
+            Value::Object(out)
+        }
+        _ => volatile.clone(),
+    }
+}
+
+/// Remove the value at `path` (descending object keys) from `root`,
+/// returning it. `None` if any segment is absent or descends through a
+/// non-object.
+fn remove_path(root: &mut Value, path: &[&str]) -> Option<Value> {
+    let (last, parents) = path.split_last()?;
+    let mut cur = root;
+    for key in parents {
+        cur = match cur {
+            Value::Object(m) => m.get_mut(*key)?,
+            _ => return None,
+        };
+    }
+    match cur {
+        Value::Object(m) => m.remove(*last),
+        _ => None,
+    }
+}
+
+/// Insert `value` at `path` into `obj`, creating intermediate objects
+/// as needed.
+fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: Value) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut cur = obj;
+    for key in parents {
+        let entry = cur
+            .entry((*key).to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        match entry {
+            Value::Object(m) => cur = m,
+            // A declared parent path collided with a non-object leaf;
+            // bail rather than clobber. split_volatile only ever feeds
+            // paths it actually removed, so this is unreachable in
+            // practice.
+            _ => return,
+        }
+    }
+    cur.insert((*last).to_string(), value);
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -880,6 +1009,34 @@ pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
     rows: &[T],
     payloads: &[(&str, &serde_json::Value)],
 ) -> Result<()> {
+    bulk_upsert_with_tape_split(pool, tape, rows, payloads, &[]).await
+}
+
+/// [`bulk_upsert_with_tape`] with volatile-field splitting (see
+/// [`split_volatile`]). The caller has already partitioned each
+/// upstream payload into a **content** half and a **volatile** half:
+///
+///   - `rows` carry the *content* payload — the stable state that
+///     belongs in the object table and drives `dolt_diff_<table>`.
+///   - `volatile` carries `(id, &volatile_json)` for the split-out
+///     per-fetch fields, written to `<table>_bookkeeping.volatile_payload`
+///     in the SAME tx as the entity upsert (so the pair is atomic).
+///   - `tape_payloads` carry the FULL reconstructed wire object
+///     (content ⊕ volatile = exactly what came off the wire), so the
+///     JSONL tape stays a faithful record even though the object table
+///     no longer holds the volatile bits.
+///
+/// `volatile` need only contain rows that actually had volatile fields;
+/// ids absent from it leave `volatile_payload` NULL (its insert
+/// default). Plain [`bulk_upsert_with_tape`] is this with an empty
+/// `volatile`.
+pub async fn bulk_upsert_with_tape_split<T: crate::bulk::BulkUpsertable>(
+    pool: &sqlx::SqlitePool,
+    tape: Option<&crate::event_tape::EventTape>,
+    rows: &[T],
+    tape_payloads: &[(&str, &serde_json::Value)],
+    volatile: &[(&str, &serde_json::Value)],
+) -> Result<()> {
     if rows.is_empty() {
         return Ok(());
     }
@@ -889,23 +1046,52 @@ pub async fn bulk_upsert_with_tape<T: crate::bulk::BulkUpsertable>(
         .await
         .with_context(|| format!("begin bulk_upsert_with_tape {} tx", T::TABLE))?;
     crate::bulk::bulk_upsert_in_tx(&mut tx, rows, &now).await?;
+    set_volatile_payloads_in_tx(&mut tx, T::TABLE, volatile).await?;
     tx.commit()
         .await
         .with_context(|| format!("commit bulk_upsert_with_tape {} tx", T::TABLE))?;
     if let Some(t) = tape {
         let batch = EventBatch {
             table: T::TABLE,
-            rows: payloads,
+            rows: tape_payloads,
         };
         if let Err(e) = t.append_batch(&batch) {
             tracing::error!(
                 event = "event_tape_append_failed",
                 table = T::TABLE,
-                count = payloads.len(),
+                count = tape_payloads.len(),
                 error = %format!("{e:#}"),
                 "event tape append_batch failed after doltlite commit; rows ARE persisted, tape is missing lines — investigate"
             );
         }
+    }
+    Ok(())
+}
+
+/// Write a `volatile_payload` JSONB onto existing
+/// `<table>_bookkeeping` rows, one per `(id, value)`. The sidecar rows
+/// already exist (just stamped by [`crate::bulk::bulk_upsert_bookkeeping`]
+/// inside the same tx), so this is a plain UPDATE. Runs inside `tx`;
+/// the caller commits.
+async fn set_volatile_payloads_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    volatile: &[(&str, &serde_json::Value)],
+) -> Result<()> {
+    if volatile.is_empty() {
+        return Ok(());
+    }
+    let bk = format!("{table}_bookkeeping");
+    let sql = format!("UPDATE {bk} SET volatile_payload = jsonb(?) WHERE id = ?");
+    for (id, value) in volatile {
+        let text = serde_json::to_string(value)
+            .with_context(|| format!("serialize volatile_payload {bk}={id}"))?;
+        sqlx::query(&sql)
+            .bind(text)
+            .bind(*id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("set volatile_payload {bk}={id}"))?;
     }
     Ok(())
 }
@@ -1170,6 +1356,117 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    // ── Volatile split / overlay ──────────────────────────────────
+
+    #[test]
+    fn split_overlay_roundtrip_lossless() {
+        // A real-shaped Slack channel payload: top-level volatile field
+        // (`updated`), a legitimate null (`parent_conversation`), a
+        // nested object, and an array — all must survive a round-trip.
+        let payload = json!({
+            "id": "C011QT8HGAC",
+            "name": "dashboard",
+            "parent_conversation": null,
+            "updated": 1724742699826i64,
+            "topic": { "creator": "U1", "last_set": 0, "value": "" },
+            "previous_names": [],
+            "shared_team_ids": ["TSTHRQ7MY"],
+        });
+        // Two paths, one top-level and one nested, to exercise both.
+        let paths: &[VolatilePath] = &[&["updated"], &["topic", "last_set"]];
+
+        let (base, volatile) = split_volatile(&payload, paths);
+
+        // Volatile fields are gone from base...
+        assert!(base.get("updated").is_none());
+        assert!(base["topic"].get("last_set").is_none());
+        // ...but the legitimate null and untouched fields remain.
+        assert!(base.get("parent_conversation").unwrap().is_null());
+        assert_eq!(base["topic"]["value"], json!(""));
+
+        // ...and live in the volatile object at the same nesting.
+        let volatile = volatile.expect("volatile fields present");
+        assert_eq!(volatile["updated"], json!(1724742699826i64));
+        assert_eq!(volatile["topic"]["last_set"], json!(0));
+
+        // Lossless: overlaying reconstructs the exact wire payload.
+        assert_eq!(overlay(&base, &volatile), payload);
+    }
+
+    #[test]
+    fn split_volatile_absent_paths_is_noop() {
+        let payload = json!({ "id": "C1", "name": "x" });
+        let (base, volatile) = split_volatile(&payload, &[&["updated"], &["topic", "last_set"]]);
+        assert_eq!(base, payload);
+        assert!(volatile.is_none());
+    }
+
+    #[test]
+    fn overlay_treats_null_as_a_value_not_a_delete() {
+        // Unlike RFC 7386 merge-patch, a null in the overlay sets the
+        // key to null rather than removing it.
+        let base = json!({ "a": 1, "b": 2 });
+        let volatile = json!({ "b": null });
+        assert_eq!(overlay(&base, &volatile), json!({ "a": 1, "b": null }));
+    }
+
+    #[test]
+    fn overlay_of_none_split_is_identity() {
+        // When nothing was volatile, base IS the payload.
+        let payload = json!({ "id": "C1", "deep": { "k": [1, 2, 3] } });
+        let (base, volatile) = split_volatile(&payload, &[&["nope"]]);
+        assert!(volatile.is_none());
+        assert_eq!(base, payload);
+    }
+
+    #[tokio::test]
+    async fn volatile_payload_roundtrips_through_sidecar() {
+        // End-to-end through the DB: split a payload, store base in the
+        // object table and volatile in the sidecar's `volatile_payload`
+        // column, read both back, and overlay → the original payload.
+        let d = tempdir().unwrap();
+        let p = d.path().join("v.doltlite_db");
+        let pool = open_test(&p).await;
+
+        let full = json!({ "id": "w1", "name": "gadget", "updated": 123456789i64 });
+        let (base, volatile) = split_volatile(&full, &[&["updated"]]);
+        let volatile = volatile.expect("updated is volatile");
+
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("INSERT INTO widgets (id, name, payload) VALUES ('w1', 'gadget', jsonb(?))")
+            .bind(serde_json::to_string(&base).unwrap())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 1)")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        set_volatile_payloads_in_tx(&mut tx, "widgets", &[("w1", &volatile)])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let base_text: String =
+            sqlx::query_scalar("SELECT json(payload) FROM widgets WHERE id = 'w1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let vol_text: String = sqlx::query_scalar(
+            "SELECT json(volatile_payload) FROM widgets_bookkeeping WHERE id = 'w1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let base_v: Value = serde_json::from_str(&base_text).unwrap();
+        let vol_v: Value = serde_json::from_str(&vol_text).unwrap();
+
+        // The content table no longer carries the volatile field...
+        assert!(base_v.get("updated").is_none());
+        // ...but overlaying the sidecar reconstructs the wire payload.
+        assert_eq!(overlay(&base_v, &vol_v), full);
     }
 
     #[tokio::test]

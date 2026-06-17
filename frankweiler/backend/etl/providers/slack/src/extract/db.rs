@@ -30,14 +30,16 @@ use sqlx::Row;
 
 use frankweiler_etl::blob_cas::BlobCas;
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
-use frankweiler_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape};
+use frankweiler_etl::doltlite_raw::{
+    self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split,
+};
 use frankweiler_etl::event_tape::EventTape;
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, slack_message_uuid, slack_thread_uuid, ChannelRow, MessageRow, UserRow, WorkspaceRow,
-    DATA_TABLES,
+    CHANNEL_VOLATILE_PATHS, DATA_TABLES, USER_VOLATILE_PATHS,
 };
 use frankweiler_etl::doltlite_raw::WirePayload;
 
@@ -212,6 +214,8 @@ impl RawDb {
         }
         let mut rows: Vec<UserRow> = Vec::with_capacity(payloads.len());
         let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(payloads.len());
+        // Owns split-out volatile Values; see `upsert_channels`.
+        let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
                 continue;
@@ -228,10 +232,12 @@ impl RawDb {
             let display_name = profile
                 .and_then(|p| p.get("display_name"))
                 .and_then(|v| v.as_str());
+            // Split the per-fetch `updated` bookkeeping into the sidecar.
+            let (base, volatile) = dr::split_volatile(payload, USER_VOLATILE_PATHS);
             rows.push(UserRow {
                 id_and_payload: WirePayload {
                     id: id.to_string(),
-                    payload: serde_json::to_string(payload).context("serialize user")?,
+                    payload: serde_json::to_string(&base).context("serialize user")?,
                 },
                 team_id: payload
                     .get("team_id")
@@ -245,8 +251,20 @@ impl RawDb {
                 display_name: display_name.map(String::from),
             });
             tape_pairs.push((id, payload));
+            if let Some(v) = volatile {
+                volatile_store.push((id, v));
+            }
         }
-        bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await
+        let volatile_pairs: Vec<(&str, &Value)> =
+            volatile_store.iter().map(|(id, v)| (*id, v)).collect();
+        bulk_upsert_with_tape_split(
+            &self.pool,
+            self.tape_ref(),
+            &rows,
+            &tape_pairs,
+            &volatile_pairs,
+        )
+        .await
     }
 
     pub async fn load_users(&self) -> Result<Vec<Value>> {
@@ -265,14 +283,23 @@ impl RawDb {
         }
         let mut rows: Vec<ChannelRow> = Vec::with_capacity(payloads.len());
         let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(payloads.len());
+        // Owns the split-out volatile Values so we can lend `&Value` to
+        // the chokepoint below. Only channels that had volatile fields
+        // land here.
+        let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
+            // Split the per-fetch `updated` bookkeeping out of the
+            // content payload; the entity row stores `base`, the sidecar
+            // stores `volatile`, and the tape still sees the full
+            // original `payload`.
+            let (base, volatile) = dr::split_volatile(payload, CHANNEL_VOLATILE_PATHS);
             rows.push(ChannelRow {
                 id_and_payload: WirePayload {
                     id: id.to_string(),
-                    payload: serde_json::to_string(payload).context("serialize channel")?,
+                    payload: serde_json::to_string(&base).context("serialize channel")?,
                 },
                 name: payload
                     .get("name")
@@ -288,8 +315,20 @@ impl RawDb {
                     .map(|b| b as i64),
             });
             tape_pairs.push((id, payload));
+            if let Some(v) = volatile {
+                volatile_store.push((id, v));
+            }
         }
-        bulk_upsert_with_tape(&self.pool, self.tape_ref(), &rows, &tape_pairs).await
+        let volatile_pairs: Vec<(&str, &Value)> =
+            volatile_store.iter().map(|(id, v)| (*id, v)).collect();
+        bulk_upsert_with_tape_split(
+            &self.pool,
+            self.tape_ref(),
+            &rows,
+            &tape_pairs,
+            &volatile_pairs,
+        )
+        .await
     }
 
     pub async fn load_channels(&self) -> Result<Vec<Value>> {

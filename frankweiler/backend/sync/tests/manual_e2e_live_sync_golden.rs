@@ -67,7 +67,15 @@ const VOLATILE_KEYS: &[&str] = &[
     "last_edited_time",
     "created_time",
     "cache_ts",
-    "updated",
+    // NB: `updated` is deliberately NOT redacted here. It's per-fetch
+    // bookkeeping that providers embed in their payload (Slack's
+    // channel/user `updated` epoch); rather than paper over it in the
+    // test, the extract pipeline splits it into the
+    // `volatile_payload` sidecar (which this dump excludes) so it never
+    // reaches a content table. See data_architecture_ingestion.md
+    // §"Volatile-field split". If a NEW provider's volatile `updated`
+    // shows up as golden churn, split it at the source — don't re-add it
+    // here.
     // Fields of `sync_summary_<now>.json` that don't reproduce
     // byte-identically across runs.
     "started_at",
@@ -240,6 +248,72 @@ fn manual_e2e_live_sync_golden() {
     }, {
         assert_json_snapshot!("sync_summary_run2_incrementality", summary_json2);
     });
+
+    // ── Third run: --reset-and-redownload content stability ───────────
+    //
+    // Wipe every entity + bookkeeping table and re-download every row
+    // from upstream. The CONTENT tables must come back byte-identical:
+    // re-fetching the same upstream object must land the same bytes at
+    // the same PK, so `dolt_diff_<t>` (and incremental render) reflect
+    // real upstream change only. Any field that drifts across an
+    // identical re-fetch is per-fetch bookkeeping leaking into a content
+    // payload — it belongs in the `volatile_payload` sidecar (see
+    // data_architecture_ingestion.md §"Volatile-field split"), and THIS
+    // is the check that surfaces it.
+    //
+    // We compare RAW (un-redacted) content so a field that should have
+    // been split — but wasn't — shows up as drift instead of being
+    // masked by `strip_volatile`. Bookkeeping sidecars, `sync_runs`, and
+    // `sync_scope_state` legitimately change across a reset and are
+    // excluded by `content_tables`.
+    //
+    // Scoped to the providers that have adopted the split. Add a DB here
+    // as each provider migrates; the long-term goal is every provider.
+    let stability_dbs = ["tiny-slack.doltlite_db"];
+    let before: Vec<(&str, Value)> = stability_dbs
+        .iter()
+        .map(|name| (*name, content_tables(&data_root.join("raw").join(name))))
+        .collect();
+
+    let now3 = "2026-05-21T18:10:00Z";
+    let status3 = Command::new(&bin)
+        .arg("--config")
+        .arg(&cfg_path)
+        .arg("--now")
+        .arg(now3)
+        .arg("--reset-and-redownload")
+        .status()
+        .expect("spawn sync 3");
+    assert!(status3.success(), "third sync (reset) failed: {status3:?}");
+
+    for (name, before_v) in &before {
+        let after_v = content_tables(&data_root.join("raw").join(name));
+        assert_eq!(
+            before_v, &after_v,
+            "{name}: content tables drifted across --reset-and-redownload. \
+             A per-fetch field is leaking into a content payload — declare it \
+             in that entity's *_VOLATILE_PATHS and route the upsert through \
+             bulk_upsert_with_tape_split (see data_architecture_ingestion.md \
+             §\"Volatile-field split\")."
+        );
+    }
+}
+
+/// Dump only the entity *content* tables of a doltlite DB for the
+/// --reset-and-redownload stability assertion: drops every
+/// `*_bookkeeping` sidecar (per-fetch stamps + the `volatile_payload`
+/// split-outs), plus `sync_runs` (audit log) and `sync_scope_state`
+/// (resume cursor) — all of which legitimately change across a reset.
+/// Deliberately NOT volatile-redacted: the whole point is to catch a
+/// field that drifts on re-fetch, which `strip_volatile` would mask.
+fn content_tables(path: &Path) -> Value {
+    let mut v = dump_doltlite_db(path);
+    if let Value::Object(map) = &mut v {
+        map.retain(|table, _| {
+            !table.ends_with("_bookkeeping") && table != "sync_runs" && table != "sync_scope_state"
+        });
+    }
+    v
 }
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
@@ -523,6 +597,13 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
         let columns: Vec<String> = info
             .iter()
             .map(|r| r.try_get::<String, _>("name").unwrap_or_default())
+            // `volatile_payload` (the bookkeeping sidecar's split-out
+            // per-fetch fields, e.g. Slack's `updated`) holds churn BY
+            // DEFINITION — that's why it was split off the content
+            // payload. Never snapshot it: it would make the golden
+            // non-deterministic across runs. See
+            // data_architecture_ingestion.md §"Volatile-field split".
+            .filter(|c| c != "volatile_payload")
             .collect();
 
         let select_list = columns
@@ -653,7 +734,8 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "last_edited_time",
         "created_time",
         "cache_ts",
-        "updated",
+        // `updated` intentionally omitted — split into the volatile_payload
+        // sidecar at extract time, not redacted here (see strip_volatile).
         "started_at",
         "finished_at",
         "duration_secs",

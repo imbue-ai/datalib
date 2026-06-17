@@ -207,6 +207,14 @@ a column:
      `etag`, ChatGPT `last_listing_update_time`, YoLink
      `last_ts_ms`, server-supplied freshness markers like
      `ctag`/`sync_token`) → `<t>_bookkeeping` sidecar.
+  4. **Upstream-supplied per-fetch bookkeeping embedded _inside_ the
+     payload** (Slack's channel/user `updated` epoch, which the server
+     bumps spuriously; user-specific view state like a message's
+     `last_read`/`subscribed`) → split OUT of `payload` and stored in
+     `<t>_bookkeeping.volatile_payload`. This is bucket 1's evil twin:
+     it looks like payload data because it rides in the wire object, but
+     it describes the fetch, not the object's state, and it churns on
+     every re-fetch.
 
 The split matters because bookkeeping changes on every attempt regardless of
 upstream change. Storing it on the entity table makes every `dolt diff` noisy,
@@ -214,6 +222,49 @@ defeats the wire-fidelity of `payload`, and forces re-renders of unchanged
 content. Keeping it on the sidecar means `<t>` mutates only when upstream
 actually changed, and the sidecar churn stays out of any cross-stage
 fingerprint.
+
+##### Volatile-field split (bucket 4) — the mechanism
+
+Bucket 4 is the only one where bookkeeping arrives *interleaved* with
+content in a single JSON object, so it needs an explicit split rather
+than just "write it to a different column." The standard mechanism lives
+in [`frankweiler_etl::doltlite_raw`](../../frankweiler/backend/etl/src/doltlite_raw.rs)
+and is the same for every provider:
+
+  - Each provider declares its volatile field paths next to the row's
+    table definition in `schema_raw.rs` — a `&[VolatilePath]`, where a
+    `VolatilePath` is a key path from the payload root (`&["updated"]`
+    for a top-level field, `&["topic", "last_set"]` for a nested one).
+    **Every provider participates; the set is just empty for providers
+    with no embedded bookkeeping**, and an empty set is a zero-cost
+    no-op (see below).
+  - At the upsert site, [`split_volatile(payload, paths)`] partitions the
+    wire object into `(base, volatile)`: `base` is the content payload
+    (what lands in `<t>.payload` and drives `dolt_diff_<t>`), `volatile`
+    is an object holding only the split-out fields.
+  - [`bulk_upsert_with_tape_split`] writes `base` to the entity table and
+    `volatile` to `<t>_bookkeeping.volatile_payload` in one transaction,
+    while the **JSONL wire-tape still records the full original payload**
+    — the tape stays a byte-faithful record of what came off the wire.
+  - [`overlay(base, volatile)`] reconstructs the exact wire object when a
+    reader needs it. It's a plain recursive object merge, **not** RFC 7386
+    JSON Merge-Patch: a `null` in `volatile` is a value, not a delete
+    (upstream payloads legitimately carry nulls). `overlay(split(p)) == p`
+    is a tested invariant.
+
+The empty-set case is free by construction: `bulk_upsert_with_tape(…)`
+is exactly `bulk_upsert_with_tape_split(…, &[])`, and the
+`volatile_payload` column is `NULL`-able and present on every sidecar
+regardless. So a provider with no volatile fields needs no code and no
+schema change; when one is discovered, it adds a `*_VOLATILE_PATHS`
+const and switches its upsert site to the `_split` chokepoint.
+
+How volatile fields are discovered: the live golden sync test
+(`manual_e2e_live_sync_golden`) runs a third `--reset-and-redownload`
+pass and asserts the data-table `dolt diff` is empty. Any field that
+drifts across an identical re-fetch shows up there and must be moved to
+bucket 4 (or explained). See [§"Verifiable via
+`--reset-and-redownload`"](#verifiable-via---reset-and-redownload).
 
 ### Layering of concerns: extract is downstream-agnostic
 

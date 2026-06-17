@@ -96,6 +96,14 @@ pub struct UserRow {
     pub display_name: Option<String>,
 }
 
+/// Per-fetch volatile fields split out of the `users` content payload
+/// into the `users_bookkeeping.volatile_payload` sidecar (see
+/// [`frankweiler_etl::doltlite_raw::split_volatile`]). Slack stamps a
+/// top-level `updated` epoch on every user object; it churns across
+/// re-fetches without reflecting a state change, so it must not live in
+/// the content payload that drives `dolt_diff_users`.
+pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
+
 /// `channels` — one row per Slack chat surface: public channel,
 /// private channel, DM, or MPIM.
 ///
@@ -117,6 +125,15 @@ pub struct ChannelRow {
     pub is_member: Option<i64>,
     pub is_archived: Option<i64>,
 }
+
+/// Per-fetch volatile fields split out of the `channels` content
+/// payload into the `channels_bookkeeping.volatile_payload` sidecar
+/// (see [`frankweiler_etl::doltlite_raw::split_volatile`]). Slack bumps
+/// the top-level `updated` millis spuriously on every fetch, so leaving
+/// it in the content payload would make `dolt_diff_channels` report a
+/// change on every re-download — defeating incremental render and the
+/// `--reset-and-redownload` "nothing changed" guarantee.
+pub const CHANNEL_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 
 /// `messages` — one row per Slack message (top-level or threaded
 /// reply).
