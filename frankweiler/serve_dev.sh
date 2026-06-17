@@ -17,6 +17,15 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
+# The backend's sync worker shells out to frankweiler-sync. Hand it the
+# runfiles path so UI-triggered "Sync" runs the real pipeline. Honor a
+# caller-supplied override.
+if [[ -z "${FRANKWEILER_SYNC_BIN:-}" ]]; then
+  SYNC_BIN="$(rlocation _main/frankweiler/backend/sync/frankweiler_sync_bin || true)"
+  [[ -x "$SYNC_BIN" ]] && export FRANKWEILER_SYNC_BIN="$SYNC_BIN"
+fi
+[[ -n "${FRANKWEILER_SYNC_BIN:-}" ]] && echo "sync bin: $FRANKWEILER_SYNC_BIN"
+
 # Default to an ephemeral port so concurrent `serve_dev.sh` runs (e.g. one
 # agent per checkout) don't fight over a hardcoded 8731. Honor a caller-
 # supplied FRANKWEILER_BIND verbatim. Same ephemeral-port trick as

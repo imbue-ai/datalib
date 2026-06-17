@@ -183,6 +183,68 @@ export function fetchChat(
   );
 }
 
+// --- Config / setup API ----------------------------------------------------
+//
+// The data root is self-contained: its `config.yaml` lives at
+// `<root>/config.yaml` and is read/written through these endpoints. A
+// fresh root has no config (`exists: false`); the Setup view scaffolds
+// one, lets the user edit, and PUTs it back.
+
+export type ConfigResponse = {
+  // Absolute path of `<root>/config.yaml`.
+  path: string;
+  // Whether that file exists yet (false on a fresh data root).
+  exists: boolean;
+  // Raw YAML text ("" when missing).
+  yaml: string;
+  // Whether the current bytes parse + validate.
+  parsed_ok: boolean;
+  // Loader error when parsed_ok is false.
+  error: string | null;
+  source_count: number;
+};
+
+export type SaveConfigResponse = {
+  ok: boolean;
+  error: string | null;
+  source_count: number;
+};
+
+export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
+  return getJson<ConfigResponse>("/api/config", signal);
+}
+
+// Server-generated starter config with `data_root` pre-filled. Used when
+// the root has no config yet.
+export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
+  return getJson<ConfigResponse>("/api/config/scaffold", signal);
+}
+
+// PUT the edited YAML. The backend validates before persisting; a
+// validation failure comes back as `{ok:false, error}` (HTTP 200), not a
+// thrown error, so the caller can show it inline.
+export async function saveConfig(
+  yaml: string,
+  signal?: AbortSignal,
+): Promise<SaveConfigResponse> {
+  const r = await fetch("/api/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ yaml }),
+    signal,
+  });
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(detail ? `${r.status}: ${detail}` : `PUT /api/config → ${r.status}`);
+  }
+  return (await r.json()) as SaveConfigResponse;
+}
+
 // --- Sync API --------------------------------------------------------------
 
 export type SyncSource = {
@@ -214,6 +276,33 @@ export type SyncJob = {
 
 export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
+}
+
+// One push update for a job, streamed from `GET /api/sync/stream` over
+// SSE. The worker + enqueue/cancel handlers emit these the instant they
+// write a job's state, so the UI updates without polling.
+export type JobProgressEvent = {
+  id: string;
+  kind: string;
+  source_name: string | null;
+  state: SyncJobState;
+  progress_pct: number | null;
+  progress_msg: string | null;
+};
+
+// Open the live job-progress SSE stream. Returns the EventSource so the
+// caller can close it on unmount. `onEvent` fires per job update; the
+// browser auto-reconnects on transient drops.
+export function openJobStream(onEvent: (e: JobProgressEvent) => void): EventSource {
+  const es = new EventSource("/api/sync/stream");
+  es.onmessage = (m) => {
+    try {
+      onEvent(JSON.parse(m.data) as JobProgressEvent);
+    } catch {
+      // ignore malformed frames
+    }
+  };
+  return es;
 }
 
 export function fetchActiveJobs(signal?: AbortSignal): Promise<SyncJob[]> {
@@ -289,6 +378,44 @@ export async function fetchCard(hash: string, signal?: AbortSignal): Promise<str
   const r = await fetch(`/api/card/${encodeURIComponent(hash)}`, { signal });
   if (!r.ok) throw new Error(`GET /api/card/${hash} → ${r.status}`);
   return await r.text();
+}
+
+// --- Component library (named, mutable card aliases) -----------------------
+//
+// GET  /api/lib            → [{name, hash}] manifest of every component
+// GET  /api/lib/{name}     → the component's JS source
+// PUT  /api/lib/{name}     → create/overwrite, body {source}, returns {name,hash}
+//
+// `hash` is the sha256 of the source; the UI polls the manifest and
+// re-renders a card when an alias it depends on changes hash.
+
+export type LibEntry = { name: string; hash: string };
+
+export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
+  const r = await fetch("/api/lib", { signal });
+  if (!r.ok) throw new Error(`GET /api/lib → ${r.status}`);
+  return (await r.json()) as LibEntry[];
+}
+
+export async function fetchLib(name: string, signal?: AbortSignal): Promise<string> {
+  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, { signal });
+  if (!r.ok) throw new Error(`GET /api/lib/${name} → ${r.status}`);
+  return await r.text();
+}
+
+export async function putLib(
+  name: string,
+  source: string,
+  signal?: AbortSignal,
+): Promise<LibEntry> {
+  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`PUT /api/lib/${name} → ${r.status}`);
+  return (await r.json()) as LibEntry;
 }
 
 export type FeedbackRequest = {

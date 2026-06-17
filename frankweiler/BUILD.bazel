@@ -4,7 +4,12 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 sh_binary(
     name = "serve",
     srcs = ["serve_dev.sh"],
-    data = ["//frankweiler/backend/http:frankweiler_http_bin"],
+    data = [
+        "//frankweiler/backend/http:frankweiler_http_bin",
+        # The HTTP backend's sync worker shells out to this; serve_dev.sh
+        # exports its runfiles path as $FRANKWEILER_SYNC_BIN.
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
+    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
@@ -16,7 +21,12 @@ sh_binary(
 sh_binary(
     name = "dev",
     srcs = ["dev.sh"],
-    data = ["//frankweiler/backend/http:frankweiler_http_bin"],
+    data = [
+        "//frankweiler/backend/http:frankweiler_http_bin",
+        # Sync worker child; dev.sh exports its runfiles path as
+        # $FRANKWEILER_SYNC_BIN so UI-triggered syncs run end-to-end.
+        "//frankweiler/backend/sync:frankweiler_sync_bin",
+    ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 

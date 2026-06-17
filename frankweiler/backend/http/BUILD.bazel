@@ -7,6 +7,7 @@ rust_library(
     srcs = [
         "src/embed.rs",
         "src/lib.rs",
+        "src/worker.rs",
     ],
     crate_name = "frankweiler_http",
     edition = "2021",
@@ -16,7 +17,11 @@ rust_library(
     # entry makes those files visible to the rustc invocation.
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
-    compile_data = ["//frankweiler/ui:dist"],
+    # `agent_guide.md` is `include_str!`'d by the `/agent.md` handler.
+    compile_data = [
+        "//frankweiler/ui:dist",
+        "src/agent_guide.md",
+    ],
     rustc_env = {
         "FRANKWEILER_UI_DIST": "$(execpath //frankweiler/ui:dist)",
     },
@@ -28,6 +33,7 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:futures",
         "@frankweiler_crates//:mime_guess",
         "@frankweiler_crates//:rust-embed",
         "@frankweiler_crates//:serde",

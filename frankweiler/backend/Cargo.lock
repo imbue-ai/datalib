@@ -1759,6 +1759,7 @@ dependencies = [
  "frankweiler-core",
  "frankweiler-schema",
  "frankweiler-time",
+ "futures",
  "mime_guess",
  "rust-embed",
  "serde",

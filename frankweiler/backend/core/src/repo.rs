@@ -117,6 +117,59 @@ pub trait MirrorRepo: Send + Sync {
     async fn request_cancel_job(&self, _job_id: &str) -> Result<(), RepoError> {
         Err(RepoError::ReadOnly)
     }
+
+    // --- Worker-side job lifecycle ------------------------------------
+    //
+    // These are the writes the in-process sync worker issues as it drains
+    // the queue. The HTTP request handlers never call them; only
+    // `worker::run` does. Default impls return [`RepoError::ReadOnly`] so
+    // a read-only backend simply never makes progress on jobs.
+
+    /// Atomically claim the oldest `pending` job: flip it to `running`,
+    /// stamp `started_at`, and return the updated row. Returns `Ok(None)`
+    /// when the queue is empty. Single-worker by construction, so the
+    /// SELECT-then-UPDATE needs no extra locking beyond SQLite's
+    /// single-writer guarantee.
+    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Record the OS pid of the child process driving a `running` job, so
+    /// a future worker restart can detect orphaned rows.
+    async fn set_job_pid(&self, _job_id: &str, _pid: i64) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Update the live progress fraction / message for a running job.
+    /// Cheap, high-frequency write — deliberately does *not* mint a Dolt
+    /// commit (only state transitions land in `dolt log`).
+    async fn update_job_progress(
+        &self,
+        _job_id: &str,
+        _pct: Option<f64>,
+        _msg: Option<&str>,
+    ) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Move a job to a terminal state (`done` / `failed` / `canceled`),
+    /// stamping `finished_at`, clearing `pid`, and recording an optional
+    /// error summary.
+    async fn finish_job(
+        &self,
+        _job_id: &str,
+        _state: &str,
+        _error: Option<&str>,
+    ) -> Result<(), RepoError> {
+        Err(RepoError::ReadOnly)
+    }
+
+    /// Startup recovery: flip any rows still marked `running` (left over
+    /// from a previous backend process that died mid-job) to `failed`.
+    /// Returns the number of rows recovered.
+    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
+        Err(RepoError::ReadOnly)
+    }
 }
 
 /// One outgoing edge, joined with the destination markdown's metadata

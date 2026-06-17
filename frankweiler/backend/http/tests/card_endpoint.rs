@@ -32,8 +32,10 @@ async fn card_round_trip_and_error_paths() {
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let app_state = AppState {
         root: root.clone(),
+        config_path: Arc::new(root.join("config.yaml")),
         repo: Arc::new(dolt),
         qmd_daemon: None,
+        progress_tx: tokio::sync::broadcast::channel(16).0,
     };
     let app = router(app_state.clone());
 

@@ -1,4 +1,4 @@
-# Cards — source-defined cards in two layouts
+# Cards — source-defined cards and the layouts that host them
 
 The frankweiler UI is a surface of cards: each card is a piece of
 JavaScript source the user can read (and edit) in the card's header
@@ -6,17 +6,15 @@ bar. The host evaluates that source to produce the card's content.
 `frankweiler/ui/src/cards/types.ts` is the canonical home of every
 shape described here; this doc is the narrative version.
 
-Two layouts host the same cards (toggle in the status bar, see
-`frankweiler/ui/src/views/CardsView.vue`):
-
-- **columns** (default) — a stack of miller columns
-  (`MillerView.vue`), synced to the URL.
-- **tree** — a pannable/zoomable 2D plane (`TreeView.vue`) where
-  opening a card spawns a child node; in-memory only, no URL sync.
-
-The card contract is identical in both; only what `host.openCard`
-*does* differs. Toggling does not carry cards across — each layout
-keeps its own set (both stay alive across toggles).
+A **layout** is what arranges cards on screen — a stack of miller
+columns, a 2D tree, a tiling window manager — selectable from the
+status bar (see `frankweiler/ui/src/views/CardsView.vue`). This doc is
+deliberately layout-agnostic: it describes the card contract and how a
+card interacts with whatever layout hosts it. The layouts differ only
+in *where* they put cards and what reshaping furniture they offer;
+those specifics live with each layout (`MillerView.vue`,
+`TreeView.vue`, `TilingView.vue`). What every layout guarantees a card
+is identical, and is the subject here.
 
 ## Card source
 
@@ -34,8 +32,7 @@ and calls it with the view factories as arguments — so the only names
 in scope are the factories in `ViewLibs`
 (`frankweiler/ui/src/cards/libs/index.ts`), plus JS globals. The
 expression must evaluate to a `CardRender`; anything else (or a parse
-error) renders as an error message inside the column instead of a
-card.
+error) renders as an error message in place of the card.
 
 Because the source is plain JS, a user-authored card is just a bigger
 expression. An IIFE that composes the factories works today:
@@ -54,11 +51,10 @@ type CardRender = (root: ShadowRoot, ctx: CardCtx) => Teardown;
 type Teardown = () => void;
 ```
 
-The layout hosts (`frankweiler/ui/src/views/MillerView.vue` and
-`TreeView.vue`, via `frankweiler/ui/src/components/ShadowCard.vue`)
-mount each card inside its own **shadow root** and call the render
-function with it. The card owns that DOM completely — the host
-renders nothing inside. The returned teardown runs when the card
+Whatever the layout, the host mounts each card inside its own **shadow
+root** (via `frankweiler/ui/src/components/ShadowCard.vue`) and calls
+the render function with it. The card owns that DOM completely — the
+host renders nothing inside. The returned teardown runs when the card
 closes or its source is re-run after an edit.
 
 Shadow DOM is the isolation boundary: document-head styles do not
@@ -83,8 +79,8 @@ a card must also be `.ce.vue` and listed in the adapter's
 
 ```ts
 type CardCtx = {
-  cardId: string;        // host-assigned, stable for the column's lifetime
-  initialState: string;  // persisted state from the URL ("" when absent)
+  cardId: string;        // host-assigned, stable for the card's lifetime
+  initialState: string;  // persisted state from the host ("" when absent)
   bus: Bus;              // ambient cross-card events
   host: HostCommands;    // structural + persistence commands
 };
@@ -92,7 +88,7 @@ type CardCtx = {
 
 ### HostCommands
 
-Each card gets its own instance, pre-bound to its column:
+Each card gets its own instance, pre-bound to that card:
 
 ```ts
 type HostCommands = {
@@ -102,34 +98,34 @@ type HostCommands = {
 };
 ```
 
-- `openCard(source)` opens a new card "from" this one; placement is
-  layout-dependent. In the **columns** layout it opens directly to
-  the right of this card, **replacing everything currently further
-  right** (miller semantics). In the **tree** layout it spawns a
-  child node this card points to, leaving everything else in place.
-  The argument is card source for the new card — e.g. the grid card
-  composes `documentView("<md>", "<row>")` when a row is clicked.
-  Structural operations always go through host commands, never the
-  bus.
-- `close()` closes this card. In the tree layout this closes the
-  card's whole subtree (its children would be orphaned otherwise).
+- `openCard(source)` opens a new card "from" this one. The card
+  supplies only the new card's **source** — e.g. the grid card
+  composes `documentView("<md>", "<row>")` when a row is clicked — and
+  makes **no assumption about placement**: where the new card lands is
+  entirely the active layout's business (next to the caller, as a
+  child node, as a sibling, …). Structural operations always go
+  through host commands, never the bus.
+- `close()` closes this card. A layout may close dependents along with
+  it (e.g. a node's subtree) — that's its call, not the card's.
 - `setState(state)` replaces this card's persisted state string (see
   below).
 
 ### State strings
 
-A card may persist state across reloads. The string is **opaque to
-the host**: in the columns layout it lands verbatim in the column's
-URL segment, comes back as `ctx.initialState` on the next load, and
-only the card interprets it. Setting `""` clears it. The tree layout
-round-trips the string in memory only (no URL), so there it survives
-source re-runs but not reloads.
+A card may persist state so it survives a re-run (and, where the
+layout supports it, a reload). The string is **opaque to the host**:
+the card passes whatever it likes to `setState`, the host round-trips
+it, and the card reads it back as `ctx.initialState`. Setting `""`
+clears it. How long it survives is the layout's choice — a
+URL-backed layout persists it across reloads; an in-memory layout
+keeps it only until the page is gone — so a card must treat
+`initialState` as a best-effort restore, never a guarantee.
 
 The grid card is the reference user
 (`frankweiler/ui/src/cards/GridCard.ce.vue`): it keeps
 `URLSearchParams` of `q` (search query), `sel` (selected row uuid) and
 `cols` (AG Grid column state, base64url-encoded JSON), writing only on
-user-driven changes so a pristine grid keeps a clean URL.
+user-driven changes so a pristine grid keeps clean state.
 
 ### Bus
 
@@ -151,71 +147,27 @@ transient highlight on the target span. Payloads cross card boundaries
 as `unknown`; subscribers validate the shape before acting.
 Unsubscribe in the card's teardown.
 
-## URL scheme (columns layout only)
+## How a card and its layout interact
 
-The URL path is the column stack
-(`frankweiler/ui/src/router/columns.ts`): a `/`-separated list of
-`code:state` segments, one per column, with both parts
-percent-escaped (so `/` and `:` inside them survive — the first raw
-`:` in a segment is the separator):
+Everything a card needs from its surroundings is the `CardCtx`; it
+never reaches for the layout directly. The division of labour:
 
-```
-/gridView():sel%3D11ec…%26cols%3DW3si…/documentView(%22e28e…%22)
-```
+- **The card** owns its shadow root, renders into it, persists its own
+  opaque state, and asks for new cards / closure through host commands.
+- **The layout** owns placement and chrome. Around each card it draws
+  a header with the source box (Enter re-runs the card, Shift+Enter
+  inserts a newline; committing new source clears the old state
+  string), an ↗ "open this card alone" link, and a ✕ close button.
+  Anything past that — resize handles, drag grips, add buttons,
+  dividers, tab bars — is layout-specific furniture, invisible to the
+  card. The layout also decides what `openCard` placement means, what
+  `close` takes with it, and whether `setState` reaches the URL.
 
-- `code` and `code:` are equivalent: a column whose state is empty
-  serializes as bare code.
-- `/` is the pristine default stack (`[gridView()]` with no state).
-- Reloading restores the stack and each card's state; back/forward
-  rebuilds the stack from the path.
-- The trailing blank column (below) is never part of the URL.
-- Each column's ↗ header button links to a URL containing just that
-  column — "open this column alone".
-
-## Host chrome
-
-Around each card, the host draws the header bar and nothing else. The
-header holds the source box (soft-wrapping; Enter re-runs the card,
-Shift+Enter inserts a newline; committing new source clears the old
-state string), the ↗ open-alone link (a columns-layout URL containing
-just this card), and the ✕ close button.
-
-In the **columns** layout, columns resize by dragging the invisible
-strip on their right divider, and the stack always ends in **exactly
-one blank column** — the place to type new card source. As soon as it
-gains code, a fresh blank appears after it; a run of several trailing
-blanks collapses to one.
-
-In the **tree** layout, the header bar carries extra top padding as a
-grab strip: drag it to move the node (and its subtree). Nodes resize
-by dragging any of their four corners, and a "+ card" button in the
-canvas controls adds a blank root node.
-
-## Tree layout
-
-`TreeView.vue` renders cards as nodes on a 2D plane. Positions are
-auto-layout first: every open/close/resize re-runs a tidy
-left-to-right tree layout (`treeLayout.ts` — children in a column to
-the right of their parent, sibling subtrees in disjoint vertical
-bands, parent vertically centered on its children) and nodes animate
-to their new spots. Dragging a node by its title bar stores a manual
-offset on top of the layout position; descendants inherit ancestor
-offsets, so a drag moves the whole subtree and later reflows keep the
-deviation instead of snapping it back. Parent→child edges are cubic
-beziers in an SVG layer under the nodes.
-
-Navigation follows design-tool (Figma/tldraw) conventions:
-
-- wheel / two-finger scroll over the background pans (over a card it
-  scrolls the card's own content);
-- ctrl/cmd+wheel and trackpad pinch zoom toward the cursor;
-- dragging the background, middle-button drag, or space+drag pans;
-- bottom-left controls: zoom out/in, percentage (click to reset to
-  100%), zoom-to-fit, "+ card".
-
-The tree starts as a single `gridView()` root and lives entirely in
-memory: no URL participation, nothing survives a reload. That's a
-deliberate open question — see the toggle note in `CardsView.vue`.
+Because the contract is the same everywhere, the same card source runs
+unchanged in any layout, and a layout can be added or changed without
+touching cards. Cards are **not** carried across when the user toggles
+layouts — each layout keeps its own set, all kept alive across toggles
+so switching back doesn't lose them.
 
 ## Prebuilt views
 

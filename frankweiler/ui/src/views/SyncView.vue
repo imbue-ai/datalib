@@ -3,12 +3,15 @@ import { ref, onMounted, onUnmounted } from "vue";
 import {
   fetchSyncSources,
   fetchAllJobs,
-  fetchActiveJobs,
+  fetchJobLog,
   enqueueJob,
   cancelJob,
+  openJobStream,
   type SyncSource,
   type SyncJob,
+  type JobProgressEvent,
 } from "@/api";
+import StepProgress from "@/components/StepProgress.vue";
 
 const sources = ref<SyncSource[]>([]);
 const jobs = ref<SyncJob[]>([]);
@@ -17,7 +20,17 @@ const loading = ref(false);
 const busySource = ref<Record<string, boolean>>({});
 const busyGlobal = ref(false);
 
+// Per-job log viewer. `expandedId` is the job whose detail row is open;
+// `logText`/`logError` hold the fetched tail. The backend serves it from
+// `<root>/state/job-logs/<id>.log` via GET /api/sync/jobs/{id}/log.
+const expandedId = ref<string | null>(null);
+const logText = ref("");
+const logError = ref<string | null>(null);
+const logLoading = ref(false);
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let stream: EventSource | null = null;
+let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function loadSources() {
   try {
@@ -35,28 +48,45 @@ async function loadJobs() {
   }
 }
 
-async function refreshActive() {
-  // Lightweight tick to surface progress updates without re-fetching 50 rows
-  // every 2s. We merge active jobs into the existing list by id.
-  try {
-    const active = await fetchActiveJobs();
-    if (active.length === 0) return;
-    const byId = new Map(jobs.value.map((j) => [j.id, j]));
-    let changed = false;
-    for (const a of active) {
-      const prev = byId.get(a.id);
-      if (!prev || prev.state !== a.state || prev.progress_pct !== a.progress_pct) {
-        changed = true;
-      }
-      byId.set(a.id, a);
-    }
-    if (changed) {
-      // Refetch full list so newly-finished jobs slot in correctly.
-      await loadJobs();
-    }
-  } catch {
-    // best effort
+// Apply one SSE push. If the job is already in the list, patch it in
+// place so the segmented bar updates without a full reload; otherwise
+// (a brand-new job, or a terminal event that needs finished_at/error)
+// schedule a debounced reload to pull the authoritative row.
+function onProgress(ev: JobProgressEvent) {
+  const j = jobs.value.find((x) => x.id === ev.id);
+  const terminal = ev.state === "done" || ev.state === "failed" || ev.state === "canceled";
+  if (j) {
+    j.state = ev.state;
+    j.progress_pct = ev.progress_pct;
+    j.progress_msg = ev.progress_msg;
+    // Terminal rows need server-stamped finished_at/error: reload soon.
+    if (terminal) scheduleReload();
+  } else {
+    // Unknown job (just enqueued): bring it into the list.
+    scheduleReload();
   }
+  // Live-tail the open log while its job is still active.
+  if (expandedId.value === ev.id && !terminal) {
+    loadLog(ev.id);
+  }
+}
+
+// Coalesce reloads so a burst of events (e.g. all-sources finishing)
+// triggers a single fetch.
+function scheduleReload() {
+  if (reloadTimer) return;
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    loadJobs();
+  }, 250);
+}
+
+// Reconnect fallback: SSE auto-reconnects, but if the page was
+// backgrounded or the stream silently stalled we still want eventual
+// consistency. A slow full reload covers the gap without the old
+// sub-second hammering.
+async function slowReload() {
+  await loadJobs();
 }
 
 async function syncOne(src: SyncSource) {
@@ -94,9 +124,29 @@ async function onCancel(job: SyncJob) {
   }
 }
 
-function pctText(j: SyncJob): string {
-  if (j.progress_pct == null) return "";
-  return `${Math.round(j.progress_pct * 100)}%`;
+async function loadLog(id: string) {
+  logLoading.value = true;
+  logError.value = null;
+  try {
+    logText.value = await fetchJobLog(id);
+  } catch (e) {
+    // 404 = worker hasn't created the log file yet (job still pending).
+    logText.value = "";
+    logError.value = (e as Error).message.includes("404")
+      ? "no log yet — the job hasn't started running."
+      : (e as Error).message;
+  } finally {
+    logLoading.value = false;
+  }
+}
+
+async function toggleLog(job: SyncJob) {
+  if (expandedId.value === job.id) {
+    expandedId.value = null;
+    return;
+  }
+  expandedId.value = job.id;
+  await loadLog(job.id);
 }
 
 function isActive(j: SyncJob): boolean {
@@ -115,11 +165,18 @@ onMounted(async () => {
   loading.value = true;
   await Promise.all([loadSources(), loadJobs()]);
   loading.value = false;
-  pollTimer = setInterval(refreshActive, 2000);
+  // Realtime push: the backend streams every job state change over SSE,
+  // so progress moves the instant the worker writes it — no polling.
+  stream = openJobStream(onProgress);
+  // Reconnect/safety fallback: a slow full reload covers a silently
+  // stalled stream (backgrounded tab, proxy timeout) without hammering.
+  pollTimer = setInterval(slowReload, 15000);
 });
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer);
+  if (reloadTimer) clearTimeout(reloadTimer);
+  if (stream) stream.close();
 });
 </script>
 
@@ -129,7 +186,8 @@ onUnmounted(() => {
       <h2>Sync</h2>
       <button
         class="btn btn-primary"
-        :disabled="busyGlobal"
+        :disabled="busyGlobal || sources.length === 0"
+        :title="sources.length === 0 ? 'Add sources in Setup first' : ''"
         @click="syncEverything"
       >
         {{ busyGlobal ? "Queuing…" : "Sync everything" }}
@@ -164,7 +222,10 @@ onUnmounted(() => {
           </td>
         </tr>
         <tr v-if="sources.length === 0 && !loading">
-          <td colspan="4" class="empty">no sources configured.</td>
+          <td colspan="4" class="empty">
+            no sources configured yet —
+            <RouterLink to="/setup">set up your config</RouterLink> to add some.
+          </td>
         </tr>
       </tbody>
     </table>
@@ -184,28 +245,49 @@ onUnmounted(() => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="j in jobs" :key="j.id">
-          <td><code>{{ j.id.slice(0, 8) }}</code></td>
-          <td>{{ j.kind }}</td>
-          <td>{{ j.source_name || "" }}</td>
-          <td>
-            <span class="state-pill" :data-state="j.state">{{ j.state }}</span>
-          </td>
-          <td>
-            <span :title="j.progress_msg || ''">{{ pctText(j) }}</span>
-          </td>
-          <td>{{ fmtTime(j.started_at) }}</td>
-          <td>{{ fmtTime(j.finished_at) }}</td>
-          <td>
-            <button
-              v-if="isActive(j)"
-              class="btn btn-cancel"
-              @click="onCancel(j)"
-            >
-              Cancel
-            </button>
-          </td>
-        </tr>
+        <template v-for="j in jobs" :key="j.id">
+          <tr :class="{ 'row-failed': j.state === 'failed' }">
+            <td><code>{{ j.id.slice(0, 8) }}</code></td>
+            <td>{{ j.kind }}</td>
+            <td>{{ j.source_name || "" }}</td>
+            <td>
+              <span class="state-pill" :data-state="j.state">{{ j.state }}</span>
+            </td>
+            <td class="progress-cell">
+              <StepProgress :msg="j.progress_msg" :state="j.state" />
+            </td>
+            <td>{{ fmtTime(j.started_at) }}</td>
+            <td>{{ fmtTime(j.finished_at) }}</td>
+            <td class="actions-cell">
+              <button class="btn btn-log" @click="toggleLog(j)">
+                {{ expandedId === j.id ? "Hide log" : "Log" }}
+              </button>
+              <button
+                v-if="isActive(j)"
+                class="btn btn-cancel"
+                @click="onCancel(j)"
+              >
+                Cancel
+              </button>
+            </td>
+          </tr>
+          <tr v-if="expandedId === j.id" class="detail-row">
+            <td colspan="8">
+              <div v-if="j.error" class="job-error">
+                <strong>error:</strong> {{ j.error }}
+              </div>
+              <div class="log-head">
+                <span>log <code>state/job-logs/{{ j.id }}.log</code></span>
+                <button class="btn btn-mini" :disabled="logLoading" @click="loadLog(j.id)">
+                  {{ logLoading ? "…" : "Refresh" }}
+                </button>
+              </div>
+              <p v-if="logError" class="log-empty">{{ logError }}</p>
+              <pre v-else-if="logText" class="log-body">{{ logText }}</pre>
+              <p v-else class="log-empty">(empty)</p>
+            </td>
+          </tr>
+        </template>
         <tr v-if="jobs.length === 0 && !loading">
           <td colspan="8" class="empty">no jobs yet.</td>
         </tr>
@@ -289,6 +371,63 @@ h3 {
 }
 .btn-cancel {
   color: #c0392b;
+}
+.btn-log {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.5rem;
+}
+.progress-cell {
+  min-width: 14rem;
+}
+.btn-mini {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+}
+.actions-cell {
+  display: flex;
+  gap: 0.4rem;
+}
+.row-failed .state-pill[data-state="failed"] {
+  font-weight: 600;
+}
+.detail-row td {
+  background: var(--fw-code-bg);
+}
+.job-error {
+  color: #c0392b;
+  font-size: 0.82rem;
+  margin-bottom: 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--fw-muted);
+  margin-bottom: 0.35rem;
+}
+.log-body {
+  margin: 0;
+  max-height: 22rem;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--fw-bg);
+  border: 1px solid var(--fw-border);
+  border-radius: 4px;
+  padding: 0.5rem 0.6rem;
+}
+.log-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--fw-muted);
+  font-style: italic;
 }
 .state-pill {
   display: inline-block;

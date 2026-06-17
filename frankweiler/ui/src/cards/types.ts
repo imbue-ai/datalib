@@ -37,6 +37,12 @@ export type HostCommands = {
   // above). `source` is the card source of the new card, e.g.
   // `documentView("abcd…")`. Returns the new card's id.
   openCard(source: string): string;
+  // Replace THIS card's own source (and clear its state, since the old
+  // state no longer applies to new code). Layout-agnostic: the miller
+  // layout rewrites the column's URL segment, the tree layout rewrites
+  // the node. Used by the agent hand-off to repoint a card at a freshly
+  // minted component alias.
+  setSource(source: string): void;
   // Close this card.
   close(): void;
   // Replace this card's persisted state string. The string is opaque
@@ -82,4 +88,6 @@ export type ViewLibs = {
     markdownUuid?: string | null,
     sectionUuid?: string | null,
   ) => CardRender;
+  // Live listing of the user-defined component library (/api/lib).
+  aliasView: () => CardRender;
 };

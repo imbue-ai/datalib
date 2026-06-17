@@ -118,7 +118,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     );
 
     if first_run {
-        run_qmd(
+        ensure_collection(
             &cache_home,
             &qmd_pkg,
             &[
@@ -220,6 +220,47 @@ fn capture_qmd_status(cache_home: &Path, qmd_pkg: &str) -> Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Register the qmd collection, tolerating the case where a previous
+/// (possibly *failed*) run already registered it. qmd's `collection add`
+/// aborts with "Collection '<name>' already exists" — which for our
+/// idempotent re-runs is success, not failure.
+///
+/// Why this can't just lean on the `first_run` (`!index.sqlite`) gate:
+/// qmd records the collection in its config the moment `collection add`
+/// runs, but `index.sqlite` only appears after a successful `update`. So
+/// a run that registers the collection and then dies before `update`
+/// finishes (e.g. the `embed` step fails on a native-module/ABI error)
+/// leaves the collection registered with no index file. Every later run
+/// then sees `first_run == true`, re-runs `collection add`, and aborts.
+/// Swallowing "already exists" makes the step re-entrant.
+fn ensure_collection(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
+    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
+    let mut cmd = Command::new(&npx);
+    cmd.arg("-y").arg(qmd_pkg).args(args);
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    cmd.env("XDG_CONFIG_HOME", cache_home);
+    cmd.env("NO_COLOR", "1");
+    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
+    // Capture output so we can inspect it for the benign "already exists"
+    // case; on the happy path qmd is quiet here anyway.
+    let out = cmd
+        .output()
+        .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if combined.contains("already exists") {
+        status_line!("[qmd-indexer] collection already registered — continuing");
+        return Ok(());
+    }
+    bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
 }
 
 fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {

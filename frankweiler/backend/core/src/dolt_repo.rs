@@ -506,8 +506,14 @@ impl MirrorRepo for DoltRepo {
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
-        let msg = format!("sync_job: {} pending", row.id);
-        self.commit_version(&mut conn, &msg).await?;
+        // NB: no DOLT_COMMIT here. `sync_jobs` is a transient work queue,
+        // and a sync *child process* (`frankweiler-sync`) commits to the
+        // same doltlite repo while jobs run — two connections both calling
+        // DOLT_COMMIT on one branch hit "commit conflict: another
+        // connection committed". So all queue writes (enqueue / claim /
+        // progress / finish / cancel / recover) stay uncommitted; they
+        // persist via plain SQL and get folded into the child's next
+        // `-Am` commit. See worker.rs.
         Ok(row)
     }
 
@@ -525,9 +531,126 @@ impl MirrorRepo for DoltRepo {
         .execute(&mut *conn)
         .await
         .map_err(|e| RepoError::Internal(format!("cancel sync_job: {e}")))?;
-        let msg = format!("sync_job: {job_id} cancel-requested");
-        self.commit_version(&mut conn, &msg).await?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
         Ok(())
+    }
+
+    async fn claim_next_job(&self) -> Result<Option<SyncJobRow>, RepoError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT id FROM sync_jobs WHERE state = 'pending' \
+             ORDER BY created_at ASC, id ASC LIMIT 1",
+        )
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("claim select: {e}")))?;
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        let started_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_jobs SET state = 'running', started_at = ?, \
+             progress_msg = 'starting…' WHERE id = ? AND state = 'pending'",
+        )
+        .bind(&started_at)
+        .bind(&id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("claim update: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
+        // Re-read so the caller gets the row exactly as persisted.
+        let sql = "SELECT id, source_name, kind, parent_job_id, state, created_at, \
+                          started_at, finished_at, error, pid, progress_pct, progress_msg \
+                   FROM sync_jobs WHERE id = ? LIMIT 1";
+        let row = sqlx::query(sql)
+            .bind(&id)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| RepoError::Internal(format!("claim refetch: {e}")))?;
+        Ok(row.as_ref().map(row_to_sync_job))
+    }
+
+    async fn set_job_pid(&self, job_id: &str, pid: i64) -> Result<(), RepoError> {
+        sqlx::query("UPDATE sync_jobs SET pid = ? WHERE id = ?")
+            .bind(pid)
+            .bind(job_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Internal(format!("set pid: {e}")))?;
+        Ok(())
+    }
+
+    async fn update_job_progress(
+        &self,
+        job_id: &str,
+        pct: Option<f64>,
+        msg: Option<&str>,
+    ) -> Result<(), RepoError> {
+        // No DOLT_COMMIT here on purpose: progress ticks are high-frequency
+        // and would flood `dolt log`. Only the lifecycle transitions
+        // (claim / finish) are versioned.
+        sqlx::query("UPDATE sync_jobs SET progress_pct = ?, progress_msg = ? WHERE id = ?")
+            .bind(pct)
+            .bind(msg)
+            .bind(job_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| RepoError::Internal(format!("update progress: {e}")))?;
+        Ok(())
+    }
+
+    async fn finish_job(
+        &self,
+        job_id: &str,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), RepoError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let finished_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        sqlx::query(
+            "UPDATE sync_jobs SET state = ?, finished_at = ?, error = ?, pid = NULL \
+             WHERE id = ?",
+        )
+        .bind(state)
+        .bind(&finished_at)
+        .bind(error)
+        .bind(job_id)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("finish job: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`. (This is the
+        // transition that actually raced the sync child's commit in
+        // testing and produced "commit conflict".)
+        Ok(())
+    }
+
+    async fn recover_running_jobs(&self) -> Result<usize, RepoError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
+        let finished_at = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
+        let res = sqlx::query(
+            "UPDATE sync_jobs SET state = 'failed', finished_at = ?, pid = NULL, \
+             error = 'interrupted: backend restarted while job was running' \
+             WHERE state = 'running'",
+        )
+        .bind(&finished_at)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("recover running: {e}")))?;
+        // No DOLT_COMMIT — see the note in `enqueue_job`.
+        let n = res.rows_affected() as usize;
+        Ok(n)
     }
 
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
