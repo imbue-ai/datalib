@@ -233,9 +233,18 @@ fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     status_line!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
-    let status = cmd
-        .status()
-        .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+    // `.status()` lets the child inherit our stdout/stderr, so qmd's own
+    // output lands on the same terminal as the orchestrator's live
+    // progress bars. Suspend the shared `MultiProgress` across the run
+    // so the two don't interleave — bars are hidden while qmd prints,
+    // then redrawn. No-op (plain run) when no bars are live, e.g. the
+    // standalone CLI or tests, where `shared_multi()` returns `None`.
+    let mut run = || cmd.status();
+    let status = match frankweiler_obs::shared_multi() {
+        Some(mp) => mp.suspend(run),
+        None => run(),
+    }
+    .with_context(|| "failed to spawn npx; is Node.js installed?")?;
     if !status.success() {
         bail!("qmd {:?} failed: {status}", args);
     }

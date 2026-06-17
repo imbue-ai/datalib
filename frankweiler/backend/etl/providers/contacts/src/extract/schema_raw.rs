@@ -38,6 +38,7 @@ use frankweiler_etl_macros::WirePayloadRow;
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
+use uuid::Uuid;
 
 pub const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
 
@@ -242,6 +243,40 @@ pub fn contact_pk(addressbook_id: &str, uid: &str) -> String {
     format!("{addressbook_id}#{uid}")
 }
 
+/// Frozen UUIDv5 namespace for synthesized contacts identity. Changing
+/// these bytes re-keys every UID-less contact we have ever ingested, so
+/// the sequence is effectively immutable.
+const CONTACTS_UUID_NS: Uuid = Uuid::from_bytes([
+    0x2d, 0x9b, 0x4e, 0x7a, 0x1c, 0x44, 0x5f, 0x6d, 0x8b, 0x5a, 0x7c, 0x2b, 0x1d, 0x3e, 0x4f, 0x5a,
+]);
+
+/// Surrogate `uid` for a vCard that carries no RFC 6350 `UID:` — most
+/// notably Google's vCard export, which omits it entirely. Derived from
+/// the contact's first + last name so the *same person* collapses onto
+/// one PK across re-exports; it's the closest thing to object permanence
+/// the data allows when there's no stable server id.
+///
+/// Recipe: `uuidv5(CONTACTS_UUID_NS, "contact:name:{given}:{family}")`,
+/// each component trimmed and lowercased so capitalization / whitespace
+/// churn between exports doesn't fork the identity.
+///
+/// Caveat by construction: two distinct people who share a first + last
+/// name hash to the same id and collapse into one row. The ingest path
+/// ([`super::vcf_dir`]) detects and warns when that happens, and an
+/// edit that changes the name also re-keys the row (it reads as a
+/// delete + insert, not an update). A real `UID:` avoids both; prefer
+/// fixing the source over relying on this.
+pub fn synthesized_name_uid(given: &str, family: &str) -> String {
+    let recipe = format!(
+        "contact:name:{}:{}",
+        given.trim().to_lowercase(),
+        family.trim().to_lowercase(),
+    );
+    Uuid::new_v5(&CONTACTS_UUID_NS, recipe.as_bytes())
+        .as_hyphenated()
+        .to_string()
+}
+
 pub const CONTACTS_BY_ADDRESSBOOK_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS contacts_by_addressbook ON contacts(addressbook_id)";
 
@@ -260,9 +295,41 @@ pub fn full_ddl() -> Vec<String> {
         ContactRow::ddl(),
         CONTACTS_BY_ADDRESSBOOK_INDEX_DDL.to_string(),
         CONTACTS_BY_HREF_INDEX_DDL.to_string(),
+        // Resume cursor for the local-`.vcf` path: skip re-ingesting a
+        // file whose `(size, mtime)` hasn't moved since last run. The
+        // CardDAV server path uses etags/sync-tokens instead and never
+        // touches this table. See [`vcf_dir`].
+        frankweiler_etl::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthesized_name_uid_is_stable_and_normalized() {
+        let a = synthesized_name_uid("Ada", "Lovelace");
+        // Same person, re-exported with different case/whitespace, keeps
+        // one identity — no churn across exports.
+        assert_eq!(a, synthesized_name_uid("  ada ", "LOVELACE"));
+        // Distinct names get distinct ids.
+        assert_ne!(a, synthesized_name_uid("Alan", "Turing"));
+        // Stable, hyphenated UUID string.
+        assert_eq!(a.len(), 36);
+    }
+
+    #[test]
+    fn synthesized_name_uid_collides_on_shared_first_last_name() {
+        // The documented hazard: two distinct people, same first+last
+        // name, collapse onto one id. Callers warn on this.
+        assert_eq!(
+            synthesized_name_uid("John", "Smith"),
+            synthesized_name_uid("John", "Smith"),
+        );
+    }
 }

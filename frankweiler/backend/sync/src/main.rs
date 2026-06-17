@@ -1961,8 +1961,8 @@ impl ExtractPlan {
             .await
             .map(|s| {
                 format!(
-                    "addressbooks={} new={} updated={} errors={}",
-                    s.addressbooks, s.contacts_new, s.contacts_updated, s.errors,
+                    "addressbooks={} new={} updated={} files_skipped={} errors={}",
+                    s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
                 )
             }),
             // Perseus is file-tree-backed (raw XML files on disk), not

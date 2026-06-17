@@ -501,6 +501,20 @@ pub fn vcard_rev(vcard: &str) -> Option<String> {
     extract_property(vcard, "REV")
 }
 
+/// Pull the structured `N:` (name) line as `(family, given)`. RFC 6350
+/// §6.2.2 orders the semicolon-separated components
+/// `Family;Given;Additional;Prefixes;Suffixes`; we keep the first two
+/// — "last name" and "first name". Either may be empty; returns `None`
+/// only when the vCard has no `N` line at all. Used to synthesize a
+/// stable id for UID-less exports (see `schema_raw::synthesized_name_uid`).
+pub fn vcard_n_family_given(vcard: &str) -> Option<(String, String)> {
+    let n = extract_property(vcard, "N")?;
+    let mut parts = n.split(';');
+    let family = parts.next().unwrap_or("").trim().to_string();
+    let given = parts.next().unwrap_or("").trim().to_string();
+    Some((family, given))
+}
+
 /// All occurrences of a vCard property, in document order. vCards
 /// can repeat properties (multiple emails, phones, addresses) and
 /// translate cares about each one individually.

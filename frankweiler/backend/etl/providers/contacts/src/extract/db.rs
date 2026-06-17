@@ -11,7 +11,7 @@
 //! lifted out, so there's no `*_attachments` edge table either.
 //! See `super::schema_raw` for the per-table docstrings.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -261,6 +261,29 @@ impl RawDb {
                     .unwrap_or_else(|| "default".to_string()),
                 vcard,
             });
+        }
+        Ok(out)
+    }
+
+    /// Every `uid` we already have in the addressbook. The local-`.vcf`
+    /// path has no server etag to store, so it can't use
+    /// [`Self::contact_etags_by_href`] (which filters `etag IS NOT NULL`)
+    /// to tell new contacts from updates. It compares against `uid`
+    /// instead — the stable identity that backs the PK
+    /// ([`contact_pk`]), so reordering a file doesn't reclassify an
+    /// unchanged contact as new.
+    pub async fn contact_uids(&self, addressbook_id: &str) -> Result<HashSet<String>> {
+        let rows = sqlx::query("SELECT uid FROM contacts WHERE addressbook_id = ?")
+            .bind(addressbook_id)
+            .fetch_all(&self.pool)
+            .await
+            .context("select contact uids")?;
+        let mut out = HashSet::with_capacity(rows.len());
+        for r in rows {
+            let uid: String = r.try_get("uid").unwrap_or_default();
+            if !uid.is_empty() {
+                out.insert(uid);
+            }
         }
         Ok(out)
     }
