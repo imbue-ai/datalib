@@ -609,7 +609,8 @@ pub struct LibEntry {
 /// out of the lib directory.
 fn valid_lib_name(name: &str) -> bool {
     let mut chars = name.chars();
-    let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$');
+    let first_ok =
+        matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$');
     first_ok
         && name.len() <= 64
         && name
@@ -724,7 +725,11 @@ async fn put_lib(
 /// markdown at a stable, app-relative URL so a wayfinder snippet can
 /// reference `<origin>/agent.md` without baking the content into the
 /// wayfinder itself.
-async fn agent_guide() -> (StatusCode, [(axum::http::HeaderName, &'static str); 1], &'static str) {
+async fn agent_guide() -> (
+    StatusCode,
+    [(axum::http::HeaderName, &'static str); 1],
+    &'static str,
+) {
     (
         StatusCode::OK,
         [(
