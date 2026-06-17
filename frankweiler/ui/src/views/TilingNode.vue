@@ -13,6 +13,7 @@
 // and recurses.
 import { inject } from "vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
+import { handOffToAgent } from "@/cards/handoff";
 import { TILING_API } from "./tilingApi";
 import type { TileNode, TileSplit } from "./tilingTree";
 
@@ -67,6 +68,13 @@ const tabLabel = (child: TileNode) =>
         title="open this card alone"
         >↗</a
       >
+      <button
+        class="tiling-agent"
+        title="let a coding agent work on this card"
+        @click="handOffToAgent(api.ctxFor(node).host)"
+      >
+        🤖
+      </button>
       <button class="tiling-close" title="close tile" @click="api.closeNode(node.id)">
         ✕
       </button>
@@ -483,6 +491,7 @@ const tabLabel = (child: TileNode) =>
   outline: none;
 }
 .tiling-alone,
+.tiling-agent,
 .tiling-close {
   flex: 0 0 auto;
   border: none;
@@ -496,6 +505,7 @@ const tabLabel = (child: TileNode) =>
   padding: 0.2rem 0;
 }
 .tiling-alone:hover,
+.tiling-agent:hover,
 .tiling-close:hover {
   opacity: 1;
 }

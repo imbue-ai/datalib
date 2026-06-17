@@ -380,6 +380,44 @@ export async function fetchCard(hash: string, signal?: AbortSignal): Promise<str
   return await r.text();
 }
 
+// --- Component library (named, mutable card aliases) -----------------------
+//
+// GET  /api/lib            → [{name, hash}] manifest of every component
+// GET  /api/lib/{name}     → the component's JS source
+// PUT  /api/lib/{name}     → create/overwrite, body {source}, returns {name,hash}
+//
+// `hash` is the sha256 of the source; the UI polls the manifest and
+// re-renders a card when an alias it depends on changes hash.
+
+export type LibEntry = { name: string; hash: string };
+
+export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
+  const r = await fetch("/api/lib", { signal });
+  if (!r.ok) throw new Error(`GET /api/lib → ${r.status}`);
+  return (await r.json()) as LibEntry[];
+}
+
+export async function fetchLib(name: string, signal?: AbortSignal): Promise<string> {
+  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, { signal });
+  if (!r.ok) throw new Error(`GET /api/lib/${name} → ${r.status}`);
+  return await r.text();
+}
+
+export async function putLib(
+  name: string,
+  source: string,
+  signal?: AbortSignal,
+): Promise<LibEntry> {
+  const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ source }),
+    signal,
+  });
+  if (!r.ok) throw new Error(`PUT /api/lib/${name} → ${r.status}`);
+  return (await r.json()) as LibEntry;
+}
+
 export type FeedbackRequest = {
   sentiment: "up" | "down" | null;
   comment: string;

@@ -30,6 +30,7 @@ import { createBus } from "@/cards/bus";
 import { encodeColumns } from "@/router/columns";
 import { layoutTree, type Rect } from "./treeLayout";
 import type { CardCtx, HostCommands } from "@/cards/types";
+import { handOffToAgent } from "@/cards/handoff";
 
 const bus = createBus();
 
@@ -360,6 +361,15 @@ function setNodeState(id: string, state: string) {
   if (node) node.state = state;
 }
 
+// host.setSource: replace this node's own source (clearing state) —
+// drives the agent hand-off (see cards/handoff.ts).
+function setNodeSource(id: string, source: string) {
+  const node = nodes.value.find((n) => n.id === id);
+  if (!node) return;
+  node.source = source;
+  node.state = "";
+}
+
 // Same memoization pattern as MillerView's ctxFor: stable identity
 // for the lifetime of the node, initialState as a getter so a source
 // re-run sees the latest saved state.
@@ -369,6 +379,7 @@ function ctxFor(node: TreeNode): CardCtx {
     const cardId = node.id;
     const host: HostCommands = {
       openCard: (source) => openCardFrom(cardId, source),
+      setSource: (source) => setNodeSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setNodeState(cardId, state),
     };
@@ -528,6 +539,13 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
               >↗</a
             >
             <button
+              class="tree-node-agent"
+              title="let a coding agent work on this card"
+              @click="handOffToAgent(ctxFor(node).host)"
+            >
+              🤖
+            </button>
+            <button
               class="tree-node-close"
               title="close card (and its subtree)"
               @click="closeNode(node.id)"
@@ -681,6 +699,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   outline: none;
 }
 .tree-node-alone,
+.tree-node-agent,
 .tree-node-close {
   flex: 0 0 auto;
   border: none;
@@ -694,6 +713,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   padding: 0.2rem 0;
 }
 .tree-node-alone:hover,
+.tree-node-agent:hover,
 .tree-node-close:hover {
   opacity: 1;
 }

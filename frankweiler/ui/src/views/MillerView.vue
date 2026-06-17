@@ -27,6 +27,7 @@ import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
 import type { CardCtx, HostCommands } from "@/cards/types";
+import { handOffToAgent } from "@/cards/handoff";
 
 const route = useRoute();
 const router = useRouter();
@@ -172,6 +173,7 @@ function ctxFor(slot: Slot): CardCtx {
     const cardId = slot.id;
     const host: HostCommands = {
       openCard: (source) => openColumnAfter(cardId, source),
+      setSource: (source) => setColumnSource(cardId, source),
       close: () => closeColumn(cardId),
       setState: (state) => setColumnState(cardId, state),
     };
@@ -195,6 +197,17 @@ function commitSource(slot: Slot, e: Event) {
     // New code means the old card's state no longer applies.
     slot.state = "";
   }
+  setSlots(slots.value);
+  syncUrl();
+}
+
+// host.setSource: replace this column's own source (clearing state) —
+// drives the agent hand-off (see cards/handoff.ts).
+function setColumnSource(id: string, source: string) {
+  const slot = slots.value.find((s) => s.id === id);
+  if (!slot) return;
+  slot.source = source;
+  slot.state = "";
   setSlots(slots.value);
   syncUrl();
 }
@@ -257,6 +270,13 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             title="open this column alone"
             >↗</a
           >
+          <button
+            class="miller-col-agent"
+            title="let a coding agent work on this card"
+            @click="handOffToAgent(ctxFor(slot).host)"
+          >
+            🤖
+          </button>
           <button
             class="miller-col-close"
             title="close column"
@@ -359,6 +379,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   outline: none;
 }
 .miller-col-alone,
+.miller-col-agent,
 .miller-col-close {
   flex: 0 0 auto;
   border: none;
@@ -372,6 +393,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   padding: 0.2rem 0;
 }
 .miller-col-alone:hover,
+.miller-col-agent:hover,
 .miller-col-close:hover {
   opacity: 1;
 }
