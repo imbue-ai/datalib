@@ -524,12 +524,235 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
             )
         })?;
     }
+    // Self-heal the schema. `CREATE TABLE IF NOT EXISTS` above is a no-op
+    // for a table that already exists, so a DB created under an older
+    // schema never gains columns a later DDL change introduced (e.g.
+    // `volatile_payload` on the bookkeeping sidecars). Reconcile each
+    // table against its DDL — add missing columns, or drop+recreate when
+    // ADD can't express the change. See [`reconcile_table_schema`].
+    let mut recreated_any = false;
+    for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
+        recreated_any |= reconcile_table_schema(&pool, stmt).await.with_context(|| {
+            format!(
+                "reconcile schema: {}",
+                stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+            )
+        })?;
+    }
+    // A drop+recreate inside reconcile also drops the table's indexes
+    // (they were created by the DDL pass above). Re-run the DDL once more
+    // to re-assert them; everything is `IF NOT EXISTS`, so it's a no-op
+    // except for indexes on a just-recreated table. Skipped entirely when
+    // nothing was recreated (the common path).
+    if recreated_any {
+        for stmt in extra_ddl.iter().chain(SHARED_DDL.iter()) {
+            sqlx::query(stmt).execute(&pool).await.with_context(|| {
+                format!(
+                    "re-apply DDL after recreate: {}",
+                    stmt.split_once('(').map(|p| p.0).unwrap_or(stmt)
+                )
+            })?;
+        }
+    }
     tracing::info!(
         path = %db_path.display(),
         elapsed_ms = started.elapsed().as_millis() as u64,
         "doltlite_raw::open: pool ready"
     );
     Ok(pool)
+}
+
+/// One column's introspected shape, from `PRAGMA table_xinfo`.
+struct ColumnInfo {
+    name: String,
+    decl_type: String,
+    not_null: bool,
+    default: Option<String>,
+    /// `hidden` 2/3 ⇒ a GENERATED column. We can't reconstruct the
+    /// generation expression from `table_xinfo`, so a missing generated
+    /// column forces a drop+recreate rather than a (wrong) `ADD COLUMN`.
+    generated: bool,
+}
+
+impl ColumnInfo {
+    /// The `<name> <type> [NOT NULL] [DEFAULT …]` fragment for
+    /// `ALTER TABLE … ADD COLUMN`. Only valid for non-generated columns.
+    fn add_column_decl(&self) -> String {
+        let ty = if self.decl_type.is_empty() {
+            "TEXT"
+        } else {
+            self.decl_type.as_str()
+        };
+        let mut decl = format!("{} {ty}", self.name);
+        if self.not_null {
+            decl.push_str(" NOT NULL");
+        }
+        if let Some(d) = &self.default {
+            decl.push_str(" DEFAULT ");
+            decl.push_str(d);
+        }
+        decl
+    }
+}
+
+/// Introspect a table's columns via `PRAGMA table_xinfo`. Returns an
+/// empty vec if the table does not exist (no error).
+async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
+    let rows = sqlx::query(&format!("PRAGMA table_xinfo(\"{table}\")"))
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("table_xinfo({table})"))?;
+    let mut cols = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let name: String = r.try_get("name").unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let not_null: i64 = r.try_get("notnull").unwrap_or(0);
+        let hidden: i64 = r.try_get("hidden").unwrap_or(0);
+        cols.push(ColumnInfo {
+            name,
+            decl_type: r.try_get("type").unwrap_or_default(),
+            not_null: not_null != 0,
+            default: r.try_get("dflt_value").ok().flatten(),
+            generated: hidden == 2 || hidden == 3,
+        });
+    }
+    Ok(cols)
+}
+
+/// Extract the table name from a `CREATE TABLE [IF NOT EXISTS] <name>
+/// (…)` statement. `None` for anything that isn't a `CREATE TABLE`
+/// (e.g. `CREATE INDEX`), which has no columns to reconcile.
+fn parse_create_table_name(sql: &str) -> Option<String> {
+    let s = sql.trim_start();
+    if !s.get(..12)?.eq_ignore_ascii_case("CREATE TABLE") {
+        return None;
+    }
+    let mut rest = s[12..].trim_start();
+    if rest.len() >= 13 && rest[..13].eq_ignore_ascii_case("IF NOT EXISTS") {
+        rest = rest[13..].trim_start();
+    }
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '(')
+        .unwrap_or(rest.len());
+    let name = rest[..end].trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Reconcile one table's columns against its `CREATE TABLE` DDL.
+///
+/// The simplest mechanism that self-heals an older on-disk schema:
+///
+///   1. Learn the DESIRED columns by letting SQLite parse the DDL into a
+///      throwaway probe table (no hand-rolled SQL parsing of column
+///      definitions).
+///   2. Compare against the table's ACTUAL columns.
+///   3. If the only difference is missing, non-generated columns →
+///      `ALTER TABLE … ADD COLUMN` each one.
+///   4. Otherwise (a column was removed/renamed, a generated column is
+///      missing, or an `ADD COLUMN` fails) → `DROP TABLE` + recreate from
+///      the DDL.
+///
+/// The drop path is safe for raw stores specifically: every row is a
+/// cache of upstream and is re-fetched on the next sync, and doltlite
+/// keeps the dropped rows in history. Non-`CREATE TABLE` statements
+/// (indexes) are skipped.
+///
+/// Returns `true` iff the table was dropped and recreated (so the caller
+/// knows it must re-assert indexes); `false` for a no-op or an
+/// `ADD COLUMN`-only reconcile.
+async fn reconcile_table_schema(pool: &SqlitePool, create_sql: &str) -> Result<bool> {
+    let Some(table) = parse_create_table_name(create_sql) else {
+        return Ok(false);
+    };
+    const PROBE: &str = "__frankweiler_schema_probe__";
+
+    // 1. Desired columns, via a probe built from this exact DDL. The
+    //    table name's first occurrence is the name itself (the CREATE /
+    //    TABLE / IF NOT EXISTS keywords never equal a table name).
+    let probe_sql = create_sql.replacen(&table, PROBE, 1);
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
+        .execute(pool)
+        .await;
+    sqlx::query(&probe_sql)
+        .execute(pool)
+        .await
+        .with_context(|| format!("build schema probe for {table}"))?;
+    let desired = table_columns(pool, PROBE).await?;
+    let _ = sqlx::query(&format!("DROP TABLE IF EXISTS {PROBE}"))
+        .execute(pool)
+        .await;
+
+    // 2. Actual columns. Empty ⇒ table doesn't exist (defensive: the DDL
+    //    pass should have created it) ⇒ create and return.
+    let actual = table_columns(pool, &table).await?;
+    if actual.is_empty() {
+        sqlx::query(create_sql)
+            .execute(pool)
+            .await
+            .with_context(|| format!("create missing table {table}"))?;
+        return Ok(true);
+    }
+
+    let actual_names: std::collections::HashSet<&str> =
+        actual.iter().map(|c| c.name.as_str()).collect();
+    let desired_names: std::collections::HashSet<&str> =
+        desired.iter().map(|c| c.name.as_str()).collect();
+    let has_extra = actual_names.iter().any(|n| !desired_names.contains(n));
+    let missing: Vec<&ColumnInfo> = desired
+        .iter()
+        .filter(|c| !actual_names.contains(c.name.as_str()))
+        .collect();
+
+    if !has_extra && missing.is_empty() {
+        return Ok(false);
+    }
+
+    // 3. Additive-only and no generated columns missing → ALTER ADD.
+    if !has_extra && missing.iter().all(|c| !c.generated) {
+        let mut added_all = true;
+        for col in &missing {
+            let sql = format!("ALTER TABLE {table} ADD COLUMN {}", col.add_column_decl());
+            match sqlx::query(&sql).execute(pool).await {
+                Ok(_) => tracing::info!(
+                    table = %table,
+                    column = %col.name,
+                    "doltlite_raw: added missing column to existing table"
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        table = %table,
+                        column = %col.name,
+                        error = %format!("{e:#}"),
+                        "doltlite_raw: ADD COLUMN failed; falling back to drop+recreate"
+                    );
+                    added_all = false;
+                    break;
+                }
+            }
+        }
+        if added_all {
+            return Ok(false);
+        }
+    }
+
+    // 4. Fallback: drop + recreate. Safe for raw stores (re-fetched from
+    //    upstream; doltlite retains history).
+    tracing::warn!(
+        table = %table,
+        "doltlite_raw: schema not reconcilable by ADD COLUMN (column removed, \
+         renamed, generated, or ADD failed); dropping and recreating from DDL"
+    );
+    sqlx::query(&format!("DROP TABLE IF EXISTS {table}"))
+        .execute(pool)
+        .await
+        .with_context(|| format!("drop {table} for schema recreate"))?;
+    sqlx::query(create_sql)
+        .execute(pool)
+        .await
+        .with_context(|| format!("recreate {table}"))?;
+    Ok(true)
 }
 
 /// Stamp a dolt commit of any orphaned working-tree changes inherited
@@ -1467,6 +1690,110 @@ mod tests {
         assert!(base_v.get("updated").is_none());
         // ...but overlaying the sidecar reconstructs the wire payload.
         assert_eq!(overlay(&base_v, &vol_v), full);
+    }
+
+    // ── Schema self-healing (reconcile_table_schema) ──────────────
+
+    #[test]
+    fn parse_create_table_name_cases() {
+        assert_eq!(
+            parse_create_table_name("CREATE TABLE IF NOT EXISTS foo (id TEXT)").as_deref(),
+            Some("foo")
+        );
+        assert_eq!(
+            parse_create_table_name("CREATE TABLE bar(x INT)").as_deref(),
+            Some("bar")
+        );
+        assert_eq!(
+            parse_create_table_name("create table if not exists \"baz\" (id TEXT)").as_deref(),
+            Some("baz")
+        );
+        // Not a CREATE TABLE → no columns to reconcile.
+        assert_eq!(parse_create_table_name("CREATE INDEX i ON foo(x)"), None);
+        assert_eq!(parse_create_table_name("SELECT 1"), None);
+    }
+
+    #[tokio::test]
+    async fn open_adds_missing_column_to_existing_db() {
+        // Simulate a DB created under an OLDER bookkeeping schema (no
+        // `volatile_payload`), then reopen with the CURRENT DDL.
+        let d = tempdir().unwrap();
+        let p = d.path().join("migrate.doltlite_db");
+        let old_bk = "CREATE TABLE IF NOT EXISTS widgets_bookkeeping (
+            id TEXT PRIMARY KEY,
+            fetched_at TEXT NULL,
+            attempt_count INTEGER NOT NULL,
+            last_attempt_at TEXT NULL,
+            last_error TEXT NULL
+        )";
+        {
+            let pool = open(&p, &[WIDGETS_DDL, old_bk]).await.unwrap();
+            sqlx::query("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 3)")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        // Reopen with the current DDL (bookkeeping_ddl_for adds volatile_payload).
+        let pool = open(&p, &[WIDGETS_DDL, &bookkeeping_ddl_for("widgets")])
+            .await
+            .unwrap();
+        let cols = table_columns(&pool, "widgets_bookkeeping").await.unwrap();
+        assert!(
+            cols.iter().any(|c| c.name == "volatile_payload"),
+            "volatile_payload should have been ADDed"
+        );
+        // Pre-existing row survived → it was an ALTER ADD, not a recreate.
+        let n: i64 =
+            sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 3);
+        // The new column is usable.
+        sqlx::query(
+            "UPDATE widgets_bookkeeping SET volatile_payload = jsonb('{\"updated\":1}') WHERE id = 'w1'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn open_drops_and_recreates_on_removed_column() {
+        // A table with a column the current DDL no longer declares can't
+        // be reconciled by ADD — it must drop+recreate.
+        let d = tempdir().unwrap();
+        let p = d.path().join("recreate.doltlite_db");
+        let stale = "CREATE TABLE IF NOT EXISTS widgets (
+            id TEXT PRIMARY KEY,
+            name TEXT NULL,
+            payload TEXT NULL,
+            legacy_col TEXT NULL
+        )";
+        {
+            let pool = open(&p, &[stale]).await.unwrap();
+            sqlx::query("INSERT INTO widgets (id, legacy_col) VALUES ('w1', 'x')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            pool.close().await;
+        }
+
+        // Reopen with the canonical widgets DDL (no legacy_col).
+        let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
+        let cols = table_columns(&pool, "widgets").await.unwrap();
+        assert!(
+            !cols.iter().any(|c| c.name == "legacy_col"),
+            "legacy_col should be gone after drop+recreate"
+        );
+        // Recreate wipes rows — acceptable for a raw store (re-fetched).
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]
