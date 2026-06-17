@@ -960,8 +960,26 @@ impl Config {
 
     /// Sources with `enabled: true` (default). Mirrors `Config.enabled_sources`
     /// in `src/ingest/config.py`.
+    /// Enabled sources, optionally narrowed to a single source by name.
+    ///
+    /// When `$FRANKWEILER_ONLY_SOURCE` is set and non-empty, only the
+    /// source whose `name:` matches is yielded. The UI-driven worker
+    /// sets this for a per-source "Sync now" so one source's button
+    /// doesn't re-run the whole config; unset (the common CLI case)
+    /// yields every enabled source.
     pub fn enabled_sources(&self) -> impl Iterator<Item = &SourceConfig> {
-        self.sources.iter().filter(|s| s.enabled())
+        let only = std::env::var("FRANKWEILER_ONLY_SOURCE")
+            .ok()
+            .filter(|s| !s.is_empty());
+        self.sources.iter().filter(move |s| {
+            if !s.enabled() {
+                return false;
+            }
+            match only.as_deref() {
+                Some(name) => s.name() == name,
+                None => true,
+            }
+        })
     }
 
     /// Absolute path to the single doltlite file this backend reads/writes.
@@ -970,6 +988,16 @@ impl Config {
     pub fn dolt_db_path(&self) -> PathBuf {
         self.data_root.join(&self.dolt.db_filename)
     }
+}
+
+/// Path to the config file that lives *inside* a data root:
+/// `<root>/config.yaml`. This is what makes a data root self-contained
+/// — the app reads and writes its own config here instead of relying on
+/// a separate `~/.config/frankweiler/config.yaml`. The HTTP backend
+/// prefers this path; [`default_config_path`] remains the fallback for
+/// the standalone CLI.
+pub fn root_config_path(data_root: &Path) -> PathBuf {
+    data_root.join("config.yaml")
 }
 
 pub fn default_config_path() -> PathBuf {

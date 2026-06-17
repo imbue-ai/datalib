@@ -23,6 +23,7 @@ use axum::{
     body::Body,
     extract::{Path, Query, State},
     http::{header, Response, StatusCode},
+    response::sse::{Event, KeepAlive, Sse},
     response::Json,
     routing::{get, post},
     Router,
@@ -42,6 +43,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 mod embed;
+pub mod worker;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -49,6 +51,12 @@ pub struct AppState {
     /// the `accounts.json` lookup. The SQL store is reached through
     /// [`AppState::repo`].
     pub root: Arc<PathBuf>,
+    /// Self-contained config path for this data root (`<root>/config.yaml`).
+    /// The config + setup endpoints read and write it, and the sync
+    /// worker drives `frankweiler-sync --config <this>`. Keeping the
+    /// config inside the root is what lets the app bootstrap from an
+    /// empty directory with no external `~/.config` file.
+    pub config_path: Arc<PathBuf>,
     /// All SQL flows through this seam.
     /// [`frankweiler_core::dolt_repo::DoltRepo`] against a single
     /// doltlite file is the only impl today.
@@ -58,6 +66,11 @@ pub struct AppState {
     /// failed) — `run_qmd_search` then falls back to the per-call
     /// `npx … query` shell-out path so search still works.
     pub qmd_daemon: Option<Arc<QmdDaemon>>,
+    /// Fan-out channel for live sync-job progress. The worker (and the
+    /// enqueue/cancel handlers) publish [`worker::ProgressEvent`]s here;
+    /// `GET /api/sync/stream` subscribes and pushes them to the UI over
+    /// SSE, so progress is realtime push, not poll.
+    pub progress_tx: worker::ProgressTx,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,12 +176,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/feedback", post(submit_feedback))
         .route("/api/card", post(create_card))
         .route("/api/card/{hash}", get(get_card))
+        .route("/api/config", get(get_config).put(put_config))
+        .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
         .route("/api/sync/jobs/{id}", get(sync_job_get))
         .route("/api/sync/jobs/{id}/cancel", post(sync_job_cancel))
         .route("/api/sync/jobs/{id}/log", get(sync_job_log))
+        .route("/api/sync/stream", get(sync_stream))
         .nest_service("/api/media", ServeDir::new(media_dir))
         // SPA fallback — anything not matched above is served from the
         // embedded Vite bundle. Client-side routing turns unknown paths
@@ -621,15 +637,201 @@ pub struct JobsAllParams {
     pub limit: Option<usize>,
 }
 
+// --- Config / setup --------------------------------------------------------
+//
+// These three endpoints make the data root self-contained: the app reads
+// and writes its own `<root>/config.yaml` instead of relying on a
+// separate `~/.config/frankweiler/config.yaml`. An empty data root opens
+// with no config; the UI's Setup tab scaffolds one, lets the user edit
+// it, and saves it back here, after which `/api/sync/*` lights up.
+
+/// Load the effective config for read purposes: prefer the data root's
+/// own `config.yaml`; fall back to the legacy global path only when the
+/// root has none yet (eases migration for existing installs).
+fn load_effective_config(
+    s: &AppState,
+) -> Result<frankweiler_core::config::Config, frankweiler_core::config::ConfigError> {
+    use frankweiler_core::config::{default_config_path, load_config};
+    if s.config_path.exists() {
+        load_config(Some(s.config_path.as_path()))
+    } else {
+        load_config(Some(&default_config_path()))
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConfigResponse {
+    /// Absolute path of `<root>/config.yaml` — shown in the UI so the
+    /// user knows exactly which file they're editing.
+    pub path: String,
+    /// Whether that file exists yet. `false` on a fresh data root.
+    pub exists: bool,
+    /// Raw YAML text (empty string when the file doesn't exist).
+    pub yaml: String,
+    /// Whether the current bytes parse + validate as a `Config`.
+    pub parsed_ok: bool,
+    /// Loader error message when `parsed_ok` is false.
+    pub error: Option<String>,
+    /// Number of configured sources (0 when invalid/missing).
+    pub source_count: usize,
+}
+
+/// `GET /api/config` — current `<root>/config.yaml` plus a parse check.
+async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
+    let path = s.config_path.as_ref().clone();
+    let exists = path.exists();
+    let yaml = std::fs::read_to_string(&path).unwrap_or_default();
+    let (parsed_ok, error, source_count) = match frankweiler_core::config::load_config(Some(&path))
+    {
+        Ok(c) => (true, None, c.sources.len()),
+        Err(e) => (false, Some(format!("{e}")), 0),
+    };
+    Json(ConfigResponse {
+        path: path.display().to_string(),
+        exists,
+        yaml,
+        parsed_ok,
+        error,
+        source_count,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PutConfigRequest {
+    pub yaml: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PutConfigResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub source_count: usize,
+}
+
+/// `PUT /api/config` — validate then atomically write `<root>/config.yaml`.
+///
+/// We validate by writing to a sibling `.tmp` file and running the real
+/// `load_config` (so date-format / Notion / Yolink invariants are caught,
+/// not just YAML syntax), then `rename` into place only on success. A
+/// rejected config never clobbers the existing one. Validation failures
+/// return `200 {ok:false, error}` (the UI shows it inline); only genuine
+/// I/O failures are 5xx.
+async fn put_config(
+    State(s): State<AppState>,
+    Json(req): Json<PutConfigRequest>,
+) -> Result<Json<PutConfigResponse>, StatusCode> {
+    let path = s.config_path.as_ref().clone();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            eprintln!("put_config: mkdir {}: {e}", parent.display());
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    }
+    let tmp = path.with_extension("yaml.tmp");
+    if let Err(e) = std::fs::write(&tmp, req.yaml.as_bytes()) {
+        eprintln!("put_config: write {}: {e}", tmp.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    match frankweiler_core::config::load_config(Some(&tmp)) {
+        Ok(cfg) => {
+            let n = cfg.sources.len();
+            if let Err(e) = std::fs::rename(&tmp, &path) {
+                let _ = std::fs::remove_file(&tmp);
+                eprintln!("put_config: rename {}: {e}", path.display());
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+            Ok(Json(PutConfigResponse {
+                ok: true,
+                error: None,
+                source_count: n,
+            }))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Ok(Json(PutConfigResponse {
+                ok: false,
+                error: Some(format!("{e}")),
+                source_count: 0,
+            }))
+        }
+    }
+}
+
+/// `GET /api/config/scaffold` — a starter `config.yaml` for this data
+/// root: `data_root` is pre-filled with the real path and a couple of
+/// commented example sources show the shape. The UI drops this into the
+/// editor when the root has no config yet.
+async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
+    let root = s.root.display().to_string();
+    let yaml = scaffold_yaml(&root);
+    Json(ConfigResponse {
+        path: s.config_path.display().to_string(),
+        exists: s.config_path.exists(),
+        yaml,
+        parsed_ok: true,
+        error: None,
+        source_count: 0,
+    })
+}
+
+/// Minimal-but-valid starter config. `sources: []` is accepted by the
+/// loader, so the scaffold parses as-is; the commented blocks are ready
+/// to uncomment. Credentials never live here — downloaders pull them
+/// from `latchkey` at runtime.
+fn scaffold_yaml(data_root: &str) -> String {
+    format!(
+        r#"# Frankweiler config for this data root. Edit here, Save, then use
+# the Sync tab to pull your data in. Credentials are NOT stored in this
+# file — each downloader reads them from `latchkey` at runtime, so run
+# `latchkey auth set <provider>` first for any managed source.
+
+data_root: {data_root}
+
+sources: []
+
+# Uncomment and adapt the sources you want. Each needs a unique `name`.
+#
+#  - name: claude
+#    type: claude_api
+#    sync: {{}}            # incremental pull of your Claude conversations
+#
+#  - name: chatgpt
+#    type: chatgpt_api
+#    sync: {{}}
+#
+#  - name: slack
+#    type: slack_api
+#    sync:
+#      media: true
+#      channels: ["general"]   # omit / use all_channels: true for everything
+#
+#  - name: github
+#    type: github_api
+#    sync: {{}}
+#
+#  - name: fastmail
+#    type: email
+#    sync:
+#      hostname: api.fastmail.com
+#
+#  - name: contacts          # translate-only: no `sync:` block
+#    type: carddav
+#    input_path: ~/Downloads/contacts.vcf
+"#
+    )
+}
+
 /// Surface the typed `Config.sources` list to the UI as
 /// `{name, type, managed}` entries. We re-load the config on every call
 /// so a user editing the YAML doesn't have to restart the backend.
 /// Returns an empty list (rather than 500) when the file is missing or
 /// fails to parse, mirroring the previous behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
-    let _ = s; // unused; included for symmetry with other handlers.
-    let path = frankweiler_core::config::default_config_path();
-    let cfg = match frankweiler_core::config::load_config(Some(&path)) {
+    // Read the data root's own `config.yaml` (self-contained), falling
+    // back to the legacy `~/.config/frankweiler/config.yaml` only when
+    // the root has no config yet. Re-loaded per call so a config edit in
+    // the Setup tab shows up without a backend restart.
+    let cfg = match load_effective_config(&s) {
         Ok(c) => c,
         Err(_) => return Json(Vec::new()),
     };
@@ -686,11 +888,46 @@ async fn sync_enqueue(
         "download" | "ingest" | "render" | "all" => {}
         _ => return Err(StatusCode::BAD_REQUEST),
     }
-    s.repo
+    let row = s
+        .repo
         .enqueue_job(&req.kind, req.source_name.as_deref())
         .await
-        .map(Json)
-        .map_err(repo_err_to_status)
+        .map_err(repo_err_to_status)?;
+    // Push the new (pending) job so SSE clients show it immediately,
+    // before the worker even claims it.
+    let _ = s.progress_tx.send(worker::ProgressEvent {
+        id: row.id.clone(),
+        kind: row.kind.clone(),
+        source_name: row.source_name.clone(),
+        state: row.state.clone(),
+        progress_pct: row.progress_pct,
+        progress_msg: row.progress_msg.clone(),
+    });
+    Ok(Json(row))
+}
+
+/// SSE stream of live job progress. Each `message` event is a JSON
+/// [`worker::ProgressEvent`]. The UI keeps its job list patched from this
+/// instead of polling; a slow poll remains as a reconnect fallback.
+async fn sync_stream(
+    State(s): State<AppState>,
+) -> Sse<impl futures::Stream<Item = Result<Event, std::convert::Infallible>>> {
+    use tokio::sync::broadcast::error::RecvError;
+    let rx = s.progress_tx.subscribe();
+    let stream = futures::stream::unfold(rx, |mut rx| async move {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let data = serde_json::to_string(&ev).unwrap_or_default();
+                    return Some((Ok(Event::default().data(data)), rx));
+                }
+                // Slow consumer dropped some events; keep going with the next.
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 async fn sync_job_cancel(
@@ -700,8 +937,19 @@ async fn sync_job_cancel(
     s.repo
         .request_cancel_job(&id)
         .await
-        .map(|_| StatusCode::NO_CONTENT)
-        .map_err(repo_err_to_status)
+        .map_err(repo_err_to_status)?;
+    // A pending job that's canceled is never claimed by the worker, so
+    // it would emit nothing — push a terminal event ourselves so the UI
+    // updates. (A running job will also get the worker's own event.)
+    let _ = s.progress_tx.send(worker::ProgressEvent {
+        id,
+        kind: String::new(),
+        source_name: None,
+        state: "canceled".to_string(),
+        progress_pct: None,
+        progress_msg: None,
+    });
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Tail the per-job log written by the worker at `<root>/state/job-logs/{id}.log`.

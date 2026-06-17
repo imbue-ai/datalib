@@ -35,6 +35,13 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
+# Sync worker child binary (see serve_dev.sh for the rationale).
+if [[ -z "${FRANKWEILER_SYNC_BIN:-}" ]]; then
+  SYNC_BIN="$(rlocation _main/frankweiler/backend/sync/frankweiler_sync_bin || true)"
+  [[ -x "$SYNC_BIN" ]] && export FRANKWEILER_SYNC_BIN="$SYNC_BIN"
+fi
+[[ -n "${FRANKWEILER_SYNC_BIN:-}" ]] && echo "sync bin: $FRANKWEILER_SYNC_BIN"
+
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 if [[ -z "$WORKSPACE" ]]; then
   echo "ERROR: BUILD_WORKSPACE_DIRECTORY not set; run via 'bazelisk run //frankweiler:dev'" >&2

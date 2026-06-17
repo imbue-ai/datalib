@@ -7,6 +7,7 @@ rust_library(
     srcs = [
         "src/embed.rs",
         "src/lib.rs",
+        "src/worker.rs",
     ],
     crate_name = "frankweiler_http",
     edition = "2021",
@@ -28,6 +29,7 @@ rust_library(
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:futures",
         "@frankweiler_crates//:mime_guess",
         "@frankweiler_crates//:rust-embed",
         "@frankweiler_crates//:serde",
