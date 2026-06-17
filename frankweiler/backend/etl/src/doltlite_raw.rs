@@ -327,7 +327,7 @@ pub fn split_volatile(payload: &Value, paths: &[VolatilePath]) -> (Value, Option
             any = true;
         }
     }
-    (base, any.then(|| Value::Object(volatile)))
+    (base, any.then_some(Value::Object(volatile)))
 }
 
 /// Deep-merge `volatile` onto `base`, returning the combined value.
