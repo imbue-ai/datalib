@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use frankweiler_etl::blob_cas::{CasEdgeAccumulator, CasEdgeRow as _};
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_time::IsoOffsetTimestamp;
@@ -41,7 +42,7 @@ pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
 
 use api::call;
 use db::refresh_email_joins;
-use schema_raw::{AccountRow, EmailRow, MailboxRow, ThreadRow};
+use schema_raw::{AccountRow, EmailRow, EmlBlobRow, MailboxRow, ThreadRow};
 
 /// Bulk-upsert one account row. Wraps the generic
 /// `bulk_upsert_in_tx<AccountRow>` so call sites don't have to spell
@@ -207,10 +208,9 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         db.reset().await?;
     }
     if opts.control.refetch_blobs {
-        // Phase 2: email no longer rides on the shared `blob_refs`
-        // table. Per-provider clear that sets `emails.blake3` and
-        // `email_attachments.blake3` back to NULL so the next
-        // sync_blobs walk re-downloads from scratch.
+        // Per-provider clear that sets every `email_blobs.blake3` back
+        // to NULL so the next sync_blobs walk re-downloads every `.eml`
+        // from scratch.
         db.clear_blob_hashes().await?;
     }
 
@@ -709,7 +709,7 @@ async fn ingest_email_list(
             continue;
         };
         if let Some(allow) = mailbox_filter {
-            if !row.mailbox_ids.iter().any(|m| allow.contains(m)) {
+            if !row.mailbox_ids().iter().any(|m| allow.contains(m)) {
                 continue;
             }
         }
@@ -812,19 +812,23 @@ async fn sync_blobs(
     }
     info!(event = "jmap_blobs_pending", count = wanted.len());
 
-    let mut cas_pending: Vec<PendingCas> = Vec::with_capacity(wanted.len());
-    let mut eml_updates: Vec<(String, String)> = Vec::new();
-    let mut errors: Vec<(String, String)> = Vec::new();
+    // Accumulate downloads + their `email_blobs` edges in the shared
+    // CAS-edge accumulator: each fetched `.eml` carries its bytes (for
+    // the end-of-pass `put_many`) and yields an edge whose `blake3` the
+    // accumulator resolves off those bytes. Failures get an edge with
+    // NULL `blake3` and an error stamp on `email_blobs_bookkeeping`.
+    let mut acc = CasEdgeAccumulator::new();
 
     for (blob_id, job) in wanted {
         if let Some(limit) = opts.blob_size_limit_bytes {
             if let Some(sz) = job.advertised_size {
                 if sz as u64 > limit {
                     summary.blobs_oversize += 1;
-                    errors.push((
-                        job.owning_id.clone(),
+                    acc.add_failed(
+                        &job.owning_id,
+                        &blob_id,
                         format!(".eml {blob_id} exceeds size_limit {limit}"),
-                    ));
+                    );
                     continue;
                 }
             }
@@ -833,84 +837,38 @@ async fn sync_blobs(
         let url = session.download_url_for(account_id, &blob_id, "message.eml", "message/rfc822");
         match api::download_bytes(&url, BLOB_TIMEOUT).await {
             Ok((bytes, content_type)) => {
-                let blake3 = frankweiler_etl::blob_cas::blake3_hex(&bytes);
-                cas_pending.push(PendingCas {
-                    blake3: blake3.clone(),
-                    content_type: content_type.unwrap_or_else(|| "message/rfc822".to_string()),
+                acc.add_fetched(
+                    &job.owning_id,
+                    &blob_id,
                     bytes,
-                });
-                eml_updates.push((job.owning_id, blake3));
+                    Some(content_type.unwrap_or_else(|| "message/rfc822".to_string())),
+                    None,
+                );
                 summary.blobs_downloaded += 1;
             }
             Err(e) => {
                 summary.blobs_errored += 1;
                 warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e);
-                errors.push((job.owning_id, e.to_string()));
+                acc.add_failed(&job.owning_id, &blob_id, e.to_string());
             }
         }
     }
 
-    flush_eml_batch(db, cas_pending, eml_updates, errors).await?;
+    acc.flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
+        EmlBlobRow {
+            id: EmlBlobRow::pk_recipe(email_id, blob_id),
+            email_id: email_id.to_string(),
+            blob_id: blob_id.to_string(),
+            blake3: blake3.map(str::to_string),
+        }
+    })
+    .await?;
     Ok(())
 }
 
 struct EmlJob {
     owning_id: String,
     advertised_size: Option<i64>,
-}
-
-struct PendingCas {
-    blake3: String,
-    content_type: String,
-    bytes: Vec<u8>,
-}
-
-/// End-of-sync flush. CAS pool: chunked `INSERT OR IGNORE` via
-/// `BlobCas::put_many`. Entity pool: `UPDATE emails SET blake3 = ?`
-/// per (id, blake3) pair, plus per-row error stamps on
-/// `emails_bookkeeping` for oversize / download-failed `.eml`s.
-async fn flush_eml_batch(
-    db: &RawDb,
-    cas_pending: Vec<PendingCas>,
-    eml_updates: Vec<(String, String)>,
-    errors: Vec<(String, String)>,
-) -> Result<()> {
-    if cas_pending.is_empty() && errors.is_empty() {
-        return Ok(());
-    }
-    if !cas_pending.is_empty() {
-        let cas_inserts: Vec<frankweiler_etl::blob_cas::CasInsert<'_>> = cas_pending
-            .iter()
-            .map(|c| frankweiler_etl::blob_cas::CasInsert {
-                blake3: &c.blake3,
-                bytes: &c.bytes,
-                content_type: Some(c.content_type.as_str()),
-            })
-            .collect();
-        db.cas()
-            .put_many(&cas_inserts)
-            .await
-            .context("flush_eml_batch put_many")?;
-    }
-    let mut tx = db
-        .pool()
-        .begin()
-        .await
-        .context("begin flush_eml_batch tx")?;
-    for (id, blake3) in &eml_updates {
-        sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
-            .bind(blake3)
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("update emails.blake3 for {id}"))?;
-    }
-    for (id, err) in &errors {
-        frankweiler_etl::doltlite_raw::record_object_attempt(&mut tx, "emails", id, Some(err))
-            .await?;
-    }
-    tx.commit().await.context("commit flush_eml_batch tx")?;
-    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────

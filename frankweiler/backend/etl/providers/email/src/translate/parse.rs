@@ -36,16 +36,17 @@ use sqlx::Row;
 
 use crate::extract::db::{db_path_for, EmailJoins, LoadedEmail};
 
-/// SQL projection from `emails.blake3` to `.eml` bytes. Consumed by
-/// [`BlobBundle::load`]. After the eml-as-canonical port we only
-/// load `.eml`s — attachment parts are mail-parsed out of the loaded
-/// `.eml` bytes and added to the same per-bucket `BlobBundle` under
-/// synthesized content-hash ref ids.
+/// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
+/// bytes. Consumed by [`BlobBundle::load`]. After the eml-as-canonical
+/// port we only load `.eml`s — attachment parts are mail-parsed out of
+/// the loaded `.eml` bytes and added to the same per-bucket
+/// `BlobBundle` under synthesized content-hash ref ids. `DISTINCT`
+/// because several emails can edge to the same `.eml` blob.
 const EML_PROJECTION_SQL: &str = "
-    SELECT blob_id AS ref_id, blake3,
+    SELECT DISTINCT blob_id AS ref_id, blake3,
            'message/rfc822' AS content_type,
            NULL AS upstream_name
-      FROM emails
+      FROM email_blobs
      WHERE blob_id IN ({placeholders}) AND blake3 IS NOT NULL";
 
 /// Result of the dolt_diff scan. Travels alongside the parsed bag so

@@ -185,6 +185,15 @@ pub trait BulkUpsertable: Sync {
     /// Target table name. Must match the DDL.
     const TABLE: &'static str;
 
+    /// Name of the single-column primary key, used as the `ON
+    /// CONFLICT(<id>)` target and as the first column in the INSERT.
+    /// Almost always `"id"` (the universal raw-entity PK name); a few
+    /// tables key on a different column (e.g. an mbox cursor keyed on
+    /// `path`). N:M join tables synthesize a single `id` from their
+    /// composite components rather than overriding this, so the
+    /// conflict target stays one column everywhere.
+    const ID_COLUMN: &'static str = "id";
+
     /// Non-PK, non-payload columns, in bind order. These bind as
     /// plain `?`. Empty slice for tables that are just `(id, payload)`
     /// (e.g. Signal's `account`) or just `(id)` plus typed columns
@@ -299,15 +308,16 @@ pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
     }
     tuple.push(')');
 
+    let id_col = T::ID_COLUMN;
     for chunk in rows.chunks(SQL_CHUNK) {
-        let mut sql = format!("INSERT INTO {table} (id, {cols_csv}) VALUES ");
+        let mut sql = format!("INSERT INTO {table} ({id_col}, {cols_csv}) VALUES ");
         for i in 0..chunk.len() {
             if i > 0 {
                 sql.push(',');
             }
             sql.push_str(&tuple);
         }
-        sql.push_str(" ON CONFLICT(id) DO UPDATE SET ");
+        sql.push_str(&format!(" ON CONFLICT({id_col}) DO UPDATE SET "));
         sql.push_str(&set_csv);
 
         let mut q = sqlx::query(&sql);

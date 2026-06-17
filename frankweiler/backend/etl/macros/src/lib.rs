@@ -83,24 +83,8 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     // DDL: build the promoted-columns slice the existing
     // `wire_payload_table_ddl` helper expects. Aligning column names
     // to a uniform width matches the visual style of the hand-written
-    // DDLs the macro is replacing.
-    let max_name_len = promoted
-        .iter()
-        .map(|p| p.name.to_string().len())
-        .max()
-        .unwrap_or(0);
-    let promoted_decls: Vec<String> = promoted
-        .iter()
-        .map(|p| {
-            let name = p.name.to_string();
-            let pad = " ".repeat(max_name_len.saturating_sub(name.len()) + 1);
-            format!("{name}{pad}{}", p.sql_type)
-        })
-        .collect();
-    let ddl_literals: Vec<LitStr> = promoted_decls
-        .iter()
-        .map(|s| LitStr::new(s, proc_macro2::Span::call_site()))
-        .collect();
+    // DDLs the macro is replacing. Shared with `RawTable` payload mode.
+    let ddl_literals = promoted_decl_literals(&promoted);
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
 
     // BulkUpsertable typed columns: promoted columns only.
@@ -341,6 +325,363 @@ fn classify(ty: &Type) -> Option<PromotedKind> {
         }
         _ => None,
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// RawTable
+// ─────────────────────────────────────────────────────────────────────
+
+/// Derive a raw-store table's **entire** SQL surface from a Rust
+/// struct: the `CREATE TABLE` DDL, any `CREATE INDEX` DDLs, and the
+/// [`frankweiler_etl::bulk::BulkUpsertable`] impl that the generic
+/// bulk-upsert helper writes through. The goal is that a provider's
+/// `schema_raw.rs` contains *no* hand-written `CREATE TABLE` strings
+/// and *no* hand-written `BulkUpsertable` impls — just structs.
+///
+/// This is the general form of [`WirePayloadRow`]: it covers both
+/// payload-shaped entity tables *and* payload-less tables (N:M join
+/// tables, cursor tables) that `WirePayloadRow` can't express.
+///
+/// **Two modes**, chosen by whether the struct has a `WirePayload`
+/// field:
+///
+/// 1. **Payload mode** — exactly one field of type `WirePayload`
+///    (path-tolerant, same as [`WirePayloadRow`]). It contributes the
+///    `id TEXT PRIMARY KEY` and `payload` (JSONB) columns; every other
+///    field is a promoted column. `PAYLOAD_COLUMN = Some("payload")`.
+///
+/// 2. **Plain mode** — no `WirePayload` field, no payload column. The
+///    primary key is a single column named by
+///    `#[raw_table(primary_key = "col")]` (default `"id"`); that
+///    field must be `String` or `i64`. Every other field is a typed
+///    column. N:M join tables fit this mode by carrying a synthesized
+///    single `id` (e.g. `"{email_id}#{mailbox_id}"`) so the conflict
+///    target stays one column.
+///
+/// **Attributes** on `#[raw_table(...)]`:
+/// - `table = "name"` — SQL table name. Required.
+/// - `primary_key = "col"` — plain-mode PK column. Optional, default
+///   `"id"`. Rejected in payload mode (the PK is always `id` there).
+/// - `index = "name:col1,col2"` — emit
+///   `CREATE INDEX IF NOT EXISTS name ON table(col1, col2)`. Repeatable.
+///
+/// **Type mapping** is identical to [`WirePayloadRow`] (`String` →
+/// `TEXT NOT NULL`, `Option<String>` → `TEXT NULL`, `i64`/`Option<i64>`
+/// → INTEGER, `f64`/`Option<f64>` → REAL).
+///
+/// The derive emits inherent `Self::ddl()`, `Self::index_ddls()`, and
+/// `Self::all_ddl()` (table DDL + index DDLs, ready to splice into a
+/// provider's `full_ddl()`), plus the `BulkUpsertable` impl.
+///
+/// **Example.**
+/// ```ignore
+/// #[derive(RawTable)]
+/// #[raw_table(table = "email_mailboxes",
+///             index = "email_mailboxes_by_mailbox:mailbox_id")]
+/// pub struct EmailMailboxRow {
+///     pub id: String,         // synth "{email_id}#{mailbox_id}"
+///     pub email_id: String,
+///     pub mailbox_id: String,
+/// }
+/// ```
+#[proc_macro_derive(RawTable, attributes(raw_table))]
+pub fn derive_raw_table(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_raw_table(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+struct IndexSpec {
+    name: String,
+    columns: Vec<String>,
+}
+
+fn parse_raw_table_attrs(
+    attrs: &[Attribute],
+    struct_name: &Ident,
+) -> syn::Result<(String, Option<String>, Vec<IndexSpec>)> {
+    let mut table: Option<String> = None;
+    let mut primary_key: Option<String> = None;
+    let mut indexes: Vec<IndexSpec> = Vec::new();
+    let mut saw_attr = false;
+    for attr in attrs {
+        if !attr.path().is_ident("raw_table") {
+            continue;
+        }
+        saw_attr = true;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("table") {
+                table = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else if meta.path.is_ident("primary_key") {
+                primary_key = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else if meta.path.is_ident("index") {
+                let lit: LitStr = meta.value()?.parse()?;
+                indexes.push(parse_index_spec(&lit)?);
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "unknown #[raw_table(...)] key; supported keys: `table`, `primary_key`, `index`",
+                ))
+            }
+        })?;
+    }
+    if !saw_attr {
+        return Err(syn::Error::new_spanned(
+            struct_name,
+            "#[derive(RawTable)] requires #[raw_table(table = \"…\")]",
+        ));
+    }
+    let table = table.ok_or_else(|| {
+        syn::Error::new_spanned(struct_name, "#[raw_table(table = \"...\")] is required")
+    })?;
+    Ok((table, primary_key, indexes))
+}
+
+/// Parse `"name:col1,col2"` into an [`IndexSpec`]. The bare-column
+/// form `"name:col"` is the common single-column case.
+fn parse_index_spec(lit: &LitStr) -> syn::Result<IndexSpec> {
+    let raw = lit.value();
+    let (name, cols) = raw.split_once(':').ok_or_else(|| {
+        syn::Error::new_spanned(
+            lit,
+            "index spec must be \"index_name:col1,col2\" (missing ':')",
+        )
+    })?;
+    let name = name.trim().to_string();
+    let columns: Vec<String> = cols
+        .split(',')
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if name.is_empty() || columns.is_empty() {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "index spec must name an index and at least one column",
+        ));
+    }
+    Ok(IndexSpec { name, columns })
+}
+
+fn expand_raw_table(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_name = input.ident.clone();
+    let (table, pk_attr, indexes) = parse_raw_table_attrs(&input.attrs, &struct_name)?;
+    let fields = collect_named_fields(&input)?;
+
+    // Index DDLs are mode-independent — they only reference column
+    // names, which exist in both modes.
+    let index_literals: Vec<LitStr> = indexes
+        .iter()
+        .map(|ix| {
+            let cols = ix.columns.join(", ");
+            LitStr::new(
+                &format!(
+                    "CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})",
+                    name = ix.name,
+                ),
+                proc_macro2::Span::call_site(),
+            )
+        })
+        .collect();
+
+    // Detect the optional WirePayload field.
+    let mut wire_ident: Option<&Ident> = None;
+    let mut other_fields: Vec<&Field> = Vec::new();
+    for f in &fields {
+        if is_wire_payload(&f.ty) {
+            if wire_ident.is_some() {
+                return Err(syn::Error::new_spanned(
+                    f,
+                    "duplicate WirePayload field; exactly one is allowed",
+                ));
+            }
+            wire_ident = Some(f.ident.as_ref().expect("named field"));
+        } else {
+            other_fields.push(f);
+        }
+    }
+
+    let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
+
+    let (ddl_tokens, bulk_impl) = if let Some(wp) = wire_ident {
+        // ── Payload mode ────────────────────────────────────────────
+        if let Some(pk) = &pk_attr {
+            return Err(syn::Error::new_spanned(
+                &struct_name,
+                format!(
+                    "primary_key = \"{pk}\" is invalid in payload mode; \
+                     the WirePayload field already supplies the `id` PK"
+                ),
+            ));
+        }
+        let promoted: Vec<PromotedField> = other_fields
+            .iter()
+            .map(|f| PromotedField::from_field(f))
+            .collect::<syn::Result<_>>()?;
+        let ddl_literals = promoted_decl_literals(&promoted);
+        let typed_col_names: Vec<LitStr> = promoted
+            .iter()
+            .map(|p| LitStr::new(&p.name.to_string(), proc_macro2::Span::call_site()))
+            .collect();
+        let promoted_binds: Vec<TokenStream2> = promoted.iter().map(|p| p.bind_expr()).collect();
+
+        let ddl = quote! {
+            ::frankweiler_etl::doltlite_raw::wire_payload_table_ddl(
+                #table_lit,
+                &[#(#ddl_literals),*],
+            )
+        };
+        let bulk = quote! {
+            impl ::frankweiler_etl::bulk::BulkUpsertable for #struct_name {
+                const TABLE: &'static str = #table_lit;
+                const TYPED_COLUMNS: &'static [&'static str] = &[#(#typed_col_names),*];
+
+                fn id(&self) -> &str {
+                    &self.#wp.id
+                }
+
+                fn bind_into<'q>(
+                    &'q self,
+                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>>,
+                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>> {
+                    q.bind(&self.#wp.id)
+                        #(.bind(#promoted_binds))*
+                        .bind(&self.#wp.payload)
+                }
+            }
+        };
+        (ddl, bulk)
+    } else {
+        // ── Plain mode (no payload column) ──────────────────────────
+        let pk_name = pk_attr.unwrap_or_else(|| "id".to_string());
+        let pk_field = other_fields
+            .iter()
+            .find(|f| f.ident.as_ref().expect("named field") == &pk_name)
+            .ok_or_else(|| {
+                syn::Error::new_spanned(
+                    &struct_name,
+                    format!("primary_key column `{pk_name}` is not a field of this struct"),
+                )
+            })?;
+        let pk_promoted = PromotedField::from_field(pk_field)?;
+        let pk_decl = match pk_promoted.kind {
+            PromotedKind::TextNotNull => format!("{pk_name} TEXT PRIMARY KEY"),
+            PromotedKind::IntegerNotNull => format!("{pk_name} INTEGER PRIMARY KEY"),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &pk_field.ty,
+                    "primary-key column must be `String` or `i64` (non-nullable)",
+                ))
+            }
+        };
+
+        // Typed columns = every field except the PK, declaration order.
+        let typed: Vec<PromotedField> = other_fields
+            .iter()
+            .filter(|f| f.ident.as_ref().expect("named field") != &pk_name)
+            .map(|f| PromotedField::from_field(f))
+            .collect::<syn::Result<_>>()?;
+
+        // CREATE TABLE: PK first, then typed columns, padded to align.
+        let mut decls: Vec<String> = vec![pk_decl];
+        decls.extend(typed.iter().map(|p| format!("{} {}", p.name, p.sql_type)));
+        let max = decls
+            .iter()
+            .map(|d| d.split(' ').next().unwrap_or("").len())
+            .max()
+            .unwrap_or(0);
+        let body = decls
+            .iter()
+            .map(|d| {
+                let (name, rest) = d.split_once(' ').unwrap_or((d.as_str(), ""));
+                let pad = " ".repeat(max.saturating_sub(name.len()) + 1);
+                format!("{name}{pad}{rest}")
+            })
+            .collect::<Vec<_>>()
+            .join(",\n    ");
+        let ddl_string = format!("CREATE TABLE IF NOT EXISTS {table} (\n    {body}\n)");
+        let ddl_lit = LitStr::new(&ddl_string, proc_macro2::Span::call_site());
+
+        let pk_ident = pk_field.ident.as_ref().expect("named field");
+        let pk_lit = LitStr::new(&pk_name, proc_macro2::Span::call_site());
+        let typed_col_names: Vec<LitStr> = typed
+            .iter()
+            .map(|p| LitStr::new(&p.name.to_string(), proc_macro2::Span::call_site()))
+            .collect();
+        let typed_binds: Vec<TokenStream2> = typed.iter().map(|p| p.bind_expr()).collect();
+        let pk_bind = pk_promoted.bind_expr();
+
+        let ddl = quote! { ::std::string::String::from(#ddl_lit) };
+        let bulk = quote! {
+            impl ::frankweiler_etl::bulk::BulkUpsertable for #struct_name {
+                const TABLE: &'static str = #table_lit;
+                const ID_COLUMN: &'static str = #pk_lit;
+                const TYPED_COLUMNS: &'static [&'static str] = &[#(#typed_col_names),*];
+                const PAYLOAD_COLUMN: ::std::option::Option<&'static str> =
+                    ::std::option::Option::None;
+
+                fn id(&self) -> &str {
+                    &self.#pk_ident
+                }
+
+                fn bind_into<'q>(
+                    &'q self,
+                    q: ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>>,
+                ) -> ::sqlx::query::Query<'q, ::sqlx::Sqlite, ::sqlx::sqlite::SqliteArguments<'q>> {
+                    q.bind(#pk_bind)
+                        #(.bind(#typed_binds))*
+                }
+            }
+        };
+        (ddl, bulk)
+    };
+
+    Ok(quote! {
+        impl #struct_name {
+            /// `CREATE TABLE IF NOT EXISTS …` for this table.
+            pub fn ddl() -> ::std::string::String {
+                #ddl_tokens
+            }
+            /// `CREATE INDEX IF NOT EXISTS …` for each declared index.
+            pub fn index_ddls() -> ::std::vec::Vec<::std::string::String> {
+                ::std::vec![#(::std::string::String::from(#index_literals)),*]
+            }
+            /// Table DDL followed by every index DDL — splice straight
+            /// into a provider's `full_ddl()`.
+            pub fn all_ddl() -> ::std::vec::Vec<::std::string::String> {
+                let mut v = ::std::vec![Self::ddl()];
+                v.extend(Self::index_ddls());
+                v
+            }
+        }
+
+        #bulk_impl
+    })
+}
+
+/// Shared between `WirePayloadRow` and `RawTable` payload mode: turn a
+/// promoted-column list into the width-aligned `name TYPE` decl string
+/// literals `wire_payload_table_ddl` expects.
+fn promoted_decl_literals(promoted: &[PromotedField]) -> Vec<LitStr> {
+    let max_name_len = promoted
+        .iter()
+        .map(|p| p.name.to_string().len())
+        .max()
+        .unwrap_or(0);
+    promoted
+        .iter()
+        .map(|p| {
+            let name = p.name.to_string();
+            let pad = " ".repeat(max_name_len.saturating_sub(name.len()) + 1);
+            LitStr::new(
+                &format!("{name}{pad}{}", p.sql_type),
+                proc_macro2::Span::call_site(),
+            )
+        })
+        .collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -54,9 +54,9 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use anyhow::{anyhow, Context, Result};
-use frankweiler_etl::blob_cas::{blake3_hex, CasInsert};
+use frankweiler_etl::blob_cas::{blake3_hex, CasEdgeAccumulator, CasEdgeRow as _};
 use frankweiler_etl::bulk::{
-    bulk_upsert_bookkeeping, push_placeholder_list, push_placeholders, SQL_CHUNK,
+    bulk_upsert_entity_in_tx, push_placeholder_list, push_placeholders, SQL_CHUNK,
 };
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::progress::Progress;
@@ -68,7 +68,9 @@ use sqlx::{Sqlite, Transaction};
 use tracing::{info, warn};
 
 use super::db::{db_path_for, EmailRow, RawDb};
-use super::schema_raw::{AccountRow, BLOB_KIND_EML};
+use super::schema_raw::{
+    AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, MboxFilesCheckpointRow,
+};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
@@ -352,21 +354,19 @@ async fn load_mbox_checkpoints(db: &RawDb) -> Result<HashMap<String, (u64, i64)>
 
 async fn upsert_mbox_checkpoint(db: &RawDb, job: &MboxJob) -> Result<()> {
     let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO mbox_files_checkpoint (path, size_bytes, mtime_ns, last_finished_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET
-            size_bytes = excluded.size_bytes,
-            mtime_ns = excluded.mtime_ns,
-            last_finished_at = excluded.last_finished_at",
-    )
-    .bind(&job.canonical)
-    .bind(job.size_bytes as i64)
-    .bind(job.mtime_ns)
-    .bind(&now)
-    .execute(db.pool())
-    .await
-    .with_context(|| format!("upsert mbox checkpoint {}", job.path.display()))?;
+    let row =
+        MboxFilesCheckpointRow::new(&job.canonical, job.size_bytes as i64, job.mtime_ns, &now);
+    let mut tx = db
+        .pool()
+        .begin()
+        .await
+        .context("begin mbox checkpoint tx")?;
+    bulk_upsert_entity_in_tx(&mut tx, std::slice::from_ref(&row))
+        .await
+        .with_context(|| format!("upsert mbox checkpoint {}", job.path.display()))?;
+    tx.commit()
+        .await
+        .with_context(|| format!("commit mbox checkpoint {}", job.path.display()))?;
     Ok(())
 }
 
@@ -528,37 +528,12 @@ impl Accumulator {
         let labels = split_gmail_labels(&label_header);
         let (mailbox_ids, keywords) = self.resolve_labels(&labels);
 
-        // Date / subject / from / to / cc.
+        // Date — load-bearing for thread ordering, so computed up front.
         let received_at = msg
             .date()
             .and_then(|d| frankweiler_time::parse_strict(&d.to_rfc3339()).ok())
             .map(|t| t.to_rfc3339())
             .or_else(|| header_text(msg.header("Date")?));
-        let sent_at = received_at.clone();
-        let subject = msg.subject().map(str::to_string);
-        let from_json =
-            addresses_to_jmap(msg.from()).map(|v| serde_json::to_string(&v).unwrap_or_default());
-        let to_json =
-            addresses_to_jmap(msg.to()).map(|v| serde_json::to_string(&v).unwrap_or_default());
-        let cc_json =
-            addresses_to_jmap(msg.cc()).map(|v| serde_json::to_string(&v).unwrap_or_default());
-
-        // Threading headers — load-bearing for thread stitching when
-        // there's no `X-GM-THRID`.
-        let in_reply_to = msg
-            .header("In-Reply-To")
-            .and_then(header_text)
-            .map(|s| strip_angle(&s).to_string());
-        let references = msg
-            .header("References")
-            .and_then(header_text)
-            .map(|s| {
-                s.split_whitespace()
-                    .map(|tok| strip_angle(tok).to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .filter(|s| !s.is_empty());
 
         // Has-attachment is computed once by walking the parts — no
         // per-part rows land. The bytes ARE the .eml; render
@@ -566,18 +541,21 @@ impl Accumulator {
         let has_attachment = iter_attachments(&msg).next().is_some();
 
         // Queue the .eml itself (the canonical body — everything we
-        // need for render lives inside it).
+        // need for render lives inside it) into the shared CAS-edge
+        // accumulator. It carries the bytes through to the
+        // end-of-batch `put_many` + `email_blobs` edge upsert; the
+        // edge's `blake3` comes straight off the accumulated bytes.
         if known_blobs.contains_key(&eml_blob_id) || pending.seen_blob_ids.contains(&eml_blob_id) {
             summary.blobs_skipped += 1;
         } else {
             pending.seen_blob_ids.insert(eml_blob_id.clone());
-            pending.cas_objects.push(PendingCas {
-                blake3: eml_blake3,
-                kind: BLOB_KIND_EML,
-                owning_id: email_id.clone(),
-                content_type: Some("message/rfc822".to_string()),
-                bytes: raw.to_vec(),
-            });
+            pending.cas.add_fetched(
+                &email_id,
+                &eml_blob_id,
+                raw.to_vec(),
+                Some("message/rfc822".to_string()),
+                None,
+            );
             summary.blobs_stored += 1;
         }
 
@@ -589,25 +567,73 @@ impl Accumulator {
                 received: received_at.clone().unwrap_or_default(),
             });
 
-        pending.emails.push(EmailRow {
-            id: email_id,
-            account_id: self.account_id.clone(),
-            thread_id,
-            blob_id: eml_blob_id,
-            message_id: msg.message_id().map(|m| strip_angle(m).to_string()),
-            in_reply_to,
-            references,
-            received_at,
-            sent_at,
-            size: Some(raw.len() as i64),
-            subject,
-            from_json,
-            to_json,
-            cc_json,
-            has_attachment,
-            mailbox_ids,
-            keywords,
+        // Synthesize a JMAP-shaped `Email/get` envelope so the row goes
+        // through the exact same `EmailRow::from_jmap_envelope` path as
+        // the JMAP source — identical promoted columns + stored
+        // payload, including the `mailboxIds` / `keywords` objects the
+        // join refresh reads back out.
+        let mailbox_ids_obj: serde_json::Map<String, Value> = mailbox_ids
+            .iter()
+            .map(|m| (m.clone(), Value::Bool(true)))
+            .collect();
+        let keywords_obj: serde_json::Map<String, Value> = keywords
+            .iter()
+            .map(|k| (k.clone(), Value::Bool(true)))
+            .collect();
+        let mut envelope = serde_json::json!({
+            "id": email_id.clone(),
+            "blobId": eml_blob_id.clone(),
+            "threadId": thread_id.clone(),
+            "mailboxIds": Value::Object(mailbox_ids_obj),
+            "keywords": Value::Object(keywords_obj),
+            "size": raw.len(),
+            "hasAttachment": has_attachment,
         });
+        let obj = envelope.as_object_mut().expect("envelope is an object");
+        if let Some(r) = &received_at {
+            obj.insert("receivedAt".into(), Value::String(r.clone()));
+            obj.insert("sentAt".into(), Value::String(r.clone()));
+        }
+        if let Some(s) = msg.subject() {
+            obj.insert("subject".into(), Value::String(s.to_string()));
+        }
+        if let Some(from) = addresses_to_jmap(msg.from()) {
+            obj.insert("from".into(), Value::Array(from));
+        }
+        if let Some(to) = addresses_to_jmap(msg.to()) {
+            obj.insert("to".into(), Value::Array(to));
+        }
+        if let Some(cc) = addresses_to_jmap(msg.cc()) {
+            obj.insert("cc".into(), Value::Array(cc));
+        }
+        if let Some(mid) = msg.message_id() {
+            obj.insert(
+                "messageId".into(),
+                Value::Array(vec![Value::String(strip_angle(mid).to_string())]),
+            );
+        }
+        if let Some(irt) = msg.header("In-Reply-To").and_then(header_text) {
+            obj.insert(
+                "inReplyTo".into(),
+                Value::Array(vec![Value::String(strip_angle(&irt).to_string())]),
+            );
+        }
+        let refs: Vec<Value> = msg
+            .header("References")
+            .and_then(header_text)
+            .map(|s| {
+                s.split_whitespace()
+                    .map(|tok| Value::String(strip_angle(tok).to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !refs.is_empty() {
+            obj.insert("references".into(), Value::Array(refs));
+        }
+
+        if let Some(row) = EmailRow::from_jmap_envelope(&self.account_id, &envelope) {
+            pending.emails.push(row);
+        }
         Ok(true)
     }
 
@@ -674,41 +700,34 @@ impl Accumulator {
 #[derive(Default)]
 struct PendingBatch {
     emails: Vec<EmailRow>,
-    cas_objects: Vec<PendingCas>,
+    /// `.eml` bytes + their `email_blobs` edges for this batch. The
+    /// accumulator holds the bytes (in its [`BlobBundle`]) and resolves
+    /// each edge's `blake3` off them at flush time — see
+    /// [`frankweiler_etl::blob_cas::CasEdgeAccumulator`].
+    cas: CasEdgeAccumulator,
     /// In-run dedupe of blob ref ids. JMAP `Email.blobId` is server-
     /// opaque (different per email), but for mbox sources the ref_id
     /// is `sha256(bytes)` — identical bodies / attachments collapse
-    /// to a single row, and this set keeps the `INSERT` list itself
+    /// to a single row, and this set keeps the edge list itself
     /// dedup-free so doltlite never sees a conflicting bind pair
     /// inside one multi-row statement.
     seen_blob_ids: std::collections::HashSet<String>,
 }
 
-struct PendingCas {
-    blake3: String,
-    kind: &'static str,
-    /// The owning email id (= the row to UPDATE in `emails` once the
-    /// `.eml` blob is in CAS). Always `BLOB_KIND_EML` post-port.
-    owning_id: String,
-    content_type: Option<String>,
-    bytes: Vec<u8>,
-}
-
 impl PendingBatch {
     fn clear(&mut self) {
         self.emails.clear();
-        self.cas_objects.clear();
+        self.cas = CasEdgeAccumulator::new();
         // `seen_blob_ids` deliberately persists across flushes: an
         // identical attachment landing in a later batch should still
         // dedupe against an earlier flush in the same run.
     }
 }
 
-/// Flush one accumulated `PendingBatch` to disk: chunked multi-row
-/// `INSERT`s inside a single entity-pool transaction (emails + join
-/// tables + the blake3 backfill onto the new per-provider CAS edge
-/// columns + bookkeeping) plus a single CAS-pool transaction via
-/// [`frankweiler_etl::blob_cas::BlobCas::put_many`].
+/// Flush one accumulated `PendingBatch` to disk: one entity-pool
+/// transaction (emails + join tables + emails bookkeeping), then the
+/// shared CAS-edge flush ([`CasEdgeAccumulator::flush`]) which does
+/// the CAS `put_many` + `email_blobs` edge upsert + edge bookkeeping.
 ///
 /// No JSONL wire-tape: mbox is a file on disk, not a wire — there
 /// are no upstream events to mirror.
@@ -717,51 +736,29 @@ async fn flush_batch(
     batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
-    if batch.emails.is_empty() && batch.cas_objects.is_empty() {
+    if batch.emails.is_empty() {
         return Ok(());
     }
-    let now = frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339();
 
     let mut etx = db.pool().begin().await.context("begin entity tx")?;
     bulk_insert_emails(&mut etx, &batch.emails).await?;
     bulk_insert_email_mailboxes(&mut etx, &batch.emails).await?;
     bulk_insert_email_keywords(&mut etx, &batch.emails).await?;
-    // Phase 2: backfill `emails.blake3` straight off the
-    // CAS-pending accumulator. Only `.eml` blobs land here after the
-    // eml-as-canonical port — per-attachment blobs are gone. Per-row
-    // UPDATEs are sufficient: mbox batches are bounded by
-    // FLUSH_BATCH.
-    for c in &batch.cas_objects {
-        debug_assert_eq!(c.kind, BLOB_KIND_EML);
-        sqlx::query("UPDATE emails SET blake3 = ? WHERE id = ?")
-            .bind(&c.blake3)
-            .bind(&c.owning_id)
-            .execute(&mut *etx)
-            .await
-            .with_context(|| format!("update emails.blake3 for {}", c.owning_id))?;
-    }
-    bulk_upsert_bookkeeping(
-        &mut etx,
-        "emails",
-        batch.emails.iter().map(|e| e.id.as_str()),
-        &now,
-    )
-    .await?;
     etx.commit().await.context("commit entity tx")?;
 
-    // CAS pool: one chunked multi-row INSERT OR IGNORE per put_many.
-    if !batch.cas_objects.is_empty() {
-        let cas_items: Vec<CasInsert<'_>> = batch
-            .cas_objects
-            .iter()
-            .map(|c| CasInsert {
-                blake3: &c.blake3,
-                bytes: &c.bytes,
-                content_type: c.content_type.as_deref(),
-            })
-            .collect();
-        db.cas().put_many(&cas_items).await?;
-    }
+    // CAS bytes + `email_blobs` edges (each carrying the bundle-derived
+    // blake3) + edge bookkeeping, all via the shared primitive.
+    batch
+        .cas
+        .flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
+            EmlBlobRow {
+                id: EmlBlobRow::pk_recipe(email_id, blob_id),
+                email_id: email_id.to_string(),
+                blob_id: blob_id.to_string(),
+                blake3: blake3.map(str::to_string),
+            }
+        })
+        .await?;
 
     summary.emails_upserted += batch.emails.len();
     batch.clear();
@@ -878,32 +875,22 @@ async fn bulk_insert_email_mailboxes(
         sql.push(')');
         let mut q = sqlx::query(&sql);
         for r in chunk {
-            q = q.bind(&r.id);
+            q = q.bind(r.id());
         }
         q.execute(&mut **tx)
             .await
             .context("bulk delete email_mailboxes")?;
     }
-    let pairs: Vec<(&str, &str)> = rows
-        .iter()
-        .flat_map(|r| {
-            r.mailbox_ids
-                .iter()
-                .map(move |m| (r.id.as_str(), m.as_str()))
-        })
-        .collect();
-    for chunk in pairs.chunks(SQL_CHUNK) {
-        let mut sql = String::from("INSERT INTO email_mailboxes (email_id, mailbox_id) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), 2);
-        sql.push_str(" ON CONFLICT(email_id, mailbox_id) DO NOTHING");
-        let mut q = sqlx::query(&sql);
-        for (eid, mid) in chunk {
-            q = q.bind(eid).bind(mid);
+    let mut join_rows: Vec<EmailMailboxRow> = Vec::new();
+    for r in rows {
+        let id = r.id();
+        for m in r.mailbox_ids() {
+            join_rows.push(EmailMailboxRow::new(id, &m));
         }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk insert email_mailboxes")?;
     }
+    bulk_upsert_entity_in_tx(tx, &join_rows)
+        .await
+        .context("bulk insert email_mailboxes")?;
     Ok(())
 }
 
@@ -917,28 +904,22 @@ async fn bulk_insert_email_keywords(
         sql.push(')');
         let mut q = sqlx::query(&sql);
         for r in chunk {
-            q = q.bind(&r.id);
+            q = q.bind(r.id());
         }
         q.execute(&mut **tx)
             .await
             .context("bulk delete email_keywords")?;
     }
-    let pairs: Vec<(&str, &str)> = rows
-        .iter()
-        .flat_map(|r| r.keywords.iter().map(move |k| (r.id.as_str(), k.as_str())))
-        .collect();
-    for chunk in pairs.chunks(SQL_CHUNK) {
-        let mut sql = String::from("INSERT INTO email_keywords (email_id, keyword) VALUES ");
-        push_placeholders(&mut sql, chunk.len(), 2);
-        sql.push_str(" ON CONFLICT(email_id, keyword) DO NOTHING");
-        let mut q = sqlx::query(&sql);
-        for (eid, k) in chunk {
-            q = q.bind(eid).bind(k);
+    let mut join_rows: Vec<EmailKeywordRow> = Vec::new();
+    for r in rows {
+        let id = r.id();
+        for k in r.keywords() {
+            join_rows.push(EmailKeywordRow::new(id, &k));
         }
-        q.execute(&mut **tx)
-            .await
-            .context("bulk insert email_keywords")?;
     }
+    bulk_upsert_entity_in_tx(tx, &join_rows)
+        .await
+        .context("bulk insert email_keywords")?;
     Ok(())
 }
 
@@ -1355,15 +1336,15 @@ mod tests {
             .unwrap();
         assert_eq!(picard.id, "msg-one@enterprise.starfleet");
         assert_eq!(picard.thread_id, "1111");
-        // .eml is in CAS keyed by emails.blob_id. The new path goes
-        // emails.blob_id → emails.blake3 → cas_objects.bytes (no
-        // shared blob_refs hop).
-        let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM emails WHERE id = ?")
-            .bind(&picard.id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
-        let blake3 = blake3.expect("emails.blake3 set by mbox flush");
+        // .eml is in CAS keyed by emails.blob_id. The path goes
+        // emails.blob_id → email_blobs.blake3 → cas_objects.bytes.
+        let blake3: Option<String> =
+            sqlx::query_scalar("SELECT blake3 FROM email_blobs WHERE email_id = ?")
+                .bind(&picard.id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let blake3 = blake3.expect("email_blobs.blake3 set by mbox flush");
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
                 .bind(&blake3)

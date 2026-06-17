@@ -94,14 +94,15 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert!(kws.iter().any(|k| k == "$important"));
     assert!(kws.iter().any(|k| k == "$seen"));
 
-    // .eml bytes are in the CAS keyed by emails.blake3 (which mbox
-    // sets to the .eml's content hash at flush time).
-    let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM emails WHERE id = ?")
-        .bind(&hayes.id)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
-    let blake3 = blake3.expect("emails.blake3 set by mbox flush");
+    // .eml bytes are in the CAS keyed by the email_blobs edge's blake3
+    // (which mbox sets to the .eml's content hash at flush time).
+    let blake3: Option<String> =
+        sqlx::query_scalar("SELECT blake3 FROM email_blobs WHERE email_id = ?")
+            .bind(&hayes.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    let blake3 = blake3.expect("email_blobs.blake3 set by mbox flush");
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
             .bind(&blake3)

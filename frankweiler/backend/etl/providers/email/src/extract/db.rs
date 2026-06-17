@@ -24,9 +24,10 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::{Row, Sqlite, Transaction};
 
 use frankweiler_etl::blob_cas::{self, BlobCas};
+use frankweiler_etl::bulk::bulk_upsert_entity_in_tx;
 use frankweiler_etl::doltlite_raw::{self as dr};
 
-use super::schema_raw::{full_ddl, DATA_TABLES, JOIN_TABLES};
+use super::schema_raw::{full_ddl, EmailKeywordRow, EmailMailboxRow, DATA_TABLES, JOIN_TABLES};
 pub use super::schema_raw::{EmailRow, BLOB_KIND_EML};
 
 pub use frankweiler_etl::doltlite_raw::db_path_for;
@@ -145,7 +146,7 @@ impl RawDb {
     pub async fn load_emails(&self) -> Result<Vec<LoadedEmail>> {
         let rows = sqlx::query(
             "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to,
-                    \"references\", received_at, sent_at, size, subject,
+                    references_header, received_at, sent_at, size, subject,
                     from_json, to_json, cc_json, has_attachment
              FROM emails
              ORDER BY thread_id, received_at, id",
@@ -164,7 +165,9 @@ impl RawDb {
                 in_reply_to: r
                     .try_get::<Option<String>, _>("in_reply_to")
                     .unwrap_or(None),
-                references: r.try_get::<Option<String>, _>("references").unwrap_or(None),
+                references: r
+                    .try_get::<Option<String>, _>("references_header")
+                    .unwrap_or(None),
                 received_at: r
                     .try_get::<Option<String>, _>("received_at")
                     .unwrap_or(None),
@@ -295,6 +298,9 @@ impl RawDb {
             for sql in [
                 "DELETE FROM email_mailboxes WHERE email_id = ?",
                 "DELETE FROM email_keywords WHERE email_id = ?",
+                "DELETE FROM email_blobs_bookkeeping
+                   WHERE id IN (SELECT id FROM email_blobs WHERE email_id = ?)",
+                "DELETE FROM email_blobs WHERE email_id = ?",
                 "DELETE FROM emails WHERE id = ?",
                 "DELETE FROM emails_bookkeeping WHERE id = ?",
             ] {
@@ -318,10 +324,12 @@ impl RawDb {
     /// Replaces the older two-table union — after the eml-as-canonical
     /// port we only fetch `.eml` blobs.
     pub async fn loaded_blob_ids(&self) -> Result<HashMap<String, String>> {
-        let rows = sqlx::query("SELECT blob_id, blake3 FROM emails WHERE blake3 IS NOT NULL")
-            .fetch_all(&self.pool)
-            .await
-            .context("loaded_blob_ids")?;
+        let rows = sqlx::query(
+            "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("loaded_blob_ids")?;
         let mut out = HashMap::with_capacity(rows.len());
         for r in rows {
             let blob_id: String = r.try_get("blob_id").unwrap_or_default();
@@ -333,16 +341,16 @@ impl RawDb {
         Ok(out)
     }
 
-    /// Implements the `--refetch-blobs` control. Sets `emails.blake3`
-    /// back to NULL so the next `sync_blobs` pass walks every `.eml`
-    /// from scratch. The CAS itself is left alone — re-downloaded
-    /// bytes hash to the same blake3, the `INSERT OR IGNORE` on the
-    /// CAS side is a no-op.
+    /// Implements the `--refetch-blobs` control. Sets every
+    /// `email_blobs.blake3` back to NULL so the next `sync_blobs` pass
+    /// walks every `.eml` from scratch. The CAS itself is left alone —
+    /// re-downloaded bytes hash to the same blake3, the `INSERT OR
+    /// IGNORE` on the CAS side is a no-op.
     pub async fn clear_blob_hashes(&self) -> Result<()> {
-        sqlx::query("UPDATE emails SET blake3 = NULL")
+        sqlx::query("UPDATE email_blobs SET blake3 = NULL")
             .execute(&self.pool)
             .await
-            .context("clear emails.blake3")?;
+            .context("clear email_blobs.blake3")?;
         Ok(())
     }
 }
@@ -359,41 +367,41 @@ impl RawDb {
 ///
 /// Runs inside the same transaction as the parent email's
 /// `bulk_upsert_in_tx` call so failure during the refresh rolls the
-/// envelope row back too. Caller is responsible for committing.
+/// envelope row back too. Caller is responsible for committing. The
+/// `mailboxIds` / `keywords` come straight off the email's stored
+/// envelope payload; the join rows go through the generic
+/// bulk-upsert path.
 pub async fn refresh_email_joins(tx: &mut Transaction<'_, Sqlite>, row: &EmailRow) -> Result<()> {
+    let email_id = row.id();
+
     sqlx::query("DELETE FROM email_mailboxes WHERE email_id = ?")
-        .bind(&row.id)
+        .bind(email_id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("clear email_mailboxes {}", row.id))?;
-    for mid in &row.mailbox_ids {
-        sqlx::query(
-            "INSERT INTO email_mailboxes (email_id, mailbox_id) VALUES (?, ?)
-             ON CONFLICT(email_id, mailbox_id) DO NOTHING",
-        )
-        .bind(&row.id)
-        .bind(mid)
-        .execute(&mut **tx)
+        .with_context(|| format!("clear email_mailboxes {email_id}"))?;
+    let mbox_rows: Vec<EmailMailboxRow> = row
+        .mailbox_ids()
+        .iter()
+        .map(|m| EmailMailboxRow::new(email_id, m))
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &mbox_rows)
         .await
-        .with_context(|| format!("insert email_mailbox {}={mid}", row.id))?;
-    }
+        .with_context(|| format!("insert email_mailboxes {email_id}"))?;
 
     sqlx::query("DELETE FROM email_keywords WHERE email_id = ?")
-        .bind(&row.id)
+        .bind(email_id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("clear email_keywords {}", row.id))?;
-    for k in &row.keywords {
-        sqlx::query(
-            "INSERT INTO email_keywords (email_id, keyword) VALUES (?, ?)
-             ON CONFLICT(email_id, keyword) DO NOTHING",
-        )
-        .bind(&row.id)
-        .bind(k)
-        .execute(&mut **tx)
+        .with_context(|| format!("clear email_keywords {email_id}"))?;
+    let kw_rows: Vec<EmailKeywordRow> = row
+        .keywords()
+        .iter()
+        .map(|k| EmailKeywordRow::new(email_id, k))
+        .collect();
+    bulk_upsert_entity_in_tx(tx, &kw_rows)
         .await
-        .with_context(|| format!("insert email_keyword {}={k}", row.id))?;
-    }
+        .with_context(|| format!("insert email_keywords {email_id}"))?;
+
     Ok(())
 }
 
