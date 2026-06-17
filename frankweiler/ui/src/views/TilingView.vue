@@ -127,6 +127,7 @@ function ctxFor(leaf: TileLeaf): CardCtx {
     const cardId = leaf.id;
     const host: HostCommands = {
       openCard: (source) => openCardFrom(cardId, source),
+      setSource: (source) => setTileSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setTileState(cardId, state),
     };
@@ -150,6 +151,15 @@ function commitSource(leaf: TileLeaf, e: Event) {
     // New code means the old card's state no longer applies.
     leaf.state = "";
   }
+}
+
+// host.setSource: replace this tile's own source (clearing state) —
+// drives the agent hand-off (see cards/handoff.ts).
+function setTileSource(id: string, source: string) {
+  const tile = findTile(root.value, id);
+  if (!tile) return;
+  tile.source = source;
+  tile.state = "";
 }
 
 // Standalone view: a miller URL containing just this card.

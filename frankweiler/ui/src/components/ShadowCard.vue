@@ -8,6 +8,11 @@
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
 import { compileCardSource } from "@/cards/cardSource";
+import {
+  aliasManifest,
+  ensureManifest,
+  referencedIdentifiers,
+} from "@/cards/aliasRegistry";
 import type { CardCtx, Teardown } from "@/cards/types";
 
 const props = defineProps<{
@@ -18,6 +23,27 @@ const props = defineProps<{
 const hostEl = useTemplateRef<HTMLDivElement>("hostEl");
 const shadow = shallowRef<ShadowRoot | null>(null);
 const teardown = shallowRef<Teardown | null>(null);
+
+// Alias names the current source mentions, and the manifest hashes they
+// had at last compile. The manifest watcher recompiles when any of
+// these names appears, changes, or disappears — so a card pointed at an
+// alias re-renders the moment an agent re-saves that alias (even if the
+// alias didn't exist yet at first compile).
+let watchedNames = new Set<string>();
+let watchedHashes = new Map<string, string | undefined>();
+
+// Compilation is async (resolving aliases fetches their source); a
+// newer run must win. Bumped on every runCard; stale runs bail before
+// mutating the DOM.
+let runToken = 0;
+
+function snapshotWatched(source: string) {
+  watchedNames = referencedIdentifiers(source);
+  watchedHashes = new Map();
+  for (const name of watchedNames) {
+    watchedHashes.set(name, aliasManifest.value.get(name));
+  }
+}
 
 function tearDownCard() {
   const fn = teardown.value;
@@ -30,11 +56,13 @@ function tearDownCard() {
   }
 }
 
-function runCard() {
+async function runCard() {
   const root = shadow.value;
   if (!root) return;
+  const token = ++runToken;
   tearDownCard();
   root.replaceChildren();
+  snapshotWatched(props.source);
   if (props.source.trim() === "") {
     // Sole onboarding text for an empty card — the source textarea
     // above stays blank (no placeholder), so the how-to lives here.
@@ -49,6 +77,7 @@ function runCard() {
     const examples = [
       "gridView()",
       'documentView("uuid")',
+      "aliasView()",
       '(root) => { root.textContent = "hello, world" }',
     ];
     for (const ex of examples) {
@@ -61,9 +90,21 @@ function runCard() {
     return;
   }
   try {
-    const render = compileCardSource(props.source);
+    await ensureManifest();
+    const { render, deps } = await compileCardSource(props.source);
+    // A newer run started while we were awaiting — drop this one.
+    if (token !== runToken || shadow.value !== root) return;
+    // Watch the resolved transitive closure (plus whatever the source
+    // names) so a change to any dependency re-renders.
+    for (const name of deps) {
+      watchedNames.add(name);
+      if (!watchedHashes.has(name)) {
+        watchedHashes.set(name, aliasManifest.value.get(name));
+      }
+    }
     teardown.value = render(root, props.ctx);
   } catch (e) {
+    if (token !== runToken || shadow.value !== root) return;
     const div = document.createElement("div");
     div.style.cssText =
       "color:#e35d6a;padding:8px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap";
@@ -78,13 +119,24 @@ onMounted(() => {
   const el = hostEl.value;
   if (!el) return;
   shadow.value = el.attachShadow({ mode: "open" });
-  runCard();
+  void runCard();
 });
 
 watch(
   () => props.source,
-  () => runCard(),
+  () => void runCard(),
 );
+
+// Re-render when an alias this card depends on (or references by name)
+// changes hash, appears, or disappears in the library manifest.
+watch(aliasManifest, (m) => {
+  for (const name of watchedNames) {
+    if (m.get(name) !== watchedHashes.get(name)) {
+      void runCard();
+      return;
+    }
+  }
+});
 
 onBeforeUnmount(tearDownCard);
 </script>

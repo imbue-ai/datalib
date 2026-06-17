@@ -178,6 +178,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/card/{hash}", get(get_card))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
+        .route("/api/lib", get(list_lib))
+        .route("/api/lib/{name}", get(get_lib).put(put_lib))
+        .route("/agent.md", get(agent_guide))
         .route("/api/sync/sources", get(sync_sources))
         .route("/api/sync/jobs", get(sync_jobs_active).post(sync_enqueue))
         .route("/api/sync/jobs/all", get(sync_jobs_all))
@@ -569,6 +572,167 @@ async fn get_card(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
+}
+
+// --- Component library (named, mutable card aliases) -----------------------
+//
+// `/api/lib` is the user-defined component library: named JS "view
+// factory" snippets that card source can invoke by bare name, exactly
+// like the builtin `gridView`/`documentView`. Unlike `/api/card` (which
+// is content-addressed and immutable), a lib entry is a MUTABLE name —
+// re-PUTting `foo` overwrites it, and any card whose source references
+// `foo()` re-renders. A coding agent is the expected author: it writes
+// (or compiles/minifies) a factory and PUTs it under a name the card
+// points at.
+//
+// Stored one-file-per-name under `<root>/.frankweiler/lib/<name>.js`.
+// The name doubles as a JS identifier injected into card scope, so it
+// is constrained to a valid bare identifier (see `valid_lib_name`),
+// which also makes it path-safe (no `/`, `.`, traversal).
+
+#[derive(Debug, Deserialize)]
+pub struct PutLibRequest {
+    pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LibEntry {
+    pub name: String,
+    /// sha256 of the source — the UI watches this to decide when a card
+    /// that depends on this alias needs re-rendering.
+    pub hash: String,
+}
+
+/// A lib name is injected into card scope as a bare identifier and
+/// invoked as `name()`, so it must be a valid ASCII JS identifier. That
+/// also makes it path-safe: no `/`, `.`, or `..`, so it can't traverse
+/// out of the lib directory.
+fn valid_lib_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let first_ok = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$');
+    first_ok
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    let digest = h.finalize();
+    let mut hash = String::with_capacity(64);
+    for b in digest.iter() {
+        hash.push_str(&format!("{b:02x}"));
+    }
+    hash
+}
+
+/// List every named component with its content hash.
+async fn list_lib(State(s): State<AppState>) -> Result<Json<Vec<LibEntry>>, StatusCode> {
+    let dir = s.root.join(".frankweiler/lib");
+    let mut out = Vec::new();
+    match std::fs::read_dir(&dir) {
+        Ok(rd) => {
+            for ent in rd.flatten() {
+                let path = ent.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("js") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if !valid_lib_name(stem) {
+                    continue;
+                }
+                if let Ok(src) = std::fs::read_to_string(&path) {
+                    out.push(LibEntry {
+                        name: stem.to_string(),
+                        hash: sha256_hex(src.as_bytes()),
+                    });
+                }
+            }
+        }
+        // No lib dir yet just means an empty library.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("list_lib: read_dir {}: {e}", dir.display());
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(out))
+}
+
+/// Serve a stored component's JS body as `text/javascript`.
+async fn get_lib(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<
+    (
+        StatusCode,
+        [(axum::http::HeaderName, &'static str); 1],
+        String,
+    ),
+    StatusCode,
+> {
+    if !valid_lib_name(&name) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let path = s.root.join(".frankweiler/lib").join(format!("{name}.js"));
+    match std::fs::read_to_string(&path) {
+        Ok(body) => Ok((
+            StatusCode::OK,
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/javascript; charset=utf-8",
+            )],
+            body,
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
+}
+
+/// Create or overwrite a named component. Idempotent per content; the
+/// returned hash lets the caller confirm what landed.
+async fn put_lib(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<PutLibRequest>,
+) -> Result<Json<LibEntry>, StatusCode> {
+    if !valid_lib_name(&name) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let dir = s.root.join(".frankweiler/lib");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("put_lib: mkdir {}: {e}", dir.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let path = dir.join(format!("{name}.js"));
+    if let Err(e) = std::fs::write(&path, req.source.as_bytes()) {
+        eprintln!("put_lib: write {}: {e}", path.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    Ok(Json(LibEntry {
+        name,
+        hash: sha256_hex(req.source.as_bytes()),
+    }))
+}
+
+/// Onboarding doc for a coding agent pointed at this instance. Served as
+/// markdown at a stable, app-relative URL so a wayfinder snippet can
+/// reference `<origin>/agent.md` without baking the content into the
+/// wayfinder itself.
+async fn agent_guide() -> (StatusCode, [(axum::http::HeaderName, &'static str); 1], &'static str) {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/markdown; charset=utf-8",
+        )],
+        include_str!("agent_guide.md"),
+    )
 }
 
 /// Strip a leading `---\n…\n---\n` YAML frontmatter block. This is text
