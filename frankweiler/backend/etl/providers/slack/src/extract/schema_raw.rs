@@ -221,9 +221,7 @@ pub struct SlackAttachmentRow {
 
 /// Shared namespace for v5-derived Slack UUIDs.
 ///
-/// Load-bearing because changing it would invalidate every uuid we
-/// have ever produced for Slack. So this byte sequence is effectively
-/// immutable.
+/// FIXME: We don't need this complexity around the namespace, it can use be a plain old string.  Let's make a backwards incompatible change to the schema and remove this.
 const SLACK_UUID_NS: Uuid = Uuid::from_bytes([
     0xa8, 0x9c, 0x7c, 0x4f, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a, 0x3e, 0x3d, 0x5a, 0x6b, 0x9f, 0x8a,
 ]);
