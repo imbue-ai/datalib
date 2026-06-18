@@ -601,7 +601,7 @@ pub struct GoogleTakeoutSync {
 
 /// Discriminated union over the literal `type:` field. Variant payloads
 /// flatten the common (name/enabled/input_path) fields so the YAML shape
-/// matches the Python pydantic models byte-for-byte.
+/// reads `type: <kind>` with the shared fields inline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceConfig {
@@ -733,6 +733,15 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<WhatsAppSync>,
     },
+    /// "SMS Backup & Restore" (Android) export. Always file-backed —
+    /// there's no API, so `input_path:` points at the directory holding
+    /// the app's `sms-*.xml` / `calls-*.xml` files. Extract ingests each
+    /// SMS / MMS / call into its own raw row (MMS attachment bytes go to
+    /// the CAS); translate renders one chat per phone number.
+    SmsBackupRestore {
+        #[serde(flatten)]
+        common: SourceCommon,
+    },
 }
 
 impl SourceConfig {
@@ -753,7 +762,8 @@ impl SourceConfig {
             | SourceConfig::Perseus { common, .. }
             | SourceConfig::Yolink { common, .. }
             | SourceConfig::SignalBackup { common, .. }
-            | SourceConfig::WhatsAppBackup { common, .. } => common,
+            | SourceConfig::WhatsAppBackup { common, .. }
+            | SourceConfig::SmsBackupRestore { common, .. } => common,
         }
     }
 
@@ -785,6 +795,7 @@ impl SourceConfig {
             SourceConfig::Yolink { .. } => "yolink",
             SourceConfig::SignalBackup { .. } => "signal_backup",
             SourceConfig::WhatsAppBackup { .. } => "whatsapp_backup",
+            SourceConfig::SmsBackupRestore { .. } => "sms_backup_restore",
         }
     }
 
@@ -825,6 +836,10 @@ impl SourceConfig {
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
             SourceConfig::SignalBackup { sync, .. } => sync.is_some(),
             SourceConfig::WhatsAppBackup { sync, .. } => sync.is_some(),
+            // SMS Backup & Restore is file-backed only: managed (we own
+            // the raw doltlite store) iff an `input_path:` export dir is
+            // set.
+            SourceConfig::SmsBackupRestore { common, .. } => common.input_path.is_some(),
         }
     }
 

@@ -48,6 +48,7 @@ rust_binary(
         "//frankweiler/backend/etl/providers/signal:frankweiler_etl_signal",
         "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",
         "//frankweiler/backend/etl/providers/whatsapp:frankweiler_etl_whatsapp",
+        "//frankweiler/backend/etl/providers/sms_backup_restore:frankweiler_etl_sms_backup_restore",
         "//frankweiler/backend/etl/providers/yolink:frankweiler_etl_yolink",
         "//frankweiler/backend/whatsapp-backup:frankweiler_whatsapp_backup",
         "//frankweiler/backend/obs:frankweiler_obs",

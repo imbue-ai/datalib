@@ -1412,6 +1412,7 @@ enum DbHandle {
     Yolink(frankweiler_etl_yolink::extract::RawDb),
     Signal(frankweiler_etl_signal::extract::RawDb),
     WhatsApp(frankweiler_etl_whatsapp::extract::RawDb),
+    SmsBackupRestore(frankweiler_etl_sms_backup_restore::extract::RawDb),
 }
 
 impl DbHandle {
@@ -1431,6 +1432,7 @@ impl DbHandle {
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
             DbHandle::WhatsApp(d) => d.pool(),
+            DbHandle::SmsBackupRestore(d) => d.pool(),
         }
     }
 
@@ -1500,6 +1502,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::WhatsApp { .. } => {
             DbHandle::WhatsApp(frankweiler_etl_whatsapp::extract::RawDb::open(path).await?)
         }
+        ExtractKind::SmsBackupRestore { .. } => DbHandle::SmsBackupRestore(
+            frankweiler_etl_sms_backup_restore::extract::RawDb::open(path).await?,
+        ),
         // File-tree-backed: no doltlite to open.
         ExtractKind::Perseus { .. } => return Ok(None),
     }))
@@ -1583,6 +1588,13 @@ enum ExtractKind {
         sync: WhatsAppSync,
         backup_dir: PathBuf,
     },
+    /// "SMS Backup & Restore" export directory walker. `input_path` is
+    /// the directory holding `sms-*.xml` / `calls-*.xml`; the raw
+    /// doltlite store lands at `<data_root>/raw/<name>` like the other
+    /// file-backed providers.
+    SmsBackupRestore {
+        input_path: PathBuf,
+    },
 }
 
 impl ExtractPlan {
@@ -1649,6 +1661,14 @@ impl ExtractPlan {
                 let input_path = out_dir.clone();
                 out_dir = cfg.data_root.join("raw").join(&name);
                 ExtractKind::Linkedin { input_path }
+            }
+            SourceConfig::SmsBackupRestore { .. } => {
+                // File-backed (the directory of sms-*.xml / calls-*.xml);
+                // raw doltlite store lands at `<data_root>/raw/<name>`
+                // like linkedin / google_takeout.
+                let input_path = out_dir.clone();
+                out_dir = cfg.data_root.join("raw").join(&name);
+                ExtractKind::SmsBackupRestore { input_path }
             }
             SourceConfig::GoogleTakeout { sync, .. } => {
                 // File-backed (the unzipped Takeout root); raw doltlite
@@ -2065,6 +2085,27 @@ impl ExtractPlan {
                     format!(
                         "files={} rows={} parse_errors={}",
                         s.files, s.rows, s.parse_errors,
+                    )
+                })
+            }
+            (
+                ExtractKind::SmsBackupRestore { input_path },
+                Some(DbHandle::SmsBackupRestore(db)),
+            ) => {
+                frankweiler_etl_sms_backup_restore::extract::fetch(
+                    frankweiler_etl_sms_backup_restore::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        input_path,
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
+                        s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
                     )
                 })
             }
@@ -2654,6 +2695,20 @@ fn translate_source(
             )
             .context("google_takeout render")
         }
+        SourceConfig::SmsBackupRestore { .. } => {
+            // Texts + calls render as one chat per phone number. The raw
+            // store is the canonical `<data_root>/raw/<name>` location.
+            let raw_dir = cfg.data_root.join("raw").join(name);
+            frankweiler_etl_sms_backup_restore::translate::render(
+                &raw_dir,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("sms_backup_restore render")
+        }
         SourceConfig::Email { sync, .. } => {
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
             use frankweiler_etl_email::translate::parse::parse;
@@ -2827,6 +2882,14 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (google_takeout): skipped (file-backed, no extract HTTP)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::SmsBackupRestore { .. } => {
+                // File-backed (no HTTP to play back); synth is a no-op.
+                status_line!(
+                    "[synth] {} (sms_backup_restore): skipped (file-backed, no extract HTTP)",
                     src.name()
                 );
                 continue;

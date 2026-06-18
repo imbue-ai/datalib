@@ -134,6 +134,32 @@ the whole backup directory instead:
 adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/ ~/backups/WhatsApp/
 ```
 
+## SMS & calls (SMS Backup & Restore)
+
+Android texts and call logs come from the free **SMS Backup & Restore**
+app by SyncTech: <https://www.synctech.com.au/sms-backup-restore/>
+(also on the
+[Play Store](https://play.google.com/store/apps/details?id=com.riteshsahu.SMSBackupRestore)).
+It exports messages and calls as XML — `sms-<timestamp>.xml` (SMS + MMS)
+and `calls-<timestamp>.xml`.
+
+In the app, tap **Set up a backup**, select **Messages** and **Call
+logs**, and back up to **local storage** (not just the cloud). Leave
+**Include MMS attachments / media** enabled — the app inlines photos,
+audio recordings, etc. as base64 directly in the XML, which is how we
+pick them up as attachments.
+
+Then pull the XML files off the device into one directory:
+
+```sh
+adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
+```
+
+(Or copy them over MTP / a file manager / the app's share sheet.) Point
+the source's `input_path` at that directory — it walks every `*.xml`
+inside, so keeping multiple dated backups there is fine; re-ingesting a
+newer export deduplicates against what's already there.
+
 ## Other sources
 
 These are wired into the pipeline; acquisition is via `latchkey` or a

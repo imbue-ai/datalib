@@ -51,6 +51,7 @@ import notionIconUrl from "@/assets/notion.svg";
 import whatsappIconUrl from "@/assets/whatsapp.svg";
 import signalIconUrl from "@/assets/signal.svg";
 import emailIconUrl from "@/assets/email.svg";
+import smsIconUrl from "@/assets/sms.svg";
 import { encodeColumns } from "@/router/columns";
 import type { CardCtx } from "./types";
 
@@ -64,6 +65,7 @@ const SOURCE_ICONS: Record<string, string> = {
   WhatsApp: whatsappIconUrl,
   Signal: signalIconUrl,
   Mail: emailIconUrl,
+  SMS: smsIconUrl,
 };
 
 ModuleRegistry.registerModules([AllCommunityModule, AllEnterpriseModule]);

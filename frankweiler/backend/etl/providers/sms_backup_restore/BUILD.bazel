@@ -1,0 +1,73 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed "SMS Backup & Restore" export (sms + calls XML, with inline
+# base64 image/audio attachments) used by the e2e test and the central
+# fixture pipeline.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/sms_backup_restore_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_sms_backup_restore",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_sms_backup_restore",
+    edition = "2021",
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
+        "//frankweiler/backend/time:frankweiler_time",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:base64",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:quick-xml",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "sms_backup_restore_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_sms_backup_restore",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# End-to-end test: points extract at the checked-in TNG export tree,
+# asserts the landed raw tables + CAS blobs, runs render, and asserts the
+# rendered conversations + attachments. The fixture is staged via
+# `data = [":tng_fixture"]`.
+rust_test(
+    name = "sms_backup_restore_e2e",
+    srcs = ["tests/sms_backup_restore_e2e.rs"],
+    crate_root = "tests/sms_backup_restore_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "SMS_FIXTURE_DIR": "frankweiler/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
+    },
+    deps = [
+        ":frankweiler_etl_sms_backup_restore",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)

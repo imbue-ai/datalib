@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--File Created By SMS Backup & Restore v10.25.005 (TNG fixture)-->
+<calls count="3" backup_set="11111111-2222-3333-4444-555555555555" backup_date="12600273600000" type="full">
+  <call number="+15550101" duration="95" date="12600210600000" type="1" presentation="1" subscription_id="0" post_dial_digits="" readable_date="Apr 14, 2369 06:30:00 PM" contact_name="Jean-Luc Picard" />
+  <call number="+15550102" duration="0" date="12600214200000" type="3" presentation="1" subscription_id="0" post_dial_digits="" readable_date="Apr 14, 2369 06:30:00 PM" contact_name="Worf" />
+  <call number="+15550103" duration="240" date="12600217800000" type="2" presentation="1" subscription_id="0" post_dial_digits="" readable_date="Apr 14, 2369 06:30:00 PM" contact_name="Deanna Troi" />
+</calls>

@@ -1,0 +1,40 @@
+<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<!--File Created By SMS Backup & Restore v10.25.005 (TNG fixture)-->
+<smses count="6" backup_set="11111111-2222-3333-4444-555555555555" backup_date="12600273600000" type="full">
+  <sms protocol="0" address="+15550101" date="12600262800000" type="1" subject="null" body="Make it so. 🚀" toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="Apr 15, 2369 09:00:00 AM" contact_name="Jean-Luc Picard" />
+  <sms protocol="0" address="+15550101" date="12600262860000" type="2" subject="null" body="Aye, Captain." toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="Apr 15, 2369 09:00:00 AM" contact_name="Jean-Luc Picard" />
+  <sms protocol="0" address="+15550102" date="12600266400000" type="1" subject="null" body="Today is a good day to die." toa="null" sc_toa="null" service_center="null" read="1" status="-1" locked="0" date_sent="0" sub_id="1" readable_date="Apr 15, 2369 09:00:00 AM" contact_name="Worf" />
+  <mms date="12600262920000" ct_t="application/vnd.wap.multipart.related" msg_box="1" address="+15550101" m_id="Tpicard001" tr_id="proto:vs001" read="1" locked="0" sub_id="1" date_sent="0" seen="1" text_only="0" readable_date="Apr 15, 2369 09:02:00 AM" contact_name="Jean-Luc Picard">
+    <parts>
+      <part seq="-1" ct="application/smil" name="null" chset="null" cd="null" fn="null" cid="&lt;smil&gt;" cl="smil.xml" ctt_s="null" ctt_t="null" text="&lt;smil&gt;&lt;body&gt;&lt;par&gt;&lt;img src=&quot;viewscreen.png&quot;/&gt;&lt;/par&gt;&lt;/body&gt;&lt;/smil&gt;" sef_type="0" />
+      <part seq="0" ct="image/png" name="null" chset="null" cd="null" fn="null" cid="&lt;viewscreen.png&gt;" cl="viewscreen.png" ctt_s="null" ctt_t="null" text="null" sef_type="0" data="iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAP0lEQVR4nO3OoRHAIAAAMbjDdxRGZPX6mpdUJBNkPvuMP1m3A19CRagIFaEiVISKUBEqQkWoCBWhIlSEilB5Aei1ATvbyiYqAAAAAElFTkSuQmCC" />
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text&gt;" cl="text.txt" ctt_s="null" ctt_t="null" text="The Enterprise approaches." sef_type="0" />
+    </parts>
+    <addrs>
+      <addr address="+15550101" type="137" charset="106" />
+      <addr address="insert-address-token" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="12600262980000" ct_t="application/vnd.wap.multipart.related" msg_box="2" address="+15550101" m_id="null" tr_id="proto:log001" read="1" locked="0" sub_id="1" date_sent="0" seen="1" text_only="0" readable_date="Apr 15, 2369 09:02:00 AM" contact_name="Jean-Luc Picard">
+    <parts>
+      <part seq="-1" ct="application/smil" name="null" chset="null" cd="null" fn="null" cid="&lt;smil&gt;" cl="smil.xml" ctt_s="null" ctt_t="null" text="&lt;smil&gt;&lt;body&gt;&lt;par&gt;&lt;audio src=&quot;captainslog.m4a&quot;/&gt;&lt;/par&gt;&lt;/body&gt;&lt;/smil&gt;" sef_type="0" />
+      <part seq="0" ct="audio/mp4" name="null" chset="null" cd="null" fn="null" cid="&lt;captainslog.m4a&gt;" cl="captainslog.m4a" ctt_s="null" ctt_t="null" text="null" sef_type="0" data="AAAAHGZ0eXBNNEEgAAACAE00QSBpc29taXNvMgAAAAhmcmVlAAAAPW1kYXTeAgBMYXZjNjIuMTEuMTAwAAIwQA4BGCAHARggBwEYIAcBGCAHARggBwEYIAcBGCAHARggBwAAAx5tb292AAAAbG12aGQAAAAAAAAAAAAAAAAAAAPoAAAD6AABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAACSXRyYWsAAABcdGtoZAAAAAMAAAAAAAAAAAAAAAEAAAAAAAAD6AAAAAAAAAAAAAAAAQEAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAA+gAAAQAAAEAAAAAAcFtZGlhAAAAIG1kaGQAAAAAAAAAAAAAAAAAAB9AAAAjQFXEAAAAAAAtaGRscgAAAAAAAAAAc291bgAAAAAAAAAAAAAAAFNvdW5kSGFuZGxlcgAAAAFsbWluZgAAABBzbWhkAAAAAAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAAEwc3RibAAAAGpzdHNkAAAAAAAAAAEAAABabXA0YQAAAAAAAAABAAAAAAAAAAAAAQAQAAAAAB9AAAAAAAA2ZXNkcwAAAAADgICAJQABAASAgIAXQBUAAAAAAD6AAAABdwWAgIAFFYhW5QAGgICAAQIAAAAgc3R0cwAAAAAAAAACAAAACAAABAAAAAABAAADQAAAABxzdHNjAAAAAAAAAAEAAAABAAAACQAAAAEAAAA4c3RzegAAAAAAAAAAAAAACQAAABUAAAAEAAAABAAAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAAABRzdGNvAAAAAAAAAAEAAAAsAAAAGnNncGQBAAAAcm9sbAAAAAIAAAAB//8AAAAcc2JncAAAAAByb2xsAAAAAQAAAAkAAAABAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAAAAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2Mi4zLjEwMA==" />
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text&gt;" cl="text.txt" ctt_s="null" ctt_t="null" text="Captain&#x27;s log, supplemental." sef_type="0" />
+    </parts>
+    <addrs>
+      <addr address="insert-address-token" type="137" charset="106" />
+      <addr address="+15550101" type="151" charset="106" />
+    </addrs>
+  </mms>
+  <mms date="12600266460000" ct_t="application/vnd.wap.multipart.related" msg_box="1" address="+15550102" m_id="Tworf001" tr_id="proto:bat001" read="1" locked="0" sub_id="1" date_sent="0" seen="1" text_only="0" readable_date="Apr 15, 2369 09:02:00 AM" contact_name="Worf">
+    <parts>
+      <part seq="-1" ct="application/smil" name="null" chset="null" cd="null" fn="null" cid="&lt;smil&gt;" cl="smil.xml" ctt_s="null" ctt_t="null" text="&lt;smil&gt;&lt;body&gt;&lt;par&gt;&lt;img src=&quot;batleth.gif&quot;/&gt;&lt;/par&gt;&lt;/body&gt;&lt;/smil&gt;" sef_type="0" />
+      <part seq="0" ct="image/gif" name="null" chset="null" cd="null" fn="null" cid="&lt;batleth.gif&gt;" cl="batleth.gif" ctt_s="null" ctt_t="null" text="null" sef_type="0" data="R0lGODlhMAAgAPcfMQAAACQAAEgAAGwAAJAAALQAANgAAPwAAAAkACQkAEgkAGwkAJAkALQkANgkAPwkAABIACRIAEhIAGxIAJBIALRIANhIAPxIAABsACRsAEhsAGxsAJBsALRsANhsAPxsAACQACSQAEiQAGyQAJCQALSQANiQAPyQAAC0ACS0AEi0AGy0AJC0ALS0ANi0APy0AADYACTYAEjYAGzYAJDYALTYANjYAPzYAAD8ACT8AEj8AGz8AJD8ALT8ANj8APz8AAAAVSQAVUgAVWwAVZAAVbQAVdgAVfwAVQAkVSQkVUgkVWwkVZAkVbQkVdgkVfwkVQBIVSRIVUhIVWxIVZBIVbRIVdhIVfxIVQBsVSRsVUhsVWxsVZBsVbRsVdhsVfxsVQCQVSSQVUiQVWyQVZCQVbSQVdiQVfyQVQC0VSS0VUi0VWy0VZC0VbS0Vdi0Vfy0VQDYVSTYVUjYVWzYVZDYVbTYVdjYVfzYVQD8VST8VUj8VWz8VZD8VbT8Vdj8Vfz8VQAAqiQAqkgAqmwAqpAAqrQAqtgAqvwAqgAkqiQkqkgkqmwkqpAkqrQkqtgkqvwkqgBIqiRIqkhIqmxIqpBIqrRIqthIqvxIqgBsqiRsqkhsqmxsqpBsqrRsqthsqvxsqgCQqiSQqkiQqmyQqpCQqrSQqtiQqvyQqgC0qiS0qki0qmy0qpC0qrS0qti0qvy0qgDYqiTYqkjYqmzYqpDYqrTYqtjYqvzYqgD8qiT8qkj8qmz8qpD8qrT8qtj8qvz8qgAA/yQA/0gA/2wA/5AA/7QA/9gA//wA/wAk/yQk/0gk/2wk/5Ak/7Qk/9gk//wk/wBI/yRI/0hI/2xI/5BI/7RI/9hI//xI/wBs/yRs/0hs/2xs/5Bs/7Rs/9hs//xs/wCQ/ySQ/0iQ/2yQ/5CQ/7SQ/9iQ//yQ/wC0/yS0/0i0/2y0/5C0/7S0/9i0//y0/wDY/yTY/0jY/2zY/5DY/7TY/9jY//zY/wD8/yT8/0j8/2z8/5D8/7T8/9j8//z8/yH/C05FVFNDQVBFMi4wAwEAAAAh+QQEBAAfACwAAAAAMAAgAAAI3wAZLBFIcKDBgggPKkzIUOECBkMYDIDI4GHEiREtSqSoEWNFih47UmxIcqHJkg0nanyokuPGlS9dtswYkybKkzhvpnR5kedGmj2B/vwYlCgDnTmTIhUKk6nPpkahPkRKValJkUJDgvSptSjWo1aril0y82NZllFrmk17FuzYtzi7Dv1Kd2tWn3DzmnTKN21fqS71CjZY16tdo3ITjwzLeGzbx2wjw2w7eLDiu5gRc8XbuPNSv6AB/33q1rPphoXnHk59uXRl05AnS5Y52+bp2wlbs96cWeNrvaODhyZNMyAAOw==" />
+      <part seq="0" ct="text/plain" name="null" chset="106" cd="null" fn="null" cid="&lt;text&gt;" cl="text.txt" ctt_s="null" ctt_t="null" text="Bat&#x27;leth practice at 0700." sef_type="0" />
+    </parts>
+    <addrs>
+      <addr address="+15550102" type="137" charset="106" />
+      <addr address="insert-address-token" type="151" charset="106" />
+    </addrs>
+  </mms>
+</smses>

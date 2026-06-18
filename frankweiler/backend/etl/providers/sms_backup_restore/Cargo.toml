@@ -1,0 +1,33 @@
+[package]
+name = "frankweiler-etl-sms-backup-restore"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "frankweiler_etl_sms_backup_restore"
+path = "src/lib.rs"
+
+[dependencies]
+frankweiler-etl = { path = "../.." }
+frankweiler-etl-chat-common = { path = "../../chat-common" }
+frankweiler-etl-macros = { path = "../../macros" }
+frankweiler-time = { path = "../../../time" }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sqlx = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
+# The "SMS Backup & Restore" Android app exports flat, attribute-heavy
+# XML (`<smses>` / `<calls>`); quick-xml pull-parses it. MMS part bytes
+# are inlined as base64 in the `data` attribute, decoded via `base64`.
+quick-xml = "0.36"
+base64 = "0.22"
+sha2 = "0.10"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -50,6 +50,10 @@ Args (positional):
                       metadata (display name, address, is_personal)
                       is supplied via the source's `mbox:` block in
                       the extract YAML below.
+    17: gtk_fx        Google Takeout root dir.
+    18: sms_fx        "SMS Backup & Restore" export dir (sms-*.xml /
+                      calls-*.xml with inline base64 attachments).
+                      File-backed; extract walks `input_path` directly.
 """
 
 from __future__ import annotations
@@ -93,7 +97,8 @@ def main() -> int:
         whatsapp_spec,
         email_mbox,
         gtk_fx,
-    ) = (Path(p).resolve() for p in sys.argv[6:18])
+        sms_fx,
+    ) = (Path(p).resolve() for p in sys.argv[6:19])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -185,6 +190,9 @@ def main() -> int:
                 # listed for symmetry. Extract walks `input_path` (the
                 # Takeout root) in the extract phase below.
                 "google-takeout": ("google_takeout", gtk_fx),
+                # SMS Backup & Restore: file-backed, no HTTP synthesizer.
+                # Extract walks `input_path` (the export dir) below.
+                "sms-backup-restore": ("sms_backup_restore", sms_fx),
             },
             signal_snapshot_root=signal_snapshot_root,
             whatsapp_dir=whatsapp_dir,
@@ -241,6 +249,9 @@ def main() -> int:
                 # Google Takeout: extract walks `input_path` (the Takeout
                 # root); the Google Chat feed renders.
                 "google-takeout": ("google_takeout", gtk_fx),
+                # SMS Backup & Restore: extract walks `input_path` (the
+                # export dir of sms-*.xml / calls-*.xml).
+                "sms-backup-restore": ("sms_backup_restore", sms_fx),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
@@ -391,6 +402,12 @@ def _yaml(
                 "    sync: {google_chat: true, google_voice: true, "
                 "google_voice_include_spam: true}"
             )
+        elif type_str == "sms_backup_restore":
+            # File-backed, no `sync:` block (the variant has no sync
+            # field — deny_unknown_fields would reject `sync: {}`). The
+            # extract phase walks `input_path` for `sms-*.xml` /
+            # `calls-*.xml`; translate renders one chat per number.
+            pass
         elif type_str != "claude_export":
             lines.append("    sync: {}")
     return "\n".join(lines) + "\n"

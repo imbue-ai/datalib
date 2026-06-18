@@ -1738,6 +1738,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-sms-backup-restore"
+version = "0.11.1"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "frankweiler-etl",
+ "frankweiler-etl-chat-common",
+ "frankweiler-etl-macros",
+ "frankweiler-time",
+ "quick-xml",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-whatsapp"
 version = "0.11.1"
 dependencies = [
@@ -1902,6 +1924,7 @@ dependencies = [
  "frankweiler-etl-perseus",
  "frankweiler-etl-signal",
  "frankweiler-etl-slack",
+ "frankweiler-etl-sms-backup-restore",
  "frankweiler-etl-whatsapp",
  "frankweiler-etl-yolink",
  "frankweiler-obs",

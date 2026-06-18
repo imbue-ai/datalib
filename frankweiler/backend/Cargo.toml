@@ -23,6 +23,7 @@ members = [
     "etl/providers/perseus",
     "etl/providers/signal",
     "etl/providers/slack",
+    "etl/providers/sms_backup_restore",
     "etl/providers/yolink",
     "qmd_indexer",
     "signal-backup",

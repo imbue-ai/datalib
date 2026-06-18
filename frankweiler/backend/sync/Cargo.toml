@@ -28,6 +28,7 @@ frankweiler-etl-notion = { path = "../etl/providers/notion" }
 frankweiler-etl-perseus = { path = "../etl/providers/perseus" }
 frankweiler-etl-signal = { path = "../etl/providers/signal" }
 frankweiler-etl-whatsapp = { path = "../etl/providers/whatsapp" }
+frankweiler-etl-sms-backup-restore = { path = "../etl/providers/sms_backup_restore" }
 frankweiler-etl-yolink = { path = "../etl/providers/yolink" }
 frankweiler-whatsapp-backup = { path = "../whatsapp-backup" }
 anyhow = { workspace = true }
