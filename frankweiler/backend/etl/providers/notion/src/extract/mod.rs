@@ -122,6 +122,25 @@ fn image_url_and_kind(block: &Value) -> Option<(String, &'static str)> {
     None
 }
 
+/// True when `url`'s host is a Notion-owned domain (and so its fetch should
+/// go through latchkey). Everything else — chiefly the pre-signed S3 links
+/// Notion hands out for uploaded files — is fetched with plain curl. Crude
+/// host extraction (no `url` crate dep): take the chars between `://` and the
+/// next `/`, `?`, or `#`, drop any `user@` and `:port`.
+fn host_is_notion(url: &str) -> bool {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+    host == "notion.so"
+        || host.ends_with(".notion.so")
+        || host == "notion.com"
+        || host.ends_with(".notion.com")
+}
+
 /// Fetch every image block's bytes that we don't already have on file.
 /// Errors are recorded against the blob row and don't fail the sync —
 /// the page mirror has already landed and a later `--retry-failed` can
@@ -148,7 +167,17 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
         // is dropped. If a future query wants it, the block's payload
         // still carries the `image.type` upstream.
         let _ = kind;
-        let req = HttpRequest::get("notion", &url);
+        // Notion's file URLs are pre-signed S3 links (e.g.
+        // `prod-files-secure.s3.<region>.amazonaws.com/…?X-Amz-Signature=…`)
+        // that carry their own auth in the query string — they need no
+        // latchkey credential. Routing them through the shim makes it try to
+        // resolve an `aws` credential it doesn't have and fail the fetch. Only
+        // URLs actually on a Notion host go through latchkey; send everything
+        // else via plain curl.
+        let mut req = HttpRequest::get("notion", &url);
+        if !host_is_notion(&url) {
+            req = req.plain();
+        }
         match latchkey_curl(&req).await {
             Ok(resp) if resp.status >= 200 && resp.status < 300 => {
                 let content_type = resp.header("content-type");

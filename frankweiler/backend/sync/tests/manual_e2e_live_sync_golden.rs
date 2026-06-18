@@ -39,7 +39,15 @@
 //!   * `_recorded_at`, `duration_ms`, `_item_hashes`, `request_id`,
 //!     `fetched_at`, `last_edited_time`, `created_time`, `cache_ts`,
 //!     `updated`, and `source_fingerprint` keys keep their position but
-//!     get their value replaced with `"[redacted]"`.
+//!     get their value replaced with `"[redacted]"`. Same for the
+//!     non-deterministic dolt `commit_hash`, the `load.write_lock` timings
+//!     (`avg/total_hold_ms`, `avg/total_wait_ms`), and the extract-metrics
+//!     per-db byte sizes (`bytes_before/after/delta`) — row counts carry the
+//!     real signal there.
+//!   * The tempdir `data_root` prefix is replaced with the stable token
+//!     `<data_root>` wherever it appears in a path string, so a path keeps its
+//!     meaningful suffix (`<data_root>/raw/tiny-slack.doltlite_db`) without
+//!     the per-run `/var/folders/…/.tmpXXXX` churn.
 //!   * `source_fingerprint:` lines in `.md` frontmatter get the same
 //!     treatment.
 //!   * `run-<timestamp>` filename segments collapse to `run-_`.
@@ -70,10 +78,26 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
+
+/// The run's tempdir `data_root`, captured once. Snapshots replace its
+/// volatile absolute prefix (`/var/folders/…/.tmpXXXX/data`) with a stable
+/// `<data_root>` token — preserving the meaningful suffix (which db / rendered
+/// file the path points at) while killing the per-run tempdir churn.
+static DATA_ROOT: OnceLock<String> = OnceLock::new();
+
+/// Replace the captured `data_root` prefix in `s` with `<data_root>`.
+/// A no-op until `DATA_ROOT` is set at the top of the test.
+fn norm_data_root(s: &str) -> String {
+    match DATA_ROOT.get() {
+        Some(dr) => s.replace(dr.as_str(), "<data_root>"),
+        None => s.to_string(),
+    }
+}
 
 /// Keys whose value is an array we want sorted before snapshotting.
 /// Use only for arrays known to be set-like (order is not meaningful).
@@ -121,6 +145,32 @@ const VOLATILE_KEYS: &[&str] = &[
     // when the upstream payload is byte-identical.
     "last_attempt_at",
     "captured_at",
+    // CAS blob "first stored" wall-clock stamp (the `blobs` table's
+    // `first_seen_at`). Identical bytes (content-addressed by blake3) land at
+    // the same PK, but the timestamp is whenever this run first wrote them.
+    "first_seen_at",
+    // Dolt commit hashes (`load.commit_hash`, per-source `commit`) fold in a
+    // wall-clock timestamp, so they differ on every run even for identical
+    // content. The actual content equality is covered by row counts + the
+    // per-file snapshots.
+    "commit_hash",
+    // `load.write_lock` timings are pure wall-clock jitter; the meaningful
+    // `acquisitions` count is preserved.
+    "avg_hold_ms",
+    "avg_wait_ms",
+    "total_hold_ms",
+    "total_wait_ms",
+    // The extract-metrics report's per-db byte sizes wobble run-to-run
+    // (sqlite page layout, ordering) even when row counts match — keep the
+    // `rows_*` signal, drop the bytes.
+    "bytes_before",
+    "bytes_after",
+    "bytes_delta",
+    // Per-source fetch wall-clock timing recorded in `sync_runs` (every
+    // provider's raw db carries it). Pure jitter; the `--now`-derived
+    // start/stop timestamps and content fields stay put.
+    "elapsed_ms",
+    "network_seconds",
 ];
 
 const REDACTED: &str = "[redacted]";
@@ -191,6 +241,9 @@ fn manual_e2e_live_sync_golden() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let data_root = tmp.path().join("data");
     std::fs::create_dir_all(&data_root).unwrap();
+    // Capture the tempdir data_root so snapshots can normalize its absolute
+    // prefix out of every embedded path (see `norm_data_root`).
+    DATA_ROOT.set(data_root.to_string_lossy().into_owned()).ok();
 
     let cfg_out = rewrite_config(&cfg_text, &data_root);
     let cfg_path = tmp.path().join("config.yaml");
@@ -463,15 +516,15 @@ fn summarize_file(path: &Path) -> SnapValue {
                 strip_volatile(&mut v);
                 SnapValue::Json(v)
             }
-            Err(_) => SnapValue::Text(text),
+            Err(_) => SnapValue::Text(norm_data_root(&text)),
         }
     } else if name.ends_with(".md") {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        SnapValue::Text(redact_markdown(&text))
+        SnapValue::Text(norm_data_root(&redact_markdown(&text)))
     } else {
         // Try text first, fall back to a size marker for binary.
         match std::fs::read_to_string(path) {
-            Ok(t) => SnapValue::Text(t),
+            Ok(t) => SnapValue::Text(norm_data_root(&t)),
             Err(_) => {
                 let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 SnapValue::Text(format!("<binary {size} bytes>"))
@@ -755,6 +808,8 @@ fn strip_volatile(v: &mut Value) {
                 strip_volatile(item);
             }
         }
+        // Normalize the tempdir data_root out of any embedded path string.
+        Value::String(s) => *s = norm_data_root(s),
         _ => {}
     }
 }
@@ -789,6 +844,7 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "source_fingerprint",
         "last_attempt_at",
         "captured_at",
+        "first_seen_at",
         // run-2-specific jitter inside the per-source `stats`:
         // wall-clock timings + the cursor `before`/`after` ISO
         // timestamps + network/elapsed jitter. The cursor `scope`
@@ -803,6 +859,15 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // wall-clock timestamps. The content-equality is already
         // covered by `deltas` showing few/no rows changed.
         "commit_hash",
+        // `load.write_lock` timings + the extract-metrics per-db byte sizes
+        // are wall-clock / layout jitter; row counts carry the real signal.
+        "avg_hold_ms",
+        "avg_wait_ms",
+        "total_hold_ms",
+        "total_wait_ms",
+        "bytes_before",
+        "bytes_after",
+        "bytes_delta",
     ];
     match v {
         Value::Object(map) => {
@@ -824,6 +889,8 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
                 strip_volatile_for_incrementality(item);
             }
         }
+        // Normalize the tempdir data_root out of any embedded path string.
+        Value::String(s) => *s = norm_data_root(s),
         _ => {}
     }
 }
