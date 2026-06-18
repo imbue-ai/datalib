@@ -1407,6 +1407,7 @@ enum DbHandle {
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
     Linkedin(frankweiler_etl_linkedin::extract::RawDb),
+    GoogleTakeout(frankweiler_etl_google_takeout::extract::RawDb),
     Jmap(frankweiler_etl_email::extract::RawDb),
     Yolink(frankweiler_etl_yolink::extract::RawDb),
     Signal(frankweiler_etl_signal::extract::RawDb),
@@ -1425,6 +1426,7 @@ impl DbHandle {
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
             DbHandle::Linkedin(d) => d.pool(),
+            DbHandle::GoogleTakeout(d) => d.pool(),
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
@@ -1483,6 +1485,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Linkedin { .. } => {
             DbHandle::Linkedin(frankweiler_etl_linkedin::extract::RawDb::open(path).await?)
         }
+        ExtractKind::GoogleTakeout { .. } => DbHandle::GoogleTakeout(
+            frankweiler_etl_google_takeout::extract::RawDb::open(path).await?,
+        ),
         ExtractKind::Jmap { .. } | ExtractKind::EmailMbox { .. } => {
             DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
         }
@@ -1540,6 +1545,12 @@ enum ExtractKind {
     /// `<data_root>/raw/<name>` like the other file-backed providers.
     Linkedin {
         input_path: PathBuf,
+    },
+    /// Google Takeout export directory walker. `input_path` is the
+    /// unzipped Takeout root; `sync` selects which feeds to ingest.
+    GoogleTakeout {
+        input_path: PathBuf,
+        sync: frankweiler_etl_google_takeout::extract::SyncFlags,
     },
     Perseus {
         sync: PerseusSync,
@@ -1638,6 +1649,26 @@ impl ExtractPlan {
                 let input_path = out_dir.clone();
                 out_dir = cfg.data_root.join("raw").join(&name);
                 ExtractKind::Linkedin { input_path }
+            }
+            SourceConfig::GoogleTakeout { sync, .. } => {
+                // File-backed (the unzipped Takeout root); raw doltlite
+                // store lands at `<data_root>/raw/<name>` like linkedin.
+                let s = sync.clone().unwrap_or_default();
+                let flags = frankweiler_etl_google_takeout::extract::SyncFlags {
+                    maps_reviews: s.maps_reviews,
+                    maps_saved_places: s.maps_saved_places,
+                    maps_photos: s.maps_photos,
+                    youtube_watch_history: s.youtube_watch_history,
+                    youtube_subscriptions: s.youtube_subscriptions,
+                    google_chat: s.google_chat,
+                    gemini_apps: s.gemini_apps,
+                };
+                let input_path = out_dir.clone();
+                out_dir = cfg.data_root.join("raw").join(&name);
+                ExtractKind::GoogleTakeout {
+                    input_path,
+                    sync: flags,
+                }
             }
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
@@ -2032,6 +2063,40 @@ impl ExtractPlan {
                     format!(
                         "files={} rows={} parse_errors={}",
                         s.files, s.rows, s.parse_errors,
+                    )
+                })
+            }
+            (
+                ExtractKind::GoogleTakeout { input_path, sync },
+                Some(DbHandle::GoogleTakeout(db)),
+            ) => {
+                frankweiler_etl_google_takeout::extract::fetch(
+                    frankweiler_etl_google_takeout::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        input_path,
+                        sync,
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
+                         chat(groups={} users={} messages={}) gemini(activity={}) \
+                         blobs={} parse_errors={}",
+                        s.maps_reviews,
+                        s.maps_saved_places,
+                        s.maps_photos,
+                        s.youtube_watch_history,
+                        s.youtube_subscriptions,
+                        s.chat_groups,
+                        s.chat_users,
+                        s.chat_messages,
+                        s.gemini_activity,
+                        s.blobs_stored,
+                        s.parse_errors,
                     )
                 })
             }
@@ -2560,6 +2625,21 @@ fn translate_source(
             )
             .context("linkedin render")
         }
+        SourceConfig::GoogleTakeout { .. } => {
+            // Only the Google Chat feed renders; the other feeds stay
+            // queryable in the raw store. The raw store is the canonical
+            // `<data_root>/raw/<name>` location.
+            let raw_dir = cfg.data_root.join("raw").join(name);
+            frankweiler_etl_google_takeout::translate::render(
+                &raw_dir,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("google_takeout render")
+        }
         SourceConfig::Email { sync, .. } => {
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
             use frankweiler_etl_email::translate::parse::parse;
@@ -2725,6 +2805,14 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (linkedin): skipped (file-backed, no extract HTTP)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::GoogleTakeout { .. } => {
+                // File-backed (no HTTP to play back); synth is a no-op.
+                status_line!(
+                    "[synth] {} (google_takeout): skipped (file-backed, no extract HTTP)",
                     src.name()
                 );
                 continue;

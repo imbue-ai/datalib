@@ -20,6 +20,7 @@ rust_library(
     ],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
         "//frankweiler/backend/obs:frankweiler_obs",
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/time:frankweiler_time",

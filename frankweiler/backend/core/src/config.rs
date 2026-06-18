@@ -578,6 +578,23 @@ pub struct NotionApiSync {
     pub subtrees: Option<NotionSubtrees>,
 }
 
+/// Per-feed opt-in switches for a Google Takeout export. Mirrors
+/// `frankweiler_etl_google_takeout::extract::SyncFlags` (the orchestrator
+/// maps one to the other); defaults are all `false` so a fresh user
+/// enables each feed consciously. Kept here — not imported from the
+/// provider crate — so `frankweiler-core` stays free of provider deps.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields, default)]
+pub struct GoogleTakeoutSync {
+    pub maps_reviews: bool,
+    pub maps_saved_places: bool,
+    pub maps_photos: bool,
+    pub youtube_watch_history: bool,
+    pub youtube_subscriptions: bool,
+    pub google_chat: bool,
+    pub gemini_apps: bool,
+}
+
 /// Discriminated union over the literal `type:` field. Variant payloads
 /// flatten the common (name/enabled/input_path) fields so the YAML shape
 /// matches the Python pydantic models byte-for-byte.
@@ -659,6 +676,16 @@ pub enum SourceConfig {
         #[serde(flatten)]
         common: SourceCommon,
     },
+    /// Google Takeout export. File-backed — `input_path:` points at the
+    /// unzipped Takeout root. The `sync:` block opts into individual
+    /// feeds (maps, youtube, google_chat, gemini, …). Translate renders
+    /// the Google Chat feed.
+    GoogleTakeout {
+        #[serde(flatten)]
+        common: SourceCommon,
+        #[serde(default)]
+        sync: Option<GoogleTakeoutSync>,
+    },
     /// Perseus Digital Library TEI editions. The `sync:` block names
     /// which TEI files to download from `PerseusDL/canonical-greekLit`
     /// (or, in translate-only mode with `sync:` omitted, expects the
@@ -718,6 +745,7 @@ impl SourceConfig {
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
             | SourceConfig::Linkedin { common, .. }
+            | SourceConfig::GoogleTakeout { common, .. }
             | SourceConfig::Perseus { common, .. }
             | SourceConfig::Yolink { common, .. }
             | SourceConfig::SignalBackup { common, .. }
@@ -748,6 +776,7 @@ impl SourceConfig {
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
             SourceConfig::Linkedin { .. } => "linkedin",
+            SourceConfig::GoogleTakeout { .. } => "google_takeout",
             SourceConfig::Perseus { .. } => "perseus",
             SourceConfig::Yolink { .. } => "yolink",
             SourceConfig::SignalBackup { .. } => "signal_backup",
@@ -785,6 +814,9 @@ impl SourceConfig {
             // LinkedIn is file-backed only: managed (we own the raw
             // doltlite store) iff an `input_path:` export dir is set.
             SourceConfig::Linkedin { common, .. } => common.input_path.is_some(),
+            // Google Takeout is file-backed: managed iff an `input_path:`
+            // (the unzipped Takeout root) is set.
+            SourceConfig::GoogleTakeout { common, .. } => common.input_path.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
             SourceConfig::SignalBackup { sync, .. } => sync.is_some(),

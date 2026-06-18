@@ -92,7 +92,8 @@ def main() -> int:
         signal_spec,
         whatsapp_spec,
         email_mbox,
-    ) = (Path(p).resolve() for p in sys.argv[6:17])
+        gtk_fx,
+    ) = (Path(p).resolve() for p in sys.argv[6:18])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -180,6 +181,10 @@ def main() -> int:
                 # raw doltlite store. Listed here for symmetry with
                 # the other no-synth providers.
                 "tng_email": ("email", email_mbox),
+                # Google Takeout: file-backed, no HTTP synthesizer;
+                # listed for symmetry. Extract walks `input_path` (the
+                # Takeout root) in the extract phase below.
+                "google-takeout": ("google_takeout", gtk_fx),
             },
             signal_snapshot_root=signal_snapshot_root,
             whatsapp_dir=whatsapp_dir,
@@ -233,6 +238,9 @@ def main() -> int:
                 # synthesized `accounts` row matches what JMAP
                 # would produce for the same user.
                 "tng_email": ("email", email_mbox),
+                # Google Takeout: extract walks `input_path` (the Takeout
+                # root); the Google Chat feed renders.
+                "google-takeout": ("google_takeout", gtk_fx),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
@@ -374,6 +382,11 @@ def _yaml(
                 lines.append(f"      backup_dir: {whatsapp_dir}")
             else:
                 lines.append("    sync: {}")
+        elif type_str == "google_takeout":
+            # Opt into the Google Chat feed (the one that renders); the
+            # other feeds stay off for the central pipeline (their extract
+            # is covered by the provider's own fixture_walk test).
+            lines.append("    sync: {google_chat: true}")
         elif type_str != "claude_export":
             lines.append("    sync: {}")
     return "\n".join(lines) + "\n"

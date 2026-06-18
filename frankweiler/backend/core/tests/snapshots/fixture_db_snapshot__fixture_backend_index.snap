@@ -145,6 +145,20 @@ expression: snapshot
       "updated_at": "2369-04-15T11:30:00Z"
     },
     {
+      "created_at": "2025-02-11T11:33:35+00:00",
+      "kind": "chat",
+      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "md_path": "rendered_md/google_takeout/google-takeout/chat-spaces/AAAAtng-bridge__jean-luc-picard-william-riker__84463d4a/all.md",
+      "provider": "google_takeout",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "147783317fbc76e7045fd30da2ca725c16de1d3ff2f3bbe708d13cced580e239",
+      "source_fingerprint": "da258604025e4df4facdf13e336d7395072b8cd03253143289e12332e246d6cd",
+      "source_name": "google-takeout",
+      "title": "Jean-Luc Picard, William Riker",
+      "updated_at": "2025-02-11T11:34:00+00:00"
+    },
+    {
       "created_at": "2369-05-28T15:08:20.000100+00:00",
       "kind": "thread",
       "markdown_uuid": "8074b3b0-3bd4-5232-843f-c8278649d1a2",
@@ -458,7 +472,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "frankweiler-sync: markdowns_loaded=32 markdowns_total=32 rows_inserted=115 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,tng_contacts,signal,whatsapp,tng_email]"
+      "message": "frankweiler-sync: markdowns_loaded=33 markdowns_total=33 rows_inserted=118 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,tng_contacts,signal,whatsapp,tng_email,google-takeout]"
     }
   ],
   "grid_rows": [
@@ -1036,6 +1050,31 @@ expression: snapshot
       "text_sha": "sha256:60b690e950ff8493a847727fcea9c9d870de9df8bcbb358964c72ae0533752c0",
       "uuid": "31dbdc1d-ddd3-5f51-bf9f-e7a7f3443e4f",
       "when_ts": "2024-04-02T23:20:00.000+00:00"
+    },
+    {
+      "account": null,
+      "author": "Jean-Luc Picard",
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
+      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "external_id": null,
+      "git_sha": null,
+      "kind": "Google Chat Message",
+      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "rendered_md/google_takeout/google-takeout/chat-spaces/AAAAtng-bridge__jean-luc-picard-william-riker__84463d4a/all.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 34,
+      "text_sha": "sha256:bf5b91d49c7f8f062f6b4a71eeadc3a6cbddf91ab8d8f5a2c7adf7fa507ee607",
+      "uuid": "32fdd05b-ea6e-5cab-94ed-3024393836c0",
+      "when_ts": "2025-02-11T11:33:35+00:00"
     },
     {
       "account": null,
@@ -1661,6 +1700,31 @@ expression: snapshot
       "text_sha": "sha256:f98dcef4bfe9aa683c5ecd712d7f4aba6f6b850a46ad123f1ae4f48157c33c5d",
       "uuid": "70c76bbb-e431-5ab9-9118-61407fbccf09",
       "when_ts": "2369-05-28T15:10:00.000200+00:00"
+    },
+    {
+      "account": null,
+      "author": null,
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
+      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "external_id": "spaces/AAAAtng-bridge",
+      "git_sha": null,
+      "kind": "Google Chat",
+      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "rendered_md/google_takeout/google-takeout/chat-spaces/AAAAtng-bridge__jean-luc-picard-william-riker__84463d4a/all.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 44,
+      "text_sha": "sha256:db43a35dc783e64c18709ad057e11e987fdf6ff30dde8a7ab7f455bf01dfe233",
+      "uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "when_ts": "2025-02-11T11:33:35+00:00"
     },
     {
       "account": "T_NCC1701D",
@@ -2889,6 +2953,31 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": "William Riker",
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
+      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "external_id": null,
+      "git_sha": null,
+      "kind": "Google Chat Message",
+      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
+      "message_index": 1,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "rendered_md/google_takeout/google-takeout/chat-spaces/AAAAtng-bridge__jean-luc-picard-william-riker__84463d4a/all.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 9,
+      "text_sha": "sha256:8beccd798ddb29ccf3e9616dc8ac5d2fcb9d80d0acebc0bf427ca4c1aea01a39",
+      "uuid": "f31f6f21-0dcf-5f64-859f-f359e1b8a623",
+      "when_ts": "2025-02-11T11:34:00+00:00"
+    },
+    {
+      "account": null,
       "author": "Will Riker",
       "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker (2364-04)",
@@ -3339,8 +3428,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 32,
+    "documents_count": 33,
     "dolt_log_count": 2,
-    "grid_rows_count": 115
+    "grid_rows_count": 118
   }
 }

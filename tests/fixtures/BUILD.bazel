@@ -46,6 +46,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/email:tng_fixture",
         "//frankweiler/backend/etl/providers/signal:tng_fixture",
         "//frankweiler/backend/etl/providers/whatsapp:tng_fixture",
+        "//frankweiler/backend/etl/providers/google_takeout:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -113,6 +114,9 @@ genrule(
             # Email: Google Takeout mbox file. Drives the email
             # extract path (mbox → raw doltlite → translate → render).
             "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
+            # Google Takeout root. Google Chat feed renders; the rest land
+            # in the raw store.
+            "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
         "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
@@ -161,6 +165,7 @@ py_test(
         "frankweiler/backend/etl/providers/signal/tests/fixtures/signal_tng/tng.json",
         "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
         "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
+        "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
     ],
     data = [
         "run_sync_pipeline.py",
