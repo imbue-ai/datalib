@@ -118,14 +118,16 @@ jobs:
           bazel version
           rustc --version || true
 
-      # Bridge: install the stock `sqlite3` CLI the beeper provider's
-      # extract shells out to (`//tests/fixtures:ingested_tng`). The
-      # devcontainer Dockerfile now lists `sqlite3` in its apt set, but
-      # `:latest` only moves on `v*` tag republishes — so until the next
-      # release image ships, install it at runtime here. Idempotent and
-      # a no-op (already-installed) once the baked image carries it, so
-      # this step can stay. apt lists are pruned in the image, hence the
-      # `update`. Running as root in the container; no sudo needed.
+      # FIXME(devcontainer-republish): TEMPORARY bridge — DELETE this whole
+      # step once a devcontainer image built after the `sqlite3` Dockerfile
+      # addition is published on a `v*` tag. It installs the stock
+      # `sqlite3` CLI the beeper provider's extract shells out to
+      # (`//tests/fixtures:ingested_tng`); the Dockerfile now lists
+      # `sqlite3` in its apt set, but `:latest` only moves on republish, so
+      # until then it's installed at runtime here. (Harmless if left in —
+      # the `command -v` guard makes it a no-op once the image carries it —
+      # but it's dead weight worth removing.) apt lists are pruned in the
+      # image, hence the `update`. Runs as root in the container; no sudo.
       - name: Install runtime test deps not yet baked into the image
         run: |
           set -euo pipefail
@@ -157,18 +159,24 @@ jobs:
       # so the suppression is removed and real failures gate merges
       # again.
       #
-      # `LIBCLANG_PATH` is passed on the command line for BOTH the
-      # target and exec configs. The devcontainer bakes `LIBCLANG_PATH`
-      # into `/root/.bazelrc`, but only `--host_action_env` makes it
-      # reach exec-config (`[for tool]`) bindgen actions — e.g.
-      # boring-sys2, pulled in when an exec-config tool needs the HTTP
-      # stack — and older images only baked the `--action_env` half.
+      # FIXME(devcontainer-republish): the `--host_action_env=LIBCLANG_PATH`
+      # half below is a TEMPORARY bridge — DROP both `LIBCLANG_PATH` flags
+      # (and the `libdir` resolution above) once a devcontainer image built
+      # after the `.bazelrc`/Dockerfile `--host_action_env` additions is
+      # published on a `v*` tag.
+      #
+      # `LIBCLANG_PATH` is passed on the command line for BOTH the target
+      # and exec configs. The devcontainer bakes `LIBCLANG_PATH` into
+      # `/root/.bazelrc`, but only `--host_action_env` makes it reach
+      # exec-config (`[for tool]`) bindgen actions — e.g. boring-sys2,
+      # pulled in when an exec-config tool needs the HTTP stack — and the
+      # current `:latest` image only baked the `--action_env` half.
       # Computing it here from `llvm-config` (the same source the image
       # uses) means CI is correct regardless of which devcontainer image
-      # `:latest` currently points at, instead of waiting for an image
-      # republish. Mirrors `release.yml`'s `bazelargs` step. Once every
-      # in-flight image carries the `--host_action_env` line these flags
-      # are a redundant no-op (identical value), so they can stay.
+      # `:latest` currently points at, instead of waiting for the
+      # republish. Mirrors `release.yml`'s `bazelargs` step. Once the
+      # republished image carries the baked `--host_action_env` line these
+      # flags are a redundant no-op (identical value).
       - name: bazel test //...
         run: |
           libdir="$(llvm-config --libdir)"
