@@ -177,6 +177,15 @@ jobs:
               exit 1
           fi
           echo "Resolved LIBCLANG_PATH=${libdir}"
-          bazel test //... -c opt --config=release --build_metadata=ROLE=CI \
+          # FIXME(e2e): `-//frankweiler/ui:e2e_test` excludes the Playwright
+          # e2e suite from the CI gate. It needs `rsync` + a Chromium
+          # browser cache the *current* `:latest` devcontainer image does
+          # not carry; both are now added to `.devcontainer/Dockerfile`, so
+          # once a new image is published on the next `v*` tag, DROP this
+          # negative pattern to re-enable the suite as a merge gate. (Local
+          # `bazel test //...` is unaffected and still runs it.) The `--`
+          # keeps the leading `-` from being read as a flag.
+          bazel test -c opt --config=release --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
-            --host_action_env=LIBCLANG_PATH="${libdir}"
+            --host_action_env=LIBCLANG_PATH="${libdir}" \
+            -- //... -//frankweiler/ui:e2e_test

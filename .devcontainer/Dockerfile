@@ -45,6 +45,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # git               needed by some build scripts (workspace_status.sh,
 #                   rules_rust crate fetches that vendor from git).
 # python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
+# rsync             `//frankweiler/ui:e2e_test`'s wrapper (run_e2e.sh)
+#                   stages the Playwright spec tree via `rsync -aL`.
+#                   macOS ships rsync; Ubuntu's base image here does not.
 # sqlite3           the beeper provider's extract shells out to the
 #                   *stock* `sqlite3` CLI (it can't link rusqlite — see
 #                   beeper/src/extract/index_db.rs — and doltlite
@@ -68,6 +71,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         perl \
         pkg-config \
         python3-pip \
+        rsync \
         sqlite3 \
         unzip \
         zip \
@@ -94,6 +98,27 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
     && rm -rf /root/.bun \
     && bun --version
+
+# Playwright Chromium + its OS libraries, for `//frankweiler/ui:e2e_test`.
+# The test resolves the browser from `~/.cache/ms-playwright` via
+# `env_inherit = ["HOME"]` (HOME=/root here) but never runs
+# `playwright install` itself, so the browser must be baked in. `npx
+# playwright@<ver> install --with-deps chromium` both apt-installs the
+# shared libs Chromium needs and downloads the browser build that this
+# exact Playwright version expects.
+#
+# PLAYWRIGHT_VERSION MUST match the resolved `playwright` /
+# `@playwright/test` version in `frankweiler/ui/pnpm-lock.yaml` — a
+# mismatch means the bazel-linked Playwright looks for a browser
+# revision that isn't on disk. Bump both together.
+#
+# NOTE: until a new image is published (on the next `v*` tag), CI still
+# excludes e2e_test from the gate — see the FIXME in
+# `.github/workflows/test.yml`. This bake is what lets that exclusion be
+# lifted.
+ARG PLAYWRIGHT_VERSION=1.59.1
+RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # uv — `precommit_test` drives ruff / pyright through `uv run`, so the
 # image needs `uv` on PATH for the in-bazel pre-commit check to work

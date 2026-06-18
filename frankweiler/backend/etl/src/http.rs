@@ -601,6 +601,31 @@ fn canonical_url(url: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Serializes the tests that point `PLAYBACK_ENV` at a fixture dir.
+    /// Rust runs unit tests on parallel threads within one process and
+    /// `PLAYBACK_ENV` is process-global, so without this one test's
+    /// `remove_var` can clear the playback root mid-request in another and
+    /// flip it into live mode — the cause of the intermittent
+    /// `retries_429_then_gives_up_per_guard` failures in CI.
+    ///
+    /// The guard intentionally spans `body.await`: each `#[tokio::test]`
+    /// owns its own thread and current-thread runtime, so the lock is
+    /// never re-entered on the holding thread and peers just wait their
+    /// turn. Poison is recovered (a panicking test shouldn't cascade into
+    /// spurious failures that hide the real one).
+    #[allow(clippy::await_holding_lock)]
+    async fn with_playback<T>(
+        root: &std::path::Path,
+        body: impl std::future::Future<Output = T>,
+    ) -> T {
+        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
+        std::env::set_var(PLAYBACK_ENV, root);
+        let out = body.await;
+        std::env::remove_var(PLAYBACK_ENV);
+        out
+    }
+
     #[test]
     fn fixture_key_is_stable_under_query_param_order() {
         let a = HttpRequest::get(
@@ -640,10 +665,10 @@ mod tests {
     #[tokio::test]
     async fn playback_miss_returns_named_error() {
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var(PLAYBACK_ENV, dir.path());
         let req = HttpRequest::get("slack", "https://slack.com/api/auth.test");
-        let err = latchkey_curl(&req).await.unwrap_err();
-        std::env::remove_var(PLAYBACK_ENV);
+        let err = with_playback(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap_err();
         match err {
             HttpError::PlaybackMiss(msg) => assert!(msg.contains("auth.test"), "{msg}"),
             other => panic!("expected PlaybackMiss, got {other:?}"),
@@ -672,9 +697,9 @@ mod tests {
             serde_json::to_vec(&response).unwrap(),
         )
         .unwrap();
-        std::env::set_var(PLAYBACK_ENV, dir.path());
-        let got = latchkey_curl(&req).await.unwrap();
-        std::env::remove_var(PLAYBACK_ENV);
+        let got = with_playback(dir.path(), latchkey_curl(&req))
+            .await
+            .unwrap();
         assert_eq!(got.status, 200);
         assert_eq!(got.header("content-type"), Some("application/json"));
         assert_eq!(got.body_str(), r#"{"ok":true,"team":"Test"}"#);
@@ -743,13 +768,14 @@ mod tests {
         )
         .unwrap();
 
-        std::env::set_var(PLAYBACK_ENV, dir.path());
         let fast = Duration::from_millis(1);
         let guard = crate::retry::RetryGuard::new(Duration::from_secs(3600), 3, fast, fast);
-        let err = crate::retry::scope(guard, async { latchkey_curl(&req).await })
-            .await
-            .unwrap_err();
-        std::env::remove_var(PLAYBACK_ENV);
+        let err = with_playback(
+            dir.path(),
+            crate::retry::scope(guard, async { latchkey_curl(&req).await }),
+        )
+        .await
+        .unwrap_err();
         match err {
             HttpError::GaveUp { reason, .. } => {
                 assert!(reason.contains("sequential failed requests"), "{reason}");
