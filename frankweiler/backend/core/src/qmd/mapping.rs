@@ -496,71 +496,71 @@ mod tests {
         }
     }
 
-    /// Regression: a poorly-matched result (a Slack post that merely mentions
-    /// "rust") outranks the genuinely-relevant Claude chat in the grid, even
-    /// though qmd ranked the chat #1 (score 1.0) and the Slack post #2 (0.5).
+    /// Regression: the genuinely-relevant Claude chat — qmd's #1 hit (score
+    /// 1.0) — must outrank a poorly-matched Slack post that merely mentions
+    /// "rust" (qmd's #2 hit, score 0.5) in the grid.
     ///
-    /// Reproduces the live failure for `q="claude chat about rust dag runner"`
-    /// (msg 6d10c99d shown above msg 019e2d00…). Two compounding bugs:
+    /// Live failure for `q="claude chat about rust dag runner"` (msg 6d10c99d
+    /// shown above msg 019e2d00…), from two compounding bugs, both now fixed:
     ///
-    ///   1. Title-chunk snippets carry NO `m-{uuid}` anchor, so EVERY hit
-    ///      falls through to the path-fallback branch and fans out to the
-    ///      whole file with one shared score — per-message ranking is lost.
-    ///   2. The same conversation is indexed under two qmd paths (the chat
-    ///      renders both at `…/llm_chats/<id>` and nested under another
-    ///      conversation at `…/<other>/llm_chats/<id>`). grid_rows.qmd_path
-    ///      only matches the nested variant, so qmd's #1 hit (the canonical
-    ///      path, score 1.0) resolves to ZERO rows and its score is dropped.
-    ///      The chat re-enters only via the duplicate hit at 0.33 — below the
-    ///      Slack post's 0.5 — so a score-desc sort floats the spam to the top.
+    ///   1. Title-chunk snippets carry NO `m-{uuid}` anchor, so EVERY hit fell
+    ///      through to the path-fallback branch and fanned out to the whole
+    ///      file with one shared score — per-message ranking was lost. Fixed
+    ///      by the line-based resolver (a title-region hit now pins the first
+    ///      message instead of fanning out).
+    ///   2. The same conversation was indexed under two qmd paths: a stale
+    ///      nested render (`…/<other>/llm_chats/<id>`) left over from a layout
+    ///      change, alongside the canonical `…/llm_chats/<id>`. grid_rows
+    ///      stored only the nested variant, so qmd's #1 hit (canonical path,
+    ///      score 1.0) resolved to ZERO rows and its score was dropped; the
+    ///      chat re-entered only via the duplicate hit at 0.33 — below the
+    ///      Slack post's 0.5 — so a score-desc sort floated the spam to the
+    ///      top. Fixed by deleting the stale render: the grid now stores the
+    ///      canonical path, so qmd's #1 hit resolves straight to the chat.
     ///
-    /// This test encodes the CURRENT (buggy) behavior so it runs green and
-    /// pins the defect; the `WANT` comments mark the intended outcome. When
-    /// either bug is fixed, flip the assertions to the `WANT` values.
+    /// With both fixed, the canonical #1 hit lands on the chat, that message
+    /// carries 1.0, and it sorts above the spam.
     #[test]
-    fn title_match_dup_path_floats_spam_above_relevant_chat() {
-        // qmd_path the grid stored points at the NESTED (duplicate) render.
-        let chat_dup_path = "anthropic/acct/ef7dacc5/llm_chats/b0c2f022/index.md";
+    fn relevant_chat_outranks_spam_with_canonical_path() {
+        // The stale nested render is gone, so the grid stores the CANONICAL
+        // path — the same one qmd's #1 hit reports.
+        let chat_path = "anthropic/acct/llm_chats/b0c2f022/index.md";
         let chat_user = "019e2d00-aad9-7ecd-9cfd-b1cd1648b98f"; // the great result
         let chat_llm = "019e2d00-aad9-7933-8639-51c8474c1b11";
         let spam_path = "slack/team/chan/threads/dba0820c/index.md";
         let spam_msg = "6d10c99d-1219-50e0-9d00-84979fd99d1d"; // the terrible result
 
         // No real files on disk, so every hit resolves via the whole-doc
-        // fallback — which is enough to reproduce the dup-path defect (the
-        // line-based resolver doesn't change which *document* a hit maps to).
+        // fallback — enough to exercise the path→score mapping (the line-based
+        // resolver doesn't change which *document* a hit maps to).
         let idx = GridIndex::new(
             "/nonexistent-root",
             vec![
                 row(spam_msg, "Slack Message", spam_path, "slack"),
-                row(chat_user, "User Input", chat_dup_path, "anthropic"),
-                row(chat_llm, "LLM Response", chat_dup_path, "anthropic"),
+                row(chat_user, "User Input", chat_path, "anthropic"),
+                row(chat_llm, "LLM Response", chat_path, "anthropic"),
             ],
         );
 
-        // qmd's ranking, in order. None of the snippets contain an m-uuid
-        // (they're the page-title chunk), so all resolve via path fallback.
+        // qmd's ranking, in order. The snippets are the page-title chunk (no
+        // m-uuid), so they resolve via the whole-doc fallback.
         let no_anchor = "@@ -10,4 @@\n<h1 data-page-title-uuid=\"b0c2f022\">Reactive data pipeline composition in Rust</h1>";
         let hits = vec![
-            // #1: qmd's best hit — canonical path, NOT the path the grid stored.
-            scored_hit("anthropic/acct/llm_chats/b0c2f022/index.md", 1.0, no_anchor),
+            // #1: qmd's best hit — the canonical path the grid now stores.
+            scored_hit(chat_path, 1.0, no_anchor),
             // #2: the spam, matched only on a stray "rust cli" vector hit.
             scored_hit(
                 spam_path,
                 0.5,
                 "@@ -23,4 @@\nthe rust cli that sped up your build",
             ),
-            // #3: the duplicate render of the same chat — this is the one the
-            //     grid path matches.
-            scored_hit(chat_dup_path, 0.33, no_anchor),
         ];
 
         let ranked = fanout(&idx, &hits);
 
-        // qmd's #1 hit (score 1.0) resolved to nothing: its path has no grid
-        // rows. WANT: the chat's User Input row should carry 1.0.
+        // qmd's #1 hit (score 1.0) resolves to the chat's rows.
         let user_score = ranked.iter().find(|(u, _)| u == chat_user).map(|(_, s)| *s);
-        assert_eq!(user_score, Some(0.33)); // WANT: Some(1.0)
+        assert_eq!(user_score, Some(1.0));
 
         // The frontend sorts by score desc (stable). Emulate it.
         let mut shown = ranked.clone();
@@ -570,11 +570,10 @@ mod tests {
         let spam_pos = order.iter().position(|u| *u == spam_msg).unwrap();
         let chat_pos = order.iter().position(|u| *u == chat_user).unwrap();
 
-        // BUG: the spam (0.5) sits above the relevant chat message (0.33).
+        // The relevant chat (1.0) now sits above the spam (0.5).
         assert!(
-            spam_pos < chat_pos,
-            "spam at {spam_pos}, chat at {chat_pos}: {order:?}"
+            chat_pos < spam_pos,
+            "chat at {chat_pos}, spam at {spam_pos}: {order:?}"
         );
-        // WANT (currently fails): assert!(chat_pos < spam_pos);
     }
 }
