@@ -139,5 +139,27 @@ jobs:
       # `--host_action_env=LIBCLANG_PATH`) are now fixed at the source,
       # so the suppression is removed and real failures gate merges
       # again.
+      #
+      # `LIBCLANG_PATH` is passed on the command line for BOTH the
+      # target and exec configs. The devcontainer bakes `LIBCLANG_PATH`
+      # into `/root/.bazelrc`, but only `--host_action_env` makes it
+      # reach exec-config (`[for tool]`) bindgen actions — e.g.
+      # boring-sys2, pulled in when an exec-config tool needs the HTTP
+      # stack — and older images only baked the `--action_env` half.
+      # Computing it here from `llvm-config` (the same source the image
+      # uses) means CI is correct regardless of which devcontainer image
+      # `:latest` currently points at, instead of waiting for an image
+      # republish. Mirrors `release.yml`'s `bazelargs` step. Once every
+      # in-flight image carries the `--host_action_env` line these flags
+      # are a redundant no-op (identical value), so they can stay.
       - name: bazel test //...
-        run: bazel test //... -c opt --config=release --build_metadata=ROLE=CI
+        run: |
+          libdir="$(llvm-config --libdir)"
+          if [[ -z "${libdir}" || ! -d "${libdir}" ]]; then
+              echo "ERROR: llvm-config --libdir returned '${libdir}' (not a dir)." >&2
+              exit 1
+          fi
+          echo "Resolved LIBCLANG_PATH=${libdir}"
+          bazel test //... -c opt --config=release --build_metadata=ROLE=CI \
+            --action_env=LIBCLANG_PATH="${libdir}" \
+            --host_action_env=LIBCLANG_PATH="${libdir}"
