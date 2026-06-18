@@ -229,6 +229,41 @@ impl GridIndex {
         out
     }
 
+    /// Map ranked hits to grid rows for display, **one row per markdown
+    /// document**: the highest-ranked hit that lands in a document wins, and
+    /// lower-ranked hits from the same document are dropped to keep the result
+    /// list concise. Returns `(row, score)` in rank order, each row carrying
+    /// the score of the hit that produced it.
+    ///
+    /// `on_orphan` is invoked for any hit that resolves to no rows (a path the
+    /// grid doesn't know about) so the caller can log it; such hits contribute
+    /// nothing to the output.
+    pub fn ranked_rows_one_per_doc(
+        &self,
+        hits: &[QmdHit],
+        mut on_orphan: impl FnMut(&QmdHit),
+    ) -> Vec<(GridRowRef, f64)> {
+        let mut seen_docs: HashSet<String> = HashSet::new();
+        let mut out: Vec<(GridRowRef, f64)> = Vec::new();
+        for h in hits {
+            let rows = self.rows_for_hit(h);
+            if rows.is_empty() {
+                on_orphan(h);
+                continue;
+            }
+            // All rows from a single hit share one `qmd_path` (a hit resolves
+            // within one document), so this keeps the first — and, because we
+            // also skip documents seen via earlier (higher-ranked) hits, the
+            // output holds at most one row per document.
+            for row in rows {
+                if seen_docs.insert(row.qmd_path.clone()) {
+                    out.push((row, h.score));
+                }
+            }
+        }
+        out
+    }
+
     /// Reverse: which of `hits` resolve to `row`? Defined in terms of
     /// `rows_for_hit` so it always tracks the forward mapping.
     pub fn hits_for_row<'a>(&self, row: &GridRowRef, hits: &'a [QmdHit]) -> Vec<&'a QmdHit> {
@@ -574,6 +609,67 @@ mod tests {
         assert!(
             chat_pos < spam_pos,
             "chat at {chat_pos}, spam at {spam_pos}: {order:?}"
+        );
+    }
+
+    /// A single document that matches in several places collapses to one row —
+    /// its top-ranked hit — so the result list stays concise. Lower-ranked
+    /// hits into the same document are dropped; orphan hits fire the callback
+    /// and contribute nothing.
+    #[test]
+    fn ranked_rows_one_per_doc_keeps_top_hit_per_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A two-message chat (anchors at lines 7 and 13) ...
+        let chat = "rendered_md/anthropic/acct/llm_chats/conv/index.md";
+        let mut rows = write_two_message_doc(tmp.path(), chat);
+        // ... plus a second, single-message document (anchor at line 5).
+        let other = "rendered_md/slack/team/chan/index.md";
+        let other_path = tmp.path().join(other);
+        std::fs::create_dir_all(other_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &other_path,
+            "---\nprovider: slack\n---\n\n<div id=\"m-cccccccc-0000-0000-0000-000000000003\" \
+             data-section-uuid=\"cccccccc-0000-0000-0000-000000000003\" class=\"msg\">\n\n\
+             slack body\n</div>\n",
+        )
+        .unwrap();
+        rows.push(row(
+            "cccccccc-0000-0000-0000-000000000003",
+            "Slack Message",
+            other,
+            "slack",
+        ));
+        let idx = GridIndex::new(tmp.path(), rows);
+
+        // Hits in rank order:
+        //   #1 (1.0)  pins the chat's 2nd message (matched line 15).
+        //   #2 (0.5)  lands in the other document.
+        //   #3 (0.25) pins the chat's 1st message — same doc as #1, dropped.
+        //   #4 (0.1)  a path the grid doesn't know — orphan.
+        let hits = vec![
+            scored_hit(chat, 1.0, "@@ -13,4 @@ (2 before, 3 after)\n## Assistant"),
+            scored_hit(other, 0.5, "@@ -7,4 @@ (0 before, 1 after)\nslack body"),
+            scored_hit(chat, 0.25, "@@ -7,4 @@ (0 before, 1 after)\n## Human"),
+            scored_hit(
+                "unknown/doc/index.md",
+                0.1,
+                "@@ -1,4 @@ (0 before, 1 after)\nx",
+            ),
+        ];
+
+        let mut orphans = 0;
+        let ranked = idx.ranked_rows_one_per_doc(&hits, |_| orphans += 1);
+
+        assert_eq!(orphans, 1, "the unknown-path hit is an orphan");
+        let got: Vec<(&str, f64)> = ranked.iter().map(|(r, s)| (r.uuid.as_str(), *s)).collect();
+        assert_eq!(
+            got,
+            vec![
+                // The chat once, at its best rank (1.0), pinned to the 2nd msg.
+                ("bbbbbbbb-0000-0000-0000-000000000002", 1.0),
+                // The other doc once. The lower-ranked #3 hit is absent.
+                ("cccccccc-0000-0000-0000-000000000003", 0.5),
+            ]
         );
     }
 }

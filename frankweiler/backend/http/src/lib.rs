@@ -331,32 +331,23 @@ async fn run_qmd_search(
         .await
         .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
     let idx = GridIndex::new((**root).clone(), refs);
-    // Walk hits in rank order, mapping each to its grid row(s) and stamping
-    // the hit's score onto every row it produces. A hit normally resolves to
-    // the single message it matched; if a row is produced by more than one hit
-    // we keep the first (highest-ranked) score we saw for it.
-    let mut uuids: Vec<String> = Vec::new();
-    let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
-    for h in &hits {
-        let rows = idx.rows_for_hit(h);
-        if rows.is_empty() {
-            // Every indexed document should map to grid rows. A hit that maps
-            // to none means qmd indexed a path the grid doesn't know about
-            // (e.g. a stale render under an old layout) — the hit's score is
-            // silently lost, so flag it loudly. (ERROR level; this file logs
-            // via eprintln!.)
-            eprintln!(
-                "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
-                h.path, h.score
-            );
-        }
-        for row in rows {
-            if !scores.contains_key(&row.uuid) {
-                scores.insert(row.uuid.clone(), h.score);
-                uuids.push(row.uuid);
-            }
-        }
-    }
+    // Map hits to grid rows in rank order, keeping only the top hit per
+    // markdown document so the result list stays concise — a single chat that
+    // matches in several places shows up once, at its best rank. Orphan hits
+    // (a path the grid doesn't know about, e.g. a stale render under an old
+    // layout) resolve to no rows; flag them loudly so their dropped score is
+    // visible. (ERROR level; this file logs via eprintln!.)
+    let ranked = idx.ranked_rows_one_per_doc(&hits, |h| {
+        eprintln!(
+            "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
+            h.path, h.score
+        );
+    });
+    let uuids: Vec<String> = ranked.iter().map(|(row, _)| row.uuid.clone()).collect();
+    let scores: std::collections::HashMap<String, f64> = ranked
+        .iter()
+        .map(|(row, score)| (row.uuid.clone(), *score))
+        .collect();
     drop(idx);
     let mut rows = repo
         .search_by_uuids(parsed, &uuids, limit)
