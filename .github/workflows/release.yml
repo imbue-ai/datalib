@@ -220,7 +220,10 @@ jobs:
                   echo "ERROR: LIBCLANG_PATH unset/empty on Linux — install step regressed." >&2
                   exit 1
               fi
-              echo "extra=--action_env=LIBCLANG_PATH=${LIBCLANG_PATH}" >> "$GITHUB_OUTPUT"
+              # Both target- and exec-config bindgen build scripts need
+              # libclang; `--host_action_env` covers the `[for tool]`
+              # copies. See the workspace .bazelrc LIBCLANG_PATH note.
+              echo "extra=--action_env=LIBCLANG_PATH=${LIBCLANG_PATH} --host_action_env=LIBCLANG_PATH=${LIBCLANG_PATH}" >> "$GITHUB_OUTPUT"
           else
               echo "extra=" >> "$GITHUB_OUTPUT"
           fi

@@ -132,8 +132,16 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 #
 # `llvm-config --libdir` is run at image-build time and baked in;
 # rebuild the image after a major LLVM bump (e.g. 18 → 19).
+#
+# Both `--action_env` and `--host_action_env` are written so exec-config
+# ("[for tool]") bindgen build scripts — e.g. boring-sys2 when an
+# exec-config tool in `//...` pulls in the HTTP stack — find libclang
+# too. `--action_env` alone only covers target-config actions; the
+# missing host variant panicked bindgen with "Unable to find libclang"
+# on a cold BuildBuddy cache. See the matching note in the workspace
+# .bazelrc.
 RUN ldir="$(llvm-config --libdir)" \
-    && printf 'build --action_env=LIBCLANG_PATH=%s\n' "$ldir" > /root/.bazelrc
+    && printf 'build --action_env=LIBCLANG_PATH=%s\nbuild --host_action_env=LIBCLANG_PATH=%s\n' "$ldir" "$ldir" > /root/.bazelrc
 
 WORKDIR /workspaces/mixed_up_files
 

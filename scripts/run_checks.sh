@@ -75,8 +75,17 @@ fi
 
 # --- Rust (frankweiler/backend) ---
 #
-# `cargo fmt --check` is plain cargo (formatter only, no compilation,
-# so the doltlite vs system-libsqlite3 link problem doesn't apply).
+# Formatting is NOT checked here with `cargo fmt`. The `rustfmt_aspect`
+# is always-on for every bazel build/test (see .bazelrc's
+# `--aspects=...%rustfmt_aspect` + `--output_groups=+rustfmt_checks`),
+# so the enclosing `bazel test //...` already fails fast on any
+# misformatted crate — a redundant `cargo fmt --check` here would add
+# nothing. It would also break CI outright: the devcontainer image
+# `bazel test //:precommit_test` runs in deliberately ships no host
+# `cargo`/`rustc` (Rust is built entirely through rules_rust), so
+# shelling out to `cargo fmt` exited 127 ("cargo: command not found")
+# and reddened every run. Same reasoning that moved clippy off host
+# `cargo` and onto the bazel aspect, below.
 #
 # Clippy used to be skipped here entirely because `cargo clippy`
 # couldn't link against our bazel-built doltlite amalgamation. We now
@@ -85,9 +94,6 @@ fi
 # no cargo-side workaround needed. See .bazelrc's `--config=clippy`
 # block for flag wiring.
 if [ -d frankweiler/backend ]; then
-    echo "[rust] cargo fmt --check"
-    (cd frankweiler/backend && cargo fmt --all -- --check)
-
     # Clippy is run via bazel's `rust_clippy_aspect`. We only invoke
     # it when this script is run interactively
     # (`bazel run :precommit`), not as a `bazel test` fixture.
