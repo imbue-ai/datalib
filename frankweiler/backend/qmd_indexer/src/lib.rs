@@ -72,6 +72,36 @@ pub fn default_models_dir() -> PathBuf {
     home.join(".cache").join("qmd").join("models")
 }
 
+/// The GGUF model files `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION> pull`
+/// lands in the cache dir, by their on-disk filenames (qmd derives these
+/// from the HF URIs). Used by [`models_present`] to decide whether the
+/// boot-time pull can be skipped.
+///
+/// These mirror `tests/fixtures/materialize_tng_root.sh`'s
+/// `REQUIRED_MODELS` — keep the two lists in sync when bumping
+/// `DEFAULT_QMD_VERSION`. We intentionally list only the embedding +
+/// query-expansion models (not the reranker): they're the gate the
+/// fixture + README guarantee, and qmd lazily fetches any other model
+/// (e.g. the reranker) on first use, so a missing one degrades to a
+/// one-time on-demand download rather than a hard failure.
+pub const REQUIRED_MODELS: &[&str] = &[
+    "hf_ggml-org_embeddinggemma-300M-Q8_0.gguf",
+    "hf_tobil_qmd-query-expansion-1.7B-q4_k_m.gguf",
+];
+
+/// True when every [`REQUIRED_MODELS`] file exists and is non-empty
+/// under `models_dir` (symlinks are followed, so passing the per-root
+/// `<root>/qmd/models` link resolves out to the shared cache). Lets a
+/// caller skip the network round-trip of `qmd pull` when the cache is
+/// already warm.
+pub fn models_present(models_dir: &Path) -> bool {
+    REQUIRED_MODELS.iter().all(|name| {
+        std::fs::metadata(models_dir.join(name))
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+    })
+}
+
 /// Result of a `run_index` pass. `status_output` is the raw stdout of
 /// `qmd status` (qmd has no `--json` flag, so this is the human-readable
 /// text) and is `None` if the status capture failed for any reason —
@@ -177,7 +207,13 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     })
 }
 
-fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
+/// Ensure `<qmd_dir>/models` is a symlink to `models_dir` (the shared
+/// cache), so qmd — run with `XDG_CACHE_HOME=<root>` — resolves model
+/// lookups out to one shared copy instead of downloading into the data
+/// root. Idempotent: a no-op when the link already exists; errors if the
+/// path exists as a real (non-symlink) entry so the caller can decide
+/// whether to surface or tolerate that.
+pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
     let models_link = qmd_dir.join("models");
     match std::fs::symlink_metadata(&models_link) {
         Ok(meta) if meta.file_type().is_symlink() => return Ok(()),
@@ -319,5 +355,27 @@ mod tests {
         unsafe { std::env::set_var("HOME", "/tmp/qmd-test-home") };
         let dir = default_models_dir();
         assert_eq!(dir, PathBuf::from("/tmp/qmd-test-home/.cache/qmd/models"));
+    }
+
+    #[test]
+    fn models_present_requires_every_required_model_nonempty() {
+        let base = std::env::temp_dir().join(format!("qmd-models-present-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Nothing there yet → absent.
+        assert!(!models_present(&base));
+
+        // All required models present + non-empty → present.
+        for name in REQUIRED_MODELS {
+            std::fs::write(base.join(name), b"gguf").unwrap();
+        }
+        assert!(models_present(&base));
+
+        // A zero-byte (partial/truncated) model doesn't count.
+        std::fs::write(base.join(REQUIRED_MODELS[0]), b"").unwrap();
+        assert!(!models_present(&base));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

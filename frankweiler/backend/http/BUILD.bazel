@@ -98,6 +98,7 @@ rust_binary(
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:clap",

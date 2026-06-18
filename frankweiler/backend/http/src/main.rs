@@ -97,16 +97,46 @@ async fn main() -> anyhow::Result<()> {
         let daemon = QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))
             .map_err(|e| anyhow::anyhow!("qmd daemon: cannot start ({e:#})"))?;
         let daemon = Arc::new(daemon);
-        // `qmd pull` ensures embedding + query-expansion + reranker models
-        // are on disk before the first user query, so we don't pay a
-        // multi-hundred-MB huggingface download on the interactive path.
-        // Cache-checked, so a re-run on a warm box is free.
-        eprintln!("qmd: pulling models…");
-        let pull_cfg = daemon.config().clone();
-        match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
-            Ok(Ok(())) => eprintln!("qmd: models ready"),
-            Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
-            Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
+
+        // Models live once in a shared cache (`~/.cache/qmd/models`);
+        // each data root reaches them through a `<root>/qmd/models`
+        // symlink, so qmd — run with `XDG_CACHE_HOME=<root>` — resolves
+        // lookups out to that one copy instead of re-downloading into
+        // the root. The indexer creates this link during sync; ensure
+        // it here too, so a backend booting a root the indexer hasn't
+        // touched in this incarnation (or whose link went missing)
+        // still shares the cache rather than silently pulling ~2 GB
+        // into the data dir. Tolerate a pre-existing *real* dir rather
+        // than hard-failing an existing install — we just won't share.
+        let qmd_dir = root.join("qmd");
+        let models_dir = frankweiler_qmd_indexer::default_models_dir();
+        if let Err(e) = std::fs::create_dir_all(&models_dir)
+            .map_err(anyhow::Error::from)
+            .and_then(|()| frankweiler_qmd_indexer::ensure_models_symlink(&qmd_dir, &models_dir))
+        {
+            eprintln!(
+                "qmd: could not ensure models symlink ({e:#}); \
+                 continuing with {}/models as-is",
+                qmd_dir.display()
+            );
+        }
+
+        // Only `qmd pull` when the cache is actually cold. Pulling on
+        // every boot spawns `npx` and revalidates each model's
+        // HuggingFace etag over the network — that both slows startup
+        // and turns a network blip into a failed boot. A warm cache
+        // (the common case) skips straight to serving; qmd lazily
+        // fetches any not-yet-listed model on first use.
+        if frankweiler_qmd_indexer::models_present(&qmd_dir.join("models")) {
+            eprintln!("qmd: models present, skipping pull");
+        } else {
+            eprintln!("qmd: pulling models…");
+            let pull_cfg = daemon.config().clone();
+            match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
+                Ok(Ok(())) => eprintln!("qmd: models ready"),
+                Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
+                Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
+            }
         }
         Some(daemon)
     } else {

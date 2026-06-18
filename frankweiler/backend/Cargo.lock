@@ -1778,6 +1778,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-qmd-indexer",
  "frankweiler-schema",
  "frankweiler-time",
  "futures",
