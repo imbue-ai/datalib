@@ -330,21 +330,34 @@ async fn run_qmd_search(
         .grid_row_refs()
         .await
         .map_err(|e| anyhow::anyhow!("grid_row_refs: {e}"))?;
-    let idx = GridIndex::new(refs);
-    // Walk hits in rank order, mapping each to its grid rows and stamping
-    // the hit's score onto every row it produces. A single qmd hit can fan
-    // out to many rows; if a row is produced by more than one hit we keep
-    // the first (highest-ranked) score we saw for it.
+    let idx = GridIndex::new((**root).clone(), refs);
+    // Walk hits in rank order, mapping each to its grid row(s) and stamping
+    // the hit's score onto every row it produces. A hit normally resolves to
+    // the single message it matched; if a row is produced by more than one hit
+    // we keep the first (highest-ranked) score we saw for it.
     let mut uuids: Vec<String> = Vec::new();
     let mut scores: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
     for h in &hits {
-        for row in idx.rows_for_hit(h) {
+        let rows = idx.rows_for_hit(h);
+        if rows.is_empty() {
+            // Every indexed document should map to grid rows. A hit that maps
+            // to none means qmd indexed a path the grid doesn't know about
+            // (e.g. a stale render under an old layout) — the hit's score is
+            // silently lost, so flag it loudly. (ERROR level; this file logs
+            // via eprintln!.)
+            eprintln!(
+                "ERROR search: qmd hit resolved to no grid rows: path={:?} score={}",
+                h.path, h.score
+            );
+        }
+        for row in rows {
             if !scores.contains_key(&row.uuid) {
                 scores.insert(row.uuid.clone(), h.score);
                 uuids.push(row.uuid);
             }
         }
     }
+    drop(idx);
     let mut rows = repo
         .search_by_uuids(parsed, &uuids, limit)
         .await

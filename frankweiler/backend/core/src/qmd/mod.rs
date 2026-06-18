@@ -2,9 +2,11 @@
 //!
 //! `runner` shells out to the `qmd` CLI via `npx -y @tobilu/qmd@<version>`
 //! and parses its JSON output into `QmdHit`s. `mapping` resolves those hits
-//! to `grid_rows` UUIDs (primary key: embedded `m-{uuid}` ids in the
-//! snippet; fallback: row whose `qmd_path` matches the hit's file path
-//! after qmd's lowercase + `[_-]+ → -` normalization).
+//! to `grid_rows` UUIDs: it locates the hit's document by `qmd_path` (after
+//! qmd's lowercase + `[_-]+ → -` normalization), then reads the rendered
+//! markdown and maps the hit's matched line to the enclosing
+//! `data-section-uuid`, falling back to the whole document when the line
+//! can't be pinned.
 //!
 //! The data root is the same `<frankweiler_root>` everything else lives
 //! under. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`,

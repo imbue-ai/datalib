@@ -76,6 +76,28 @@ fn write_sidecar(root: &Path, qmd_path: &str, rows: Vec<GridRow>) {
     fs::write(&sidecar_path, serde_json::to_string(&sidecar).unwrap()).unwrap();
 }
 
+/// Write a real rendered `.md` at `root/qmd_path` whose section divs carry the
+/// given uuids in order (one per message), so the line-based resolver has a
+/// file to read. Returns the 1-based line number of each anchor.
+fn write_md(root: &Path, qmd_path: &str, section_uuids: &[&str]) -> Vec<usize> {
+    let mut body =
+        String::from("---\nprovider: test\n---\n\n<h1 class=\"page-title\">Title</h1>\n");
+    for uuid in section_uuids {
+        body.push_str(&format!(
+            "\n<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg\">\n\nbody text\n</div>\n"
+        ));
+    }
+    let md = root.join(qmd_path);
+    fs::create_dir_all(md.parent().unwrap()).unwrap();
+    fs::write(&md, &body).unwrap();
+    // Report each anchor's 1-based line so callers can craft `@@ -N` snippets.
+    body.lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("data-section-uuid="))
+        .map(|(i, _)| i + 1)
+        .collect()
+}
+
 fn collect_sidecars(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for entry in rd.flatten() {
@@ -209,17 +231,26 @@ fn sidecar_walk_builds_grid_index() {
 }
 
 #[test]
-fn uuid_anchor_resolves_to_single_message_row() {
-    // Snippet names one specific message uuid → only that row comes back,
-    // even though the chat doc has three rows under the same qmd_path.
+fn line_resolves_to_single_message_row() {
+    // A hit whose diff-header line lands in the second message resolves to
+    // only that row, even though the chat doc has three rows under one
+    // qmd_path — no snippet anchor required.
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
-    let idx = GridIndex::new(load_grid_rows(tmp.path()));
+    let chat = "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md";
+    let anchors = write_md(
+        tmp.path(),
+        chat,
+        &[
+            "30000001-1701-4d00-8000-000000030001",
+            "30000002-1701-4d00-8000-000000030002",
+        ],
+    );
+    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
 
-    let stdout = fake_stdout(&[(
-        "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md",
-        "<div id=\\\"m-30000002-1701-4d00-8000-000000030002\\\">…</div>",
-    )]);
+    // `@@ -<second-anchor>,4 @@` → the matched line is on the 2nd message div.
+    let snip = format!("@@ -{},4 @@ (0 before, 3 after)\n## Assistant", anchors[1]);
+    let stdout = fake_stdout(&[(chat, snip.as_str())]);
     let hits = parse_stdout(&stdout).unwrap();
     let rows = idx.rows_for_hits(&hits);
     assert_eq!(rows.len(), 1);
@@ -234,7 +265,9 @@ fn path_fallback_returns_all_rows_for_doc() {
     // rows; all should come back.
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
-    let idx = GridIndex::new(load_grid_rows(tmp.path()));
+    // No real `.md` on disk for this doc → the line can't be pinned, so the
+    // whole document surfaces.
+    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
 
     let stdout = fake_stdout(&[(
         "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md",
@@ -256,7 +289,7 @@ fn thread_hit_returns_comment_rows_not_container() {
     // semantics the Python integration test asserts.
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
-    let idx = GridIndex::new(load_grid_rows(tmp.path()));
+    let idx = GridIndex::new(tmp.path(), load_grid_rows(tmp.path()));
 
     let stdout = fake_stdout(&[(
         "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
@@ -274,11 +307,23 @@ fn thread_hit_returns_comment_rows_not_container() {
 
 #[test]
 fn hits_for_row_reverse_mapping() {
-    // Pick a known comment row; ask which of a set of hits mention it.
+    // Pick a known comment row; ask which of a set of hits resolve to it.
+    // hits_for_row is defined in terms of the forward (line-based) mapping.
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
+    let pr_thread =
+        "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md";
+    let anchors = write_md(
+        tmp.path(),
+        pr_thread,
+        &[
+            "aaaaaaaa-bbbb-cccc-dddd-000000000001",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000002",
+            "aaaaaaaa-bbbb-cccc-dddd-000000000003",
+        ],
+    );
     let rows_vec = load_grid_rows(tmp.path());
-    let idx = GridIndex::new(rows_vec.clone());
+    let idx = GridIndex::new(tmp.path(), rows_vec.clone());
 
     let target = rows_vec
         .iter()
@@ -286,31 +331,25 @@ fn hits_for_row_reverse_mapping() {
         .cloned()
         .unwrap();
 
+    let s_target = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[1]);
+    let s_other = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[0]);
+    let s_diff = format!("@@ -{},4 @@ (0 before, 1 after)\nx", anchors[1]);
     let stdout = fake_stdout(&[
-        // Same doc, mentions our target uuid → should match.
-        (
-            "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
-            "<div id=\\\"m-aaaaaaaa-bbbb-cccc-dddd-000000000002\\\">…</div>",
-        ),
-        // Same doc, no anchors at all → file-level fallback also matches.
-        (
-            "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
-            "nothing anchored",
-        ),
-        // Same doc, names a *different* uuid → must NOT match the target.
-        (
-            "rendered_md/github/enterprise-d/replicator/pr-42__recalibrate-tea/threads/t01__earl-grey.md",
-            "<div id=\\\"m-aaaaaaaa-bbbb-cccc-dddd-000000000001\\\">other</div>",
-        ),
+        // Same doc, line lands in the target (2nd) message → matches.
+        (pr_thread, s_target.as_str()),
+        // Same doc, line lands in a *different* message → must NOT match.
+        (pr_thread, s_other.as_str()),
+        // Same doc, no diff header → whole-doc fallback includes the target.
+        (pr_thread, "nothing anchored"),
         // Different doc altogether → must NOT match.
         (
             "rendered_md/anthropic/acct/llm_chats/c001__klingon_diplomacy.md",
-            "<div id=\\\"m-aaaaaaaa-bbbb-cccc-dddd-000000000002\\\">…</div>",
+            s_diff.as_str(),
         ),
     ]);
     let hits = parse_stdout(&stdout).unwrap();
     let back = idx.hits_for_row(&target, &hits);
-    assert_eq!(back.len(), 2, "expected uuid-anchor + fallback only");
+    assert_eq!(back.len(), 2, "target-line hit + whole-doc fallback");
 }
 
 #[test]
@@ -322,7 +361,7 @@ fn bidirectional_coverage_every_indexed_path_resolves() {
     let tmp = tempfile::tempdir().unwrap();
     make_fixture(tmp.path());
     let rows_vec = load_grid_rows(tmp.path());
-    let idx = GridIndex::new(rows_vec.clone());
+    let idx = GridIndex::new(tmp.path(), rows_vec.clone());
 
     // Collect the on-disk paths of the rendered docs (one per sidecar).
     let mut sidecars = Vec::new();
