@@ -26,12 +26,22 @@
 //! no latchkey service, and we still get the chokepoint's retry/backoff
 //! and playback support.
 //!
-//! ## Idempotence
+//! ## Idempotence & retry
 //!
 //! We only fetch for a connection that has **no** `contact_photos` row
-//! yet. A successful fetch records the blake3; a failure records a row
-//! with `blake3 = NULL`. Either way the connection is never retried, so
-//! once a sync has run this is effectively a no-op.
+//! yet, and we persist a row only for *settled* outcomes:
+//!
+//!   * **success** — bytes stored, `blake3` set;
+//!   * **no public photo** — the profile page loaded (2xx) but advertised
+//!     no `og:image`; recorded with `blake3 = NULL` so we don't re-hammer
+//!     a connection that genuinely has no picture.
+//!
+//! A **transient** failure (LinkedIn's `HTTP 999` bot-block, a 429/5xx, a
+//! network error, or an image fetch that didn't return bytes) records
+//! *nothing* — so the next `fetch_photos` run retries that connection.
+//! That's what lets a rate-limited bulk run finish filling in photos over
+//! subsequent syncs, while a fully-fetched connection is still never
+//! re-fetched.
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{cas_path_for, BlobCas};
@@ -84,8 +94,12 @@ pub struct PhotoSummary {
     pub attempted: usize,
     /// Photos successfully stored in CAS this run.
     pub fetched: usize,
-    /// Attempts that found no usable image (recorded so we don't retry).
-    pub misses: usize,
+    /// Profiles that loaded but advertise no photo — recorded permanently
+    /// (we won't retry a connection that genuinely has no picture).
+    pub no_photo: usize,
+    /// Transient failures (bot-block / rate-limit / network). NOT
+    /// recorded, so the next run retries these.
+    pub transient: usize,
 }
 
 /// Fetch-and-store photos for every connection that doesn't already have
@@ -142,7 +156,7 @@ pub async fn fetch_connection_photos(
         progress.set_message(&format!("photo: {}", display_name(p)));
 
         match fetch_one(url).await {
-            Ok(Some(photo)) => {
+            Outcome::Found(photo) => {
                 let blake3 = cas
                     .put(&photo.bytes, photo.content_type.as_deref())
                     .await
@@ -150,20 +164,31 @@ pub async fn fetch_connection_photos(
                 insert_edge(pool, &owner_id, &photo.source_url, Some(&blake3)).await?;
                 summary.fetched += 1;
             }
-            Ok(None) => {
-                // Record the attempt (keyed on the profile URL) so we
-                // don't try this connection again.
+            Outcome::NoPhoto => {
+                // Settled: the page loaded but has no photo. Record it
+                // (blake3 NULL, keyed on the profile URL) so we don't
+                // re-hammer a connection that genuinely has no picture.
                 insert_edge(pool, &owner_id, url, None).await?;
-                summary.misses += 1;
+                summary.no_photo += 1;
             }
-            Err(e) => {
-                tracing::warn!(event = "linkedin_photo_failed", url, error = %e);
-                insert_edge(pool, &owner_id, url, None).await?;
-                summary.misses += 1;
+            Outcome::Transient => {
+                // Bot-block / rate-limit / network. Record NOTHING so the
+                // next run retries this connection.
+                summary.transient += 1;
             }
         }
     }
     Ok(summary)
+}
+
+/// The settled-or-not result of one connection's photo fetch.
+enum Outcome {
+    /// Got image bytes.
+    Found(FetchedPhoto),
+    /// Profile loaded (2xx) but advertises no `og:image` — definitive.
+    NoPhoto,
+    /// Bot-block / rate-limit / network / empty image — retry next run.
+    Transient,
 }
 
 /// Render-side: load every stored connection photo as
@@ -227,30 +252,43 @@ struct FetchedPhoto {
     bytes: Vec<u8>,
 }
 
-/// GET the profile page, scrape `og:image`, GET the image. Returns
-/// `None` when the page/image can't be fetched or has no usable image
-/// (a normal, non-error outcome — many profiles aren't public).
-async fn fetch_one(profile_url: &str) -> Result<Option<FetchedPhoto>> {
-    let page = latchkey_curl(&photo_request(profile_url))
-        .await
-        .with_context(|| format!("GET profile page {profile_url}"))?;
+/// GET the profile page, scrape `og:image`, GET the image. Classifies
+/// the result so the caller knows whether to record it (settled) or
+/// leave it for a retry (transient). Errors are folded into
+/// [`Outcome::Transient`] — they're worth retrying, not propagating.
+async fn fetch_one(profile_url: &str) -> Outcome {
+    let page = match latchkey_curl(&photo_request(profile_url)).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(event = "linkedin_photo_page_failed", url = profile_url, error = %e);
+            return Outcome::Transient;
+        }
+    };
+    // Non-2xx is a bot-block (LinkedIn's 999), rate-limit, or 5xx — all
+    // worth retrying on a later run.
     if !(200..300).contains(&page.status) {
-        return Ok(None);
+        return Outcome::Transient;
     }
     let Some(img_url) = extract_og_image(&page.body_str()) else {
-        return Ok(None);
+        // The page loaded cleanly but names no image: this connection
+        // has no public photo. Settled — don't keep retrying.
+        return Outcome::NoPhoto;
     };
-    let img = latchkey_curl(&photo_request(&img_url))
-        .await
-        .with_context(|| format!("GET og:image {img_url}"))?;
+    let img = match latchkey_curl(&photo_request(&img_url)).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(event = "linkedin_photo_image_failed", url = %img_url, error = %e);
+            return Outcome::Transient;
+        }
+    };
     if !(200..300).contains(&img.status) || img.body.is_empty() {
-        return Ok(None);
+        return Outcome::Transient;
     }
-    Ok(Some(FetchedPhoto {
+    Outcome::Found(FetchedPhoto {
         source_url: img_url,
         content_type: img.header("content-type").map(str::to_string),
         bytes: img.body,
-    }))
+    })
 }
 
 /// Pull the first `og:image` (or `og:image:secure_url` / `twitter:image`)

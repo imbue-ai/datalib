@@ -183,7 +183,8 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 event = "linkedin_photos",
                 attempted = s.attempted,
                 fetched = s.fetched,
-                misses = s.misses,
+                no_photo = s.no_photo,
+                transient = s.transient,
             ),
             Err(e) => warn!(event = "linkedin_photos_failed", error = %e),
         }

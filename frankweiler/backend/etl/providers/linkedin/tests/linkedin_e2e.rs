@@ -260,6 +260,56 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "markdown embeds the photo blob: {md}"
         );
 
+        // ── transient misses are retryable ─────────────────────────
+        // A fresh store, then a photo pass pointed at an EMPTY playback
+        // dir: every fetch is a playback miss (transient), so NOTHING is
+        // recorded. A second pass with real fixtures retries and fetches.
+        let raw2 = tmp.path().join("raw2");
+        fs::create_dir_all(&raw2)?;
+        extract::fetch(FetchOptions {
+            db_path: raw2.clone(),
+            db: None,
+            input_path: export.clone(),
+            fetch_photos: false,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await?;
+        let db2 = RawDb::open(&db_path_for(&raw2)).await?;
+
+        let empty_pb = tmp.path().join("empty_pb");
+        fs::create_dir_all(&empty_pb)?;
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let s1 =
+            extract::photos::fetch_connection_photos(&db2, &db_path_for(&raw2), &Progress::noop())
+                .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert_eq!(s1.fetched, 0, "no photos on a playback miss");
+        assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
+        assert!(
+            load_photo_blobs(&db2, &db_path_for(&raw2))
+                .await?
+                .is_empty(),
+            "transient miss records nothing"
+        );
+
+        // Retry with the real fixtures — now it succeeds.
+        std::env::set_var(PLAYBACK_ENV, &playback);
+        let s2 =
+            extract::photos::fetch_connection_photos(&db2, &db_path_for(&raw2), &Progress::noop())
+                .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert!(
+            s2.fetched >= 1,
+            "transient miss retried and fetched, got {s2:?}"
+        );
+        assert!(
+            !load_photo_blobs(&db2, &db_path_for(&raw2))
+                .await?
+                .is_empty(),
+            "photo recorded after retry"
+        );
+
         Ok::<_, anyhow::Error>(())
     })?;
 
