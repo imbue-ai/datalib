@@ -4,8 +4,10 @@
 //! Messages, Skills, Positions, …). [`extract`] ingests *every* CSV
 //! generically — one `(id, payload)` raw table per file — with no
 //! per-file code; see its module docs for the identity / quirk-handling
-//! story. [`render`] is the only translate path today: it turns the
-//! `messages` table into markdown via the shared chat renderer.
+//! story. Two translate paths render selected feeds: [`render`] turns the
+//! message-shaped tables into markdown via the shared chat renderer, and
+//! [`connections`] turns the `connections` table into first-class
+//! contacts via the shared contact renderer.
 //!
 //! Wired into the config-driven `sync` orchestrator as the `linkedin`
 //! source type:
@@ -16,5 +18,6 @@
 //!   input_path: ~/backups/Basic_LinkedInDataExport_06-16-2026
 //! ```
 
+pub mod connections;
 pub mod extract;
 pub mod render;

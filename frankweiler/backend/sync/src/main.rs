@@ -2626,7 +2626,18 @@ fn translate_source(
                 prior_fingerprints,
                 on_doc_complete,
             )
-            .context("linkedin render")
+            .context("linkedin render")?;
+            // Connections render as first-class contacts via the shared
+            // contact renderer (sibling of the chat path above).
+            frankweiler_etl_linkedin::connections::render_connections(
+                &raw_dir,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("linkedin connections render")
         }
         SourceConfig::GoogleTakeout { .. } => {
             // Only the Google Chat feed renders; the other feeds stay

@@ -18,6 +18,7 @@ rust_library(
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
+        "//frankweiler/backend/etl/contact-common:frankweiler_etl_contact_common",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:csv",

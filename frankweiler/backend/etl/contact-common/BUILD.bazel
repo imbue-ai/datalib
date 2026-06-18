@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "frankweiler_etl_contact_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_contact_common",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/index_lib:frankweiler_index_lib",
+        "//frankweiler/backend/schema:frankweiler_schema",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:sha2",
+        "@frankweiler_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "contact_common_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_contact_common",
+    edition = "2021",
+)

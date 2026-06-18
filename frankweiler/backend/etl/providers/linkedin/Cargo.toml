@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 frankweiler-etl = { path = "../.." }
 frankweiler-etl-chat-common = { path = "../../chat-common" }
+frankweiler-etl-contact-common = { path = "../../contact-common" }
 anyhow = { workspace = true }
 csv = "1"
 chrono = { workspace = true }

@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 frankweiler-etl = { path = "../.." }
+frankweiler-etl-contact-common = { path = "../../contact-common" }
 frankweiler-etl-macros = { path = "../../macros" }
 frankweiler-time = { path = "../../../time" }
 frankweiler-schema = { path = "../../../schema" }

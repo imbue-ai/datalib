@@ -17,18 +17,21 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl_linkedin::connections;
+use frankweiler_etl_linkedin::extract::schema_raw::connection_uuid;
 use frankweiler_etl_linkedin::extract::{self, db_path_for, FetchOptions, RawDb};
 use frankweiler_etl_linkedin::render;
 
 /// Write the synthetic export tree under `root`.
 fn build_export(root: &Path) -> Result<()> {
-    // Connections.csv with the Notes: preamble we strip, and a URL key.
+    // Connections.csv with the Notes: preamble we strip, and the real
+    // column shape (URL is the natural key → uuid identity).
     fs::write(
         root.join("Connections.csv"),
         "Notes:\n\"Some preamble text about email visibility.\"\n\n\
-         First Name,Last Name,URL,Company\n\
-         Jean-Luc,Picard,https://www.linkedin.com/in/jlp,Starfleet\n\
-         Beverly,Crusher,https://www.linkedin.com/in/bev,Starfleet\n",
+         First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
+         Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n\
+         Beverly,Crusher,https://www.linkedin.com/in/bev,,Starfleet,CMO,17 Jun 2026\n",
     )?;
 
     // Member-id-suffixed filename → canonical table `comments`.
@@ -160,6 +163,39 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "rendered at least 3 docs, got {}",
             docs.len()
         );
+
+        // ── connections → contacts ───────────────────────────────
+        let mut contact_docs: Vec<RenderedMarkdown> = Vec::new();
+        {
+            let mut on_doc = |d: RenderedMarkdown| {
+                contact_docs.push(d);
+                Ok(())
+            };
+            connections::render_connections(
+                &raw_dir,
+                &out_dir,
+                "linkedin",
+                &Progress::noop(),
+                &HashMap::new(),
+                &mut on_doc,
+            )
+            .context("render_connections")?;
+        }
+        assert_eq!(contact_docs.len(), 2, "two connection contacts");
+        // Identity + grid row are keyed off the profile URL.
+        let picard_uuid = connection_uuid("https://www.linkedin.com/in/jlp");
+        let picard = contact_docs
+            .iter()
+            .find(|d| d.markdown_uuid == picard_uuid)
+            .expect("Picard rendered under his URL-derived uuid");
+        let row = &picard.rows[0];
+        assert_eq!(row.kind, "Contact");
+        assert_eq!(row.source_label, "LinkedIn");
+        assert_eq!(
+            row.source_url.as_deref(),
+            Some("https://www.linkedin.com/in/jlp")
+        );
+        assert!(row.text.contains("Captain"), "field values in search text");
 
         Ok::<_, anyhow::Error>(())
     })?;

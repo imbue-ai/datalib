@@ -119,6 +119,28 @@ pub fn known_file(table: &str) -> Option<&'static KnownFile> {
     KNOWN_FILES.iter().find(|f| f.table == table)
 }
 
+/// Tables whose raw-row `id` is a uuidv5 *derived from* the natural key
+/// rather than the raw key string itself. `connections` is first-class:
+/// its id is a stable UUID minted from the member's LinkedIn profile URL
+/// (see [`connection_uuid`]), so the same connection keeps one identity
+/// across re-exports and the rendered contact agrees with the raw row.
+pub const UUID_KEYED_TABLES: &[&str] = &["connections"];
+
+/// Whether [`canonical_table`] `table`'s row id is a uuidv5 of its
+/// natural key (see [`UUID_KEYED_TABLES`]).
+pub fn is_uuid_keyed(table: &str) -> bool {
+    UUID_KEYED_TABLES.contains(&table)
+}
+
+/// Stable UUID for a LinkedIn connection, derived from their profile
+/// `URL`. Both the raw `connections.id` and the rendered contact's
+/// `contact_uuid` use this, so they agree. Recipe:
+/// `uuidv5(NS, "connections:{url}")` — matches what the extract walker
+/// mints for the `connections` table's natural (`URL`) key.
+pub fn connection_uuid(url: &str) -> String {
+    ns_id(&format!("connections:{url}"))
+}
+
 /// Canonical table names of the message-shaped feeds, in manifest order.
 /// Render walks these (any that exist + are non-empty) to produce chat
 /// markdown.

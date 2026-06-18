@@ -31,6 +31,7 @@ members = [
     "whatsapp-backup",
     "etl/providers/whatsapp",
     "etl/chat-common",
+    "etl/contact-common",
 ]
 
 [workspace.package]
