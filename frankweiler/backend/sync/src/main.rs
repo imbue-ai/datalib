@@ -1662,6 +1662,8 @@ impl ExtractPlan {
                     youtube_subscriptions: s.youtube_subscriptions,
                     google_chat: s.google_chat,
                     gemini_apps: s.gemini_apps,
+                    google_voice: s.google_voice,
+                    google_voice_include_spam: s.google_voice_include_spam,
                 };
                 let input_path = out_dir.clone();
                 out_dir = cfg.data_root.join("raw").join(&name);

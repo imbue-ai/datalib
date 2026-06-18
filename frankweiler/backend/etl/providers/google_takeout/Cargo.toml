@@ -23,6 +23,10 @@ chrono = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "rt-multi-thread", "macros"] }
 uuid = { workspace = true, features = ["v5"] }
 sqlx = { workspace = true }
+# Google Voice takeout is XHTML; quick-xml pull-parses it (with a
+# `<br>`→newline pre-pass) into structured rows.
+quick-xml = "0.36"
+sha2 = "0.10"
 tracing = "0.1"
 
 [dev-dependencies]

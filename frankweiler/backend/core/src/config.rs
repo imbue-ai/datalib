@@ -593,6 +593,10 @@ pub struct GoogleTakeoutSync {
     pub youtube_subscriptions: bool,
     pub google_chat: bool,
     pub gemini_apps: bool,
+    /// Google Voice (`Voice/` subtree): texts, voicemails, calls, bills.
+    pub google_voice: bool,
+    /// When `google_voice` is on, also process `Voice/Spam/`.
+    pub google_voice_include_spam: bool,
 }
 
 /// Discriminated union over the literal `type:` field. Variant payloads

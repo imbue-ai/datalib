@@ -8,6 +8,7 @@
 pub mod db;
 pub mod gemini_apps;
 pub mod google_chat;
+pub mod google_voice;
 pub mod maps_photos;
 pub mod maps_reviews;
 pub mod maps_saved_places;
@@ -40,6 +41,12 @@ pub struct SyncFlags {
     pub youtube_subscriptions: bool,
     pub google_chat: bool,
     pub gemini_apps: bool,
+    /// Google Voice (`Voice/` subtree): texts, voicemails, calls, bills.
+    pub google_voice: bool,
+    /// When `google_voice` is on, also process the `Voice/Spam/` folder
+    /// (extract + render). Off by default — spam is bulky and only
+    /// useful for parser hardening / practice corpora.
+    pub google_voice_include_spam: bool,
 }
 
 impl SyncFlags {
@@ -53,6 +60,8 @@ impl SyncFlags {
             youtube_subscriptions: true,
             google_chat: true,
             gemini_apps: true,
+            google_voice: true,
+            google_voice_include_spam: true,
         }
     }
 }
@@ -101,6 +110,10 @@ pub struct FetchSummary {
     pub chat_attachments: usize,
     pub gemini_activity: usize,
     pub gemini_attachments: usize,
+    pub voice_messages: usize,
+    pub voice_bills: usize,
+    pub voice_greetings: usize,
+    pub voice_attachments: usize,
     pub blobs_stored: usize,
     pub parse_errors: usize,
 }
@@ -194,6 +207,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             Err(e) => {
                 warn!(event = "google_takeout_feed_failed", feed = "gemini_apps", error = %e);
+                summary.parse_errors += 1;
+            }
+        }
+    }
+    if opts.sync.google_voice {
+        match google_voice::ingest(&db, root, opts.sync.google_voice_include_spam, progress).await {
+            Ok(s) => {
+                summary.voice_messages += s.messages;
+                summary.voice_bills += s.bills;
+                summary.voice_greetings += s.greetings;
+                summary.voice_attachments += s.attachments;
+                summary.blobs_stored += s.blobs_stored;
+            }
+            Err(e) => {
+                warn!(event = "google_takeout_feed_failed", feed = "google_voice", error = %e);
                 summary.parse_errors += 1;
             }
         }

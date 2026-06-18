@@ -383,10 +383,14 @@ def _yaml(
             else:
                 lines.append("    sync: {}")
         elif type_str == "google_takeout":
-            # Opt into the Google Chat feed (the one that renders); the
-            # other feeds stay off for the central pipeline (their extract
-            # is covered by the provider's own fixture_walk test).
-            lines.append("    sync: {google_chat: true}")
+            # Opt into the rendering feeds: Google Chat and Google Voice
+            # (incl. its Spam folder, to exercise that path). The other
+            # feeds stay off for the central pipeline (their extract is
+            # covered by the provider's own fixture_walk test).
+            lines.append(
+                "    sync: {google_chat: true, google_voice: true, "
+                "google_voice_include_spam: true}"
+            )
         elif type_str != "claude_export":
             lines.append("    sync: {}")
     return "\n".join(lines) + "\n"

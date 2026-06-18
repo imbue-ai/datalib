@@ -442,10 +442,33 @@ fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
         "📎"
     };
 
+    let is_audio = att
+        .mime_type
+        .as_deref()
+        .is_some_and(|m| m.starts_with("audio/"));
+    let is_video = att
+        .mime_type
+        .as_deref()
+        .is_some_and(|m| m.starts_with("video/"));
+
     s.push('\n');
     match &att.rel_path {
         Some(rel) if att.is_image() => {
             s.push_str(&format!("![{label}]({rel})\n"));
+        }
+        // Inline HTML5 players so audio/video attachments play straight
+        // from the markdown viewer (which already passes raw HTML through
+        // — see the `<div class="msg">` wrappers). The labelled link
+        // underneath is a fallback for renderers that strip media tags.
+        Some(rel) if is_audio => {
+            s.push_str(&format!(
+                "<audio controls src=\"{rel}\"></audio>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+            ));
+        }
+        Some(rel) if is_video => {
+            s.push_str(&format!(
+                "<video controls src=\"{rel}\"></video>\n\n{kind_marker} [{label}]({rel}) — {size}\n"
+            ));
         }
         Some(rel) => {
             s.push_str(&format!("{kind_marker} [{label}]({rel}) — {size}\n"));

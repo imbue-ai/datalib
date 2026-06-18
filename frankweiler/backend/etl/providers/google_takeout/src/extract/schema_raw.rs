@@ -53,11 +53,19 @@ pub const DATA_TABLES: &[&str] = &[
     "chat_users",
     "chat_messages",
     "gemini_activity",
+    // Google Voice feed (own `schema_raw`); see `google_voice::schema_raw`.
+    "voice_messages",
+    "voice_bills",
+    "voice_greetings",
 ];
 
 /// Per-provider CAS edge tables. Wiped by reset alongside
 /// [`DATA_TABLES`].
-pub const EDGE_TABLES: &[&str] = &["chat_attachments", "gemini_attachments"];
+pub const EDGE_TABLES: &[&str] = &[
+    "chat_attachments",
+    "gemini_attachments",
+    "voice_attachments",
+];
 
 /// Per-provider uuidv5 namespace constant. Recipes are kebab-ish
 /// strings (`"maps_review:{ftid}:{date}"`, `"youtube:watch:{id}:{ts}"`,
@@ -243,6 +251,9 @@ pub fn full_ddl() -> Vec<String> {
     ];
     out.extend(ChatAttachmentRow::all_ddl());
     out.extend(GeminiAttachmentRow::all_ddl());
+    // Google Voice feed's own tables (entity + CAS edge DDL); the
+    // bookkeeping loop below covers its `_bookkeeping` sidecars.
+    out.extend(super::google_voice::schema_raw::voice_table_ddl());
     for table in DATA_TABLES.iter().chain(EDGE_TABLES.iter()) {
         out.push(dr::bookkeeping_ddl_for(table));
     }
