@@ -18,9 +18,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::http::{HttpRequest, HttpResponse};
+use frankweiler_etl::http::HttpResponse;
 use frankweiler_etl::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
 
+use crate::extract::photos::photo_request;
 use crate::extract::strip_notes_preamble;
 
 pub struct LinkedinSynth {
@@ -54,7 +55,7 @@ impl Synthesizer for LinkedinSynth {
                 body: profile_html(&img_url).into_bytes(),
                 duration_ms: 0,
             };
-            write_fixture(out_root, &HttpRequest::get("linkedin", &url).plain(), &page)?;
+            write_fixture(out_root, &photo_request(&url), &page)?;
 
             // 2) the image bytes (placeholder — content is irrelevant; it
             //    lands in CAS and renders as a blob file).
@@ -64,11 +65,7 @@ impl Synthesizer for LinkedinSynth {
                 body: format!("FAKE-PNG bytes for {url}").into_bytes(),
                 duration_ms: 0,
             };
-            write_fixture(
-                out_root,
-                &HttpRequest::get("linkedin", &img_url).plain(),
-                &img,
-            )?;
+            write_fixture(out_root, &photo_request(&img_url), &img)?;
 
             report.fixtures_written += 2;
         }

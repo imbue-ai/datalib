@@ -48,6 +48,25 @@ use super::RawDb;
 /// provider). Lives in the entity raw store; bytes live in the CAS.
 pub const CONTACT_PHOTOS_TABLE: &str = "contact_photos";
 
+/// Browser User-Agent for the photo fetch. LinkedIn serves an `HTTP 999`
+/// bot-block (no body, no `og:image`) to requests with curl's default
+/// UA, but returns the real public profile page — with the member's
+/// `profile-displayphoto` `og:image` — to a browser-shaped UA. No auth
+/// required. Kept here (not inline) so the synthesizer builds the exact
+/// same request, and thus the same playback [`fixture_key`].
+const PHOTO_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+     AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+/// The canonical request for fetching a LinkedIn photo URL (profile page
+/// or image): plain curl (no latchkey — these are public), with a
+/// browser User-Agent. Both extract and [`crate::synthesize`] build
+/// requests through this so playback keys match.
+pub fn photo_request(url: &str) -> HttpRequest {
+    HttpRequest::get("linkedin", url)
+        .plain()
+        .header("User-Agent", PHOTO_UA)
+}
+
 const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (
     id         TEXT PRIMARY KEY,
     owner_id   TEXT NOT NULL,
@@ -212,7 +231,7 @@ struct FetchedPhoto {
 /// `None` when the page/image can't be fetched or has no usable image
 /// (a normal, non-error outcome — many profiles aren't public).
 async fn fetch_one(profile_url: &str) -> Result<Option<FetchedPhoto>> {
-    let page = latchkey_curl(&HttpRequest::get("linkedin", profile_url).plain())
+    let page = latchkey_curl(&photo_request(profile_url))
         .await
         .with_context(|| format!("GET profile page {profile_url}"))?;
     if !(200..300).contains(&page.status) {
@@ -221,7 +240,7 @@ async fn fetch_one(profile_url: &str) -> Result<Option<FetchedPhoto>> {
     let Some(img_url) = extract_og_image(&page.body_str()) else {
         return Ok(None);
     };
-    let img = latchkey_curl(&HttpRequest::get("linkedin", &img_url).plain())
+    let img = latchkey_curl(&photo_request(&img_url))
         .await
         .with_context(|| format!("GET og:image {img_url}"))?;
     if !(200..300).contains(&img.status) || img.body.is_empty() {
@@ -254,13 +273,24 @@ fn extract_og_image(html: &str) -> Option<String> {
             if let Some(content) = attr_value(&html[tag_start..tag_end], "content") {
                 let v = content.trim();
                 if v.starts_with("http://") || v.starts_with("https://") {
-                    return Some(v.to_string());
+                    // og:image content is HTML-escaped (`&amp;` in the
+                    // signed media URL's query string); decode the few
+                    // entities that actually appear so the fetch URL is
+                    // valid.
+                    return Some(html_unescape(v));
                 }
             }
             from = tag_end.max(idx + 1);
         }
     }
     None
+}
+
+/// Decode the handful of HTML entities that appear in og:image URLs.
+fn html_unescape(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&#38;", "&")
+        .replace("&#x26;", "&")
 }
 
 /// Read `name="value"` (or `name='value'`) out of a tag fragment,
@@ -333,6 +363,12 @@ mod tests {
         // secure_url preferred key also works
         let html3 = r#"<meta property="og:image:secure_url" content="https://s/p.jpg">"#;
         assert_eq!(extract_og_image(html3).as_deref(), Some("https://s/p.jpg"));
+        // `&amp;` in the signed media URL's query string is decoded.
+        let html4 = r#"<meta property="og:image" content="https://media.licdn.com/x?e=1&amp;v=beta&amp;t=zz">"#;
+        assert_eq!(
+            extract_og_image(html4).as_deref(),
+            Some("https://media.licdn.com/x?e=1&v=beta&t=zz")
+        );
         // no og:image
         assert_eq!(extract_og_image("<html></html>"), None);
         // non-http content is ignored
