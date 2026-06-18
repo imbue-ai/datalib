@@ -233,3 +233,21 @@ sources:
     sync:
       backup_dir: ~/backups/WhatsApp
       key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted
+
+  # --- LinkedIn (data export) -----------------------------------------------
+
+  # File-backed: point `input_path` at an unzipped LinkedIn "Get a copy of
+  # your data" export. Extract ingests every CSV; translate renders the
+  # message feeds and your connections (as first-class contacts).
+  #
+  # `fetch_photos` (default false) scrapes each connection's public profile
+  # `og:image` into the per-source CAS, once per connection — transient
+  # bot-blocks aren't recorded, so they retry on later runs. The per-source
+  # `extract_params` override below bounds that: stop the photo sweep after
+  # 20 consecutive failures (LinkedIn rate-limits bursts).
+  - name: linkedin
+    type: linkedin
+    input_path: ~/backups/LinkedInDataExport
+    fetch_photos: true
+    extract_params:
+      maximum_sequential_failed_requests: 20

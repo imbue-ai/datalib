@@ -101,6 +101,10 @@ pub struct FetchOptions {
     /// the per-source CAS + `contact_photos` edge table. Off by default;
     /// once fetched, a connection is never re-fetched (see [`photos`]).
     pub fetch_photos: bool,
+    /// Give up the photo sweep after this many *consecutive* transient
+    /// fetch failures (LinkedIn hard-blocking). Resolved from the source's
+    /// `extract_params.maximum_sequential_failed_requests`.
+    pub photo_max_consecutive_failures: u64,
     pub progress: Progress,
     pub control: ExtractControl,
 }
@@ -178,13 +182,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     // connection is fetched at most once across runs.
     if opts.fetch_photos {
         let db_path = db_path_for(&opts.db_path);
-        match photos::fetch_connection_photos(&db, &db_path, &opts.progress).await {
+        match photos::fetch_connection_photos(
+            &db,
+            &db_path,
+            &opts.progress,
+            opts.photo_max_consecutive_failures,
+        )
+        .await
+        {
             Ok(s) => tracing::info!(
                 event = "linkedin_photos",
                 attempted = s.attempted,
                 fetched = s.fetched,
                 no_photo = s.no_photo,
                 transient = s.transient,
+                gave_up = s.gave_up,
             ),
             Err(e) => warn!(event = "linkedin_photos_failed", error = %e),
         }

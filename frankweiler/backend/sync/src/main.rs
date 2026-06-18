@@ -2061,6 +2061,11 @@ impl ExtractPlan {
                         db: Some(db),
                         input_path,
                         fetch_photos,
+                        // Piggyback the shared give-up knob: stop the photo
+                        // sweep after this many consecutive failures.
+                        photo_max_consecutive_failures: self
+                            .extract_params
+                            .max_sequential_failures(),
                         progress: progress.clone(),
                         control: control.clone(),
                     },

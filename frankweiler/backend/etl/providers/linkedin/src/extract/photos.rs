@@ -100,15 +100,30 @@ pub struct PhotoSummary {
     /// Transient failures (bot-block / rate-limit / network). NOT
     /// recorded, so the next run retries these.
     pub transient: usize,
+    /// True if we stopped early after hitting the consecutive-failure
+    /// give-up limit (LinkedIn was clearly blocking us). The un-attempted
+    /// connections simply retry on the next run.
+    pub gave_up: bool,
 }
 
 /// Fetch-and-store photos for every connection that doesn't already have
 /// a `contact_photos` row. `db_path` is the resolved entity db path (its
 /// CAS sibling is derived via [`cas_path_for`]).
+///
+/// `max_consecutive_failures` bounds wasted effort when LinkedIn is hard-
+/// blocking us: once that many connections fail transiently *in a row*
+/// (with no success/no-photo in between to reset the streak) we stop for
+/// this run. It's resolved from the source's
+/// `extract_params.maximum_sequential_failed_requests` (the same give-up
+/// knob the HTTP chokepoint uses; LinkedIn's `HTTP 999` is classified
+/// definitive there, so that guard never trips — this loop-level check is
+/// what actually bounds the photo sweep). The un-attempted connections
+/// have no row, so they just retry next run.
 pub async fn fetch_connection_photos(
     db: &RawDb,
     db_path: &std::path::Path,
     progress: &Progress,
+    max_consecutive_failures: u64,
 ) -> Result<PhotoSummary> {
     // The connections table may be absent (user excluded it) — nothing
     // to do. load_payloads errors on a missing table, so treat that as
@@ -143,6 +158,7 @@ pub async fn fetch_connection_photos(
         .context("open linkedin CAS")?;
 
     let mut summary = PhotoSummary::default();
+    let mut consecutive_failures: u64 = 0;
     for p in &connections {
         let url = field(p, "URL");
         if url.is_empty() {
@@ -163,6 +179,7 @@ pub async fn fetch_connection_photos(
                     .context("cas put connection photo")?;
                 insert_edge(pool, &owner_id, &photo.source_url, Some(&blake3)).await?;
                 summary.fetched += 1;
+                consecutive_failures = 0;
             }
             Outcome::NoPhoto => {
                 // Settled: the page loaded but has no photo. Record it
@@ -170,11 +187,23 @@ pub async fn fetch_connection_photos(
                 // re-hammer a connection that genuinely has no picture.
                 insert_edge(pool, &owner_id, url, None).await?;
                 summary.no_photo += 1;
+                consecutive_failures = 0;
             }
             Outcome::Transient => {
                 // Bot-block / rate-limit / network. Record NOTHING so the
                 // next run retries this connection.
                 summary.transient += 1;
+                consecutive_failures += 1;
+                if consecutive_failures >= max_consecutive_failures {
+                    summary.gave_up = true;
+                    tracing::warn!(
+                        event = "linkedin_photos_gave_up",
+                        consecutive_failures,
+                        limit = max_consecutive_failures,
+                        "giving up photo fetch for this run; un-attempted connections retry next run",
+                    );
+                    break;
+                }
             }
         }
     }

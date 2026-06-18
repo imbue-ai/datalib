@@ -102,6 +102,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             db: None,
             input_path: export.clone(),
             fetch_photos: false,
+            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -216,6 +217,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             db: None,
             input_path: export.clone(),
             fetch_photos: true,
+            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -271,6 +273,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             db: None,
             input_path: export.clone(),
             fetch_photos: false,
+            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -280,9 +283,13 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let s1 =
-            extract::photos::fetch_connection_photos(&db2, &db_path_for(&raw2), &Progress::noop())
-                .await?;
+        let s1 = extract::photos::fetch_connection_photos(
+            &db2,
+            &db_path_for(&raw2),
+            &Progress::noop(),
+            50,
+        )
+        .await?;
         std::env::remove_var(PLAYBACK_ENV);
         assert_eq!(s1.fetched, 0, "no photos on a playback miss");
         assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
@@ -295,9 +302,13 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // Retry with the real fixtures — now it succeeds.
         std::env::set_var(PLAYBACK_ENV, &playback);
-        let s2 =
-            extract::photos::fetch_connection_photos(&db2, &db_path_for(&raw2), &Progress::noop())
-                .await?;
+        let s2 = extract::photos::fetch_connection_photos(
+            &db2,
+            &db_path_for(&raw2),
+            &Progress::noop(),
+            50,
+        )
+        .await?;
         std::env::remove_var(PLAYBACK_ENV);
         assert!(
             s2.fetched >= 1,
@@ -309,6 +320,35 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 .is_empty(),
             "photo recorded after retry"
         );
+
+        // ── give-up after N consecutive failures ───────────────────
+        // Fresh store, empty playback (every fetch transient), limit 1:
+        // it should stop after the very first failure rather than walk
+        // all connections.
+        let raw3 = tmp.path().join("raw3");
+        fs::create_dir_all(&raw3)?;
+        extract::fetch(FetchOptions {
+            db_path: raw3.clone(),
+            db: None,
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await?;
+        let db3 = RawDb::open(&db_path_for(&raw3)).await?;
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let g = extract::photos::fetch_connection_photos(
+            &db3,
+            &db_path_for(&raw3),
+            &Progress::noop(),
+            1, // give up after a single consecutive failure
+        )
+        .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert!(g.gave_up, "should give up at the limit, got {g:?}");
+        assert_eq!(g.attempted, 1, "stopped after the first failure, got {g:?}");
 
         Ok::<_, anyhow::Error>(())
     })?;
