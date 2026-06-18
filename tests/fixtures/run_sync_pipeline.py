@@ -93,7 +93,8 @@ def main() -> int:
         whatsapp_spec,
         email_mbox,
         gtk_fx,
-    ) = (Path(p).resolve() for p in sys.argv[6:18])
+        linkedin_fx,
+    ) = (Path(p).resolve() for p in sys.argv[6:19])
 
     data_root.mkdir(parents=True, exist_ok=True)
     # YAML configs + playback fixtures + per-source raw dirs all stashed
@@ -185,6 +186,11 @@ def main() -> int:
                 # listed for symmetry. Extract walks `input_path` (the
                 # Takeout root) in the extract phase below.
                 "google-takeout": ("google_takeout", gtk_fx),
+                # LinkedIn: file-backed CSV walk. Its ONE HTTP path is the
+                # connection-photo fetch (fetch_photos: true below); the
+                # synth pass runs LinkedinSynth over the export's
+                # Connections.csv to write profile-page + image fixtures.
+                "linkedin": ("linkedin", linkedin_fx),
             },
             signal_snapshot_root=signal_snapshot_root,
             whatsapp_dir=whatsapp_dir,
@@ -241,6 +247,11 @@ def main() -> int:
                 # Google Takeout: extract walks `input_path` (the Takeout
                 # root); the Google Chat feed renders.
                 "google-takeout": ("google_takeout", gtk_fx),
+                # LinkedIn: extract walks the export dir directly (same
+                # file-backed shape as carddav); the message feeds +
+                # connections render, and connection photos are fetched
+                # via the playback fixtures synthesized above.
+                "linkedin": ("linkedin", linkedin_fx),
             },
             notion_seed=notion_seed,
             beeper_data_dir=beeper_data_dir,
@@ -382,6 +393,12 @@ def _yaml(
                 lines.append(f"      backup_dir: {whatsapp_dir}")
             else:
                 lines.append("    sync: {}")
+        elif type_str == "linkedin":
+            # File-backed CSV walk (no `sync:` block). Turn on the
+            # connection-photo fetch so the pipeline exercises the
+            # og:image → CAS path — hermetically, against the playback
+            # fixtures LinkedinSynth wrote in the synth phase.
+            lines.append("    fetch_photos: true")
         elif type_str == "google_takeout":
             # Opt into the rendering feeds: Google Chat and Google Voice
             # (incl. its Spam folder, to exercise that path). The other

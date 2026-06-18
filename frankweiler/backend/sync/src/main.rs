@@ -1545,6 +1545,7 @@ enum ExtractKind {
     /// `<data_root>/raw/<name>` like the other file-backed providers.
     Linkedin {
         input_path: PathBuf,
+        fetch_photos: bool,
     },
     /// Google Takeout export directory walker. `input_path` is the
     /// unzipped Takeout root; `sync` selects which feeds to ingest.
@@ -1641,14 +1642,17 @@ impl ExtractPlan {
                     }
                 }
             },
-            SourceConfig::Linkedin { .. } => {
+            SourceConfig::Linkedin { fetch_photos, .. } => {
                 // File-backed: `out_dir` was resolved from `input_path:`
                 // and points at the user's export directory. The raw
                 // doltlite store always lives at `<data_root>/raw/<name>`
                 // (same convention as the carddav-file / mbox paths).
                 let input_path = out_dir.clone();
                 out_dir = cfg.data_root.join("raw").join(&name);
-                ExtractKind::Linkedin { input_path }
+                ExtractKind::Linkedin {
+                    input_path,
+                    fetch_photos: *fetch_photos,
+                }
             }
             SourceConfig::GoogleTakeout { sync, .. } => {
                 // File-backed (the unzipped Takeout root); raw doltlite
@@ -2050,12 +2054,13 @@ impl ExtractPlan {
                     s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
                 )
             }),
-            (ExtractKind::Linkedin { input_path }, Some(DbHandle::Linkedin(db))) => {
+            (ExtractKind::Linkedin { input_path, fetch_photos }, Some(DbHandle::Linkedin(db))) => {
                 frankweiler_etl_linkedin::extract::fetch(
                     frankweiler_etl_linkedin::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
                         db: Some(db),
                         input_path,
+                        fetch_photos,
                         progress: progress.clone(),
                         control: control.clone(),
                     },
@@ -2815,13 +2820,22 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::Linkedin { .. } => {
-                // File-backed (no HTTP to play back); synth is a no-op.
-                status_line!(
-                    "[synth] {} (linkedin): skipped (file-backed, no extract HTTP)",
-                    src.name()
-                );
-                continue;
+            SourceConfig::Linkedin { fetch_photos, .. } => {
+                // File-backed for the CSV walk; the only HTTP it makes is
+                // the optional connection-photo fetch. Synthesize those
+                // fixtures iff that's enabled, else there's nothing to
+                // play back.
+                if *fetch_photos {
+                    Box::new(frankweiler_etl_linkedin::synthesize::LinkedinSynth::new(
+                        input.clone(),
+                    ))
+                } else {
+                    status_line!(
+                        "[synth] {} (linkedin): skipped (photo fetch off)",
+                        src.name()
+                    );
+                    continue;
+                }
             }
             SourceConfig::GoogleTakeout { .. } => {
                 // File-backed (no HTTP to play back); synth is a no-op.

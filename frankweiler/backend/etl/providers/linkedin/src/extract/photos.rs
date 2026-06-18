@@ -1,0 +1,344 @@
+//! Fetch each connection's profile photo and store it in the per-source
+//! CAS, mapped by a `contact_photos` edge row.
+//!
+//! Shape (kept consistent with the contacts provider, even though the
+//! code isn't shared — this is raw data, owned per-provider):
+//!
+//! ```sql
+//! CREATE TABLE contact_photos (
+//!     id        TEXT PRIMARY KEY,   -- "{owner_id}#{source_url}"
+//!     owner_id  TEXT NOT NULL,      -- the raw entity id (= connection_uuid)
+//!     source_url TEXT NOT NULL,     -- where the bytes came from (og:image URL)
+//!     blake3    TEXT NULL           -- CAS key; NULL = attempted, no photo
+//! )
+//! ```
+//!
+//! Bytes live in the sibling `<name>.blobs.doltlite_db` CAS keyed by
+//! blake3. The render side joins `contact_photos` → `cas_objects` to
+//! materialize the image next to the contact's markdown.
+//!
+//! ## Fetch path
+//!
+//! LinkedIn profile URLs are HTML pages, not images. We GET the public
+//! profile page, scrape its `og:image` meta tag, then GET that image —
+//! both via the shared curl chokepoint in **plain** mode
+//! ([`HttpRequest::plain`]): these are public, auth-free resources with
+//! no latchkey service, and we still get the chokepoint's retry/backoff
+//! and playback support.
+//!
+//! ## Idempotence
+//!
+//! We only fetch for a connection that has **no** `contact_photos` row
+//! yet. A successful fetch records the blake3; a failure records a row
+//! with `blake3 = NULL`. Either way the connection is never retried, so
+//! once a sync has run this is effectively a no-op.
+
+use anyhow::{Context, Result};
+use frankweiler_etl::blob_cas::{cas_path_for, BlobCas};
+use frankweiler_etl::http::{latchkey_curl, HttpRequest};
+use frankweiler_etl::progress::Progress;
+use serde::Serialize;
+use serde_json::Value;
+use sqlx::Row;
+
+use super::schema_raw::connection_uuid;
+use super::RawDb;
+
+/// The shared contact→photo edge table name (same in the contacts
+/// provider). Lives in the entity raw store; bytes live in the CAS.
+pub const CONTACT_PHOTOS_TABLE: &str = "contact_photos";
+
+const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (
+    id         TEXT PRIMARY KEY,
+    owner_id   TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    blake3     TEXT NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
+)";
+
+const CONTACT_PHOTOS_BY_OWNER_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS contact_photos_by_owner ON contact_photos(owner_id)";
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct PhotoSummary {
+    /// Connections we attempted a fetch for this run (had a URL, no prior row).
+    pub attempted: usize,
+    /// Photos successfully stored in CAS this run.
+    pub fetched: usize,
+    /// Attempts that found no usable image (recorded so we don't retry).
+    pub misses: usize,
+}
+
+/// Fetch-and-store photos for every connection that doesn't already have
+/// a `contact_photos` row. `db_path` is the resolved entity db path (its
+/// CAS sibling is derived via [`cas_path_for`]).
+pub async fn fetch_connection_photos(
+    db: &RawDb,
+    db_path: &std::path::Path,
+    progress: &Progress,
+) -> Result<PhotoSummary> {
+    // The connections table may be absent (user excluded it) — nothing
+    // to do. load_payloads errors on a missing table, so treat that as
+    // empty.
+    let connections = db.load_payloads("connections").await.unwrap_or_default();
+    if connections.is_empty() {
+        return Ok(PhotoSummary::default());
+    }
+
+    let pool = db.pool();
+    sqlx::query(CONTACT_PHOTOS_DDL)
+        .execute(pool)
+        .await
+        .context("create contact_photos")?;
+    sqlx::query(CONTACT_PHOTOS_BY_OWNER_DDL)
+        .execute(pool)
+        .await
+        .context("index contact_photos")?;
+
+    // Owners we've already attempted (success or miss) — skip them.
+    let already: std::collections::HashSet<String> =
+        sqlx::query("SELECT DISTINCT owner_id FROM contact_photos")
+            .fetch_all(pool)
+            .await
+            .context("load existing contact_photos owners")?
+            .into_iter()
+            .map(|r| r.get::<String, _>("owner_id"))
+            .collect();
+
+    let cas = BlobCas::open(&cas_path_for(db_path))
+        .await
+        .context("open linkedin CAS")?;
+
+    let mut summary = PhotoSummary::default();
+    for p in &connections {
+        let url = field(p, "URL");
+        if url.is_empty() {
+            continue;
+        }
+        let owner_id = connection_uuid(url);
+        if already.contains(&owner_id) {
+            continue;
+        }
+        summary.attempted += 1;
+        progress.set_message(&format!("photo: {}", display_name(p)));
+
+        match fetch_one(url).await {
+            Ok(Some(photo)) => {
+                let blake3 = cas
+                    .put(&photo.bytes, photo.content_type.as_deref())
+                    .await
+                    .context("cas put connection photo")?;
+                insert_edge(pool, &owner_id, &photo.source_url, Some(&blake3)).await?;
+                summary.fetched += 1;
+            }
+            Ok(None) => {
+                // Record the attempt (keyed on the profile URL) so we
+                // don't try this connection again.
+                insert_edge(pool, &owner_id, url, None).await?;
+                summary.misses += 1;
+            }
+            Err(e) => {
+                tracing::warn!(event = "linkedin_photo_failed", url, error = %e);
+                insert_edge(pool, &owner_id, url, None).await?;
+                summary.misses += 1;
+            }
+        }
+    }
+    Ok(summary)
+}
+
+/// Render-side: load every stored connection photo as
+/// `owner_id (connection_uuid) → (bytes, content_type)`. Joins
+/// `contact_photos` → `cas_objects`. Empty when photos were never
+/// fetched (the table won't exist). Never fails on a missing table.
+pub async fn load_photo_blobs(
+    db: &RawDb,
+    db_path: &std::path::Path,
+) -> Result<std::collections::HashMap<String, (Vec<u8>, Option<String>)>> {
+    let pool = db.pool();
+    let table_exists: Option<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+            .bind(CONTACT_PHOTOS_TABLE)
+            .fetch_optional(pool)
+            .await
+            .context("probe contact_photos")?;
+    let mut out = std::collections::HashMap::new();
+    if table_exists.is_none() {
+        return Ok(out);
+    }
+
+    // owner_id → blake3 for the rows that actually have bytes.
+    let edges = sqlx::query("SELECT owner_id, blake3 FROM contact_photos WHERE blake3 IS NOT NULL")
+        .fetch_all(pool)
+        .await
+        .context("load contact_photos")?;
+    if edges.is_empty() {
+        return Ok(out);
+    }
+    let cas = BlobCas::open(&cas_path_for(db_path))
+        .await
+        .context("open linkedin CAS")?;
+    for row in edges {
+        let owner_id: String = row.get("owner_id");
+        let blake3: String = row.get("blake3");
+        if let Some((bytes, content_type)) = load_cas_bytes(&cas, &blake3).await? {
+            out.insert(owner_id, (bytes, content_type));
+        }
+    }
+    Ok(out)
+}
+
+async fn load_cas_bytes(cas: &BlobCas, blake3: &str) -> Result<Option<(Vec<u8>, Option<String>)>> {
+    let row = sqlx::query("SELECT bytes, content_type FROM cas_objects WHERE blake3 = ?")
+        .bind(blake3)
+        .fetch_optional(cas.pool())
+        .await
+        .context("load cas bytes")?;
+    Ok(row.map(|r| {
+        (
+            r.get::<Vec<u8>, _>("bytes"),
+            r.get::<Option<String>, _>("content_type"),
+        )
+    }))
+}
+
+struct FetchedPhoto {
+    source_url: String,
+    content_type: Option<String>,
+    bytes: Vec<u8>,
+}
+
+/// GET the profile page, scrape `og:image`, GET the image. Returns
+/// `None` when the page/image can't be fetched or has no usable image
+/// (a normal, non-error outcome — many profiles aren't public).
+async fn fetch_one(profile_url: &str) -> Result<Option<FetchedPhoto>> {
+    let page = latchkey_curl(&HttpRequest::get("linkedin", profile_url).plain())
+        .await
+        .with_context(|| format!("GET profile page {profile_url}"))?;
+    if !(200..300).contains(&page.status) {
+        return Ok(None);
+    }
+    let Some(img_url) = extract_og_image(&page.body_str()) else {
+        return Ok(None);
+    };
+    let img = latchkey_curl(&HttpRequest::get("linkedin", &img_url).plain())
+        .await
+        .with_context(|| format!("GET og:image {img_url}"))?;
+    if !(200..300).contains(&img.status) || img.body.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(FetchedPhoto {
+        source_url: img_url,
+        content_type: img.header("content-type").map(str::to_string),
+        bytes: img.body,
+    }))
+}
+
+/// Pull the first `og:image` (or `og:image:secure_url` / `twitter:image`)
+/// URL out of an HTML head. Deliberately tiny and forgiving — we scan for
+/// a `<meta>` whose property/name is one of those and read its `content`,
+/// tolerating either attribute order.
+fn extract_og_image(html: &str) -> Option<String> {
+    const KEYS: &[&str] = &["og:image:secure_url", "og:image", "twitter:image"];
+    let lower = html.to_lowercase();
+    for key in KEYS {
+        let mut from = 0;
+        while let Some(rel) = lower[from..].find(&format!("\"{key}\"")) {
+            let idx = from + rel;
+            // Search the enclosing tag (back to '<', forward to '>') for content="…".
+            let tag_start = lower[..idx].rfind('<').unwrap_or(idx);
+            let tag_end = lower[idx..]
+                .find('>')
+                .map(|e| idx + e)
+                .unwrap_or(html.len());
+            if let Some(content) = attr_value(&html[tag_start..tag_end], "content") {
+                let v = content.trim();
+                if v.starts_with("http://") || v.starts_with("https://") {
+                    return Some(v.to_string());
+                }
+            }
+            from = tag_end.max(idx + 1);
+        }
+    }
+    None
+}
+
+/// Read `name="value"` (or `name='value'`) out of a tag fragment,
+/// case-insensitive on the attribute name.
+fn attr_value(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_lowercase();
+    let needle = format!("{name}=");
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(&needle) {
+        let after = from + rel + needle.len();
+        let rest = &tag[after..];
+        let quote = rest.chars().next()?;
+        if quote == '"' || quote == '\'' {
+            let body = &rest[1..];
+            if let Some(end) = body.find(quote) {
+                return Some(body[..end].to_string());
+            }
+        }
+        from = after;
+    }
+    None
+}
+
+async fn insert_edge(
+    pool: &sqlx::SqlitePool,
+    owner_id: &str,
+    source_url: &str,
+    blake3: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT OR REPLACE INTO contact_photos (id, owner_id, source_url, blake3) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(format!("{owner_id}#{source_url}"))
+    .bind(owner_id)
+    .bind(source_url)
+    .bind(blake3)
+    .execute(pool)
+    .await
+    .context("insert contact_photos row")?;
+    Ok(())
+}
+
+fn field<'a>(p: &'a Value, key: &str) -> &'a str {
+    p.get(key).and_then(Value::as_str).unwrap_or("").trim()
+}
+
+fn display_name(p: &Value) -> String {
+    format!("{} {}", field(p, "First Name"), field(p, "Last Name"))
+        .trim()
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_og_image_either_attr_order() {
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://media.example/pic.jpg" />
+            </head></html>"#;
+        assert_eq!(
+            extract_og_image(html).as_deref(),
+            Some("https://media.example/pic.jpg")
+        );
+        // content before property
+        let html2 = r#"<meta content='https://x/y.png' property="og:image">"#;
+        assert_eq!(extract_og_image(html2).as_deref(), Some("https://x/y.png"));
+        // secure_url preferred key also works
+        let html3 = r#"<meta property="og:image:secure_url" content="https://s/p.jpg">"#;
+        assert_eq!(extract_og_image(html3).as_deref(), Some("https://s/p.jpg"));
+        // no og:image
+        assert_eq!(extract_og_image("<html></html>"), None);
+        // non-http content is ignored
+        assert_eq!(
+            extract_og_image(r#"<meta property="og:image" content="data:foo">"#),
+            None
+        );
+    }
+}

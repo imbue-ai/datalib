@@ -133,6 +133,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
         opts.progress.inc(1);
     }
+
+    // Lift inline vCard photos into the per-source CAS (consistent
+    // contact_photos shape, shared with the LinkedIn provider). The
+    // local-file path opens the db directly at `opts.db_path`.
+    if let Err(e) = super::photos::lift_photos_to_cas(&db, &opts.db_path).await {
+        warn!(event = "carddav_vcf_photo_lift_failed", error = %e);
+    }
     Ok(summary)
 }
 

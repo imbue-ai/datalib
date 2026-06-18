@@ -675,10 +675,17 @@ pub enum SourceConfig {
     /// LinkedIn data export ("takeout"). Always file-backed — there's no
     /// API to sync from, so `input_path:` points at the unzipped export
     /// directory full of CSVs. Extract ingests every CSV generically;
-    /// translate renders the `messages` feed.
+    /// translate renders the message feeds + connections.
     Linkedin {
         #[serde(flatten)]
         common: SourceCommon,
+        /// Fetch each connection's profile photo (scrape `og:image` from
+        /// their public profile page) into the per-source CAS, once.
+        /// Off by default — it makes outbound web requests to LinkedIn,
+        /// which we don't want implicitly. See the linkedin `photos`
+        /// module for the once-only fetch contract.
+        #[serde(default)]
+        fetch_photos: bool,
     },
     /// Google Takeout export. File-backed — `input_path:` points at the
     /// unzipped Takeout root. The `sync:` block opts into individual

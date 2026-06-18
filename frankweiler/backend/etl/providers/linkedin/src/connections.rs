@@ -21,10 +21,12 @@ use anyhow::Result;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_contact_common::{
-    render_all as cc_render_all, ContactField, ContactRenderProfile, NormalizedContact,
+    render_all as cc_render_all, ContactField, ContactPhoto, ContactRenderProfile,
+    NormalizedContact,
 };
 use serde_json::Value;
 
+use crate::extract::photos::load_photo_blobs;
 use crate::extract::schema_raw::{connection_uuid, ns_id};
 use crate::extract::{db_path_for, RawDb};
 
@@ -53,16 +55,33 @@ pub fn render_connections(
     if !db_path.exists() {
         return Ok(());
     }
-    let payloads = tokio::task::block_in_place(|| {
+    let (payloads, photos) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open(&db_path).await?;
             // A user who excluded connections has no table; treat a load
             // error as "absent" rather than failing the whole render.
-            Ok::<_, anyhow::Error>(db.load_payloads("connections").await.unwrap_or_default())
+            let payloads = db.load_payloads("connections").await.unwrap_or_default();
+            // Photos, if any were fetched, keyed by connection_uuid.
+            let photos = load_photo_blobs(&db, &db_path).await.unwrap_or_default();
+            Ok::<_, anyhow::Error>((payloads, photos))
         })
     })?;
 
-    let contacts: Vec<NormalizedContact> = payloads.iter().map(to_contact).collect();
+    let contacts: Vec<NormalizedContact> = payloads
+        .iter()
+        .map(|p| {
+            let mut c = to_contact(p);
+            if let Some((bytes, content_type)) = photos.get(&c.contact_uuid) {
+                c.photo = Some(ContactPhoto {
+                    bytes: bytes.clone(),
+                    content_type: content_type
+                        .clone()
+                        .unwrap_or_else(|| "application/octet-stream".to_string()),
+                });
+            }
+            c
+        })
+        .collect();
     let profile = ContactRenderProfile {
         provider: "linkedin",
         source_label: "LinkedIn".to_string(),
