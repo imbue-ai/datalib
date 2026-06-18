@@ -1591,6 +1591,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-linkedin"
+version = "0.11.1"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "csv",
+ "frankweiler-etl",
+ "frankweiler-etl-chat-common",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-macros"
 version = "0.11.1"
 dependencies = [
@@ -1860,6 +1878,7 @@ dependencies = [
  "frankweiler-etl-email",
  "frankweiler-etl-github",
  "frankweiler-etl-gitlab",
+ "frankweiler-etl-linkedin",
  "frankweiler-etl-notion",
  "frankweiler-etl-perseus",
  "frankweiler-etl-signal",

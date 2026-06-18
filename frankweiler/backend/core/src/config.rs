@@ -651,6 +651,14 @@ pub enum SourceConfig {
         #[serde(default)]
         sync: Option<CarddavSync>,
     },
+    /// LinkedIn data export ("takeout"). Always file-backed — there's no
+    /// API to sync from, so `input_path:` points at the unzipped export
+    /// directory full of CSVs. Extract ingests every CSV generically;
+    /// translate renders the `messages` feed.
+    Linkedin {
+        #[serde(flatten)]
+        common: SourceCommon,
+    },
     /// Perseus Digital Library TEI editions. The `sync:` block names
     /// which TEI files to download from `PerseusDL/canonical-greekLit`
     /// (or, in translate-only mode with `sync:` omitted, expects the
@@ -709,6 +717,7 @@ impl SourceConfig {
             | SourceConfig::Email { common, .. }
             | SourceConfig::Beeper { common, .. }
             | SourceConfig::Carddav { common, .. }
+            | SourceConfig::Linkedin { common, .. }
             | SourceConfig::Perseus { common, .. }
             | SourceConfig::Yolink { common, .. }
             | SourceConfig::SignalBackup { common, .. }
@@ -738,6 +747,7 @@ impl SourceConfig {
             SourceConfig::Email { .. } => "email",
             SourceConfig::Beeper { .. } => "beeper",
             SourceConfig::Carddav { .. } => "carddav",
+            SourceConfig::Linkedin { .. } => "linkedin",
             SourceConfig::Perseus { .. } => "perseus",
             SourceConfig::Yolink { .. } => "yolink",
             SourceConfig::SignalBackup { .. } => "signal_backup",
@@ -772,6 +782,9 @@ impl SourceConfig {
             SourceConfig::Carddav { sync, common, .. } => {
                 sync.is_some() || common.input_path.is_some()
             }
+            // LinkedIn is file-backed only: managed (we own the raw
+            // doltlite store) iff an `input_path:` export dir is set.
+            SourceConfig::Linkedin { common, .. } => common.input_path.is_some(),
             SourceConfig::Perseus { sync, .. } => sync.is_some(),
             SourceConfig::Yolink { sync, .. } => sync.is_some(),
             SourceConfig::SignalBackup { sync, .. } => sync.is_some(),

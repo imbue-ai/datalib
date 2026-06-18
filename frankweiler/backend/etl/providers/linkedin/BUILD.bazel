@@ -1,0 +1,41 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# TNG-themed LinkedIn export used by the central fixture pipeline.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/linkedin_tng/**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_linkedin",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_linkedin",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:csv",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "linkedin_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_linkedin",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)

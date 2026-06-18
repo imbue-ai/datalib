@@ -1,0 +1,7 @@
+Notes:
+"When exporting your connection data, you may notice that some of the email addresses are missing. You will only see email addresses for connections who have allowed their connections to see or download their email address."
+
+First Name,Last Name,URL,Email Address,Company,Position,Connected On
+Jean-Luc,Picard,https://www.linkedin.com/in/jlpicard,jlpicard@starfleet.gov,Starfleet,Captain,10 Apr 2369
+William,Riker,https://www.linkedin.com/in/wriker,,Starfleet,Commander,09 Apr 2369
+Data,Soong,https://www.linkedin.com/in/datasoong,,Starfleet,"Lt. Commander, Operations",08 Apr 2369

@@ -1406,6 +1406,7 @@ enum DbHandle {
     Notion(frankweiler_etl_notion::extract::RawDb),
     Beeper(frankweiler_etl_beeper::extract::RawDb),
     Carddav(frankweiler_etl_contacts::extract::RawDb),
+    Linkedin(frankweiler_etl_linkedin::extract::RawDb),
     Jmap(frankweiler_etl_email::extract::RawDb),
     Yolink(frankweiler_etl_yolink::extract::RawDb),
     Signal(frankweiler_etl_signal::extract::RawDb),
@@ -1423,6 +1424,7 @@ impl DbHandle {
             DbHandle::Notion(d) => d.pool(),
             DbHandle::Beeper(d) => d.pool(),
             DbHandle::Carddav(d) => d.pool(),
+            DbHandle::Linkedin(d) => d.pool(),
             DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
@@ -1478,6 +1480,9 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::Carddav { .. } | ExtractKind::CarddavFile { .. } => {
             DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
         }
+        ExtractKind::Linkedin { .. } => {
+            DbHandle::Linkedin(frankweiler_etl_linkedin::extract::RawDb::open(path).await?)
+        }
         ExtractKind::Jmap { .. } | ExtractKind::EmailMbox { .. } => {
             DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
         }
@@ -1529,6 +1534,12 @@ enum ExtractKind {
     CarddavFile {
         input_path: PathBuf,
         account_id_override: Option<String>,
+    },
+    /// LinkedIn export directory walker. `input_path` is the unzipped
+    /// export full of CSVs; the raw doltlite store lives at
+    /// `<data_root>/raw/<name>` like the other file-backed providers.
+    Linkedin {
+        input_path: PathBuf,
     },
     Perseus {
         sync: PerseusSync,
@@ -1619,6 +1630,15 @@ impl ExtractPlan {
                     }
                 }
             },
+            SourceConfig::Linkedin { .. } => {
+                // File-backed: `out_dir` was resolved from `input_path:`
+                // and points at the user's export directory. The raw
+                // doltlite store always lives at `<data_root>/raw/<name>`
+                // (same convention as the carddav-file / mbox paths).
+                let input_path = out_dir.clone();
+                out_dir = cfg.data_root.join("raw").join(&name);
+                ExtractKind::Linkedin { input_path }
+            }
             SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
                 sync: sync.clone().unwrap_or_default(),
             },
@@ -1997,6 +2017,24 @@ impl ExtractPlan {
                     s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
                 )
             }),
+            (ExtractKind::Linkedin { input_path }, Some(DbHandle::Linkedin(db))) => {
+                frankweiler_etl_linkedin::extract::fetch(
+                    frankweiler_etl_linkedin::extract::FetchOptions {
+                        db_path: self.out_dir.clone(),
+                        db: Some(db),
+                        input_path,
+                        progress: progress.clone(),
+                        control: control.clone(),
+                    },
+                )
+                .await
+                .map(|s| {
+                    format!(
+                        "files={} rows={} parse_errors={}",
+                        s.files, s.rows, s.parse_errors,
+                    )
+                })
+            }
             // Perseus is file-tree-backed (raw XML files on disk), not
             // doltlite — so it has no `DbHandle` and skips both the
             // pre-open and the post-extract dolt_commit. The pre-open
@@ -2507,6 +2545,21 @@ fn translate_source(
             .context("carddav render_all")
             .map(|_| ())
         }
+        SourceConfig::Linkedin { .. } => {
+            // `fixture` is the export dir; the raw store (where extract
+            // wrote the `messages` table) is the canonical
+            // `<data_root>/raw/<name>` location. Only messages render.
+            let raw_dir = cfg.data_root.join("raw").join(name);
+            frankweiler_etl_linkedin::render::render(
+                &raw_dir,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("linkedin render")
+        }
         SourceConfig::Email { sync, .. } => {
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
             use frankweiler_etl_email::translate::parse::parse;
@@ -2664,6 +2717,14 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // follow-up. Skip quietly.
                 status_line!(
                     "[synth] {} (email): skipped (no synthesizer yet)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Linkedin { .. } => {
+                // File-backed (no HTTP to play back); synth is a no-op.
+                status_line!(
+                    "[synth] {} (linkedin): skipped (file-backed, no extract HTTP)",
                     src.name()
                 );
                 continue;
