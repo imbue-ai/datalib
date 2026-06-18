@@ -45,6 +45,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 # git               needed by some build scripts (workspace_status.sh,
 #                   rules_rust crate fetches that vendor from git).
 # python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
+# sqlite3           the beeper provider's extract shells out to the
+#                   *stock* `sqlite3` CLI (it can't link rusqlite — see
+#                   beeper/src/extract/index_db.rs — and doltlite
+#                   misreads stock SQLite type codes). macOS ships
+#                   /usr/bin/sqlite3; on Ubuntu the runtime lib
+#                   (libsqlite3-0) does NOT carry the CLI, so the
+#                   `//tests/fixtures:ingested_tng` genrule failed with
+#                   "spawn sqlite3: No such file or directory" until
+#                   this was added.
 # unzip + zip       rules_rust workspace setup occasionally pulls
 #                   these in; cheap to keep.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -59,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         perl \
         pkg-config \
         python3-pip \
+        sqlite3 \
         unzip \
         zip \
     && rm -rf /var/lib/apt/lists/* \

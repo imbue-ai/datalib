@@ -118,6 +118,23 @@ jobs:
           bazel version
           rustc --version || true
 
+      # Bridge: install the stock `sqlite3` CLI the beeper provider's
+      # extract shells out to (`//tests/fixtures:ingested_tng`). The
+      # devcontainer Dockerfile now lists `sqlite3` in its apt set, but
+      # `:latest` only moves on `v*` tag republishes — so until the next
+      # release image ships, install it at runtime here. Idempotent and
+      # a no-op (already-installed) once the baked image carries it, so
+      # this step can stay. apt lists are pruned in the image, hence the
+      # `update`. Running as root in the container; no sudo needed.
+      - name: Install runtime test deps not yet baked into the image
+        run: |
+          set -euo pipefail
+          if ! command -v sqlite3 >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y --no-install-recommends sqlite3
+          fi
+          echo "sqlite3: $(command -v sqlite3) ($(sqlite3 --version))"
+
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
       # on every PR / main push warms exactly the entries tag-time
