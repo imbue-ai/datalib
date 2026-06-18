@@ -78,6 +78,7 @@ async function runCard() {
       "gridView()",
       'documentView("uuid")',
       "aliasView()",
+      "dactalView()",
       '(root) => { root.textContent = "hello, world" }',
     ];
     for (const ex of examples) {

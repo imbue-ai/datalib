@@ -90,4 +90,9 @@ export type ViewLibs = {
   ) => CardRender;
   // Live listing of the user-defined component library (/api/lib).
   aliasView: () => CardRender;
+  // DACTAL explorer (https://dactal.org): query grid_rows with DACTAL's
+  // query language + table UI, mounted in an iframe (public/dactal/).
+  // `load` is a Frankweiler search that seeds the working set; `q` is the
+  // initial DACTAL query.
+  dactalView: (opts?: { load?: string; q?: string }) => CardRender;
 };

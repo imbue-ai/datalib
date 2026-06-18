@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>DACTAL × Frankweiler — prototype</title>
+<!--
+  DACTAL ships as classic (non-module) scripts that attach to globals:
+    - dactal.js                 -> `window.DACTAL` (the engine: parse/execute/load)
+    - dactal_storage_indexeddb.js -> `DACTALdb` (IndexedDB persistence wrapper)
+    - dactal_utils.js           -> the table UI: buildView/arrayToTable/render,
+                                   the `renderers` registry, and `dactal_css`.
+  We reuse the ENGINE and the RENDERER, but NOT DACTAL's full host page
+  (its query page, saved-query store, AI assist, adapters). Instead we wire
+  a tiny query bar to `dactal.executeq()` + `buildView()` ourselves, and pull
+  the working set from Frankweiler's own `/api/search`.
+-->
+<script src="./vendor/dactal.js"></script>
+<script src="./vendor/dactal_storage_indexeddb.js"></script>
+<script src="./vendor/dactal_utils.js"></script>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; color: #1a1a1a; }
+  header { padding: 10px 14px; border-bottom: 1px solid #ddd; background: #fafafa; }
+  header h1 { font-size: 15px; margin: 0 0 8px; }
+  .bar { display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  .bar label { width: 92px; color: #666; font-size: 12px; text-align: right; }
+  .bar input { flex: 1; font: inherit; padding: 5px 7px; border: 1px solid #bbb; border-radius: 4px; }
+  .bar input#dq { font-family: ui-monospace, monospace; }
+  .bar button { padding: 5px 10px; }
+  .chips { margin: 6px 0 2px 98px; }
+  .chip { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 7px; background: #eef;
+          border: 1px solid #ccd; border-radius: 10px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 12px; }
+  .chip:hover { background: #dde; }
+  #status { color: #777; font-size: 12px; margin: 4px 0 0 98px; min-height: 16px; }
+  #crumbs { margin: 8px 14px 0; font-family: ui-monospace, monospace; font-size: 12px; color: #888; }
+  #crumbs a { color: #36c; cursor: pointer; text-decoration: none; }
+  #queryoutput { padding: 6px 14px 40px; }
+  .err { color: #b00; white-space: pre-wrap; font-family: ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DACTAL × Frankweiler — query your <code>grid_rows</code> with DACTAL</h1>
+  <div class="bar">
+    <label for="fw">Load (Frankweiler)</label>
+    <input id="fw" placeholder="Frankweiler search, e.g. provider:slack after:2025-01 — pulls a working set into the browser" />
+    <button id="fwgo">Load</button>
+  </div>
+  <div class="bar">
+    <label for="dq">DACTAL query</label>
+    <input id="dq" placeholder="rows/source   ·   rows:source=slack.author   ·   rows.author.count" />
+    <button id="dqgo">Run</button>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div id="status">loading…</div>
+</header>
+<div id="crumbs"></div>
+<div id="queryoutput"></div>
+
+<script type="module">
+import { loadSearchIntoDactal, fetchSearch } from "./bridge.js";
+
+// --- Wire up the globals DACTAL's renderer expects -------------------------
+// dactal_utils.js references a bare global `dactal` (the engine instance) and
+// `dactaldb` (used by column hide/filter handlers). buildView/arrayToTable
+// also call a global `runQuery` for drill-down; we install OUR OWN below so
+// clicks re-render into our container instead of DACTAL's host page.
+const dactal = new DACTAL();
+window.dactal = dactal;
+window.dactaldb = new DACTALdb({ dbname: "dactal-frankweiler-proto", storename: "Data" });
+
+// Inject DACTAL's table styles (normally added by its own host page).
+const css = document.createElement("style");
+// `dactal_css` is a top-level `const` in dactal_utils.js → a global *lexical*
+// binding, reachable by bare name from this module but NOT as window.dactal_css.
+css.textContent = dactal_css || "";
+document.head.appendChild(css);
+
+const out = document.getElementById("queryoutput");
+const dqInput = document.getElementById("dq");
+const statusEl = document.getElementById("status");
+const crumbs = document.getElementById("crumbs");
+let history = [];
+
+// Our minimal stand-in for DACTAL's runQuery: execute with the engine, render
+// with DACTAL's buildView. buildView's internal drill-down links call the
+// global runQuery (this function), so navigation composes for free.
+function runQuery(query) {
+  if (query == null) query = dqInput.value;
+  dqInput.value = query;
+  out.textContent = "";
+  // DACTAL's render() reads a global `audioshown` counter that its own
+  // runQuery seeds before each render; reading it undeclared would throw.
+  window.audioshown = 0;
+  try {
+    const results = dactal.executeq(query);     // synchronous engine path
+    const view = buildView(results, query, out); // DACTAL's table UI (global fn)
+    out.appendChild(view);
+    if (history[history.length - 1] !== query) history.push(query);
+    renderCrumbs();
+    const n = Array.isArray(results) ? results.length : 1;
+    setStatus(`${n} result${n === 1 ? "" : "s"} for `, query);
+  } catch (e) {
+    const pre = document.createElement("div");
+    pre.className = "err";
+    pre.textContent = `query error: ${e.message}\n${e.stack || ""}`;
+    out.appendChild(pre);
+  }
+}
+window.runQuery = runQuery; // override DACTAL's so drill-down routes here
+
+function renderCrumbs() {
+  crumbs.textContent = "";
+  history.slice(-8).forEach((q, i, arr) => {
+    const a = document.createElement("a");
+    a.textContent = q;
+    a.onclick = () => { history = history.slice(0, history.indexOf(q) + 1); runQuery(q); };
+    crumbs.appendChild(a);
+    if (i < arr.length - 1) crumbs.appendChild(document.createTextNode("  ›  "));
+  });
+}
+
+function setStatus(prefix, query) {
+  statusEl.textContent = prefix + (query ? `“${query}”` : "");
+}
+
+// Card params (set by dactalView(...) via the iframe URL):
+//   ?fw=<frankweiler search>   working set to pull from /api/search
+//   ?dq=<dactal query>         initial DACTAL query (default rows/source)
+const PARAMS = new URLSearchParams(location.search);
+const INITIAL_FW = PARAMS.get("fw") || "";
+const INITIAL_DQ = PARAMS.get("dq") || "rows/source";
+
+// Provider-agnostic examples (work over any Frankweiler corpus). The last
+// one shows bracketing a value that contains spaces/parens — DACTAL treats
+// space/`(`/`)` as syntax, so `kind=Slack Message` must be `kind=[Slack Message]`.
+const EXAMPLES = [
+  "rows",
+  "rows/source",
+  "rows/kind",
+  "rows/author#-count",
+  "rows#-when",
+  "rows:kind=[Slack Message]",
+];
+const chips = document.getElementById("chips");
+for (const ex of EXAMPLES) {
+  const c = document.createElement("span");
+  c.className = "chip";
+  c.textContent = ex;
+  c.onclick = () => runQuery(ex);
+  chips.appendChild(c);
+}
+
+async function load(fwQuery, initialDq) {
+  setStatus("loading working set…");
+  history = [];
+  // Reset datasets so re-loading doesn't append duplicates.
+  for (const k of Object.keys(dactal.data)) {
+    if (!dactal.internal_datasets.includes(k)) delete dactal.data[k];
+  }
+  try {
+    const resp = await fetchSearch(fwQuery, 500);
+    const summary = loadSearchIntoDactal(dactal, resp);
+    const ents = Object.entries(summary.entities)
+      .filter(([, n]) => n)
+      .map(([k, n]) => `${k}:${n}`)
+      .join("  ");
+    statusEl.textContent =
+      `loaded ${summary.rows} rows → datasets: rows + ${ents}.  Try a DACTAL query.`;
+    runQuery(initialDq || INITIAL_DQ);
+  } catch (e) {
+    statusEl.innerHTML =
+      `<span class="err">could not reach /api/search (${e.message}). ` +
+      `Serve this page so /api proxies to the Frankweiler backend — see README.</span>`;
+  }
+}
+
+const fwInput = document.getElementById("fw");
+fwInput.value = INITIAL_FW;
+document.getElementById("fwgo").onclick = () => load(fwInput.value);
+document.getElementById("dqgo").onclick = () => runQuery();
+dqInput.addEventListener("keydown", (e) => { if (e.key === "Enter") runQuery(); });
+fwInput.addEventListener("keydown", (e) => { if (e.key === "Enter") load(e.target.value); });
+
+// Initial load from card params (or empty Frankweiler query → recent rows).
+load(INITIAL_FW, INITIAL_DQ);
+</script>
+</body>
+</html>
