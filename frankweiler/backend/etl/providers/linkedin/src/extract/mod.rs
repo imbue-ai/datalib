@@ -1,21 +1,34 @@
 //! LinkedIn data-export ("takeout") ingester — dead simple, one table
-//! per CSV.
+//! per file.
 //!
 //! We walk the export directory, and for every `*.csv` we find we make a
 //! `(id, payload)` raw table named after the file, drop its rows, and
 //! re-insert one row per CSV record with the entire record captured as a
 //! JSON `payload`. A LinkedIn export is a complete snapshot, so
 //! "drop-all-and-reinsert every present file" is the whole incremental
-//! story — no cursors, no diffing.
+//! story — no cursors, no diffing. The user's published articles
+//! (`Articles/**/*.html`) are the one non-CSV feed; they land in the
+//! [`schema_raw::ARTICLES_TABLE`] table one row per file.
+//!
+//! ## What we ingest
+//!
+//! [`schema_raw::KNOWN_FILES`] enumerates every file a *complete* export
+//! can contain. That list is documentation, not a gate: any CSV we find
+//! is ingested whether listed or not (an unlisted one earns a WARN so we
+//! notice new export shapes), and every listed file is optional — a
+//! missing file simply yields no table. So running on a partial export
+//! (deleted, never-exported, or privacy-excluded files) is always safe.
 //!
 //! ## Identity
 //!
 //! Most LinkedIn CSVs carry no per-row id, so the default PK is a
 //! uuidv5 over the table name + the row's contents: stable across
-//! re-exports and self-deduping. A tiny per-file hint table
-//! ([`ID_HINTS`]) names the natural key column(s) for the handful of
-//! files that have one (e.g. Connections' profile `URL`); when those
-//! columns are all empty for a row we fall back to the row hash.
+//! re-exports and self-deduping. [`schema_raw::KNOWN_FILES`] names the
+//! natural-key column(s) for the handful of files that have one (e.g.
+//! Connections' profile `URL`); when those columns are all empty for a
+//! row we fall back to the row hash. Table names come from
+//! [`schema_raw::canonical_table`], which strips LinkedIn's per-member
+//! numeric filename suffix (`Comments_17529409.csv` → `comments`).
 //!
 //! ## Quirks handled
 //!
@@ -26,6 +39,8 @@
 //!     lost.
 //!   * Multi-line quoted fields (Learning.csv course descriptions) parse
 //!     correctly because we hand the byte stream to the `csv` crate.
+
+pub mod schema_raw;
 
 use std::path::{Path, PathBuf};
 
@@ -39,31 +54,13 @@ use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 use uuid::Uuid;
 
+use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
+
 pub use frankweiler_etl::doltlite_raw::db_path_for;
 
 /// Rows per multi-VALUES INSERT statement. 2 binds/row keeps us well
 /// under SQLite's 32k-param ceiling.
 const INSERT_CHUNK: usize = 400;
-
-/// Natural-key column hints, keyed by the lowercased file stem (the
-/// basename without `.csv`). Files not listed — and rows whose hinted
-/// columns are all empty — fall back to a uuidv5 row hash. Keep this
-/// short: only list files with a genuinely stable unique column.
-const ID_HINTS: &[(&str, &[&str])] = &[
-    ("connections", &["URL"]),
-    (
-        "invitations",
-        &["inviterProfileUrl", "inviteeProfileUrl", "Sent At"],
-    ),
-    ("email addresses", &["Email Address"]),
-    ("company follows", &["Organization"]),
-    ("rich_media", &["Media Link"]),
-];
-
-/// Per-provider uuidv5 namespace for synthesized row ids.
-fn linkedin_ns() -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.frankweiler")
-}
 
 #[derive(Clone, Debug)]
 pub struct RawDb {
@@ -110,7 +107,9 @@ pub struct FetchSummary {
     pub parse_errors: usize,
 }
 
-/// Run one extract pass: ingest every `*.csv` under `input_path`.
+/// Run one extract pass: ingest every `*.csv` (plus `Articles/**/*.html`)
+/// under `input_path`. Files absent from [`schema_raw::KNOWN_FILES`] are
+/// still ingested — they just log a WARN so new export shapes surface.
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let db = match opts.db.clone() {
         Some(db) => db,
@@ -125,6 +124,14 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 
     for path in discover_csvs(&opts.input_path) {
         let table = table_name(&opts.input_path, &path);
+        if known_file(&table).is_none() {
+            warn!(
+                event = "linkedin_unknown_file",
+                file = %path.display(),
+                table,
+                "CSV not in KNOWN_FILES manifest; ingesting generically",
+            );
+        }
         match ingest_one(&mut tx, &table, &path).await {
             Ok(n) => {
                 summary.files += 1;
@@ -134,6 +141,26 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             }
             Err(e) => {
                 warn!(event = "linkedin_csv_failed", file = %path.display(), table, error = %e);
+                summary.parse_errors += 1;
+            }
+        }
+    }
+
+    // Articles are the one non-CSV feed: each `*.html` becomes a row in
+    // the shared `articles` table. No-op when the export has none.
+    let articles = discover_articles(&opts.input_path);
+    if !articles.is_empty() {
+        match ingest_articles(&mut tx, &opts.input_path, &articles).await {
+            Ok(n) => {
+                summary.files += 1;
+                summary.rows += n;
+                opts.progress.set_message(&format!(
+                    "{ARTICLES_TABLE}: {n} rows ({} files)",
+                    summary.files
+                ));
+            }
+            Err(e) => {
+                warn!(event = "linkedin_articles_failed", error = %e);
                 summary.parse_errors += 1;
             }
         }
@@ -157,10 +184,9 @@ async fn ingest_one(
         .flexible(true)
         .from_reader(body.as_bytes());
     let headers = dedup_headers(rdr.headers().context("read CSV header")?);
-    let id_cols = ID_HINTS
-        .iter()
-        .find(|(stem, _)| *stem == file_stem_lower(path))
-        .map(|(_, cols)| *cols);
+    let id_cols = known_file(table)
+        .map(|f| f.id_cols)
+        .filter(|c| !c.is_empty());
 
     let mut rows: Vec<(String, String)> = Vec::new();
     for rec in rdr.records() {
@@ -175,7 +201,43 @@ async fn ingest_one(
         rows.push((id, payload.to_string()));
     }
 
-    // CREATE (idempotent), then full replace.
+    replace_table(tx, table, &rows).await?;
+    Ok(rows.len())
+}
+
+/// Discover every `*.html` under an `Articles/` directory in the export
+/// and ingest each as one row of the shared [`ARTICLES_TABLE`]. The
+/// payload is `{ "file": <export-relative path>, "html": <contents> }`;
+/// the row id is the relative path (stable, one row per article file).
+async fn ingest_articles(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    root: &Path,
+    paths: &[PathBuf],
+) -> Result<usize> {
+    let mut rows: Vec<(String, String)> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+        let html =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let payload = serde_json::json!({ "file": rel, "html": html });
+        rows.push((rel, payload.to_string()));
+    }
+    replace_table(tx, ARTICLES_TABLE, &rows).await?;
+    Ok(rows.len())
+}
+
+/// CREATE the `(id, payload)` table if needed, clear it, and bulk-insert
+/// `rows` (id, payload-JSON). A LinkedIn export is a full snapshot, so
+/// every table is replaced wholesale.
+async fn replace_table(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    table: &str,
+    rows: &[(String, String)],
+) -> Result<()> {
     let ddl = dr::wire_payload_table_ddl(table, &[]);
     sqlx::query(&ddl)
         .execute(&mut **tx)
@@ -202,8 +264,7 @@ async fn ingest_one(
             .await
             .with_context(|| format!("insert into {table}"))?;
     }
-
-    Ok(rows.len())
+    Ok(())
 }
 
 /// PK for a row: the joined natural-key columns when hinted and present,
@@ -247,38 +308,46 @@ fn discover_csvs(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Slugify a CSV's path-relative-to-`root` into a SQL table name:
-/// lowercase, non-alphanumeric runs collapse to `_`. e.g.
-/// `Email Addresses.csv` → `email_addresses`, `Jobs/foo.csv` →
-/// `jobs_foo`.
+/// Recursively collect every `*.html` under an `Articles/` directory in
+/// the export, sorted. Empty when the export has no articles.
+fn discover_articles(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut in_articles = vec![false];
+    while let Some(dir) = stack.pop() {
+        let under = in_articles.pop().unwrap_or(false);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let name_is_articles = p
+                    .file_name()
+                    .is_some_and(|n| n.eq_ignore_ascii_case("articles"));
+                stack.push(p);
+                in_articles.push(under || name_is_articles);
+            } else if under
+                && p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+            {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The raw table name for a CSV's path-relative-to-`root`. Delegates to
+/// [`schema_raw::canonical_table`]: lowercase, non-alphanumeric runs
+/// collapse to `_`, and the per-member numeric filename suffix is
+/// stripped. e.g. `Email Addresses.csv` → `email_addresses`,
+/// `Comments_17529409.csv` → `comments`.
 fn table_name(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
     let stem = rel.with_extension("");
-    let s = stem.to_string_lossy().to_lowercase();
-    let mut out = String::new();
-    let mut prev_us = false;
-    for ch in s.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-            prev_us = false;
-        } else if !prev_us {
-            out.push('_');
-            prev_us = true;
-        }
-    }
-    let t = out.trim_matches('_').to_string();
-    // Leading digit would be an awkward identifier; prefix it.
-    if t.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("t_{t}")
-    } else {
-        t
-    }
-}
-
-fn file_stem_lower(path: &Path) -> String {
-    path.file_stem()
-        .map(|s| s.to_string_lossy().to_lowercase())
-        .unwrap_or_default()
+    canonical_table(&stem.to_string_lossy())
 }
 
 /// Drop a leading `Notes:` preamble (a `Notes:` line, an explanatory
@@ -341,6 +410,11 @@ mod tests {
         assert_eq!(
             table_name(root, Path::new("/x/Receipts_v2.csv")),
             "receipts_v2"
+        );
+        // Per-member numeric suffix is stripped to a canonical name.
+        assert_eq!(
+            table_name(root, Path::new("/x/Comments_17529409.csv")),
+            "comments"
         );
     }
 

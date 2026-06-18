@@ -2612,8 +2612,9 @@ fn translate_source(
         }
         SourceConfig::Linkedin { .. } => {
             // `fixture` is the export dir; the raw store (where extract
-            // wrote the `messages` table) is the canonical
-            // `<data_root>/raw/<name>` location. Only messages render.
+            // wrote the message tables) is the canonical
+            // `<data_root>/raw/<name>` location. Every message-shaped
+            // feed (DMs + AI-coach transcripts) renders.
             let raw_dir = cfg.data_root.join("raw").join(name);
             frankweiler_etl_linkedin::render::render(
                 &raw_dir,

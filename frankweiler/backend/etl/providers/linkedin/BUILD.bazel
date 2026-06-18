@@ -39,3 +39,23 @@ rust_test(
         "@frankweiler_crates//:tempfile",
     ],
 )
+
+# End-to-end test: writes a synthetic export tree (Notes: preamble,
+# member-id-suffixed filename, Articles HTML, two message feeds, an
+# unmanifested CSV) into a tempdir, runs extract + render, and asserts
+# the landed raw tables and rendered chats. Self-contained — the fixture
+# is built in-code, so there's nothing to stage via `data`.
+rust_test(
+    name = "linkedin_e2e",
+    srcs = ["tests/linkedin_e2e.rs"],
+    crate_root = "tests/linkedin_e2e.rs",
+    edition = "2021",
+    deps = [
+        ":frankweiler_etl_linkedin",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
+)

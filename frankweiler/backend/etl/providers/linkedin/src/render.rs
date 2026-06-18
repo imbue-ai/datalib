@@ -1,12 +1,18 @@
-//! Render LinkedIn `messages` into markdown via the shared chat
-//! renderer.
+//! Render LinkedIn's message-shaped feeds into markdown via the shared
+//! chat renderer.
 //!
-//! Messages are the only LinkedIn feed we render today; every other CSV
-//! lands in the raw store for query and stops there. We group the
-//! `messages` table by `CONVERSATION ID`, map each row into a
-//! [`NormalizedChatItem`], and hand the lot to
+//! Conversations are the only LinkedIn feeds we render; every other CSV
+//! lands in the raw store for query and stops there. Several files share
+//! the `messages.csv` schema (`CONVERSATION ID, FROM, TO, DATE, CONTENT,
+//! …`): the primary `messages` direct-message feed plus the AI-coach
+//! transcripts (`guide_messages`, `learning_coach_messages`, …). We
+//! render every one of them — see [`schema_raw::message_tables`]. For
+//! each present, non-empty table we group rows by `CONVERSATION ID`, map
+//! each into a [`NormalizedChatItem`], and hand the lot to
 //! [`frankweiler_etl_chat_common::render::render_all`], which owns all
-//! the markdown / grid-row / fingerprint plumbing.
+//! the markdown / grid-row / fingerprint plumbing. Chat/message ids are
+//! namespaced by table so feeds can't collide on a shared conversation
+//! id.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -21,22 +27,12 @@ use frankweiler_etl_chat_common::types::{
     ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use serde_json::Value;
-use uuid::Uuid;
 
+use crate::extract::schema_raw::{message_tables, ns_id as uuid5};
 use crate::extract::{db_path_for, RawDb};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 const RENDER_VERSION: u32 = 1;
-
-fn linkedin_ns() -> Uuid {
-    Uuid::new_v5(&Uuid::NAMESPACE_DNS, b"linkedin.frankweiler")
-}
-
-fn uuid5(recipe: &str) -> String {
-    Uuid::new_v5(&linkedin_ns(), recipe.as_bytes())
-        .as_hyphenated()
-        .to_string()
-}
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -49,8 +45,10 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// Render the `messages` table under `raw_dir` into `out_dir`. No-op if
-/// the raw store (or the messages table) is absent / empty.
+/// Render every message-shaped table under `raw_dir` into `out_dir`.
+/// No-op if the raw store is absent; each individual table is skipped if
+/// it's missing or empty. Conversations from different feeds keep
+/// distinct ids (namespaced by table) so they never collide.
 pub fn render(
     raw_dir: &Path,
     out_dir: &Path,
@@ -63,12 +61,20 @@ pub fn render(
     if !db_path.exists() {
         return Ok(());
     }
-    let payloads = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current()
-            .block_on(async { RawDb::open(&db_path).await?.load_payloads("messages").await })
-    })?;
 
-    let chats = build_chats(&payloads);
+    let mut chats: Vec<NormalizedChat> = Vec::new();
+    for table in message_tables() {
+        let payloads = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let db = RawDb::open(&db_path).await?;
+                // A feed the user didn't export has no table; treat a
+                // load error as "absent" rather than failing the render.
+                Ok::<_, anyhow::Error>(db.load_payloads(table).await.unwrap_or_default())
+            })
+        })?;
+        chats.extend(build_chats(table, &payloads));
+    }
+
     let blobs: HashMap<String, BlobBundle> = HashMap::new();
     cc_render_all(
         &profile(),
@@ -83,9 +89,10 @@ pub fn render(
     Ok(())
 }
 
-/// One [`NormalizedChat`] per `CONVERSATION ID`, single `all` bucket,
-/// items sorted oldest-first.
-fn build_chats(payloads: &[Value]) -> Vec<NormalizedChat> {
+/// One [`NormalizedChat`] per `CONVERSATION ID` in a single message
+/// table, single `all` bucket, items sorted oldest-first. Ids are
+/// namespaced by `table` so two feeds can't clash on a conversation id.
+fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
     // BTreeMap keeps conversation order stable across runs.
     let mut by_conv: BTreeMap<String, Vec<&Value>> = BTreeMap::new();
     for p in payloads {
@@ -102,7 +109,7 @@ fn build_chats(payloads: &[Value]) -> Vec<NormalizedChat> {
                 let date = field(p, "DATE");
                 let content = field(p, "CONTENT");
                 NormalizedChatItem {
-                    message_uuid: uuid5(&format!("msg:{conv}:{date}:{from}:{content}")),
+                    message_uuid: uuid5(&format!("msg:{table}:{conv}:{date}:{from}:{content}")),
                     author_id: nonempty(field(p, "SENDER PROFILE URL"))
                         .unwrap_or(from)
                         .to_string(),
@@ -123,15 +130,15 @@ fn build_chats(payloads: &[Value]) -> Vec<NormalizedChat> {
             .unwrap_or_else(|| participants(&rows));
 
         chats.push(NormalizedChat {
-            id: conv.clone(),
-            chat_uuid: uuid5(&format!("chat:{conv}")),
+            id: format!("{table}:{conv}"),
+            chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
             display,
             account: None,
             project: None,
             external_id: Some(conv.clone()),
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
-                markdown_uuid: uuid5(&format!("doc:{conv}:all")),
+                markdown_uuid: uuid5(&format!("doc:{table}:{conv}:all")),
                 items,
             }],
         });
@@ -197,9 +204,9 @@ mod tests {
             msg("c1", "B", "A", "2026-06-16 04:58:21 UTC", "first"),
             msg("c2", "A", "C", "2026-01-01 00:00:00 UTC", "other"),
         ];
-        let chats = build_chats(&payloads);
+        let chats = build_chats("messages", &payloads);
         assert_eq!(chats.len(), 2);
-        let c1 = chats.iter().find(|c| c.id == "c1").unwrap();
+        let c1 = chats.iter().find(|c| c.id == "messages:c1").unwrap();
         assert_eq!(c1.buckets[0].items.len(), 2);
         assert_eq!(c1.buckets[0].items[0].text.as_deref(), Some("first"));
         assert_eq!(c1.display, "A, B");
