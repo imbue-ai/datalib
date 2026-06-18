@@ -42,9 +42,13 @@ The TNG fixtures catch code-level regressions; the **live-golden
 e2e** catches what happens against the actual world. The target is
 [`//frankweiler/backend/sync:manual_e2e_live_sync_golden`](../../frankweiler/backend/sync/tests/manual_e2e_live_sync_golden.rs)
 (tagged `manual` + `external` + `no-sandbox`; runs the full sync
-pipeline against `configs/thad_tiny.yaml`, every source, against
-live upstreams using host-side latchkey credentials). It snapshots
-three things into `frankweiler/backend/sync/tests/snapshots/`:
+pipeline, every source, against live upstreams using host-side
+latchkey credentials). Its config, file-based source data, and golden
+snapshots all live OUTSIDE this repo — in the private dir named by
+`$FRANKWEILER_MANUAL_E2E_DIR` (so the slightly sensitive source data
+isn't shared when the repo is open-sourced); the `run.sh` there sets
+the env var and invokes the test. It snapshots three things into
+`$FRANKWEILER_MANUAL_E2E_DIR/snapshots/`:
 
   - `sync_summary.snap` — the per-source `FetchSummary` JSON the
     orchestrator emits at end of run.

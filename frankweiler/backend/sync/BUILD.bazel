@@ -80,25 +80,24 @@ rust_test(
     ],
 )
 
-# Live end-to-end golden test. Drives the sync binary against
-# configs/thad_tiny.yaml into a fresh tempdir and snapshots the raw +
-# rendered_md trees plus the sync_summary_<now>.json. Manual: hits the
-# network, needs latchkey creds.
+# Live end-to-end golden test. Drives the sync binary against the config in
+# $FRANKWEILER_MANUAL_E2E_DIR into a fresh tempdir and snapshots the raw +
+# rendered_md trees plus the sync_summary_<now>.json. Config, file-based
+# source data, and the golden snapshots all live OUTSIDE this repo, in
+# $FRANKWEILER_MANUAL_E2E_DIR (a private repo) — so nothing sensitive is
+# committed here. `no-sandbox` lets the test read that absolute host path
+# directly; `run.sh` in that dir forwards the env var (see its header).
+# Manual: hits the network, needs latchkey creds.
 rust_test(
     name = "manual_e2e_live_sync_golden",
     srcs = ["tests/manual_e2e_live_sync_golden.rs"],
     crate_root = "tests/manual_e2e_live_sync_golden.rs",
     data = [
         ":frankweiler_sync_bin",
-        "//configs:thad_tiny.yaml",
-    ] + glob(
-        ["tests/snapshots/**/*.snap"],
-        allow_empty = True,
-    ),
+    ],
     edition = "2021",
     env = {
         "FRANKWEILER_SYNC_BIN": "$(rootpath :frankweiler_sync_bin)",
-        "FRANKWEILER_TEST_CONFIG": "$(rootpath //configs:thad_tiny.yaml)",
         "INSTA_WORKSPACE_ROOT": ".",
     },
     tags = [
@@ -118,23 +117,23 @@ rust_test(
 )
 
 # `bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update`
-# re-runs the live test with INSTA_UPDATE=always and writes the new
-# snapshots into the source tree (not the sandbox). Set LATCHKEY_CURL
-# on the host before invoking — same prereq as `cargo test`.
+# re-runs the live test with INSTA_UPDATE=always; the test writes the new
+# `.snap`s straight into `$FRANKWEILER_MANUAL_E2E_DIR/snapshots` (an absolute
+# host path), so nothing lands in the repo's source tree. Export
+# FRANKWEILER_MANUAL_E2E_DIR + LATCHKEY_CURL on the host before invoking
+# (`bazel run` forwards the client env) — `run.sh` in that dir does both.
 insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
     test_args = ["--ignored"],
-    # Mirrors the rust_test's data + env so the .update sh_binary
-    # resolves FRANKWEILER_SYNC_BIN / FRANKWEILER_TEST_CONFIG the same
-    # way `bazel test` would. The base macro doesn't see those because
-    # bazel doesn't propagate a rust_test's env to its sibling sh_binary.
+    # Mirrors the rust_test's data + env so the .update sh_binary resolves
+    # FRANKWEILER_SYNC_BIN the same way `bazel test` would. The base macro
+    # doesn't see it because bazel doesn't propagate a rust_test's env to
+    # its sibling sh_binary.
     extra_data = [
         ":frankweiler_sync_bin",
-        "//configs:thad_tiny.yaml",
     ],
     extra_env = {
         "FRANKWEILER_SYNC_BIN": "$(rootpath :frankweiler_sync_bin)",
-        "FRANKWEILER_TEST_CONFIG": "$(rootpath //configs:thad_tiny.yaml)",
     },
 )

@@ -5,13 +5,25 @@
 
 //! Live end-to-end golden test for `frankweiler-sync`.
 //!
-//! Spawns the sync binary against `configs/thad_tiny.yaml` (with a few
-//! test-only tweaks: tempdir `data_root`, `qmd.skip=true`, slack
-//! `refresh_window_days=30`), hitting real provider APIs through
-//! `latchkey curl`. Then snapshots the produced data tree, one
-//! `.snap` per file under `tests/snapshots/`, mirroring the data layout:
+//! Config, file-based source data, and golden snapshots live OUTSIDE this
+//! repo — in the dir named by `FRANKWEILER_MANUAL_E2E_DIR` (e.g.
+//! `~/data_liberation_manual_e2e_test_data`), versioned in a private repo so
+//! the (slightly sensitive) source data is never shared when this repo is
+//! open-sourced. That dir holds:
 //!
-//!   tests/snapshots/
+//!   <FRANKWEILER_MANUAL_E2E_DIR>/
+//!     config.yaml          ← the sync config (file sources point at sources/)
+//!     sources/             ← LinkedIn / Takeout / SMS … export data
+//!     snapshots/           ← the golden .snap tree (below)
+//!     run.sh               ← sets the env var and runs this test / .update
+//!
+//! Spawns the sync binary against that `config.yaml` (with a few test-only
+//! tweaks: tempdir `data_root`, `qmd.skip=true`, slack
+//! `refresh_window_days=30`), hitting real provider APIs through
+//! `latchkey curl`. Then snapshots the produced data tree, one `.snap` per
+//! file under `<FRANKWEILER_MANUAL_E2E_DIR>/snapshots/`, mirroring the layout:
+//!
+//!   snapshots/
 //!     manifest.snap                              ← list of paths
 //!     raw/tiny-slack/raw_api/auth.test/run-_.snap
 //!     raw/notion-api/notion_official_page/created/events.snap
@@ -38,9 +50,18 @@
 //!
 //! Dolt + qmd are deliberately skipped — too noisy / not deterministic.
 //!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Run with:
+//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Easiest path is the
+//! `run.sh` in `FRANKWEILER_MANUAL_E2E_DIR` (it sets the env var + creds):
 //!
 //! ```sh
+//! ~/data_liberation_manual_e2e_test_data/run.sh           # run + diff
+//! ~/data_liberation_manual_e2e_test_data/run.sh --update  # accept new goldens
+//! ```
+//!
+//! Or directly, with the env var + creds set yourself:
+//!
+//! ```sh
+//! export FRANKWEILER_MANUAL_E2E_DIR=~/data_liberation_manual_e2e_test_data
 //! export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
 //! cargo test -p frankweiler-sync --test manual_e2e_live_sync_golden -- --ignored --nocapture
 //! # then to accept changes:
@@ -115,13 +136,24 @@ const REDACTED: &str = "[redacted]";
 /// about extract correctness.
 const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "events"];
 
-fn workspace_root() -> PathBuf {
-    // CARGO_MANIFEST_DIR is .../frankweiler/backend/sync
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .expect("workspace root above sync/")
-        .to_path_buf()
+/// External, out-of-repo home for this manual test's `config.yaml`, the
+/// file-based `sources/`, and the golden `snapshots/`. Kept outside the repo
+/// so the (slightly sensitive) source data is never shared when the repo is
+/// open-sourced; versioned separately in a private repo. `run.sh` in that dir
+/// sets `FRANKWEILER_MANUAL_E2E_DIR` and invokes this test. `None` when unset.
+fn e2e_dir() -> Option<PathBuf> {
+    std::env::var("FRANKWEILER_MANUAL_E2E_DIR")
+        .ok()
+        .map(PathBuf::from)
+}
+
+/// Base directory for golden snapshots. Resolves to `<e2e_dir>/snapshots`
+/// (absolute, so insta reads/writes there directly) when the data dir is
+/// configured, else the legacy in-tree `snapshots/` next to this file.
+fn snap_base() -> PathBuf {
+    e2e_dir()
+        .map(|d| d.join("snapshots"))
+        .unwrap_or_else(|| PathBuf::from("snapshots"))
 }
 
 fn sync_binary() -> PathBuf {
@@ -139,9 +171,21 @@ fn sync_binary() -> PathBuf {
 fn manual_e2e_live_sync_golden() {
     let src_config = match std::env::var("FRANKWEILER_TEST_CONFIG") {
         Ok(p) => PathBuf::from(p),
-        Err(_) => workspace_root().join("configs/thad_tiny.yaml"),
+        Err(_) => e2e_dir()
+            .expect(
+                "set FRANKWEILER_MANUAL_E2E_DIR to the external test-data dir \
+                 (holding config.yaml + sources/ + snapshots/), or set \
+                 FRANKWEILER_TEST_CONFIG to a config explicitly",
+            )
+            .join("config.yaml"),
     };
-    assert!(src_config.exists(), "missing {}", src_config.display());
+    assert!(
+        src_config.exists(),
+        "missing {}. Point FRANKWEILER_MANUAL_E2E_DIR at the external test-data \
+         dir (holding config.yaml + sources/ + snapshots/), or set \
+         FRANKWEILER_TEST_CONFIG to a config explicitly.",
+        src_config.display()
+    );
     let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
 
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -149,7 +193,7 @@ fn manual_e2e_live_sync_golden() {
     std::fs::create_dir_all(&data_root).unwrap();
 
     let cfg_out = rewrite_config(&cfg_text, &data_root);
-    let cfg_path = tmp.path().join("thad_tiny.yaml");
+    let cfg_path = tmp.path().join("config.yaml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
     let bin = sync_binary();
@@ -184,7 +228,7 @@ fn manual_e2e_live_sync_golden() {
     // not interrupted. If a source flakes, the snapshot diff will make
     // the failure mode obvious instead of just exiting non-zero.
     insta::with_settings!({
-        snapshot_path => "snapshots",
+        snapshot_path => snap_base().display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
     }, {
@@ -199,7 +243,7 @@ fn manual_e2e_live_sync_golden() {
     // Manifest pins which files we expect to find. Catches additions /
     // removals without having to diff every per-file snapshot.
     insta::with_settings!({
-        snapshot_path => "snapshots",
+        snapshot_path => snap_base().display().to_string(),
         prepend_module_to_snapshot => false,
     }, {
         assert_snapshot!("manifest", manifest.join("\n"));
@@ -242,7 +286,7 @@ fn manual_e2e_live_sync_golden() {
         serde_json::from_str(&summary_text2).expect("parse summary 2 JSON");
     strip_volatile_for_incrementality(&mut summary_json2);
     insta::with_settings!({
-        snapshot_path => "snapshots",
+        snapshot_path => snap_base().display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
     }, {
@@ -317,8 +361,9 @@ fn content_tables(path: &Path) -> Value {
 }
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
-/// `tests/snapshots/<top>/<rel_dir>/<filename>.snap`, mirroring the
-/// data layout. `manifest` collects the snapshot key (top + rel path)
+/// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
+/// `$FRANKWEILER_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
+/// `manifest` collects the snapshot key (top + rel path)
 /// for the overall manifest assertion.
 fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
     if !root.is_dir() {
@@ -356,7 +401,7 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         // creates the directories as needed.
         let canonical_rel_path = PathBuf::from(&canonical_rel);
         let snap_parent = canonical_rel_path.parent().unwrap_or(Path::new(""));
-        let snap_dir = PathBuf::from("snapshots").join(top).join(snap_parent);
+        let snap_dir = snap_base().join(top).join(snap_parent);
         let snap_name = canonical_rel_path
             .file_name()
             .unwrap()
