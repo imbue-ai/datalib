@@ -317,6 +317,33 @@ pub fn addressbook_uuid(account_id: &str, addressbook_label: &str) -> String {
         .to_string()
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// contact_photos — CAS edge for contact pictures
+// ─────────────────────────────────────────────────────────────────────
+//
+// The same shape the LinkedIn provider uses (`contact_photos(id,
+// owner_id, source_url, blake3)`), so the contact→photo-blob mapping is
+// consistent across providers even though the code isn't shared (raw
+// data is owned per-provider). Bytes live in the sibling
+// `<name>.blobs.doltlite_db` CAS keyed by blake3; `owner_id` is the
+// `contacts.id` (see [`contact_pk`]), `source_url` is `"vcard:inline"`
+// for embedded base64 photos (or the URL for URL-only `PHOTO`s).
+
+/// Edge table name. Shared (by convention, not code) with the LinkedIn
+/// provider's `contact_photos`.
+pub const CONTACT_PHOTOS_TABLE: &str = "contact_photos";
+
+pub const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (
+    id         TEXT PRIMARY KEY,
+    owner_id   TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    blake3     TEXT NULL,
+    CHECK (blake3 IS NULL OR length(blake3) = 64)
+)";
+
+pub const CONTACT_PHOTOS_BY_OWNER_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS contact_photos_by_owner ON contact_photos(owner_id)";
+
 pub const CONTACTS_BY_ADDRESSBOOK_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS contacts_by_addressbook ON contacts(addressbook_id)";
 
@@ -335,6 +362,8 @@ pub fn full_ddl() -> Vec<String> {
         ContactRow::ddl(),
         CONTACTS_BY_ADDRESSBOOK_INDEX_DDL.to_string(),
         CONTACTS_BY_HREF_INDEX_DDL.to_string(),
+        CONTACT_PHOTOS_DDL.to_string(),
+        CONTACT_PHOTOS_BY_OWNER_INDEX_DDL.to_string(),
         // Resume cursor for the local-`.vcf` path: skip re-ingesting a
         // file whose `(size, mtime)` hasn't moved since last run. The
         // CardDAV server path uses etags/sync-tokens instead and never

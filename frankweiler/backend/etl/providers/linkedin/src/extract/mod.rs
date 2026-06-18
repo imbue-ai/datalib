@@ -40,6 +40,7 @@
 //!   * Multi-line quoted fields (Learning.csv course descriptions) parse
 //!     correctly because we hand the byte stream to the `csv` crate.
 
+pub mod photos;
 pub mod schema_raw;
 
 use std::path::{Path, PathBuf};
@@ -96,6 +97,14 @@ pub struct FetchOptions {
     pub db: Option<RawDb>,
     /// Root of the user's LinkedIn export (the directory full of CSVs).
     pub input_path: PathBuf,
+    /// When set, fetch each connection's profile photo (og:image) into
+    /// the per-source CAS + `contact_photos` edge table. Off by default;
+    /// once fetched, a connection is never re-fetched (see [`photos`]).
+    pub fetch_photos: bool,
+    /// Give up the photo sweep after this many *consecutive* transient
+    /// fetch failures (LinkedIn hard-blocking). Resolved from the source's
+    /// `extract_params.maximum_sequential_failed_requests`.
+    pub photo_max_consecutive_failures: u64,
     pub progress: Progress,
     pub control: ExtractControl,
 }
@@ -167,6 +176,31 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     tx.commit().await.context("commit linkedin tx")?;
+
+    // Photo fetch runs after the snapshot is committed (it needs the
+    // `connections` rows persisted) and is a no-op unless enabled. Each
+    // connection is fetched at most once across runs.
+    if opts.fetch_photos {
+        let db_path = db_path_for(&opts.db_path);
+        match photos::fetch_connection_photos(
+            &db,
+            &db_path,
+            &opts.progress,
+            opts.photo_max_consecutive_failures,
+        )
+        .await
+        {
+            Ok(s) => tracing::info!(
+                event = "linkedin_photos",
+                attempted = s.attempted,
+                fetched = s.fetched,
+                no_photo = s.no_photo,
+                transient = s.transient,
+                gave_up = s.gave_up,
+            ),
+            Err(e) => warn!(event = "linkedin_photos_failed", error = %e),
+        }
+    }
     Ok(summary)
 }
 
@@ -361,7 +395,7 @@ fn table_name(root: &Path, path: &Path) -> String {
 /// Drop a leading `Notes:` preamble (a `Notes:` line, an explanatory
 /// paragraph, then a blank line) so the real header is row 1. No-op when
 /// the file doesn't start with `Notes:`.
-fn strip_notes_preamble(text: &str) -> String {
+pub(crate) fn strip_notes_preamble(text: &str) -> String {
     let trimmed = text.trim_start_matches('\u{feff}');
     if !trimmed.trim_start().starts_with("Notes:") {
         return trimmed.to_string();

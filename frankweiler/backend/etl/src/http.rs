@@ -88,6 +88,14 @@ pub struct HttpRequest {
     pub headers: BTreeMap<String, String>,
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
+    /// Skip the `latchkey` credential-injecting shim and shell out to
+    /// plain `curl`. For *publicly* reachable resources that need no auth
+    /// (e.g. a LinkedIn profile's public `og:image`) — they'd have no
+    /// latchkey service registered and would otherwise fail the host
+    /// allowlist. The retry/backoff loop and playback still apply; this
+    /// flag is behavior-only and is NOT part of [`fixture_key`], so a
+    /// synthesizer's fixtures match whether or not the bypass is set.
+    pub bypass_latchkey: bool,
 }
 
 impl HttpRequest {
@@ -99,6 +107,7 @@ impl HttpRequest {
             headers: BTreeMap::new(),
             body: None,
             timeout: Duration::from_secs(60),
+            bypass_latchkey: false,
         }
     }
 
@@ -112,6 +121,7 @@ impl HttpRequest {
             headers,
             body: Some(body),
             timeout: Duration::from_secs(60),
+            bypass_latchkey: false,
         }
     }
 
@@ -122,6 +132,13 @@ impl HttpRequest {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Send via plain `curl`, bypassing the latchkey shim — for public,
+    /// auth-free resources. See [`HttpRequest::bypass_latchkey`].
+    pub fn plain(mut self) -> Self {
+        self.bypass_latchkey = true;
         self
     }
 }
@@ -373,8 +390,16 @@ mod live {
         })?;
         let body_path = body_file.path().to_path_buf();
 
-        let mut cmd = latchkey_tokio_command();
-        cmd.arg("curl").arg("-sS");
+        // `latchkey curl …` for the credential-injecting shim, or plain
+        // `curl …` when the caller opted out (public, auth-free fetch).
+        let mut cmd = if req.bypass_latchkey {
+            tokio::process::Command::new("curl")
+        } else {
+            let mut c = latchkey_tokio_command();
+            c.arg("curl");
+            c
+        };
+        cmd.arg("-sS");
         // -D - dumps the response header block to stdout so we can
         // parse every header. -o <path> writes the body to a tempfile
         // so headers and body are cleanly separated (no need to split

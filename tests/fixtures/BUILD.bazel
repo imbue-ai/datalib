@@ -47,6 +47,7 @@ filegroup(
         "//frankweiler/backend/etl/providers/signal:tng_fixture",
         "//frankweiler/backend/etl/providers/whatsapp:tng_fixture",
         "//frankweiler/backend/etl/providers/google_takeout:tng_fixture",
+        "//frankweiler/backend/etl/providers/linkedin:tng_fixture",
         "//frankweiler/backend/etl/providers/sms_backup_restore:tng_fixture",
     ],
     visibility = ["//visibility:public"],
@@ -118,6 +119,10 @@ genrule(
             # Google Takeout root. Google Chat feed renders; the rest land
             # in the raw store.
             "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
+            # LinkedIn export dir (Connections + messages + Skills). The
+            # message feeds + connections render; fetch_photos is on, so
+            # the synth phase writes photo playback fixtures.
+            "frankweiler/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
             # "SMS Backup & Restore" export dir (sms + calls XML with
             # inline base64 image/audio attachments). Texts + calls
             # render as one chat per phone number.
@@ -171,6 +176,7 @@ py_test(
         "frankweiler/backend/etl/providers/whatsapp/tests/fixtures/whatsapp_tng/tng.json",
         "frankweiler/backend/etl/providers/email/tests/fixtures/mbox/star_trek.mbox",
         "frankweiler/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
+        "frankweiler/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
         "frankweiler/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     ],
     data = [

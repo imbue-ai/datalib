@@ -16,6 +16,7 @@
 
 pub mod api;
 pub mod db;
+pub mod photos;
 pub mod schema_raw;
 pub mod vcf_dir;
 
@@ -143,6 +144,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 );
             }
         }
+    }
+
+    // Lift inline vCard photos into the per-source CAS (consistent
+    // contact_photos shape). Best-effort: a CAS hiccup shouldn't fail an
+    // otherwise-good contacts sync.
+    if let Err(e) = photos::lift_photos_to_cas(&db, &db_path_for(&opts.db_path)).await {
+        warn!(event = "carddav_photo_lift_failed", error = %e);
     }
 
     Ok(summary)

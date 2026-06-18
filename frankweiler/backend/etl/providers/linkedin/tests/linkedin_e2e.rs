@@ -15,12 +15,16 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_linkedin::connections;
+use frankweiler_etl_linkedin::extract::photos::load_photo_blobs;
 use frankweiler_etl_linkedin::extract::schema_raw::connection_uuid;
 use frankweiler_etl_linkedin::extract::{self, db_path_for, FetchOptions, RawDb};
 use frankweiler_etl_linkedin::render;
+use frankweiler_etl_linkedin::synthesize::LinkedinSynth;
 
 /// Write the synthetic export tree under `root`.
 fn build_export(root: &Path) -> Result<()> {
@@ -97,6 +101,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             db_path: raw_dir.clone(),
             db: None,
             input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
             progress: Progress::noop(),
             control: Default::default(),
         })
@@ -196,6 +202,153 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             Some("https://www.linkedin.com/in/jlp")
         );
         assert!(row.text.contains("Captain"), "field values in search text");
+
+        // ── photo fetch (hermetic via the synthesizer + playback) ──
+        // Synthesize profile-page + image fixtures, point the curl
+        // chokepoint at them, and re-extract with fetch_photos on. This
+        // is the only test in this binary, so mutating the playback env
+        // var here is race-free.
+        let playback = tmp.path().join("playback");
+        fs::create_dir_all(&playback)?;
+        Synthesizer::synthesize(&LinkedinSynth::new(export.clone()), &playback)?;
+        std::env::set_var(PLAYBACK_ENV, &playback);
+        extract::fetch(FetchOptions {
+            db_path: raw_dir.clone(),
+            db: None,
+            input_path: export.clone(),
+            fetch_photos: true,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await
+        .context("fetch with photos")?;
+        std::env::remove_var(PLAYBACK_ENV);
+
+        // The photo landed in CAS, keyed by the connection's uuid.
+        let blobs = load_photo_blobs(&db, &db_path_for(&raw_dir)).await?;
+        let (bytes, content_type) = blobs
+            .get(&picard_uuid)
+            .expect("Picard's photo fetched into CAS");
+        assert!(!bytes.is_empty(), "photo bytes stored");
+        assert_eq!(content_type.as_deref(), Some("image/png"));
+
+        // Re-render: the contact markdown now embeds the photo blob.
+        let out2 = tmp.path().join("out2");
+        fs::create_dir_all(&out2)?;
+        let mut with_photo: Vec<RenderedMarkdown> = Vec::new();
+        {
+            let mut on_doc = |d: RenderedMarkdown| {
+                with_photo.push(d);
+                Ok(())
+            };
+            connections::render_connections(
+                &raw_dir,
+                &out2,
+                "linkedin",
+                &Progress::noop(),
+                &HashMap::new(),
+                &mut on_doc,
+            )
+            .context("render_connections with photo")?;
+        }
+        let picard_doc = with_photo
+            .iter()
+            .find(|d| d.markdown_uuid == picard_uuid)
+            .expect("picard re-rendered");
+        let md = fs::read_to_string(&picard_doc.md_path)?;
+        assert!(
+            md.contains(&format!("blobs/{picard_uuid}")),
+            "markdown embeds the photo blob: {md}"
+        );
+
+        // ── transient misses are retryable ─────────────────────────
+        // A fresh store, then a photo pass pointed at an EMPTY playback
+        // dir: every fetch is a playback miss (transient), so NOTHING is
+        // recorded. A second pass with real fixtures retries and fetches.
+        let raw2 = tmp.path().join("raw2");
+        fs::create_dir_all(&raw2)?;
+        extract::fetch(FetchOptions {
+            db_path: raw2.clone(),
+            db: None,
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await?;
+        let db2 = RawDb::open(&db_path_for(&raw2)).await?;
+
+        let empty_pb = tmp.path().join("empty_pb");
+        fs::create_dir_all(&empty_pb)?;
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let s1 = extract::photos::fetch_connection_photos(
+            &db2,
+            &db_path_for(&raw2),
+            &Progress::noop(),
+            50,
+        )
+        .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert_eq!(s1.fetched, 0, "no photos on a playback miss");
+        assert!(s1.transient >= 1, "playback miss is transient, got {s1:?}");
+        assert!(
+            load_photo_blobs(&db2, &db_path_for(&raw2))
+                .await?
+                .is_empty(),
+            "transient miss records nothing"
+        );
+
+        // Retry with the real fixtures — now it succeeds.
+        std::env::set_var(PLAYBACK_ENV, &playback);
+        let s2 = extract::photos::fetch_connection_photos(
+            &db2,
+            &db_path_for(&raw2),
+            &Progress::noop(),
+            50,
+        )
+        .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert!(
+            s2.fetched >= 1,
+            "transient miss retried and fetched, got {s2:?}"
+        );
+        assert!(
+            !load_photo_blobs(&db2, &db_path_for(&raw2))
+                .await?
+                .is_empty(),
+            "photo recorded after retry"
+        );
+
+        // ── give-up after N consecutive failures ───────────────────
+        // Fresh store, empty playback (every fetch transient), limit 1:
+        // it should stop after the very first failure rather than walk
+        // all connections.
+        let raw3 = tmp.path().join("raw3");
+        fs::create_dir_all(&raw3)?;
+        extract::fetch(FetchOptions {
+            db_path: raw3.clone(),
+            db: None,
+            input_path: export.clone(),
+            fetch_photos: false,
+            photo_max_consecutive_failures: 50,
+            progress: Progress::noop(),
+            control: Default::default(),
+        })
+        .await?;
+        let db3 = RawDb::open(&db_path_for(&raw3)).await?;
+        std::env::set_var(PLAYBACK_ENV, &empty_pb);
+        let g = extract::photos::fetch_connection_photos(
+            &db3,
+            &db_path_for(&raw3),
+            &Progress::noop(),
+            1, // give up after a single consecutive failure
+        )
+        .await?;
+        std::env::remove_var(PLAYBACK_ENV);
+        assert!(g.gave_up, "should give up at the limit, got {g:?}");
+        assert_eq!(g.attempted, 1, "stopped after the first failure, got {g:?}");
 
         Ok::<_, anyhow::Error>(())
     })?;

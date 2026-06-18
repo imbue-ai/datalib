@@ -370,6 +370,10 @@ fn ext_for(content_type: &str) -> &'static str {
         "image/gif" => "gif",
         "image/webp" => "webp",
         "image/heic" => "heic",
+        // LinkedIn serves its default "ghost" avatar as an SVG og:image
+        // for connections with no public photo; keep the extension so it
+        // renders inline rather than as an opaque `.bin`.
+        "image/svg+xml" | "image/svg" => "svg",
         _ => "bin",
     }
 }

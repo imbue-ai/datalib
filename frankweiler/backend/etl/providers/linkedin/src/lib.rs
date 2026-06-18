@@ -21,3 +21,4 @@
 pub mod connections;
 pub mod extract;
 pub mod render;
+pub mod synthesize;
