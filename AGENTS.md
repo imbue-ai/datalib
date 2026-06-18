@@ -232,9 +232,13 @@ bazel run //frankweiler/backend/etl/providers/slack:slack_translate.update
 # the shim once:
 bazel build //frankweiler/backend/etl:latchkey_curl_shim
 export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
-bazel run //frankweiler/backend/sync:manual_e2e_live_sync_golden.update
 bazel run //frankweiler/backend/etl/providers/anthropic:anthropic_live.update
 ```
+
+The `manual_e2e_live_sync_golden` test is special: its config, source data,
+and goldens live OUTSIDE this repo, found via `FRANKWEILER_MANUAL_E2E_DIR`.
+Run it via the `run.sh` in that dir (`run.sh` to check, `run.sh --update` to
+accept). See [`docs/dev/testing.md`](/docs/dev/testing.md).
 
 The wrapper sets `INSTA_WORKSPACE_ROOT=$BUILD_WORKSPACE_DIRECTORY`,
 which only exists under `bazel run` and resolves to the source tree
