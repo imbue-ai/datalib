@@ -34,7 +34,12 @@ export type SearchRow = {
   kind: string;
   author: string;
   channel: string;
+  // Legacy Slack deep-link column; new rows carry their public URL in
+  // source_url. The "Open source" action prefers source_url, falls back here.
   slack_link: string;
+  // Public URL for the row's source artifact (Slack permalink, LinkedIn
+  // post, …); empty when none.
+  source_url: string;
   // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
   notion_page_uuid: string;
   // Provider-assigned stable id (the grid_rows `external_id` column);

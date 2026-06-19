@@ -723,7 +723,10 @@ const gridOptions: GridOptions<SearchRow> = {
           ),
         }
       : null;
-    const slackTargets = targets.filter((r) => r.slack_link);
+    // A row's outbound linkout: the generic source_url (Slack permalink,
+    // LinkedIn post, …), falling back to the legacy slack_link column.
+    const linkOf = (r: SearchRow): string => r.source_url || r.slack_link || "";
+    const linkTargets = targets.filter((r) => linkOf(r));
     // Anchor + cell info come from onCellContextMenu (it fires before
     // getContextMenuItems on the same right-click). Snapshot now so
     // each item action closes over the right values even if the user
@@ -777,14 +780,14 @@ const gridOptions: GridOptions<SearchRow> = {
         void copyUuids(targets);
       },
     });
-    if (slackTargets.length > 0) {
+    if (linkTargets.length > 0) {
       items.push({
-        name: `Open in Slack${
-          slackTargets.length === 1 ? "" : ` (${slackTargets.length})`
+        name: `Open source${
+          linkTargets.length === 1 ? "" : ` (${linkTargets.length})`
         }`,
         action: () => {
-          for (const r of slackTargets) {
-            window.open(r.slack_link, "_blank", "noopener");
+          for (const r of linkTargets) {
+            window.open(linkOf(r), "_blank", "noopener");
           }
         },
       });

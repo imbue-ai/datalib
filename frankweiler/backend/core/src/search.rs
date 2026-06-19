@@ -37,7 +37,12 @@ pub struct SearchRow {
     /// Slack channel display name for Slack rows; empty otherwise.
     pub channel: String,
     /// Deep-link URL to open this row in Slack; empty for non-Slack rows.
+    /// Legacy column — new rows carry their public URL in `source_url`.
     pub slack_link: String,
+    /// Public URL for the row's source artifact (Slack permalink,
+    /// LinkedIn post, …); empty when the producer set none. The grid's
+    /// "Open source" action prefers this and falls back to `slack_link`.
+    pub source_url: String,
     /// For Notion rows: the page-level UUID the row belongs to. Empty
     /// otherwise. Used by right-click "Filter by Notion Page".
     pub notion_page_uuid: String,
