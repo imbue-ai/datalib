@@ -24,17 +24,28 @@ build --action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
 build --host_action_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
 test --test_env=PATH=/opt/homebrew/bin:/usr/bin:/bin
 
-# `--action_env=HOME` so actions that key caches off `$HOME` (cargo /
-# rustc's `~/.cargo`, npx's npm cache, etc.) resolve a stable host path
-# instead of bazel's scrubbed default.
+# Mount the host's shared qmd embedding-model cache (`~/.cache/qmd/models`,
+# ~2GB of GGUF files) into the sandbox at the same path. Without this,
+# the qmd-indexer genrule (`//tests/fixtures:ingested_tng_qmd`) would
+# have to re-download the multi-GB model files every action: inside the
+# sandbox `$HOME` is remapped to a per-action tmpdir, so an absolute
+# path to the host cache is the only way through.
 #
-# NOTE: the qmd-indexer genrule used to also rely on a
-# `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` here to reach a
-# host-downloaded ~2GB GGUF cache. That's gone: the models are now
-# pinned `@qmd_model_*//file` Bazel inputs handed to qmd via
-# `QMD_*_MODEL` (see //tests/fixtures:build_qmd_index.py), so they ride
-# the repository + remote cache like any other input and need no host
-# mount.
+# Path matches qmd's own default (`join(homedir(), ".cache", "qmd",
+# "models")` in third-party/qmd/src/llm.ts), so a standalone `qmd`
+# invocation on the dev host populates the same directory the build
+# reads from. //tests/fixtures:qmd_model_cache_path_test enforces
+# the match — break it and that test fails.
+#
+# Safe to mount because the cache is content-keyed (qmd looks up models
+# by their HuggingFace repo + filename, never by mtime). Pairs with
+# `--action_env=HOME` below so `os.path.expanduser('~')` inside the
+# build script resolves to the same host path the mount uses.
+#
+# `$(HOME)` here is expanded by Bazel at startup time (one of the few
+# flags that supports it). If your host is missing the cache dir,
+# create it: `mkdir -p ~/.cache/qmd/models`.
+build --sandbox_add_mount_pair=$(HOME)/.cache/qmd/models
 build --action_env=HOME
 
 # libsqlite3-sys's build script invokes bindgen, which uses

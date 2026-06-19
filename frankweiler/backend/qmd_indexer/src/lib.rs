@@ -299,8 +299,8 @@ mod tests {
     /// `default_models_dir()` must agree with qmd's `MODEL_CACHE_DIR`
     /// (`third-party/qmd/src/llm.ts`) so a standalone `qmd` run and a
     /// build-driven run share one cache. Upstream-side drift is caught
-    /// by `//tools:qmd_model_pins_test`; this end checks our half of
-    /// the contract.
+    /// by `//tools:check_qmd_model_cache_path_test`; this end checks
+    /// our half of the contract.
     #[test]
     fn default_models_dir_matches_qmd_default() {
         // XDG_CACHE_HOME branch: $XDG/qmd/models.

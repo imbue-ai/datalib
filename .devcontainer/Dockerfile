@@ -144,12 +144,12 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 # Run the devcontainer as `root` (inherited from the prod image's USER).
 # That removes a whole class of friction:
 #
-#   * The prod image's pre-baked qmd GGUFs at /root/.cache/qmd/models
-#     (used by `frankweiler-sync`'s runtime `npx qmd`) stay readable
-#     without a `chmod 0755 /root` traversal grant for a non-root user.
-#     (The bazel test fixture no longer reads this cache — it gets its
-#     models as `@qmd_model_*//file` inputs — but the product runtime
-#     still does.)
+#   * No symlink-shenanigans to make qmd's pre-baked GGUFs at
+#     /root/.cache/qmd/models reachable from a different `$HOME` —
+#     `.bazelrc`'s `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
+#     just resolves to /root/.cache/qmd/models directly.
+#   * No `chmod 0755 /root` to grant a non-root user traversal access
+#     to the models directory.
 #   * No `chown`-on-named-volume dance in postCreateCommand.
 #
 # Tradeoff: files the contributor creates via the workspace bind mount

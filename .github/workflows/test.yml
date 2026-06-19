@@ -193,7 +193,29 @@ jobs:
           # negative pattern to re-enable the suite as a merge gate. (Local
           # `bazel test //...` is unaffected and still runs it.) The `--`
           # keeps the leading `-` from being read as a flag.
+          #
+          # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
+          # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
+          # into the sandbox. The devcontainer bakes them at
+          # `/root/.cache/qmd/models` (prod image's `qmd pull`, run as
+          # root). But GitHub Actions overrides HOME=/github/home for
+          # container steps, so `.bazelrc`'s `$(HOME)/.cache/qmd/models`
+          # mount + build_qmd_index.py's `~/.cache/qmd/models` both point
+          # at an EMPTY /github/home path — and qmd re-downloads ~2GB on
+          # every run (incl. reruns). Point both at the baked /root cache:
+          #   * --sandbox_add_mount_pair makes the baked dir visible in the
+          #     genrule sandbox (additive to the .bazelrc $(HOME) mount,
+          #     which stays correct for local dev).
+          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve its
+          #     models dir to /root/.cache/qmd/models (the script reads it
+          #     in place of $HOME).
+          # qmd then finds the baked models + their `.etag` sidecars and
+          # skips the download (etag matches the unchanged HF release).
+          # Standing CI accommodation — not a republish bridge: the image
+          # bakes as root and GH always sets HOME=/github/home.
           bazel test -c opt --config=release --build_metadata=ROLE=CI \
             --action_env=LIBCLANG_PATH="${libdir}" \
             --host_action_env=LIBCLANG_PATH="${libdir}" \
+            --sandbox_add_mount_pair=/root/.cache/qmd/models \
+            --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
             -- //... -//frankweiler/ui:e2e_test

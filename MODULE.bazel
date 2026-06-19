@@ -54,42 +54,6 @@ http_archive(
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
-# qmd's three default GGUF models, fetched as content-addressed Bazel
-# inputs instead of being downloaded by qmd at action runtime. The
-# `//tests/fixtures:ingested_tng_qmd` genrule feeds these to qmd via the
-# `QMD_{EMBED,RERANK,GENERATE}_MODEL` env vars (see build_qmd_index.py),
-# so qmd resolves them as local files and never touches HuggingFace —
-# the ~2 GB download becomes a repository-cache + BuildBuddy artifact
-# that survives across runs.
-#
-# Pins: URL revision is the file's immutable HuggingFace commit
-# (`x-repo-commit`); `sha256` is the file's git-LFS digest
-# (`x-linked-etag`). Both come from `curl -sI` on the `resolve/main`
-# URL. `//tools:qmd_model_pins_test` guards that the repo/file here
-# still matches qmd's DEFAULT_*_MODEL constants in
-# third-party/qmd/src/llm.ts; bump these together when qmd changes a
-# default model. To refresh after a bump:
-#   curl -sIL <resolve/main url> | grep -iE 'x-repo-commit|x-linked-etag'
-http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
-http_file(
-    name = "qmd_model_embed",
-    urls = ["https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/0f741b5a6585bd53aeb15cd1372c56f2a0f65e12/embeddinggemma-300M-Q8_0.gguf"],
-    sha256 = "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
-    downloaded_file_path = "embeddinggemma-300M-Q8_0.gguf",
-)
-http_file(
-    name = "qmd_model_rerank",
-    urls = ["https://huggingface.co/ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/resolve/a02f48bb4f057028298c21fa033da2b30d7742d5/qwen3-reranker-0.6b-q8_0.gguf"],
-    sha256 = "22c9979ce4fbcdc5acdc310c6641c32797eff1aa980b8f7a2db8a8ea23429a48",
-    downloaded_file_path = "qwen3-reranker-0.6b-q8_0.gguf",
-)
-http_file(
-    name = "qmd_model_generate",
-    urls = ["https://huggingface.co/tobil/qmd-query-expansion-1.7B-gguf/resolve/7816de0b72572c6c860ca1eddf97ba9e7fb8cc65/qmd-query-expansion-1.7B-q4_k_m.gguf"],
-    sha256 = "000dfb1c06efa6a049e9f64ba921c3740e2454f62abab6fa10e77bd30bb2bcc0",
-    downloaded_file_path = "qmd-query-expansion-1.7B-q4_k_m.gguf",
-)
-
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.0.0")
 
