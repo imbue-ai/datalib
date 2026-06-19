@@ -99,6 +99,55 @@ fn norm_data_root(s: &str) -> String {
     }
 }
 
+/// Collapse the volatile query string of any AWS S3 pre-signed URL to a stable
+/// `?<presigned>` token, preserving the base URL (which file). Notion (and any
+/// S3-backed provider) re-signs these on every fetch, so the query — the
+/// `X-Amz-Signature`, `-Date`, `-Credential`, `-Security-Token`, `-Expires` —
+/// rotates each run while the path stays put. Handles both a bare value (JSON)
+/// and a URL embedded in `![alt](…)` markdown (terminated by `)`/`"`/space).
+fn scrub_presigned(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(q) = rest.find("?X-Amz-") {
+        out.push_str(&rest[..q]);
+        out.push_str("?<presigned>");
+        let after = &rest[q..];
+        let end = after
+            .find(|c: char| c == '"' || c == ')' || c.is_whitespace())
+            .unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Per-string snapshot normalization: data_root prefix + pre-signed URLs.
+fn normalize_str(s: &str) -> String {
+    scrub_presigned(&norm_data_root(s))
+}
+
+/// Redact dolt `commit=<hash>` substrings embedded in a human-readable string.
+/// The run-2 incrementality snapshot preserves each source's `stats` line (for
+/// its counts), but that line ends in `commit=<40-hex>` which is per-run
+/// volatile. Run-1 / per-file snapshots redact the whole `stats` key instead,
+/// so this is only wired into the incrementality path.
+fn scrub_commit(s: &str) -> String {
+    const KEY: &str = "commit=";
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find(KEY) {
+        out.push_str(&rest[..i + KEY.len()]);
+        out.push_str(REDACTED);
+        let after = &rest[i + KEY.len()..];
+        let end = after
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Keys whose value is an array we want sorted before snapshotting.
 /// Use only for arrays known to be set-like (order is not meaningful).
 const SORTED_ARRAY_KEYS: &[&str] = &["safe_urls"];
@@ -149,6 +198,27 @@ const VOLATILE_KEYS: &[&str] = &[
     // `first_seen_at`). Identical bytes (content-addressed by blake3) land at
     // the same PK, but the timestamp is whenever this run first wrote them.
     "first_seen_at",
+    // Resume-cursor / bookkeeping wall-clock stamps: `sync_scope_state`'s
+    // `last_finished_at` + `after` (real now when the scope ran, not the
+    // `--now` arg), and `last_seen_at` (when a row was last fetched). The
+    // cursor `before` is a `--now`-relative window start and stays put, as do
+    // genuine upstream content times (`last_sign_in_at`, `latest_build_*`).
+    "last_finished_at",
+    "after",
+    "last_seen_at",
+    // GitLab user object's `local_time` — the user's *current* local time
+    // ("4:52 PM"), so it ticks every minute. Upstream content, but volatile by
+    // nature.
+    "local_time",
+    // Notion file blocks carry a pre-signed S3 link the API re-signs on every
+    // fetch: `expiry_time` is its rotating expiry; the sibling `url`'s volatile
+    // query string is collapsed by `scrub_presigned` (the base URL stays).
+    "expiry_time",
+    // Per-provider `_render_cursor.json` skip-check bookkeeping: `last_render_at`
+    // is wall-clock, and `last_rendered_hash` is a digest over inputs that
+    // include volatile fields (same reason `source_fingerprint` is redacted).
+    "last_render_at",
+    "last_rendered_hash",
     // Dolt commit hashes (`load.commit_hash`, per-source `commit`) fold in a
     // wall-clock timestamp, so they differ on every run even for identical
     // content. The actual content equality is covered by row counts + the
@@ -172,6 +242,29 @@ const VOLATILE_KEYS: &[&str] = &[
     "elapsed_ms",
     "network_seconds",
 ];
+
+/// Live counters on an embedded GitHub *repo* object (a PR payload carries the
+/// full head/base repo) that drift as the repo is used. Redacted ONLY inside a
+/// repo object — see `is_github_repo_object` — so the same generic names
+/// elsewhere (a file's `size`, a comment's `updated_at`) survive as content.
+const REPO_VOLATILE_KEYS: &[&str] = &[
+    "size",
+    "forks",
+    "forks_count",
+    "watchers",
+    "watchers_count",
+    "open_issues",
+    "open_issues_count",
+    "stargazers_count",
+    "pushed_at",
+    "updated_at",
+];
+
+/// A JSON object is a GitHub repo object if it carries both `full_name` and
+/// `default_branch` — distinctive enough to scope `REPO_VOLATILE_KEYS` to it.
+fn is_github_repo_object(map: &serde_json::Map<String, Value>) -> bool {
+    map.contains_key("full_name") && map.contains_key("default_branch")
+}
 
 const REDACTED: &str = "[redacted]";
 
@@ -516,15 +609,15 @@ fn summarize_file(path: &Path) -> SnapValue {
                 strip_volatile(&mut v);
                 SnapValue::Json(v)
             }
-            Err(_) => SnapValue::Text(norm_data_root(&text)),
+            Err(_) => SnapValue::Text(normalize_str(&text)),
         }
     } else if name.ends_with(".md") {
         let text = std::fs::read_to_string(path).unwrap_or_default();
-        SnapValue::Text(norm_data_root(&redact_markdown(&text)))
+        SnapValue::Text(normalize_str(&redact_markdown(&text)))
     } else {
         // Try text first, fall back to a size marker for binary.
         match std::fs::read_to_string(path) {
-            Ok(t) => SnapValue::Text(norm_data_root(&t)),
+            Ok(t) => SnapValue::Text(normalize_str(&t)),
             Err(_) => {
                 let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                 SnapValue::Text(format!("<binary {size} bytes>"))
@@ -790,8 +883,11 @@ async fn dump_doltlite_db_async(path: &Path) -> Value {
 fn strip_volatile(v: &mut Value) {
     match v {
         Value::Object(map) => {
+            let repo = is_github_repo_object(map);
             for (k, child) in map.iter_mut() {
-                if VOLATILE_KEYS.contains(&k.as_str()) {
+                if VOLATILE_KEYS.contains(&k.as_str())
+                    || (repo && REPO_VOLATILE_KEYS.contains(&k.as_str()))
+                {
                     *child = Value::String(REDACTED.into());
                     continue;
                 }
@@ -809,7 +905,7 @@ fn strip_volatile(v: &mut Value) {
             }
         }
         // Normalize the tempdir data_root out of any embedded path string.
-        Value::String(s) => *s = norm_data_root(s),
+        Value::String(s) => *s = normalize_str(s),
         _ => {}
     }
 }
@@ -845,6 +941,10 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "last_attempt_at",
         "captured_at",
         "first_seen_at",
+        "last_finished_at",
+        "last_seen_at",
+        "local_time",
+        "expiry_time",
         // run-2-specific jitter inside the per-source `stats`:
         // wall-clock timings + the cursor `before`/`after` ISO
         // timestamps + network/elapsed jitter. The cursor `scope`
@@ -871,8 +971,11 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
     ];
     match v {
         Value::Object(map) => {
+            let repo = is_github_repo_object(map);
             for (k, child) in map.iter_mut() {
-                if RUN2_VOLATILE_KEYS.contains(&k.as_str()) {
+                if RUN2_VOLATILE_KEYS.contains(&k.as_str())
+                    || (repo && REPO_VOLATILE_KEYS.contains(&k.as_str()))
+                {
                     *child = Value::String(REDACTED.into());
                     continue;
                 }
@@ -889,8 +992,9 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
                 strip_volatile_for_incrementality(item);
             }
         }
-        // Normalize the tempdir data_root out of any embedded path string.
-        Value::String(s) => *s = norm_data_root(s),
+        // Normalize the data_root prefix, and scrub the volatile `commit=<hash>`
+        // out of the preserved per-source `stats` line.
+        Value::String(s) => *s = scrub_commit(&normalize_str(s)),
         _ => {}
     }
 }
