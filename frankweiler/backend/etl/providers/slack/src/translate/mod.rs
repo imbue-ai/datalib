@@ -15,10 +15,7 @@ pub mod mrkdwn;
 pub mod parse;
 pub mod render;
 
-use std::collections::BTreeMap;
-
 use chrono::{DateTime, TimeZone, Utc};
-use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
 // UUIDv5 recipes for Slack message and thread ids live in
@@ -105,107 +102,11 @@ impl Message {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Grid row emission (cross-provider). Used by callers that want just
-// the grid_rows projection without rendering markdown.
-// ---------------------------------------------------------------------------
-
-pub fn grid_rows(t: &ParsedSlack) -> Vec<GridRow> {
-    let user_labels: BTreeMap<String, String> = t
-        .users
-        .iter()
-        .map(|(id, u)| (id.clone(), u.label()))
-        .collect();
-    let mut out: Vec<GridRow> = Vec::new();
-    for bucket in &t.threads {
-        let root: &Message = bucket
-            .messages
-            .iter()
-            .find(|m| m.is_thread_root)
-            .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
-        let channel = t.channels.get(&root.channel_id);
-        let cname = channel
-            .and_then(|c| c.name.clone())
-            .unwrap_or_else(|| root.channel_id.clone());
-        let thread_uuid = bucket.thread_uuid.clone();
-
-        out.push(GridRow {
-            uuid: thread_uuid.clone(),
-            provider: "slack".to_string(),
-            kind: "Slack Thread".to_string(),
-            source_label: "Slack".to_string(),
-            when_ts: Some(root.ts_iso.clone()),
-            author: root
-                .user_id
-                .as_deref()
-                .and_then(|u| user_labels.get(u).cloned())
-                .or_else(|| root.user_id.clone()),
-            account: Some(root.team_id.clone()),
-            org_uuid: None,
-            org_name: None,
-            project: None,
-            channel: Some(cname.clone()),
-            conversation_name: Some(format!("#{cname}")),
-            conversation_uuid: thread_uuid.clone(),
-            message_index: None,
-            entire_chat: format!("/slack/{thread_uuid}"),
-            text: resolve_user_mentions(&root.text, &user_labels),
-            slack_link: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
-            qmd_path: Some(slack_qmd_path(
-                &root.team_id,
-                &root.channel_id,
-                &thread_uuid,
-            )),
-            source_url: None,
-            git_sha: None,
-            external_id: None,
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(thread_uuid.clone()),
-        });
-
-        for (idx, m) in bucket.messages.iter().enumerate() {
-            out.push(GridRow {
-                uuid: m.uuid(),
-                provider: "slack".to_string(),
-                kind: "Slack Message".to_string(),
-                source_label: "Slack".to_string(),
-                when_ts: Some(m.ts_iso.clone()),
-                author: m
-                    .user_id
-                    .as_deref()
-                    .and_then(|u| user_labels.get(u).cloned())
-                    .or_else(|| m.user_id.clone()),
-                account: Some(m.team_id.clone()),
-                org_uuid: None,
-                org_name: None,
-                project: None,
-                channel: Some(cname.clone()),
-                conversation_name: Some(format!("#{cname}")),
-                conversation_uuid: thread_uuid.clone(),
-                message_index: Some(idx as i64),
-                entire_chat: format!("/slack/{thread_uuid}"),
-                text: resolve_user_mentions(&m.text, &user_labels),
-                slack_link: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
-                qmd_path: Some(slack_qmd_path(
-                    &root.team_id,
-                    &root.channel_id,
-                    &thread_uuid,
-                )),
-                source_url: None,
-                git_sha: None,
-                external_id: None,
-                notion_page_uuid: None,
-                notion_block_uuid: None,
-                markdown_uuid: Some(thread_uuid.clone()),
-            });
-        }
-    }
-    out
-}
-
 pub use mrkdwn::resolve_user_mentions;
 
+/// A Slack message permalink. With `thread_ts` (and when it differs from
+/// `ts`) the reply-in-thread params are appended so the link deep-links
+/// to the threaded message rather than the channel root.
 pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&str>) -> String {
     let ts_no_dot: String = ts.chars().filter(|c| *c != '.').collect();
     let mut url = format!("https://slack.com/archives/{channel_id}/p{ts_no_dot}?team={team_id}");
@@ -215,8 +116,4 @@ pub fn slack_link(team_id: &str, channel_id: &str, ts: &str, thread_ts: Option<&
         }
     }
     url
-}
-
-pub fn slack_qmd_path(team_id: &str, channel_id: &str, thread_uuid: &str) -> String {
-    format!("rendered_md/slack/{team_id}/{channel_id}/threads/{thread_uuid}/index.md")
 }

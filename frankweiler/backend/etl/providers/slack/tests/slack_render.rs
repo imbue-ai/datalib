@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl_slack::translate::{parse, render::render_all};
-use insta::assert_snapshot;
+use frankweiler_etl_slack::translate::{
+    parse, render::render_all, slack_message_uuid, slack_thread_uuid,
+};
+use insta::{assert_json_snapshot, assert_snapshot};
 
 fn fixture_root() -> PathBuf {
     if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {
@@ -89,4 +91,94 @@ fn renders_tng_fixture() {
         .and_then(|h| h.get("source_fingerprint"))
         .is_some());
     assert!(one.get("rows").and_then(|r| r.as_array()).is_some());
+}
+
+#[test]
+fn renders_tng_fixture_grid_rows() {
+    let parsed = parse(&fixture_root(), None).expect("parse");
+    let tmp = tempfile::tempdir().expect("tmp");
+
+    // Capture every grid row the chat-common renderer emits.
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    {
+        let mut on_done = |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+            for r in &doc.rows {
+                rows.push(serde_json::to_value(r).unwrap());
+            }
+            Ok(())
+        };
+        render_all(
+            &parsed,
+            tmp.path(),
+            "slack_api",
+            &frankweiler_etl::progress::Progress::noop(),
+            &mut on_done,
+        )
+        .expect("render");
+    }
+
+    let picard_root_uuid = slack_message_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
+    let picard_thread_uuid = slack_thread_uuid("T_NCC1701D", "C_BRIDGE", "12604000100.000100");
+
+    let field = |r: &serde_json::Value, k: &str| -> Option<String> {
+        r.get(k).and_then(|v| v.as_str()).map(str::to_string)
+    };
+
+    // The thread-level row: stable thread uuid, channel, permalink now in
+    // source_url (not slack_link), title text preserved as conversation_name.
+    let thread_row = rows
+        .iter()
+        .find(|r| {
+            field(r, "kind").as_deref() == Some("Slack Thread")
+                && field(r, "conversation_uuid").as_deref() == Some(&picard_thread_uuid)
+        })
+        .expect("Picard thread row");
+    assert_eq!(
+        field(thread_row, "uuid").as_deref(),
+        Some(picard_thread_uuid.as_str())
+    );
+    // chat-common drives both `channel` and `conversation_name` from the
+    // single `display` ("#bridge").
+    assert_eq!(field(thread_row, "channel").as_deref(), Some("#bridge"));
+    assert_eq!(
+        field(thread_row, "conversation_name").as_deref(),
+        Some("#bridge")
+    );
+    // Permalink migrated from slack_link → source_url.
+    assert!(thread_row
+        .get("slack_link")
+        .map(|v| v.is_null())
+        .unwrap_or(true));
+    assert!(field(thread_row, "source_url")
+        .unwrap_or_default()
+        .contains("slack.com/archives/C_BRIDGE"));
+
+    // The root message row keeps its own message uuid + index 0.
+    let root_msg = rows
+        .iter()
+        .find(|r| {
+            field(r, "kind").as_deref() == Some("Slack Message")
+                && field(r, "uuid").as_deref() == Some(&picard_root_uuid)
+        })
+        .expect("Picard root message row");
+    assert_eq!(
+        root_msg.get("message_index").and_then(|v| v.as_i64()),
+        Some(0)
+    );
+    assert_ne!(
+        field(root_msg, "uuid").as_deref(),
+        Some(picard_thread_uuid.as_str())
+    );
+    assert!(field(root_msg, "source_url")
+        .unwrap_or_default()
+        .contains("slack.com/archives/C_BRIDGE"));
+
+    rows.sort_by_key(|v| {
+        (
+            field(v, "kind").unwrap_or_default(),
+            field(v, "when_ts").unwrap_or_default(),
+            field(v, "uuid").unwrap_or_default(),
+        )
+    });
+    assert_json_snapshot!("tng_grid_rows", rows);
 }

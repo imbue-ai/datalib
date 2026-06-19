@@ -194,6 +194,7 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             id: format!("posts:{key}"),
             chat_uuid: uuid5(&format!("chat:posts:{key}")),
             display: thread_title(thread.share, &thread.comments),
+            title: None,
             account: None,
             project: None,
             external_id: nonempty(&key).map(str::to_string),
@@ -230,6 +231,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         attachments: linkout(url),
         reactions: Vec::new(),
         system_note: None,
+        source_url: None,
     }
 }
 
@@ -250,6 +252,7 @@ fn post_placeholder(key: &str, date_ms: i64, url: &str) -> NormalizedChatItem {
         attachments: linkout(url),
         reactions: Vec::new(),
         system_note: Some(note),
+        source_url: None,
     }
 }
 

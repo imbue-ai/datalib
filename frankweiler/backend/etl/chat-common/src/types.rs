@@ -124,6 +124,12 @@ pub struct NormalizedChatItem {
     /// only for system events ("Worf joined", "ephemeral disappearing
     /// messages enabled", …); empty for everything else.
     pub system_note: Option<String>,
+    /// Optional public URL for this individual message (Slack message
+    /// permalink, …). Surfaced as a `↗` link in the message header and
+    /// as the message-level grid_row's `source_url`. Takes precedence
+    /// over an attachment-derived URL. `None` for providers with no
+    /// per-message URL — the default for anything that doesn't set it.
+    pub source_url: Option<String>,
 }
 
 /// One rendered-markdown bucket: a slice of a chat covering a single
@@ -147,10 +153,16 @@ pub struct NormalizedChat {
     /// Stable per-chat UUID minted by the provider. Same value across
     /// every bucket of this chat.
     pub chat_uuid: String,
-    /// Human-readable label that goes into the page title and the
-    /// chat-level grid_row's `conversation_name`. E.g. "Will Riker"
-    /// or "Bridge Crew".
+    /// Human-readable label that goes into the chat-level grid_row's
+    /// `conversation_name` (and the page title when `title` is unset).
+    /// E.g. "Will Riker" or "Bridge Crew".
     pub display: String,
+    /// Optional first-class page title (the `<h1>`). When set, it
+    /// replaces the derived `"{source_label} · {display}"` heading —
+    /// e.g. Slack's "#channel: <root snippet>". `conversation_name`
+    /// still comes from `display`. `None` falls back to the derived
+    /// heading — the default for anything that doesn't set it.
+    pub title: Option<String>,
     /// Optional account scope (Beeper's account_id, slack's
     /// team_id). Surfaced in the chat-level grid_row's `account`
     /// column.

@@ -120,6 +120,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
                     attachments: Vec::new(),
                     reactions: Vec::new(),
                     system_note: None,
+                    source_url: None,
                 }
             })
             .collect();
@@ -133,6 +134,7 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             id: format!("{table}:{conv}"),
             chat_uuid: uuid5(&format!("chat:{table}:{conv}")),
             display,
+            title: None,
             account: None,
             project: None,
             external_id: Some(conv.clone()),

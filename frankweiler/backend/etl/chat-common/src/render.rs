@@ -154,11 +154,16 @@ fn render_one(
     let resolved_doc = materialize_attachment_bytes(doc, &page_dir, blobs);
     let doc = &resolved_doc;
 
-    let chat_title = format!(
-        "{label} · {disp}",
-        label = profile.source_label,
-        disp = chat.display
-    );
+    // A provider-supplied `title` takes the `<h1>`; otherwise derive the
+    // familiar "{source_label} · {display}" heading.
+    let chat_title = match &chat.title {
+        Some(t) => t.clone(),
+        None => format!(
+            "{label} · {disp}",
+            label = profile.source_label,
+            disp = chat.display
+        ),
+    };
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
     let md = render_markdown(profile, chat, doc, &doc_title, &fingerprint);
@@ -358,6 +363,13 @@ fn render_item(s: &mut String, profile: &RenderProfile, item: &NormalizedChatIte
             s.push_str(&display_ts(item.date_ms));
             s.push_str(" — ");
             s.push_str(&item.author_display);
+            // Per-message linkout (e.g. a Slack permalink) as a `↗` after
+            // the header, opening in a new tab.
+            if let Some(url) = &item.source_url {
+                s.push_str(&format!(
+                    " <a class=\"source-link\" href=\"{url}\" target=\"_blank\" rel=\"noopener noreferrer\">↗</a>"
+                ));
+            }
             s.push('\n');
         }
     }
@@ -571,7 +583,11 @@ fn build_grid_rows(
             text,
             slack_link: None,
             qmd_path: Some(md_rel.to_string()),
-            source_url: item.attachments.iter().find_map(|a| a.source_url.clone()),
+            // Per-message linkout wins; fall back to an attachment's URL.
+            source_url: item
+                .source_url
+                .clone()
+                .or_else(|| item.attachments.iter().find_map(|a| a.source_url.clone())),
             git_sha: None,
             external_id: None,
             notion_page_uuid: None,
@@ -629,12 +645,16 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
     h.update(chat.chat_uuid.as_bytes());
     h.update(b"|");
     h.update(doc.period_key.as_bytes());
-    // Fold the chat-level linkout in only when present, so providers that
-    // don't set one keep their existing fingerprints (no forced
-    // re-render); a changed/added URL re-renders the `↗` in the title.
+    // Fold chat-level linkout + title in only when present, so providers
+    // that don't set them keep their existing fingerprints (no forced
+    // re-render); a change re-renders the `↗` / `<h1>`.
     if let Some(url) = &chat.source_url {
         h.update(b"|src|");
         h.update(url.as_bytes());
+    }
+    if let Some(title) = &chat.title {
+        h.update(b"|title|");
+        h.update(title.as_bytes());
     }
     for item in &doc.items {
         h.update(b"\n");
@@ -645,6 +665,10 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         h.update(item.date_ms.to_be_bytes());
         h.update(b"|");
         h.update(item.text.as_deref().unwrap_or("").as_bytes());
+        if let Some(url) = &item.source_url {
+            h.update(b"|msrc|");
+            h.update(url.as_bytes());
+        }
         h.update(b"|");
         h.update((item.attachments.len() as u32).to_be_bytes());
         for a in &item.attachments {
@@ -732,6 +756,7 @@ mod tests {
             project: None,
             external_id: Some("bridge-crew@g.us".to_string()),
             source_url: None,
+            title: None,
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
@@ -750,6 +775,7 @@ mod tests {
                         date_ms: 12442118410000,
                     }],
                     system_note: None,
+                    source_url: None,
                 }],
             }],
         }
@@ -879,6 +905,75 @@ mod tests {
         assert_ne!(
             compute_fingerprint(1, &none, &none.buckets[0]),
             compute_fingerprint(1, &set, &set.buckets[0]),
+        );
+    }
+
+    #[test]
+    fn title_override_replaces_derived_heading() {
+        let profile = RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            render_version: 1,
+        };
+        let mut chat = mk_chat();
+        chat.title = Some("#bridge: Make it so.".to_string());
+
+        // render_one builds the title; render_markdown takes it as a param,
+        // so exercise the heading logic via render_one's formatting here by
+        // re-deriving the same way render_one does.
+        let chat_title = match &chat.title {
+            Some(t) => t.clone(),
+            None => format!("{} · {}", profile.source_label, chat.display),
+        };
+        assert_eq!(chat_title, "#bridge: Make it so.");
+
+        // And a set title re-cuts the fingerprint (None stays stable).
+        let plain = mk_chat();
+        assert_ne!(
+            compute_fingerprint(1, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, &chat, &chat.buckets[0]),
+        );
+    }
+
+    #[test]
+    fn per_message_source_url_surfaces_in_header_and_grid_row() {
+        let profile = RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            render_version: 1,
+        };
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].source_url = Some("https://slack.example/p123".to_string());
+
+        // Message header carries a `↗` linkout.
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        assert!(
+            md.contains("class=\"source-link\"") && md.contains("https://slack.example/p123"),
+            "message header carries the per-message linkout: {md}"
+        );
+
+        // The message-level grid row (row[1], after the chat row) carries it.
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        let msg = rows
+            .iter()
+            .find(|r| r.kind == profile.message_kind)
+            .unwrap();
+        assert_eq!(
+            msg.source_url.as_deref(),
+            Some("https://slack.example/p123")
+        );
+
+        // A per-message URL re-cuts the fingerprint.
+        let plain = mk_chat();
+        assert_ne!(
+            compute_fingerprint(1, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, &chat, &chat.buckets[0]),
         );
     }
 }

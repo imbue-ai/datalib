@@ -265,6 +265,25 @@ pub fn slack_thread_uuid(team_id: &str, channel_id: &str, thread_ts: &str) -> St
     .to_string()
 }
 
+/// UUIDv5 recipe for an individual reaction (one per reacting user) on
+/// a message — its grid_row PK + markdown anchor.
+///
+/// Recipe: `uuidv5(SLACK_UUID_NS,
+/// "slack:reaction:{team_id}:{channel_id}:{ts}:{name}:{user}")`.
+pub fn slack_reaction_uuid(
+    team_id: &str,
+    channel_id: &str,
+    ts: &str,
+    name: &str,
+    user: &str,
+) -> String {
+    Uuid::new_v5(
+        &SLACK_UUID_NS,
+        format!("slack:reaction:{team_id}:{channel_id}:{ts}:{name}:{user}").as_bytes(),
+    )
+    .to_string()
+}
+
 /// Composite-key recipe for [`RepliesPagesRow`]'s primary key.
 pub fn replies_page_id_recipe(channel_id: &str, thread_ts: &str) -> String {
     format!("{channel_id}:{thread_ts}")
