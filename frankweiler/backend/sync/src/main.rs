@@ -2688,7 +2688,19 @@ fn translate_source(
                 prior_fingerprints,
                 on_doc_complete,
             )
-            .context("linkedin connections render")
+            .context("linkedin connections render")?;
+            // Your own posts (Shares) and the comments you left, grouped
+            // one chat-style thread per post, with linkouts back to
+            // linkedin.com.
+            frankweiler_etl_linkedin::posts::render_posts(
+                &raw_dir,
+                root,
+                name,
+                progress,
+                prior_fingerprints,
+                on_doc_complete,
+            )
+            .context("linkedin posts render")
         }
         SourceConfig::GoogleTakeout { .. } => {
             // Only the Google Chat feed renders; the other feeds stay

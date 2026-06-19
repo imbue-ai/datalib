@@ -314,8 +314,9 @@ fn render_markdown(
         &Title {
             text: title,
             markdown_uuid: Some(&doc.markdown_uuid),
-            // No public per-chat URL for any backup-based provider.
-            source_url: None,
+            // Public per-chat URL when the provider has one (LinkedIn
+            // post, Slack permalink, …); None for backup-based providers.
+            source_url: chat.source_url.as_deref(),
         }
         .render(),
     );
@@ -528,7 +529,7 @@ fn build_grid_rows(
             .join("\n"),
         slack_link: None,
         qmd_path: Some(md_rel.to_string()),
-        source_url: None,
+        source_url: chat.source_url.clone(),
         git_sha: None,
         external_id: chat.external_id.clone(),
         notion_page_uuid: None,
@@ -628,6 +629,13 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
     h.update(chat.chat_uuid.as_bytes());
     h.update(b"|");
     h.update(doc.period_key.as_bytes());
+    // Fold the chat-level linkout in only when present, so providers that
+    // don't set one keep their existing fingerprints (no forced
+    // re-render); a changed/added URL re-renders the `↗` in the title.
+    if let Some(url) = &chat.source_url {
+        h.update(b"|src|");
+        h.update(url.as_bytes());
+    }
     for item in &doc.items {
         h.update(b"\n");
         h.update(item.message_uuid.as_bytes());
@@ -723,6 +731,7 @@ mod tests {
             account: Some("acct-1".to_string()),
             project: None,
             external_id: Some("bridge-crew@g.us".to_string()),
+            source_url: None,
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
@@ -823,5 +832,53 @@ mod tests {
         let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
         assert!(md.contains("not yet fetched"));
         assert!(md.contains("https://example/vscapture"));
+    }
+
+    #[test]
+    fn chat_source_url_surfaces_in_title_and_chat_grid_row() {
+        let profile = RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            render_version: 1,
+        };
+        let mut chat = mk_chat();
+        chat.source_url = Some("https://example.com/post/42".to_string());
+
+        // Title gets the `↗` source link.
+        let md = render_markdown(&profile, &chat, &chat.buckets[0], "Test", "fp");
+        assert!(
+            md.contains("class=\"source-link\"") && md.contains("https://example.com/post/42"),
+            "title carries the source linkout: {md}"
+        );
+
+        // The chat-level grid row (first row) carries it too.
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        assert_eq!(rows[0].kind, profile.chat_kind);
+        assert_eq!(
+            rows[0].source_url.as_deref(),
+            Some("https://example.com/post/42")
+        );
+    }
+
+    #[test]
+    fn fingerprint_tracks_source_url() {
+        // None (the default) keeps the pre-existing fingerprint stable…
+        let none = mk_chat();
+        let mut bare = mk_chat();
+        bare.source_url = None;
+        assert_eq!(
+            compute_fingerprint(1, &none, &none.buckets[0]),
+            compute_fingerprint(1, &bare, &bare.buckets[0]),
+        );
+        // …while setting / changing it re-cuts the fingerprint.
+        let mut set = mk_chat();
+        set.source_url = Some("https://example.com/a".to_string());
+        assert_ne!(
+            compute_fingerprint(1, &none, &none.buckets[0]),
+            compute_fingerprint(1, &set, &set.buckets[0]),
+        );
     }
 }

@@ -2,10 +2,11 @@
 //!
 //! Builds a small synthetic export in a tempdir that exercises every
 //! interesting path — a `Notes:`-preamble file, a member-id-suffixed
-//! filename, an `Articles/` HTML file, two message-shaped feeds, and a
-//! CSV that isn't in the manifest — then runs `extract::fetch` and
-//! `render::render` against it and asserts the landed raw tables and
-//! rendered chats.
+//! filename, an `Articles/` HTML file, two message-shaped feeds, a
+//! Shares + Comments pair that group into per-post threads, and a CSV
+//! that isn't in the manifest — then runs `extract::fetch` and the
+//! render paths against it and asserts the landed raw tables and
+//! rendered chats / post threads.
 //!
 //! Self-contained: the fixture is written by the test, so there are no
 //! checked-in fixture files and nothing to stage via Bazel `data`.
@@ -23,6 +24,7 @@ use frankweiler_etl_linkedin::connections;
 use frankweiler_etl_linkedin::extract::photos::load_photo_blobs;
 use frankweiler_etl_linkedin::extract::schema_raw::connection_uuid;
 use frankweiler_etl_linkedin::extract::{self, db_path_for, FetchOptions, RawDb};
+use frankweiler_etl_linkedin::posts;
 use frankweiler_etl_linkedin::render;
 use frankweiler_etl_linkedin::synthesize::LinkedinSynth;
 
@@ -38,11 +40,24 @@ fn build_export(root: &Path) -> Result<()> {
          Beverly,Crusher,https://www.linkedin.com/in/bev,,Starfleet,CMO,17 Jun 2026\n",
     )?;
 
-    // Member-id-suffixed filename → canonical table `comments`.
+    // Member-id-suffixed filename → canonical table `comments`. Two
+    // comments: one on the user's own ugcPost (merges into its Shares
+    // thread by URN), one on someone else's post (its body isn't in the
+    // export → a comment-only thread).
     fs::write(
-        root.join("Comments_99887766.csv"),
+        root.join("Comments_17529409.csv"),
         "Date,Link,Message\n\
-         2026-01-02 03:04:05,https://example.com/p/1,Make it so.\n",
+         2026-05-08 09:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Replying to my own post thread.\n\
+         2026-04-30 15:32:07,https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681,\"Great point, Jean-Luc!\"\n",
+    )?;
+
+    // The user's own posts. The first shares a URN with a comment above
+    // (they merge into one thread); the second is a standalone post.
+    fs::write(
+        root.join("Shares_17529409.csv"),
+        "Date,ShareLink,ShareCommentary,SharedUrl,MediaUrl,Visibility\n\
+         2026-05-07 16:41:18,https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216,Excited to share our new treemap viz!,,,MEMBER_NETWORK\n\
+         2026-04-01 12:00:00,https://www.linkedin.com/feed/update/urn%3Ali%3Ashare%3A7448081445065035776,Check this out,https://example.com/article,,PUBLIC\n",
     )?;
 
     // Primary messages feed: two conversations.
@@ -109,19 +124,21 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .await
         .context("fetch")?;
 
-        // 5 CSVs + 1 articles batch = 6 "files".
-        assert_eq!(summary.files, 6, "files (5 csv + articles)");
+        // 6 CSVs + 1 articles batch = 7 "files".
+        assert_eq!(summary.files, 7, "files (6 csv + articles)");
         assert_eq!(summary.parse_errors, 0, "no parse errors");
 
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
 
         // Member-id suffix stripped: table is `comments`, not
-        // `comments_99887766`.
-        assert_eq!(rows(&db, "comments").await.len(), 1, "comments rows");
+        // `comments_17529409`.
+        assert_eq!(rows(&db, "comments").await.len(), 2, "comments rows");
         assert!(
-            rows(&db, "comments_99887766").await.is_empty(),
+            rows(&db, "comments_17529409").await.is_empty(),
             "no member-id-suffixed table"
         );
+        // Shares ingested under the suffix-stripped `shares` table.
+        assert_eq!(rows(&db, "shares").await.len(), 2, "shares rows");
 
         // Notes: preamble stripped, both connection rows landed.
         assert_eq!(rows(&db, "connections").await.len(), 2, "connections rows");
@@ -168,6 +185,80 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             docs.len() >= 3,
             "rendered at least 3 docs, got {}",
             docs.len()
+        );
+
+        // ── shares + comments → one thread per post ──────────────
+        let mut post_docs: Vec<RenderedMarkdown> = Vec::new();
+        {
+            let mut on_doc = |d: RenderedMarkdown| {
+                post_docs.push(d);
+                Ok(())
+            };
+            posts::render_posts(
+                &raw_dir,
+                &out_dir,
+                "linkedin",
+                &Progress::noop(),
+                &HashMap::new(),
+                &mut on_doc,
+            )
+            .context("render_posts")?;
+        }
+        // Two shares (two URNs) + a comment that merges into the first +
+        // a comment on an external post = 3 threads.
+        assert_eq!(post_docs.len(), 3, "three post threads");
+
+        // Thread A: the user's ugcPost, with their follow-up comment
+        // merged into the same thread by shared URN.
+        let ugc = "https://www.linkedin.com/feed/update/urn%3Ali%3AugcPost%3A7458194261025673216";
+        let thread_a = post_docs
+            .iter()
+            .find(|d| d.rows.iter().any(|r| r.source_url.as_deref() == Some(ugc)))
+            .expect("ugcPost thread rendered");
+        let md_a = fs::read_to_string(&thread_a.md_path)?;
+        assert!(
+            md_a.contains("Excited to share our new treemap viz!"),
+            "post body in thread"
+        );
+        assert!(
+            md_a.contains("Replying to my own post thread."),
+            "comment merged into the post's thread: {md_a}"
+        );
+        // Message-level grid rows carry the linkout back to the post.
+        assert!(
+            thread_a
+                .rows
+                .iter()
+                .any(|r| r.kind == "LinkedIn Post Message" && r.source_url.as_deref() == Some(ugc)),
+            "message row carries the post linkout"
+        );
+        // The chat-level row (whole post) carries it too, and the page
+        // title renders the `↗` source link.
+        assert!(
+            thread_a
+                .rows
+                .iter()
+                .any(|r| r.kind == "LinkedIn Post" && r.source_url.as_deref() == Some(ugc)),
+            "chat-level row carries the post linkout"
+        );
+        assert!(
+            md_a.contains("class=\"source-link\"") && md_a.contains(ugc),
+            "page title carries the `↗` linkout: {md_a}"
+        );
+
+        // Thread C: a comment on someone else's post — the original body
+        // isn't in the export, so we note that and still link out.
+        let act = "https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A7401794121226567681";
+        let thread_c = post_docs
+            .iter()
+            .find(|d| d.rows.iter().any(|r| r.source_url.as_deref() == Some(act)))
+            .expect("external-post comment thread rendered");
+        let md_c = fs::read_to_string(&thread_c.md_path)?;
+        assert!(md_c.contains("Great point, Jean-Luc!"), "comment body");
+        assert!(
+            md_c.to_lowercase()
+                .contains("not included in the linkedin export"),
+            "missing-original note: {md_c}"
         );
 
         // ── connections → contacts ───────────────────────────────

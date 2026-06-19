@@ -233,6 +233,7 @@ fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
             account: None,
             project: None,
             external_id: Some(space.clone()),
+            source_url: None,
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:{space}:all")),
@@ -344,6 +345,7 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             account: None,
             project: Some("Google Voice".to_string()),
             external_id: Some(external_id),
+            source_url: None,
             buckets,
         });
     }

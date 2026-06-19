@@ -162,6 +162,12 @@ pub struct NormalizedChat {
     /// JID, signal recipient identifier). Goes into the
     /// chat-level grid_row's `external_id` and the .md frontmatter.
     pub external_id: Option<String>,
+    /// Optional public URL for the conversation's source artifact (a
+    /// LinkedIn post, a Slack thread permalink, …). Surfaced as the `↗`
+    /// link in the page title and the chat-level grid_row's `source_url`.
+    /// `None` for backup-based providers with no public per-chat URL —
+    /// the default for anything that doesn't set it.
+    pub source_url: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
 }

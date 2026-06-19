@@ -136,6 +136,8 @@ fn build_chats(table: &str, payloads: &[Value]) -> Vec<NormalizedChat> {
             account: None,
             project: None,
             external_id: Some(conv.clone()),
+            // No public per-conversation URL in the message export.
+            source_url: None,
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:{table}:{conv}:all")),
