@@ -203,6 +203,8 @@ fn build_chats(messages: &[Value], calls: &[Value]) -> Vec<NormalizedChat> {
             external_id: Some(external_id),
             source_url: None,
             title: None,
+            org_uuid: None,
+            org_name: None,
             buckets,
         });
     }
@@ -242,6 +244,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 reactions: Vec::new(),
                 system_note: Some(call_note(call_type, duration, display)),
                 source_url: None,
+                kind_label: None,
             }
         }
         // sms / mms
@@ -302,6 +305,7 @@ fn item(v: &Value) -> NormalizedChatItem {
                 reactions: Vec::new(),
                 system_note: None,
                 source_url: None,
+                kind_label: None,
             }
         }
     }

@@ -312,6 +312,8 @@ async fn parse_async(db_path: &Path, period: Period, source_name: &str) -> Resul
             external_id: Some(ch.chat_jid),
             source_url: None,
             title: None,
+            org_uuid: None,
+            org_name: None,
             buckets,
         });
     }
@@ -431,6 +433,7 @@ fn build_item(
         reactions,
         system_note: None,
         source_url: None,
+        kind_label: None,
     }
 }
 

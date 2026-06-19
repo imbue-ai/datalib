@@ -171,6 +171,8 @@ fn build_chats(
             external_id: None,
             // Thread permalink → chat-level `↗` + chat grid source_url.
             source_url: Some(slack_link(&root.team_id, &root.channel_id, &root.ts, None)),
+            org_uuid: None,
+            org_name: None,
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
                 markdown_uuid: thread_uuid.clone(),
@@ -212,6 +214,7 @@ fn build_item(
         system_note: None,
         // Per-message permalink (with thread_ts for replies).
         source_url: Some(slack_link(&m.team_id, &m.channel_id, &m.ts, Some(&root.ts))),
+        kind_label: None,
     }
 }
 

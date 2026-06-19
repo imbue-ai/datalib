@@ -200,6 +200,8 @@ fn build_post_chats(shares: &[Value], comments: &[Value]) -> Vec<NormalizedChat>
             external_id: nonempty(&key).map(str::to_string),
             // Whole-post linkout on the thread header / chat-level row.
             source_url: nonempty(&thread.url).map(str::to_string),
+            org_uuid: None,
+            org_name: None,
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:posts:{key}:all")),
@@ -232,6 +234,7 @@ fn me_item(key: &str, role: &str, date: &str, body: String, url: &str) -> Normal
         reactions: Vec::new(),
         system_note: None,
         source_url: None,
+        kind_label: None,
     }
 }
 
@@ -253,6 +256,7 @@ fn post_placeholder(key: &str, date_ms: i64, url: &str) -> NormalizedChatItem {
         reactions: Vec::new(),
         system_note: Some(note),
         source_url: None,
+        kind_label: None,
     }
 }
 

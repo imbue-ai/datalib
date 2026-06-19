@@ -130,6 +130,13 @@ pub struct NormalizedChatItem {
     /// over an attachment-derived URL. `None` for providers with no
     /// per-message URL — the default for anything that doesn't set it.
     pub source_url: Option<String>,
+    /// Optional override for this item's grid_row `kind`. Lets a provider
+    /// distinguish per-message roles ("User Input", "LLM Response",
+    /// "LLM Thinking", "Tool Call") instead of the single
+    /// `RenderProfile::message_kind`. `None` → use `message_kind` — the
+    /// default for anything that doesn't set it. Grid-only; doesn't change
+    /// the markdown layout.
+    pub kind_label: Option<String>,
 }
 
 /// One rendered-markdown bucket: a slice of a chat covering a single
@@ -180,6 +187,12 @@ pub struct NormalizedChat {
     /// `None` for backup-based providers with no public per-chat URL —
     /// the default for anything that doesn't set it.
     pub source_url: Option<String>,
+    /// Optional owning-org identity, surfaced in every grid_row's
+    /// `org_uuid` / `org_name` columns. Today only Anthropic sets these
+    /// (a Claude account can span a personal plan + Team workspaces).
+    /// `None` for everything else — the default.
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
     /// Buckets sorted by period_key.
     pub buckets: Vec<NormalizedDoc>,
 }

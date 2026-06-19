@@ -217,6 +217,7 @@ fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
                     reactions: Vec::new(),
                     system_note: None,
                     source_url: None,
+                    kind_label: None,
                 }
             })
             .collect();
@@ -236,6 +237,8 @@ fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
             external_id: Some(space.clone()),
             source_url: None,
             title: None,
+            org_uuid: None,
+            org_name: None,
             buckets: vec![NormalizedDoc {
                 period_key: "all".to_string(),
                 markdown_uuid: uuid5(&format!("doc:{space}:all")),
@@ -349,6 +352,8 @@ fn build_voice_chats(messages: &[Value]) -> Vec<NormalizedChat> {
             external_id: Some(external_id),
             source_url: None,
             title: None,
+            org_uuid: None,
+            org_name: None,
             buckets,
         });
     }
@@ -417,6 +422,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 reactions: Vec::new(),
                 system_note: None,
                 source_url: None,
+                kind_label: None,
             }
         }
         "voicemail" | "recorded" => {
@@ -444,6 +450,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 reactions: Vec::new(),
                 system_note: None,
                 source_url: None,
+                kind_label: None,
             }
         }
         // missed / placed / received — a call with no media: a system note.
@@ -466,6 +473,7 @@ fn voice_item(m: &Value) -> NormalizedChatItem {
                 reactions: Vec::new(),
                 system_note: Some(format!("{note} — {}", party_display(party))),
                 source_url: None,
+                kind_label: None,
             }
         }
     }

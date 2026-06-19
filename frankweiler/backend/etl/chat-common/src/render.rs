@@ -524,8 +524,8 @@ fn build_grid_rows(
         when_ts: Some(first_ts),
         author: None,
         account: chat.account.clone(),
-        org_uuid: None,
-        org_name: None,
+        org_uuid: chat.org_uuid.clone(),
+        org_name: chat.org_name.clone(),
         project: chat.project.clone(),
         channel: conversation_name.clone(),
         conversation_name: conversation_name.clone(),
@@ -567,13 +567,17 @@ fn build_grid_rows(
         rows.push(GridRow {
             uuid: item.message_uuid.clone(),
             provider: profile.provider.to_string(),
-            kind: profile.message_kind.clone(),
+            // Per-item role override (ChatGPT/Anthropic) or the profile default.
+            kind: item
+                .kind_label
+                .clone()
+                .unwrap_or_else(|| profile.message_kind.clone()),
             source_label: profile.source_label.clone(),
             when_ts: Some(iso_from_ms(item.date_ms)),
             author: Some(item.author_display.clone()),
             account: chat.account.clone(),
-            org_uuid: None,
-            org_name: None,
+            org_uuid: chat.org_uuid.clone(),
+            org_name: chat.org_name.clone(),
             project: chat.project.clone(),
             channel: conversation_name.clone(),
             conversation_name: conversation_name.clone(),
@@ -603,8 +607,8 @@ fn build_grid_rows(
                 when_ts: Some(iso_from_ms(r.date_ms)),
                 author: Some(r.reactor_display.clone()),
                 account: chat.account.clone(),
-                org_uuid: None,
-                org_name: None,
+                org_uuid: chat.org_uuid.clone(),
+                org_name: chat.org_name.clone(),
                 project: chat.project.clone(),
                 channel: conversation_name.clone(),
                 conversation_name: conversation_name.clone(),
@@ -656,6 +660,14 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         h.update(b"|title|");
         h.update(title.as_bytes());
     }
+    if let Some(org) = &chat.org_uuid {
+        h.update(b"|org|");
+        h.update(org.as_bytes());
+    }
+    if let Some(org_name) = &chat.org_name {
+        h.update(b"|orgn|");
+        h.update(org_name.as_bytes());
+    }
     for item in &doc.items {
         h.update(b"\n");
         h.update(item.message_uuid.as_bytes());
@@ -668,6 +680,10 @@ fn compute_fingerprint(render_version: u32, chat: &NormalizedChat, doc: &Normali
         if let Some(url) = &item.source_url {
             h.update(b"|msrc|");
             h.update(url.as_bytes());
+        }
+        if let Some(k) = &item.kind_label {
+            h.update(b"|kind|");
+            h.update(k.as_bytes());
         }
         h.update(b"|");
         h.update((item.attachments.len() as u32).to_be_bytes());
@@ -757,6 +773,8 @@ mod tests {
             external_id: Some("bridge-crew@g.us".to_string()),
             source_url: None,
             title: None,
+            org_uuid: None,
+            org_name: None,
             buckets: vec![NormalizedDoc {
                 period_key: "2364-04".to_string(),
                 markdown_uuid: "22222222-2222-2222-2222-222222222222".to_string(),
@@ -776,6 +794,7 @@ mod tests {
                     }],
                     system_note: None,
                     source_url: None,
+                    kind_label: None,
                 }],
             }],
         }
@@ -970,6 +989,62 @@ mod tests {
         );
 
         // A per-message URL re-cuts the fingerprint.
+        let plain = mk_chat();
+        assert_ne!(
+            compute_fingerprint(1, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, &chat, &chat.buckets[0]),
+        );
+    }
+
+    #[test]
+    fn kind_label_overrides_message_kind_in_grid_row() {
+        let profile = RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            render_version: 1,
+        };
+        let mut chat = mk_chat();
+        chat.buckets[0].items[0].kind_label = Some("LLM Response".to_string());
+
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        // The message row uses the override, not the profile default.
+        assert!(rows.iter().any(|r| r.kind == "LLM Response"));
+        assert!(!rows.iter().any(|r| r.kind == "Test Message"));
+
+        // …and it re-cuts the fingerprint.
+        let plain = mk_chat();
+        assert_ne!(
+            compute_fingerprint(1, &plain, &plain.buckets[0]),
+            compute_fingerprint(1, &chat, &chat.buckets[0]),
+        );
+    }
+
+    #[test]
+    fn org_columns_populate_every_grid_row() {
+        let profile = RenderProfile {
+            provider: "test",
+            source_label: "Test".to_string(),
+            chat_kind: "Test Chat".to_string(),
+            message_kind: "Test Message".to_string(),
+            reaction_kind: "Test Reaction".to_string(),
+            render_version: 1,
+        };
+        let mut chat = mk_chat();
+        chat.org_uuid = Some("org-123".to_string());
+        chat.org_name = Some("Starfleet".to_string());
+
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        // chat, message, and reaction rows all carry org_uuid/org_name.
+        assert!(rows.len() >= 3);
+        for r in &rows {
+            assert_eq!(r.org_uuid.as_deref(), Some("org-123"));
+            assert_eq!(r.org_name.as_deref(), Some("Starfleet"));
+        }
+
+        // org identity folds into the fingerprint (only when set).
         let plain = mk_chat();
         assert_ne!(
             compute_fingerprint(1, &plain, &plain.buckets[0]),
