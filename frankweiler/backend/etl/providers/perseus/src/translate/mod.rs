@@ -9,13 +9,6 @@ pub mod align;
 pub mod parse;
 pub mod render;
 
-/// The two TEI filenames we expect under `input_path`. These are the
-/// canonical Perseus filenames — both are tracked under PerseusDL's
-/// `canonical-greekLit` repo at:
-/// <https://github.com/PerseusDL/canonical-greekLit/tree/master/data/tlg0003/tlg001>
-pub const GRC_FILENAME: &str = "tlg0003.tlg001.perseus-grc2.xml";
-pub const ENG_FILENAME: &str = "tlg0003.tlg001.1st1K-eng1.xml";
-
 /// Bump when the rendered markdown layout or grid row shape changes
 /// enough that every existing doc needs re-rendering. v7 was the
 /// initial Rust port (same row shape as the Python `v6`, just to
@@ -42,5 +35,12 @@ pub const ENG_FILENAME: &str = "tlg0003.tlg001.1st1K-eng1.xml";
 /// (UUIDs derived via `paragraph_sentence_uuid`), and the edges
 /// table carries one row per aligned (grc-sentence, eng-sentence)
 /// pair — within-section sentence alignment is computed by the
-/// `translate::align` module using Ancient-Greek-BERT.
-pub const RENDER_VERSION: u32 = 13;
+/// `translate::align` module using Ancient-Greek-BERT. v14 generalizes
+/// from the hardcoded grc+eng pair to N independent editions: every
+/// `tlg0003.tlg001.<id>.xml` under `input_path` renders its own
+/// per-(chapter, edition) doc, `kind` carries the edition id
+/// (`"Chapter (perseus-grc2)"`), `conversation_name` carries the
+/// CTS-derived edition title, and within-section sentence alignment is
+/// opt-in per edition *pair* (the `alignment_pairs` config), off by
+/// default — so most editions render with section-level anchors only.
+pub const RENDER_VERSION: u32 = 14;

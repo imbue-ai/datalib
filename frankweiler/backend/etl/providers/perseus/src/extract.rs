@@ -41,13 +41,26 @@ use frankweiler_etl::progress::Progress;
 pub const RAW_GITHUB_BASE: &str =
     "https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data";
 
-/// Default fetch list when `sync.files` is empty/omitted. Matches the
-/// two TEI editions the translate path expects:
-///   * Greek: `tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml`
-///   * English: `tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml`
+/// Default fetch list when `sync.files` is empty/omitted: every
+/// published edition/translation of Thucydides' Histories in
+/// PerseusDL's `tlg0003/tlg001/` tree, plus `__cts__.xml` (the CTS
+/// metadata the translate path reads for human-readable edition
+/// titles). The Greek original (`perseus-grc2`) sits first.
 pub const DEFAULT_FILES: &[&str] = &[
+    "tlg0003/tlg001/__cts__.xml",
     "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.perseus-eng4.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.perseus-eng6.xml",
     "tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-eng2.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-fre1.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-fre2.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-ger1.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-ger2.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-ger3.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-ger4.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-ita1.xml",
+    "tlg0003/tlg001/tlg0003.tlg001.1st1K-lat2.xml",
 ];
 
 #[derive(Debug, Clone, Default)]
@@ -167,15 +180,16 @@ mod tests {
     }
 
     #[test]
-    fn default_files_match_translate_expected_basenames() {
-        use crate::translate::{ENG_FILENAME, GRC_FILENAME};
-        // Spine-of-the-pipeline assertion: if these drift, a default
-        // `sync: {}` block leaves Translate looking for files Extract
-        // never wrote.
+    fn default_files_include_grc_eng_and_cts() {
+        // Spine-of-the-pipeline assertion: a default `sync: {}` block
+        // must fetch the Greek original, at least one English
+        // translation, and the CTS metadata the translate path reads
+        // for edition titles.
         let default_basenames: Vec<&str> =
             DEFAULT_FILES.iter().map(|s| basename(s).unwrap()).collect();
-        assert!(default_basenames.contains(&GRC_FILENAME));
-        assert!(default_basenames.contains(&ENG_FILENAME));
+        assert!(default_basenames.contains(&"tlg0003.tlg001.perseus-grc2.xml"));
+        assert!(default_basenames.contains(&"tlg0003.tlg001.1st1K-eng1.xml"));
+        assert!(default_basenames.contains(&"__cts__.xml"));
     }
 
     #[test]

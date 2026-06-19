@@ -38,7 +38,7 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
     root.appendChild(frame);
 
     // Future: bridge over postMessage so opening a DACTAL row calls
-    // ctx.host.openCard(`documentView("<uuid>")`), and so host search
+    // ctx.host.openCards(`documentView("<uuid>")`), and so host search
     // state can seed the working set. Omitted to keep the view self-
     // contained.
     return () => frame.remove();

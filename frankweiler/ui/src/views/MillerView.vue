@@ -12,8 +12,9 @@
 // it back via ctx.initialState; the host just round-trips it.
 //
 // Structural operations are host commands, not bus messages: a card
-// calls `ctx.host.openCard(source)` to open a column to its right
-// (replacing everything further right — Miller semantics). The bus
+// calls `ctx.host.openCards(source)` to open a column to its right
+// (replacing everything further right — Miller semantics), or
+// `openCards(a, b, …)` to open a run of columns at once. The bus
 // carries ambient cross-card events only (e.g. edge hover).
 //
 // Invariant: the stack always ends in exactly one blank column — the
@@ -39,20 +40,26 @@ type Slot = {
   // Opaque per-card state string (see HostCommands.setState).
   state: string;
   // Column width in px; null renders at DEFAULT_WIDTH until the user
-  // drags the column's right edge. In-memory only.
+  // drags the column's right edge. Persisted in the URL as a ratio of
+  // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
   width: number | null;
 };
 
 const DEFAULT_WIDTH = 640;
 const MIN_WIDTH = 240;
 
+// Round a width ratio to two decimals for a terse, stable URL.
+function sizeRatio(width: number | null): number | null {
+  return width == null ? null : Math.round((width / DEFAULT_WIDTH) * 100) / 100;
+}
+
 let nextId = 1;
 function freshId(): string {
   return `card-${nextId++}`;
 }
 
-function newSlot(source: string, state = ""): Slot {
-  return { id: freshId(), source, state, width: null };
+function newSlot(source: string, state = "", width: number | null = null): Slot {
+  return { id: freshId(), source, state, width };
 }
 
 function isBlankSource(source: string): boolean {
@@ -93,18 +100,23 @@ function setSlots(list: Slot[]) {
 function specsOf(list: Slot[]): ColumnSpec[] {
   return list
     .filter((s) => !isBlankSource(s.source))
-    .map((s) => ({ code: s.source, state: s.state }));
+    .map((s) => ({ code: s.source, size: sizeRatio(s.width), state: s.state }));
 }
 
 function sameSpecs(a: ColumnSpec[], b: ColumnSpec[]): boolean {
   return (
     a.length === b.length &&
-    a.every((x, i) => x.code === b[i].code && x.state === b[i].state)
+    a.every(
+      (x, i) =>
+        x.code === b[i].code &&
+        (x.size ?? null) === (b[i].size ?? null) &&
+        x.state === b[i].state,
+    )
   );
 }
 
 // The stack "/" renders when the URL carries no columns.
-const DEFAULT_SPECS: ColumnSpec[] = [{ code: "gridView()", state: "" }];
+const DEFAULT_SPECS: ColumnSpec[] = [{ code: "gridView()", size: null, state: "" }];
 
 function syncUrl() {
   const specs = specsOf(slots.value);
@@ -115,7 +127,9 @@ function syncUrl() {
 
 function slotsFromSpecs(specs: ColumnSpec[]): Slot[] {
   if (specs.length === 0) return [newSlot("gridView()")];
-  return specs.map((c) => newSlot(c.code, c.state));
+  return specs.map((c) =>
+    newSlot(c.code, c.state, c.size != null ? c.size * DEFAULT_WIDTH : null),
+  );
 }
 
 setSlots(slotsFromSpecs(decodeColumns(route.path)));
@@ -150,6 +164,22 @@ function openColumnAfter(afterId: string, source: string): string {
   return slot.id;
 }
 
+// host.openCards: open a chain of columns. Each source opens to the
+// right of the previous one, so the whole chain lands as consecutive
+// columns after the caller — and because openColumnAfter truncates
+// everything past its anchor, re-opening from the same card swaps the
+// trailing panels out (Miller semantics). Drives the scaife control
+// panel: one click opens one column per selected version.
+function openColumnsAfter(afterId: string, sources: string[]): string[] {
+  let prev = afterId;
+  const ids: string[] = [];
+  for (const source of sources) {
+    prev = openColumnAfter(prev, source);
+    ids.push(prev);
+  }
+  return ids;
+}
+
 function closeColumn(id: string) {
   setSlots(slots.value.filter((s) => s.id !== id));
   syncUrl();
@@ -172,7 +202,7 @@ function ctxFor(slot: Slot): CardCtx {
   if (!ctx) {
     const cardId = slot.id;
     const host: HostCommands = {
-      openCard: (source) => openColumnAfter(cardId, source),
+      openCards: (...sources) => openColumnsAfter(cardId, sources),
       setSource: (source) => setColumnSource(cardId, source),
       close: () => closeColumn(cardId),
       setState: (state) => setColumnState(cardId, state),
@@ -230,6 +260,8 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
     target.removeEventListener("pointermove", onMove);
     target.removeEventListener("pointerup", onUp);
     target.removeEventListener("pointercancel", onUp);
+    // Persist the new width as a size ratio in the URL.
+    syncUrl();
   };
   target.addEventListener("pointermove", onMove);
   target.addEventListener("pointerup", onUp);

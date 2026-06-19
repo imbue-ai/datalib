@@ -2756,20 +2756,33 @@ fn translate_source(
                 .context("email render_all")
                 .map(|_| ())
         }
-        SourceConfig::Perseus { .. } => {
+        SourceConfig::Perseus { sync, .. } => {
             use frankweiler_etl_perseus::translate::{align, parse, render};
             let parsed = parse::parse(&fixture)
                 .with_context(|| format!("perseus parse {}", fixture.display()))?;
-            // Within-section sentence alignment needs the Ancient-
-            // Greek-BERT encoder, which is async (hf-hub fetch +
-            // model load). The translate phase is sync; bridge with
+            // Within-section sentence alignment is opt-in per edition
+            // pair via `sync.alignment_pairs` (default: none). Each
+            // pair loads the Ancient-Greek-BERT encoder (async: hf-hub
+            // fetch + model load) and aligns multi-sentence sections —
+            // the dominant translate cost, hence opt-in. With no pairs
+            // configured this is a cheap no-op and every edition
+            // renders with section-level anchors only. The async
+            // aligner is bridged into the sync translate phase with
             // `Handle::current().block_on` — same pattern as the
-            // per-doc apply_one call above. The first run pays the
-            // HF Hub download cost (~440 MB cached under
-            // ~/.cache/huggingface/hub/); subsequent runs read from
-            // cache.
+            // per-doc apply_one call above. The first aligned run pays
+            // the HF Hub download (~440 MB cached under
+            // ~/.cache/huggingface/hub/); later runs read from cache.
+            let pairs: Vec<(String, String)> = sync
+                .as_ref()
+                .map(|s| {
+                    s.alignment_pairs
+                        .iter()
+                        .map(|[a, b]| (a.clone(), b.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
             let alignments = tokio::runtime::Handle::current()
-                .block_on(align::align_all(&parsed))
+                .block_on(align::align_all(&parsed, &pairs))
                 .context("perseus align_all")?;
             render::render_all(
                 &parsed,

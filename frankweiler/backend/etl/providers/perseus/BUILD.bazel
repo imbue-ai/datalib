@@ -72,28 +72,3 @@ rust_test(
         "@frankweiler_crates//:tempfile",
     ],
 )
-
-# Cross-checks the Rust sentence aligner against a Python reference
-# JSON produced by the experiment scripts under ~/tmp/perseus/align/.
-# Tagged "manual" so `bazelisk test //...` doesn't pick it up — the
-# test downloads ~440 MB of Ancient-Greek-BERT from HF Hub and needs
-# a PERSEUS_REFERENCE path that isn't part of CI. Run locally with:
-#   bazelisk test //frankweiler/backend/etl/providers/perseus:perseus_cross_check_python_test \
-#       --test_env=PERSEUS_REFERENCE=$HOME/tmp/perseus/align/sentence_alignments_reference.json \
-#       --test_env=HOME=$HOME \
-#       --test_output=streamed
-# The inline #[ignore] on the test function adds a second layer of
-# opt-in (the test harness will skip it without `--ignored`).
-rust_test(
-    name = "perseus_cross_check_python_test",
-    srcs = ["tests/cross_check_python.rs"],
-    crate_root = "tests/cross_check_python.rs",
-    edition = "2021",
-    tags = ["manual"],
-    deps = [
-        ":frankweiler_etl_perseus",
-        "@frankweiler_crates//:serde",
-        "@frankweiler_crates//:serde_json",
-        "@frankweiler_crates//:tokio",
-    ],
-)

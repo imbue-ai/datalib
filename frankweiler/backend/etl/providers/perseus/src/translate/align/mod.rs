@@ -1,271 +1,220 @@
-//! Within-section sentence-level bilingual alignment.
+//! Within-section sentence-level alignment between a *pair* of editions.
 //!
-//! The Perseus CTS spine already gives us section-level alignment
-//! for free (`1.4.1` exists in both editions). What this module
-//! adds is the next layer: when the translator split one Greek
-//! sentence into 2-3 English ones (or vice versa), find which goes
-//! with which. About 50% of Thucydides' sections need this.
+//! The Perseus CTS spine already gives us section-level alignment for
+//! free (`1.4.1` exists in every edition). What this module adds is the
+//! next layer: when one edition split a sentence the other kept whole
+//! (or vice versa), find which sentence goes with which.
 //!
-//! Pipeline per section:
-//!   1. Split grc and eng into sentences with [`split`].
+//! Alignment is **opt-in per edition pair** — the source config's
+//! `alignment_pairs` lists the `(edition_a, edition_b)` pairs to align
+//! (default: none). For each configured pair and each section both
+//! cover, we:
+//!   1. Split each side into sentences with [`split::split_for`] (the
+//!      splitter is chosen by the edition's language).
 //!   2. If both sides have ≤1 sentence, return the trivial 1:1 (no
-//!      model call needed). This is ~50% of sections — keeps cost
-//!      down.
-//!   3. Embed each sentence on each side via [`embed::Embedder`]
-//!      (mean-pooled Ancient-Greek-BERT).
-//!   4. Run [`dp::align`] for the Bertalign-style sentence grouping.
+//!      model call).
+//!   3. Otherwise embed each sentence via [`embed::Embedder`]
+//!      (mean-pooled Ancient-Greek-BERT) and run [`dp::align`].
 //!
-//! The result is a `Vec<SentenceGroup>` per section, each carrying
-//! which grc-sentence-indices group with which eng-sentence-indices
-//! plus the underlying sentence text + byte spans (so the renderer
-//! can wrap the right substrings in anchor spans).
-//!
-//! Errors are surfaced — translate will refuse to render if the
-//! aligner errors out, rather than silently falling back to the
-//! pre-existing section-level placeholder edges. This is a build
-//! step, not a serving step; failing loudly is the right default.
+//! The result is per (book, chapter, section) a list of
+//! [`SectionPairAlignment`]s — one per configured pair that covers the
+//! section — each carrying which a-sentence-indices group with which
+//! b-sentence-indices. The renderer turns those into `<span>` anchors
+//! and `bilingual-alignment` edges.
 
 pub mod dp;
 pub mod embed;
 pub mod split;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use crate::translate::parse::Section;
-
+use crate::translate::parse::ParsedPerseus;
 pub use embed::Embedder;
 pub use split::Sentence;
 
-/// One aligned grouping inside a section.
+/// One aligned grouping inside a section: indices into edition a's
+/// sentence split ↔ indices into edition b's.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SentenceGroup {
-    /// 0-indexed positions within `grc_sentences` covered by this group.
-    pub grc_indices: Vec<usize>,
-    /// 0-indexed positions within `eng_sentences` covered by this group.
-    pub eng_indices: Vec<usize>,
+pub struct PairGroup {
+    pub a: Vec<usize>,
+    pub b: Vec<usize>,
 }
 
-/// Aligned sentence layout for one section.
+/// Alignment of one section across one configured edition pair.
 #[derive(Debug, Clone)]
-pub struct SectionAlignment {
-    pub grc_sentences: Vec<Sentence>,
-    pub eng_sentences: Vec<Sentence>,
-    pub groups: Vec<SentenceGroup>,
+pub struct SectionPairAlignment {
+    pub a_id: String,
+    pub b_id: String,
+    pub groups: Vec<PairGroup>,
 }
 
-impl SectionAlignment {
-    /// Trivial single-group alignment covering both sides 1:1 (used
-    /// when neither side has more than one sentence — no model call).
-    pub fn trivial(grc: Vec<Sentence>, eng: Vec<Sentence>) -> Self {
-        let grc_indices: Vec<usize> = (0..grc.len()).collect();
-        let eng_indices: Vec<usize> = (0..eng.len()).collect();
-        let groups = if grc_indices.is_empty() && eng_indices.is_empty() {
-            Vec::new()
-        } else {
-            vec![SentenceGroup {
-                grc_indices,
-                eng_indices,
-            }]
-        };
-        Self {
-            grc_sentences: grc,
-            eng_sentences: eng,
-            groups,
-        }
-    }
-}
-
-/// Align one section. Calls the embedder only when at least one side
-/// has more than one sentence — the common trivial case skips the
-/// model entirely.
-pub fn align_section(emb: &Embedder, section: &Section) -> Result<SectionAlignment> {
-    let grc = split::split_grc(&section.grc);
-    let eng = split::split_eng(&section.eng);
-
-    if grc.len() <= 1 && eng.len() <= 1 {
-        return Ok(SectionAlignment::trivial(grc, eng));
-    }
-    if grc.is_empty() || eng.is_empty() {
-        return Ok(SectionAlignment::trivial(grc, eng));
-    }
-
-    let grc_emb: Vec<Vec<f32>> = grc
-        .iter()
-        .map(|s| emb.embed_one(&s.text))
-        .collect::<Result<_>>()?;
-    let eng_emb: Vec<Vec<f32>> = eng
-        .iter()
-        .map(|s| emb.embed_one(&s.text))
-        .collect::<Result<_>>()?;
-    let grc_lens: Vec<usize> = grc.iter().map(|s| s.text.chars().count()).collect();
-    let eng_lens: Vec<usize> = eng.iter().map(|s| s.text.chars().count()).collect();
-    let groups = dp::align(&grc_emb, &eng_emb, &grc_lens, &eng_lens);
-    let groups = groups
-        .into_iter()
-        .map(|g| SentenceGroup {
-            grc_indices: g.grc,
-            eng_indices: g.eng,
-        })
-        .collect();
-    Ok(SectionAlignment {
-        grc_sentences: grc,
-        eng_sentences: eng,
-        groups,
-    })
-}
-
-/// Per-section sentence alignments, keyed by `(book_n, ch_n, sec_n)`.
-/// Output of [`align_all`]; consumed by `render_all`.
+/// All per-section alignments for a work, plus the set of editions that
+/// participate in any pair (so the renderer knows which editions to
+/// wrap in per-sentence anchor spans).
 #[derive(Debug, Default)]
 pub struct PerseusAlignments {
-    by_section: HashMap<(String, String, String), SectionAlignment>,
+    by_section: HashMap<(String, String, String), Vec<SectionPairAlignment>>,
+    aligned: HashSet<String>,
 }
 
 impl PerseusAlignments {
-    pub fn from_map(map: HashMap<(String, String, String), SectionAlignment>) -> Self {
-        Self { by_section: map }
-    }
-
-    pub fn get(&self, book_n: &str, ch_n: &str, sec_n: &str) -> Option<&SectionAlignment> {
+    /// The pair alignments covering one section (empty when none).
+    pub fn for_section(&self, book_n: &str, ch_n: &str, sec_n: &str) -> &[SectionPairAlignment] {
         self.by_section
             .get(&(book_n.to_string(), ch_n.to_string(), sec_n.to_string()))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
-    /// Resolve the alignment for a section, falling back to the
-    /// trivial 1:1 grouping. Used by the renderer so a fixture-based
-    /// test (which doesn't run the model) still produces a sensible
-    /// output even though `by_section` is empty.
-    pub fn get_or_trivial(
-        &self,
-        book_n: &str,
-        ch_n: &str,
-        sec_n: &str,
-        sec: &Section,
-    ) -> SectionAlignment {
-        if let Some(a) = self.get(book_n, ch_n, sec_n) {
-            return a.clone();
-        }
-        SectionAlignment::trivial(split::split_grc(&sec.grc), split::split_eng(&sec.eng))
+    /// Whether an edition participates in any configured pair — i.e.
+    /// whether the renderer should emit per-sentence anchor spans for
+    /// it.
+    pub fn is_aligned(&self, edition_id: &str) -> bool {
+        self.aligned.contains(edition_id)
     }
 }
 
-/// Align every section in a parsed work. Builds the embedder once
-/// up-front (one model load) iff any section needs it. Embedder
-/// failures short-circuit; per-section failures bubble up.
+/// Align every configured pair across the work. Loads the embedder once
+/// iff at least one (pair, section) is non-trivial. With `pairs` empty
+/// this is a cheap no-op returning empty alignments.
 pub async fn align_all(
-    parsed: &crate::translate::parse::ParsedPerseus,
+    parsed: &ParsedPerseus,
+    pairs: &[(String, String)],
 ) -> Result<PerseusAlignments> {
-    let n_nontrivial: usize = parsed
-        .books
+    // Keep only pairs whose editions both exist in this corpus.
+    let valid: Vec<(String, String)> = pairs
         .iter()
-        .flat_map(|b| b.chapters.iter())
-        .flat_map(|c| c.sections.iter())
-        .filter(|s| needs_model(s))
-        .count();
-    tracing::info!(
-        "perseus alignment: {} sections need model inference",
-        n_nontrivial
-    );
+        .filter(|(a, b)| {
+            parsed.editions.iter().any(|e| &e.id == a) && parsed.editions.iter().any(|e| &e.id == b)
+        })
+        .cloned()
+        .collect();
+    if valid.is_empty() {
+        return Ok(PerseusAlignments::default());
+    }
 
-    let emb = if n_nontrivial > 0 {
+    let mut aligned: HashSet<String> = HashSet::new();
+    for (a, b) in &valid {
+        aligned.insert(a.clone());
+        aligned.insert(b.clone());
+    }
+
+    // Does any (pair, section) need the model? If not, skip the load.
+    let needs_model = valid.iter().any(|(a, b)| {
+        let (la, lb) = (parsed.lang_of(a), parsed.lang_of(b));
+        parsed.books.iter().any(|book| {
+            book.chapters.iter().any(|ch| {
+                ch.sections.iter().any(|s| {
+                    let (at, bt) = (s.text(a), s.text(b));
+                    !at.is_empty()
+                        && !bt.is_empty()
+                        && (split::split_for(la, at).len() > 1
+                            || split::split_for(lb, bt).len() > 1)
+                })
+            })
+        })
+    });
+    tracing::info!(
+        "perseus alignment: {} pair(s), model {}",
+        valid.len(),
+        if needs_model { "loading" } else { "not needed" }
+    );
+    let emb = if needs_model {
         Some(Embedder::load().await?)
     } else {
         None
     };
 
-    let mut by_section: HashMap<(String, String, String), SectionAlignment> = HashMap::new();
-    for book in &parsed.books {
-        for chapter in &book.chapters {
-            for sec in &chapter.sections {
-                let alignment = if needs_model(sec) {
-                    align_section(emb.as_ref().expect("loaded above when n_nontrivial>0"), sec)?
-                } else {
-                    SectionAlignment::trivial(
-                        split::split_grc(&sec.grc),
-                        split::split_eng(&sec.eng),
-                    )
-                };
-                by_section.insert(
-                    (book.n.clone(), chapter.n.clone(), sec.n.clone()),
-                    alignment,
-                );
+    let mut by_section: HashMap<(String, String, String), Vec<SectionPairAlignment>> =
+        HashMap::new();
+    for (a, b) in &valid {
+        let (la, lb) = (parsed.lang_of(a).to_string(), parsed.lang_of(b).to_string());
+        for book in &parsed.books {
+            for ch in &book.chapters {
+                for sec in &ch.sections {
+                    let (at, bt) = (sec.text(a), sec.text(b));
+                    if at.is_empty() || bt.is_empty() {
+                        continue;
+                    }
+                    let groups = align_pair(emb.as_ref(), at, &la, bt, &lb)?;
+                    by_section
+                        .entry((book.n.clone(), ch.n.clone(), sec.n.clone()))
+                        .or_default()
+                        .push(SectionPairAlignment {
+                            a_id: a.clone(),
+                            b_id: b.clone(),
+                            groups,
+                        });
+                }
             }
         }
     }
-    Ok(PerseusAlignments { by_section })
+    Ok(PerseusAlignments {
+        by_section,
+        aligned,
+    })
 }
 
-fn needs_model(sec: &Section) -> bool {
-    if sec.grc.is_empty() || sec.eng.is_empty() {
-        return false;
+/// Align one section's two texts. Returns one trivial group when
+/// neither side has more than one sentence (no model call).
+fn align_pair(
+    emb: Option<&Embedder>,
+    a_text: &str,
+    a_lang: &str,
+    b_text: &str,
+    b_lang: &str,
+) -> Result<Vec<PairGroup>> {
+    let a = split::split_for(a_lang, a_text);
+    let b = split::split_for(b_lang, b_text);
+
+    if (a.len() <= 1 && b.len() <= 1) || a.is_empty() || b.is_empty() {
+        let ga: Vec<usize> = (0..a.len()).collect();
+        let gb: Vec<usize> = (0..b.len()).collect();
+        return Ok(if ga.is_empty() && gb.is_empty() {
+            Vec::new()
+        } else {
+            vec![PairGroup { a: ga, b: gb }]
+        });
     }
-    // Fast path: count terminators directly without invoking the full
-    // splitter. If neither side has more than one sentence's worth of
-    // terminators we know the splitter will return ≤1 too — no model
-    // call.
-    let grc_terms = sec
-        .grc
-        .chars()
-        .filter(|c| matches!(c, '.' | ';' | '·' | ':'))
-        .count();
-    let eng_terms = sec
-        .eng
-        .chars()
-        .filter(|c| matches!(c, '.' | '?' | '!'))
-        .count();
-    // A trailing terminator counts as one "sentence end" without a
-    // following sentence — only count >1 as multi-sentence.
-    grc_terms > 1 || eng_terms > 1
+
+    let emb = emb.expect("embedder loaded when a section is non-trivial");
+    let a_emb: Vec<Vec<f32>> = a
+        .iter()
+        .map(|s| emb.embed_one(&s.text))
+        .collect::<Result<_>>()?;
+    let b_emb: Vec<Vec<f32>> = b
+        .iter()
+        .map(|s| emb.embed_one(&s.text))
+        .collect::<Result<_>>()?;
+    let a_lens: Vec<usize> = a.iter().map(|s| s.text.chars().count()).collect();
+    let b_lens: Vec<usize> = b.iter().map(|s| s.text.chars().count()).collect();
+    let groups = dp::align(&a_emb, &b_emb, &a_lens, &b_lens)
+        .into_iter()
+        .map(|g| PairGroup { a: g.grc, b: g.eng })
+        .collect();
+    Ok(groups)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn trivial_returns_single_group() {
-        let a = SectionAlignment::trivial(
-            vec![Sentence {
-                text: "α.".into(),
-                start: 0,
-                end: 2,
-            }],
-            vec![Sentence {
-                text: "A.".into(),
-                start: 0,
-                end: 2,
-            }],
-        );
-        assert_eq!(a.groups.len(), 1);
-        assert_eq!(a.groups[0].grc_indices, vec![0]);
-        assert_eq!(a.groups[0].eng_indices, vec![0]);
+    #[tokio::test]
+    async fn empty_pairs_is_a_no_op() {
+        let parsed = ParsedPerseus::default();
+        let al = align_all(&parsed, &[]).await.unwrap();
+        assert!(!al.is_aligned("perseus-grc2"));
+        assert!(al.for_section("1", "1", "1").is_empty());
     }
 
     #[test]
-    fn trivial_with_zero_sentences_has_no_group() {
-        let a = SectionAlignment::trivial(Vec::new(), Vec::new());
-        assert!(a.groups.is_empty());
-    }
-
-    #[test]
-    fn needs_model_skips_single_sentence_pairs() {
-        let s = Section {
-            n: "1".into(),
-            grc: "Θουκυδίδης Ἀθηναῖος ξυνέγραψε.".into(),
-            eng: "Thucydides wrote.".into(),
-        };
-        assert!(!needs_model(&s));
-    }
-
-    #[test]
-    fn needs_model_picks_up_multi_sentence() {
-        let s = Section {
-            n: "1".into(),
-            grc: "Πρώτη φράσις. Δεύτερη φράσις.".into(),
-            eng: "First. Second.".into(),
-        };
-        assert!(needs_model(&s));
+    fn trivial_pair_needs_no_model() {
+        // One sentence each side → trivial group, emb unused.
+        let groups = align_pair(None, "Μία πρότασις.", "grc", "One sentence.", "eng").unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].a, vec![0]);
+        assert_eq!(groups[0].b, vec![0]);
     }
 }

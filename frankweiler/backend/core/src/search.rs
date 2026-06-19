@@ -41,6 +41,13 @@ pub struct SearchRow {
     /// For Notion rows: the page-level UUID the row belongs to. Empty
     /// otherwise. Used by right-click "Filter by Notion Page".
     pub notion_page_uuid: String,
+    /// Provider-assigned stable id for the underlying entity, verbatim
+    /// from the `external_id` grid_rows column. Empty when the producer
+    /// didn't set one. For Perseus this is the locator path (`"1"`,
+    /// `"1.2"`, `"1.2.3"` for book / chapter / section), which the
+    /// scaife control panel parses to build its book→chapter→section
+    /// tree.
+    pub external_id: String,
     /// QMD-routed rank score for this row, when the search went through qmd.
     /// `None` for pure structured queries (no free text) and for the SQL-LIKE
     /// fallback path. Surfaced to the UI as a sortable "Score" column.

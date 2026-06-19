@@ -11,7 +11,7 @@
 // Structural operations — opening and closing cards — are host
 // commands on the ctx, NOT bus messages. When the grid card wants a
 // document card to appear next to it, it calls
-// `ctx.host.openCard('documentView("abcd…")')` with the source of
+// `ctx.host.openCards('documentView("abcd…")')` with the source of
 // the new card. The bus is reserved for ambient cross-card events:
 // today, the document view advertises the edge under the cursor on
 // `edge.hover` so whichever card shows the destination doc can
@@ -33,10 +33,18 @@ export type Bus = {
 // (replacing everything further right), the tree layout spawns a
 // child node pointing from this card.
 export type HostCommands = {
-  // Open a new card "from" this one; layout-dependent placement (see
-  // above). `source` is the card source of the new card, e.g.
-  // `documentView("abcd…")`. Returns the new card's id.
-  openCard(source: string): string;
+  // Open a chain of cards. The first source opens "from" this card;
+  // each subsequent source opens from the card the previous source
+  // produced — i.e. `openCards(a, b, c)` is `openCard(a)` from this
+  // card, then `openCard(b)` from a, then `openCard(c)` from b.
+  // Layout-dependent placement (see above): in the miller layout the
+  // chain lays out as consecutive columns to the right (replacing
+  // everything further right, so re-opening swaps the panels); in the
+  // tree layout it's a parent→child spine; in the tiling layout each
+  // is a sibling of the previous. Returns the new cards' ids in chain
+  // order. Calling with a single source opens one card, the common
+  // case (a grid row → its document).
+  openCards(...sources: string[]): string[];
   // Replace THIS card's own source (and clear its state, since the old
   // state no longer applies to new code). Layout-agnostic: the miller
   // layout rewrites the column's URL segment, the tree layout rewrites
@@ -95,4 +103,9 @@ export type ViewLibs = {
   // `load` is a Frankweiler search that seeds the working set; `q` is the
   // initial DACTAL query.
   dactalView: (opts?: { load?: string; q?: string }) => CardRender;
+  // Scaife-like control panel over the Perseus corpus: togglable
+  // versions (editions in various languages) + a book→chapter→section
+  // locator tree. Clicking a locator opens one reader panel per enabled
+  // version via host.openCards. See cards/libs/perseusView.ts.
+  perseusView: () => CardRender;
 };

@@ -50,7 +50,7 @@ export function aliasView(): CardRender {
         const row = document.createElement("div");
         row.className = "av-row";
         row.title = `open ${name}()`;
-        row.addEventListener("click", () => ctx.host.openCard(`${name}()`));
+        row.addEventListener("click", () => ctx.host.openCards(`${name}()`));
 
         const nm = document.createElement("span");
         nm.className = "av-name";

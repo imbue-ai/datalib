@@ -37,6 +37,11 @@ export type SearchRow = {
   slack_link: string;
   // For Notion rows: the page-level UUID the row belongs to. Empty otherwise.
   notion_page_uuid: string;
+  // Provider-assigned stable id (the grid_rows `external_id` column);
+  // empty when unset. For Perseus it's the locator path — `"1"` (book),
+  // `"1.2"` (chapter), `"1.2.3"` (section) — which perseusView parses to
+  // build its book→chapter→section tree.
+  external_id: string;
   // QMD rank score. Present when the row came from a qmd-routed search;
   // omitted (undefined) for pure structured queries and the LIKE fallback.
   score?: number;
