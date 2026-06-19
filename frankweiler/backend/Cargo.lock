@@ -1357,6 +1357,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-etl",
+ "frankweiler-etl-chat-common",
  "frankweiler-etl-macros",
  "frankweiler-index-lib",
  "frankweiler-obs",

@@ -1,117 +1,334 @@
-//! Port of `_render_one_anthropic` + `_render_anthropic_block` +
-//! shared helpers from `src/ingest/render.py`. Output must match the
-//! Python byte-for-byte (the project's UI loads the rendered .md
-//! verbatim, so any drift visibly mis-renders messages).
+//! Anthropic (Claude) render: convert parsed conversations into the
+//! shared `chat-common` normalized model and delegate markdown /
+//! grid-row / sidecar plumbing to
+//! [`frankweiler_etl_chat_common::render::render_all`].
+//!
+//! One conversation → one [`NormalizedChat`] (single `"all"` bucket);
+//! `chat_uuid`/`markdown_uuid` are the upstream `conversation_uuid`, so
+//! page identities / links stay stable. The page title links out to
+//! `claude.ai/chat/<uuid>`, and `org_uuid`/`org_name` ride along on
+//! every grid row.
+//!
+//! Each Claude message is *exploded* into one [`NormalizedChatItem`] for
+//! its text (+ extracted-text attachments + downloadable files) plus one
+//! item per `thinking` / `tool_use` / `tool_result` block. The block
+//! items keep their stable `tu-`/`tr-`/`th-` ids and the role-/block-
+//! distinguished `kind_label` ("LLM Thinking" / "Tool Call"), so the
+//! per-block grid rows the UI links to are preserved.
+//!
+//! Incrementality is unchanged and still dolt-diff driven: `parse`
+//! narrowed to changed conversations, so we pass an empty
+//! `prior_fingerprints` map and advance the cursor on success.
 
 use std::collections::HashMap;
 
-use once_cell::sync::Lazy;
-use serde_json::{json, Value};
+use anyhow::{Context as _, Result};
+use serde_json::Value;
 
-use anyhow::Context as _;
 use frankweiler_etl::blob_cas::BlobBundle;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
-use frankweiler_etl::title::Title;
-use frankweiler_index_lib::emit_sidecar;
+use frankweiler_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
+use frankweiler_etl_chat_common::types::{
+    ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
+};
 
-use super::grid_rows::{rows_for_conversation, RENDER_VERSION};
 use super::parse::{
     shred, AttachmentRow, ContentBlockRow, MessageRow, ParsedExport, ShreddedConversation,
 };
 
-/// YAML scalar emitter that matches the Python `_yaml_scalar` exactly.
-/// Strings containing structural chars (`:#\n"'`) or with surrounding
-/// whitespace get JSON-escaped (Python uses `json.dumps(..., ensure_ascii=False)`).
-pub(crate) fn yaml_scalar(v: Option<&str>) -> String {
-    let Some(s) = v else {
-        return "null".into();
-    };
-    let needs_quote = s
-        .chars()
-        .any(|c| matches!(c, ':' | '#' | '\n' | '"' | '\''))
-        || s != s.trim();
-    if needs_quote {
-        // serde_json's `to_string` with a String input produces the same
-        // escapes as Python's json.dumps with ensure_ascii=False (Rust
-        // serde_json defaults to UTF-8 passthrough for non-control chars).
-        serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
-    } else {
-        s.into()
+/// Bump when the item-shape / column mapping changes meaningfully.
+/// v3: render via chat-common (block-explosion).
+pub const RENDER_VERSION: u32 = 3;
+
+fn profile() -> RenderProfile {
+    RenderProfile {
+        provider: "anthropic",
+        source_label: "Claude".to_string(),
+        chat_kind: "Chat".to_string(),
+        // Per-item kind is always set via `kind_label`; nominal fallback.
+        message_kind: "LLM Response".to_string(),
+        reaction_kind: "Claude Reaction".to_string(),
+        render_version: RENDER_VERSION,
     }
 }
 
-/// Same for non-string YAML scalars rendered from Python `str(v)`.
-fn yaml_scalar_raw(s: &str) -> String {
-    yaml_scalar(Some(s))
-}
+pub fn render_all(
+    parsed: &ParsedExport,
+    root: &std::path::Path,
+    source_name: &str,
+    progress: &Progress,
+    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+) -> Result<()> {
+    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
+    tracing::info!(
+        source = source_name,
+        scan_elapsed_ms = elapsed_ms,
+        changed_conversations = parsed
+            .scan
+            .changed_conversations
+            .as_ref()
+            .map(|s| s.len() as i64)
+            .unwrap_or(-1),
+        cold_start = parsed.scan.changed_conversations.is_none(),
+        "[translate] anthropic dolt_diff scan"
+    );
 
-pub(crate) fn bump_iso(ts: &str) -> String {
-    let Some(mut out) = frankweiler_time::bump_micros_str(ts, 1) else {
-        return ts.to_string();
-    };
-    // Preserve a `Z` suffix on input (Python parity — UI loads the
-    // rendered .md verbatim, so byte-stability matters).
-    if ts.ends_with('Z') && out.ends_with("+00:00") {
-        out.truncate(out.len() - 6);
-        out.push('Z');
+    let mut chats: Vec<NormalizedChat> = Vec::with_capacity(parsed.conversations.len());
+    let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
+    for c in &parsed.conversations {
+        let shredded = shred(c);
+        let chat = build_chat(&shredded);
+        blobs_by_chat.insert(chat.id.clone(), c.blobs.clone());
+        chats.push(chat);
     }
-    out
-}
 
-pub(crate) use frankweiler_etl::section::{msg_div_open, MSG_DIV_CLOSE};
-
-/// Open tag for a per-block section nested inside a message
-/// (`tool_use`, `tool_result`, `thinking`). The section's id and
-/// `data-section-uuid` always match the grid row uuid the translator
-/// emits — see `grid_rows::rows_for_conversation` and the
-/// `tu-`/`tr-`/`th-` prefix convention there.
-///
-/// Distinct from `section::msg_div_open` because anthropic's per-block
-/// sections use the row uuid verbatim as the element id (no `m-`
-/// prefix), and tag with `msg--block msg--{block_kind}` for the nested
-/// styling.
-pub(crate) fn block_div_open(section_uuid: &str, block_kind: &str) -> String {
-    format!(
-        "<div id=\"{section_uuid}\" data-section-uuid=\"{section_uuid}\" class=\"msg msg--block msg--{block_kind}\">"
+    let no_priors: HashMap<String, String> = HashMap::new();
+    cc_render_all(
+        &profile(),
+        &chats,
+        root,
+        source_name,
+        &blobs_by_chat,
+        progress,
+        &no_priors,
+        on_doc_complete,
     )
+    .context("anthropic chat-common render")?;
+
+    if let Some(head) = parsed.scan.new_head.as_deref() {
+        let cursor_path = render_cursor::cursor_path(root, "anthropic", source_name);
+        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
+            .with_context(|| format!("write anthropic render cursor {}", cursor_path.display()))?;
+    }
+    Ok(())
 }
 
-/// JSON dumped the way Python emits with `indent=2, ensure_ascii=False, sort_keys=True`.
-/// serde_json::to_string_pretty with a BTreeMap-backed Value matches when keys
-/// are sorted; we sort all object keys recursively before serializing.
-fn json_pretty_sorted(v: &Value) -> String {
-    let canonical = canonicalize(v);
-    // serde_json::to_string_pretty uses 2-space indent by default.
-    serde_json::to_string_pretty(&canonical).unwrap_or_default()
-}
+/// One [`NormalizedChat`] per conversation, messages exploded into items.
+fn build_chat(shredded: &ShreddedConversation) -> NormalizedChat {
+    let conv = &shredded.conv;
+    let conv_uuid = conv.conversation_uuid.clone();
+    let model = conv
+        .raw_json
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
 
-fn canonicalize(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => {
-            let mut pairs: Vec<_> = m.iter().collect();
-            pairs.sort_by(|a, b| a.0.cmp(b.0));
-            let mut out = serde_json::Map::with_capacity(pairs.len());
-            for (k, val) in pairs {
-                out.insert(k.clone(), canonicalize(val));
+    let mut blocks_by_msg: HashMap<&str, Vec<&ContentBlockRow>> = HashMap::new();
+    for b in &shredded.content_blocks {
+        blocks_by_msg.entry(&b.message_uuid).or_default().push(b);
+    }
+    let mut atts_by_msg: HashMap<&str, Vec<&AttachmentRow>> = HashMap::new();
+    for a in &shredded.attachments {
+        atts_by_msg.entry(&a.message_uuid).or_default().push(a);
+    }
+    let mut msgs: Vec<&MessageRow> = shredded.messages.iter().collect();
+    msgs.sort_by(|a, b| {
+        (
+            a.created_at.as_deref().unwrap_or(""),
+            a.message_uuid.as_str(),
+        )
+            .cmp(&(
+                b.created_at.as_deref().unwrap_or(""),
+                b.message_uuid.as_str(),
+            ))
+    });
+
+    let mut items: Vec<NormalizedChatItem> = Vec::new();
+    let mut last_ms = conv.created_at.as_deref().and_then(iso_to_ms);
+    for m in &msgs {
+        let msg_ms = m
+            .created_at
+            .as_deref()
+            .and_then(iso_to_ms)
+            .or_else(|| last_ms.map(|p| p + 1))
+            .unwrap_or(0);
+        last_ms = Some(msg_ms);
+
+        let sender = m.sender.as_deref().unwrap_or("unknown");
+        let kind_label = kind_for_sender(sender);
+        let author_display = match kind_label {
+            "LLM Response" => filter_nonempty(model.clone()).unwrap_or_else(|| "Assistant".into()),
+            _ => capitalize(sender),
+        };
+
+        let mut blocks = blocks_by_msg
+            .get(m.message_uuid.as_str())
+            .cloned()
+            .unwrap_or_default();
+        blocks.sort_by_key(|b| b.block_index);
+
+        // The message item: its `text` blocks, plus any extracted-text
+        // attachments folded inline and downloadable files as
+        // attachments. Always emitted so the per-message grid row stays.
+        let mut body_parts: Vec<String> = blocks
+            .iter()
+            .filter(|b| b.r#type.as_deref() == Some("text"))
+            .filter_map(|b| b.text.as_deref())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_end().to_string())
+            .collect();
+
+        let mut atts = atts_by_msg
+            .get(m.message_uuid.as_str())
+            .cloned()
+            .unwrap_or_default();
+        atts.sort_by_key(|a| a.attachment_index);
+        let mut norm_atts: Vec<NormalizedAttachment> = Vec::new();
+        for at in &atts {
+            let (id, name, is_image) = attachment_meta(at);
+            if at.kind == "attachment" {
+                // Extracted text (no bytes) → folded into the body.
+                let extracted = at
+                    .raw_json
+                    .as_object()
+                    .and_then(|o| o.get("extracted_content"))
+                    .and_then(Value::as_str);
+                body_parts.push(render_extracted_attachment(
+                    name.unwrap_or("(unnamed)"),
+                    extracted,
+                ));
+            } else if let Some(id) = id {
+                // Downloadable file → chat-common materializes via ref_id.
+                norm_atts.push(NormalizedAttachment {
+                    rel_path: None,
+                    file_name: name.map(str::to_string),
+                    mime_type: is_image.then(|| "image/png".to_string()),
+                    byte_len: None,
+                    source_url: None,
+                    ref_id: Some(id.to_string()),
+                });
             }
-            Value::Object(out)
         }
-        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
-        other => other.clone(),
+
+        // One item per structural block (thinking / tool_use /
+        // tool_result), keeping its stable section id + block kind.
+        // Emitted before the message's own text item so that on a
+        // timestamp tie the blocks (which precede the final answer) sort
+        // first under the stable sort below.
+        for b in &blocks {
+            let btype = b.r#type.as_deref().unwrap_or("");
+            if !matches!(btype, "tool_use" | "tool_result" | "thinking") {
+                continue;
+            }
+            let raw_obj = b.raw_json.as_object().cloned().unwrap_or_default();
+            let section_uuid =
+                section_uuid_for_block(&m.message_uuid, b.block_index, Some(btype), &raw_obj)
+                    .unwrap_or_else(|| format!("blk-{}-{}", m.message_uuid, b.block_index));
+            let block_ms = b
+                .start_timestamp
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .and_then(iso_to_ms)
+                .unwrap_or_else(|| msg_ms + (b.block_index as i64) + 1);
+            let block_author = filter_nonempty(model.clone()).unwrap_or_else(|| btype.to_string());
+            let body = block_body_md(btype, b.text.as_deref(), &raw_obj);
+            items.push(NormalizedChatItem {
+                message_uuid: section_uuid,
+                author_id: btype.to_string(),
+                author_display: block_author,
+                date_ms: block_ms,
+                text: filter_nonempty(body),
+                kind: ItemKind::Text,
+                attachments: Vec::new(),
+                reactions: Vec::new(),
+                system_note: None,
+                source_url: None,
+                kind_label: Some(kind_for_block(btype).to_string()),
+            });
+        }
+
+        // The message's own item: its text blocks + extracted-text
+        // attachments + downloadable files. Always emitted (even empty)
+        // so the per-message grid row survives.
+        let body = body_parts.join("\n\n");
+        let kind = if norm_atts.is_empty() {
+            ItemKind::Text
+        } else {
+            ItemKind::Attachment
+        };
+        items.push(NormalizedChatItem {
+            message_uuid: m.message_uuid.clone(),
+            author_id: sender.to_string(),
+            author_display: author_display.clone(),
+            date_ms: msg_ms,
+            text: filter_nonempty(body),
+            kind,
+            attachments: norm_atts,
+            reactions: Vec::new(),
+            system_note: None,
+            source_url: None,
+            kind_label: Some(kind_label.to_string()),
+        });
+    }
+
+    // Stable-sort items chronologically: blocks (earlier timestamps,
+    // emitted first) fall before the message's final text on a tie, so a
+    // turn reads thinking → tool calls → answer.
+    items.sort_by_key(|i| i.date_ms);
+
+    let title = conv
+        .name
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(untitled)".to_string());
+    NormalizedChat {
+        id: conv_uuid.clone(),
+        chat_uuid: conv_uuid.clone(),
+        display: title.clone(),
+        title: Some(title),
+        account: Some(conv.account_uuid.clone()),
+        project: conv.project_uuid.clone(),
+        external_id: None,
+        source_url: Some(format!("https://claude.ai/chat/{conv_uuid}")),
+        org_uuid: conv.org_uuid.clone(),
+        org_name: conv.org_name.clone(),
+        buckets: vec![NormalizedDoc {
+            period_key: "all".to_string(),
+            markdown_uuid: conv_uuid,
+            items,
+        }],
     }
 }
 
-/// The grid-row `uuid` (and matching section-div `id` /
-/// `data-section-uuid`) for a content block. Returns `None` for blocks
-/// that don't get their own row/section (e.g. plain `text`, which is
-/// inline in the parent message).
-///
-/// Prefix convention: `tu-` for `tool_use` (Anthropic's
-/// `tool_use_id` is the natural id), `tr-` for the matching
-/// `tool_result`, `th-` for `thinking` (no upstream id —
-/// `{msg_uuid}-{block_index}` is the unavoidable synthesis).
+fn kind_for_sender(sender: &str) -> &'static str {
+    match sender.to_ascii_lowercase().as_str() {
+        "human" | "user" => "User Input",
+        "assistant" => "LLM Response",
+        _ => "Tool Call",
+    }
+}
+
+fn kind_for_block(block_type: &str) -> &'static str {
+    if block_type == "thinking" {
+        "LLM Thinking"
+    } else {
+        "Tool Call"
+    }
+}
+
+fn filter_nonempty(s: String) -> Option<String> {
+    (!s.trim().is_empty()).then_some(s)
+}
+
+/// Parse an ISO-8601 timestamp to unix millis; `None` on anything
+/// unparseable (callers fall back to a bumped previous time).
+fn iso_to_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Block / attachment rendering (the markdown that becomes item.text).
+// ─────────────────────────────────────────────────────────────────────
+
+/// The grid-row `uuid` (and the item's `message_uuid`) for a structural
+/// block. `tu-` for `tool_use`, `tr-` for the matching `tool_result`,
+/// `th-` for `thinking` (synthesized from `{msg_uuid}-{block_index}`).
+/// `None` for plain `text`, which lives in the parent message item.
 pub(crate) fn section_uuid_for_block(
     msg_uuid: &str,
     block_index: usize,
@@ -132,69 +349,22 @@ pub(crate) fn section_uuid_for_block(
     }
 }
 
-fn render_anthropic_block(
-    msg_uuid: &str,
-    block_index: usize,
-    btype: Option<&str>,
+/// Render one `thinking` / `tool_use` / `tool_result` block to the
+/// markdown body of its own item (the `<details>` block the UI shows).
+fn block_body_md(
+    btype: &str,
     btext: Option<&str>,
-    braw: &Value,
-) -> Vec<String> {
-    let raw_obj: &serde_json::Map<String, Value> = match braw {
-        Value::Object(m) => m,
-        Value::String(s) if !s.is_empty() => {
-            // Re-parse as a JSON object if possible.
-            if let Ok(Value::Object(m)) = serde_json::from_str::<Value>(s) {
-                return render_anthropic_block(
-                    msg_uuid,
-                    block_index,
-                    btype,
-                    btext,
-                    &Value::Object(m),
-                );
-            }
-            &EMPTY_MAP
-        }
-        _ => &EMPTY_MAP,
-    };
-
-    // Blocks that get their own section get wrapped in a div whose id
-    // matches the grid row's uuid (see grid_rows::rows_for_conversation
-    // — that's the contract the UI relies on to highlight the right
-    // block when its row is clicked). Plain `text` blocks stay inline.
-    let section = section_uuid_for_block(msg_uuid, block_index, btype, raw_obj);
-    let (section_open, section_close) = match (&section, btype) {
-        (Some(sid), Some("tool_use")) => {
-            (Some(block_div_open(sid, "tool-use")), Some(MSG_DIV_CLOSE))
-        }
-        (Some(sid), Some("tool_result")) => (
-            Some(block_div_open(sid, "tool-result")),
-            Some(MSG_DIV_CLOSE),
-        ),
-        (Some(sid), Some("thinking")) => {
-            (Some(block_div_open(sid, "thinking")), Some(MSG_DIV_CLOSE))
-        }
-        _ => (None, None),
-    };
-
-    let body: Vec<String> = match btype {
-        Some("text") => {
-            if let Some(text) = btext {
-                vec![text.trim_end().into(), String::new()]
-            } else {
-                vec![
-                    format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
-                    String::new(),
-                ]
-            }
-        }
-        Some("thinking") => {
+    raw_obj: &serde_json::Map<String, Value>,
+) -> String {
+    let lines: Vec<String> = match btype {
+        "thinking" => {
             let thought = raw_obj
                 .get("thinking")
                 .and_then(Value::as_str)
                 .or(btext)
                 .unwrap_or("");
             if thought.is_empty() {
-                vec!["<!-- thinking (no text) -->".into(), String::new()]
+                vec![]
             } else {
                 let quoted = format!("> {}", thought.trim_end().replace('\n', "\n> "));
                 vec![
@@ -203,11 +373,10 @@ fn render_anthropic_block(
                     quoted,
                     String::new(),
                     "</details>".into(),
-                    String::new(),
                 ]
             }
         }
-        Some("tool_use") => {
+        "tool_use" => {
             let name = raw_obj
                 .get("name")
                 .and_then(Value::as_str)
@@ -222,29 +391,16 @@ fn render_anthropic_block(
                 String::new(),
             ];
             if let Some(tool_input) = raw_obj.get("input") {
-                if !tool_input.is_null() {
-                    // Falsy-ish check mirroring Python `if tool_input:` —
-                    // skip if empty object/array/string.
-                    let empty = match tool_input {
-                        Value::Object(m) => m.is_empty(),
-                        Value::Array(a) => a.is_empty(),
-                        Value::String(s) => s.is_empty(),
-                        Value::Bool(false) | Value::Null => true,
-                        Value::Number(n) => n.as_f64() == Some(0.0),
-                        _ => false,
-                    };
-                    if !empty {
-                        out.push("```json".into());
-                        out.push(json_pretty_sorted(tool_input));
-                        out.push("```".into());
-                    }
+                if !json_is_empty(tool_input) {
+                    out.push("```json".into());
+                    out.push(json_pretty_sorted(tool_input));
+                    out.push("```".into());
                 }
             }
             out.push("</details>".into());
-            out.push(String::new());
             out
         }
-        Some("tool_result") => {
+        "tool_result" => {
             let name = raw_obj
                 .get("name")
                 .and_then(Value::as_str)
@@ -253,7 +409,6 @@ fn render_anthropic_block(
                 .get("is_error")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let content = raw_obj.get("content");
             let summary = if is_err {
                 format!("Tool result: {name} (error)")
             } else {
@@ -263,370 +418,111 @@ fn render_anthropic_block(
                 format!("<details><summary>{summary}</summary>"),
                 String::new(),
             ];
-            match content {
-                Some(Value::String(s)) => {
-                    out.push("```".into());
-                    out.push(s.trim_end().into());
-                    out.push("```".into());
-                }
-                Some(Value::Array(items)) => {
-                    for item in items {
-                        match item {
-                            Value::Object(m)
-                                if m.get("type").and_then(Value::as_str) == Some("text")
-                                    && m.get("text")
-                                        .and_then(Value::as_str)
-                                        .is_some_and(|t| !t.is_empty()) =>
-                            {
-                                let t = m.get("text").and_then(Value::as_str).unwrap();
-                                out.push(t.trim_end().into());
-                                out.push(String::new());
+            render_tool_result_content(raw_obj.get("content"), &mut out);
+            out.push("</details>".into());
+            out
+        }
+        _ => btext
+            .filter(|t| !t.is_empty())
+            .map(|t| vec![t.trim_end().to_string()])
+            .unwrap_or_default(),
+    };
+    lines.join("\n")
+}
+
+fn render_tool_result_content(content: Option<&Value>, out: &mut Vec<String>) {
+    match content {
+        Some(Value::String(s)) => {
+            out.push("```".into());
+            out.push(s.trim_end().into());
+            out.push("```".into());
+        }
+        Some(Value::Array(items)) => {
+            for item in items {
+                match item {
+                    Value::Object(m)
+                        if m.get("type").and_then(Value::as_str) == Some("text")
+                            && m.get("text")
+                                .and_then(Value::as_str)
+                                .is_some_and(|t| !t.is_empty()) =>
+                    {
+                        out.push(
+                            m.get("text")
+                                .and_then(Value::as_str)
+                                .unwrap()
+                                .trim_end()
+                                .into(),
+                        );
+                        out.push(String::new());
+                    }
+                    Value::Object(_) => {
+                        out.push("```json".into());
+                        out.push(json_pretty_sorted(item));
+                        out.push("```".into());
+                        out.push(String::new());
+                    }
+                    other => {
+                        out.push("```".into());
+                        out.push(
+                            match other {
+                                Value::String(s) => s.clone(),
+                                v => v.to_string(),
                             }
-                            Value::Object(_) => {
-                                out.push("```json".into());
-                                out.push(json_pretty_sorted(item));
-                                out.push("```".into());
-                                out.push(String::new());
-                            }
-                            other => {
-                                out.push("```".into());
-                                out.push(
-                                    match other {
-                                        Value::String(s) => s.clone(),
-                                        v => v.to_string(),
-                                    }
-                                    .trim_end()
-                                    .into(),
-                                );
-                                out.push("```".into());
-                                out.push(String::new());
-                            }
-                        }
+                            .trim_end()
+                            .into(),
+                        );
+                        out.push("```".into());
+                        out.push(String::new());
                     }
                 }
-                Some(v) if !v.is_null() => {
-                    out.push("```json".into());
-                    out.push(json_pretty_sorted(v));
-                    out.push("```".into());
-                }
-                _ => {}
-            }
-            out.push("</details>".into());
-            out.push(String::new());
-            out
-        }
-        _ => {
-            if let Some(text) = btext {
-                if !text.is_empty() {
-                    let fence = format!("```{}", btype.unwrap_or("")).trim_end().to_string();
-                    vec![fence, text.trim_end().into(), "```".into(), String::new()]
-                } else {
-                    vec![
-                        format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
-                        String::new(),
-                    ]
-                }
-            } else {
-                vec![
-                    format!("<!-- {} (no text) -->", btype.unwrap_or("block")),
-                    String::new(),
-                ]
             }
         }
-    };
-
-    match (section_open, section_close) {
-        (Some(open), Some(close)) => {
-            let mut out = Vec::with_capacity(body.len() + 3);
-            out.push(open);
-            out.push(String::new());
-            out.extend(body);
-            out.push(close.into());
-            out.push(String::new());
-            out
+        Some(v) if !v.is_null() => {
+            out.push("```json".into());
+            out.push(json_pretty_sorted(v));
+            out.push("```".into());
         }
-        _ => body,
+        _ => {}
     }
 }
 
-static EMPTY_MAP: Lazy<serde_json::Map<String, Value>> = Lazy::new(serde_json::Map::new);
-
-#[allow(dead_code)]
-fn _ensure_json_used(_: Value) {
-    let _ = json!({});
-}
-
-pub struct Rendered {
-    pub conversation_uuid: String,
-    pub account_uuid: String,
-    /// Owning Anthropic organization UUID — segment in the rendered
-    /// path so two conversations from the same logged-in account but
-    /// different orgs don't collide. Falls back to "unknown-org" when
-    /// the upstream `_source.org_uuid` is missing (legacy raw rows).
-    pub org_uuid: String,
-    pub body: String,
-}
-
-impl Rendered {
-    /// Page-dir layout: `<conv_uuid>/index.md` under
-    /// `<account>/<org>/llm_chats/`. Blobs live in a sibling `blobs/`
-    /// subdir under the same dir so a conversation is sharable in
-    /// isolation. Mirrors Notion's `<page_dir>/index.md` shape.
-    pub fn relative_path(&self) -> std::path::PathBuf {
-        conv_relative_path(&self.account_uuid, &self.org_uuid, &self.conversation_uuid)
+/// Falsy-ish check mirroring Python `if tool_input:` — skip empty
+/// object/array/string/zero.
+fn json_is_empty(v: &Value) -> bool {
+    match v {
+        Value::Object(m) => m.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::String(s) => s.is_empty(),
+        Value::Bool(false) | Value::Null => true,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        _ => false,
     }
 }
 
-pub fn render_all(
-    parsed: &ParsedExport,
-    root: &std::path::Path,
-    source_name: &str,
-    progress: &Progress,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> anyhow::Result<()>,
-) -> anyhow::Result<Vec<std::path::PathBuf>> {
-    let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
-    tracing::info!(
-        source = source_name,
-        scan_elapsed_ms = elapsed_ms,
-        changed_conversations = parsed
-            .scan
-            .changed_conversations
-            .as_ref()
-            .map(|s| s.len() as i64)
-            .unwrap_or(-1),
-        cold_start = parsed.scan.changed_conversations.is_none(),
-        "[translate] anthropic dolt_diff scan"
-    );
-
-    progress.set_length(Some(
-        (parsed.conversations.len() + parsed.docs_skipped) as u64,
-    ));
-    progress.inc(parsed.docs_skipped as u64);
-    let mut written = Vec::new();
-    for c in &parsed.conversations {
-        let conv_uuid = c.conv.conversation_uuid.clone();
-        let org_uuid = c
-            .conv
-            .org_uuid
-            .clone()
-            .unwrap_or_else(|| "unknown-org".into());
-        let rel = conv_relative_path(&c.conv.account_uuid, &org_uuid, &conv_uuid);
-        let abs = root.join(&rel);
-        // With dolt_diff driving skip, the per-doc `source_fingerprint`
-        // is now the conversation UUID — stable across re-renders,
-        // distinct between docs, the load step still has its
-        // (qmd_path, source_fingerprint) skip key.
-        let fingerprint = conv_uuid.clone();
-
-        // Changed (or first-time): walk chat_messages into msgs/blocks/atts.
-        let shredded = shred(c);
-        let Some(r) = render_one(&shredded, source_name, &c.blobs) else {
-            progress.inc(1);
-            continue;
-        };
-
-        let page_dir = abs
-            .parent()
-            .expect("relative_path always has a parent (the page-dir)");
-        std::fs::create_dir_all(page_dir)?;
-
-        // Order: blobs → md → sidecar → callback. Callback firing last
-        // is the commit point. All sync — `c.blobs` is already loaded.
-        c.blobs.materialize_to_dir(&page_dir.join("blobs"))?;
-
-        std::fs::write(&abs, &r.body)?;
-
-        let rows = rows_for_conversation(&shredded);
-        let sidecar_abs = abs.with_extension("grid_rows.json");
-        emit_sidecar(
-            &sidecar_abs,
-            &conv_uuid,
-            &fingerprint,
-            RENDER_VERSION,
-            &rows,
-            &[],
-        )
-        .map_err(std::io::Error::other)?;
-
-        on_doc_complete(RenderedMarkdown {
-            markdown_uuid: conv_uuid.clone(),
-            source_name: source_name.to_string(),
-            source_fingerprint: fingerprint,
-            upstream_cursor: None,
-            md_path: abs.clone(),
-            render_version: RENDER_VERSION,
-            rows,
-            edges: Vec::new(),
-        })?;
-
-        written.push(rel);
-        progress.inc(1);
-    }
-
-    // Advance the render cursor on success when HEAD was readable.
-    if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, "anthropic", source_name);
-        render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
-            .with_context(|| format!("write anthropic render cursor {}", cursor_path.display()))?;
-    }
-    Ok(written)
+/// JSON dumped with `indent=2, sort_keys=true` (recursive key sort).
+fn json_pretty_sorted(v: &Value) -> String {
+    serde_json::to_string_pretty(&canonicalize(v)).unwrap_or_default()
 }
 
-/// Mirror of `Rendered::relative_path` for use *before* we've rendered
-/// (so we can fingerprint-skip without paying for a render first).
-fn conv_relative_path(account_uuid: &str, org_uuid: &str, conv_uuid: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from("rendered_md/anthropic")
-        .join(account_uuid)
-        .join(org_uuid)
-        .join("llm_chats")
-        .join(conv_uuid)
-        .join("index.md")
-}
-
-pub fn render_one(
-    shredded: &ShreddedConversation,
-    _source_name: &str,
-    blobs: &BlobBundle,
-) -> Option<Rendered> {
-    let conv = &shredded.conv;
-    let conv_uuid = conv.conversation_uuid.as_str();
-
-    let mut blocks_by_msg: HashMap<&str, Vec<&ContentBlockRow>> = HashMap::new();
-    for b in &shredded.content_blocks {
-        blocks_by_msg.entry(&b.message_uuid).or_default().push(b);
-    }
-    let mut atts_by_msg: HashMap<&str, Vec<&AttachmentRow>> = HashMap::new();
-    for a in &shredded.attachments {
-        atts_by_msg.entry(&a.message_uuid).or_default().push(a);
-    }
-    let mut msgs: Vec<&MessageRow> = shredded.messages.iter().collect();
-    msgs.sort_by(|a, b| {
-        let ka = (
-            a.created_at.as_deref().unwrap_or(""),
-            a.message_uuid.as_str(),
-        );
-        let kb = (
-            b.created_at.as_deref().unwrap_or(""),
-            b.message_uuid.as_str(),
-        );
-        ka.cmp(&kb)
-    });
-
-    let mut parts: Vec<String> = Vec::new();
-    parts.push("---".into());
-    parts.push("provider: anthropic".into());
-    parts.push(format!("uuid: {}", yaml_scalar(Some(conv_uuid))));
-    parts.push(format!("name: {}", yaml_scalar(conv.name.as_deref())));
-    parts.push(format!(
-        "account_uuid: {}",
-        yaml_scalar(Some(&conv.account_uuid))
-    ));
-    parts.push(format!(
-        "project_uuid: {}",
-        yaml_scalar(conv.project_uuid.as_deref())
-    ));
-    parts.push(format!(
-        "created_at: {}",
-        yaml_scalar(conv.created_at.as_deref())
-    ));
-    parts.push(format!(
-        "updated_at: {}",
-        yaml_scalar(conv.updated_at.as_deref())
-    ));
-    if let Some(summary) = conv.summary.as_deref() {
-        if !summary.is_empty() {
-            parts.push(format!("summary: {}", yaml_scalar_raw(summary)));
-        }
-    }
-    parts.push("---".into());
-    parts.push(String::new());
-    let source_url = format!("https://claude.ai/chat/{}", conv.conversation_uuid);
-    parts.push(
-        Title {
-            text: conv.name.as_deref().unwrap_or("(untitled)"),
-            markdown_uuid: Some(&conv.conversation_uuid),
-            source_url: Some(&source_url),
-        }
-        .render()
-        .trim_end()
-        .to_string(),
-    );
-    parts.push(String::new());
-
-    let mut last_ts: Option<String> = conv.created_at.clone();
-    for m in msgs.iter() {
-        let mut msg_created = m.created_at.clone();
-        if msg_created.is_none() {
-            if let Some(prev) = &last_ts {
-                msg_created = Some(bump_iso(prev));
+fn canonicalize(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut pairs: Vec<_> = m.iter().collect();
+            pairs.sort_by(|a, b| a.0.cmp(b.0));
+            let mut out = serde_json::Map::with_capacity(pairs.len());
+            for (k, val) in pairs {
+                out.insert(k.clone(), canonicalize(val));
             }
+            Value::Object(out)
         }
-        if let Some(ts) = &msg_created {
-            last_ts = Some(ts.clone());
-        }
-        let heading = capitalize(m.sender.as_deref().unwrap_or("unknown"));
-        parts.push(msg_div_open(&m.message_uuid, "anthropic"));
-        parts.push(String::new());
-        parts.push(format!("## {heading}"));
-        if let Some(ts) = &msg_created {
-            parts.push(String::new());
-            parts.push(format!("*{ts}*"));
-        }
-        parts.push(String::new());
-
-        let mut blocks = blocks_by_msg
-            .get(m.message_uuid.as_str())
-            .cloned()
-            .unwrap_or_default();
-        blocks.sort_by_key(|b| b.block_index);
-        for b in blocks {
-            parts.extend(render_anthropic_block(
-                &m.message_uuid,
-                b.block_index,
-                b.r#type.as_deref(),
-                b.text.as_deref(),
-                &b.raw_json,
-            ));
-        }
-
-        let mut atts = atts_by_msg
-            .get(m.message_uuid.as_str())
-            .cloned()
-            .unwrap_or_default();
-        atts.sort_by_key(|a| a.attachment_index);
-        if !atts.is_empty() {
-            parts.push("**Attachments:**".into());
-            parts.push(String::new());
-            for at in atts {
-                parts.push(format!("- {}", attachment_md(at, blobs)));
-            }
-            parts.push(String::new());
-        }
-        parts.push(MSG_DIV_CLOSE.into());
-        parts.push(String::new());
+        Value::Array(a) => Value::Array(a.iter().map(canonicalize).collect()),
+        other => other.clone(),
     }
-
-    let mut body = parts.join("\n");
-    while body.ends_with('\n') || body.ends_with('\r') {
-        body.pop();
-    }
-    body.push('\n');
-
-    Some(Rendered {
-        conversation_uuid: conv_uuid.into(),
-        account_uuid: conv.account_uuid.clone(),
-        org_uuid: conv
-            .org_uuid
-            .clone()
-            .unwrap_or_else(|| "unknown-org".into()),
-        body,
-    })
 }
 
-/// Pull (file_uuid, file_name, is_image) out of an Anthropic
-/// attachment row's raw_json. Anthropic uses one of several keys for
-/// the upstream id depending on whether the row came from the bulk
-/// export or the live API — `file_uuid` / `id` / `uuid` in that order.
+/// Pull (file id, file name, is_image) out of an attachment row's
+/// raw_json. Anthropic uses `file_uuid` / `id` / `uuid` for the id
+/// depending on export vs live API.
 fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     let raw_obj = at.raw_json.as_object();
     let id = raw_obj
@@ -647,44 +543,8 @@ fn attachment_meta(at: &AttachmentRow) -> (Option<&str>, Option<&str>, bool) {
     (id, name, is_image)
 }
 
-fn attachment_md(at: &AttachmentRow, blobs: &BlobBundle) -> String {
-    let (id, name, is_image) = attachment_meta(at);
-    let label = name.unwrap_or("(unnamed)");
-
-    // Claude's `chat_messages[*].attachments[]` slot is fundamentally
-    // text — the API carries the bytes Claude extracted from a user
-    // upload (the binary itself is not retained), surfaced as
-    // `extracted_content`. Render that text inline rather than
-    // pretending there's a blob to link to.
-    if at.kind == "attachment" {
-        let extracted = at
-            .raw_json
-            .as_object()
-            .and_then(|o| o.get("extracted_content"))
-            .and_then(Value::as_str);
-        return render_extracted_attachment(label, extracted);
-    }
-
-    // `files[]` items: real downloadable attachments. Look them up in
-    // the per-doc BlobBundle, which emits the durable "not yet
-    // fetched" placeholder when the bytes aren't in the bundle.
-    let Some(id) = id else {
-        return format!("[{}] {}", at.kind, label);
-    };
-    blobs.markdown_link(id, Some(label), is_image)
-}
-
-/// Render a Claude-`attachments[]` text item inline. Format:
-///
-/// ```text
-/// **[attachment: <filename>]**
-/// > line 1
-/// > line 2
-/// ```
-///
-/// Empty / missing `extracted_content` falls back to a short marker
-/// so the conversation history still records that an attachment
-/// existed.
+/// Render a Claude `attachments[]` text item inline (extracted upload
+/// text; the binary is not retained).
 fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
     let header_label = if label.is_empty() { "(unnamed)" } else { label };
     let body = extracted.unwrap_or("").trim();
@@ -696,7 +556,6 @@ fn render_extracted_attachment(label: &str, extracted: Option<&str>) -> String {
 }
 
 fn capitalize(s: &str) -> String {
-    // Python `str.capitalize()`: first char upper, rest lower.
     let mut chars = s.chars();
     match chars.next() {
         None => String::new(),
