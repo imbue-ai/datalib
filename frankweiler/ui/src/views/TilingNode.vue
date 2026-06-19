@@ -12,8 +12,8 @@
 // the injected TilingApi, so this component only takes a `node` prop
 // and recurses.
 import { inject } from "vue";
+import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
-import { handOffToAgent } from "@/cards/handoff";
 import { TILING_API } from "./tilingApi";
 import type { TileNode, TileSplit } from "./tilingTree";
 
@@ -59,25 +59,7 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
-      <a
-        v-if="node.source.trim() !== ''"
-        class="tiling-alone"
-        :href="api.aloneHref(node)"
-        target="_blank"
-        rel="noopener"
-        title="open this card alone"
-        >↗</a
-      >
-      <button
-        class="tiling-agent"
-        title="let a coding agent work on this card"
-        @click="handOffToAgent(api.ctxFor(node).host)"
-      >
-        🤖
-      </button>
-      <button class="tiling-close" title="close tile" @click="api.closeNode(node.id)">
-        ✕
-      </button>
+      <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
          (keyed by id), so it isn't remounted when the tree restructures
@@ -489,25 +471,6 @@ const tabLabel = (child: TileNode) =>
 }
 .tiling-source:focus {
   outline: none;
-}
-.tiling-alone,
-.tiling-agent,
-.tiling-close {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  text-decoration: none;
-  padding: 0.2rem 0;
-}
-.tiling-alone:hover,
-.tiling-agent:hover,
-.tiling-close:hover {
-  opacity: 1;
 }
 /* Slot the host teleports the card into; a flex container so the
    mounted card fills it. */
