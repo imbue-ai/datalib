@@ -263,10 +263,17 @@ fn output_paths(
     chat: &NormalizedChat,
     period_key: &str,
 ) -> (PathBuf, PathBuf, PathBuf) {
+    // Cap the human-readable slug component: a `display` can be huge
+    // (ChatGPT uses the whole first message as an untitled conversation's
+    // title), and the full path must stay under the filesystem's
+    // name limit. The slug is cosmetic — `chat.id` + `chat_uuid` carry
+    // identity — so truncating is safe. slugify() is ASCII, so byte
+    // truncation can't split a char.
+    let slug = slugify(&chat.display);
+    let slug = slug[..slug.len().min(80)].trim_end_matches('-');
     let chat_slug = format!(
         "chat-{id}__{slug}__{short}",
         id = chat.id,
-        slug = slugify(&chat.display),
         short = &chat.chat_uuid[..8.min(chat.chat_uuid.len())],
     );
     let page_dir = out_dir
