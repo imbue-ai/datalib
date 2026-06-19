@@ -23,11 +23,11 @@
 import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
+import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
 import type { CardCtx, HostCommands } from "@/cards/types";
-import { handOffToAgent } from "@/cards/handoff";
 
 const route = useRoute();
 const router = useRouter();
@@ -212,11 +212,6 @@ function setColumnSource(id: string, source: string) {
   syncUrl();
 }
 
-// Standalone view: a URL containing just this column.
-function aloneHref(slot: Slot): string {
-  return encodeColumns([{ code: slot.source, state: slot.state }]);
-}
-
 // Drag a column's right edge to set its width. Captures the pointer
 // so the move tracks even when the cursor crosses other columns;
 // clamps to MIN_WIDTH so columns can't collapse to nothing.
@@ -261,29 +256,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
-          <a
-            v-if="!isBlankSource(slot.source)"
-            class="miller-col-alone"
-            :href="aloneHref(slot)"
-            target="_blank"
-            rel="noopener"
-            title="open this column alone"
-            >↗</a
-          >
-          <button
-            class="miller-col-agent"
-            title="let a coding agent work on this card"
-            @click="handOffToAgent(ctxFor(slot).host)"
-          >
-            🤖
-          </button>
-          <button
-            class="miller-col-close"
-            title="close column"
-            @click="closeColumn(slot.id)"
-          >
-            ✕
-          </button>
+          <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
         </div>
         <ShadowCard
           class="miller-col-card"
@@ -377,25 +350,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 }
 .miller-col-source:focus {
   outline: none;
-}
-.miller-col-alone,
-.miller-col-agent,
-.miller-col-close {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  text-decoration: none;
-  padding: 0.2rem 0;
-}
-.miller-col-alone:hover,
-.miller-col-agent:hover,
-.miller-col-close:hover {
-  opacity: 1;
 }
 .miller-col-card {
   flex: 1 1 auto;

@@ -9,10 +9,9 @@ import type { Dir, TileLeaf, TileSplit } from "./tilingTree";
 export type TilingApi = {
   ctxFor(leaf: TileLeaf): CardCtx;
   commitSource(leaf: TileLeaf, e: Event): void;
-  // Remove a node by id — a tile (the chrome ✕ / a card's close) or a
-  // whole grouped child (a tab's ✕).
+  // Remove a node by id — a tile (a card's close, via ctx.host.close) or
+  // a whole grouped child (a tab's ✕).
   closeNode(id: string): void;
-  aloneHref(leaf: TileLeaf): string;
   // Begin dragging the divider after children[index] of `split`.
   startResize(split: TileSplit, index: number, ev: PointerEvent): void;
   // Show children[index] of a tab split.

@@ -25,12 +25,11 @@
 // across when toggling layouts (see CardsView).
 import { computed, reactive, ref, nextTick, useTemplateRef, onMounted, onBeforeUnmount } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
+import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
-import { encodeColumns } from "@/router/columns";
 import { layoutTree, type Rect } from "./treeLayout";
 import type { CardCtx, HostCommands } from "@/cards/types";
-import { handOffToAgent } from "@/cards/handoff";
 
 const bus = createBus();
 
@@ -405,11 +404,6 @@ function commitSource(node: TreeNode, e: Event) {
   }
 }
 
-// Standalone view: a miller URL containing just this card.
-function aloneHref(node: TreeNode): string {
-  return encodeColumns([{ code: node.source, state: node.state }]);
-}
-
 // True while a node is being moved or resized; pauses the re-layout
 // position animation, which would otherwise trail the pointer by its
 // transition duration (and drag a moved subtree behind its parent).
@@ -529,29 +523,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
               @input="growSourceBox($event.target as HTMLTextAreaElement)"
               @keydown.enter.exact.prevent="commitSource(node, $event)"
             />
-            <a
-              v-if="node.source.trim() !== ''"
-              class="tree-node-alone"
-              :href="aloneHref(node)"
-              target="_blank"
-              rel="noopener"
-              title="open this card alone"
-              >↗</a
-            >
-            <button
-              class="tree-node-agent"
-              title="let a coding agent work on this card"
-              @click="handOffToAgent(ctxFor(node).host)"
-            >
-              🤖
-            </button>
-            <button
-              class="tree-node-close"
-              title="close card (and its subtree)"
-              @click="closeNode(node.id)"
-            >
-              ✕
-            </button>
+            <CardControls :source="node.source" :ctx="ctxFor(node)" />
           </div>
           <ShadowCard
             class="tree-node-card"
@@ -697,25 +669,6 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
 }
 .tree-node-source:focus {
   outline: none;
-}
-.tree-node-alone,
-.tree-node-agent,
-.tree-node-close {
-  flex: 0 0 auto;
-  border: none;
-  background: transparent;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  font-size: 0.8rem;
-  line-height: 1.5;
-  text-decoration: none;
-  padding: 0.2rem 0;
-}
-.tree-node-alone:hover,
-.tree-node-agent:hover,
-.tree-node-close:hover {
-  opacity: 1;
 }
 .tree-node-card {
   flex: 1 1 auto;

@@ -34,7 +34,6 @@
 import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
-import { encodeColumns } from "@/router/columns";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -160,11 +159,6 @@ function setTileSource(id: string, source: string) {
   if (!tile) return;
   tile.source = source;
   tile.state = "";
-}
-
-// Standalone view: a miller URL containing just this card.
-function aloneHref(leaf: TileLeaf): string {
-  return encodeColumns([{ code: leaf.source, state: leaf.state }]);
 }
 
 // ---- divider resize ----
@@ -313,7 +307,6 @@ const api: TilingApi = {
   ctxFor,
   commitSource,
   closeNode,
-  aloneHref,
   startResize,
   setActive,
   setDir,
