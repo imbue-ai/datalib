@@ -54,8 +54,19 @@ build --action_env=HOME
 # macOS host (incl. GitHub Actions `macos-*` runners) since bazel
 # already requires CLT for the C toolchain.
 #
-# Linux hosts must override on the command line (later flags win):
-#   bazel build ... --action_env=LIBCLANG_PATH=$(llvm-config --libdir)
+# `--host_action_env` mirrors `--action_env` so the *exec*-config copy
+# of every bindgen build script finds libclang too. boring-sys2 (and
+# other `wreq`/BoringSSL users) gets built `[for tool]` whenever an
+# exec-config build tool in the `//...` graph depends on the HTTP
+# stack; without the host variant that exec-config bindgen panics with
+# "Unable to find libclang" the moment the action isn't a cache hit —
+# which is exactly what reddened `bazel test //...` in CI on a cold
+# BuildBuddy cache. `--action_env` alone only covers target-config
+# actions, so the failure hid behind the remote cache until a miss.
+#
+# Linux hosts must override both on the command line (later flags win):
+#   bazel build ... --action_env=LIBCLANG_PATH=$(llvm-config --libdir) \
+#                   --host_action_env=LIBCLANG_PATH=$(llvm-config --libdir)
 # `release.yml` does this for the linux-amd64 / linux-arm64 matrix
 # entries. The devcontainer's user-level ~/.bazelrc carries the same
 # override so interactive Linux work doesn't need to remember the flag.
@@ -64,6 +75,7 @@ build --action_env=HOME
 # in MODULE.bazel — that wins over `--action_env` and would re-break
 # Linux. See the libsqlite3-sys annotation comment.
 build --action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
+build --host_action_env=LIBCLANG_PATH=/Library/Developer/CommandLineTools/usr/lib
 
 # Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
 # STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation

@@ -83,7 +83,12 @@ else
   # runfiles tree has the specs and configs as symlinks back to
   # bazel-out / source, so we rehome the test inputs into a tempdir
   # as real files (rsync -L resolves symlinks during the copy).
-  STAGE_DIR="$(mktemp -d -t fw-e2e-stage)"
+  # Explicit `XXXXXX` template rather than `-t fw-e2e-stage`: BSD mktemp
+  # (macOS) treats `-t` as a prefix and tolerates a template with no X's,
+  # but GNU mktemp (Linux/CI) reads the arg as a literal template and
+  # aborts with "too few X's in template 'fw-e2e-stage'". The full
+  # `$TMPDIR/...XXXXXX` form is accepted identically by both.
+  STAGE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fw-e2e-stage.XXXXXX")"
   trap 'rm -rf "$STAGE_DIR"' EXIT
   rsync -aL \
     --exclude node_modules \

@@ -118,6 +118,25 @@ jobs:
           bazel version
           rustc --version || true
 
+      # FIXME(devcontainer-republish): TEMPORARY bridge — DELETE this whole
+      # step once a devcontainer image built after the `sqlite3` Dockerfile
+      # addition is published on a `v*` tag. It installs the stock
+      # `sqlite3` CLI the beeper provider's extract shells out to
+      # (`//tests/fixtures:ingested_tng`); the Dockerfile now lists
+      # `sqlite3` in its apt set, but `:latest` only moves on republish, so
+      # until then it's installed at runtime here. (Harmless if left in —
+      # the `command -v` guard makes it a no-op once the image carries it —
+      # but it's dead weight worth removing.) apt lists are pruned in the
+      # image, hence the `update`. Runs as root in the container; no sudo.
+      - name: Install runtime test deps not yet baked into the image
+        run: |
+          set -euo pipefail
+          if ! command -v sqlite3 >/dev/null 2>&1; then
+              apt-get update
+              apt-get install -y --no-install-recommends sqlite3
+          fi
+          echo "sqlite3: $(command -v sqlite3) ($(sqlite3 --version))"
+
       # `-c opt --config=release` mirrors the build mode `release.yml`'s
       # dist build uses, so the BuildBuddy action cache populated here
       # on every PR / main push warms exactly the entries tag-time
@@ -131,14 +150,72 @@ jobs:
       # Matches the convention used by `release.yml`'s build + test
       # steps.
       #
-      # `continue-on-error: true` because several tests currently fail
-      # when run in CI (they pass locally — likely env/toolchain drift
-      # not yet diagnosed). We still want the job to run on every PR
-      # so the BuildBuddy cache warms and so regressions surface in
-      # the logs, but we don't want a scary red cross on PRs until the
-      # remote-failure set is triaged. Step-level continue-on-error
-      # (not job-level) is what actually suppresses the UI cross —
-      # job-level still renders failed in the run summary.
+      # This step is the merge gate: a non-zero `bazel test` exit must
+      # fail the job. It previously carried `continue-on-error: true` to
+      # hide a red cross while the CI-only failures were triaged — the
+      # two known causes (precommit_test shelling out to a host `cargo`
+      # the devcontainer doesn't ship, and exec-config bindgen missing
+      # `--host_action_env=LIBCLANG_PATH`) are now fixed at the source,
+      # so the suppression is removed and real failures gate merges
+      # again.
+      #
+      # FIXME(devcontainer-republish): the `--host_action_env=LIBCLANG_PATH`
+      # half below is a TEMPORARY bridge — DROP both `LIBCLANG_PATH` flags
+      # (and the `libdir` resolution above) once a devcontainer image built
+      # after the `.bazelrc`/Dockerfile `--host_action_env` additions is
+      # published on a `v*` tag.
+      #
+      # `LIBCLANG_PATH` is passed on the command line for BOTH the target
+      # and exec configs. The devcontainer bakes `LIBCLANG_PATH` into
+      # `/root/.bazelrc`, but only `--host_action_env` makes it reach
+      # exec-config (`[for tool]`) bindgen actions — e.g. boring-sys2,
+      # pulled in when an exec-config tool needs the HTTP stack — and the
+      # current `:latest` image only baked the `--action_env` half.
+      # Computing it here from `llvm-config` (the same source the image
+      # uses) means CI is correct regardless of which devcontainer image
+      # `:latest` currently points at, instead of waiting for the
+      # republish. Mirrors `release.yml`'s `bazelargs` step. Once the
+      # republished image carries the baked `--host_action_env` line these
+      # flags are a redundant no-op (identical value).
       - name: bazel test //...
-        continue-on-error: true
-        run: bazel test //... -c opt --config=release --build_metadata=ROLE=CI
+        run: |
+          libdir="$(llvm-config --libdir)"
+          if [[ -z "${libdir}" || ! -d "${libdir}" ]]; then
+              echo "ERROR: llvm-config --libdir returned '${libdir}' (not a dir)." >&2
+              exit 1
+          fi
+          echo "Resolved LIBCLANG_PATH=${libdir}"
+          # FIXME(e2e): `-//frankweiler/ui:e2e_test` excludes the Playwright
+          # e2e suite from the CI gate. It needs `rsync` + a Chromium
+          # browser cache the *current* `:latest` devcontainer image does
+          # not carry; both are now added to `.devcontainer/Dockerfile`, so
+          # once a new image is published on the next `v*` tag, DROP this
+          # negative pattern to re-enable the suite as a merge gate. (Local
+          # `bazel test //...` is unaffected and still runs it.) The `--`
+          # keeps the leading `-` from being read as a flag.
+          #
+          # qmd model cache: the `//tests/fixtures:ingested_tng_qmd` genrule
+          # runs qmd, which reads its ~2GB GGUFs from a host dir mounted
+          # into the sandbox. The devcontainer bakes them at
+          # `/root/.cache/qmd/models` (prod image's `qmd pull`, run as
+          # root). But GitHub Actions overrides HOME=/github/home for
+          # container steps, so `.bazelrc`'s `$(HOME)/.cache/qmd/models`
+          # mount + build_qmd_index.py's `~/.cache/qmd/models` both point
+          # at an EMPTY /github/home path — and qmd re-downloads ~2GB on
+          # every run (incl. reruns). Point both at the baked /root cache:
+          #   * --sandbox_add_mount_pair makes the baked dir visible in the
+          #     genrule sandbox (additive to the .bazelrc $(HOME) mount,
+          #     which stays correct for local dev).
+          #   * CLAUDE_MIRROR_HOST_HOME makes build_qmd_index.py resolve its
+          #     models dir to /root/.cache/qmd/models (the script reads it
+          #     in place of $HOME).
+          # qmd then finds the baked models + their `.etag` sidecars and
+          # skips the download (etag matches the unchanged HF release).
+          # Standing CI accommodation — not a republish bridge: the image
+          # bakes as root and GH always sets HOME=/github/home.
+          bazel test -c opt --config=release --build_metadata=ROLE=CI \
+            --action_env=LIBCLANG_PATH="${libdir}" \
+            --host_action_env=LIBCLANG_PATH="${libdir}" \
+            --sandbox_add_mount_pair=/root/.cache/qmd/models \
+            --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
+            -- //... -//frankweiler/ui:e2e_test

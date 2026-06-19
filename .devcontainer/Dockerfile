@@ -45,6 +45,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # git               needed by some build scripts (workspace_status.sh,
 #                   rules_rust crate fetches that vendor from git).
 # python3-pip       `tests/fixtures/build_qmd_index.py` and friends.
+# rsync             `//frankweiler/ui:e2e_test`'s wrapper (run_e2e.sh)
+#                   stages the Playwright spec tree via `rsync -aL`.
+#                   macOS ships rsync; Ubuntu's base image here does not.
+# sqlite3           the beeper provider's extract shells out to the
+#                   *stock* `sqlite3` CLI (it can't link rusqlite — see
+#                   beeper/src/extract/index_db.rs — and doltlite
+#                   misreads stock SQLite type codes). macOS ships
+#                   /usr/bin/sqlite3; on Ubuntu the runtime lib
+#                   (libsqlite3-0) does NOT carry the CLI, so the
+#                   `//tests/fixtures:ingested_tng` genrule failed with
+#                   "spawn sqlite3: No such file or directory" until
+#                   this was added.
 # unzip + zip       rules_rust workspace setup occasionally pulls
 #                   these in; cheap to keep.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -59,6 +71,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         perl \
         pkg-config \
         python3-pip \
+        rsync \
+        sqlite3 \
         unzip \
         zip \
     && rm -rf /var/lib/apt/lists/* \
@@ -84,6 +98,27 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
     && rm -rf /root/.bun \
     && bun --version
+
+# Playwright Chromium + its OS libraries, for `//frankweiler/ui:e2e_test`.
+# The test resolves the browser from `~/.cache/ms-playwright` via
+# `env_inherit = ["HOME"]` (HOME=/root here) but never runs
+# `playwright install` itself, so the browser must be baked in. `npx
+# playwright@<ver> install --with-deps chromium` both apt-installs the
+# shared libs Chromium needs and downloads the browser build that this
+# exact Playwright version expects.
+#
+# PLAYWRIGHT_VERSION MUST match the resolved `playwright` /
+# `@playwright/test` version in `frankweiler/ui/pnpm-lock.yaml` — a
+# mismatch means the bazel-linked Playwright looks for a browser
+# revision that isn't on disk. Bump both together.
+#
+# NOTE: until a new image is published (on the next `v*` tag), CI still
+# excludes e2e_test from the gate — see the FIXME in
+# `.github/workflows/test.yml`. This bake is what lets that exclusion be
+# lifted.
+ARG PLAYWRIGHT_VERSION=1.59.1
+RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 # uv — `precommit_test` drives ruff / pyright through `uv run`, so the
 # image needs `uv` on PATH for the in-bazel pre-commit check to work
@@ -132,8 +167,16 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 #
 # `llvm-config --libdir` is run at image-build time and baked in;
 # rebuild the image after a major LLVM bump (e.g. 18 → 19).
+#
+# Both `--action_env` and `--host_action_env` are written so exec-config
+# ("[for tool]") bindgen build scripts — e.g. boring-sys2 when an
+# exec-config tool in `//...` pulls in the HTTP stack — find libclang
+# too. `--action_env` alone only covers target-config actions; the
+# missing host variant panicked bindgen with "Unable to find libclang"
+# on a cold BuildBuddy cache. See the matching note in the workspace
+# .bazelrc.
 RUN ldir="$(llvm-config --libdir)" \
-    && printf 'build --action_env=LIBCLANG_PATH=%s\n' "$ldir" > /root/.bazelrc
+    && printf 'build --action_env=LIBCLANG_PATH=%s\nbuild --host_action_env=LIBCLANG_PATH=%s\n' "$ldir" "$ldir" > /root/.bazelrc
 
 WORKDIR /workspaces/mixed_up_files
 
