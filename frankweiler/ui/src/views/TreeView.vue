@@ -2,10 +2,11 @@
 // Tree layout host: cards are nodes on a pannable/zoomable 2D plane.
 // The card contract is identical to the miller layout's — same
 // source-in-header chrome, same ShadowCard mounting, same CardCtx —
-// only `ctx.host.openCard(source)` behaves differently: instead of
+// only `ctx.host.openCards(source)` behaves differently: instead of
 // replacing everything to the right it spawns a child node the caller
-// points to. Closing a node closes its whole subtree (children would
-// be orphaned otherwise).
+// points to (and `openCards(a, b, …)` spawns a parent→child spine).
+// Closing a node closes its whole subtree (children would be
+// orphaned otherwise).
 //
 // Positions are auto-layout first: every open/close/resize re-runs
 // the tidy-tree layout (treeLayout.ts) and nodes animate to their new
@@ -334,6 +335,19 @@ function openCardFrom(parentId: string, source: string): string {
   return node.id;
 }
 
+// host.openCards: open a chain of cards. Each source hangs off the
+// node the previous source produced, so the chain forms a parent→child
+// spine descending from the caller. Returns the new node ids in order.
+function openCardsFrom(parentId: string, sources: string[]): string[] {
+  let prev = parentId;
+  const ids: string[] = [];
+  for (const source of sources) {
+    prev = openCardFrom(prev, source);
+    ids.push(prev);
+  }
+  return ids;
+}
+
 function addRootCard() {
   const node = newNode("", null);
   nodes.value = [...nodes.value, node];
@@ -378,7 +392,7 @@ function ctxFor(node: TreeNode): CardCtx {
   if (!ctx) {
     const cardId = node.id;
     const host: HostCommands = {
-      openCard: (source) => openCardFrom(cardId, source),
+      openCards: (...sources) => openCardsFrom(cardId, sources),
       setSource: (source) => setNodeSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setNodeState(cardId, state),

@@ -404,6 +404,28 @@ onMounted(() => {
 .chat-body .msg--slack {
   border-left-color: #4a154b;
 }
+/* Perseus sections carry polytonic Greek (Greek Extended, U+1F00–
+   U+1FFF: precomposed accented vowels). The body otherwise inherits
+   `system-ui`, which on macOS resolves to `.AppleSystemUIFont` — and
+   that font has NO polytonic glyphs. The browser then falls back
+   per-character and decomposes each precomposed vowel into base +
+   combining mark, rendering the accent at a default advance (floating
+   up and to the right of the letter) instead of over it. Naming fonts
+   that actually contain the precomposed glyphs makes the browser use
+   their (correctly placed) baked-in forms instead of that broken
+   fallback. Every face named here was verified to contain the
+   precomposed Greek Extended glyphs (via a CoreText coverage probe);
+   `Noto Sans` / `GFS Neohellenic` are sans faces built for polytonic
+   Greek, `Helvetica Neue` / `Lucida Grande` are the macOS sans
+   fallbacks that also cover the block. We deliberately end in generic
+   `sans-serif` (which maps to Helvetica, NOT the polytonic-less
+   `.AppleSystemUIFont` that `system-ui` resolves to) so the broken
+   fallback can never re-enter. Applies to the English sections too,
+   which is harmless. */
+.chat-body .msg--perseus {
+  font-family: "Noto Sans", "GFS Neohellenic", "Helvetica Neue",
+    "Lucida Grande", "Arial Unicode MS", sans-serif;
+}
 /* Per-block sections (tool_use / tool_result / thinking). Nested
    inside their parent message wrapper, so we keep them visually
    subordinate: thinner left border, lighter accent. The selection

@@ -41,6 +41,17 @@ pub fn split_eng(text: &str) -> Vec<Sentence> {
     split(text, ENG_TERMINATORS)
 }
 
+/// Pick the splitter by language code: Ancient Greek uses its own
+/// terminator set (`. · ; :`); every Latin-script language (eng, fre,
+/// ger, lat, ita, …) uses `. ? !`.
+pub fn split_for(lang: &str, text: &str) -> Vec<Sentence> {
+    if lang == "grc" {
+        split_grc(text)
+    } else {
+        split_eng(text)
+    }
+}
+
 fn split(text: &str, terminators: &[char]) -> Vec<Sentence> {
     let trimmed_input = text.trim();
     if trimmed_input.is_empty() {

@@ -11,7 +11,7 @@
 // more children.
 //
 // Ways the tree changes:
-//   - openCard (a card spawning another): add it as a sibling of the
+//   - openCards (a card spawning another): add it as a sibling of the
 //     caller — see addSibling.
 //   - the "add" button at a container's end: appendChild a blank tile.
 //   - drag a node onto a container's add area: moveNodeToContainer.
@@ -61,7 +61,7 @@ export type TileSplit = {
 export type TileNode = TileLeaf | TileSplit;
 
 // Build a leaf. `weight` defaults to 1; callers pass the id so it can
-// be allocated up front (openCard returns it synchronously).
+// be allocated up front (openCards returns it synchronously).
 export function makeTile(id: string, source: string, weight = 1): TileLeaf {
   return { kind: "leaf", id, source, state: "", weight };
 }

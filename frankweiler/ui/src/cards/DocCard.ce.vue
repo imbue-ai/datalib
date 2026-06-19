@@ -3,7 +3,7 @@
 // ChatBody. Fully determined by its props (which come from the card
 // source, e.g. `documentView("md-uuid", "section-uuid")`):
 // - navigation (edge clicks, inline /chat/<uuid> links) opens a new
-//   card via ctx.host.openCard — never a bus message;
+//   card via ctx.host.openCards — never a bus message;
 // - hovering an edge source advertises the destination on the bus
 //   (`edge.hover`); every doc card subscribes and puts a transient
 //   highlight on the target span when the destination is its own doc.
@@ -41,7 +41,7 @@ function docSource(md: string, anchor: string | null): string {
 }
 
 function openDoc(md: string, anchor: string | null) {
-  props.ctx.host.openCard(docSource(md, anchor));
+  props.ctx.host.openCards(docSource(md, anchor));
 }
 
 function onBodyClick(ev: MouseEvent) {

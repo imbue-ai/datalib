@@ -76,10 +76,27 @@ use uuid::Uuid;
 pub mod extract;
 pub mod translate;
 
-/// CTS URN for the one edition we currently render. The UUID
-/// derivation embeds this so we can add a second edition later (e.g.
-/// Herodotus' `tlg0016.tlg001`) without colliding row PKs.
+/// Frozen UUIDv5 seed string. Despite the name carrying `perseus-grc2`,
+/// this is just a stable namespace prefix for *every* row PK in this
+/// crate — it predates multi-edition support and is kept verbatim so
+/// `book_uuid` stays byte-for-byte stable against existing data roots.
+/// Per-edition PKs append the edition id (see [`chapter_uuid`]).
 pub const TLG0003_TLG001: &str = "urn:cts:greekLit:tlg0003.tlg001.perseus-grc2";
+
+/// CTS work URN (no edition suffix). `__cts__.xml` edition `urn`s are
+/// `<this>.<edition-id>`, which [`crate::translate::parse`] strips to
+/// recover the edition id.
+pub const WORK_URN: &str = "urn:cts:greekLit:tlg0003.tlg001";
+
+/// Filename prefix every edition TEI shares:
+/// `tlg0003.tlg001.<edition-id>.xml`. The parser strips this (and the
+/// `.xml` suffix) to recover the edition id.
+pub const TLG_FILE_PREFIX: &str = "tlg0003.tlg001.";
+
+/// The CTS work URN, used by the parser to strip edition `urn`s.
+pub fn cts_urn() -> &'static str {
+    WORK_URN
+}
 
 /// Displayed in the grid's `project` column.
 pub const WORK_TITLE: &str = "Thucydides, Histories";
@@ -106,11 +123,12 @@ pub fn book_uuid(book_n: &str) -> String {
         .to_string()
 }
 
-/// PK for one (book, chapter, language) — each language variant gets
-/// its own row so the UI can resolve `/api/chat/{uuid}` to a specific
-/// language's markdown.
-pub fn chapter_uuid(book_n: &str, ch_n: &str, lang: &str) -> String {
-    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:{lang}");
+/// PK for one (book, chapter, edition) — each edition variant gets its
+/// own row so the UI can resolve `/api/chat/{uuid}` to a specific
+/// edition's markdown. `version` is the edition id (`perseus-grc2`,
+/// `1st1K-eng1`, …).
+pub fn chapter_uuid(book_n: &str, ch_n: &str, version: &str) -> String {
+    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:{version}");
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
         .as_hyphenated()
         .to_string()
@@ -124,8 +142,8 @@ pub fn chapter_uuid(book_n: &str, ch_n: &str, lang: &str) -> String {
 /// byte-for-byte and the scroll-and-highlight pane snaps to the
 /// section. See `frankweiler/ui/src/components/ChatBody.vue`'s
 /// `applySelection` for the matching code.
-pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, lang: &str) -> String {
-    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}");
+pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> String {
+    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{version}");
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
         .as_hyphenated()
         .to_string()
@@ -147,10 +165,11 @@ pub fn paragraph_sentence_uuid(
     book_n: &str,
     ch_n: &str,
     sec_n: &str,
-    lang: &str,
+    version: &str,
     sent_idx: usize,
 ) -> String {
-    let name = format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{lang}:sent{sent_idx}");
+    let name =
+        format!("{TLG0003_TLG001}:book{book_n}:ch{ch_n}:sec{sec_n}:{version}:sent{sent_idx}");
     Uuid::new_v5(perseus_uuid_ns(), name.as_bytes())
         .as_hyphenated()
         .to_string()
@@ -196,12 +215,11 @@ mod tests {
             // python3 -c "import uuid; print(uuid.uuid5(uuid.UUID('a1f5d2c4-8e1f-4bd1-9bc8-9c5d3a6e7b21'), 'urn:cts:greekLit:tlg0003.tlg001.perseus-grc2:book1'))"
             "186e8a85-1d9f-56fd-8d47-2a6dd33f2f13"
         );
-        assert_eq!(
-            chapter_uuid("1", "1", "grc"),
-            // ...:book1:ch1:grc
-            chapter_uuid("1", "1", "grc"),
+        // Each edition gets a distinct chapter PK (the edition id is
+        // part of the derivation string).
+        assert_ne!(
+            chapter_uuid("1", "1", "perseus-grc2"),
+            chapter_uuid("1", "1", "1st1K-eng1"),
         );
-        // grc ≠ eng for the same chapter.
-        assert_ne!(chapter_uuid("1", "1", "grc"), chapter_uuid("1", "1", "eng"));
     }
 }

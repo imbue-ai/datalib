@@ -151,7 +151,7 @@ impl MirrorRepo for DoltRepo {
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
                     org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, notion_page_uuid \
+                    message_index, entire_chat, text, slack_link, notion_page_uuid, external_id \
              FROM grid_rows{} \
              ORDER BY when_ts ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
@@ -202,6 +202,7 @@ impl MirrorRepo for DoltRepo {
             let text: String = r.try_get("text").unwrap_or_default();
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();
             let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
+            let external_id: String = r.try_get("external_id").unwrap_or_default();
 
             let snip = if kind == "Chat" {
                 text.clone()
@@ -228,6 +229,7 @@ impl MirrorRepo for DoltRepo {
                 channel,
                 slack_link,
                 notion_page_uuid,
+                external_id,
                 score: None,
             });
         }
@@ -337,7 +339,7 @@ impl MirrorRepo for DoltRepo {
         let sql = format!(
             "SELECT uuid, provider, kind, source_label, when_ts, author, account, project, \
                     org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
-                    message_index, entire_chat, text, slack_link, notion_page_uuid \
+                    message_index, entire_chat, text, slack_link, notion_page_uuid, external_id \
              FROM grid_rows{}",
             where_sql
         );
@@ -379,6 +381,7 @@ impl MirrorRepo for DoltRepo {
             let text: String = r.try_get("text").unwrap_or_default();
             let slack_link: String = r.try_get("slack_link").unwrap_or_default();
             let notion_page_uuid: String = r.try_get("notion_page_uuid").unwrap_or_default();
+            let external_id: String = r.try_get("external_id").unwrap_or_default();
             let snip = if kind == "Chat" {
                 text.clone()
             } else {
@@ -406,6 +409,7 @@ impl MirrorRepo for DoltRepo {
                     channel,
                     slack_link,
                     notion_page_uuid,
+                    external_id,
                     score: None,
                 },
             );

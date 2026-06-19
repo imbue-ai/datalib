@@ -258,11 +258,29 @@ pub struct PerseusSync {
     /// `refs/heads/master/data/`. Each entry is fetched verbatim from
     /// `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/{subpath}`
     /// and written to `<input_path>/<basename>`. Empty/omitted falls
-    /// back to the Thucydides Histories pair the translate path
-    /// currently expects (`grc2` + `1st1K-eng1`) so a bare
-    /// `sync: {}` block does the right thing for the default work.
+    /// back to every published edition/translation of Thucydides'
+    /// Histories plus `__cts__.xml` (see `extract::DEFAULT_FILES`), so a
+    /// bare `sync: {}` block ingests the whole multi-edition corpus.
     #[serde(default)]
     pub files: Vec<String>,
+    /// Edition pairs to sentence-align within each section, as
+    /// `[edition_a, edition_b]` tuples of edition ids (the
+    /// `tlg0003.tlg001.<id>.xml` suffix — e.g. `perseus-grc2`,
+    /// `1st1K-eng1`). For each listed pair the translate step loads
+    /// Ancient-Greek-BERT and aligns multi-sentence sections, wrapping
+    /// each aligned edition's sentences in anchor spans and emitting
+    /// `bilingual-alignment` edges between them. This dominates the
+    /// translate runtime, so it defaults to empty (no alignment): every
+    /// edition then renders with section-level anchors only, which is
+    /// fast and good enough for plain reading. Supersedes the old
+    /// `sentence_alignment` boolean.
+    ///
+    /// ```yaml
+    /// alignment_pairs:
+    ///   - [perseus-grc2, perseus-eng6]
+    /// ```
+    #[serde(default)]
+    pub alignment_pairs: Vec<[String; 2]>,
 }
 
 /// Tunables for the CardDAV provider (Apple, Fastmail, Google

@@ -2,7 +2,7 @@
 // Search-grid card: a search bar + AG Grid over /api/search results.
 //
 // Selecting a row opens the row's document as a new card via
-// ctx.host.openCard — structural changes never go through the bus.
+// ctx.host.openCards — structural changes never go through the bus.
 // Double-clicking a row opens that document as a standalone
 // single-column page in a new tab.
 //
@@ -867,7 +867,7 @@ const gridOptions: GridOptions<SearchRow> = {
     if (restoring) return;
     saveState();
     const md = e.data.markdown_uuid ?? e.data.uuid;
-    props.ctx.host.openCard(docSource(md, e.data.uuid));
+    props.ctx.host.openCards(docSource(md, e.data.uuid));
   },
   onRowDoubleClicked: (e) => {
     if (e.data) openRow(e.data);

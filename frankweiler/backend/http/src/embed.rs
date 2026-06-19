@@ -57,9 +57,24 @@ fn serve_index() -> Response {
 fn asset_response(path: &str, content: rust_embed::EmbeddedFile) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
     let mut resp = Response::new(Body::from(content.data));
-    resp.headers_mut().insert(
+    let headers = resp.headers_mut();
+    headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(mime.as_ref()).unwrap_or(HeaderValue::from_static("text/plain")),
     );
+    // Cache policy: Vite content-hashes everything under `assets/`, so
+    // those are safe to cache forever (a content change yields a new
+    // filename). The entry `index.html` is NOT hashed and points at the
+    // current chunk names, so it must be revalidated on every load —
+    // otherwise a reload can serve a whole stale app (old index.html +
+    // its old chunks) from disk cache and the UI silently runs an old
+    // bundle. `no-cache` (revalidate, not "never store") is right for
+    // the entry document and the SPA fallback.
+    let cache = if path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
     resp
 }

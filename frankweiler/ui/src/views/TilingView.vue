@@ -6,9 +6,10 @@
 //
 // Ways to grow/reshape the layout:
 //   - the "add" button at a container's end appends a blank card;
-//   - a card's `ctx.host.openCard(source)` opens the new card as a
+//   - a card's `ctx.host.openCards(source)` opens the new card as a
 //     sibling next to the caller — no prompt; the user reshapes later
-//     with the per-container h/v/tab switch or by dragging;
+//     with the per-container h/v/tab switch or by dragging
+//     (`openCards(a, b, …)` opens a run of siblings at once);
 //   - each container has a switch to set its arrangement (h/v/tab);
 //   - drag a node by its grip strip onto a container's add area (moves
 //     it there) or onto a card (replaces the card with a new split,
@@ -108,6 +109,19 @@ function openCardFrom(fromId: string, source: string): string {
   return newTile.id;
 }
 
+// host.openCards: open a chain of cards, each placed as a sibling of
+// the one the previous source produced. Returns the new tile ids in
+// chain order.
+function openCardsFrom(fromId: string, sources: string[]): string[] {
+  let prev = fromId;
+  const ids: string[] = [];
+  for (const source of sources) {
+    prev = openCardFrom(prev, source);
+    ids.push(prev);
+  }
+  return ids;
+}
+
 function closeNode(id: string) {
   // A new blank tile keeps the tree non-empty when the last card goes.
   root.value = deleteNode(root.value, id, () => makeTile(freshId(), ""));
@@ -126,7 +140,7 @@ function ctxFor(leaf: TileLeaf): CardCtx {
   if (!ctx) {
     const cardId = leaf.id;
     const host: HostCommands = {
-      openCard: (source) => openCardFrom(cardId, source),
+      openCards: (...sources) => openCardsFrom(cardId, sources),
       setSource: (source) => setTileSource(cardId, source),
       close: () => closeNode(cardId),
       setState: (state) => setTileState(cardId, state),
