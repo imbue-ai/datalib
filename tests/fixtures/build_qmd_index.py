@@ -18,12 +18,21 @@ Why a script:
   3. qmd is invoked via `npx`, which needs `node` on PATH and writes to a
      per-user cache. Bazel scrubs PATH and HOME for hermeticity, so we
      re-add the common host install locations and point HOME at the sandbox.
+  4. qmd's embedding/rerank/query-expansion GGUFs are supplied as Bazel
+     inputs (the `@qmd_model_*//file` deps) and handed to qmd via the
+     `QMD_{EMBED,RERANK,GENERATE}_MODEL` env vars. qmd treats an absolute
+     local path as a ready model (it skips the HuggingFace etag check and
+     download entirely — see third-party/qmd/src/llm.ts), so nothing is
+     fetched from the network and the models stay a cacheable build input.
 
 Args (positional):
     1: path to the qmd_indexer rust_binary
     2: path to qmd.tar (the rendered markdown archive)
     3: output path for qmd-index.tar (Bazel-supplied overlay tar)
     4: qmd npm package version to pin (e.g. "2.1.0")
+    5: path to the embedding GGUF       (-> QMD_EMBED_MODEL)
+    6: path to the reranker GGUF        (-> QMD_RERANK_MODEL)
+    7: path to the query-expansion GGUF (-> QMD_GENERATE_MODEL)
 """
 
 from __future__ import annotations
@@ -38,17 +47,12 @@ from pathlib import Path
 
 def main() -> int:
     indexer, qmd_tar, out_tar, qmd_version = sys.argv[1:5]
+    embed_model, rerank_model, generate_model = (
+        Path(p).resolve() for p in sys.argv[5:8]
+    )
     qmd_tar_path = Path(qmd_tar).resolve()
     out_tar_path = Path(out_tar).resolve()
     out_tar_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Capture the host user's $HOME *before* we scramble it for the
-    # subprocess, so the qmd embedding model lands in a shared, persistent
-    # cache instead of being re-downloaded into the sandbox each run.
-    host_home = Path(
-        os.environ.get("CLAUDE_MIRROR_HOST_HOME") or os.path.expanduser("~")
-    )
-    models_dir = host_home / ".cache" / "qmd" / "models"
 
     work = out_tar_path.parent / "qmd_work"
     if work.exists():
@@ -67,8 +71,22 @@ def main() -> int:
             member.name = rel
             tf.extract(member, work)
 
+    # qmd still wants a models dir to symlink into the data root, but no
+    # model is ever downloaded into it: the QMD_*_MODEL vars below point
+    # qmd at the Bazel-supplied GGUFs as ready local files. Keep it inside
+    # the sandbox so the action stays hermetic.
+    models_dir = work / "qmd_models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
     env = os.environ.copy()
     env["HOME"] = str(work)  # isolate npm/npx cache to the sandbox
+    # Hand qmd the pinned GGUFs directly. An absolute path (vs an `hf:`
+    # URI) makes qmd resolve the file in place and skip the HuggingFace
+    # etag check + download (third-party/qmd/src/llm.ts). Covers embed,
+    # update, and pull — all read these via resolveModels().
+    env["QMD_EMBED_MODEL"] = str(embed_model)
+    env["QMD_RERANK_MODEL"] = str(rerank_model)
+    env["QMD_GENERATE_MODEL"] = str(generate_model)
     extra_paths = [
         "/opt/homebrew/bin",
         "/usr/local/bin",

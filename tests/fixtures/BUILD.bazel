@@ -180,15 +180,32 @@ py_test(
 # markdown tree plus `.frankweiler/qmd/index.sqlite`.
 #
 # Caveats:
-#   * Requires `node` (and network on first run for npx to fetch qmd and its
-#     ~2GB embedding models). Tagged accordingly.
-#   * SQLite output is NOT byte-stable across runs (timestamps, packing).
-#     This rule is correctness-only, not determinism-cacheable.
+#   * Still requires `node` + network for `npx` to fetch the pinned qmd
+#     package (and node-llama-cpp prebuilt bindings) on a cache miss —
+#     hence `requires-network`. The ~2GB GGUF models are NO LONGER
+#     downloaded here: they arrive as the `@qmd_model_*//file` Bazel
+#     inputs below and are handed to qmd via `QMD_{EMBED,RERANK,GENERATE}_MODEL`
+#     (see build_qmd_index.py), so they're a content-addressed
+#     repository-cache + BuildBuddy artifact instead of a per-run fetch.
+#   * SQLite output is NOT byte-stable across runs (timestamps, packing),
+#     so the rule isn't reproducible — but that doesn't block *remote
+#     action caching*, which keys on inputs, not outputs: the first
+#     execution's output is stored and reused. With the models now
+#     declared inputs we drop `no-remote` so reruns are BuildBuddy cache
+#     hits (skipping both the model fetch and the embed compute).
 QMD_VERSION = "2.5.3"
 
 genrule(
     name = "ingested_tng_qmd",
-    srcs = ["ingested/qmd.tar"],
+    srcs = [
+        "ingested/qmd.tar",
+        # qmd's three default GGUFs as pinned Bazel inputs; passed to
+        # build_qmd_index.py and on to qmd via QMD_*_MODEL env so qmd
+        # uses them in place rather than downloading from HuggingFace.
+        "@qmd_model_embed//file",
+        "@qmd_model_rerank//file",
+        "@qmd_model_generate//file",
+    ],
     outs = ["ingested/qmd-index.tar"],
     tools = [
         "//frankweiler/backend/qmd_indexer:qmd_indexer_bin",
@@ -200,14 +217,15 @@ genrule(
         "$(execpath ingested/qmd.tar)",
         "$(execpath ingested/qmd-index.tar)",
         QMD_VERSION,
+        "$(execpath @qmd_model_embed//file)",
+        "$(execpath @qmd_model_rerank//file)",
+        "$(execpath @qmd_model_generate//file)",
     ]),
     tags = [
-        # qmd's first run downloads ~2GB of GGUF models from
-        # HuggingFace via `npx -y qmd`. Subsequent runs use the host
-        # cache at ~/.cache/qmd/models (mounted into the sandbox via
-        # --sandbox_add_mount_pair in .bazelrc).
+        # `npx -y qmd` still fetches the pinned qmd package (+ native
+        # node-llama-cpp bindings) from the network on a cache miss.
+        # Models no longer download here (see srcs above).
         "requires-network",
-        "no-remote",
     ],
     visibility = ["//visibility:public"],
 )

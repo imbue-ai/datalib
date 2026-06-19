@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files([
     "Cargo.toml",
-    "src/lib.rs",  # read by //tools:qmd_model_cache_path_test
+    "src/lib.rs",  # read by //tools:qmd_version_pins_test
 ])
 
 rust_library(

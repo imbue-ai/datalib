@@ -2,7 +2,7 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 exports_files([
     "check_cargo_lock_versions.sh",
-    "check_qmd_model_cache_path.sh",
+    "check_qmd_model_pins.sh",
     "check_qmd_version_pins.sh",
     "check_version_consistency.sh",
     "insta_update.sh",
@@ -10,19 +10,18 @@ exports_files([
     "workspace_status.sh",
 ])
 
-# Asserts that the vendored qmd snapshot, our .bazelrc mount path,
-# and `default_models_dir()` all agree on `~/.cache/qmd/models` (the
-# upstream qmd default). See check_qmd_model_cache_path.sh for the
-# full rationale. Pairs with the rust-side unit test
-# //frankweiler/backend/qmd_indexer:qmd_indexer_unittests.
+# Asserts the three `http_file` GGUF pins in MODULE.bazel still name the
+# same HuggingFace repo + file that qmd resolves by default (its
+# DEFAULT_*_MODEL constants in third-party/qmd/src/llm.ts). Catches a
+# qmd upgrade that changes a default model out from under our pins. See
+# check_qmd_model_pins.sh for the full rationale. Companion to
+# //tools:qmd_version_pins_test.
 sh_test(
-    name = "qmd_model_cache_path_test",
+    name = "qmd_model_pins_test",
     size = "small",
-    srcs = ["check_qmd_model_cache_path.sh"],
+    srcs = ["check_qmd_model_pins.sh"],
     data = [
-        "//:.bazelrc",
-        "//frankweiler/backend/qmd_indexer:src/lib.rs",
-        "//third-party/qmd:package.json",
+        "//:MODULE.bazel",
         "//third-party/qmd:src/llm.ts",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
@@ -41,6 +40,7 @@ sh_test(
         "//frankweiler/backend/qmd_indexer:src/lib.rs",
         "//frankweiler/docker:Dockerfile",
         "//tests/fixtures:BUILD.bazel",
+        "//third-party/qmd:package.json",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )

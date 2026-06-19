@@ -21,9 +21,10 @@
 # `FROM ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}`, so it has
 # no qmd pin of its own to drift.
 #
-# Companion to //tools:qmd_model_cache_path_test (which asserts the
-# vendored qmd snapshot's cache-path matches what
-# `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION>` writes to at runtime).
+# Includes the vendored `third-party/qmd/package.json` snapshot: it must
+# match DEFAULT_QMD_VERSION so //tools:qmd_model_pins_test validates the
+# llm.ts that `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION>` actually runs.
+# Companion to //tools:qmd_model_pins_test (model URI + cache-path drift).
 
 # --- begin runfiles.bash initialization v3 ---
 set -uo pipefail; set +e
@@ -39,8 +40,9 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 indexer_lib="$(rlocation _main/frankweiler/backend/qmd_indexer/src/lib.rs)"
 fixtures_build="$(rlocation _main/tests/fixtures/BUILD.bazel)"
 prod_dockerfile="$(rlocation _main/frankweiler/docker/Dockerfile)"
+qmd_pkg="$(rlocation _main/third-party/qmd/package.json)"
 
-for f in "$indexer_lib" "$fixtures_build" "$prod_dockerfile"; do
+for f in "$indexer_lib" "$fixtures_build" "$prod_dockerfile" "$qmd_pkg"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
 done
 
@@ -63,10 +65,17 @@ extract_from_dockerfile_arg() {
         | sed -E 's/^ARG QMD_VERSION=([^ ]+).*/\1/' \
         | head -n1
 }
+extract_from_qmd_pkg() {
+    # The vendored snapshot's own `"version": "2.5.3"`.
+    grep -E '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$1" \
+        | head -n1 \
+        | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+}
 
 canonical="$(extract_from_indexer "$indexer_lib")"
 fixtures_v="$(extract_from_fixtures_build "$fixtures_build")"
 prod_v="$(extract_from_dockerfile_arg "$prod_dockerfile")"
+vendored_v="$(extract_from_qmd_pkg "$qmd_pkg")"
 
 if [[ -z "$canonical" ]]; then
     echo "ERROR: failed to extract DEFAULT_QMD_VERSION from $indexer_lib" >&2
@@ -90,6 +99,7 @@ echo "qmd version pins (canonical: ${canonical}):"
 report "frankweiler/backend/qmd_indexer/.../lib.rs"  "$canonical"
 report "tests/fixtures/BUILD.bazel"                  "$fixtures_v"
 report "frankweiler/docker/Dockerfile"               "$prod_v"
+report "third-party/qmd/package.json (vendored)"     "$vendored_v"
 
 if [[ "$fails" != "0" ]]; then
     cat >&2 <<EOF
@@ -98,10 +108,10 @@ ${fails} qmd version pin(s) disagree with the canonical
 DEFAULT_QMD_VERSION (${canonical}) declared in
 frankweiler/backend/qmd_indexer/src/lib.rs.
 
-Update the diverging files above to match, or — if upstream qmd has
-a new release worth tracking — bump DEFAULT_QMD_VERSION (and the
-vendored snapshot under third-party/qmd/ if //tools:qmd_model_cache_path_test
-complains) and then update the rest.
+Update the diverging files above to match. If upstream qmd has a new
+release worth tracking, bump DEFAULT_QMD_VERSION, re-vendor
+third-party/qmd/ at that version, and refresh the model pins if
+//tools:qmd_model_pins_test complains — then update the rest.
 EOF
     exit 1
 fi

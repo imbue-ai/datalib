@@ -1,8 +1,8 @@
 # Vendored qmd snapshot. Kept in sync with the version pinned in
-# `frankweiler/backend/qmd_indexer/src/lib.rs::DEFAULT_QMD_VERSION`.
-# Parity is enforced by `//tools:qmd_model_cache_path_test`, which
-# also asserts that the model cache path matches what `.bazelrc` and
-# `default_models_dir()` expect.
+# `frankweiler/backend/qmd_indexer/src/lib.rs::DEFAULT_QMD_VERSION`
+# (parity enforced by `//tools:qmd_version_pins_test`). `src/llm.ts` is
+# also read by `//tools:qmd_model_pins_test`, which checks our
+# MODULE.bazel GGUF pins + cache-dir construction against this snapshot.
 exports_files([
     "package.json",
     "src/llm.ts",

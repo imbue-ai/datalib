@@ -170,15 +170,11 @@ jobs:
               echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
           fi
 
-      # Pre-create the host-side qmd model cache. .bazelrc has
-      # `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models` so the
-      # ingested_tng_qmd genrule can read its ~2GB GGUF cache without
-      # re-downloading per action. macOS sandboxing refuses to mount a
-      # nonexistent host path ("Operation not permitted (os error 1)"),
-      # so create the dir up-front; harmless on Linux. Empty dir is
-      # fine — qmd populates it on first run.
-      - name: Ensure ~/.cache/qmd/models exists
-        run: mkdir -p "$HOME/.cache/qmd/models"
+      # (The qmd model cache mkdir that used to live here is gone: the
+      # ingested_tng_qmd genrule now gets its GGUFs as pinned
+      # `@qmd_model_*//file` Bazel inputs, so there's no
+      # `--sandbox_add_mount_pair` host path to pre-create. This job
+      # doesn't build that genrule anyway.)
 
       # Defense in depth against "tagged the wrong version" or "forgot
       # to bump Cargo.toml before tagging". The bazel test below already
