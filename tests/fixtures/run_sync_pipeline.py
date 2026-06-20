@@ -396,6 +396,8 @@ def _yaml(
             lines.append("      display_name: Jean-Luc Picard")
             lines.append("      email_address: picard@enterprise.starfleet")
             lines.append("      is_personal: true")
+            # Google-Takeout-shaped .mbox → Gmail webmail outlinks.
+            lines.append("    outlink_format: gmail")
         elif type_str == "whatsapp_backup":
             # WhatsApp extractor needs `backup_dir` (the dir containing
             # `Databases/msgstore.db.crypt15` + `Media/`). Root key

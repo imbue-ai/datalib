@@ -56,9 +56,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
-    GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
-    SourceConfig, WhatsAppSync, YolinkSync,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailOutlink,
+    EmailSync, GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync,
+    SlackApiSync, SourceConfig, WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -2731,10 +2731,14 @@ fn translate_source(
             )
             .context("sms_backup_restore render")
         }
-        SourceConfig::Email { sync, .. } => {
+        SourceConfig::Email {
+            sync,
+            outlink_format,
+            ..
+        } => {
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
             use frankweiler_etl_email::translate::parse::parse;
-            use frankweiler_etl_email::translate::render::render_all;
+            use frankweiler_etl_email::translate::render::{render_all, OutlinkFormat};
 
             // Both JMAP-server and mbox sources land their data in
             // the same shape; translate is identical for both. The
@@ -2764,7 +2768,11 @@ fn translate_source(
                 .with_context(|| format!("read email render cursor {}", cursor_path.display()))?;
             let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))
                 .with_context(|| format!("email parse {}", db.display()))?;
-            render_all(&parsed, root, name, progress, on_doc_complete)
+            let outlink = outlink_format.map(|f| match f {
+                EmailOutlink::Gmail => OutlinkFormat::Gmail,
+                EmailOutlink::Fastmail => OutlinkFormat::Fastmail,
+            });
+            render_all(&parsed, root, name, outlink, progress, on_doc_complete)
                 .context("email render_all")
                 .map(|_| ())
         }

@@ -466,6 +466,26 @@ pub struct EmailSync {
     pub full_resync: bool,
 }
 
+/// How to build a public "open this email in the webmail" link for the
+/// `↗` outlink on each rendered email. The provider that owns the
+/// account decides the URL shape; we only have the standard identifiers
+/// (RFC 822 `Message-ID`, JMAP email/thread ids, mailbox names), so each
+/// variant uses the most robust scheme those allow.
+///
+///   * `gmail` — `https://mail.google.com/mail/u/0/#search/rfc822msgid:<id>`
+///     (uses the `Message-ID`; the opaque `#inbox/FMfcg…` permalink id
+///     isn't reconstructable from a Takeout export, but this search URL
+///     lands on the same message).
+///   * `fastmail` — `https://app.fastmail.com/mail/<mailbox>/<emailId>.<threadId>`
+///     (the `?u=<id>` account hint isn't in our extract data; the link
+///     resolves without it for a logged-in account).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailOutlink {
+    Gmail,
+    Fastmail,
+}
+
 /// Tunables for the Yolink provider (per-device CSV downloads from
 /// `us.yosmart.com/download/...` — see `frankweiler_etl_yolink`).
 ///
@@ -677,6 +697,12 @@ pub enum SourceConfig {
         /// (JMAP carries that info itself). See [`MboxSync`].
         #[serde(default)]
         mbox: Option<MboxSync>,
+        /// Webmail to build each email's `↗` outlink for. Set `gmail`
+        /// for a Google Takeout `.mbox`, `fastmail` for a Fastmail JMAP
+        /// account. Omit for any other server (no outlink). See
+        /// [`EmailOutlink`].
+        #[serde(default)]
+        outlink_format: Option<EmailOutlink>,
     },
     Beeper {
         #[serde(flatten)]

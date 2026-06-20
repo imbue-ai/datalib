@@ -13,7 +13,7 @@ use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{db_path_for, RawDb};
 use frankweiler_etl_email::extract::mbox;
 use frankweiler_etl_email::translate::parse::parse;
-use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
+use frankweiler_etl_email::translate::render::{render_all, thread_uuid, OutlinkFormat};
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -146,6 +146,7 @@ async fn star_trek_mbox_renders_through_render_all() {
         &parsed,
         tmp.path(),
         "star-trek-mbox",
+        Some(OutlinkFormat::Gmail),
         &progress,
         &mut |doc| {
             docs.push(doc);
@@ -197,6 +198,11 @@ async fn star_trek_mbox_renders_through_render_all() {
     for needle in ["Admiral Hayes", "Picard", "Geordi"] {
         assert!(md.contains(needle), "expected `{}` in briefing md", needle);
     }
+    // Gmail outlink: rfc822msgid search built from each email's Message-ID.
+    assert!(
+        md.contains("https://mail.google.com/mail/u/0/#search/rfc822msgid:"),
+        "expected a Gmail outlink in briefing md:\n{md}"
+    );
 
     // Risa promo thread prefers the HTML body — `**jewel of the
     // Alpha Quadrant**` appears in the htmd output.

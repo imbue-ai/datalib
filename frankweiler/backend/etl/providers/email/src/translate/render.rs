@@ -43,6 +43,82 @@ use crate::extract::db::{LoadedAttachment, LoadedEmail};
 /// v3: render via chat-common (+ quoted-text folding, label chips).
 pub const RENDER_VERSION: u32 = 3;
 
+/// Which webmail to build each email's `↗` outlink for. Mirrors
+/// `frankweiler_core::config::EmailOutlink`; the orchestrator maps the
+/// config enum onto this one (the provider crate doesn't depend on core).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutlinkFormat {
+    Gmail,
+    Fastmail,
+}
+
+/// Build the public webmail URL for one email, if the format and the
+/// required identifiers are present.
+fn email_outlink(
+    fmt: Option<OutlinkFormat>,
+    em: &LoadedEmail,
+    mailbox_labels: &[String],
+) -> Option<String> {
+    match fmt? {
+        OutlinkFormat::Gmail => gmail_outlink(em.message_id.as_deref()?),
+        OutlinkFormat::Fastmail => Some(fastmail_outlink(
+            primary_mailbox(mailbox_labels),
+            &em.id,
+            &em.thread_id,
+        )),
+    }
+}
+
+/// `#search/rfc822msgid:` lands on the message from its `Message-ID`
+/// alone — robust across Takeout exports where the opaque permalink id
+/// isn't available.
+fn gmail_outlink(message_id: &str) -> Option<String> {
+    let id = message_id
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "https://mail.google.com/mail/u/0/#search/rfc822msgid:{}",
+        percent_encode(id)
+    ))
+}
+
+fn fastmail_outlink(mailbox: &str, email_id: &str, thread_id: &str) -> String {
+    format!(
+        "https://app.fastmail.com/mail/{}/{email_id}.{thread_id}",
+        percent_encode(mailbox)
+    )
+}
+
+/// Pick the mailbox name to put in a Fastmail path: prefer "Inbox", else
+/// the first label, else "Inbox".
+fn primary_mailbox(labels: &[String]) -> &str {
+    labels
+        .iter()
+        .find(|n| n.eq_ignore_ascii_case("inbox"))
+        .or_else(|| labels.first())
+        .map(String::as_str)
+        .unwrap_or("Inbox")
+}
+
+/// Percent-encode everything but RFC 3986 unreserved chars.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn profile() -> RenderProfile {
     RenderProfile {
         provider: "jmap",
@@ -58,6 +134,7 @@ pub fn render_all(
     parsed: &ParsedEmail,
     root: &std::path::Path,
     source_name: &str,
+    outlink: Option<OutlinkFormat>,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -96,7 +173,7 @@ pub fn render_all(
         if bucket.emails.is_empty() {
             continue;
         }
-        let (chat, bundle) = build_chat(bucket, &mailbox_name);
+        let (chat, bundle) = build_chat(bucket, &mailbox_name, outlink);
         blobs_by_chat.insert(chat.id.clone(), bundle);
         chats.push(chat);
     }
@@ -128,6 +205,7 @@ pub fn render_all(
 fn build_chat(
     bucket: &super::parse::EmailThreadBucket,
     mailbox_name: &HashMap<String, String>,
+    outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
     let tuid = thread_uuid(account_id, &bucket.thread_id);
@@ -253,11 +331,14 @@ fn build_chat(
             attachments: Vec::new(),
             reactions: Vec::new(),
             system_note: None,
-            source_url: None,
+            // Per-email `↗` outlink into the source webmail.
+            source_url: email_outlink(outlink, em, &labels),
             kind_label: None,
         });
     }
 
+    // The thread's title `↗` points at the root (first) email's outlink.
+    let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let chat = NormalizedChat {
         id: tuid.clone(),
         chat_uuid: tuid.clone(),
@@ -266,7 +347,7 @@ fn build_chat(
         account: Some(account_id.clone()),
         project: None,
         external_id: Some(bucket.thread_id.clone()),
-        source_url: None,
+        source_url: thread_source_url,
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
@@ -660,5 +741,38 @@ mod tests {
         let (fresh, quoted) = split_quoted(body);
         assert_eq!(fresh, body);
         assert!(quoted.is_none());
+    }
+
+    #[test]
+    fn gmail_outlink_uses_rfc822msgid_search() {
+        let url = gmail_outlink("<abc.123@mail.example.com>").unwrap();
+        assert_eq!(
+            url,
+            "https://mail.google.com/mail/u/0/#search/rfc822msgid:abc.123%40mail.example.com"
+        );
+        assert!(gmail_outlink("   ").is_none());
+    }
+
+    #[test]
+    fn fastmail_outlink_is_mailbox_email_thread() {
+        assert_eq!(
+            fastmail_outlink("Inbox", "Em1", "Th1"),
+            "https://app.fastmail.com/mail/Inbox/Em1.Th1"
+        );
+        // mailbox names are path-encoded
+        assert_eq!(
+            fastmail_outlink("Sent Items", "E", "T"),
+            "https://app.fastmail.com/mail/Sent%20Items/E.T"
+        );
+    }
+
+    #[test]
+    fn primary_mailbox_prefers_inbox() {
+        assert_eq!(
+            primary_mailbox(&["Archive".into(), "Inbox".into()]),
+            "Inbox"
+        );
+        assert_eq!(primary_mailbox(&["Work".into()]), "Work");
+        assert_eq!(primary_mailbox(&[]), "Inbox");
     }
 }

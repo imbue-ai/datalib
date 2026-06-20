@@ -13,7 +13,7 @@ use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use frankweiler_etl_email::translate::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
-use frankweiler_etl_email::translate::render::{render_all, thread_uuid};
+use frankweiler_etl_email::translate::render::{render_all, thread_uuid, OutlinkFormat};
 use serde_json::json;
 
 const EML_E1: &str = "From: Alice <a@x.test>\r\n\
@@ -137,7 +137,15 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         completed.push(md);
         Ok(())
     };
-    render_all(&parsed, tmp.path(), "fastmail", &progress, &mut on_done).expect("render_all");
+    render_all(
+        &parsed,
+        tmp.path(),
+        "fastmail",
+        Some(OutlinkFormat::Fastmail),
+        &progress,
+        &mut on_done,
+    )
+    .expect("render_all");
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 
     // chat-common owns the page-dir layout
@@ -166,6 +174,26 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     assert!(md.contains("Alice"), "sender in a message header");
     assert!(md.contains("doc.pdf"), "attachment listed");
     assert!(md.contains("🏷 Inbox"), "mailbox label chip rendered");
+    // Fastmail outlink: /mail/<mailbox>/<emailId>.<threadId>.
+    assert!(
+        md.contains("https://app.fastmail.com/mail/Inbox/E1.T1"),
+        "fastmail outlink for root email: {md}"
+    );
+
+    // The thread (chat) row and the root email row both carry the outlink.
+    let rows = {
+        let s: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        s["rows"].as_array().unwrap().clone()
+    };
+    assert_eq!(
+        rows[0]["source_url"], "https://app.fastmail.com/mail/Inbox/E1.T1",
+        "thread row outlink"
+    );
+    assert_eq!(
+        rows[1]["source_url"], "https://app.fastmail.com/mail/Inbox/E1.T1",
+        "root email row outlink"
+    );
 
     let sidecar: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
