@@ -1,7 +1,7 @@
 [project]
-name = "mixed-up-files"
+name = "datalib"
 version = "0.1.0"
-description = "Tooling environment for schema codegen + lint of mixed-up-files"
+description = "Tooling environment for schema codegen + lint of datalib"
 authors = [
     { name = "Thad Hughes", email = "thad@imbue.com" }
 ]

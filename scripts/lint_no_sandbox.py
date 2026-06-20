@@ -64,9 +64,6 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     "frankweiler/backend/etl/providers/notion:notion_live": (
         "manual live test, latchkey needs host keychain"
     ),
-    "frankweiler/backend/etl/providers/slack:slack_live": (
-        "manual live test, latchkey needs host keychain"
-    ),
     "frankweiler/backend/sync:manual_e2e_live_sync_golden": (
         "manual end-to-end test, latchkey needs host keychain"
     ),

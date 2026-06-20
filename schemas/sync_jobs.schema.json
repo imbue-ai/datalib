@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://imbue.com/schemas/sync_jobs.schema.json",
   "title": "SyncJobsSchema",
-  "description": "Background job queue for UI-driven sync. The backend inserts rows here in response to `POST /api/sync/jobs`; the `mixed-up-files worker` child process polls for `pending` rows, executes them (download + ingest + render), and updates state. Every state transition is committed via `CALL DOLT_COMMIT('-Am', 'sync_job: <id> <state>')` so the full history lives in `dolt log` next to the data it produced. See plan-ui-driven-sync.md, Phases D + E.",
+  "description": "Background job queue for UI-driven sync. The backend inserts rows here in response to `POST /api/sync/jobs`; the `datalib worker` child process polls for `pending` rows, executes them (download + ingest + render), and updates state. Every state transition is committed via `CALL DOLT_COMMIT('-Am', 'sync_job: <id> <state>')` so the full history lives in `dolt log` next to the data it produced. See plan-ui-driven-sync.md, Phases D + E.",
   "type": "object",
   "definitions": {
     "SyncJobRow": {

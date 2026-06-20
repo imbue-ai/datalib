@@ -1,4 +1,4 @@
-"""Repo-root Bzlmod module for mixed-up-files (formerly personal-mirror).
+"""Repo-root Bzlmod module for datalib (formerly personal-mirror).
 
 Version policy: 7-day burn-in. We avoid versions released in the last 7
 days because hot releases are where regressions hide. When bumping a
@@ -20,7 +20,7 @@ Bazel does NOT own:
 """
 
 module(
-    name = "mixed_up_files",
+    name = "datalib",
     version = "0.0.1",
 )
 
