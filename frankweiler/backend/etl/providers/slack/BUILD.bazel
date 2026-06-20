@@ -133,35 +133,6 @@ rust_test(
     ],
 )
 
-# Live Slack snapshot test. Hits api.slack.com via `latchkey curl`.
-# Tagged `manual` + `external` + `no-sandbox` to exclude from
-# `bazelisk test //...`. Run with:
-#
-#     bazelisk test //frankweiler/backend/etl/providers/slack:slack_live \
-#         --test_arg=--ignored --test_env=PATH --test_env=HOME
-rust_test(
-    name = "slack_live",
-    srcs = ["tests/slack_live.rs"],
-    crate_root = "tests/slack_live.rs",
-    data = glob(["tests/snapshots/*.snap"], allow_empty = True),
-    edition = "2021",
-    env = {
-        "INSTA_WORKSPACE_ROOT": ".",
-    },
-    tags = [
-        "external",  # talks to api.slack.com
-        "manual",
-        "no-sandbox",  # latchkey reads its keyring from the host
-    ],
-    deps = [
-        ":frankweiler_etl_slack",
-        "@frankweiler_crates//:insta",
-        "@frankweiler_crates//:serde_json",
-        "@frankweiler_crates//:tempfile",
-        "@frankweiler_crates//:tokio",
-    ],
-)
-
 insta_update(
     name = "slack_render.update",
     test = ":slack_render",
@@ -178,10 +149,4 @@ insta_update(
     extra_env = {
         "SLACK_FIXTURE_DIR": "frankweiler/backend/etl/providers/slack/tests/fixtures/slack_api",
     },
-)
-
-insta_update(
-    name = "slack_live.update",
-    test = ":slack_live",
-    test_args = ["--ignored"],
 )

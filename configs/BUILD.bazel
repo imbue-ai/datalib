@@ -1,6 +1,1 @@
-exports_files(
-    [
-        "thad_dev.yaml",
-    ],
-    visibility = ["//visibility:public"],
-)
+# No exported configs. (Per-user sample configs are kept out of the repo.)
