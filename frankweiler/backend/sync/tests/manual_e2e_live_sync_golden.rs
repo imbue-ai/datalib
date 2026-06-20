@@ -386,6 +386,15 @@ fn manual_e2e_live_sync_golden() {
     snapshot_tree(&data_root.join("rendered_md"), "rendered_md", &mut manifest);
     manifest.sort();
 
+    // Prune orphaned `.snap` files left behind when the set of produced
+    // files changes (e.g. a renderer migration that changes output
+    // paths). insta's own `INSTA_UNREFERENCED=delete` is a cargo-insta
+    // feature that doesn't fire under `bazel run` and wouldn't scan our
+    // external `snapshot_path` tree anyway — so we prune ourselves,
+    // keyed off the manifest above. Only in update mode: a check run
+    // surfaces the change through the `manifest` snapshot diff instead.
+    prune_orphan_snapshots(&manifest);
+
     // Manifest pins which files we expect to find. Catches additions /
     // removals without having to diff every per-file snapshot.
     insta::with_settings!({
@@ -566,6 +575,69 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
                 SnapValue::Text(s) => assert_snapshot!(snap_name, s),
             }
         });
+    }
+}
+
+/// Delete `.snap` files under `snapshots/{raw,rendered_md}` that don't
+/// correspond to a key in `manifest` — orphans from a prior run whose
+/// produced paths have since changed. No-op outside update mode (a check
+/// run surfaces the change via the `manifest` snapshot diff instead, and
+/// must never mutate the version-controlled golden).
+fn prune_orphan_snapshots(manifest: &[String]) {
+    if !insta_update_mode() {
+        return;
+    }
+    let base = snap_base();
+    let keys: std::collections::HashSet<&str> = manifest.iter().map(String::as_str).collect();
+    for top in ["raw", "rendered_md"] {
+        let dir = base.join(top);
+        if !dir.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&dir) {
+            let entry = entry.expect("walk snapshot tree");
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("snap") {
+                continue;
+            }
+            // Snapshot path mirrors the data layout: a file at
+            // `<base>/<top>/<canonical_rel>.snap` corresponds to manifest
+            // key `<top>/<canonical_rel>`.
+            let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
+            let key = rel.strip_suffix(".snap").unwrap_or(&rel);
+            if !keys.contains(key) {
+                std::fs::remove_file(p)
+                    .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
+            }
+        }
+        remove_empty_dirs(&dir);
+    }
+}
+
+/// True when insta is writing snapshots (the `.update` target sets
+/// `INSTA_UPDATE=always`).
+fn insta_update_mode() -> bool {
+    matches!(
+        std::env::var("INSTA_UPDATE").ok().as_deref(),
+        Some("always") | Some("force") | Some("new") | Some("unseen") | Some("1")
+    )
+}
+
+/// Recursively remove directories under `dir` that became empty after
+/// pruning (leaves `dir` itself in place).
+fn remove_empty_dirs(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            remove_empty_dirs(&p);
+            let _ = std::fs::remove_dir(&p); // succeeds only when empty
+        }
     }
 }
 
