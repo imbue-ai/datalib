@@ -137,41 +137,38 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         completed.push(md);
         Ok(())
     };
-    let written =
-        render_all(&parsed, tmp.path(), "fastmail", &progress, &mut on_done).expect("render_all");
-    assert_eq!(written.len(), 1, "one thread → one rendered md");
+    render_all(&parsed, tmp.path(), "fastmail", &progress, &mut on_done).expect("render_all");
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 
-    let tuid = thread_uuid("A1", "T1");
-    let page_dir = tmp
-        .path()
-        .join("rendered_md/jmap")
-        .join("thad_example_com")
-        .join(&tuid);
-    assert!(page_dir.join("index.md").exists(), "index.md missing");
-    assert!(
-        page_dir.join("index.grid_rows.json").exists(),
-        "sidecar missing"
-    );
+    // chat-common owns the page-dir layout
+    // (rendered_md/jmap/<source>/chat-<id>__<slug>__<short>/all.md); find
+    // the single rendered doc by walking rather than hard-coding the slug.
+    let md_path = find_one(tmp.path(), ".md");
+    let sidecar_path = find_one(tmp.path(), ".grid_rows.json");
+    let page_dir = md_path.parent().unwrap();
+
     let blobs_dir = page_dir.join("blobs");
     assert!(blobs_dir.is_dir(), "blobs/ dir missing");
-    let mut entries: Vec<_> = std::fs::read_dir(&blobs_dir)
+    let blobs: Vec<_> = std::fs::read_dir(&blobs_dir)
         .unwrap()
         .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
         .collect();
-    entries.retain(|e| e.path().is_file());
-    assert_eq!(entries.len(), 1, "expected exactly one materialized blob");
+    assert_eq!(blobs.len(), 1, "expected exactly one materialized blob");
 
-    let md = std::fs::read_to_string(page_dir.join("index.md")).unwrap();
-    assert!(md.contains("subject: \"Hello\""));
-    assert!(md.contains("thread_id: \"T1\""));
-    assert!(md.contains("Alice"));
-    assert!(md.contains("doc.pdf"));
+    let tuid = thread_uuid("A1", "T1");
+    let md = std::fs::read_to_string(&md_path).unwrap();
+    assert!(
+        md.contains("display: \"Hello\""),
+        "subject as display: {md}"
+    );
+    assert!(md.contains("external_id: T1"), "thread_id as external_id");
+    assert!(md.contains("Alice"), "sender in a message header");
+    assert!(md.contains("doc.pdf"), "attachment listed");
+    assert!(md.contains("🏷 Inbox"), "mailbox label chip rendered");
 
-    let sidecar: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(page_dir.join("index.grid_rows.json")).unwrap(),
-    )
-    .unwrap();
+    let sidecar: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
     assert_eq!(sidecar["header"]["markdown_uuid"], tuid);
     let rows = sidecar["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3, "1 thread + 2 emails");
@@ -180,4 +177,26 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
     assert_eq!(rows[2]["kind"], "Email");
     assert_eq!(rows[0]["provider"], "jmap");
     assert_eq!(rows[0]["source_label"], "Mail");
+}
+
+/// Find the single file under `root` whose name ends with `suffix`.
+fn find_one(root: &std::path::Path, suffix: &str) -> PathBuf {
+    fn walk(dir: &std::path::Path, suffix: &str, out: &mut Vec<PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, suffix, out);
+            } else if p.to_string_lossy().ends_with(suffix) {
+                out.push(p);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(root, suffix, &mut found);
+    assert_eq!(
+        found.len(),
+        1,
+        "expected exactly one *{suffix} under {root:?}"
+    );
+    found.pop().unwrap()
 }

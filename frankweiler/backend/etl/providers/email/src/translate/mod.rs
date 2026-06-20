@@ -5,8 +5,7 @@
 pub mod parse;
 pub mod render;
 
-/// Bump to force a rebake of every rendered thread even when upstream
-/// payloads are unchanged. The Load step keys `(qmd_path,
-/// source_fingerprint)` on this version stamp, so a bump is the
-/// canonical way to roll out a renderer change.
-pub const RENDER_VERSION: u32 = 2;
+/// The render version stamped into each doc's sidecar — now owned by the
+/// renderer (which drives chat-common). Re-exported for callers that
+/// referenced `translate::RENDER_VERSION`.
+pub use render::RENDER_VERSION;
