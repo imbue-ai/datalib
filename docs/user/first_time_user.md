@@ -51,7 +51,7 @@ To access the Imbue-private repo, also make sure you're authenticated with GitHu
 gh auth login
 ```
 
-## 1. Make a data_root playground and download the CLI (here it's `~/mixed_up_files`)
+## 1. Make a data_root playground and download the CLI (here it's `~/datalib`)
 
 This is where the tools will download your data.
 
@@ -59,9 +59,9 @@ The tools themselves can run from anywhere, but for now, you can just download t
 
 ```sh
 # Make the data_root as our playground.
-mkdir -p ~/mixed_up_files && cd ~/mixed_up_files
+mkdir -p ~/datalib && cd ~/datalib
 
-gh release download --repo imbue-ai/mixed_up_files --clobber --pattern '*.tar.gz' -D /tmp \
+gh release download --repo imbue-ai/datalib --clobber --pattern '*.tar.gz' -D /tmp \
     && tar -xzf /tmp/frankweiler-aarch64-apple-darwin.tar.gz --strip-components=1
 ```
 
@@ -184,7 +184,7 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 
 ## 3. Sample configuration
 
-Download [**sample_config.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/user/config_examples/sample_config.yaml)
+Download [**sample_config.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.yaml)
 into your working dir.
 
 This config enables the Slack source, the Claude API source, and an
@@ -199,12 +199,12 @@ It's the `data_root` configuration parameter at the top.
 You can also feel free to comment out some of the YAML stanzas that identify different synchronization sources.
 
 If you only want to mirror your Claude conversations, download
-[**claude_only.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/user/config_examples/claude_only.yaml)
+[**claude_only.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.yaml)
 instead — it has just the `claude_api` stanza.
 
 For a reference listing every supported source type with realistic
 defaults (including both input modes for email and contacts), see
-[**all_sources.yaml**](https://github.com/imbue-ai/mixed_up_files/blob/main/docs/user/config_examples/all_sources.yaml).
+[**all_sources.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/all_sources.yaml).
 
 ## 4. Run the sync
 
@@ -234,10 +234,10 @@ and should be faster.
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
   seconds.
 
-**On disk afterwards** (with `data_root: ~/mixed_up_files`):
+**On disk afterwards** (with `data_root: ~/datalib`):
 
 ```
-~/mixed_up_files/
+~/datalib/
 ├── raw/                            # one doltlite file per source
 │   ├── claude_web.doltlite_db
 │   ├── slack.doltlite_db
@@ -285,7 +285,7 @@ pointing `qmd` at the sqlite file under your data root via the
 `INDEX_PATH` env var:
 
 ```sh
-INDEX_PATH=~/mixed_up_files/qmd/index.sqlite \
+INDEX_PATH=~/datalib/qmd/index.sqlite \
     npx -y @tobilu/qmd query "hello"
 ```
 

@@ -210,7 +210,7 @@ build:clippy --output_groups=+clippy_checks
 # leaving them only under `build:clippy` made every alternation
 # between `bazel build --config=clippy //...` (pre-commit hook)
 # and a bare `bazel test //...` flip the values and discard the
-# analysis cache — see https://github.com/imbue-ai/mixed_up_files/issues/30.
+# analysis cache.
 #
 # Setting them globally is a no-op for non-clippy actions: without
 # the aspect activation above, the clippy aspect never runs, so no

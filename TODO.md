@@ -7,5 +7,5 @@
   (e.g. `git filter-repo --path configs/thad_tiny.yaml --path
   frankweiler/backend/sync/tests/snapshots --invert-paths`), force-push, and have
   collaborators re-clone. Do this before the repo is ever made public.
-* Notion: The order of the blocks in this markdown looks wrong: /Users/thad/mixed_up_files.thad_tiny_1/rendered_md/notion/pages/364a550f-af95-80de-829f-c5fccb3021fd/index.md
+* Notion: The order of the blocks in this markdown looks wrong: /Users/thad/datalib.thad_tiny_1/rendered_md/notion/pages/364a550f-af95-80de-829f-c5fccb3021fd/index.md
 * Make sure that markdown for Notion and Slack has relative links for other documents and media.

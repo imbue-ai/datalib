@@ -27,7 +27,7 @@
 //!     `ref_id` (Signal's `media_name`), `blake3` (NULL until CAS
 //!     write succeeds). Replaces this provider's use of the shared
 //!     `blob_refs` table — see [issue
-//!     #36](https://github.com/imbue-ai/mixed_up_files/issues/36)
+//!     #14](https://github.com/imbue-ai/datalib/issues/14)
 //!     for the design.
 //!
 //! ## Row structs and the bulk-upsert path
@@ -200,7 +200,7 @@ pub const CHAT_ITEMS_BY_CHAT_INDEX_DDL: &str =
 /// + `blake3` (CAS hash, NULL until decrypt+store succeed).
 ///
 /// Replaces this provider's use of the shared `blob_refs` table;
-/// see [issue #36](https://github.com/imbue-ai/mixed_up_files/issues/36).
+/// see [issue #14](https://github.com/imbue-ai/datalib/issues/14).
 ///
 /// **Signal-specific:** the PK recipe is `"{chat_item_id}#{slot}"`,
 /// not the trait's default `"{chat_item_id}#{ref_id}"` — one

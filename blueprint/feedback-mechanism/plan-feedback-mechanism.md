@@ -269,7 +269,7 @@ Tasks are grouped by phase. Each task is small enough to ship/review independent
 
 ### Phase 1 — Backend cutover to Dolt
 
-1. ★ **Add `dolt_repo_path` and (optional) `dolt_binary` to backend config loader.** Mirror the `~/.config/mixed-up-files/config.yaml` schema ingest already uses.
+1. ★ **Add `dolt_repo_path` and (optional) `dolt_binary` to backend config loader.** Mirror the `~/.config/datalib/config.yaml` schema ingest already uses.
 2. ★ **Implement `DoltServer` (C1).** Random-port discovery, spawn, readiness probe, drop-on-shutdown, log piping.
 3. ★ **Add `sqlx` dep** with `mysql`, `sqlite`, `runtime-tokio-rustls`, `json`, `uuid` features. Remove `rusqlite` once tasks 5–6 land.
 4. ★ **Introduce `MirrorRepo` trait** (C2) and refactor existing `search`, `columns`, `get_chat`, `get_media` call sites in `db.rs` / `query.rs` / `http/src/lib.rs` to go through it. **No behavior change yet** — only the seam.

@@ -6,9 +6,9 @@
 #
 # Configuration:
 #   $1 (positional)     data root. Leading tildes expanded relative to
-#                       $HOME. Defaults to ~/Documents/mixed-up-files when
+#                       $HOME. Defaults to ~/Documents/datalib when
 #                       not given.
-#                       e.g. `bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad`
+#                       e.g. `bazelisk run //frankweiler:dev -- ~/datalib.thad`
 #   FRANKWEILER_PORT    Vite port (default: ephemeral, freshly allocated)
 #   FRANKWEILER_BIND    Backend bind addr (default: 127.0.0.1:<ephemeral>)
 #   FRANKWEILER_BACKEND Vite proxy target for /api (default: derived from
@@ -85,7 +85,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
 else
-  ROOT_ARG="$HOME/Documents/mixed-up-files"
+  ROOT_ARG="$HOME/Documents/datalib"
 fi
 echo "data root: $ROOT_ARG"
 

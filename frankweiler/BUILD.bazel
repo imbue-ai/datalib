@@ -33,7 +33,7 @@ sh_binary(
 # Same as :serve, but materializes a one-shot data root from the
 # checked-in TNG fixtures (`//tests/fixtures:ingested_tng`) into a
 # tmpdir and points the backend at it. Useful for eyeballing the grid
-# without needing a real on-disk mixed-up-files root. The packaged
+# without needing a real on-disk datalib root. The packaged
 # `frankweiler_http_bin` serves both the embedded SPA and `/api/*`, so
 # we go through serve_dev.sh (no Vite dev server). The ingest genrule
 # links doltlite statically (via `//third-party/doltlite:sqlite3`), so

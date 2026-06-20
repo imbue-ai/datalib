@@ -1,6 +1,6 @@
 # Running frankweiler in Docker
 
-The `ghcr.io/imbue-ai/mixed_up_files` image bundles the three release
+The `ghcr.io/imbue-ai/datalib` image bundles the three release
 binaries (`frankweiler-sync`, `frankweiler-http`,
 `frankweiler-latchkey-curl-shim`) and the `latchkey` CLI on top of an
 Ubuntu 24.04 base, so you can register service credentials and run syncs
@@ -34,12 +34,12 @@ described below**. Bind-mounting `$HOME` or running the container with
 ## Quickstart
 
 ```sh
-IMG=ghcr.io/imbue-ai/mixed_up_files:latest
+IMG=ghcr.io/imbue-ai/datalib:latest
 docker pull "$IMG"
 
 # Pick host paths for the two bind mounts.
 LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
-DATA_ROOT="$HOME/mixed_up_files"
+DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
 # Drop a config.yaml into the data root (see docs/user/config_examples/sample_config.yaml
@@ -193,7 +193,7 @@ to its `npx`/`node` qmd-indexer subprocesses).
 scripts/build_docker.sh
 
 # Same, but load the host-native arch into your local docker daemon so
-# you can `docker run ghcr.io/imbue-ai/mixed_up_files:<version>` it:
+# you can `docker run ghcr.io/imbue-ai/datalib:<version>` it:
 scripts/build_docker.sh --load
 
 # Build against tarballs you produced locally via `bazel build
@@ -202,7 +202,7 @@ scripts/build_docker.sh --load
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
 # Push to your own registry:
-REPO=your-fork/mixed_up_files \
-IMAGE_NAME=ghcr.io/your-fork/mixed_up_files \
+REPO=your-fork/datalib \
+IMAGE_NAME=ghcr.io/your-fork/datalib \
 scripts/build_docker.sh --push
 ```

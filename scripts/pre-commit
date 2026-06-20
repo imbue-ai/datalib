@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook for mixed_up_files
+# Pre-commit hook for datalib
 # Runs linting and type checking before commits.
 #
 # To install: ./scripts/setup-hooks.sh

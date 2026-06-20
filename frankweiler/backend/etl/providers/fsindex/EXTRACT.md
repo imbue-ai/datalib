@@ -363,7 +363,7 @@ contract not a tease:
   calls out exactly this gap. Tracked in a follow-up issue; when
   it lands, each `BulkUpsertable` impl in this file collapses to
   its struct definition. Tracked at
-  [imbue-ai/mixed_up_files#41](https://github.com/imbue-ai/mixed_up_files/issues/41).
+  [imbue-ai/datalib#41](https://github.com/imbue-ai/datalib/issues/41).
 
 - **Rescan-cache load is sqlx-bound, not engine-bound.** On a
   1.7 M-entry index the in-memory cache load takes ~29 s, but the

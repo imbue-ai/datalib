@@ -18,7 +18,7 @@
 #
 # `.devcontainer/Dockerfile` is intentionally NOT checked: it inherits
 # qmd (and its pinned version) from the prod image via
-# `FROM ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}`, so it has
+# `FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`, so it has
 # no qmd pin of its own to drift.
 #
 # Companion to //tools:qmd_model_cache_path_test (which asserts the

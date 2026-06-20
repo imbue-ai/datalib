@@ -459,7 +459,7 @@ jobs:
 
   # Build and push the devcontainer image to ghcr.io. The devcontainer
   # image inherits from the prod image (`FROM
-  # ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}`), so this MUST
+  # ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}`), so this MUST
   # run after `docker-publish` has uploaded prod:${version}. We pass
   # `--build-arg PROD_IMAGE_TAG=${version}` so the published
   # devcontainer:${version} inherits from the prod image at the same

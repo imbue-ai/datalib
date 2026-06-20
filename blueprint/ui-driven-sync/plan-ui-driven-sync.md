@@ -2,7 +2,7 @@
 
 ## Overview
 
-Turn the mixed-up-files from a CLI-driven pipeline into an Outlook-flavored
+Turn the datalib from a CLI-driven pipeline into an Outlook-flavored
 productivity app. The user clicks "Sync" in the UI; the backend runs the
 download → ingest → render pipeline as a background job; a persistent
 Lightroom Classic-style progress chrome reports status while the rest of
@@ -19,11 +19,11 @@ v0 ships the plumbing end-to-end for **at least one** real source (Slack)
 plus one takeout-style source, with the rest of the providers migrating
 incrementally on the same plumbing.
 
-Note: We renamed personal-mirror to mixed-up-files
+Note: We renamed personal-mirror to datalib
 
 ## Goals (v0)
 
-- Single `~/.config/mixed-up-files/config.yaml` describes every source
+- Single `~/.config/datalib/config.yaml` describes every source
   *and* drives every downloader. Standalone CLI invocation reads the same
   YAML block.
 - New `/sync` route lists every source: name, provider, last sync, status,
@@ -31,7 +31,7 @@ Note: We renamed personal-mirror to mixed-up-files
 - Global Lightroom-style progress chrome in the top-left of `App.vue`,
   visible on every route. Collapsible. Click to expand for per-job
   progress, log tail, cancel button.
-- Backend supervises a `mixed-up-files worker` child process (same
+- Backend supervises a `datalib worker` child process (same
   pattern as `dolt sql-server`); worker consumes a Dolt-backed `sync_jobs`
   queue.
 - `sync_jobs` row transitions land in `dolt log` (just like `feedback`).
@@ -70,7 +70,7 @@ Note: We renamed personal-mirror to mixed-up-files
 
 ## Inputs
 
-`~/.config/mixed-up-files/config.yaml` (unified):
+`~/.config/datalib/config.yaml` (unified):
 
 ```yaml
 root: /Users/thad/data/mirror
@@ -250,7 +250,7 @@ Python + Rust + TypeScript per the existing pattern (see
   `.md` file whose `document_uuid` is not in the `documents` table is
   deleted.
 
-### 4. `src/worker/` (new) — `mixed-up-files worker`
+### 4. `src/worker/` (new) — `datalib worker`
 
 - Long-running Python process; entrypoint `python -m worker`.
 - Connects to Dolt (the backend's `dolt sql-server`), polls `sync_jobs`

@@ -26,7 +26,7 @@
 #                                  `frankweiler-sync` run.
 #
 # Devcontainer: `.devcontainer/Dockerfile` inherits from a published
-# version of THIS image via `FROM ghcr.io/imbue-ai/mixed_up_files:<tag>`,
+# version of THIS image via `FROM ghcr.io/imbue-ai/datalib:<tag>`,
 # so everything below (apt + Node + latchkey + doltlite CLI + qmd
 # models + bind-mount dirs) is carried into the devcontainer for free
 # — no Dockerfile mirroring, no double download. The devcontainer

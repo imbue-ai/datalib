@@ -1,10 +1,10 @@
 #!/bin/sh
 # frankweiler installer — modeled on https://astral.sh/uv/install.sh
 #
-#   curl -LsSf https://raw.githubusercontent.com/imbue-ai/mixed_up_files/main/scripts/install.sh | sh
+#   curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 #
 # Downloads the latest release tarball from
-#   https://github.com/imbue-ai/mixed_up_files/releases
+#   https://github.com/imbue-ai/datalib/releases
 # and drops the binaries into ${FRANKWEILER_INSTALL_DIR:-$HOME/.local/bin}.
 #
 # Env vars:
@@ -15,7 +15,7 @@
 
 set -eu
 
-REPO="imbue-ai/mixed_up_files"
+REPO="imbue-ai/datalib"
 TRIPLE="aarch64-apple-darwin"
 TARBALL="frankweiler-${TRIPLE}.tar.gz"
 INSTALL_DIR="${FRANKWEILER_INSTALL_DIR:-${HOME}/.local/bin}"

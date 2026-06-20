@@ -11,7 +11,7 @@
 
 # Bazel's convenience symlinks point at output_base — DO NOT follow.
 bazel-bin
-bazel-mixed_up_files
+bazel-datalib
 bazel-out
 bazel-testlogs
 

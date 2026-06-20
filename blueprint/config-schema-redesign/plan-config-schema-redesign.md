@@ -2,7 +2,7 @@
 
 ## Overview
 
-The user config (`~/.config/mixed-up-files/config.yaml`, plus the in-repo
+The user config (`~/.config/datalib/config.yaml`, plus the in-repo
 `configs/thad_dev.yaml`, `ingest_configs/thad_dev.yaml`, and the fixture
 generator in `tests/fixtures/build_ingested.py`) carries a handful of
 fields that are redundant, misnamed, or awkward to live with. This plan
@@ -11,7 +11,7 @@ collapses them. Hard cutover — no aliases, no users to migrate.
 Concretely, the shape goes from:
 
 ```yaml
-root: ~/mixed_up_files.thad
+root: ~/datalib.thad
 sources:
   - name: claude-api
     provider: anthropic
@@ -35,7 +35,7 @@ sources:
 to:
 
 ```yaml
-data_root: ~/mixed_up_files.thad
+data_root: ~/datalib.thad
 sources:
   - name: claude-api
     type: claude_api          # collapses provider+kind+provenance
@@ -217,7 +217,7 @@ Knobs unchanged except where noted:
 ### Configs in the repo
 
 - `configs/thad_dev.yaml` — rewrite in new schema (this is the file the
-  user is staging for `~/.config/mixed-up-files/config.yaml`).
+  user is staging for `~/.config/datalib/config.yaml`).
 - `ingest_configs/thad_dev.yaml` — delete the directory.
 - `tests/fixtures/build_ingested.py` — rewrite the inline YAML at lines
   54-90 in the new schema. This is what generates the byte-stable
@@ -286,7 +286,7 @@ Hard cutover means breakage is loud. The mitigations are:
    examples and update them. Drop any `notion_official` references to the
    old single-mode XOR.
 9. **Full bazel test pass + commit + push**. Hand-verify `configs/thad_dev.yaml`
-   loads, copy it to `~/.config/mixed-up-files/config.yaml`, run one
+   loads, copy it to `~/.config/datalib/config.yaml`, run one
    real-world sync (e.g. `python -m ingest.run_source slack-api --dry-run`)
    to confirm argv generation is sane.
 

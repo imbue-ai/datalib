@@ -5,7 +5,7 @@
 # directories, so inheriting from it gives the devcontainer all of that
 # "for free" — no Dockerfile mirroring, no double download. Contributors
 # who've already pulled the prod image during `docker pull
-# ghcr.io/imbue-ai/mixed_up_files:<ver>` (or anyone who ran
+# ghcr.io/imbue-ai/datalib:<ver>` (or anyone who ran
 # `scripts/build_docker.sh --load`) reuse the cached layers; a fresh
 # `devcontainer up` only needs to fetch the dev-only build toolchain
 # layers added below.
@@ -14,7 +14,7 @@
 # editing the ARG default below; the bump is intentionally manual
 # (rather than `:latest`) so devcontainer builds are reproducible.
 ARG PROD_IMAGE_TAG=0.5.2
-FROM ghcr.io/imbue-ai/mixed_up_files:${PROD_IMAGE_TAG}
+FROM ghcr.io/imbue-ai/datalib:${PROD_IMAGE_TAG}
 
 # Reset the prod image's ENTRYPOINT. Prod wraps everything in
 # `tini -- frankweiler-entrypoint.sh`, which bootstraps
@@ -178,7 +178,7 @@ RUN ARCH=$(case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
 RUN ldir="$(llvm-config --libdir)" \
     && printf 'build --action_env=LIBCLANG_PATH=%s\nbuild --host_action_env=LIBCLANG_PATH=%s\n' "$ldir" "$ldir" > /root/.bazelrc
 
-WORKDIR /workspaces/mixed_up_files
+WORKDIR /workspaces/datalib
 
 # Cache warmup: pre-populate bazel's repository cache by running
 # `bazelisk fetch` against the workspace source. `fetch` resolves the
@@ -237,7 +237,7 @@ ARG WARM_BAZEL_CACHE=true
 # external repo (BoringSSL git clone, doltlite amalgamation download,
 # rules_rust toolchains, etc.), writes them into
 # /root/.cache/bazel/_bazel_root/<hash>/external/.
-RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
+RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
         bazelisk --batch --host_jvm_args=-Xmx1024m fetch //frankweiler/backend/...:all; \
     fi
@@ -248,7 +248,7 @@ RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
 # first interactive `bazel build` hits the disk cache and skips
 # straight to whatever they've actually edited. Heap bumped to 4 GB
 # because the action graph + analysis caches get hefty.
-RUN --mount=type=bind,source=.,target=/workspaces/mixed_up_files,rw \
+RUN --mount=type=bind,source=.,target=/workspaces/datalib,rw \
     if [ "${WARM_BAZEL_CACHE}" = "true" ]; then \
         bazelisk --batch --host_jvm_args=-Xmx4096m build //frankweiler/backend/...:all -c opt; \
     fi

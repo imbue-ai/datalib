@@ -1,4 +1,4 @@
-data_root: ~/mixed_up_files  # Where the downloaded data gets written.
+data_root: ~/datalib  # Where the downloaded data gets written.
 
 # Optional: bound how long a source keeps retrying upstream rate limits
 # before the orchestrator gives up on it. The shared HTTP layer always

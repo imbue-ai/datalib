@@ -72,7 +72,7 @@ jobs:
     # because release tagging is a deliberate human action; bad images
     # surface immediately on the next PR.
     container:
-      image: ghcr.io/imbue-ai/mixed_up_files-devcontainer:latest
+      image: ghcr.io/imbue-ai/datalib-devcontainer:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

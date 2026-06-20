@@ -1,7 +1,7 @@
 # `frankweiler/docker/` — production runtime image
 
 Source for the multi-arch image published to
-`ghcr.io/imbue-ai/mixed_up_files:<tag>` on every `v*` tag push.
+`ghcr.io/imbue-ai/datalib:<tag>` on every `v*` tag push.
 
 - **User docs** (how to bind-mount, register services, run a sync):
   [`docs/dev/docker.md`](/docs/dev/docker.md).
@@ -48,8 +48,8 @@ scripts/build_docker.sh 0.4.0 --load
 scripts/build_docker.sh --tarball-dir /path/to/tarballs --load
 
 # 5. Push to your own registry.
-REPO=your-fork/mixed_up_files \
-IMAGE_NAME=ghcr.io/your-fork/mixed_up_files \
+REPO=your-fork/datalib \
+IMAGE_NAME=ghcr.io/your-fork/datalib \
 scripts/build_docker.sh --push
 ```
 
@@ -64,9 +64,9 @@ Once the image is loaded (`--load`), the bind-mount contract from
 shorthand for iterating:
 
 ```sh
-IMG=ghcr.io/imbue-ai/mixed_up_files:latest
+IMG=ghcr.io/imbue-ai/datalib:latest
 LATCHKEY_DIR="$HOME/.frankweiler-docker/latchkey"
-DATA_ROOT="$HOME/mixed_up_files"
+DATA_ROOT="$HOME/datalib"
 mkdir -p "$LATCHKEY_DIR" "$DATA_ROOT"
 
 # Register + auth (run once per service).
@@ -101,7 +101,7 @@ that lands in the binaries, mirror that smoke locally before pushing:
 
 ```sh
 scripts/build_docker.sh --load
-IMG=ghcr.io/imbue-ai/mixed_up_files:latest
+IMG=ghcr.io/imbue-ai/datalib:latest
 tmp=$(mktemp -d)
 
 docker run --rm -v "$tmp:/root/.latchkey" "$IMG" \

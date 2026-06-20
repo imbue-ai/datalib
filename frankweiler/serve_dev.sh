@@ -47,7 +47,7 @@ BASE_URL="${FRANKWEILER_URL:-http://$FRANKWEILER_BIND}"
 HEALTH_URL="$BASE_URL/api/health"
 
 # Positional data-root arg required by the binary; default to
-# ~/Documents/mixed-up-files if not supplied (legacy default).
+# ~/Documents/datalib if not supplied (legacy default).
 if [[ $# -ge 1 && -n "$1" ]]; then
   ROOT_ARG="$1"
   case "$ROOT_ARG" in
@@ -55,7 +55,7 @@ if [[ $# -ge 1 && -n "$1" ]]; then
     "~/"*)   ROOT_ARG="$HOME/${ROOT_ARG#\~/}" ;;
   esac
 else
-  ROOT_ARG="$HOME/Documents/mixed-up-files"
+  ROOT_ARG="$HOME/Documents/datalib"
 fi
 echo "data root: $ROOT_ARG"
 

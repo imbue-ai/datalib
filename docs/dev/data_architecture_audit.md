@@ -1337,7 +1337,7 @@ P2: They are slightly different though, because beeper and signal need to group 
 
 ### Principle violations
 
-* **Bookkeeping sidecar missing (port guide §6)** — `yolink_readings` has no `_bookkeeping` sidecar. Should carry `attempt_count`, `last_attempt_at`, `last_error` per-row to enable `--retry-failed` on-by-default (doc: "Retry and fetch durability"). See `/Users/thad/Imbue Dropbox/Thad Hughes/src/mixed_up_files/frankweiler/backend/etl/providers/yolink/src/extract.rs:125-142` (DDL) — missing boilerplate like `dr::bookkeeping_ddl_for()`.
+* **Bookkeeping sidecar missing (port guide §6)** — `yolink_readings` has no `_bookkeeping` sidecar. Should carry `attempt_count`, `last_attempt_at`, `last_error` per-row to enable `--retry-failed` on-by-default (doc: "Retry and fetch durability"). See `/Users/thad/Imbue Dropbox/Thad Hughes/src/datalib/frankweiler/backend/etl/providers/yolink/src/extract.rs:125-142` (DDL) — missing boilerplate like `dr::bookkeeping_ddl_for()`.
 
 * **Pre-seed pattern not implemented** — Per doc principle "Pre-seed before fetch" (port guide §6, doc §446-461), rows should exist with `payload=NULL` before fetch attempts. YoLink only writes on success; a mid-fetch crash on a partially-loaded device leaves no evidence of which windows were attempted. See `extract.rs:256-353` (`fetch_device`) — no pre-seed call before `curl`.
 

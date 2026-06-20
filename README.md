@@ -1,4 +1,4 @@
-# mixed-up-files
+# datalib
 
 > Codenames in this project (`frankweiler`, etc.) are inspired by
 > [_From the Mixed-Up Files of Mrs. Basil E. Frankweiler_](https://en.wikipedia.org/wiki/From_the_Mixed-Up_Files_of_Mrs._Basil_E._Frankweiler).
@@ -152,7 +152,7 @@ Runs:
 ### Launch the dev UI
 
 ```sh
-bazelisk run //frankweiler:dev -- ~/mixed_up_files.thad
+bazelisk run //frankweiler:dev -- ~/datalib.thad
 ```
 
 The trailing path is the data root (see resolution order below). It can
@@ -173,7 +173,7 @@ Data root resolution (the QMDs feed the search index —
 1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
 2. `$FRANKWEILER_ROOT`
 3. `root:` from `~/.config/frankweiler/config.yaml` (or `$FRANKWEILER_CONFIG`)
-4. `~/Documents/mixed-up-files`
+4. `~/Documents/datalib`
 
 The backend starts even if the root is missing — `/api/health` reports
 `root_exists: false` and the search grid shows zero rows.
@@ -224,7 +224,7 @@ Design notes:
 
   ```
   [1/1] mirror (**/*.qmd)
-  Collection: /Users/thad/mixed_up_files.thad (**/*.qmd)
+  Collection: /Users/thad/datalib.thad (**/*.qmd)
   Indexing: 7294/7294 ETA: 0s
   Indexed: 0 new, 0 updated, 7294 unchanged, 0 removed
 

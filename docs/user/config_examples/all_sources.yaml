@@ -15,7 +15,7 @@
 # REDACT: several stanzas below carry device-history secrets (yolink) or
 # would, if filled in, hold tokens/keys. Never commit a real one.
 
-data_root: ~/mixed_up_files  # Base dir; everything is written under here. `~` is expanded.
+data_root: ~/datalib  # Base dir; everything is written under here. `~` is expanded.
 
 # Global default applied to every source unless overridden per-source.
 blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
@@ -94,8 +94,8 @@ sources:
       refresh_window_days: 30
       max_prs: 50
       pull_requests:
-        - imbue-ai/mixed_up_files#40
-        - https://github.com/imbue-ai/mixed_up_files/pull/41
+        - imbue-ai/datalib#40
+        - https://github.com/imbue-ai/datalib/pull/41
 
   # --- GitLab ---------------------------------------------------------------
 

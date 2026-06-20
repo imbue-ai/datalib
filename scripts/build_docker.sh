@@ -8,7 +8,7 @@
 #     Release tag to bake into the image, without the leading `v`. Defaults
 #     to the workspace version from frankweiler/backend/Cargo.toml. The
 #     script downloads the matching per-arch tarballs from the GitHub
-#     Release `v$VERSION` of $REPO (default imbue-ai/mixed_up_files).
+#     Release `v$VERSION` of $REPO (default imbue-ai/datalib).
 #
 # --push
 #     Push the built manifest list to $IMAGE_NAME:$VERSION and :latest.
@@ -28,8 +28,8 @@
 #     //frankweiler/backend:dist`.
 #
 # Environment:
-#   REPO          owner/name on GitHub (default imbue-ai/mixed_up_files)
-#   IMAGE_NAME    registry image ref (default ghcr.io/imbue-ai/mixed_up_files)
+#   REPO          owner/name on GitHub (default imbue-ai/datalib)
+#   IMAGE_NAME    registry image ref (default ghcr.io/imbue-ai/datalib)
 #
 # Requires: docker (with buildx), gh, tar. `gh auth login` must have been
 # run — the repo is private, so anonymous releases/download/<tag>/<file>
@@ -40,8 +40,8 @@ set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
-REPO="${REPO:-imbue-ai/mixed_up_files}"
-IMAGE_NAME="${IMAGE_NAME:-ghcr.io/imbue-ai/mixed_up_files}"
+REPO="${REPO:-imbue-ai/datalib}"
+IMAGE_NAME="${IMAGE_NAME:-ghcr.io/imbue-ai/datalib}"
 
 VERSION=""
 PUSH=0

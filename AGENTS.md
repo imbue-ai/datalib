@@ -1,4 +1,4 @@
-# mixed-up-files — agent runbook
+# datalib — agent runbook
 
 Quick references for AI/human contributors. See `docs/dev/grid_rows.md` for
 the union-table architecture behind the grid.

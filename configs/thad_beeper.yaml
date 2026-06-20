@@ -5,7 +5,7 @@
 #     --config "$(pwd)/configs/thad_beeper.yaml" \
 #     --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-data_root: ~/mixed_up_files.thad_beeper
+data_root: ~/datalib.thad_beeper
 
 dolt:
   db_filename: backend_index.doltlite_db

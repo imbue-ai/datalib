@@ -34,7 +34,7 @@ use frankweiler_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 
 /// SQLite/doltlite-backed implementation of [`MirrorRepo`].
 ///
-/// `root` is the data root (e.g. `~/Documents/mixed-up-files`) — needed
+/// `root` is the data root (e.g. `~/Documents/datalib`) — needed
 /// because `qmd_path` in `grid_rows` is stored relative to the root and
 /// the trait contract returns an absolute path.
 pub struct DoltRepo {
