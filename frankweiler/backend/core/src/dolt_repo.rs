@@ -153,7 +153,7 @@ impl MirrorRepo for DoltRepo {
                     org_uuid, org_name, channel, conversation_name, conversation_uuid, markdown_uuid, \
                     message_index, entire_chat, text, slack_link, source_url, notion_page_uuid, external_id \
              FROM grid_rows{} \
-             ORDER BY when_ts ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
+             ORDER BY when_ts_utc ASC, CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END, uuid \
              LIMIT ?",
             where_sql
         );

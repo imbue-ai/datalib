@@ -780,19 +780,35 @@ async fn insert_grid_row(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     row: &GridRow,
 ) -> Result<()> {
+    // `when_ts_utc` / `when_offset` are derived here, not emitted by
+    // producers (see grid_rows.schema.json `x-derived`). Splitting the
+    // producer's offset-bearing `when_ts` gives the grid a single-zone,
+    // fixed-width column to sort/filter on (so ordering matches true
+    // chronological order) plus the original offset for local rendering.
+    // Unparseable / null `when_ts` leaves both columns NULL.
+    let (when_ts_utc, when_offset) = match row
+        .when_ts
+        .as_deref()
+        .and_then(frankweiler_time::split_when_ts)
+    {
+        Some((utc, offset)) => (Some(utc), Some(offset)),
+        None => (None, None),
+    };
     sqlx::query(
         "INSERT INTO grid_rows \
-         (uuid, provider, kind, source_label, when_ts, author, account, project, channel, \
-          conversation_name, conversation_uuid, message_index, entire_chat, text, slack_link, \
-          qmd_path, source_url, git_sha, external_id, notion_page_uuid, notion_block_uuid, \
+         (uuid, provider, kind, source_label, when_ts, when_ts_utc, when_offset, author, account, \
+          project, channel, conversation_name, conversation_uuid, message_index, entire_chat, text, \
+          slack_link, qmd_path, source_url, git_sha, external_id, notion_page_uuid, notion_block_uuid, \
           markdown_uuid) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&row.uuid)
     .bind(&row.provider)
     .bind(&row.kind)
     .bind(&row.source_label)
     .bind(&row.when_ts)
+    .bind(&when_ts_utc)
+    .bind(&when_offset)
     .bind(&row.author)
     .bind(&row.account)
     .bind(&row.project)

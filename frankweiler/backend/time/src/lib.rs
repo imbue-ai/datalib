@@ -271,6 +271,102 @@ pub fn bump_micros_str(s: &str, n: i64) -> Option<String> {
         .map(|t| t.bump_micros(n).to_rfc3339_micros())
 }
 
+/// Split a stored `when_ts` (RFC 3339 with an explicit offset;
+/// tolerates `Z`) into the two values the `grid_rows` index needs:
+///
+/// * `.0` — the same instant normalized to **UTC**, rendered with fixed
+///   microsecond precision and a `Z` suffix (the `Z` states "this is
+///   UTC", not a local zone that happens to sit at zero offset). Because
+///   every value shares one zone and one width, lexical ordering of this
+///   column matches true chronological order — which a column of mixed
+///   local-offset `when_ts` strings does *not*: `2026-01-01T09:00:00+00:00`
+///   sorts before `2026-01-01T10:00:00-08:00` as text, yet is nine hours
+///   *earlier* in absolute time.
+/// * `.1` — the original UTC offset (`+05:30`, `-07:00`, `+00:00`),
+///   preserved so the UI can re-render the instant in the wall-clock
+///   zone it was recorded in.
+///
+/// Returns `None` on empty input or parse failure, so the caller can
+/// leave both index columns NULL rather than fabricate a value.
+pub fn split_when_ts(s: &str) -> Option<(String, String)> {
+    if s.is_empty() {
+        return None;
+    }
+    let owned;
+    let normalized: &str = if let Some(prefix) = s.strip_suffix('Z') {
+        owned = format!("{prefix}+00:00");
+        &owned
+    } else {
+        s
+    };
+    let dt = parse_strict(normalized).ok()?.inner();
+    let offset = dt.offset().to_string();
+    Some((utc_micros(dt), offset))
+}
+
+/// Render an offsetted instant in the canonical `when_ts_utc` form:
+/// UTC, fixed microsecond precision, `Z` suffix. The `Z` (rather than
+/// `+00:00`) states the intent — *this column is UTC* — instead of a
+/// local zone that merely happens to sit at zero offset. The single
+/// spelling is also what keeps the column lexically sortable; the
+/// original local offset is preserved separately in `when_offset` (see
+/// [`split_when_ts`]).
+fn utc_micros(dt: DateTime<FixedOffset>) -> String {
+    dt.with_timezone(&Utc)
+        .to_rfc3339_opts(SecondsFormat::Micros, true)
+}
+
+/// Normalize a user-typed time bound (the value behind a `before:` /
+/// `after:` search filter) into the **same canonical UTC form** as the
+/// `when_ts_utc` index column, so the two compare correctly as plain
+/// strings.
+///
+/// Policy: **a user-typed timestamp with no offset means local machine
+/// time.** People type wall-clock times in the zone they're sitting in,
+/// not UTC, so `before:2026-01-15` means "before midnight here" and
+/// `after:2026-01-15T09:00` means "after 9am here" — and we convert that
+/// to UTC before comparing against the (UTC) index. An input that
+/// *does* carry an explicit offset is honored as written. This is the
+/// query-side mirror of [`parse_with_assumed_utc`] (which assumes UTC
+/// for audited *upstream* feeds): here the human is the source, so local
+/// time is the right assumption, not UTC.
+///
+/// Accepts:
+/// - bare date `YYYY-MM-DD` → local midnight that day
+/// - naive date-time `YYYY-MM-DDTHH:MM:SS[.fff]` → that local wall-clock
+/// - explicit-offset RFC 3339 (`...-07:00`, `...Z`) → honored as-is
+///
+/// Returns `None` when the input matches none of those shapes, so the
+/// caller can drop the bound rather than compare against a garbage
+/// string. During a spring-forward gap the wall-clock instant doesn't
+/// exist locally; we take the earlier of the two candidate instants.
+pub fn normalize_user_time_to_utc(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // 1. Already offset-bearing (RFC 3339, incl. bare `Z`) — honor it.
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(utc_micros(dt));
+    }
+    // 2. Naive date-time → local wall-clock.
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S"))
+    {
+        let local = Local.from_local_datetime(&naive).earliest()?;
+        return Some(utc_micros(local.fixed_offset()));
+    }
+    // 3. Bare date → local midnight.
+    if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        let naive = date
+            .and_hms_opt(0, 0, 0)
+            .expect("00:00:00 is always a valid time-of-day");
+        let local = Local.from_local_datetime(&naive).earliest()?;
+        return Some(utc_micros(local.fixed_offset()));
+    }
+    None
+}
+
 /// Cheap structural check that `s` is RFC 3339 with an explicit
 /// offset. Useful in translate-time validators that want to assert
 /// without keeping the parsed value.
@@ -358,6 +454,104 @@ mod tests {
         let t = parse_yyyy_mm_dd_assumed_utc("2026-01-15").unwrap();
         assert_eq!(t.to_rfc3339_secs(), "2026-01-15T00:00:00+00:00");
         assert!(parse_yyyy_mm_dd_assumed_utc("not-a-date").is_err());
+    }
+
+    #[test]
+    fn split_when_ts_normalizes_utc_and_keeps_offset() {
+        // Local-offset input: UTC column shifts by the offset and is
+        // spelled with `Z`; the offset column preserves the original zone.
+        let (utc, off) = split_when_ts("2026-06-10T14:23:00-07:00").unwrap();
+        assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
+        assert_eq!(off, "-07:00");
+
+        // Already-UTC input (explicit +00:00): UTC column uses `Z`, but
+        // the offset column keeps the input's literal `+00:00`.
+        let (utc, off) = split_when_ts("2026-06-10T21:23:00+00:00").unwrap();
+        assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
+        assert_eq!(off, "+00:00");
+
+        // Bare `Z` input is tolerated; offset column reports `+00:00`.
+        let (utc, off) = split_when_ts("2026-06-10T21:23:00Z").unwrap();
+        assert_eq!(utc, "2026-06-10T21:23:00.000000Z");
+        assert_eq!(off, "+00:00");
+
+        // Half-hour offset round-trips.
+        let (_utc, off) = split_when_ts("2026-06-10T21:23:00+05:30").unwrap();
+        assert_eq!(off, "+05:30");
+
+        // Far-future (24th-century TNG-era) dates parse and render fine —
+        // chrono supports 4-digit years through 9999, so the fixture
+        // corpus's stardate-era timestamps are well within range.
+        let (utc, off) = split_when_ts("2369-04-15T14:00:00-07:00").unwrap();
+        assert_eq!(utc, "2369-04-15T21:00:00.000000Z");
+        assert_eq!(off, "-07:00");
+
+        // Empty / unparseable → None, so the caller leaves columns NULL.
+        assert!(split_when_ts("").is_none());
+        assert!(split_when_ts("2026-06-10T21:23:00").is_none());
+    }
+
+    #[test]
+    fn split_when_ts_utc_column_sorts_chronologically() {
+        // Two instants whose raw `when_ts` strings sort the *opposite* way
+        // from true chronological order, because the offsets differ:
+        //   a = 2026-01-01T23:00:00+00:00  → 23:00 UTC (the later instant)
+        //   b = 2026-01-02T00:00:00+05:00  → 19:00 UTC (the earlier instant)
+        // As plain text a < b (date "...01T23" < "...02T00"), yet b happens
+        // four hours before a. The UTC column must put b first.
+        let a = "2026-01-01T23:00:00+00:00";
+        let b = "2026-01-02T00:00:00+05:00";
+        let (a_utc, _) = split_when_ts(a).unwrap();
+        let (b_utc, _) = split_when_ts(b).unwrap();
+        assert!(
+            a < b,
+            "raw strings mis-sort: text order puts the later instant first"
+        );
+        assert!(b_utc < a_utc, "UTC column sorts by true instant");
+    }
+
+    #[test]
+    fn normalize_user_time_honors_explicit_offset() {
+        // An explicit offset is honored and converted to UTC (spelled `Z`).
+        assert_eq!(
+            normalize_user_time_to_utc("2026-01-15T00:00:00-08:00").as_deref(),
+            Some("2026-01-15T08:00:00.000000Z")
+        );
+        // Bare `Z` is accepted and stays `Z`.
+        assert_eq!(
+            normalize_user_time_to_utc("2026-01-15T12:00:00Z").as_deref(),
+            Some("2026-01-15T12:00:00.000000Z")
+        );
+        assert!(normalize_user_time_to_utc("not-a-date").is_none());
+        assert!(normalize_user_time_to_utc("   ").is_none());
+    }
+
+    #[test]
+    fn normalize_user_time_assumes_local_for_naive() {
+        // Naive input is interpreted in the local machine zone. We verify
+        // by computing the same instant through chrono's `Local`
+        // independently, so the test is machine-timezone-agnostic.
+        let expect_local = |y, mo, d, h, mi| {
+            let naive = NaiveDate::from_ymd_opt(y, mo, d)
+                .unwrap()
+                .and_hms_opt(h, mi, 0)
+                .unwrap();
+            Local
+                .from_local_datetime(&naive)
+                .earliest()
+                .unwrap()
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(SecondsFormat::Micros, true)
+        };
+        assert_eq!(
+            normalize_user_time_to_utc("2026-01-15T09:30:00").as_deref(),
+            Some(expect_local(2026, 1, 15, 9, 30).as_str())
+        );
+        // Bare date → local midnight.
+        assert_eq!(
+            normalize_user_time_to_utc("2026-01-15").as_deref(),
+            Some(expect_local(2026, 1, 15, 0, 0).as_str())
+        );
     }
 
     #[test]

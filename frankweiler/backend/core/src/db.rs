@@ -137,17 +137,29 @@ pub fn build_where(q: &ParsedQuery, needle: &str) -> (String, Vec<String>) {
         params.push(bound);
     }
 
-    if let Some(vals) = q.filters.get(&Field::Before) {
-        if let Some(v) = vals.first() {
-            clauses.push("when_ts < ?".into());
-            params.push(v.clone());
-        }
+    // Filter on the UTC-normalized index column, the same one the grid
+    // sorts on, so before:/after: bounds agree with display order across
+    // rows recorded in different local offsets. The user-typed bound is
+    // normalized to UTC first (frankweiler_time): a naive value means
+    // local machine time, so it lands on the same basis as when_ts_utc.
+    // An unparseable bound drops the filter rather than compare garbage.
+    if let Some(v) = q
+        .filters
+        .get(&Field::Before)
+        .and_then(|vals| vals.first())
+        .and_then(|v| frankweiler_time::normalize_user_time_to_utc(v))
+    {
+        clauses.push("when_ts_utc < ?".into());
+        params.push(v);
     }
-    if let Some(vals) = q.filters.get(&Field::After) {
-        if let Some(v) = vals.first() {
-            clauses.push("when_ts > ?".into());
-            params.push(v.clone());
-        }
+    if let Some(v) = q
+        .filters
+        .get(&Field::After)
+        .and_then(|vals| vals.first())
+        .and_then(|v| frankweiler_time::normalize_user_time_to_utc(v))
+    {
+        clauses.push("when_ts_utc > ?".into());
+        params.push(v);
     }
     if !needle.is_empty() {
         clauses.push("LOWER(text) LIKE ?".into());

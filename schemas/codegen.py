@@ -23,6 +23,13 @@ Custom annotations:
                               for Python only — the only consumer that
                               writes rows. Add Rust/TS emission if a writer
                               shows up in those languages.)
+  * `x-derived` (prop)      — marks a property as a DB column that is
+                              *computed at load time*, not emitted by
+                              producers. It appears in the table DDL and
+                              the COLUMNS list, but is omitted from the
+                              generated Rust struct / Python dataclass /
+                              TypeScript interface (and from MAX_LENGTHS),
+                              so producers never have to populate it.
   * `x-primary-key` (defn)  — list of column names that form the table's
                               primary key. Triggers DDL emission for that
                               definition.
@@ -155,6 +162,12 @@ def _default_sql_type(prop: dict) -> str:
 
 def _sql_type(prop: dict) -> str:
     return prop.get("x-sql-type") or _default_sql_type(prop)
+
+
+def _is_derived(prop: dict) -> bool:
+    """True for load-time-computed columns: present in DDL/COLUMNS but
+    omitted from the generated language structs (see `x-derived`)."""
+    return bool(prop.get("x-derived"))
 
 
 def _varchar_max_len(prop: dict) -> int | None:
@@ -297,6 +310,8 @@ def emit_typescript(schema: dict, source_name: str) -> str:
         out.append(f"export interface {name} {{")
         required = set(defn.get("required", []))
         for prop_name, prop in defn.get("properties", {}).items():
+            if _is_derived(prop):
+                continue
             doc = _ts_doc(prop, "  ")
             if doc:
                 out.extend(doc)
@@ -378,6 +393,8 @@ def emit_rust(schema: dict, source_name: str) -> str:
         out.append("#[derive(Debug, Clone, Serialize, Deserialize)]")
         out.append(f"pub struct {name} {{")
         for prop_name, prop in defn.get("properties", {}).items():
+            if _is_derived(prop):
+                continue
             doc = _rust_doc(prop, "    ")
             if doc:
                 out.extend(doc)
@@ -473,6 +490,8 @@ def emit_python(schema: dict, source_name: str) -> str:
         if not props and not cls_doc:
             out.append("    pass")
         for prop_name, prop in props:
+            if _is_derived(prop):
+                continue
             if "x-tagged-union" in prop:
                 ptype = _tagged_union_alias_name(name, prop_name)
             else:
@@ -499,6 +518,7 @@ def emit_python(schema: dict, source_name: str) -> str:
                 bounded = [
                     (pn, _varchar_max_len(p))
                     for pn, p in defn.get("properties", {}).items()
+                    if not _is_derived(p)
                 ]
                 max_lengths_emitted.append(
                     (table, [(pn, n) for pn, n in bounded if n is not None])

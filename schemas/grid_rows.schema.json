@@ -116,6 +116,18 @@
             "notion.comment":    "comment.created_time"
           }
         },
+        "when_ts_utc": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(40)",
+          "x-derived": true,
+          "description": "`when_ts` normalized to UTC, rendered with fixed microsecond precision and a `Z` suffix (e.g. `2026-06-10T21:23:00.000000Z`; the `Z` states the column is UTC, not a local zone at zero offset). DERIVED at load time from `when_ts` (frankweiler_time::split_when_ts) — not emitted by producers, so it is absent from the GridRow struct/dataclass/interface. This is the column the grid sorts and before:/after:-filters on: a single zone and fixed width make lexical string order match true chronological order, which a column of mixed local-offset `when_ts` values does not. Null exactly when `when_ts` is null or unparseable."
+        },
+        "when_offset": {
+          "type": ["string", "null"],
+          "x-sql-type": "VARCHAR(8)",
+          "x-derived": true,
+          "description": "The original UTC offset of `when_ts` (e.g. `-07:00`, `+05:30`, `+00:00`). DERIVED at load time from `when_ts` (frankweiler_time::split_when_ts) — not emitted by producers. Paired with `when_ts_utc` it recovers the exact local wall-clock the event was recorded in, so the UI can render local time while the grid still sorts on UTC. Null exactly when `when_ts` is null or unparseable."
+        },
         "author": {
           "type": ["string", "null"],
           "x-sql-type": "VARCHAR(255)",
