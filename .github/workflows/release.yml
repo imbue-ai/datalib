@@ -452,6 +452,7 @@ jobs:
               --platform linux/amd64,linux/arm64 \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
               --cache-from type=gha,scope=docker-publish,version=2 \
               --cache-to type=gha,mode=max,scope=docker-publish,version=2 \
               --push \
@@ -546,6 +547,7 @@ jobs:
               --build-arg WARM_BAZEL_CACHE=false \
               --tag "${image}:${version}" \
               --tag "${image}:latest" \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
               --cache-from type=gha,scope=devcontainer,version=2 \
               --cache-to type=gha,mode=max,scope=devcontainer,version=2 \
               --push \
