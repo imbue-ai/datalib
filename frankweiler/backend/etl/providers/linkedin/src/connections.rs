@@ -132,12 +132,34 @@ fn to_contact(p: &Value) -> NormalizedContact {
         group_label: GROUP_LABEL.to_string(),
         display_name: (!name.is_empty()).then_some(name),
         external_id: (!url.is_empty()).then(|| url.to_string()),
-        when_ts: nonempty(field(p, "Connected On")).map(str::to_string),
+        when_ts: connected_on_to_when_ts(field(p, "Connected On")),
         source_url: (!url.is_empty()).then(|| url.to_string()),
         fields,
         photo: None,
         photo_url: None,
     }
+}
+
+/// LinkedIn's `Connected On` is a bare `DD Mon YYYY` date (e.g.
+/// `16 Jun 2026`) — no time, no zone. The grid's `when_ts` must be RFC
+/// 3339 with an explicit offset (the load step derives the sortable
+/// `when_ts_utc` column from it via `split_when_ts`), so we fabricate
+/// midnight UTC for that day. The fabrication is deliberate and mirrors
+/// `frankweiler_time::parse_yyyy_mm_dd_assumed_utc`'s policy for
+/// date-only inputs: the day stays correct for sorting and the invented
+/// time-of-day is explicit. The original `16 Jun 2026` text still shows
+/// in the contact's `Connected On` field (see `FIELD_COLUMNS`), so no
+/// human-facing information is lost. Returns `None` for an empty /
+/// unparseable value — a contact with no parseable date simply carries
+/// no timestamp rather than a bogus one (we never fabricate the day).
+fn connected_on_to_when_ts(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    chrono::NaiveDate::parse_from_str(s, "%d %b %Y")
+        .ok()
+        .map(|d| format!("{}T00:00:00+00:00", d.format("%Y-%m-%d")))
 }
 
 fn full_name(p: &Value) -> String {
@@ -148,10 +170,6 @@ fn full_name(p: &Value) -> String {
 
 fn field<'a>(p: &'a Value, key: &str) -> &'a str {
     p.get(key).and_then(Value::as_str).unwrap_or("").trim()
-}
-
-fn nonempty(s: &str) -> Option<&str> {
-    (!s.is_empty()).then_some(s)
 }
 
 #[cfg(test)]
@@ -185,10 +203,33 @@ mod tests {
             Some("https://www.linkedin.com/in/angelicajeannelim")
         );
         assert_eq!(c.group_label, "Connections");
-        assert_eq!(c.when_ts.as_deref(), Some("16 Jun 2026"));
+        // The bare `16 Jun 2026` date is normalized to an offset-bearing
+        // RFC 3339 timestamp (midnight UTC) so the grid can sort/derive
+        // `when_ts_utc` from it — a raw `16 Jun 2026` would render
+        // verbatim and sort wrong. The original text survives as the
+        // `Connected On` field below.
+        assert_eq!(c.when_ts.as_deref(), Some("2026-06-16T00:00:00+00:00"));
         // Empty Email Address is dropped; the rest are fields in order.
         let labels: Vec<&str> = c.fields.iter().map(|f| f.label.as_str()).collect();
         assert_eq!(labels, vec!["Company", "Position", "Connected On"]);
+    }
+
+    #[test]
+    fn connected_on_normalizes_to_offset_bearing_midnight_utc() {
+        // The grid bug: a bare `DD Mon YYYY` date must become a valid
+        // offset-bearing when_ts, and the result must round-trip through
+        // the same `split_when_ts` the load step uses to build the
+        // sortable `when_ts_utc` column.
+        let ts = connected_on_to_when_ts("26 Oct 2020").unwrap();
+        assert_eq!(ts, "2020-10-26T00:00:00+00:00");
+        let (utc, offset) = frankweiler_time::split_when_ts(&ts)
+            .expect("normalized when_ts is parseable by the load step");
+        assert_eq!(utc, "2020-10-26T00:00:00.000000Z");
+        assert_eq!(offset, "+00:00");
+
+        // Empty / unparseable → no fabricated day.
+        assert_eq!(connected_on_to_when_ts(""), None);
+        assert_eq!(connected_on_to_when_ts("not a date"), None);
     }
 
     #[test]

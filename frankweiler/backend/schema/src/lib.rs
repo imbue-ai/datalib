@@ -16,6 +16,8 @@ pub mod anthropic {
 
 pub mod grid_rows {
     include!("generated/grid_rows.rs");
+    // Hand-written validating builder for the generated `GridRow` struct.
+    include!("grid_rows_builder.rs");
 }
 
 pub mod feedback {

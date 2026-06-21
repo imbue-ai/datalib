@@ -151,7 +151,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let row = build_grid_row(profile, contact, source_name, &md_rel);
+    let row = build_grid_row(profile, contact, source_name, &md_rel)?;
 
     // Sidecar `.grid_rows.json` next to the markdown, mirroring what
     // every other provider writes. The orchestrator commits `rows` into
@@ -315,7 +315,7 @@ fn build_grid_row(
     contact: &NormalizedContact,
     source_name: &str,
     md_rel: &str,
-) -> GridRow {
+) -> Result<GridRow> {
     let title = display_or_id(contact).to_string();
     // Body the UI displays / qmd indexes — compact, single string:
     // the name followed by every field value.
@@ -325,32 +325,25 @@ fn build_grid_row(
         text.push_str(&f.value);
     }
 
-    GridRow {
-        uuid: contact.contact_uuid.clone(),
-        provider: profile.provider.to_string(),
-        kind: profile.contact_kind.clone(),
-        source_label: profile.source_label.clone(),
-        when_ts: contact.when_ts.clone(),
-        author: Some(title.clone()),
-        account: Some(source_name.to_string()),
-        org_uuid: None,
-        org_name: None,
-        project: None,
-        channel: Some(contact.group_label.clone()),
-        conversation_name: Some(contact.group_label.clone()),
-        conversation_uuid: contact.group_uuid.clone(),
-        message_index: None,
-        entire_chat: format!("/contact/{}", contact.contact_uuid),
-        text,
-        slack_link: None,
-        qmd_path: Some(md_rel.to_string()),
-        source_url: contact.source_url.clone(),
-        git_sha: None,
-        external_id: contact.external_id.clone(),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(contact.contact_uuid.clone()),
-    }
+    GridRow::builder()
+        .uuid(contact.contact_uuid.clone())
+        .provider(profile.provider)
+        .kind(profile.contact_kind.clone())
+        .source_label(profile.source_label.clone())
+        .when_ts(contact.when_ts.clone())
+        .author(Some(title))
+        .account(Some(source_name.to_string()))
+        .channel(Some(contact.group_label.clone()))
+        .conversation_name(Some(contact.group_label.clone()))
+        .conversation_uuid(contact.group_uuid.clone())
+        .entire_chat(format!("/contact/{}", contact.contact_uuid))
+        .text(text)
+        .qmd_path(Some(md_rel.to_string()))
+        .source_url(contact.source_url.clone())
+        .external_id(contact.external_id.clone())
+        .markdown_uuid(Some(contact.contact_uuid.clone()))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 fn write_photo(page_dir: &Path, contact_uuid: &str, photo: &ContactPhoto) -> Result<String> {
@@ -431,7 +424,9 @@ mod tests {
             group_label: "LinkedIn Connections".to_string(),
             display_name: Some("Jean-Luc Picard".to_string()),
             external_id: Some("https://www.linkedin.com/in/jlp".to_string()),
-            when_ts: Some("2024-01-02".to_string()),
+            // Offset-bearing per the grid's when_ts contract (the
+            // builder now rejects bare dates — see GridRowBuilder).
+            when_ts: Some("2024-01-02T00:00:00+00:00".to_string()),
             source_url: Some("https://www.linkedin.com/in/jlp".to_string()),
             fields: vec![
                 ContactField::new("Company", "Starfleet"),
@@ -474,7 +469,8 @@ mod tests {
 
     #[test]
     fn grid_row_carries_uuid_url_and_searchtext() {
-        let row = build_grid_row(&mk_profile(), &mk_contact(), "linkedin", "rendered_md/x.md");
+        let row = build_grid_row(&mk_profile(), &mk_contact(), "linkedin", "rendered_md/x.md")
+            .expect("valid contact grid row");
         assert_eq!(row.uuid, "11111111-1111-1111-1111-111111111111");
         assert_eq!(row.kind, "Contact");
         assert_eq!(

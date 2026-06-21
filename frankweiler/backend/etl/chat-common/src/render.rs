@@ -175,7 +175,7 @@ fn render_one(
         .to_string_lossy()
         .into_owned();
 
-    let rows = build_grid_rows(profile, chat, doc, &chat_title, &md_rel);
+    let rows = build_grid_rows(profile, chat, doc, &chat_title, &md_rel)?;
 
     emit_sidecar(
         &json_path,
@@ -512,7 +512,7 @@ fn build_grid_rows(
     doc: &NormalizedDoc,
     chat_title: &str,
     md_rel: &str,
-) -> Vec<GridRow> {
+) -> Result<Vec<GridRow>> {
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + doc.items.len());
 
     let first_ts = doc
@@ -523,38 +523,35 @@ fn build_grid_rows(
     let conversation_name = Some(chat.display.clone());
     let entire_chat = format!("/chat/{}", doc.markdown_uuid);
 
-    rows.push(GridRow {
-        uuid: doc.markdown_uuid.clone(),
-        provider: profile.provider.to_string(),
-        kind: profile.chat_kind.clone(),
-        source_label: profile.source_label.clone(),
-        when_ts: Some(first_ts),
-        author: None,
-        account: chat.account.clone(),
-        org_uuid: chat.org_uuid.clone(),
-        org_name: chat.org_name.clone(),
-        project: chat.project.clone(),
-        channel: conversation_name.clone(),
-        conversation_name: conversation_name.clone(),
-        conversation_uuid: chat.chat_uuid.clone(),
-        message_index: None,
-        entire_chat: entire_chat.clone(),
-        text: doc
-            .items
-            .iter()
-            .filter(|i| !matches!(i.kind, ItemKind::System))
-            .filter_map(|i| i.text.clone())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        slack_link: None,
-        qmd_path: Some(md_rel.to_string()),
-        source_url: chat.source_url.clone(),
-        git_sha: None,
-        external_id: chat.external_id.clone(),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(doc.markdown_uuid.clone()),
-    });
+    rows.push(
+        GridRow::builder()
+            .uuid(doc.markdown_uuid.clone())
+            .provider(profile.provider)
+            .kind(profile.chat_kind.clone())
+            .source_label(profile.source_label.clone())
+            .when_ts(Some(first_ts))
+            .account(chat.account.clone())
+            .org_uuid(chat.org_uuid.clone())
+            .org_name(chat.org_name.clone())
+            .project(chat.project.clone())
+            .channel(conversation_name.clone())
+            .conversation_name(conversation_name.clone())
+            .conversation_uuid(chat.chat_uuid.clone())
+            .entire_chat(entire_chat.clone())
+            .text(
+                doc.items
+                    .iter()
+                    .filter(|i| !matches!(i.kind, ItemKind::System))
+                    .filter_map(|i| i.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .qmd_path(Some(md_rel.to_string()))
+            .source_url(chat.source_url.clone())
+            .external_id(chat.external_id.clone())
+            .markdown_uuid(Some(doc.markdown_uuid.clone()))
+            .build()?,
+    );
 
     let _ = chat_title; // reserved for future per-message title context
 
@@ -571,70 +568,64 @@ fn build_grid_rows(
                 .or_else(|| item.text.clone())
                 .unwrap_or_default(),
         };
-        rows.push(GridRow {
-            uuid: item.message_uuid.clone(),
-            provider: profile.provider.to_string(),
-            // Per-item role override (ChatGPT/Anthropic) or the profile default.
-            kind: item
-                .kind_label
-                .clone()
-                .unwrap_or_else(|| profile.message_kind.clone()),
-            source_label: profile.source_label.clone(),
-            when_ts: Some(iso_from_ms(item.date_ms)),
-            author: Some(item.author_display.clone()),
-            account: chat.account.clone(),
-            org_uuid: chat.org_uuid.clone(),
-            org_name: chat.org_name.clone(),
-            project: chat.project.clone(),
-            channel: conversation_name.clone(),
-            conversation_name: conversation_name.clone(),
-            conversation_uuid: chat.chat_uuid.clone(),
-            message_index: Some(idx as i64),
-            entire_chat: entire_chat.clone(),
-            text,
-            slack_link: None,
-            qmd_path: Some(md_rel.to_string()),
-            // Per-message linkout wins; fall back to an attachment's URL.
-            source_url: item
-                .source_url
-                .clone()
-                .or_else(|| item.attachments.iter().find_map(|a| a.source_url.clone())),
-            git_sha: None,
-            external_id: None,
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(doc.markdown_uuid.clone()),
-        });
+        rows.push(
+            GridRow::builder()
+                .uuid(item.message_uuid.clone())
+                .provider(profile.provider)
+                // Per-item role override (ChatGPT/Anthropic) or the profile default.
+                .kind(
+                    item.kind_label
+                        .clone()
+                        .unwrap_or_else(|| profile.message_kind.clone()),
+                )
+                .source_label(profile.source_label.clone())
+                .when_ts(Some(iso_from_ms(item.date_ms)))
+                .author(Some(item.author_display.clone()))
+                .account(chat.account.clone())
+                .org_uuid(chat.org_uuid.clone())
+                .org_name(chat.org_name.clone())
+                .project(chat.project.clone())
+                .channel(conversation_name.clone())
+                .conversation_name(conversation_name.clone())
+                .conversation_uuid(chat.chat_uuid.clone())
+                .message_index(Some(idx as i64))
+                .entire_chat(entire_chat.clone())
+                .text(text)
+                .qmd_path(Some(md_rel.to_string()))
+                // Per-message linkout wins; fall back to an attachment's URL.
+                .source_url(
+                    item.source_url
+                        .clone()
+                        .or_else(|| item.attachments.iter().find_map(|a| a.source_url.clone())),
+                )
+                .markdown_uuid(Some(doc.markdown_uuid.clone()))
+                .build()?,
+        );
         for r in &item.reactions {
-            rows.push(GridRow {
-                uuid: r.reaction_uuid.clone(),
-                provider: profile.provider.to_string(),
-                kind: profile.reaction_kind.clone(),
-                source_label: profile.source_label.clone(),
-                when_ts: Some(iso_from_ms(r.date_ms)),
-                author: Some(r.reactor_display.clone()),
-                account: chat.account.clone(),
-                org_uuid: chat.org_uuid.clone(),
-                org_name: chat.org_name.clone(),
-                project: chat.project.clone(),
-                channel: conversation_name.clone(),
-                conversation_name: conversation_name.clone(),
-                conversation_uuid: chat.chat_uuid.clone(),
-                message_index: None,
-                entire_chat: entire_chat.clone(),
-                text: r.emoji.clone(),
-                slack_link: None,
-                qmd_path: Some(md_rel.to_string()),
-                source_url: None,
-                git_sha: None,
-                external_id: None,
-                notion_page_uuid: None,
-                notion_block_uuid: None,
-                markdown_uuid: Some(doc.markdown_uuid.clone()),
-            });
+            rows.push(
+                GridRow::builder()
+                    .uuid(r.reaction_uuid.clone())
+                    .provider(profile.provider)
+                    .kind(profile.reaction_kind.clone())
+                    .source_label(profile.source_label.clone())
+                    .when_ts(Some(iso_from_ms(r.date_ms)))
+                    .author(Some(r.reactor_display.clone()))
+                    .account(chat.account.clone())
+                    .org_uuid(chat.org_uuid.clone())
+                    .org_name(chat.org_name.clone())
+                    .project(chat.project.clone())
+                    .channel(conversation_name.clone())
+                    .conversation_name(conversation_name.clone())
+                    .conversation_uuid(chat.chat_uuid.clone())
+                    .entire_chat(entire_chat.clone())
+                    .text(r.emoji.clone())
+                    .qmd_path(Some(md_rel.to_string()))
+                    .markdown_uuid(Some(doc.markdown_uuid.clone()))
+                    .build()?,
+            );
         }
     }
-    rows
+    Ok(rows)
 }
 
 fn attachment_search_text(item: &NormalizedChatItem) -> String {
@@ -907,7 +898,8 @@ mod tests {
         );
 
         // The chat-level grid row (first row) carries it too.
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
         assert_eq!(rows[0].kind, profile.chat_kind);
         assert_eq!(
             rows[0].source_url.as_deref(),
@@ -985,7 +977,8 @@ mod tests {
         );
 
         // The message-level grid row (row[1], after the chat row) carries it.
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
         let msg = rows
             .iter()
             .find(|r| r.kind == profile.message_kind)
@@ -1016,7 +1009,8 @@ mod tests {
         let mut chat = mk_chat();
         chat.buckets[0].items[0].kind_label = Some("LLM Response".to_string());
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
         // The message row uses the override, not the profile default.
         assert!(rows.iter().any(|r| r.kind == "LLM Response"));
         assert!(!rows.iter().any(|r| r.kind == "Test Message"));
@@ -1043,7 +1037,8 @@ mod tests {
         chat.org_uuid = Some("org-123".to_string());
         chat.org_name = Some("Starfleet".to_string());
 
-        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md");
+        let rows = build_grid_rows(&profile, &chat, &chat.buckets[0], "Test", "x.md")
+            .expect("valid grid rows");
         // chat, message, and reaction rows all carry org_uuid/org_name.
         assert!(rows.len() >= 3);
         for r in &rows {

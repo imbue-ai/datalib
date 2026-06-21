@@ -37,6 +37,7 @@ rust_test(
     crate = ":frankweiler_etl_linkedin",
     edition = "2021",
     deps = [
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:tempfile",
     ],
 )

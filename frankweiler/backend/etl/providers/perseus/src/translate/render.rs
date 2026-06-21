@@ -172,7 +172,7 @@ fn render_book(
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = vec![book_grid_row(book, &m_uuid)];
+    let rows = vec![book_grid_row(book, &m_uuid)?];
     let edges: Vec<EdgeRow> = Vec::new();
     emit_sidecar(
         &sidecar_path,
@@ -236,7 +236,7 @@ fn render_chapter(
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
-    rows.push(chapter_grid_row(book, chapter, edition, &m_uuid, &rel));
+    rows.push(chapter_grid_row(book, chapter, edition, &m_uuid, &rel)?);
     let mut idx = 0i64;
     for sec in &chapter.sections {
         let text = sec.text(&edition.id);
@@ -246,7 +246,7 @@ fn render_chapter(
         let s_uuid = paragraph_uuid(&book.n, &chapter.n, &sec.n, &edition.id);
         rows.push(section_grid_row(
             book, chapter, sec, edition, &s_uuid, &m_uuid, &rel, text, idx,
-        ));
+        )?);
         idx += 1;
     }
     let edges = chapter_edges(book, chapter, edition, &m_uuid, alignments);
@@ -452,36 +452,32 @@ fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
     render_synth_ts(ts_base() + Duration::seconds(offset))
 }
 
-fn book_grid_row(book: &Book, bk_uuid: &str) -> GridRow {
-    GridRow {
-        uuid: bk_uuid.to_string(),
-        provider: "perseus".to_string(),
-        kind: "Book".to_string(),
-        source_label: "Perseus".to_string(),
-        when_ts: Some(synth_when_ts(&book.n, 0)),
-        author: Some("Thucydides".to_string()),
-        account: Some("Perseus Digital Library".to_string()),
-        org_uuid: None,
-        org_name: None,
-        project: Some(WORK_TITLE.to_string()),
-        channel: None,
-        conversation_name: Some(book_title(&book.n)),
-        conversation_uuid: bk_uuid.to_string(),
-        message_index: None,
-        entire_chat: format!("/chat/{bk_uuid}"),
-        text: book_text_for_grid(book),
-        slack_link: None,
-        qmd_path: Some(format!("{}/index.md", book_dir_rel(&book.n).display())),
-        source_url: Some(format!(
+fn book_grid_row(book: &Book, bk_uuid: &str) -> Result<GridRow> {
+    GridRow::builder()
+        .uuid(bk_uuid.to_string())
+        .provider("perseus")
+        .kind("Book")
+        .source_label("Perseus")
+        .when_ts(Some(synth_when_ts(&book.n, 0)))
+        .author(Some("Thucydides".to_string()))
+        .account(Some("Perseus Digital Library".to_string()))
+        .project(Some(WORK_TITLE.to_string()))
+        .conversation_name(Some(book_title(&book.n)))
+        .conversation_uuid(bk_uuid.to_string())
+        .entire_chat(format!("/chat/{bk_uuid}"))
+        .text(book_text_for_grid(book))
+        .qmd_path(Some(format!(
+            "{}/index.md",
+            book_dir_rel(&book.n).display()
+        )))
+        .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{TLG0003_TLG001}:{}/",
             book.n
-        )),
-        git_sha: None,
-        external_id: Some(book.n.clone()),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(bk_uuid.to_string()),
-    }
+        )))
+        .external_id(Some(book.n.clone()))
+        .markdown_uuid(Some(bk_uuid.to_string()))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 fn chapter_grid_row(
@@ -490,39 +486,32 @@ fn chapter_grid_row(
     edition: &Edition,
     ch_uuid: &str,
     md_rel: &str,
-) -> GridRow {
+) -> Result<GridRow> {
     let ci: i64 = chapter.n.parse().unwrap_or(0);
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci_u: u32 = ci as u32;
-    GridRow {
-        uuid: ch_uuid.to_string(),
-        provider: "perseus".to_string(),
-        kind: format!("Chapter ({})", edition.id),
-        source_label: "Perseus".to_string(),
-        when_ts: Some(synth_when_ts(&book.n, ci)),
-        author: Some("Thucydides".to_string()),
-        account: Some("Perseus Digital Library".to_string()),
-        org_uuid: None,
-        org_name: None,
-        project: Some(WORK_TITLE.to_string()),
-        channel: None,
-        conversation_name: Some(conversation_name(&book.n, &chapter.n, edition)),
-        conversation_uuid: ch_uuid.to_string(),
-        message_index: None,
-        entire_chat: format!("/chat/{ch_uuid}"),
-        text: chapter_text_for_grid(chapter, edition),
-        slack_link: None,
-        qmd_path: Some(md_rel.to_string()),
-        source_url: Some(format!(
+    GridRow::builder()
+        .uuid(ch_uuid.to_string())
+        .provider("perseus")
+        .kind(format!("Chapter ({})", edition.id))
+        .source_label("Perseus")
+        .when_ts(Some(synth_when_ts(&book.n, ci)))
+        .author(Some("Thucydides".to_string()))
+        .account(Some("Perseus Digital Library".to_string()))
+        .project(Some(WORK_TITLE.to_string()))
+        .conversation_name(Some(conversation_name(&book.n, &chapter.n, edition)))
+        .conversation_uuid(ch_uuid.to_string())
+        .entire_chat(format!("/chat/{ch_uuid}"))
+        .text(chapter_text_for_grid(chapter, edition))
+        .qmd_path(Some(md_rel.to_string()))
+        .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci_u}/",
             edition.id
-        )),
-        git_sha: None,
-        external_id: Some(format!("{bi}.{ci_u}")),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(ch_uuid.to_string()),
-    }
+        )))
+        .external_id(Some(format!("{bi}.{ci_u}")))
+        .markdown_uuid(Some(ch_uuid.to_string()))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -536,7 +525,7 @@ fn section_grid_row(
     md_rel: &str,
     text: &str,
     idx: i64,
-) -> GridRow {
+) -> Result<GridRow> {
     let bi: u32 = book.n.parse().unwrap_or(0);
     let ci: u32 = chapter.n.parse().unwrap_or(0);
     let si: u32 = sec.n.parse().unwrap_or(0);
@@ -546,35 +535,29 @@ fn section_grid_row(
         let ts = ts_base() + Duration::seconds(chapter_secs) + Duration::milliseconds(idx + 1);
         render_synth_ts(ts)
     };
-    GridRow {
-        uuid: sec_uuid.to_string(),
-        provider: "perseus".to_string(),
-        kind: format!("Section ({})", edition.id),
-        source_label: "Perseus".to_string(),
-        when_ts: Some(when_ts),
-        author: Some("Thucydides".to_string()),
-        account: Some("Perseus Digital Library".to_string()),
-        org_uuid: None,
-        org_name: None,
-        project: Some(WORK_TITLE.to_string()),
-        channel: None,
-        conversation_name: Some(conversation_name(&book.n, &chapter.n, edition)),
-        conversation_uuid: ch_uuid.to_string(),
-        message_index: Some(idx),
-        entire_chat: format!("/chat/{ch_uuid}"),
-        text: text.to_string(),
-        slack_link: None,
-        qmd_path: Some(md_rel.to_string()),
-        source_url: Some(format!(
+    GridRow::builder()
+        .uuid(sec_uuid.to_string())
+        .provider("perseus")
+        .kind(format!("Section ({})", edition.id))
+        .source_label("Perseus")
+        .when_ts(Some(when_ts))
+        .author(Some("Thucydides".to_string()))
+        .account(Some("Perseus Digital Library".to_string()))
+        .project(Some(WORK_TITLE.to_string()))
+        .conversation_name(Some(conversation_name(&book.n, &chapter.n, edition)))
+        .conversation_uuid(ch_uuid.to_string())
+        .message_index(Some(idx))
+        .entire_chat(format!("/chat/{ch_uuid}"))
+        .text(text.to_string())
+        .qmd_path(Some(md_rel.to_string()))
+        .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{WORK_URN}.{}:{bi}.{ci}.{si}/",
             edition.id
-        )),
-        git_sha: None,
-        external_id: Some(format!("{bi}.{ci}.{si}")),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(ch_uuid.to_string()),
-    }
+        )))
+        .external_id(Some(format!("{bi}.{ci}.{si}")))
+        .markdown_uuid(Some(ch_uuid.to_string()))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 /// Edges from this edition's chapter doc to its configured alignment

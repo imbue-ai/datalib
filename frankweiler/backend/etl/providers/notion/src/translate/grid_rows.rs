@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
+use anyhow::Result;
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
@@ -183,7 +184,7 @@ fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<Strin
     }
 }
 
-fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> GridRow {
+fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> Result<GridRow> {
     let pid = page
         .get("id")
         .and_then(|v| v.as_str())
@@ -200,32 +201,23 @@ fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> 
         .and_then(|v| v.get("id"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    GridRow {
-        uuid: pid.clone(),
-        provider: "notion".into(),
-        kind: "Notion Page".into(),
-        source_label: "Notion".into(),
-        when_ts,
-        author: short_author(author_id, user_names),
-        account: None,
-        org_uuid: None,
-        org_name: None,
-        project: None,
-        channel: None,
-        conversation_name: Some(title.into()),
-        conversation_uuid: pid.clone(),
-        message_index: None,
-        entire_chat: format!("/notion/page/{pid}"),
-        text: title.into(),
-        slack_link: None,
-        qmd_path: Some(page_qmd_path_rel(&pid, title)),
-        source_url: Some(notion_url(&pid)),
-        git_sha: None,
-        external_id: None,
-        notion_page_uuid: Some(pid.clone()),
-        notion_block_uuid: None,
-        markdown_uuid: Some(pid),
-    }
+    GridRow::builder()
+        .uuid(pid.clone())
+        .provider("notion")
+        .kind("Notion Page")
+        .source_label("Notion")
+        .when_ts(when_ts)
+        .author(short_author(author_id, user_names))
+        .conversation_name(Some(title.to_string()))
+        .conversation_uuid(pid.clone())
+        .entire_chat(format!("/notion/page/{pid}"))
+        .text(title.to_string())
+        .qmd_path(Some(page_qmd_path_rel(&pid, title)))
+        .source_url(Some(notion_url(&pid)))
+        .notion_page_uuid(Some(pid.clone()))
+        .markdown_uuid(Some(pid))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 /// Rows for one discussion: the thread row + per-comment rows.
@@ -236,9 +228,9 @@ fn thread_rows(
     page_title: &str,
     parent_block_id: Option<&str>,
     user_names: &HashMap<String, String>,
-) -> Vec<GridRow> {
+) -> Result<Vec<GridRow>> {
     if members_sorted.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let snippet = thread_snippet(&comment_text_plain(&members_sorted[0]));
     let thread_qmd = thread_qmd_path_rel(page_id, page_title, disc_id, &snippet);
@@ -256,72 +248,62 @@ fn thread_rows(
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    rows.push(GridRow {
-        uuid: disc_id.into(),
-        provider: "notion".into(),
-        kind: "Notion Comment Thread".into(),
-        source_label: "Notion".into(),
-        when_ts: first
-            .get("created_time")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        author: short_author(first_author_id, user_names),
-        account: None,
-        org_uuid: None,
-        org_name: None,
-        project: None,
-        channel: None,
-        conversation_name: Some(page_title.into()),
-        conversation_uuid: disc_id.into(),
-        message_index: None,
-        entire_chat: format!("/notion/thread/{disc_id}"),
-        text: aggregated_text,
-        slack_link: None,
-        qmd_path: Some(thread_qmd.clone()),
-        source_url: Some(thread_url.clone()),
-        git_sha: None,
-        external_id: None,
-        notion_page_uuid: Some(page_id.into()),
-        notion_block_uuid: parent_block_id.map(String::from),
-        markdown_uuid: Some(disc_id.into()),
-    });
+    rows.push(
+        GridRow::builder()
+            .uuid(disc_id)
+            .provider("notion")
+            .kind("Notion Comment Thread")
+            .source_label("Notion")
+            .when_ts(
+                first
+                    .get("created_time")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            )
+            .author(short_author(first_author_id, user_names))
+            .conversation_name(Some(page_title.to_string()))
+            .conversation_uuid(disc_id)
+            .entire_chat(format!("/notion/thread/{disc_id}"))
+            .text(aggregated_text)
+            .qmd_path(Some(thread_qmd.clone()))
+            .source_url(Some(thread_url.clone()))
+            .notion_page_uuid(Some(page_id.to_string()))
+            .notion_block_uuid(parent_block_id.map(String::from))
+            .markdown_uuid(Some(disc_id.to_string()))
+            .build()?,
+    );
     for (idx, c) in members_sorted.iter().enumerate() {
         let author_id = c
             .get("created_by")
             .and_then(|v| v.get("id"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        rows.push(GridRow {
-            uuid: c.get("id").and_then(|v| v.as_str()).unwrap_or("").into(),
-            provider: "notion".into(),
-            kind: "Notion Comment".into(),
-            source_label: "Notion".into(),
-            when_ts: c
-                .get("created_time")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            author: short_author(author_id, user_names),
-            account: None,
-            org_uuid: None,
-            org_name: None,
-            project: None,
-            channel: None,
-            conversation_name: Some(page_title.into()),
-            conversation_uuid: disc_id.into(),
-            message_index: Some(idx as i64),
-            entire_chat: format!("/notion/thread/{disc_id}"),
-            text: comment_text_plain(c),
-            slack_link: None,
-            qmd_path: Some(thread_qmd.clone()),
-            source_url: Some(thread_url.clone()),
-            git_sha: None,
-            external_id: None,
-            notion_page_uuid: Some(page_id.into()),
-            notion_block_uuid: parent_block_id.map(String::from),
-            markdown_uuid: Some(disc_id.into()),
-        });
+        rows.push(
+            GridRow::builder()
+                .uuid(c.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+                .provider("notion")
+                .kind("Notion Comment")
+                .source_label("Notion")
+                .when_ts(
+                    c.get("created_time")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                )
+                .author(short_author(author_id, user_names))
+                .conversation_name(Some(page_title.to_string()))
+                .conversation_uuid(disc_id)
+                .message_index(Some(idx as i64))
+                .entire_chat(format!("/notion/thread/{disc_id}"))
+                .text(comment_text_plain(c))
+                .qmd_path(Some(thread_qmd.clone()))
+                .source_url(Some(thread_url.clone()))
+                .notion_page_uuid(Some(page_id.to_string()))
+                .notion_block_uuid(parent_block_id.map(String::from))
+                .markdown_uuid(Some(disc_id.to_string()))
+                .build()?,
+        );
     }
-    rows
+    Ok(rows)
 }
 
 fn canonical_json(v: &Value) -> String {
@@ -393,7 +375,7 @@ pub struct ThreadDocument {
     pub source_fingerprint: String,
 }
 
-pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
+pub fn gather_documents(parsed: &ParsedNotionOfficial) -> Result<DocumentRows> {
     // Phase-by-phase timing for `notion_unittests`'s
     // `gather_documents_is_linear_in_blocks` regression test (and any
     // real sync where this function appears in a flame graph). Each
@@ -582,7 +564,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             .cloned()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "(untitled)".into());
-        let row = page_row(page, &title, &parsed.user_names);
+        let row = page_row(page, &title, &parsed.user_names)?;
         let empty: Vec<&Value> = Vec::new();
         let blocks = blocks_by_page.get(&pid).unwrap_or(&empty);
         let comments = comments_by_page.get(&pid).unwrap_or(&empty);
@@ -649,7 +631,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
             &page_title,
             parent_block_id.as_deref(),
             &parsed.user_names,
-        );
+        )?;
         // Fingerprint over sorted-by-id comments for stability.
         let mut for_fp: Vec<&Value> = members.iter().collect();
         for_fp.sort_by(|a, b| {
@@ -684,7 +666,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> DocumentRows {
         elapsed_ms = total_start.elapsed().as_millis() as u64,
     );
 
-    DocumentRows { pages, threads }
+    Ok(DocumentRows { pages, threads })
 }
 
 // Silence unused-import warning for slugify (re-exported from render
@@ -779,7 +761,7 @@ mod tests {
         };
 
         let start = Instant::now();
-        let docs = gather_documents(&parsed);
+        let docs = gather_documents(&parsed).expect("valid notion grid rows");
         let elapsed = start.elapsed();
         // Surface the wall time on stderr so `bazel test
         // --test_output=streamed` shows it next to the

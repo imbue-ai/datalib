@@ -1151,7 +1151,7 @@ pub fn render_notion_official(
     // Pre-compute every document's row set + fingerprint up front so
     // the per-doc loop can decide skip/render against priors before
     // doing any IO.
-    let docs = gather_documents(parsed);
+    let docs = gather_documents(parsed)?;
     let page_doc_by_uuid: HashMap<String, &PageDocument> = docs
         .pages
         .iter()

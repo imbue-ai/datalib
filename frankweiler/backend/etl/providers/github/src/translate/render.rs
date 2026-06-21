@@ -308,7 +308,7 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
     // sidecar
-    let rows = rows_for_pr(pr, comments);
+    let rows = rows_for_pr(pr, comments)?;
     let sidecar_path = md_path.with_extension("grid_rows.json");
     emit_sidecar(
         &sidecar_path,
@@ -355,7 +355,7 @@ pub fn render_github(
         }
 
         render_one_pr(pr, &comments, root)?;
-        let rows = rows_for_pr(pr, &comments);
+        let rows = rows_for_pr(pr, &comments)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: pr.uuid.clone(),
             source_name: String::new(),
