@@ -47,18 +47,18 @@ expression: snapshot
       "updated_at": "2369-05-28T15:20:00+00:00"
     },
     {
-      "created_at": "09 Apr 2369",
+      "created_at": "2369-04-09T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "1ccdcb0c-d89c-55fa-b087-458fcc3df616",
       "md_path": "rendered_md/linkedin/linkedin/connections/1ccdcb0c-d89c-55fa-b087-458fcc3df616__william-riker.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "5ac9a02902bca942ff90a6679d16d0c9b02fce39de02618c446656c4a5d08433",
-      "source_fingerprint": "e04f3f5a6d7bf83ea8e457bab2548cc5cc5b7449390816410f8b9c77936b8efb",
+      "row_set_hash": "cf097678b94c084305d2aae716a4c59cd09737d9b9d2eb9571f2db11bf9d78f2",
+      "source_fingerprint": "9726bea222b27c328575dd14966f272c94ac7332d63018a0c956fa692fc99ffb",
       "source_name": "linkedin",
       "title": "Connections",
-      "updated_at": "09 Apr 2369"
+      "updated_at": "2369-04-09T00:00:00+00:00"
     },
     {
       "created_at": "2370-02-11T00:00:00Z",
@@ -215,18 +215,18 @@ expression: snapshot
       "updated_at": "2369-04-10T09:06:30+00:00"
     },
     {
-      "created_at": "08 Apr 2369",
+      "created_at": "2369-04-08T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "73f0ce2f-9e35-55fa-a581-133a786a4149",
       "md_path": "rendered_md/linkedin/linkedin/connections/73f0ce2f-9e35-55fa-a581-133a786a4149__data-soong.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "86eeb0fe629bfa11dac68ac941984afb53cbaf7942c3c455fbae7b698a298f76",
-      "source_fingerprint": "74866a10d88a0eb0926c2471556a69fb3f99647af105e947e672968945e7bb23",
+      "row_set_hash": "46eb995648bdf723e4ada603e65449093f0ad34457e5e0cd537aad4bdc27f5a7",
+      "source_fingerprint": "4e9e018cb935efa18aee14d9319eeb69750c5125484d45d3c6e51db29abc8f29",
       "source_name": "linkedin",
       "title": "Connections",
-      "updated_at": "08 Apr 2369"
+      "updated_at": "2369-04-08T00:00:00+00:00"
     },
     {
       "created_at": "2369-04-14T19:30:00+00:00",
@@ -509,18 +509,18 @@ expression: snapshot
       "updated_at": "2370-04-15T00:00:00Z"
     },
     {
-      "created_at": "10 Apr 2369",
+      "created_at": "2369-04-10T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "c8be5964-8f65-5a22-9f0e-197590541d94",
       "md_path": "rendered_md/linkedin/linkedin/connections/c8be5964-8f65-5a22-9f0e-197590541d94__jean-luc-picard.md",
       "provider": "linkedin",
       "rendered_at": "2369-04-15T00:00:00+00:00",
       "renderer_version": "rust-v1.1",
-      "row_set_hash": "a6e862d6488c006024f012cfda6001c4d4cfec4c4a77f573b93524b6f6c16aa4",
-      "source_fingerprint": "bfe063e798f9a9259ce93361f2c10d87a179cafd48ab1c2b8b8f5c715e70e919",
+      "row_set_hash": "8d1944da1710d449037e6692c74c9f03db1efd60773b52794181085e92fb2e96",
+      "source_fingerprint": "a4badb37450ce16935b3b4431d940b8c1fa10404f0cf575fc50089924b7831d8",
       "source_name": "linkedin",
       "title": "Connections",
-      "updated_at": "10 Apr 2369"
+      "updated_at": "2369-04-10T00:00:00+00:00"
     },
     {
       "created_at": "2026-01-05T09:00:00+00:00",
@@ -1114,7 +1114,7 @@ expression: snapshot
       "text_len": 45,
       "text_sha": "sha256:2151f2112feffc5ae4f99f879ba70a0ff32974c30f47ec2a880b2c5f73ccd67d",
       "uuid": "1ccdcb0c-d89c-55fa-b087-458fcc3df616",
-      "when_ts": "09 Apr 2369"
+      "when_ts": "2369-04-09T00:00:00+00:00"
     },
     {
       "account": "tng_contacts",
@@ -2314,7 +2314,7 @@ expression: snapshot
       "text_len": 58,
       "text_sha": "sha256:62d5cc9120041e465e084563849cec62d833ed2ed994509df86661d9617c12b2",
       "uuid": "73f0ce2f-9e35-55fa-a581-133a786a4149",
-      "when_ts": "08 Apr 2369"
+      "when_ts": "2369-04-08T00:00:00+00:00"
     },
     {
       "account": "picard@enterprise.starfleet",
@@ -3589,7 +3589,7 @@ expression: snapshot
       "text_len": 68,
       "text_sha": "sha256:d6c25c292987383812a7db75fadf152e080c55960cf4b6051b932e9ac3c44b0d",
       "uuid": "c8be5964-8f65-5a22-9f0e-197590541d94",
-      "when_ts": "10 Apr 2369"
+      "when_ts": "2369-04-10T00:00:00+00:00"
     },
     {
       "account": "picard@enterprise.starfleet",
