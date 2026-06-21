@@ -56,9 +56,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailOutlink,
-    EmailSync, GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync,
-    SlackApiSync, SourceConfig, WhatsAppSync, YolinkSync,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
+    GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
+    SourceConfig, WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -77,6 +77,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinSet;
 
 mod progress;
+mod render_and_index_md;
 mod summary;
 use crate::progress::{make_bar, make_multi, IndicatifSink};
 use crate::summary::{ErrorKind, PhaseOutcome, Status, SyncSummary};
@@ -2548,340 +2549,21 @@ fn render_and_index_md_source(
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();
+    let renderer = render_and_index_md::renderer_for(src)?;
     status_line!(
-        "[translate] {name} ({}): {}",
+        "[render_and_index_md] {name} ({}): {}",
         src.type_str(),
         fixture.display()
     );
-    match src {
-        SourceConfig::ClaudeApi { .. } | SourceConfig::ClaudeExport { .. } => {
-            use frankweiler_etl_anthropic::render_and_index_md::{
-                parse::parse, render::render_all,
-            };
-            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "anthropic", name);
-            let cursor = frankweiler_etl::render_cursor::read(&cursor_path).with_context(|| {
-                format!("read anthropic render cursor {}", cursor_path.display())
-            })?;
-            let parsed = parse(
-                &fixture,
-                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-            )
-            .with_context(|| format!("anthropic parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress, on_doc_complete)
-                .context("anthropic render_all")
-                .map(|_| ())
-        }
-        SourceConfig::ChatgptApi { .. } => {
-            use frankweiler_etl_chatgpt::render_and_index_md::{parse::parse, render::render_all};
-            // Incremental skip is driven by the render cursor + a
-            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
-            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "chatgpt", name);
-            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-                .with_context(|| format!("read chatgpt render cursor {}", cursor_path.display()))?;
-            let parsed = parse(
-                &fixture,
-                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-            )
-            .with_context(|| format!("chatgpt parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress, on_doc_complete)
-                .context("chatgpt render_all")
-                .map(|_| ())
-        }
-        SourceConfig::SlackApi { .. } => {
-            use frankweiler_etl_slack::render_and_index_md::{parse::parse, render::render_all};
-            // Incremental skip is driven by the render cursor + a
-            // `dolt_diff_<table>` union, not by `prior_fingerprints`.
-            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "slack", name);
-            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-                .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
-            let parsed = parse(
-                &fixture,
-                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-            )
-            .with_context(|| format!("slack parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress, on_doc_complete)
-                .context("slack render_all")
-                .map(|_| ())
-        }
-        SourceConfig::GithubApi { .. } => {
-            use frankweiler_etl_github::render_and_index_md::{parse_api_dir, render_github};
-            let parsed = parse_api_dir(&fixture)
-                .with_context(|| format!("github parse {}", fixture.display()))?;
-            render_github(&parsed, root, progress, prior_fingerprints, on_doc_complete)
-                .context("render_github")
-                .map(|_| ())
-        }
-        SourceConfig::GitlabApi { .. } => {
-            use frankweiler_etl_gitlab::render_and_index_md::{parse_api_dir, render_gitlab};
-            let parsed = parse_api_dir(&fixture)
-                .with_context(|| format!("gitlab parse {}", fixture.display()))?;
-            render_gitlab(&parsed, root, progress, prior_fingerprints, on_doc_complete)
-                .context("render_gitlab")
-                .map(|_| ())
-        }
-        SourceConfig::NotionApi { .. } => {
-            use frankweiler_etl_notion::render_and_index_md::{
-                parse_api_dir, render::render_notion_official,
-            };
-            let parsed = parse_api_dir(&fixture)
-                .with_context(|| format!("notion parse {}", fixture.display()))?;
-            render_notion_official(&parsed, root, progress, prior_fingerprints, on_doc_complete)
-                .context("render_notion_official")
-                .map(|_| ())
-        }
-        SourceConfig::Beeper { sync, .. } => {
-            use frankweiler_etl_beeper::render_and_index_md::{render_all, Period};
-            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
-                .context("parse beeper period")?;
-            let parsed =
-                frankweiler_etl_beeper::render_and_index_md::parse::parse(&fixture, period)
-                    .with_context(|| format!("beeper parse {}", fixture.display()))?;
-            let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(&fixture);
-            render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-                &raw_db_path,
-            )
-            .context("beeper render_all")
-            .map(|_| ())
-        }
-        SourceConfig::Carddav { sync, .. } => {
-            use frankweiler_etl_contacts::extract::db_path_for as carddav_db_path_for;
-            use frankweiler_etl_contacts::render_and_index_md::{parse, render};
-            // Both CardDAV-server and vcf-file sources land their data
-            // in the same raw doltlite shape; translate reads from
-            // there. For the file path `fixture` is the user's `.vcf`
-            // (or directory of them), not the raw store, so look up
-            // the canonical doltlite location by source name.
-            let db_dir = if sync.is_some() {
-                fixture.clone()
-            } else {
-                cfg.data_root.join("raw").join(name)
-            };
-            let db_path = carddav_db_path_for(&db_dir);
-            let parsed = parse::parse(&db_path)
-                .with_context(|| format!("carddav parse {}", db_path.display()))?;
-            render::render_all(
-                &parsed,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("carddav render_all")
-            .map(|_| ())
-        }
-        SourceConfig::Linkedin { .. } => {
-            // `fixture` is the export dir; the raw store (where extract
-            // wrote the message tables) is the canonical
-            // `<data_root>/raw/<name>` location. Every message-shaped
-            // feed (DMs + AI-coach transcripts) renders.
-            let raw_dir = cfg.data_root.join("raw").join(name);
-            frankweiler_etl_linkedin::render::render(
-                &raw_dir,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("linkedin render")?;
-            // Connections render as first-class contacts via the shared
-            // contact renderer (sibling of the chat path above).
-            frankweiler_etl_linkedin::connections::render_connections(
-                &raw_dir,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("linkedin connections render")?;
-            // Your own posts (Shares) and the comments you left, grouped
-            // one chat-style thread per post, with linkouts back to
-            // linkedin.com.
-            frankweiler_etl_linkedin::posts::render_posts(
-                &raw_dir,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("linkedin posts render")
-        }
-        SourceConfig::GoogleTakeout { .. } => {
-            // Only the Google Chat feed renders; the other feeds stay
-            // queryable in the raw store. The raw store is the canonical
-            // `<data_root>/raw/<name>` location.
-            let raw_dir = cfg.data_root.join("raw").join(name);
-            frankweiler_etl_google_takeout::render_and_index_md::render(
-                &raw_dir,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("google_takeout render")
-        }
-        SourceConfig::SmsBackupRestore { .. } => {
-            // Texts + calls render as one chat per phone number. The raw
-            // store is the canonical `<data_root>/raw/<name>` location.
-            let raw_dir = cfg.data_root.join("raw").join(name);
-            frankweiler_etl_sms_backup_restore::render_and_index_md::render(
-                &raw_dir,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("sms_backup_restore render")
-        }
-        SourceConfig::Email {
-            sync,
-            outlink_format,
-            ..
-        } => {
-            use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
-            use frankweiler_etl_email::render_and_index_md::parse::parse;
-            use frankweiler_etl_email::render_and_index_md::render::{render_all, OutlinkFormat};
-
-            // Both JMAP-server and mbox sources land their data in
-            // the same shape; translate is identical for both. The
-            // canonical doltlite location is `<data_root>/raw/<name>`
-            // — for the mbox case `fixture` is the user's `.mbox`,
-            // not the raw store, so we look up the db path by name.
-            let db_dir = if sync.is_some() {
-                fixture.clone()
-            } else {
-                cfg.data_root.join("raw").join(name)
-            };
-            let db = jmap_db_path_for(&db_dir);
-            if !db.exists() {
-                status_line!(
-                    "[translate] {name} (email): no raw db at {} — skipping",
-                    db.display(),
-                );
-                return Ok(());
-            }
-            // Two-phase parse driven by `dolt_diff_<table>`: phase 1
-            // asks doltlite which threads changed since the render
-            // cursor's commit; phase 2 loads only those threads.
-            // The orchestrator's `prior_fingerprints` map is ignored
-            // here — the cursor is the single source of truth.
-            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "email", name);
-            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-                .with_context(|| format!("read email render cursor {}", cursor_path.display()))?;
-            let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))
-                .with_context(|| format!("email parse {}", db.display()))?;
-            let outlink = outlink_format.map(|f| match f {
-                EmailOutlink::Gmail => OutlinkFormat::Gmail,
-                EmailOutlink::Fastmail => OutlinkFormat::Fastmail,
-            });
-            render_all(&parsed, root, name, outlink, progress, on_doc_complete)
-                .context("email render_all")
-                .map(|_| ())
-        }
-        SourceConfig::Perseus { sync, .. } => {
-            use frankweiler_etl_perseus::render_and_index_md::{align, parse, render};
-            let parsed = parse::parse(&fixture)
-                .with_context(|| format!("perseus parse {}", fixture.display()))?;
-            // Within-section sentence alignment is opt-in per edition
-            // pair via `sync.alignment_pairs` (default: none). Each
-            // pair loads the Ancient-Greek-BERT encoder (async: hf-hub
-            // fetch + model load) and aligns multi-sentence sections —
-            // the dominant translate cost, hence opt-in. With no pairs
-            // configured this is a cheap no-op and every edition
-            // renders with section-level anchors only. The async
-            // aligner is bridged into the sync translate phase with
-            // `Handle::current().block_on` — same pattern as the
-            // per-doc apply_one call above. The first aligned run pays
-            // the HF Hub download (~440 MB cached under
-            // ~/.cache/huggingface/hub/); later runs read from cache.
-            let pairs: Vec<(String, String)> = sync
-                .as_ref()
-                .map(|s| {
-                    s.alignment_pairs
-                        .iter()
-                        .map(|[a, b]| (a.clone(), b.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let alignments = tokio::runtime::Handle::current()
-                .block_on(align::align_all(&parsed, &pairs))
-                .context("perseus align_all")?;
-            render::render_all(
-                &parsed,
-                &alignments,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("perseus render_all")
-            .map(|_| ())
-        }
-        SourceConfig::SignalBackup { sync, .. } => {
-            use frankweiler_etl_signal::render_and_index_md::{parse, render_all, Period};
-            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
-                .context("parse signal period")?;
-            // Incremental skip is driven by the render cursor + a
-            // `dolt_diff_<table>` union, not by `prior_fingerprints`
-            // anymore. Read the cursor (a JSON file at the root of
-            // signal's render dir), hand its commit hash to `parse`,
-            // and let `render_all` advance the cursor on success.
-            let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "signal", name);
-            let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
-                .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
-            let parsed = parse(
-                &fixture,
-                period,
-                name,
-                cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
-            )
-            .with_context(|| format!("signal parse {}", fixture.display()))?;
-            render_all(&parsed, root, name, progress, on_doc_complete)
-                .context("signal render_all")
-                .map(|_| ())
-        }
-        SourceConfig::Yolink { .. } => {
-            // Extract-only provider. Time-series viz lives outside
-            // the rendered_md tree; the readings sit in the source's
-            // doltlite for direct query (sqlite3 / dolt log) without
-            // a markdown intermediary. Skip translate quietly so a
-            // mixed config doesn't error out.
-            status_line!("[translate] {name} (yolink): skipped (extract-only, no render path)");
-            Ok(())
-        }
-        SourceConfig::WhatsAppBackup { .. } => {
-            use frankweiler_etl_whatsapp::render_and_index_md::{parse, render_all, Period};
-            // WhatsApp doesn't expose a `period` knob on its sync block
-            // today — default to month bucketing, same as signal.
-            let period = Period::from_config(None).context("default whatsapp period")?;
-            let parsed = parse(&fixture, period, name)
-                .with_context(|| format!("whatsapp parse {}", fixture.display()))?;
-            render_all(
-                &parsed.chats,
-                &parsed.blobs_by_chat,
-                &fixture,
-                root,
-                name,
-                progress,
-                prior_fingerprints,
-                on_doc_complete,
-            )
-            .context("whatsapp render_all")
-            .map(|_| ())
-        }
-    }
+    let ctx = render_and_index_md::RenderCtx {
+        root,
+        data_root: &cfg.data_root,
+        name,
+        input_path: &fixture,
+        progress,
+        prior_fingerprints,
+    };
+    renderer.run(&ctx, on_doc_complete)
 }
 
 // ─────────────────────────────────────────────────────────────────────

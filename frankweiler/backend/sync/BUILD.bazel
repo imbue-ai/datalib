@@ -11,6 +11,7 @@ rust_binary(
     srcs = [
         "src/main.rs",
         "src/progress.rs",
+        "src/render_and_index_md.rs",
         "src/summary.rs",
     ],
     edition = "2021",
