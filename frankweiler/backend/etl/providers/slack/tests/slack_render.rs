@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl_slack::translate::{
+use frankweiler_etl_slack::render_and_index_md::{
     parse, render::render_all, slack_message_uuid, slack_thread_uuid,
 };
 use insta::{assert_json_snapshot, assert_snapshot};

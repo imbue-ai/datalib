@@ -1,11 +1,11 @@
-//! Golden test for `slack::translate` against the checked-in TNG-themed
+//! Golden test for `slack::render_and_index_md` against the checked-in TNG-themed
 //! fixture under `tests/fixtures/slack_api`. Locks in the grid_rows
 //! projection — UUID derivation, thread grouping, dedup, mention
 //! resolution.
 
 use std::path::PathBuf;
 
-use frankweiler_etl_slack::translate::{parse, ts_to_iso};
+use frankweiler_etl_slack::render_and_index_md::{parse, ts_to_iso};
 
 fn fixture_root() -> PathBuf {
     if let Ok(d) = std::env::var("SLACK_FIXTURE_DIR") {

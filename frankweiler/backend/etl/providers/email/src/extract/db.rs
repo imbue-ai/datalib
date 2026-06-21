@@ -461,7 +461,7 @@ pub struct EmailJoins {
 }
 
 /// Bag passed to translate's sync render path. Attachment bytes are
-/// loaded per bucket as a [`BlobBundle`] by `translate::parse`, not
+/// loaded per bucket as a [`BlobBundle`] by `render_and_index_md::parse`, not
 /// here.
 #[derive(Clone, Default)]
 pub struct LoadedRaw {
@@ -474,7 +474,7 @@ pub struct LoadedRaw {
 
 /// Synchronous loader for tests / ad-hoc callers that want every
 /// entity table at once. Production translate calls
-/// `crate::translate::parse::parse(..., last_render_hash)` instead.
+/// `crate::render_and_index_md::parse::parse(..., last_render_hash)` instead.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {

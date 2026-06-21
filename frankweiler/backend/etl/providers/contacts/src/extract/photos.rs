@@ -75,7 +75,7 @@ pub async fn lift_photos_to_cas(db: &RawDb, entity_db_path: &std::path::Path) ->
 }
 
 /// First inline (base64 / `data:`) `PHOTO` in a vCard → `(bytes,
-/// content_type)`. Mirrors the decode in `translate::parse` (kept
+/// content_type)`. Mirrors the decode in `render_and_index_md::parse` (kept
 /// separate: this is the raw side). URL-only photos return `None` here —
 /// they carry no bytes to store.
 fn decode_inline_photo(vcard: &str) -> Option<(Vec<u8>, String)> {

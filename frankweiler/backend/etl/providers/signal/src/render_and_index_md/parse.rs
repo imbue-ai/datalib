@@ -19,7 +19,7 @@
 //! the `bucket_fingerprint_query` CTE, and the `prior_fingerprints`
 //! plumbing through translate/render/orchestrator). The dolt prolly-
 //! tree diff itself is timed on every run and logged in the render
-//! cursor — see `translate::render`.
+//! cursor — see `render_and_index_md::render`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

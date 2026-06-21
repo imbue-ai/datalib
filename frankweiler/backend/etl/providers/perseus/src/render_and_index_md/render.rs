@@ -65,7 +65,7 @@ pub struct RenderSummary {
     pub rows_emitted: usize,
 }
 
-/// Translate entry point. Mirrors `contacts::translate::render::render_all`
+/// Translate entry point. Mirrors `contacts::render_and_index_md::render::render_all`
 /// so the sync orchestrator's match arm wires up the same way.
 ///
 /// `alignments` carries the per-section sentence alignments for the
@@ -691,7 +691,7 @@ fn compute_chapter_fingerprint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::translate::parse::{Book, Chapter, Edition, Section};
+    use crate::render_and_index_md::parse::{Book, Chapter, Edition, Section};
     use std::collections::BTreeMap;
 
     fn edition(id: &str, lang: &str, title: &str) -> Edition {

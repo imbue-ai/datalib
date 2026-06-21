@@ -198,7 +198,7 @@ pub struct SyncSummary {
     /// before the run finishes.
     pub output_path: Option<PathBuf>,
     pub extract: Vec<PhaseOutcome>,
-    pub translate: Vec<PhaseOutcome>,
+    pub render_and_index_md: Vec<PhaseOutcome>,
     pub load: Option<LoadOutcome>,
     pub qmd_index: Option<PhaseOutcome>,
     /// Raw stdout of `qmd status` captured at the end of the qmd-index
@@ -224,7 +224,7 @@ impl SyncSummary {
             data_root: None,
             output_path: None,
             extract: Vec::new(),
-            translate: Vec::new(),
+            render_and_index_md: Vec::new(),
             load: None,
             qmd_index: None,
             qmd_status: None,
@@ -259,7 +259,10 @@ impl SyncSummary {
         });
         let any_error = self.fatal_error.is_some()
             || self.extract.iter().any(|o| o.status == Status::Error)
-            || self.translate.iter().any(|o| o.status == Status::Error)
+            || self
+                .render_and_index_md
+                .iter()
+                .any(|o| o.status == Status::Error)
             || self.load.as_ref().is_some_and(|l| l.error.is_some())
             || self
                 .qmd_index
@@ -283,7 +286,7 @@ impl SyncSummary {
             "overall_status": overall,
             "data_root": self.data_root.as_ref().map(|p| p.display().to_string()),
             "extract": self.extract.iter().map(PhaseOutcome::to_json).collect::<Vec<_>>(),
-            "translate": self.translate.iter().map(PhaseOutcome::to_json).collect::<Vec<_>>(),
+            "render_and_index_md": self.render_and_index_md.iter().map(PhaseOutcome::to_json).collect::<Vec<_>>(),
             "load": load,
             "qmd_index": self.qmd_index.as_ref().map(PhaseOutcome::to_json),
             "qmd_status": self.qmd_status,

@@ -17,7 +17,7 @@ pub mod render;
 
 // The UUIDv5 identity recipes live in `extract::schema_raw` (identity
 // recipes belong next to the schema). Re-export so existing
-// `crate::translate::beeper_*` callers keep resolving.
+// `crate::render_and_index_md::beeper_*` callers keep resolving.
 pub use super::extract::schema_raw::{
     beeper_event_uuid, beeper_markdown_uuid, beeper_room_uuid, beeper_user_uuid, BEEPER_UUID_NS,
 };

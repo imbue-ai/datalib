@@ -45,7 +45,7 @@
 //!
 //!   No `sync:` block ⇒ extract is skipped; the translate path
 //!   reads the file directly. See
-//!   [`translate::parse`] for the directory-vs-file + multi-block
+//!   [`render_and_index_md::parse`] for the directory-vs-file + multi-block
 //!   semantics.
 //!
 //! * **Read-only.** Translate produces grid rows; we do not push
@@ -65,4 +65,4 @@
 //!   linkages.
 
 pub mod extract;
-pub mod translate;
+pub mod render_and_index_md;

@@ -15,7 +15,7 @@
 //!   without first cracking the detail payload.
 //! - **Translate-side UUIDs are a separate recipe.** Cross-provider grid
 //!   UUIDs (`github:{repo}:pr:{number}`, `github:{repo}:issue_comment:{id}`,
-//!   …) are UUIDv5-derived in `crate::translate::parse`
+//!   …) are UUIDv5-derived in `crate::render_and_index_md::parse`
 //!   (`github_pr_uuid`, `github_issue_comment_uuid`,
 //!   `github_review_uuid`, `github_review_comment_uuid`) — see
 //!   `docs/dev/data_architecture_ingestion.md` §"Object identity". Those are
@@ -490,7 +490,7 @@ pub const PR_REVIEW_COMMENTS_BY_PR_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS
 /// This is GitHub's analogue of the UUIDv5 recipes other providers
 /// document under their (eventual, plan §P0.4) `uuid.rs` modules; the
 /// translate-side cross-provider grid UUIDs
-/// (`github_pr_uuid`, …) live in `crate::translate::parse` and key off
+/// (`github_pr_uuid`, …) live in `crate::render_and_index_md::parse` and key off
 /// the same `(repo, number)` pair but feed a different namespace.
 /// For now we keep the recipe **here** with the schema it keys into,
 /// so that "what does the PK mean?" is one rustdoc-hop from the DDL.

@@ -233,8 +233,8 @@ async fn open_ro_pool(path: &Path) -> Result<SqlitePool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render_and_index_md::parse::parse;
     use crate::schema_raw::ALL_DDL;
-    use crate::translate::parse::parse;
     use frankweiler_etl::doltlite_raw::{commit_run, has_dolt_extensions, open as open_doltlite};
     use frankweiler_etl::periodize::Period;
 
@@ -342,8 +342,9 @@ mod tests {
             1,
             "after modifying one chat, render should emit exactly one doc, got {docs3:?}"
         );
-        let alice_chat_uuid = crate::translate::whatsapp_chat_uuid("test", "alice@s.whatsapp.net");
-        let expected = crate::translate::whatsapp_markdown_uuid(&alice_chat_uuid, "all");
+        let alice_chat_uuid =
+            crate::render_and_index_md::whatsapp_chat_uuid("test", "alice@s.whatsapp.net");
+        let expected = crate::render_and_index_md::whatsapp_markdown_uuid(&alice_chat_uuid, "all");
         assert_eq!(
             docs3[0], expected,
             "rendered doc should belong to alice's chat"

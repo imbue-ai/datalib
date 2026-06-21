@@ -21,6 +21,6 @@ pub mod render;
 
 // The UUIDv5 identity recipes live in `extract::schema_raw` (identity
 // recipes belong next to the schema). Re-export so
-// `crate::translate::{contact_uuid, addressbook_uuid}` callers — here
+// `crate::render_and_index_md::{contact_uuid, addressbook_uuid}` callers — here
 // and in `render.rs` — keep resolving.
 pub use super::extract::schema_raw::{addressbook_uuid, contact_uuid};

@@ -25,4 +25,4 @@
 //! ```
 
 pub mod extract;
-pub mod translate;
+pub mod render_and_index_md;

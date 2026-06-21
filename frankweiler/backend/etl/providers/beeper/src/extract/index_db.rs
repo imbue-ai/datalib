@@ -39,7 +39,7 @@ use tracing::{debug, info, warn};
 
 use super::db::{BeeperMediaAttachmentRow, EventRow, RawDb, RoomRow, UserRow};
 use super::FetchSummary;
-use crate::translate::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
+use crate::render_and_index_md::{beeper_event_uuid, beeper_room_uuid, beeper_user_uuid};
 use frankweiler_etl::blob_cas::CasEdgeRow as _;
 
 /// In-memory accumulator the per-thread walkers push into; flushed

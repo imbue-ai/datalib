@@ -20,7 +20,7 @@ use serde_json::Value;
 
 // UUIDv5 recipes for Slack message and thread ids live in
 // `extract::schema_raw`. Re-export here so existing
-// `crate::translate::slack_message_uuid` callers outside this crate
+// `crate::render_and_index_md::slack_message_uuid` callers outside this crate
 // keep resolving.
 pub use super::extract::schema_raw::{slack_message_uuid, slack_thread_uuid};
 pub use parse::{parse, ParsedSlack, ScanResult, SlackThreadBucket};

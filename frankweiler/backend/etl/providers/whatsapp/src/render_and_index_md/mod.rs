@@ -16,7 +16,7 @@ pub mod render;
 
 // The UUIDv5 identity recipes live in `crate::schema_raw` (identity
 // recipes belong next to the schema). Re-export so existing
-// `crate::translate::whatsapp_*` callers keep resolving.
+// `crate::render_and_index_md::whatsapp_*` callers keep resolving.
 pub use super::schema_raw::{
     whatsapp_chat_uuid, whatsapp_markdown_uuid, whatsapp_message_uuid, whatsapp_reaction_uuid,
     WHATSAPP_UUID_NS,

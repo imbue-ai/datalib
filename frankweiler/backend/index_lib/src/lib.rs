@@ -1,6 +1,7 @@
-//! Cross-provider **Translate → Load** contract — the "index" layer.
+//! Cross-provider **Render-and-index-md → Load** contract — the "index"
+//! layer.
 //!
-//! Every provider's translate step emits one `.grid_rows.json` sidecar
+//! Every provider's render-and-index-md step emits one `.grid_rows.json` sidecar
 //! per rendered markdown by calling [`emit_sidecar`]. The provider-
 //! agnostic Load step reads them back as [`Sidecar`] and upserts the
 //! rows into the backend index. Both sides import from this crate so

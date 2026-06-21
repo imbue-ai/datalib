@@ -35,7 +35,7 @@ pub mod render;
 /// (UUIDs derived via `paragraph_sentence_uuid`), and the edges
 /// table carries one row per aligned (grc-sentence, eng-sentence)
 /// pair — within-section sentence alignment is computed by the
-/// `translate::align` module using Ancient-Greek-BERT. v14 generalizes
+/// `render_and_index_md::align` module using Ancient-Greek-BERT. v14 generalizes
 /// from the hardcoded grc+eng pair to N independent editions: every
 /// `tlg0003.tlg001.<id>.xml` under `input_path` renders its own
 /// per-(chapter, edition) doc, `kind` carries the edition id

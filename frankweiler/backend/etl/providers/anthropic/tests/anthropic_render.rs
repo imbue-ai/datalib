@@ -1,4 +1,4 @@
-//! Golden test for Anthropic translate::render against the TNG fixture.
+//! Golden test for Anthropic render_and_index_md::render against the TNG fixture.
 //!
 //! The expected snapshot is byte-equal to what `src/ingest/render.py`
 //! produces for the same fixture.
@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl_anthropic::translate::parse::parse_export;
-use frankweiler_etl_anthropic::translate::render::render_all;
+use frankweiler_etl_anthropic::render_and_index_md::parse::parse_export;
+use frankweiler_etl_anthropic::render_and_index_md::render::render_all;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("ANTHROPIC_FIXTURE_DIR") {

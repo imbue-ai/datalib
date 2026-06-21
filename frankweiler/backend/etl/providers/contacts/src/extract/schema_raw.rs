@@ -284,7 +284,7 @@ pub fn synthesized_name_uid(given: &str, family: &str) -> String {
 // These derive the UUIDs the rendered grid rows carry (`row.id`,
 // `conversation_uuid`). Distinct from the extract-side surrogate above:
 // changing either namespace re-keys everything downstream, so both are
-// frozen. The translate path re-exports these via `crate::translate`.
+// frozen. The translate path re-exports these via `crate::render_and_index_md`.
 
 /// Stable namespace for the translate-side contact / addressbook
 /// UUIDs. Picked once + frozen so re-ingests are idempotent across

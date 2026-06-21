@@ -1,6 +1,6 @@
 //! End-to-end mbox-mode test: run the extract::mbox extractor against
 //! the checked-in Star Trek mbox fixture, then read it back via the
-//! shared raw store and run it through `translate::render::render_all`
+//! shared raw store and run it through `render_and_index_md::render::render_all`
 //! — exercises the file-based ingest path end-to-end. Same code path
 //! the sync orchestrator picks up when a `type: email` source has no
 //! `sync:` block and `input_path` points at an `.mbox` file.
@@ -12,8 +12,8 @@ use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_email::extract::db::{db_path_for, RawDb};
 use frankweiler_etl_email::extract::mbox;
-use frankweiler_etl_email::translate::parse::parse;
-use frankweiler_etl_email::translate::render::{render_all, thread_uuid, OutlinkFormat};
+use frankweiler_etl_email::render_and_index_md::parse::parse;
+use frankweiler_etl_email::render_and_index_md::render::{render_all, thread_uuid, OutlinkFormat};
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {

@@ -36,7 +36,7 @@
 //!   on-disk store the row originated from; PKs are namespaced by
 //!   `source` so two stores holding the "same" chat from different
 //!   angles cannot collide. See [`beeper_room_uuid`-family recipes in
-//!   `crate::translate`].
+//!   `crate::render_and_index_md`].
 //!
 //! - **Chat-human family with Slack / Signal.** Per
 //!   `docs/dev/data_architecture_ingestion.md` §"Shared schemas across similar
@@ -55,7 +55,7 @@
 //!
 //! - **PKs are translate-side UUIDv5.** The `id` columns are minted
 //!   by `beeper_room_uuid` / `beeper_user_uuid` / `beeper_event_uuid`
-//!   in `crate::translate`, keyed off `(source, native_id)`. The
+//!   in `crate::render_and_index_md`, keyed off `(source, native_id)`. The
 //!   recipes live there because they're also consumed by the
 //!   translate-side cross-reference logic; the writer here calls
 //!   into the same functions.
@@ -400,7 +400,7 @@ pub const EVENTS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 /// doesn't enforce these per-`event_type` subsets — it can't,
 /// without a per-type table split — and a reader of the schema has
 /// to consult this docstring (and the
-/// [`crate::translate::render`] taxonomy switch) to know which
+/// [`crate::render_and_index_md::render`] taxonomy switch) to know which
 /// columns apply when.
 ///
 /// We pay this cost deliberately to keep the
@@ -411,7 +411,7 @@ pub const EVENTS_BY_SOURCE_NATIVE_INDEX_DDL: &str =
 /// per-`event_type` split (`beeper_message` / `beeper_reaction` /
 /// `beeper_membership` / …) would force a `UNION` or a join-heavy
 /// rewrite of the bucket walker in
-/// [`crate::translate::parse`] and lose the chronological
+/// [`crate::render_and_index_md::parse`] and lose the chronological
 /// ordering convenience the unified table buys us.
 ///
 /// If a future need pushes us toward stricter typing, the natural

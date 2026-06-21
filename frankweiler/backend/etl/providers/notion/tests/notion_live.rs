@@ -24,7 +24,7 @@
 //! ```
 
 use frankweiler_etl_notion::extract::{self as notion, FetchOptions};
-use frankweiler_etl_notion::translate::parse_api_dir;
+use frankweiler_etl_notion::render_and_index_md::parse_api_dir;
 use insta::assert_json_snapshot;
 use serde_json::json;
 

@@ -1,10 +1,10 @@
 //! `frankweiler-sync` — config-driven ETL orchestrator.
 //!
-//! Drives Extract → Translate → Load → Archive across every
+//! Drives Extract → Render-and-index-md → Load → Archive across every
 //! enabled source in the user's `~/.config/frankweiler/config.yaml`.
 //! Each source is dispatched on its `type:` discriminator; sources with
 //! a `sync:` block (the "managed" ones) get their downloader invoked,
-//! the others are translate-only against pre-staged `input_path`.
+//! the others are render-and-index-md-only against pre-staged `input_path`.
 //!
 //! ```sh
 //! FRANKWEILER_CONFIG=$(pwd)/configs/thad_dev.yaml \
@@ -269,7 +269,7 @@ async fn main() {
     // Print per-error auth hints based on the collected outcomes
     // (rather than only on a single bubbled-up error). The user reads
     // these alongside the JSON summary path.
-    for outcome in s.extract.iter().chain(s.translate.iter()) {
+    for outcome in s.extract.iter().chain(s.render_and_index_md.iter()) {
         if outcome.status == Status::Error {
             status_line!(
                 "\n[{}] {} ({}): {}",
@@ -295,7 +295,9 @@ async fn main() {
     }
 
     let any_phase_err = s.extract.iter().any(|o| o.status == Status::Error)
-        || s.translate.iter().any(|o| o.status == Status::Error)
+        || s.render_and_index_md
+            .iter()
+            .any(|o| o.status == Status::Error)
         || s.load.as_ref().is_some_and(|l| l.error.is_some())
         || s.qmd_index
             .as_ref()
@@ -758,8 +760,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         prior_cursors.len(),
     );
 
-    // ── Translate (= render + per-doc load) ────────────────────────
-    // Translate only runs against sources whose extract succeeded (or
+    // ── Render-and-index-md (= render + per-doc load) ──────────────
+    // Render-and-index-md only runs against sources whose extract succeeded (or
     // was skipped via --skip-extract). A source whose extract errored
     // out probably has missing/partial fixtures on disk, so attempting
     // to translate it just produces a second, downstream failure
@@ -776,7 +778,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     // source. Sources run concurrently in `spawn_blocking` tasks
     // (mirrors the extract phase), so bars animate together rather
     // than in turn.
-    let translate_multi = make_multi();
+    let render_and_index_md_multi = make_multi();
     let load_totals = Arc::new(Mutex::new(summary::LoadOutcome {
         markdowns_loaded: 0,
         markdowns_total: 0,
@@ -816,24 +818,28 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         let name = src.name().to_string();
         let type_str = src.type_str().to_string();
         if extract_failed.contains(&name) {
-            summary.lock().unwrap().translate.push(PhaseOutcome {
-                name,
-                type_str,
-                status: Status::Skipped,
-                error: None,
-                error_kind: None,
-                stats: Some("skipped (extract failed)".into()),
-                report: None,
-            });
+            summary
+                .lock()
+                .unwrap()
+                .render_and_index_md
+                .push(PhaseOutcome {
+                    name,
+                    type_str,
+                    status: Status::Skipped,
+                    error: None,
+                    error_kind: None,
+                    stats: Some("skipped (extract failed)".into()),
+                    report: None,
+                });
             continue;
         }
-        let bar = make_bar(&translate_multi, name.clone());
-        let mp = translate_multi.clone();
+        let bar = make_bar(&render_and_index_md_multi, name.clone());
+        let mp = render_and_index_md_multi.clone();
         let src_owned = src.clone();
         let cfg_t = cfg_arc.clone();
         let root_t = root_arc.clone();
         // Separate clone for the on_doc_complete closure so the outer
-        // `translate_source` call can still borrow `root_t`.
+        // `render_and_index_md_source` call can still borrow `root_t`.
         let root_for_cb = root_arc.clone();
         let now_t = now_arc.clone();
         let pfp = prior_fingerprints.clone();
@@ -874,7 +880,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 Ok(())
             };
 
-            let res = translate_source(
+            let res = render_and_index_md_source(
                 &src_owned,
                 &cfg_t,
                 root_t.as_path(),
@@ -895,7 +901,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 summary
                     .lock()
                     .unwrap()
-                    .translate
+                    .render_and_index_md
                     .push(summary::outcome_from(&name, &type_str, res));
             }
             Err(e) => {
@@ -903,11 +909,11 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
                 // panic shows up in the summary instead of being
                 // swallowed.
                 let err = anyhow::anyhow!("translate task panicked: {e}");
-                summary.lock().unwrap().translate.push(PhaseOutcome::err(
-                    "<unknown>",
-                    "unknown",
-                    &err,
-                ));
+                summary
+                    .lock()
+                    .unwrap()
+                    .render_and_index_md
+                    .push(PhaseOutcome::err("<unknown>", "unknown", &err));
             }
         }
     }
@@ -920,12 +926,16 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         .map(|(i, s)| (s.name().to_string(), i))
         .collect();
     let fallback_pos = cfg_order.len();
-    summary.lock().unwrap().translate.sort_by_key(|o| {
-        cfg_order
-            .get(o.name.as_str())
-            .copied()
-            .unwrap_or(fallback_pos)
-    });
+    summary
+        .lock()
+        .unwrap()
+        .render_and_index_md
+        .sort_by_key(|o| {
+            cfg_order
+                .get(o.name.as_str())
+                .copied()
+                .unwrap_or(fallback_pos)
+        });
 
     // All-or-nothing semantics: COMMIT the big batch if every source
     // succeeded; ROLLBACK otherwise so the index DB is left exactly
@@ -934,13 +944,13 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     // translate outcomes above, which are NOT errors). A ROLLBACK
     // failure is logged but not propagated — the open transaction
     // will be closed when the held connection drops.
-    let any_translate_error = summary
+    let any_render_and_index_md_error = summary
         .lock()
         .unwrap()
-        .translate
+        .render_and_index_md
         .iter()
         .any(|o| o.status == Status::Error);
-    if any_translate_error {
+    if any_render_and_index_md_error {
         status_line!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
         if let Err(e) = write_lock.rollback_transaction().await {
             status_line!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");
@@ -2501,7 +2511,7 @@ fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Translate phase
+// Render-and-index-md phase
 // ─────────────────────────────────────────────────────────────────────
 
 /// True when `fixture` looks like a Google Takeout mbox drop:
@@ -2524,10 +2534,10 @@ fn is_mbox_input(fixture: &Path) -> bool {
     false
 }
 
-/// Translate one source's `input_path` into the workspace's
-/// `rendered_md/` + sidecar tree. ClaudeExport shares the anthropic
-/// translator since the on-disk shape is the same.
-fn translate_source(
+/// Render-and-index-md: turn one source's `input_path` into the
+/// workspace's `rendered_md/` + sidecar tree. ClaudeExport shares the
+/// anthropic renderer since the on-disk shape is the same.
+fn render_and_index_md_source(
     src: &SourceConfig,
     cfg: &Config,
     root: &Path,
@@ -2545,7 +2555,9 @@ fn translate_source(
     );
     match src {
         SourceConfig::ClaudeApi { .. } | SourceConfig::ClaudeExport { .. } => {
-            use frankweiler_etl_anthropic::translate::{parse::parse, render::render_all};
+            use frankweiler_etl_anthropic::render_and_index_md::{
+                parse::parse, render::render_all,
+            };
             let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "anthropic", name);
             let cursor = frankweiler_etl::render_cursor::read(&cursor_path).with_context(|| {
                 format!("read anthropic render cursor {}", cursor_path.display())
@@ -2560,7 +2572,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::ChatgptApi { .. } => {
-            use frankweiler_etl_chatgpt::translate::{parse::parse, render::render_all};
+            use frankweiler_etl_chatgpt::render_and_index_md::{parse::parse, render::render_all};
             // Incremental skip is driven by the render cursor + a
             // `dolt_diff_<table>` union, not by `prior_fingerprints`.
             let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "chatgpt", name);
@@ -2576,7 +2588,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::SlackApi { .. } => {
-            use frankweiler_etl_slack::translate::{parse::parse, render::render_all};
+            use frankweiler_etl_slack::render_and_index_md::{parse::parse, render::render_all};
             // Incremental skip is driven by the render cursor + a
             // `dolt_diff_<table>` union, not by `prior_fingerprints`.
             let cursor_path = frankweiler_etl::render_cursor::cursor_path(root, "slack", name);
@@ -2592,7 +2604,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::GithubApi { .. } => {
-            use frankweiler_etl_github::translate::{parse_api_dir, render_github};
+            use frankweiler_etl_github::render_and_index_md::{parse_api_dir, render_github};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("github parse {}", fixture.display()))?;
             render_github(&parsed, root, progress, prior_fingerprints, on_doc_complete)
@@ -2600,7 +2612,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::GitlabApi { .. } => {
-            use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
+            use frankweiler_etl_gitlab::render_and_index_md::{parse_api_dir, render_gitlab};
             let parsed = parse_api_dir(&fixture)
                 .with_context(|| format!("gitlab parse {}", fixture.display()))?;
             render_gitlab(&parsed, root, progress, prior_fingerprints, on_doc_complete)
@@ -2608,7 +2620,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::NotionApi { .. } => {
-            use frankweiler_etl_notion::translate::{
+            use frankweiler_etl_notion::render_and_index_md::{
                 parse_api_dir, render::render_notion_official,
             };
             let parsed = parse_api_dir(&fixture)
@@ -2618,11 +2630,12 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::Beeper { sync, .. } => {
-            use frankweiler_etl_beeper::translate::{render_all, Period};
+            use frankweiler_etl_beeper::render_and_index_md::{render_all, Period};
             let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
                 .context("parse beeper period")?;
-            let parsed = frankweiler_etl_beeper::translate::parse::parse(&fixture, period)
-                .with_context(|| format!("beeper parse {}", fixture.display()))?;
+            let parsed =
+                frankweiler_etl_beeper::render_and_index_md::parse::parse(&fixture, period)
+                    .with_context(|| format!("beeper parse {}", fixture.display()))?;
             let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(&fixture);
             render_all(
                 &parsed,
@@ -2638,7 +2651,7 @@ fn translate_source(
         }
         SourceConfig::Carddav { sync, .. } => {
             use frankweiler_etl_contacts::extract::db_path_for as carddav_db_path_for;
-            use frankweiler_etl_contacts::translate::{parse, render};
+            use frankweiler_etl_contacts::render_and_index_md::{parse, render};
             // Both CardDAV-server and vcf-file sources land their data
             // in the same raw doltlite shape; translate reads from
             // there. For the file path `fixture` is the user's `.vcf`
@@ -2707,7 +2720,7 @@ fn translate_source(
             // queryable in the raw store. The raw store is the canonical
             // `<data_root>/raw/<name>` location.
             let raw_dir = cfg.data_root.join("raw").join(name);
-            frankweiler_etl_google_takeout::translate::render(
+            frankweiler_etl_google_takeout::render_and_index_md::render(
                 &raw_dir,
                 root,
                 name,
@@ -2721,7 +2734,7 @@ fn translate_source(
             // Texts + calls render as one chat per phone number. The raw
             // store is the canonical `<data_root>/raw/<name>` location.
             let raw_dir = cfg.data_root.join("raw").join(name);
-            frankweiler_etl_sms_backup_restore::translate::render(
+            frankweiler_etl_sms_backup_restore::render_and_index_md::render(
                 &raw_dir,
                 root,
                 name,
@@ -2737,8 +2750,8 @@ fn translate_source(
             ..
         } => {
             use frankweiler_etl_email::extract::db_path_for as jmap_db_path_for;
-            use frankweiler_etl_email::translate::parse::parse;
-            use frankweiler_etl_email::translate::render::{render_all, OutlinkFormat};
+            use frankweiler_etl_email::render_and_index_md::parse::parse;
+            use frankweiler_etl_email::render_and_index_md::render::{render_all, OutlinkFormat};
 
             // Both JMAP-server and mbox sources land their data in
             // the same shape; translate is identical for both. The
@@ -2777,7 +2790,7 @@ fn translate_source(
                 .map(|_| ())
         }
         SourceConfig::Perseus { sync, .. } => {
-            use frankweiler_etl_perseus::translate::{align, parse, render};
+            use frankweiler_etl_perseus::render_and_index_md::{align, parse, render};
             let parsed = parse::parse(&fixture)
                 .with_context(|| format!("perseus parse {}", fixture.display()))?;
             // Within-section sentence alignment is opt-in per edition
@@ -2817,7 +2830,7 @@ fn translate_source(
             .map(|_| ())
         }
         SourceConfig::SignalBackup { sync, .. } => {
-            use frankweiler_etl_signal::translate::{parse, render_all, Period};
+            use frankweiler_etl_signal::render_and_index_md::{parse, render_all, Period};
             let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
                 .context("parse signal period")?;
             // Incremental skip is driven by the render cursor + a
@@ -2849,7 +2862,7 @@ fn translate_source(
             Ok(())
         }
         SourceConfig::WhatsAppBackup { .. } => {
-            use frankweiler_etl_whatsapp::translate::{parse, render_all, Period};
+            use frankweiler_etl_whatsapp::render_and_index_md::{parse, render_all, Period};
             // WhatsApp doesn't expose a `period` knob on its sync block
             // today — default to month bucketing, same as signal.
             let period = Period::from_config(None).context("default whatsapp period")?;

@@ -116,7 +116,7 @@ pub const DATA_TABLES: &[&str] = &[
 /// JSON-serialized `Frame::Account`. The per-row content fingerprint
 /// (`payload_blake3`) that used to ride alongside is gone — translate
 /// drives incremental skip via `dolt_diff_<table>` now; see
-/// `super::super::translate::parse`.
+/// `super::super::render_and_index_md::parse`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "account")]
 pub struct AccountRow {

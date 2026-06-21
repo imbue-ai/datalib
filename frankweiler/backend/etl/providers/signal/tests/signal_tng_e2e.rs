@@ -17,7 +17,7 @@ use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
 use frankweiler_etl_signal::extract::{self, FetchOptions};
-use frankweiler_etl_signal::translate::{parse_raw_dir, render_all};
+use frankweiler_etl_signal::render_and_index_md::{parse_raw_dir, render_all};
 use frankweiler_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -293,7 +293,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         let raw = raw_db_path.clone();
         let last_hash = cursor.last_rendered_hash.clone();
         move || {
-            frankweiler_etl_signal::translate::parse(
+            frankweiler_etl_signal::render_and_index_md::parse(
                 &raw,
                 frankweiler_etl::periodize::Period::Month,
                 "signal-tng",

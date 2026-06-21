@@ -4,7 +4,7 @@
 //! Writes into a single doltlite database file
 //! (`<data_root>/raw/<name>.doltlite_db`) — one row per page / block /
 //! comment, full payload in a JSON column. See `DOLTLITE_RAW.md` for the
-//! schema and rationale. The downstream `translate::parse` and
+//! schema and rationale. The downstream `render_and_index_md::parse` and
 //! `synthesize` stages consume the DB directly.
 
 pub mod db;

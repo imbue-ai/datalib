@@ -63,7 +63,7 @@
 //!
 //! ### Translate is Thucydides-specific for now
 //!
-//! The [`crate::translate`] path is hardcoded to the Thucydides
+//! The [`crate::render_and_index_md`] path is hardcoded to the Thucydides
 //! Histories shape — it looks for the two basenames the default
 //! `files` list resolves to. Pointing `files:` at a different work
 //! will Extract cleanly but Translate will not find anything to
@@ -74,7 +74,7 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 pub mod extract;
-pub mod translate;
+pub mod render_and_index_md;
 
 /// Frozen UUIDv5 seed string. Despite the name carrying `perseus-grc2`,
 /// this is just a stable namespace prefix for *every* row PK in this
@@ -84,7 +84,7 @@ pub mod translate;
 pub const TLG0003_TLG001: &str = "urn:cts:greekLit:tlg0003.tlg001.perseus-grc2";
 
 /// CTS work URN (no edition suffix). `__cts__.xml` edition `urn`s are
-/// `<this>.<edition-id>`, which [`crate::translate::parse`] strips to
+/// `<this>.<edition-id>`, which [`crate::render_and_index_md::parse`] strips to
 /// recover the edition id.
 pub const WORK_URN: &str = "urn:cts:greekLit:tlg0003.tlg001";
 
@@ -150,7 +150,7 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> S
 }
 
 /// Anchor UUID for one sentence within a section. The renderer wraps
-/// each sentence (split by [`crate::translate::align::split`]) in its
+/// each sentence (split by [`crate::render_and_index_md::align::split`]) in its
 /// own `<span data-section-uuid="…">` using this UUID; the
 /// bilingual-alignment `edges` rows reference these as
 /// `src_anchor_uuid` / `dst_anchor_uuid` so the UI can highlight the

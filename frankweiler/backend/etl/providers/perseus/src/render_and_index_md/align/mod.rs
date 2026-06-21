@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use crate::translate::parse::ParsedPerseus;
+use crate::render_and_index_md::parse::ParsedPerseus;
 pub use embed::Embedder;
 pub use split::Sentence;
 

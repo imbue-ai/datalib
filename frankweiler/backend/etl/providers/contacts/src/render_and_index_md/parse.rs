@@ -110,7 +110,7 @@ pub fn parse(db_path: &Path) -> Result<ParsedContacts> {
     let rows = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move {
             let db = RawDb::open(&path).await?;
-            db.load_all_for_translate().await
+            db.load_all_for_render_and_index_md().await
         })
     })?;
     Ok(parse_loaded(rows))

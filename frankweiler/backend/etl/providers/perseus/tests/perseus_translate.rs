@@ -16,8 +16,8 @@ use std::path::PathBuf;
 
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_perseus::translate::align::PerseusAlignments;
-use frankweiler_etl_perseus::translate::{parse, render};
+use frankweiler_etl_perseus::render_and_index_md::align::PerseusAlignments;
+use frankweiler_etl_perseus::render_and_index_md::{parse, render};
 use frankweiler_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid};
 
 const GRC: &str = "perseus-grc2";

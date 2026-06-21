@@ -16,7 +16,7 @@ pub mod render;
 
 // The UUIDv5 identity recipes live in `extract::schema_raw` (identity
 // recipes belong next to the schema). Re-export so existing
-// `crate::translate::signal_*` callers keep resolving.
+// `crate::render_and_index_md::signal_*` callers keep resolving.
 pub use super::extract::schema_raw::{
     signal_chat_uuid, signal_markdown_uuid, signal_message_uuid, signal_recipient_uuid,
     SIGNAL_UUID_NS,

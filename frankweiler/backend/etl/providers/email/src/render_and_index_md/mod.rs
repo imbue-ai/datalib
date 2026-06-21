@@ -7,5 +7,5 @@ pub mod render;
 
 /// The render version stamped into each doc's sidecar — now owned by the
 /// renderer (which drives chat-common). Re-exported for callers that
-/// referenced `translate::RENDER_VERSION`.
+/// referenced `render_and_index_md::RENDER_VERSION`.
 pub use render::RENDER_VERSION;
