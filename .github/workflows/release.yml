@@ -528,7 +528,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Image is published under `<repo>-devcontainer` rather than a
+      # Image is published under `<repo>_devcontainer` rather than a
       # `devcontainer-` tag prefix on the prod image so the two are
       # cleanly separable in the GHCR UI and ghcr retention policies
       # can be set independently.
@@ -539,7 +539,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${REF_NAME#v}"
-          image="ghcr.io/${GITHUB_REPOSITORY,,}-devcontainer"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}_devcontainer"
           docker buildx build \
               --file .devcontainer/Dockerfile \
               --platform linux/amd64,linux/arm64 \
