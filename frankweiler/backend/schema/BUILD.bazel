@@ -6,6 +6,7 @@ rust_library(
     name = "frankweiler_schema",
     srcs = [
         "src/lib.rs",
+        "src/grid_rows_builder.rs",
         "src/generated/anthropic.rs",
         "src/generated/feedback.rs",
         "src/generated/grid_rows.rs",
@@ -18,6 +19,7 @@ rust_library(
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
+        "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
     ],

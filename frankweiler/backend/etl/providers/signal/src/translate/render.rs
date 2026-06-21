@@ -239,7 +239,7 @@ fn render_one(
         &recipient_display,
         &when_ts,
         &md_rel_path,
-    ));
+    )?);
 
     let mut messages_rendered = 0;
     for (idx, item) in doc.items.iter().enumerate() {
@@ -259,7 +259,7 @@ fn render_one(
             idx as i64,
             &iso_ts(item.date_sent),
             &md_rel_path,
-        ));
+        )?);
         messages_rendered += 1;
     }
 
@@ -405,7 +405,7 @@ fn chat_grid_row(
     recipient_display: &str,
     when_ts: &str,
     qmd_rel: &str,
-) -> GridRow {
+) -> Result<GridRow> {
     base_row(
         markdown_uuid.to_string(),
         "Signal Chat".to_string(),
@@ -437,7 +437,7 @@ fn message_grid_row(
     idx: i64,
     when_ts: &str,
     qmd_rel: &str,
-) -> GridRow {
+) -> Result<GridRow> {
     base_row(
         msg_uuid.to_string(),
         "Signal Message".to_string(),
@@ -457,6 +457,7 @@ fn message_grid_row(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn base_row(
     uuid: String,
     kind: String,
@@ -469,33 +470,24 @@ fn base_row(
     channel: Option<String>,
     qmd_path: String,
     markdown_uuid: String,
-) -> GridRow {
-    GridRow {
-        uuid,
-        provider: PROVIDER.to_string(),
-        kind,
-        source_label: SOURCE_LABEL.to_string(),
-        when_ts,
-        author,
-        account: None,
-        project: None,
-        org_uuid: None,
-        org_name: None,
-        channel,
-        conversation_name: Some(conversation_name),
-        conversation_uuid: conversation_uuid.clone(),
-        message_index,
-        entire_chat: format!("/chat/{markdown_uuid}"),
-        text,
-        slack_link: None,
-        qmd_path: Some(qmd_path),
-        source_url: None,
-        git_sha: None,
-        external_id: None,
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(markdown_uuid),
-    }
+) -> Result<GridRow> {
+    GridRow::builder()
+        .uuid(uuid)
+        .provider(PROVIDER)
+        .kind(kind)
+        .source_label(SOURCE_LABEL)
+        .when_ts(when_ts)
+        .author(author)
+        .channel(channel)
+        .conversation_name(Some(conversation_name))
+        .conversation_uuid(conversation_uuid)
+        .message_index(message_index)
+        .entire_chat(format!("/chat/{markdown_uuid}"))
+        .text(text)
+        .qmd_path(Some(qmd_path))
+        .markdown_uuid(Some(markdown_uuid))
+        .build()
+        .map_err(anyhow::Error::from)
 }
 
 fn author_display(parsed: &ParsedSignal, item: &ParsedChatItem) -> String {

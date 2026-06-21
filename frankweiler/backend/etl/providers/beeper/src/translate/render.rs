@@ -134,7 +134,7 @@ fn render_one(
     );
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel);
+    let rows = build_grid_rows(room, doc, &markdown_uuid, &md_rel)?;
     emit_sidecar(
         &json_path,
         &markdown_uuid,
@@ -611,7 +611,7 @@ fn build_grid_rows(
     doc: &DocBucket,
     markdown_uuid: &str,
     md_rel: &Path,
-) -> Vec<GridRow> {
+) -> Result<Vec<GridRow>> {
     let qmd_path = Some(md_rel.display().to_string());
     let entire_chat = format!("/beeper/{}/{}", room.network, room.room_uuid);
     let conversation_name = room.title.clone().or_else(|| room.external_room_id.clone());
@@ -628,71 +628,61 @@ fn build_grid_rows(
     let mut rows: Vec<GridRow> = Vec::with_capacity(doc.messages.len() + 1);
 
     // One "conversation" header row per doc.
-    rows.push(GridRow {
-        uuid: markdown_uuid.to_string(),
-        provider: "beeper".into(),
-        kind: kind_for_conversation(&room.network),
-        source_label: source_label.clone(),
-        when_ts: Some(iso_from_ms(doc.first_ms)),
-        author: None,
-        account: room.account_id.clone(),
-        org_uuid: None,
-        org_name: None,
-        project: room.external_workspace_id.clone(),
-        channel: conversation_name.clone(),
-        conversation_name: conversation_name.clone(),
-        conversation_uuid: room.room_uuid.clone(),
-        message_index: None,
-        entire_chat: entire_chat.clone(),
-        text: doc
-            .messages
-            .iter()
-            // The chat-header row's `text` field is what
-            // full-text-search indexes. HIDDEN events (encryption
-            // setup, membership churn) carry no human signal, so
-            // we keep them OUT of the concatenated search text
-            // even though they DO get their own `… Hidden` row.
-            .filter(|m| !m.is_hidden())
-            .filter_map(|m| m.text_content.clone())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        slack_link: None,
-        qmd_path: qmd_path.clone(),
-        source_url: None,
-        git_sha: None,
-        external_id: room.external_room_id.clone(),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(markdown_uuid.to_string()),
-    });
+    rows.push(
+        GridRow::builder()
+            .uuid(markdown_uuid.to_string())
+            .provider("beeper")
+            .kind(kind_for_conversation(&room.network))
+            .source_label(source_label.clone())
+            .when_ts(Some(iso_from_ms(doc.first_ms)))
+            .account(room.account_id.clone())
+            .project(room.external_workspace_id.clone())
+            .channel(conversation_name.clone())
+            .conversation_name(conversation_name.clone())
+            .conversation_uuid(room.room_uuid.clone())
+            .entire_chat(entire_chat.clone())
+            .text(
+                doc.messages
+                    .iter()
+                    // The chat-header row's `text` field is what
+                    // full-text-search indexes. HIDDEN events (encryption
+                    // setup, membership churn) carry no human signal, so
+                    // we keep them OUT of the concatenated search text
+                    // even though they DO get their own `… Hidden` row.
+                    .filter(|m| !m.is_hidden())
+                    .filter_map(|m| m.text_content.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .qmd_path(qmd_path.clone())
+            .external_id(room.external_room_id.clone())
+            .markdown_uuid(Some(markdown_uuid.to_string()))
+            .build()?,
+    );
 
     for (idx, m) in doc.messages.iter().enumerate() {
-        rows.push(GridRow {
-            uuid: m.event_uuid.clone(),
-            provider: "beeper".into(),
-            kind: kind_for_message(&room.network, &m.event_type),
-            source_label: source_label.clone(),
-            when_ts: Some(iso_from_ms(m.timestamp_ms)),
-            author: m.sender_label.clone(),
-            account: room.account_id.clone(),
-            org_uuid: None,
-            org_name: None,
-            project: room.external_workspace_id.clone(),
-            channel: conversation_name.clone(),
-            conversation_name: conversation_name.clone(),
-            conversation_uuid: room.room_uuid.clone(),
-            message_index: Some(idx as i64),
-            entire_chat: entire_chat.clone(),
-            text: m.text_content.clone().unwrap_or_default(),
-            slack_link: None,
-            qmd_path: qmd_path.clone(),
-            source_url: m.blobs.first().and_then(|b| b.source_url.clone()),
-            git_sha: None,
-            external_id: m.external_event_id.clone(),
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(markdown_uuid.to_string()),
-        });
+        rows.push(
+            GridRow::builder()
+                .uuid(m.event_uuid.clone())
+                .provider("beeper")
+                .kind(kind_for_message(&room.network, &m.event_type))
+                .source_label(source_label.clone())
+                .when_ts(Some(iso_from_ms(m.timestamp_ms)))
+                .author(m.sender_label.clone())
+                .account(room.account_id.clone())
+                .project(room.external_workspace_id.clone())
+                .channel(conversation_name.clone())
+                .conversation_name(conversation_name.clone())
+                .conversation_uuid(room.room_uuid.clone())
+                .message_index(Some(idx as i64))
+                .entire_chat(entire_chat.clone())
+                .text(m.text_content.clone().unwrap_or_default())
+                .qmd_path(qmd_path.clone())
+                .source_url(m.blobs.first().and_then(|b| b.source_url.clone()))
+                .external_id(m.external_event_id.clone())
+                .markdown_uuid(Some(markdown_uuid.to_string()))
+                .build()?,
+        );
     }
 
     // Reactions get their own rows so search can find them.
@@ -703,36 +693,30 @@ fn build_grid_rows(
             // side (see megabridge enrichment), so we re-use it.
             let _ = target;
             let _ = beeper_event_uuid; // imported for future use
-            rows.push(GridRow {
-                uuid: r.event_uuid.clone(),
-                provider: "beeper".into(),
-                kind: format!("{} Reaction", network_label(&room.network)),
-                source_label: source_label.clone(),
-                when_ts: Some(iso_from_ms(r.timestamp_ms)),
-                author: r.sender_label.clone(),
-                account: room.account_id.clone(),
-                org_uuid: None,
-                org_name: None,
-                project: room.external_workspace_id.clone(),
-                channel: conversation_name.clone(),
-                conversation_name: conversation_name.clone(),
-                conversation_uuid: room.room_uuid.clone(),
-                message_index: None,
-                entire_chat: entire_chat.clone(),
-                text: r.reaction_emoji.clone().unwrap_or_default(),
-                slack_link: None,
-                qmd_path: qmd_path.clone(),
-                source_url: None,
-                git_sha: None,
-                external_id: r.external_event_id.clone(),
-                notion_page_uuid: None,
-                notion_block_uuid: None,
-                markdown_uuid: Some(markdown_uuid.to_string()),
-            });
+            rows.push(
+                GridRow::builder()
+                    .uuid(r.event_uuid.clone())
+                    .provider("beeper")
+                    .kind(format!("{} Reaction", network_label(&room.network)))
+                    .source_label(source_label.clone())
+                    .when_ts(Some(iso_from_ms(r.timestamp_ms)))
+                    .author(r.sender_label.clone())
+                    .account(room.account_id.clone())
+                    .project(room.external_workspace_id.clone())
+                    .channel(conversation_name.clone())
+                    .conversation_name(conversation_name.clone())
+                    .conversation_uuid(room.room_uuid.clone())
+                    .entire_chat(entire_chat.clone())
+                    .text(r.reaction_emoji.clone().unwrap_or_default())
+                    .qmd_path(qmd_path.clone())
+                    .external_id(r.external_event_id.clone())
+                    .markdown_uuid(Some(markdown_uuid.to_string()))
+                    .build()?,
+            );
         }
     }
 
-    rows
+    Ok(rows)
 }
 
 fn kind_for_conversation(network: &str) -> String {

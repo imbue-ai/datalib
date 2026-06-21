@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
+use anyhow::Result;
 use frankweiler_schema::grid_rows::GridRow;
 use serde_json::Value;
 
@@ -114,69 +115,58 @@ fn ordered_notes(notes: &[NoteRow]) -> Vec<&NoteRow> {
     out
 }
 
-pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Vec<GridRow> {
+pub fn rows_for_mr(mr: &MergeRequestRow, notes: &[NoteRow]) -> Result<Vec<GridRow>> {
     let qmd = super::render::mr_qmd_path_rel(&mr.project_full_path, mr.mr_iid);
     let entire_chat = format!("/chat/{}", mr.uuid);
 
     let mut rows: Vec<GridRow> = Vec::new();
-    rows.push(GridRow {
-        uuid: mr.uuid.clone(),
-        provider: "gitlab".into(),
-        kind: "GitLab MR".into(),
-        source_label: "GitLab".into(),
-        when_ts: mr.updated_at.clone().or_else(|| mr.created_at.clone()),
-        author: mr.author_username.clone(),
-        account: None,
-        org_uuid: None,
-        org_name: None,
-        project: Some(mr.project_full_path.clone()),
-        channel: None,
-        conversation_name: Some(mr.title.clone()),
-        conversation_uuid: mr.uuid.clone(),
-        message_index: None,
-        entire_chat: entire_chat.clone(),
-        text: if mr.body.is_empty() {
-            mr.title.clone()
-        } else {
-            format!("{}\n\n{}", mr.title, mr.body)
-        },
-        slack_link: None,
-        qmd_path: Some(qmd.clone()),
-        source_url: mr.web_url.clone(),
-        git_sha: mr.head_sha.clone(),
-        external_id: Some(mr.mr_iid.to_string()),
-        notion_page_uuid: None,
-        notion_block_uuid: None,
-        markdown_uuid: Some(mr.uuid.clone()),
-    });
+    rows.push(
+        GridRow::builder()
+            .uuid(mr.uuid.clone())
+            .provider("gitlab")
+            .kind("GitLab MR")
+            .source_label("GitLab")
+            .when_ts(mr.updated_at.clone().or_else(|| mr.created_at.clone()))
+            .author(mr.author_username.clone())
+            .project(Some(mr.project_full_path.clone()))
+            .conversation_name(Some(mr.title.clone()))
+            .conversation_uuid(mr.uuid.clone())
+            .entire_chat(entire_chat.clone())
+            .text(if mr.body.is_empty() {
+                mr.title.clone()
+            } else {
+                format!("{}\n\n{}", mr.title, mr.body)
+            })
+            .qmd_path(Some(qmd.clone()))
+            .source_url(mr.web_url.clone())
+            .git_sha(mr.head_sha.clone())
+            .external_id(Some(mr.mr_iid.to_string()))
+            .markdown_uuid(Some(mr.uuid.clone()))
+            .build()?,
+    );
 
     for (idx, n) in ordered_notes(notes).into_iter().enumerate() {
-        rows.push(GridRow {
-            uuid: n.uuid.clone(),
-            provider: "gitlab".into(),
-            kind: n.kind.into(),
-            source_label: "GitLab".into(),
-            when_ts: Some(n.created_at.clone()),
-            author: n.author_username.clone(),
-            account: None,
-            org_uuid: None,
-            org_name: None,
-            project: Some(mr.project_full_path.clone()),
-            channel: None,
-            conversation_name: Some(mr.title.clone()),
-            conversation_uuid: mr.uuid.clone(),
-            message_index: Some(idx as i64),
-            entire_chat: entire_chat.clone(),
-            text: n.body.clone(),
-            slack_link: None,
-            qmd_path: Some(qmd.clone()),
-            source_url: n.web_url.clone(),
-            git_sha: n.commit_sha.clone(),
-            external_id: Some(n.external_id.to_string()),
-            notion_page_uuid: None,
-            notion_block_uuid: None,
-            markdown_uuid: Some(mr.uuid.clone()),
-        });
+        rows.push(
+            GridRow::builder()
+                .uuid(n.uuid.clone())
+                .provider("gitlab")
+                .kind(n.kind)
+                .source_label("GitLab")
+                .when_ts(Some(n.created_at.clone()))
+                .author(n.author_username.clone())
+                .project(Some(mr.project_full_path.clone()))
+                .conversation_name(Some(mr.title.clone()))
+                .conversation_uuid(mr.uuid.clone())
+                .message_index(Some(idx as i64))
+                .entire_chat(entire_chat.clone())
+                .text(n.body.clone())
+                .qmd_path(Some(qmd.clone()))
+                .source_url(n.web_url.clone())
+                .git_sha(n.commit_sha.clone())
+                .external_id(Some(n.external_id.to_string()))
+                .markdown_uuid(Some(mr.uuid.clone()))
+                .build()?,
+        );
     }
-    rows
+    Ok(rows)
 }

@@ -1619,6 +1619,7 @@ dependencies = [
  "frankweiler-etl",
  "frankweiler-etl-chat-common",
  "frankweiler-etl-contact-common",
+ "frankweiler-time",
  "serde",
  "serde_json",
  "sqlx",
@@ -1877,6 +1878,7 @@ dependencies = [
 name = "frankweiler-schema"
 version = "0.12.2"
 dependencies = [
+ "frankweiler-time",
  "serde",
  "serde_json",
 ]

@@ -259,7 +259,7 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     }
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = rows_for_mr(mr, notes);
+    let rows = rows_for_mr(mr, notes)?;
     let sidecar_path = md_path.with_extension("grid_rows.json");
     emit_sidecar(
         &sidecar_path,
@@ -305,7 +305,7 @@ pub fn render_gitlab(
         }
 
         render_one_mr(mr, &notes, root)?;
-        let rows = rows_for_mr(mr, &notes);
+        let rows = rows_for_mr(mr, &notes)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
             source_name: String::new(),
