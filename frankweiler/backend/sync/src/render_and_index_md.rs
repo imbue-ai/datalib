@@ -2,31 +2,36 @@
 //! extracted data into the universal presentable shape — `grid_rows`
 //! sidecars + rendered markdown documents.
 //!
-//! Every provider implements one uniform interface, [`RenderAndIndexMd`],
-//! and [`renderer_for`] maps a [`SourceConfig`] variant to its
-//! implementation. The orchestrator (`render_and_index_md_source` in
-//! `main.rs`) builds a [`RenderCtx`] once and calls `.run(..)` — there is
-//! no per-provider branching left in the orchestrator itself.
+//! Every provider implements one uniform interface, [`RenderAndIndexMd`].
+//! [`renderer_for`] selects the implementation **by the source's `type`
+//! string** and hands it the source's config as an **opaque YAML stanza**
+//! ([`serde_yaml::Value`]). The orchestrator never inspects a provider's
+//! config fields — each provider deserializes the knobs it cares about
+//! out of its own stanza (`Beeper`/`Signal` read `sync.period`, `Email`
+//! reads `outlink_format`, `Perseus` reads `sync.alignment_pairs`). This
+//! is the "config lives with the step, orchestrator forwards an opaque
+//! subtree" direction from issue #23's comment thread: the registry has
+//! no dependency on `frankweiler_core::config` at all.
 //!
-//! The adapters are thin: each owns only its provider-specific knobs
-//! (period bucketing, e-mail outlink flavor, Perseus alignment pairs) and
-//! delegates to the provider crate's `render_and_index_md` entry points.
-//! The knobs are pulled out of `SourceConfig` once, in [`renderer_for`],
-//! so the run path never re-inspects the config.
+//! The tradeoff vs. matching a typed `SourceConfig` enum is that an
+//! unknown `type` is a runtime error here rather than a compile error —
+//! deliberate, per the opacity decision.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use frankweiler_core::config::{EmailOutlink, SourceConfig};
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+use serde_yaml::Value;
+
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl::progress::Progress;
 use frankweiler_obs::status_line;
 
 /// Everything a render-and-index-md step needs that is common across
-/// providers. Provider-specific knobs are captured by the adapter at
-/// construction time (see [`renderer_for`]); they never appear here.
+/// providers. Provider-specific knobs are parsed by the adapter from its
+/// opaque stanza (see [`renderer_for`]); they never appear here.
 pub struct RenderCtx<'a> {
     /// Workspace root — the parent of the `rendered_md/` tree the step
     /// writes markdown + `.grid_rows.json` sidecars into.
@@ -58,65 +63,82 @@ pub trait RenderAndIndexMd {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()>;
 }
 
-/// Map a configured source to its render-and-index-md implementation,
-/// extracting any provider-specific knobs from the config up front.
-pub fn renderer_for(src: &SourceConfig) -> Result<Box<dyn RenderAndIndexMd>> {
-    Ok(match src {
-        SourceConfig::ClaudeApi { .. } | SourceConfig::ClaudeExport { .. } => Box::new(Anthropic),
-        SourceConfig::ChatgptApi { .. } => Box::new(Chatgpt),
-        SourceConfig::SlackApi { .. } => Box::new(Slack),
-        SourceConfig::GithubApi { .. } => Box::new(Github),
-        SourceConfig::GitlabApi { .. } => Box::new(Gitlab),
-        SourceConfig::NotionApi { .. } => Box::new(Notion),
-        SourceConfig::Beeper { sync, .. } => {
-            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
-                .context("parse beeper period")?;
-            Box::new(Beeper { period })
-        }
-        SourceConfig::Carddav { sync, .. } => Box::new(Carddav {
-            from_sync: sync.is_some(),
-        }),
-        SourceConfig::Linkedin { .. } => Box::new(Linkedin),
-        SourceConfig::GoogleTakeout { .. } => Box::new(GoogleTakeout),
-        SourceConfig::SmsBackupRestore { .. } => Box::new(SmsBackupRestore),
-        SourceConfig::Email {
-            sync,
-            outlink_format,
-            ..
-        } => {
-            use frankweiler_etl_email::render_and_index_md::render::OutlinkFormat;
-            let outlink = outlink_format.map(|f| match f {
-                EmailOutlink::Gmail => OutlinkFormat::Gmail,
-                EmailOutlink::Fastmail => OutlinkFormat::Fastmail,
-            });
-            Box::new(Email {
-                from_sync: sync.is_some(),
-                outlink,
-            })
-        }
-        SourceConfig::Perseus { sync, .. } => {
-            let pairs: Vec<(String, String)> = sync
-                .as_ref()
-                .map(|s| {
-                    s.alignment_pairs
-                        .iter()
-                        .map(|[a, b]| (a.clone(), b.clone()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            Box::new(Perseus { pairs })
-        }
-        SourceConfig::SignalBackup { sync, .. } => {
-            let period = Period::from_config(sync.as_ref().and_then(|s| s.period.as_deref()))
-                .context("parse signal period")?;
-            Box::new(Signal { period })
-        }
-        SourceConfig::WhatsAppBackup { .. } => Box::new(WhatsApp),
-        SourceConfig::Yolink { .. } => Box::new(Skip {
+/// Select a render-and-index-md implementation by the source's `type`
+/// string, handing each provider its config as an opaque YAML stanza to
+/// parse for itself. The orchestrator forwards `stanza` without looking
+/// inside it.
+pub fn renderer_for(type_str: &str, stanza: &Value) -> Result<Box<dyn RenderAndIndexMd>> {
+    Ok(match type_str {
+        "claude_api" | "claude_export" => Box::new(Anthropic),
+        "chatgpt_api" => Box::new(Chatgpt),
+        "slack_api" => Box::new(Slack),
+        "github_api" => Box::new(Github),
+        "gitlab_api" => Box::new(Gitlab),
+        "notion_api" => Box::new(Notion),
+        "beeper" => Box::new(Beeper::from_stanza(stanza)?),
+        "carddav" => Box::new(Carddav::from_stanza(stanza)?),
+        "linkedin" => Box::new(Linkedin),
+        "google_takeout" => Box::new(GoogleTakeout),
+        "sms_backup_restore" => Box::new(SmsBackupRestore),
+        "email" => Box::new(Email::from_stanza(stanza)?),
+        "perseus" => Box::new(Perseus::from_stanza(stanza)?),
+        "signal_backup" => Box::new(Signal::from_stanza(stanza)?),
+        "whatsapp_backup" => Box::new(WhatsApp),
+        "yolink" => Box::new(Skip {
             provider: "yolink",
             reason: "extract-only, no render path",
         }),
+        other => {
+            return Err(anyhow!(
+                "no render-and-index-md step registered for source type `{other}`"
+            ))
+        }
     })
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Opaque-stanza config fragments
+//
+// Each fragment names only the keys its provider cares about and ignores
+// everything else in the source's YAML (no `deny_unknown_fields`). These
+// are the only place the provider's config *shape* is known — moving an
+// adapter into its own crate later moves its fragment with it.
+// ─────────────────────────────────────────────────────────────────────
+
+/// The `sync.period` knob shared by the period-bucketing chat providers
+/// (beeper, signal).
+#[derive(Deserialize, Default)]
+struct PeriodStanza {
+    #[serde(default)]
+    sync: Option<SyncPeriod>,
+}
+#[derive(Deserialize, Default)]
+struct SyncPeriod {
+    #[serde(default)]
+    period: Option<String>,
+}
+impl PeriodStanza {
+    fn parse(stanza: &Value) -> Result<Period> {
+        let s: PeriodStanza =
+            serde_yaml::from_value(stanza.clone()).context("parse period config")?;
+        Period::from_config(s.sync.as_ref().and_then(|p| p.period.as_deref()))
+            .context("parse period")
+    }
+}
+
+/// Presence of a `sync:` block — distinguishes live-API sources from
+/// file-backed ones for carddav / email.
+#[derive(Deserialize, Default)]
+struct SyncPresence {
+    #[serde(default)]
+    sync: Option<Value>,
+}
+impl SyncPresence {
+    fn parse(stanza: &Value) -> Result<bool> {
+        let s: SyncPresence =
+            serde_yaml::from_value(stanza.clone()).context("parse sync presence")?;
+        Ok(s.sync.is_some())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -181,6 +203,13 @@ impl RenderAndIndexMd for Slack {
 
 struct Signal {
     period: Period,
+}
+impl Signal {
+    fn from_stanza(stanza: &Value) -> Result<Self> {
+        Ok(Signal {
+            period: PeriodStanza::parse(stanza).context("signal period")?,
+        })
+    }
 }
 impl RenderAndIndexMd for Signal {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
@@ -264,6 +293,13 @@ impl RenderAndIndexMd for Notion {
 struct Beeper {
     period: Period,
 }
+impl Beeper {
+    fn from_stanza(stanza: &Value) -> Result<Self> {
+        Ok(Beeper {
+            period: PeriodStanza::parse(stanza).context("beeper period")?,
+        })
+    }
+}
 impl RenderAndIndexMd for Beeper {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_beeper::render_and_index_md::render_all;
@@ -287,6 +323,32 @@ impl RenderAndIndexMd for Beeper {
 
 struct Perseus {
     pairs: Vec<(String, String)>,
+}
+impl Perseus {
+    fn from_stanza(stanza: &Value) -> Result<Self> {
+        #[derive(Deserialize, Default)]
+        struct PerseusStanza {
+            #[serde(default)]
+            sync: Option<PerseusSync>,
+        }
+        #[derive(Deserialize, Default)]
+        struct PerseusSync {
+            #[serde(default)]
+            alignment_pairs: Vec<[String; 2]>,
+        }
+        let s: PerseusStanza =
+            serde_yaml::from_value(stanza.clone()).context("parse perseus config")?;
+        let pairs = s
+            .sync
+            .map(|sync| {
+                sync.alignment_pairs
+                    .into_iter()
+                    .map(|[a, b]| (a, b))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Perseus { pairs })
+    }
 }
 impl RenderAndIndexMd for Perseus {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
@@ -432,6 +494,13 @@ struct Carddav {
     /// mode lands it at `<data_root>/raw/<name>` instead.
     from_sync: bool,
 }
+impl Carddav {
+    fn from_stanza(stanza: &Value) -> Result<Self> {
+        Ok(Carddav {
+            from_sync: SyncPresence::parse(stanza).context("carddav config")?,
+        })
+    }
+}
 impl RenderAndIndexMd for Carddav {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_contacts::extract::db_path_for as carddav_db_path_for;
@@ -457,9 +526,41 @@ impl RenderAndIndexMd for Carddav {
     }
 }
 
+/// The e-mail "open in webmail" link flavor, parsed straight from the
+/// opaque stanza so this registry doesn't depend on the config crate's
+/// `EmailOutlink`. Mirrors the YAML values (`gmail` / `fastmail`).
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum OutlinkFlavor {
+    Gmail,
+    Fastmail,
+}
+
 struct Email {
     from_sync: bool,
     outlink: Option<frankweiler_etl_email::render_and_index_md::render::OutlinkFormat>,
+}
+impl Email {
+    fn from_stanza(stanza: &Value) -> Result<Self> {
+        use frankweiler_etl_email::render_and_index_md::render::OutlinkFormat;
+        #[derive(Deserialize, Default)]
+        struct EmailStanza {
+            #[serde(default)]
+            sync: Option<Value>,
+            #[serde(default)]
+            outlink_format: Option<OutlinkFlavor>,
+        }
+        let s: EmailStanza =
+            serde_yaml::from_value(stanza.clone()).context("parse email config")?;
+        let outlink = s.outlink_format.map(|f| match f {
+            OutlinkFlavor::Gmail => OutlinkFormat::Gmail,
+            OutlinkFlavor::Fastmail => OutlinkFormat::Fastmail,
+        });
+        Ok(Email {
+            from_sync: s.sync.is_some(),
+            outlink,
+        })
+    }
 }
 impl RenderAndIndexMd for Email {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
@@ -520,5 +621,117 @@ impl RenderAndIndexMd for Skip {
             self.reason
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frankweiler_etl_email::render_and_index_md::render::OutlinkFormat;
+
+    fn yaml(s: &str) -> Value {
+        serde_yaml::from_str(s).expect("valid yaml stanza")
+    }
+
+    #[test]
+    fn period_reads_sync_period_with_month_default() {
+        // Explicit period under the sync block.
+        let v = yaml("sync:\n  sources: [signal]\n  period: year\n");
+        assert_eq!(PeriodStanza::parse(&v).unwrap(), Period::Year);
+        // sync block present but no period → default Month.
+        let v = yaml("sync:\n  sources: [signal]\n");
+        assert_eq!(PeriodStanza::parse(&v).unwrap(), Period::Month);
+        // No sync block at all (e.g. file-mode) → default Month, no error.
+        let v = yaml("name: wa\ntype: whatsapp_backup\n");
+        assert_eq!(PeriodStanza::parse(&v).unwrap(), Period::Month);
+    }
+
+    #[test]
+    fn sync_presence_detects_block() {
+        assert!(SyncPresence::parse(&yaml("sync:\n  host: dav.example\n")).unwrap());
+        assert!(!SyncPresence::parse(&yaml("input_path: /tmp/cards\n")).unwrap());
+    }
+
+    #[test]
+    fn email_reads_outlink_and_sync_presence() {
+        let e = Email::from_stanza(&yaml("sync:\n  host: x\noutlink_format: gmail\n")).unwrap();
+        assert!(e.from_sync);
+        assert!(matches!(e.outlink, Some(OutlinkFormat::Gmail)));
+
+        let e = Email::from_stanza(&yaml("outlink_format: fastmail\n")).unwrap();
+        assert!(matches!(e.outlink, Some(OutlinkFormat::Fastmail)));
+
+        // mbox / file mode: no sync block, no outlink.
+        let e = Email::from_stanza(&yaml("input_path: /tmp/mail.mbox\n")).unwrap();
+        assert!(!e.from_sync);
+        assert!(e.outlink.is_none());
+    }
+
+    #[test]
+    fn perseus_reads_alignment_pairs() {
+        let p =
+            Perseus::from_stanza(&yaml("sync:\n  alignment_pairs:\n    - [grc, eng]\n")).unwrap();
+        assert_eq!(p.pairs, vec![("grc".to_string(), "eng".to_string())]);
+        // The default example shape (`sync: { files: [] }`, no pairs) → none.
+        let p = Perseus::from_stanza(&yaml("sync:\n  files: []\n")).unwrap();
+        assert!(p.pairs.is_empty());
+    }
+
+    #[test]
+    fn unknown_type_is_a_runtime_error() {
+        assert!(renderer_for("not_a_real_source", &Value::Null).is_err());
+    }
+
+    /// Locks the load-bearing assumption of this whole step: the orchestrator
+    /// hands us `serde_yaml::to_value(&SourceConfig)`, and a provider must be
+    /// able to recover its knob from that serialized form. Uses a *non-default*
+    /// period (`year`) so the assertion can't pass by falling back to `Month`.
+    #[test]
+    fn typed_config_roundtrips_through_to_value() {
+        use frankweiler_core::config::Config;
+        let cfg: Config = serde_yaml::from_str(concat!(
+            "data_root: /tmp/x\n",
+            "sources:\n",
+            "  - name: beeper\n",
+            "    type: beeper\n",
+            "    sync:\n",
+            "      sources: [signal]\n",
+            "      period: year\n",
+        ))
+        .expect("parse config");
+        let src = &cfg.sources[0];
+        assert_eq!(src.type_str(), "beeper");
+        let stanza = serde_yaml::to_value(src).expect("serialize source");
+        assert_eq!(PeriodStanza::parse(&stanza).unwrap(), Period::Year);
+        assert!(renderer_for(src.type_str(), &stanza).is_ok());
+    }
+
+    #[test]
+    fn every_registered_type_dispatches() {
+        // Knobless + skip providers ignore the stanza entirely.
+        for t in [
+            "claude_api",
+            "claude_export",
+            "chatgpt_api",
+            "slack_api",
+            "github_api",
+            "gitlab_api",
+            "notion_api",
+            "linkedin",
+            "google_takeout",
+            "sms_backup_restore",
+            "whatsapp_backup",
+            "yolink",
+        ] {
+            assert!(
+                renderer_for(t, &Value::Null).is_ok(),
+                "type {t} should dispatch"
+            );
+        }
+        // Knob providers accept an empty mapping — every knob is optional.
+        let empty = yaml("{}");
+        for t in ["beeper", "signal_backup", "carddav", "email", "perseus"] {
+            assert!(renderer_for(t, &empty).is_ok(), "type {t} should dispatch");
+        }
     }
 }

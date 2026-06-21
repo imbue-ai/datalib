@@ -1950,6 +1950,7 @@ dependencies = [
  "frankweiler-whatsapp-backup",
  "indicatif 0.18.4",
  "insta",
+ "serde",
  "serde_json",
  "serde_yaml",
  "sqlx",

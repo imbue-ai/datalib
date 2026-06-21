@@ -2549,7 +2549,12 @@ fn render_and_index_md_source(
 ) -> Result<()> {
     let fixture = src.resolved_input_path(&cfg.data_root);
     let name = src.name();
-    let renderer = render_and_index_md::renderer_for(src)?;
+    // The render registry is config-opaque: it dispatches on the `type`
+    // string and parses any knobs out of this stanza itself. We hand it
+    // the source serialized back to YAML; once the config loader carries
+    // raw stanzas natively this round-trip goes away.
+    let stanza = serde_yaml::to_value(src).context("serialize source config stanza")?;
+    let renderer = render_and_index_md::renderer_for(src.type_str(), &stanza)?;
     status_line!(
         "[render_and_index_md] {name} ({}): {}",
         src.type_str(),
