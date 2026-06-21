@@ -12,7 +12,7 @@
 //! [`Self::insert_feedback`] appends a row to the `feedback` table and
 //! stamps `SELECT dolt_commit('-Am', ?)` so each piece of feedback gets
 //! its own entry in `dolt_log` (lazy man's audit trail). The DDL is
-//! shipped by [`frankweiler_schema::feedback`]; `CREATE TABLE IF NOT
+//! shipped by [`app_schema::feedback`]; `CREATE TABLE IF NOT
 //! EXISTS` keeps the init idempotent across restarts.
 
 use std::path::PathBuf;
@@ -28,9 +28,9 @@ use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{EdgeRowOut, MirrorRepo, RepoError};
 use crate::search::SearchRow;
+use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
+use app_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 use frankweiler_schema::edges::EdgeRow;
-use frankweiler_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
-use frankweiler_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
 
 /// SQLite/doltlite-backed implementation of [`MirrorRepo`].
 ///

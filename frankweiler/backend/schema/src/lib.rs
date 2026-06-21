@@ -1,77 +1,34 @@
-//! Frankweiler schema crate — re-exports the row types generated from
-//! the JSON Schemas under `//schemas/`.
+//! Frankweiler **render schema** crate — the "universal schema" for the
+//! denormalized tables that back the grid / UI.
 //!
-//! Each schema becomes a submodule:
-//!   * `anthropic` — anthropic_* tables (raw provider rows)
-//!   * `grid_rows` — grid_rows union table (one row per displayable entity)
-//!   * `feedback`  — feedback table + discriminated surface payload
+//! Each module is one hand-written row struct whose `CREATE TABLE` DDL
+//! and column metadata are derived from the struct by
+//! `#[derive(PortableTable)]` (see `frankweiler_etl_macros`). The struct
+//! is the single source of truth — there is no code generation step.
 //!
-//! Regenerate by running:
-//!     bazelisk run //schemas:update_generated
-//! (or directly with `python schemas/codegen.py <schema.json> --rust ...`).
-
-pub mod anthropic {
-    include!("generated/anthropic.rs");
-}
+//!   * `grid_rows` — the union table (one row per displayable entity)
+//!   * `edges`     — directed links between rendered documents / anchors
+//!   * `markdowns` — per-rendered-`.md` metadata + render bookkeeping
+//!
+//! App-state tables that are *not* part of the render schema
+//! (`feedback`, `sync_jobs`) live in the separate `app_schema` crate.
 
 pub mod grid_rows {
-    include!("generated/grid_rows.rs");
-    // Hand-written validating builder for the generated `GridRow` struct.
+    include!("grid_rows.rs");
+    // Hand-written validating builder for the `GridRow` struct above.
     include!("grid_rows_builder.rs");
 }
 
-pub mod feedback {
-    include!("generated/feedback.rs");
-}
-
-pub mod sync_jobs {
-    include!("generated/sync_jobs.rs");
-}
-
-pub mod download_runs {
-    include!("generated/download_runs.rs");
+pub mod edges {
+    include!("edges.rs");
 }
 
 pub mod markdowns {
-    include!("generated/markdowns.rs");
-}
-
-pub mod edges {
-    include!("generated/edges.rs");
+    include!("markdowns.rs");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::anthropic::*;
-
-    #[test]
-    fn account_round_trips() {
-        let a = Account {
-            account_uuid: "u-1".into(),
-            full_name: Some("Test".into()),
-            email_address: None,
-            first_seen_at: "2026-01-01T00:00:00Z".into(),
-            last_seen_at: "2026-01-01T00:00:00Z".into(),
-        };
-        let s = serde_json::to_string(&a).unwrap();
-        let b: Account = serde_json::from_str(&s).unwrap();
-        assert_eq!(b.account_uuid, "u-1");
-    }
-
-    #[test]
-    fn anthropic_tables_lists_all_six() {
-        assert_eq!(super::anthropic::TABLES.len(), 6);
-    }
-
-    #[test]
-    fn feedback_table_present() {
-        assert_eq!(super::feedback::TABLES.len(), 1);
-        assert_eq!(super::feedback::DDL.len(), 1);
-        let (_, cols) = super::feedback::COLUMNS[0];
-        assert!(cols.contains(&"feedback_uuid"));
-        assert!(cols.contains(&"context_json"));
-    }
-
     #[test]
     fn grid_rows_table_present() {
         assert_eq!(super::grid_rows::TABLES.len(), 1);
@@ -79,6 +36,10 @@ mod tests {
         let (_, cols) = super::grid_rows::COLUMNS[0];
         assert!(cols.contains(&"uuid"));
         assert!(cols.contains(&"channel"));
+        // The two load-time-derived columns are present in the DDL /
+        // COLUMNS metadata even though they are absent from the struct.
+        assert!(cols.contains(&"when_ts_utc"));
+        assert!(cols.contains(&"when_offset"));
     }
 
     #[test]
@@ -89,5 +50,14 @@ mod tests {
         assert!(cols.contains(&"edge_uuid"));
         assert!(cols.contains(&"src_markdown_uuid"));
         assert!(cols.contains(&"dst_markdown_uuid"));
+    }
+
+    #[test]
+    fn markdowns_table_present() {
+        assert_eq!(super::markdowns::TABLES.len(), 1);
+        assert_eq!(super::markdowns::DDL.len(), 1);
+        let (_, cols) = super::markdowns::COLUMNS[0];
+        assert!(cols.contains(&"markdown_uuid"));
+        assert!(cols.contains(&"row_set_hash"));
     }
 }

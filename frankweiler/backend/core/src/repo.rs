@@ -13,9 +13,9 @@ use crate::db::ChatMeta;
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
+use app_schema::feedback::FeedbackRow;
+use app_schema::sync_jobs::SyncJobRow;
 use frankweiler_schema::edges::EdgeRow;
-use frankweiler_schema::feedback::FeedbackRow;
-use frankweiler_schema::sync_jobs::SyncJobRow;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepoError {

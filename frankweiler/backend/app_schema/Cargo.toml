@@ -1,14 +1,14 @@
 [package]
-name = "frankweiler-schema"
+name = "app-schema"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [lib]
+name = "app_schema"
 path = "src/lib.rs"
 
 [dependencies]
 frankweiler-etl-macros = { path = "../etl/macros" }
-frankweiler-time = { path = "../time" }
 serde = { workspace = true }
 serde_json = { workspace = true }

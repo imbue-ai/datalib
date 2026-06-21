@@ -54,9 +54,14 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`frankweiler/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and an Open Host container.
 
-Both projects share row shapes through **`schemas/`**, the single
-source-of-truth that emits Rust / Python / TypeScript types from one JSON
-Schema.
+Backend row shapes are defined as hand-written Rust structs in two
+crates — **`frankweiler/backend/schema`** (the *render schema*:
+`grid_rows` / `edges` / `markdowns`) and **`frankweiler/backend/app_schema`**
+(app-state tables: `feedback` / `sync_jobs`). Each row struct derives its
+portable `CREATE TABLE` DDL via `#[derive(PortableTable)]` (in
+`frankweiler/backend/etl/macros`), the same "DDL from a Rust struct"
+pattern the Extract layer uses for raw-store tables. The struct is the
+single source of truth — there is no codegen step.
 
 ## Slug + UUID identifiers (Notion-style)
 
@@ -81,17 +86,14 @@ form is `slug-uuid` (e.g.
 .
 ├── MODULE.bazel              Bzlmod root (rules_python + rules_rust)
 ├── BUILD.bazel               :all_tests aggregator
-├── schemas/                  cross-language source of truth
-│   ├── grid_rows.schema.json union row shape backing the grid (see docs/dev/grid_rows.md)
-│   ├── codegen.py            JSON Schema → Rust/TS types + DDL
-│   └── BUILD.bazel           genrules per language
 ├── docs/                     dev/ architecture notes · user/ guides + config_examples
 │   ├── dev/grid_rows.md      how the grid_rows union table works
 │   └── user/                 first_time_user.md, getting_your_data.md, config_examples/
 ├── tests/fixtures/           checked-in fixture JSON + ingested_tng genrule
 └── frankweiler/
     ├── backend/              Cargo workspace
-    │   ├── schema/           re-exports //schemas:*_rs types
+    │   ├── schema/           render schema: grid_rows / edges / markdowns structs (+ DDL via #[derive(PortableTable)])
+    │   ├── app_schema/       app-state schema: feedback / sync_jobs structs
     │   ├── core/             query engine + deeplink grammar
     │   ├── etl/              shared Translate/Load framework
     │   ├── etl/providers/*/  per-provider Extract/Translate crates
@@ -107,12 +109,8 @@ form is `slug-uuid` (e.g.
 ## Dependency graph
 
 ```
-                       schemas/
-                          │
-                ┌─────────┴─────────┐
-                ▼                   ▼
        frankweiler/backend     frankweiler/ui
-       (Rust ETL + axum)        (TS types)
+       (Rust ETL + axum)        (Vue UI)
                 │
                 ▼
         frankweiler/backend/core ──► doltlite + qmd
@@ -272,16 +270,21 @@ and require `latchkey` on PATH with creds set for the `slack` service.
   After posting new messages or attachments in the channel, the test
   will fail with a diff; accept the change with `cargo insta review`.
 
-### Regenerating the cross-language types
+### Changing a row schema
 
-The generated Rust file at
-`frankweiler/backend/schema/src/generated/grid_rows.rs` is checked in.
-To regenerate after editing `schemas/grid_rows.schema.json`:
+Row shapes are plain Rust structs — no codegen. To add or change a column,
+edit the struct directly:
 
-```sh
-bazelisk build //schemas:grid_rows_all
-cp bazel-bin/schemas/grid_rows.rs   frankweiler/backend/schema/src/generated/
-```
+- render-schema tables (`grid_rows` / `edges` / `markdowns`) in
+  `frankweiler/backend/schema/src/`,
+- app-state tables (`feedback` / `sync_jobs`) in
+  `frankweiler/backend/app_schema/src/`.
+
+Give each field a `#[col(sql = "…")]` portable type;
+`#[derive(PortableTable)]` produces the matching `CREATE TABLE` DDL (and
+`COLUMNS` / `TABLES` metadata) at compile time. Columns computed at load
+time (e.g. `grid_rows.when_ts_utc`) are declared with
+`#[derived(name = "…", sql = "…")]` on the field they trail.
 
 ## Version policy: 7-day burn-in
 

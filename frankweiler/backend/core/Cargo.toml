@@ -9,6 +9,7 @@ build = "build.rs"
 path = "src/lib.rs"
 
 [dependencies]
+app-schema = { path = "../app_schema" }
 frankweiler-schema = { path = "../schema" }
 frankweiler-obs = { path = "../obs" }
 frankweiler-time = { path = "../time" }
