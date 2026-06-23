@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Schema-only config crate for the `email` source (Program A goal #1).
+# Depends on serde + anyhow only — no extraction code — so the orchestrator
+# and the `http` backend can name `EmailConfig` without linking the provider.
+#
+# Bazel-only by design (no Cargo.toml): a first-party crate that uses only
+# already-vendored third-party deps needs just this BUILD file. See
+# docs/dev/data_processor_and_config_refactor.md §4.3.
+rust_library(
+    name = "frankweiler_etl_email_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_email_config",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "email_config_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_email_config",
+    edition = "2021",
+)

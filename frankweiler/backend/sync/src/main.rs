@@ -56,9 +56,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::Parser;
 use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, EmailSync,
-    GithubApiSync, GitlabApiSync, MboxSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync,
-    SourceConfig, WhatsAppSync, YolinkSync,
+    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
+    GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync, SourceConfig,
+    WhatsAppSync, YolinkSync,
 };
 use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
 use frankweiler_etl::load::{
@@ -334,6 +334,12 @@ struct CtrlcState {
     /// source's files and assembles a report from these, so an
     /// interrupted run still records what changed.
     extract_reports: Vec<ReportCtx>,
+    /// Opaque interrupt-commit hooks registered by Program-A
+    /// `DataProcessor`-based sources (today: email). The handler fires each
+    /// on Ctrl-C; unlike `extract_pools` it carries no pool and no doltlite
+    /// knowledge — the source's `Checkpoint` impl owns the commit. Shared by
+    /// `Arc` into every migrated source's `RunCtx`.
+    checkpoints: Arc<frankweiler_etl::processor::CheckpointSink>,
 }
 
 /// Everything needed to assemble a source's [`ExtractReport`] after the
@@ -381,9 +387,13 @@ struct ExtractPoolEntry {
 /// SIGINT handler; each individual failure is downgraded to a stderr
 /// warning so one stuck file doesn't block the others.
 async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
-    let (pool_opt, extract_pools) = {
+    let (pool_opt, extract_pools, checkpoints) = {
         let s = state.lock().unwrap();
-        (s.index_pool.clone(), s.extract_pools.clone())
+        (
+            s.index_pool.clone(),
+            s.extract_pools.clone(),
+            s.checkpoints.snapshot(),
+        )
     };
     if let Some(pool) = pool_opt {
         let msg = "frankweiler-sync: interrupted (Ctrl-C); committing partial state".to_string();
@@ -403,6 +413,19 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
             Ok(None) => {}
             Err(e) => status_line!(
                 "[frankweiler-sync] interrupt extract commit failed for {}: {e:#}",
+                entry.name
+            ),
+        }
+    }
+    // Program-A processor-based sources (email): fire each registered opaque
+    // interrupt-commit hook. The orchestrator knows only that each persists
+    // partial state — the `dolt_commit` is encapsulated in the source's
+    // `Checkpoint` impl.
+    for entry in checkpoints {
+        match entry.hook.checkpoint().await {
+            Ok(()) => status_line!("[frankweiler-sync] interrupt checkpoint {}: ok", entry.name),
+            Err(e) => status_line!(
+                "[frankweiler-sync] interrupt checkpoint failed for {}: {e:#}",
                 entry.name
             ),
         }
@@ -1178,6 +1201,15 @@ async fn run_extract_phase(
     // runs; we just keep `plan.db == None`.
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
+        // Program-A processor-based sources (email) own their store: the
+        // orchestrator opens no pool and registers no `ExtractPoolEntry`.
+        // Instead they share the SIGINT `CheckpointSink` and register their
+        // own opaque `Checkpoint` when they open the store inside `run`.
+        if plan.kind.is_none() {
+            plan.checkpoints = ctrlc.lock().unwrap().checkpoints.clone();
+            opened.push(plan);
+            continue;
+        }
         let path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
         // Per-source narration: without this the pre-open loop runs
         // silently and a stall on any one source looks like the whole
@@ -1189,7 +1221,7 @@ async fn run_extract_phase(
             path = %path.display(),
             "extract pre-open: opening writable doltlite pool"
         );
-        match open_extract_db(&plan.kind, &path).await {
+        match open_extract_db(plan.kind.as_ref().expect("legacy plan has a kind"), &path).await {
             Ok(Some(mut db)) => {
                 ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
                     name: plan.name.clone(),
@@ -1371,7 +1403,20 @@ struct ExtractPlan {
     out_dir: PathBuf,
     now: String,
     progress: Progress,
-    kind: ExtractKind,
+    /// Legacy enum-dispatch kind. `None` for sources migrated to the
+    /// Program-A `DataProcessor` path (`processors` non-empty), which own
+    /// their store (open/commit/checkpoint) instead of going through the
+    /// `(ExtractKind, DbHandle)` match.
+    kind: Option<ExtractKind>,
+    /// Program-A processors for a migrated source (today: email only). When
+    /// non-empty this plan runs them via `run_processors` instead of the
+    /// `kind` match; the orchestrator opens no pool and issues no commit.
+    processors: Vec<Box<dyn frankweiler_etl::processor::DataProcessor>>,
+    /// Shared interrupt-commit sink (from [`CtrlcState`]) the processors
+    /// register their [`Checkpoint`](frankweiler_etl::processor::Checkpoint)
+    /// hooks into. A standalone placeholder until `run_extract_phase` swaps in
+    /// the real shared one.
+    checkpoints: Arc<frankweiler_etl::processor::CheckpointSink>,
     /// Cross-provider knobs (e.g. `--reset-and-redownload`). Flows
     /// from the CLI through `ExtractPlan::for_source` into each
     /// provider's `FetchOptions.control`.
@@ -1419,7 +1464,6 @@ enum DbHandle {
     Carddav(frankweiler_etl_contacts::extract::RawDb),
     Linkedin(frankweiler_etl_linkedin::extract::RawDb),
     GoogleTakeout(frankweiler_etl_google_takeout::extract::RawDb),
-    Jmap(frankweiler_etl_email::extract::RawDb),
     Yolink(frankweiler_etl_yolink::extract::RawDb),
     Signal(frankweiler_etl_signal::extract::RawDb),
     WhatsApp(frankweiler_etl_whatsapp::extract::RawDb),
@@ -1439,7 +1483,6 @@ impl DbHandle {
             DbHandle::Carddav(d) => d.pool(),
             DbHandle::Linkedin(d) => d.pool(),
             DbHandle::GoogleTakeout(d) => d.pool(),
-            DbHandle::Jmap(d) => d.pool(),
             DbHandle::Yolink(d) => d.pool(),
             DbHandle::Signal(d) => d.pool(),
             DbHandle::WhatsApp(d) => d.pool(),
@@ -1501,9 +1544,6 @@ async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHan
         ExtractKind::GoogleTakeout { .. } => DbHandle::GoogleTakeout(
             frankweiler_etl_google_takeout::extract::RawDb::open(path).await?,
         ),
-        ExtractKind::Jmap { .. } | ExtractKind::EmailMbox { .. } => {
-            DbHandle::Jmap(frankweiler_etl_email::extract::RawDb::open(path).await?)
-        }
         ExtractKind::Yolink { .. } => {
             DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
         }
@@ -1572,23 +1612,8 @@ enum ExtractKind {
     Perseus {
         sync: PerseusSync,
     },
-    Jmap {
-        sync: EmailSync,
-        blob_size_limit_bytes: Option<u64>,
-    },
-    EmailMbox {
-        /// `.mbox` file or a directory containing one, from
-        /// `SourceCommon::input_path`.
-        input_path: PathBuf,
-        /// Optional `account_id` override; falls back to the mbox
-        /// file stem.
-        account_id_override: Option<String>,
-        /// Account-row display data (name / email / personal flag)
-        /// from the YAML `mbox:` block, piped through to the mbox
-        /// extractor so the synthesized `accounts` row matches JMAP.
-        account_config: MboxSync,
-        blob_size_limit_bytes: Option<u64>,
-    },
+    // Email (Jmap / EmailMbox) is migrated to the Program-A `DataProcessor`
+    // path — see `email_processor_plan` — so it has no `ExtractKind` variant.
     Yolink {
         sync: YolinkSync,
     },
@@ -1609,6 +1634,54 @@ enum ExtractKind {
     },
 }
 
+/// Build the email source's extract [`ExtractPlan`] on the Program-A
+/// `DataProcessor` path. The provider owns its config: we re-parse the
+/// email-specific slice straight from the source's serialized stanza (the same
+/// round-trip the render registry uses), so the orchestrator names no email
+/// config fields and builds no `ExtractKind`. The plan's `processors` are
+/// email's extract processors; they own the store (open/commit/checkpoint).
+fn email_processor_plan(
+    src: &SourceConfig,
+    cfg: &Config,
+    now: &str,
+    control: &frankweiler_etl::control::ExtractControl,
+) -> Result<ExtractPlan> {
+    let name = src.name().to_string();
+    let type_str = src.type_str();
+    let out_dir = src.resolved_raw_path(&cfg.data_root);
+    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
+    let config: frankweiler_etl_email_config::EmailConfig =
+        serde_yaml::from_value(stanza).context("parse email config")?;
+    let source_plan =
+        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
+            name: name.clone(),
+            raw_path: out_dir.clone(),
+            input_path: src.resolved_input_path(&cfg.data_root),
+            config,
+            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
+        })?;
+    Ok(ExtractPlan {
+        name,
+        type_str,
+        out_dir,
+        now: now.to_string(),
+        progress: Progress::noop(),
+        kind: None,
+        processors: source_plan.extract,
+        // Placeholder; `run_extract_phase` swaps in the shared sink from
+        // `CtrlcState` before the processors run.
+        checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
+        control: control.clone(),
+        db: None,
+        // Email never consumed the wire-event tape (only slack does), so
+        // there's nothing to attach.
+        event_tape: None,
+        metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
+        extract_params: src.resolved_shared(cfg).extract_params,
+        diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
+    })
+}
+
 impl ExtractPlan {
     /// `None` when the source is translate-only (no `sync:` block).
     fn for_source(
@@ -1620,6 +1693,12 @@ impl ExtractPlan {
     ) -> Option<Result<Self>> {
         if !src.is_managed() {
             return None;
+        }
+        // Program A pilot: email is migrated to the `DataProcessor` path and
+        // builds its own processors (owning its store). The remaining 12
+        // providers stay on the `ExtractKind` dispatch below.
+        if matches!(src, SourceConfig::Email { .. }) {
+            return Some(email_processor_plan(src, cfg, now, control));
         }
         let name = src.name().to_string();
         let type_str = src.type_str();
@@ -1734,33 +1813,10 @@ impl ExtractPlan {
                 }
             }
             SourceConfig::ClaudeExport { .. } => return None,
-            SourceConfig::Email { sync, mbox, .. } => {
-                let blob_size_limit_bytes = src.resolved_shared(cfg).blob_size_limit_bytes;
-                match sync.clone() {
-                    Some(sync) => ExtractKind::Jmap {
-                        sync,
-                        blob_size_limit_bytes,
-                    },
-                    None => {
-                        // No `sync:` block — file-backed mbox mode.
-                        // `input_path:` points at the user's `.mbox`; we
-                        // write our raw store to `out_dir`.
-                        let input_path = src.resolved_input_path(&cfg.data_root);
-                        if !is_mbox_input(&input_path) {
-                            return Some(Err(anyhow::anyhow!(
-                                "email source {name} has no sync: block and no .mbox found under {}",
-                                input_path.display()
-                            )));
-                        }
-                        let mbox_cfg = mbox.clone().unwrap_or_default();
-                        ExtractKind::EmailMbox {
-                            input_path,
-                            account_id_override: mbox_cfg.account_id.clone(),
-                            account_config: mbox_cfg,
-                            blob_size_limit_bytes,
-                        }
-                    }
-                }
+            // Email is handled by the `DataProcessor` path (early return at
+            // the top of `for_source`); it never reaches this match.
+            SourceConfig::Email { .. } => {
+                unreachable!("email is migrated to the DataProcessor path")
             }
         };
         // Opt-out: tape is on unless the source (or the global) explicitly
@@ -1781,7 +1837,9 @@ impl ExtractPlan {
             out_dir,
             now: now.to_string(),
             progress: Progress::noop(),
-            kind,
+            kind: Some(kind),
+            processors: Vec::new(),
+            checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
             control: control.clone(),
             db: None,
             event_tape,
@@ -1821,6 +1879,12 @@ impl ExtractPlan {
     }
 
     async fn run_inner(self) -> Result<String> {
+        // Program-A processor path (email): the source owns its store, so
+        // there is no orchestrator pool, no `(ExtractKind, DbHandle)` match,
+        // and no orchestrator commit. Run the processors and return.
+        if !self.processors.is_empty() {
+            return self.run_processors().await;
+        }
         let progress = self.progress.clone();
         let name = self.name.clone();
         let control = self.control.clone();
@@ -1831,7 +1895,10 @@ impl ExtractPlan {
         // deterministic `pool.close().await` below — both no-op when
         // there's no pool.
         let pool = self.db.as_ref().map(|d| d.pool().clone());
-        let result: Result<String> = match (self.kind, self.db) {
+        let kind = self
+            .kind
+            .expect("non-processor extract plan must carry an ExtractKind");
+        let result: Result<String> = match (kind, self.db) {
             (ExtractKind::Anthropic { sync }, Some(DbHandle::Anthropic(db))) => {
                 frankweiler_etl_anthropic::extract::fetch(
                     frankweiler_etl_anthropic::extract::FetchOptions {
@@ -2072,7 +2139,13 @@ impl ExtractPlan {
                     s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
                 )
             }),
-            (ExtractKind::Linkedin { input_path, fetch_photos }, Some(DbHandle::Linkedin(db))) => {
+            (
+                ExtractKind::Linkedin {
+                    input_path,
+                    fetch_photos,
+                },
+                Some(DbHandle::Linkedin(db)),
+            ) => {
                 frankweiler_etl_linkedin::extract::fetch(
                     frankweiler_etl_linkedin::extract::FetchOptions {
                         db_path: self.out_dir.clone(),
@@ -2099,58 +2172,54 @@ impl ExtractPlan {
             (
                 ExtractKind::SmsBackupRestore { input_path },
                 Some(DbHandle::SmsBackupRestore(db)),
-            ) => {
-                frankweiler_etl_sms_backup_restore::extract::fetch(
-                    frankweiler_etl_sms_backup_restore::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        input_path,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
+            ) => frankweiler_etl_sms_backup_restore::extract::fetch(
+                frankweiler_etl_sms_backup_restore::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    input_path,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
+                    s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
                 )
-                .await
-                .map(|s| {
-                    format!(
-                        "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
-                        s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
-                    )
-                })
-            }
+            }),
             (
                 ExtractKind::GoogleTakeout { input_path, sync },
                 Some(DbHandle::GoogleTakeout(db)),
-            ) => {
-                frankweiler_etl_google_takeout::extract::fetch(
-                    frankweiler_etl_google_takeout::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        input_path,
-                        sync,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
+            ) => frankweiler_etl_google_takeout::extract::fetch(
+                frankweiler_etl_google_takeout::extract::FetchOptions {
+                    db_path: self.out_dir.clone(),
+                    db: Some(db),
+                    input_path,
+                    sync,
+                    progress: progress.clone(),
+                    control: control.clone(),
+                },
+            )
+            .await
+            .map(|s| {
+                format!(
+                    "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
                          chat(groups={} users={} messages={}) gemini(activity={}) \
                          blobs={} parse_errors={}",
-                        s.maps_reviews,
-                        s.maps_saved_places,
-                        s.maps_photos,
-                        s.youtube_watch_history,
-                        s.youtube_subscriptions,
-                        s.chat_groups,
-                        s.chat_users,
-                        s.chat_messages,
-                        s.gemini_activity,
-                        s.blobs_stored,
-                        s.parse_errors,
-                    )
-                })
-            }
+                    s.maps_reviews,
+                    s.maps_saved_places,
+                    s.maps_photos,
+                    s.youtube_watch_history,
+                    s.youtube_subscriptions,
+                    s.chat_groups,
+                    s.chat_users,
+                    s.chat_messages,
+                    s.gemini_activity,
+                    s.blobs_stored,
+                    s.parse_errors,
+                )
+            }),
             // Perseus is file-tree-backed (raw XML files on disk), not
             // doltlite — so it has no `DbHandle` and skips both the
             // pre-open and the post-extract dolt_commit. The pre-open
@@ -2272,26 +2341,19 @@ impl ExtractPlan {
                     s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
                 )
             }),
-            (
-                ExtractKind::WhatsApp { sync, backup_dir },
-                Some(DbHandle::WhatsApp(db)),
-            ) => {
+            (ExtractKind::WhatsApp { sync, backup_dir }, Some(DbHandle::WhatsApp(db))) => {
                 let env_var = sync
                     .key_env_var
                     .clone()
                     .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
-                let key_hex = std::env::var(&env_var).with_context(|| {
-                    format!("read WhatsApp root key from env var `{env_var}`")
-                });
+                let key_hex = std::env::var(&env_var)
+                    .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
                 match key_hex.and_then(|h| frankweiler_whatsapp_backup::decode_hex_key(&h)) {
-                    Ok(root_key) => frankweiler_etl_whatsapp::extract::fetch(
-                        &backup_dir,
-                        &root_key,
-                        &db,
-                    )
-                    .await
-                    .map(|s| {
-                        format!(
+                    Ok(root_key) => {
+                        frankweiler_etl_whatsapp::extract::fetch(&backup_dir, &root_key, &db)
+                            .await
+                            .map(|s| {
+                                format!(
                             "jids={} chats={} messages={} message_text={} message_media={} \
                              reactions={} media_files={}",
                             s.jids,
@@ -2302,82 +2364,14 @@ impl ExtractPlan {
                             s.message_add_on_reaction,
                             s.media_files,
                         )
-                    }),
+                            })
+                    }
                     Err(e) => Err(e),
                 }
             }
-            // The open phase pairs each ExtractKind with the
-            (
-                ExtractKind::Jmap {
-                    sync,
-                    blob_size_limit_bytes,
-                },
-                Some(DbHandle::Jmap(db)),
-            ) => frankweiler_etl_email::extract::fetch(
-                frankweiler_etl_email::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    hostname: sync.hostname.clone(),
-                    account_id: sync.account_id.clone(),
-                    full_resync: sync.full_resync,
-                    only_mailbox_ids: sync.only_mailbox_ids.clone(),
-                    blob_size_limit_bytes,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "mailboxes={} emails={} destroyed={} threads={} blobs(dl={} oversize={} err={})",
-                    s.mailboxes_upserted,
-                    s.emails_upserted,
-                    s.emails_destroyed,
-                    s.threads_upserted,
-                    s.blobs_downloaded,
-                    s.blobs_oversize,
-                    s.blobs_errored,
-                )
-            }),
-            (
-                ExtractKind::EmailMbox {
-                    input_path,
-                    account_id_override,
-                    account_config,
-                    blob_size_limit_bytes,
-                },
-                Some(DbHandle::Jmap(db)),
-            ) => frankweiler_etl_email::extract::mbox::fetch(
-                frankweiler_etl_email::extract::mbox::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    input_path,
-                    account_id_override,
-                    account_config:
-                        frankweiler_etl_email::extract::mbox::MboxAccountConfig {
-                            account_id: account_config.account_id,
-                            display_name: account_config.display_name,
-                            email_address: account_config.email_address,
-                            is_personal: account_config.is_personal,
-                        },
-                    blob_size_limit_bytes,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "mailboxes={} threads={} emails={} blobs(stored={} skipped={} oversize={}) parse_errors={}",
-                    s.mailboxes_upserted,
-                    s.threads_upserted,
-                    s.emails_upserted,
-                    s.blobs_stored,
-                    s.blobs_skipped,
-                    s.blobs_oversize,
-                    s.parse_errors,
-                )
-            }),
+            // Email (Jmap / EmailMbox) is migrated to the Program-A
+            // `DataProcessor` path (`EmailExtract`), so it no longer appears
+            // in this match.
             // matching DbHandle variant, so any mismatch here would
             // be a bug in `open_extract_db`. We don't try to recover.
             _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
@@ -2460,6 +2454,36 @@ impl ExtractPlan {
             Err(e) => Err(e),
         }
     }
+
+    /// Run a Program-A processor-based source's extract wave. Each processor
+    /// owns its store and registers its own `Checkpoint`; the orchestrator
+    /// supplies only the storage-agnostic [`RunCtx`]. No pool, no commit, no
+    /// `dolt_commit` here — that all lives inside the processor.
+    async fn run_processors(self) -> Result<String> {
+        // `root` is unused by extract processors (they derive their own store
+        // path from config); pass the source's out_dir to satisfy the ctx.
+        // `prior_fingerprints` is a translate-wave concern — empty here.
+        let empty_fingerprints = std::collections::HashMap::new();
+        let mut summaries = Vec::with_capacity(self.processors.len());
+        for proc in &self.processors {
+            let ctx = frankweiler_etl::processor::RunCtx::for_extract(
+                &self.name,
+                &self.out_dir,
+                &self.now,
+                &self.progress,
+                &self.control,
+                &empty_fingerprints,
+                self.checkpoints.as_ref(),
+            );
+            let summary = proc
+                .run(&ctx)
+                .await
+                .with_context(|| format!("processor {}", proc.id()))?;
+            summaries.push(summary);
+        }
+        self.progress.finish_and_clear();
+        Ok(summaries.join(" | "))
+    }
 }
 
 /// Walk `<playback>/notion/*.json`, decode each as an `HttpResponse`,
@@ -2502,26 +2526,6 @@ fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
 // Render-and-index-md phase
 // ─────────────────────────────────────────────────────────────────────
 
-/// True when `fixture` looks like a Google Takeout mbox drop:
-/// either a single `.mbox` file or a directory containing at least
-/// one. Lets the jmap translate path fall back to file-mode without
-/// a doltlite raw db.
-fn is_mbox_input(fixture: &Path) -> bool {
-    if fixture.is_file() {
-        return fixture.extension().and_then(|s| s.to_str()) == Some("mbox");
-    }
-    let Ok(entries) = fs::read_dir(fixture) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("mbox") {
-            return true;
-        }
-    }
-    false
-}
-
 /// Render-and-index-md: turn one source's `input_path` into the
 /// workspace's `rendered_md/` + sidecar tree. ClaudeExport shares the
 /// anthropic renderer since the on-disk shape is the same.
@@ -2532,8 +2536,21 @@ fn render_and_index_md_source(
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     _prior_cursors: &std::collections::HashMap<String, String>,
-    on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
+    on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
+    // Program A pilot: email's translate wave runs through its
+    // `DataProcessor` (the provider owns its config + render path) instead of
+    // the opaque-stanza render registry. The other 12 stay on `renderer_for`.
+    if src.type_str() == "email" {
+        return render_email_translate(
+            src,
+            cfg,
+            root,
+            progress,
+            prior_fingerprints,
+            on_doc_complete,
+        );
+    }
     let raw_dir = src.resolved_raw_path(&cfg.data_root);
     let name = src.name();
     // The render registry is config-opaque: it dispatches on the `type`
@@ -2555,6 +2572,60 @@ fn render_and_index_md_source(
         prior_fingerprints,
     };
     renderer.run(&ctx, on_doc_complete)
+}
+
+/// Run email's translate wave on the Program-A `DataProcessor` path. Builds
+/// the email `SourcePlan` (provider-owned config) and drives its translate
+/// processors, fusing Load through `on_doc_complete` exactly like the render
+/// registry. Called from a `spawn_blocking` thread, so `block_on` is safe.
+fn render_email_translate(
+    src: &SourceConfig,
+    cfg: &Config,
+    root: &Path,
+    progress: &Progress,
+    prior_fingerprints: &std::collections::HashMap<String, String>,
+    on_doc_complete: &mut render_and_index_md::OnDoc,
+) -> Result<()> {
+    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
+    let config: frankweiler_etl_email_config::EmailConfig =
+        serde_yaml::from_value(stanza).context("parse email config")?;
+    let source_plan =
+        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
+            name: src.name().to_string(),
+            raw_path: src.resolved_raw_path(&cfg.data_root),
+            input_path: src.resolved_input_path(&cfg.data_root),
+            config,
+            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
+        })?;
+    // Translate processors don't persist a raw store, so they register no
+    // checkpoints and read no extract control; supply throwaway values to
+    // satisfy the (extract-shaped) `RunCtx`.
+    let checkpoints = frankweiler_etl::processor::CheckpointSink::new();
+    let control = frankweiler_etl::control::ExtractControl::default();
+    let now = String::new();
+    for proc in &source_plan.translate {
+        // `ctx` reborrows `on_doc_complete` for this iteration and drops at the
+        // end of it, returning the unique borrow before the next processor.
+        let ctx = frankweiler_etl::processor::RunCtx::for_translate(
+            src.name(),
+            root,
+            &now,
+            progress,
+            &control,
+            prior_fingerprints,
+            &checkpoints,
+            on_doc_complete,
+        );
+        // Drive the translate future with `futures`' executor, NOT tokio's:
+        // the processor's body is synchronous render work, and the fused-Load
+        // callback (`emit_doc` → the orchestrator's `on_doc_complete`) does its
+        // own `tokio::block_on(apply_one)`. Using tokio here too would nest two
+        // tokio runtimes on this `spawn_blocking` thread and panic; `futures`'
+        // executor enters no tokio context, so the callback's `block_on` stays
+        // the only one — exactly as the old synchronous renderer behaved.
+        futures::executor::block_on(proc.run(&ctx))?;
+    }
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -2815,6 +2886,7 @@ mod interrupt_tests {
                 pool: extract_pool.clone(),
             }],
             extract_reports: Vec::new(),
+            ..Default::default()
         }));
 
         // Invoke the same function the SIGINT handler invokes.
