@@ -1574,6 +1574,9 @@ enum ExtractKind {
     },
     Jmap {
         sync: EmailSync,
+        /// Full mailbox label paths to limit extraction to (empty =
+        /// every mailbox). From the source's `only_extract_labels`.
+        only_extract_labels: Vec<String>,
         blob_size_limit_bytes: Option<u64>,
     },
     EmailMbox {
@@ -1587,6 +1590,9 @@ enum ExtractKind {
         /// from the YAML `mbox:` block, piped through to the mbox
         /// extractor so the synthesized `accounts` row matches JMAP.
         account_config: MboxSync,
+        /// Gmail label paths to limit extraction to (empty = every
+        /// message). From the source's `only_extract_labels`.
+        only_extract_labels: Vec<String>,
         blob_size_limit_bytes: Option<u64>,
     },
     Yolink {
@@ -1734,11 +1740,18 @@ impl ExtractPlan {
                 }
             }
             SourceConfig::ClaudeExport { .. } => return None,
-            SourceConfig::Email { sync, mbox, .. } => {
+            SourceConfig::Email {
+                sync,
+                mbox,
+                only_extract_labels,
+                ..
+            } => {
                 let blob_size_limit_bytes = src.resolved_shared(cfg).blob_size_limit_bytes;
+                let only_extract_labels = only_extract_labels.clone();
                 match sync.clone() {
                     Some(sync) => ExtractKind::Jmap {
                         sync,
+                        only_extract_labels,
                         blob_size_limit_bytes,
                     },
                     None => {
@@ -1757,6 +1770,7 @@ impl ExtractPlan {
                             input_path,
                             account_id_override: mbox_cfg.account_id.clone(),
                             account_config: mbox_cfg,
+                            only_extract_labels,
                             blob_size_limit_bytes,
                         }
                     }
@@ -2310,6 +2324,7 @@ impl ExtractPlan {
             (
                 ExtractKind::Jmap {
                     sync,
+                    only_extract_labels,
                     blob_size_limit_bytes,
                 },
                 Some(DbHandle::Jmap(db)),
@@ -2320,7 +2335,7 @@ impl ExtractPlan {
                     hostname: sync.hostname.clone(),
                     account_id: sync.account_id.clone(),
                     full_resync: sync.full_resync,
-                    only_mailbox_ids: sync.only_mailbox_ids.clone(),
+                    only_mailbox_labels: only_extract_labels,
                     blob_size_limit_bytes,
                     progress: progress.clone(),
                     control: control.clone(),
@@ -2344,6 +2359,7 @@ impl ExtractPlan {
                     input_path,
                     account_id_override,
                     account_config,
+                    only_extract_labels,
                     blob_size_limit_bytes,
                 },
                 Some(DbHandle::Jmap(db)),
@@ -2360,6 +2376,7 @@ impl ExtractPlan {
                             email_address: account_config.email_address,
                             is_personal: account_config.is_personal,
                         },
+                    only_labels: only_extract_labels,
                     blob_size_limit_bytes,
                     progress: progress.clone(),
                     control: control.clone(),

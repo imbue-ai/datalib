@@ -22,7 +22,7 @@
 //! narrowed to changed threads, so we pass an empty `prior_fingerprints`
 //! map and advance the cursor on success.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::{blake3_hex, BlobBundle};
@@ -135,6 +135,7 @@ pub fn render_all(
     root: &std::path::Path,
     source_name: &str,
     outlink: Option<OutlinkFormat>,
+    only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -167,11 +168,51 @@ pub fn render_all(
         })
         .collect();
 
+    // Optional render-time label filter. Resolve the configured label
+    // paths to mailbox ids against the same tree (`parentId`) the chips
+    // use; `None` = render every thread. Resolution and exact-match
+    // semantics are shared with the extract filter via
+    // [`crate::mailbox_labels`], so a given label means the same thing
+    // at both phases and across JMAP / mbox sources.
+    let label_allow: Option<HashSet<String>> = if only_labels.is_empty() {
+        None
+    } else {
+        let nodes: Vec<crate::mailbox_labels::MailboxNode> = parsed
+            .mailboxes
+            .iter()
+            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
+            .collect();
+        let resolved = crate::mailbox_labels::resolve(&nodes, only_labels);
+        if !resolved.unmatched.is_empty() {
+            tracing::warn!(
+                source = source_name,
+                unmatched = ?resolved.unmatched,
+                "only_render_labels matched no mailbox; check spelling / parent path",
+            );
+        }
+        Some(resolved.ids)
+    };
+
     let mut chats: Vec<NormalizedChat> = Vec::with_capacity(parsed.docs.len());
     let mut blobs_by_chat: HashMap<String, BlobBundle> = HashMap::new();
     for bucket in &parsed.docs {
         if bucket.emails.is_empty() {
             continue;
+        }
+        // Thread-level inclusion: keep the whole thread if ANY of its
+        // emails is filed under an allowed mailbox, so conversations
+        // aren't fragmented across the filter boundary.
+        if let Some(allow) = &label_allow {
+            let in_scope = bucket.emails.iter().any(|em| {
+                bucket
+                    .joins
+                    .mailboxes
+                    .get(&em.id)
+                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
+            });
+            if !in_scope {
+                continue;
+            }
         }
         let (chat, bundle) = build_chat(bucket, &mailbox_name, outlink);
         blobs_by_chat.insert(chat.id.clone(), bundle);
