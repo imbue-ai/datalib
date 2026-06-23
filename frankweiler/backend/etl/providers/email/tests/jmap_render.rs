@@ -144,6 +144,7 @@ fn render_smoke_produces_thread_dir_with_md_and_sidecar() {
         tmp.path(),
         "fastmail",
         Some(OutlinkFormat::Fastmail),
+        &[],
         &progress,
         &mut on_done,
     )
