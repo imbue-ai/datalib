@@ -2,7 +2,7 @@
 //! `src/download/claude_web.py`.
 //!
 //! Writes into a single doltlite database file
-//! (`<data_root>/raw/<name>.doltlite_db`). Conversations are stored as
+//! (`<data_root>/raw/<name>/entities.doltlite_db`). Conversations are stored as
 //! the **raw** `/api/...` payload — the export-shape normalization
 //! used to happen here at fetch time, but now lives in `translate`
 //! so the raw store stays as close to the wire as possible.
@@ -42,9 +42,9 @@ const CLAUDE_ORIGIN: &str = "https://claude.ai";
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
-    /// Path to the doltlite database file. Legacy directories are
-    /// rewritten to `<dir>.doltlite_db`. Ignored for opening when
-    /// `db` is `Some`.
+    /// Path to the doltlite database file. The entity db lives inside
+    /// the per-source directory as `entities.doltlite_db` (the dir is
+    /// created if needed). Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
     /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
     /// instead of opening from `db_path`. The sync orchestrator pre-

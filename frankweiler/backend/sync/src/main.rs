@@ -1230,8 +1230,8 @@ async fn run_extract_phase(
 
     // Each provider creates whatever on-disk layout it needs:
     //   - doltlite-backed (anthropic, chatgpt, notion, slack) write to
-    //     `<data_root>/raw/<name>.doltlite_db`; `doltlite_raw::open`
-    //     creates the file's parent (`raw/`) automatically.
+    //     `<data_root>/raw/<name>/entities.doltlite_db`; `doltlite_raw::open`
+    //     creates the file's parent dir automatically.
     //   - file-tree-backed (github, gitlab) call `create_dir_all` on
     //     their out_dir as their first extract step.
     // We used to pre-create `<data_root>/raw/<name>/` here for everyone,
@@ -1623,7 +1623,11 @@ impl ExtractPlan {
         }
         let name = src.name().to_string();
         let type_str = src.type_str();
-        let mut out_dir = src.resolved_input_path(&cfg.data_root);
+        // Where we store our raw version — one resolver for both extract
+        // (write, here) and render (read), overridable per source via
+        // `raw_path:`. File-backed sources read their *input* (the
+        // export) from `resolved_input_path` separately, below.
+        let out_dir = src.resolved_raw_path(&cfg.data_root);
         let kind = match src {
             SourceConfig::ClaudeApi { sync, .. } => ExtractKind::Anthropic {
                 sync: sync.clone().unwrap_or_default(),
@@ -1651,43 +1655,34 @@ impl ExtractPlan {
             SourceConfig::Carddav { sync, .. } => match sync.clone() {
                 Some(sync) => ExtractKind::Carddav { sync },
                 None => {
-                    // No `sync:` block — file-tree mode. `out_dir` was
-                    // resolved from `input_path:` and points at the
-                    // user's .vcf file (or a directory of them). The
-                    // raw doltlite store goes under
-                    // `<data_root>/raw/<name>` (same shape as the
-                    // email mbox path).
-                    let input_path = out_dir.clone();
-                    out_dir = cfg.data_root.join("raw").join(&name);
+                    // No `sync:` block — file-tree mode. `input_path:`
+                    // points at the user's .vcf file (or a directory of
+                    // them); we write our raw store to `out_dir`.
                     ExtractKind::CarddavFile {
-                        input_path,
+                        input_path: src.resolved_input_path(&cfg.data_root),
                         account_id_override: None,
                     }
                 }
             },
             SourceConfig::Linkedin { fetch_photos, .. } => {
-                // File-backed: `out_dir` was resolved from `input_path:`
-                // and points at the user's export directory. The raw
-                // doltlite store always lives at `<data_root>/raw/<name>`
-                // (same convention as the carddav-file / mbox paths).
-                let input_path = out_dir.clone();
-                out_dir = cfg.data_root.join("raw").join(&name);
+                // File-backed: `input_path:` points at the user's export
+                // directory; we write our raw store to `out_dir`.
                 ExtractKind::Linkedin {
-                    input_path,
+                    input_path: src.resolved_input_path(&cfg.data_root),
                     fetch_photos: *fetch_photos,
                 }
             }
             SourceConfig::SmsBackupRestore { .. } => {
-                // File-backed (the directory of sms-*.xml / calls-*.xml);
-                // raw doltlite store lands at `<data_root>/raw/<name>`
-                // like linkedin / google_takeout.
-                let input_path = out_dir.clone();
-                out_dir = cfg.data_root.join("raw").join(&name);
-                ExtractKind::SmsBackupRestore { input_path }
+                // File-backed: `input_path:` points at the directory of
+                // sms-*.xml / calls-*.xml; we write our raw store to
+                // `out_dir`.
+                ExtractKind::SmsBackupRestore {
+                    input_path: src.resolved_input_path(&cfg.data_root),
+                }
             }
             SourceConfig::GoogleTakeout { sync, .. } => {
-                // File-backed (the unzipped Takeout root); raw doltlite
-                // store lands at `<data_root>/raw/<name>` like linkedin.
+                // File-backed: `input_path:` points at the unzipped
+                // Takeout root; we write our raw store to `out_dir`.
                 let s = sync.clone().unwrap_or_default();
                 let flags = frankweiler_etl_google_takeout::extract::SyncFlags {
                     maps_reviews: s.maps_reviews,
@@ -1700,10 +1695,8 @@ impl ExtractPlan {
                     google_voice: s.google_voice,
                     google_voice_include_spam: s.google_voice_include_spam,
                 };
-                let input_path = out_dir.clone();
-                out_dir = cfg.data_root.join("raw").join(&name);
                 ExtractKind::GoogleTakeout {
-                    input_path,
+                    input_path: src.resolved_input_path(&cfg.data_root),
                     sync: flags,
                 }
             }
@@ -1750,21 +1743,15 @@ impl ExtractPlan {
                     },
                     None => {
                         // No `sync:` block — file-backed mbox mode.
-                        // `out_dir` was just resolved from
-                        // `input_path:` (with tilde expansion), so it
-                        // points at the user's `.mbox`. The raw
-                        // doltlite store always lives at
-                        // `<data_root>/raw/<name>`, so override
-                        // `out_dir` to the canonical path after
-                        // capturing the source-side input.
-                        let input_path = out_dir.clone();
+                        // `input_path:` points at the user's `.mbox`; we
+                        // write our raw store to `out_dir`.
+                        let input_path = src.resolved_input_path(&cfg.data_root);
                         if !is_mbox_input(&input_path) {
                             return Some(Err(anyhow::anyhow!(
                                 "email source {name} has no sync: block and no .mbox found under {}",
                                 input_path.display()
                             )));
                         }
-                        out_dir = cfg.data_root.join("raw").join(&name);
                         let mbox_cfg = mbox.clone().unwrap_or_default();
                         ExtractKind::EmailMbox {
                             input_path,
@@ -1785,7 +1772,7 @@ impl ExtractPlan {
             .enabled
             .then(|| {
                 Arc::new(frankweiler_etl::event_tape::EventTape::new(
-                    out_dir.join("events"),
+                    frankweiler_etl::raw_layout::events_dir(&out_dir),
                 ))
             });
         Some(Ok(Self {
@@ -2547,7 +2534,7 @@ fn render_and_index_md_source(
     _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
-    let fixture = src.resolved_input_path(&cfg.data_root);
+    let raw_dir = src.resolved_raw_path(&cfg.data_root);
     let name = src.name();
     // The render registry is config-opaque: it dispatches on the `type`
     // string and parses any knobs out of this stanza itself. We hand it
@@ -2558,13 +2545,12 @@ fn render_and_index_md_source(
     status_line!(
         "[render_and_index_md] {name} ({}): {}",
         src.type_str(),
-        fixture.display()
+        raw_dir.display()
     );
     let ctx = render_and_index_md::RenderCtx {
         root,
-        data_root: &cfg.data_root,
         name,
-        input_path: &fixture,
+        raw_path: &raw_dir,
         progress,
         prior_fingerprints,
     };

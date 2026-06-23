@@ -71,8 +71,8 @@ is the in-tree `latchkey-curl-shim` bin (a `wreq`-backed shim, mirror
 of `src/download/latchkey_curl_shim.py`):
 
 ```sh
-cargo build -p frankweiler-etl --bin latchkey-curl-shim
-export LATCHKEY_CURL="$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim"
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
 chatgpt-download --out ~/backups/chatgpt_api
 ```
 

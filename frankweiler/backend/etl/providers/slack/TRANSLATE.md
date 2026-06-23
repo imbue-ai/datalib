@@ -2,7 +2,7 @@
 
 The slack translate step is an in-process library (called from
 `frankweiler-sync`, no standalone bin) that reads the doltlite db at
-`<out>/raw/<name>.doltlite_db` (written by `slack-download`) and
+`<out>/raw/<name>/entities.doltlite_db` (written by `slack-download`) and
 emits, per Slack thread, a `.md` plus a `.grid_rows.json` sidecar
 under `<out>/rendered_md/slack/<team>/<channel>/threads/`.
 
@@ -61,9 +61,8 @@ TNG-themed fixture co-located at `tests/fixtures/slack_api/`. Run them
 with:
 
 ```sh
-cd frankweiler/backend
-cargo test -p frankweiler-etl-slack --test slack_translate
-cargo test -p frankweiler-etl-slack --test slack_render
+bazelisk test //frankweiler/backend/etl/providers/slack:slack_translate
+bazelisk test //frankweiler/backend/etl/providers/slack:slack_render
 ```
 
 Both are tagged `manual` in Bazel because the fixture tree isn't in

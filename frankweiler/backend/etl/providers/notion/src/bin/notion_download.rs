@@ -21,8 +21,9 @@ use tracing::{info, info_span, Instrument};
     about = "Mirror Notion pages via the official API into a doltlite DB."
 )]
 struct Args {
-    /// Path to the doltlite database file. If a directory or extensionless
-    /// path is passed, `.doltlite_db` is appended automatically.
+    /// Path to the doltlite database file. The entity db lives inside the
+    /// per-source directory as `entities.doltlite_db` (the dir is created
+    /// if needed).
     #[arg(long, env = "NOTION_OUT")]
     out: PathBuf,
 

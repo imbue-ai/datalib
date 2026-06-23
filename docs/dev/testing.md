@@ -9,9 +9,11 @@ test surface and the one piece of setup that isn't self-contained: the
 "Build green" means `bazelisk test //...` passes — nothing less. It runs the
 Rust unit + integration tests, the cross-language goldens, `//:precommit_test`
 (cargo fmt / clippy / ruff / pyright / vue-tsc), and the Playwright e2e suite,
-the same way CI does. Bazel's action cache makes re-runs cheap. Use
-`cargo test` / `pnpm test` only for tight inner-loop iteration, then confirm
-with the full line.
+the same way CI does. Bazel's action cache makes re-runs cheap, so for a
+tight inner loop narrow the *bazel* invocation to what you're touching
+(e.g. `bazelisk test //frankweiler/backend/etl/...`). Bazel is the only
+supported build/test driver — don't shell out to `cargo` / `pnpm`, which
+bypass (and never warm) the cache and can disagree with CI.
 
 See [`/AGENTS.md`](/AGENTS.md) § "Running tests" for the details (don't filter
 on `-manual,-external` — it silently drops fmt/UI checks) and

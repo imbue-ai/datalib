@@ -17,6 +17,14 @@
 
 data_root: ~/datalib  # Base dir; everything is written under here. `~` is expanded.
 
+# Where each source's raw store lives. By default a source's raw data
+# (entities.doltlite_db + blobs.doltlite_db + the events/ tape) lands in
+# `<data_root>/raw/<name>/`. ANY source may override that directory with
+# a per-source `raw_path:` (see the commented example on claude-api
+# below) — it can point anywhere, e.g. a bigger disk. This is purely
+# about where WE store our copy; it's independent of `input_path:`, which
+# says where a file-backed source's data is read FROM.
+
 # Global default applied to every source unless overridden per-source.
 blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
 
@@ -38,6 +46,7 @@ sources:
   # every conversation across every org; the knobs bound incremental work.
   - name: claude-api
     type: claude_api
+    # raw_path: /mnt/big/datalib-raw/claude-api  # optional: store our raw copy elsewhere
     sync:
       refresh_window_days: 7              # treat anything older than this as cold
       refresh_most_recent_n_chat_count: 3 # force-refetch top-N by updated_at

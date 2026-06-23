@@ -177,8 +177,20 @@ pub struct SourceCommon {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Where this source's data comes *from*: the export the extractor
+    /// reads (a `.mbox`, a `.vcf`, an unzipped Takeout root, a LinkedIn
+    /// export dir, …). File-backed sources only — for API sources the
+    /// data arrives off the wire and this is unused. This is NOT where
+    /// we keep our version of the data; that's [`Self::raw_path`].
     #[serde(default)]
     pub input_path: Option<PathBuf>,
+    /// Where *we* keep our raw store for this source — the directory
+    /// holding `entities.doltlite_db`, `blobs.doltlite_db`, and the
+    /// `events/` tape. Overridable identically for every source (API or
+    /// file-backed); defaults to `<data_root>/raw/<name>`. Resolved by
+    /// [`SourceConfig::resolved_raw_path`]. Independent of `input_path`.
+    #[serde(default)]
+    pub raw_path: Option<PathBuf>,
     // Per-source overrides for the global [`SharedConfig`] knobs. Each
     // field here mirrors one on `SharedConfig`; they're not nested behind
     // a `shared:` key (and not `#[serde(flatten)]`-ed either, because
@@ -900,11 +912,28 @@ impl SourceConfig {
         cfg.shared.merge(&self.common().shared_override())
     }
 
-    /// Resolved on-disk input directory: the explicit `input_path:` if set,
-    /// else `<data_root>/raw/<name>`. Matches `_fill_input_path_defaults`
-    /// in `src/ingest/config.py`.
+    /// Where this source's data comes *from*: the explicit `input_path:`
+    /// (tilde-expanded) if set, else the per-source default
+    /// `<data_root>/raw/<name>`. Meaningful for file-backed sources (the
+    /// export to read); for API sources `input_path:` is unset. This is
+    /// the *source* of the data — see [`Self::resolved_raw_path`] for
+    /// where we *store* our version of it.
     pub fn resolved_input_path(&self, data_root: &Path) -> PathBuf {
         if let Some(p) = &self.common().input_path {
+            expand_tilde(&p.display().to_string())
+        } else {
+            data_root.join("raw").join(self.name())
+        }
+    }
+
+    /// Where *we* keep this source's raw store: the explicit `raw_path:`
+    /// (tilde-expanded) if set, else `<data_root>/raw/<name>`. This is
+    /// the directory the extractor writes (`entities.doltlite_db`,
+    /// `blobs.doltlite_db`, `events/`) and the renderer reads — one
+    /// resolver for both sides. Overridable identically for every source,
+    /// independent of where the data came *from* ([`Self::resolved_input_path`]).
+    pub fn resolved_raw_path(&self, data_root: &Path) -> PathBuf {
+        if let Some(p) = &self.common().raw_path {
             expand_tilde(&p.display().to_string())
         } else {
             data_root.join("raw").join(self.name())
@@ -1523,6 +1552,33 @@ sources:
         assert_eq!(
             s.resolved_input_path(&cfg.data_root),
             root.join("raw/slack")
+        );
+    }
+
+    #[test]
+    fn raw_path_defaults_under_data_root_and_is_overridable() {
+        let (cfg_path, root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: slack
+    type: slack_api
+    sync: {channels: ['c']}
+  - name: gh
+    type: github_api
+    raw_path: /mnt/big/gh-raw
+    sync: {}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        // Default: <data_root>/raw/<name>, same shape for every source.
+        assert_eq!(
+            cfg.sources[0].resolved_raw_path(&cfg.data_root),
+            root.join("raw/slack")
+        );
+        // Override: the store can live anywhere, independent of data_root.
+        assert_eq!(
+            cfg.sources[1].resolved_raw_path(&cfg.data_root),
+            PathBuf::from("/mnt/big/gh-raw")
         );
     }
 

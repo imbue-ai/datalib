@@ -49,8 +49,9 @@ fn dirs_home() -> Option<PathBuf> {
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Path to the doltlite database we write into. Legacy directory
-    /// paths get rewritten to `<dir>.doltlite_db` by [`db_path_for`].
+    /// Path to the doltlite database we write into. [`db_path_for`]
+    /// places the entity db inside the per-source directory as
+    /// `entities.doltlite_db` (the dir is created if needed).
     /// Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
     /// Pre-opened raw DB. When `Some`, `fetch` uses this directly

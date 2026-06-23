@@ -152,8 +152,9 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
-    /// Either an explicit `.doltlite_db` file or a parent directory; the
-    /// shared `db_path_for` helper rewrites it consistently. Ignored
+    /// Either an explicit `.doltlite_db` file or the per-source directory;
+    /// the shared `db_path_for` helper places the entity db inside as
+    /// `entities.doltlite_db` (the dir is created if needed). Ignored
     /// for opening when `db` is `Some`.
     pub db_path: PathBuf,
     /// Pre-opened raw DB. When `Some`, `fetch` uses this directly

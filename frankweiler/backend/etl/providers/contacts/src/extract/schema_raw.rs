@@ -50,8 +50,8 @@ pub const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
 
 /// `accounts` — one row per configured CardDAV server.
 ///
-/// We expect one row per `<name>.doltlite_db` in practice (the data
-/// root maps 1:1 with a file), but model as a table for symmetry with
+/// We expect one row per `<name>/entities.doltlite_db` in practice (the
+/// data root maps 1:1 with a file), but model as a table for symmetry with
 /// other providers and so a future "merge two address-book backends
 /// into one file" path stays trivial.
 ///
@@ -325,7 +325,7 @@ pub fn addressbook_uuid(account_id: &str, addressbook_label: &str) -> String {
 // owner_id, source_url, blake3)`), so the contact→photo-blob mapping is
 // consistent across providers even though the code isn't shared (raw
 // data is owned per-provider). Bytes live in the sibling
-// `<name>.blobs.doltlite_db` CAS keyed by blake3; `owner_id` is the
+// `blobs.doltlite_db` CAS keyed by blake3; `owner_id` is the
 // `contacts.id` (see [`contact_pk`]), `source_url` is `"vcard:inline"`
 // for embedded base64 photos (or the URL for URL-only `PHOTO`s).
 

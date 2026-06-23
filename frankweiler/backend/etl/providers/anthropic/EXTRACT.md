@@ -37,8 +37,8 @@ curl. The simplest option is the in-tree `latchkey-curl-shim` bin
 `src/download/latchkey_curl_shim.py`):
 
 ```sh
-cargo build -p frankweiler-etl --bin latchkey-curl-shim
-export LATCHKEY_CURL="$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim"
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL="$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim"
 anthropic-download --out ~/backups/claude_api
 ```
 

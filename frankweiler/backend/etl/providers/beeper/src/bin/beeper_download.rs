@@ -25,8 +25,8 @@ use tracing::{info, info_span, Instrument};
     about = "Mirror Beeper Texts' on-disk data for selected chat networks into a doltlite database."
 )]
 struct Args {
-    /// Output doltlite path. A legacy directory path is rewritten to
-    /// `<dir>.doltlite_db`.
+    /// Output doltlite path. The entity db lives inside the per-source
+    /// directory as `entities.doltlite_db` (the dir is created if needed).
     #[arg(long, env = "BEEPER_OUT")]
     out: PathBuf,
 

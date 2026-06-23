@@ -54,7 +54,14 @@ or review id for the rest.
 
 ## Run it
 
+The translate step is an in-process library (the `render_and_index_md`
+module, called from `frankweiler-sync`); there is no standalone
+`github-translate` binary and no Bazel target for it. Run a sync to
+exercise it, and rendered docs land under
+`/tmp/github-mirror/rendered_md/github/...`.
+
+To exercise the renderer in isolation, run its tests:
+
 ```sh
-cargo run -p frankweiler-etl-github --bin github-translate -- --out /tmp/github-mirror
-# rendered docs land under /tmp/github-mirror/rendered_md/github/...
+bazelisk test //frankweiler/backend/etl/providers/github:github_unittests
 ```

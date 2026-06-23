@@ -38,7 +38,7 @@ That's it.
 
 `beeper-download` (or `frankweiler-sync` with a `beeper` source)
 writes a single doltlite file at
-`<data_root>/raw/<name>.doltlite_db`. Tables:
+`<data_root>/raw/<name>/entities.doltlite_db`. Tables:
 
 - `rooms` — one row per Beeper "thread" matching the configured
   networks. `bridge_network` is the canonical network name

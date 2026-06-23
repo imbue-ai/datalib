@@ -175,11 +175,17 @@ shipping path is Rust.
 ## Running tests
 
 **"Build green" means `bazelisk test //...` passes — nothing less.** A
-narrower invocation (`bazel build //some/subtree/...`,
-`cargo test -p <crate>`, a single target's tests) is fine for inner-loop
-iteration, but don't call the tree green based on one of those. If you
-report "build green" without having run `bazelisk test //...`, say what
-you actually ran instead.
+narrower *bazel* invocation (`bazelisk test //some/subtree/...`, a single
+target's tests) is fine for inner-loop iteration, but don't call the tree
+green based on one of those. If you report "build green" without having run
+`bazelisk test //...`, say what you actually ran instead.
+
+**Bazel is the only supported build/test driver — don't shell out to
+`cargo test` / `cargo build` / `pnpm test` for the inner loop.** They
+bypass Bazel's action cache (so they neither use nor warm it) and its
+sandboxing, and risk producing artifacts that disagree with what CI sees.
+If your inner loop feels slow, narrow the bazel invocation or fix the
+slow target — don't drop to cargo.
 
 **Coverage** uses `bazelisk coverage` with a one-shot wrapper that
 captures Rust-subprocess hit counts too — see
@@ -195,9 +201,10 @@ tools/run_coverage.sh //tests/fixtures:ingested_tng_test -- \
 It's the source of truth: it runs Rust, cross-language goldens, and the
 Playwright e2e suite in one shot, the same way CI does. Bazel's action
 cache makes re-runs cheap — unchanged targets are served from cache, so
-iterating costs only what you actually touched. Reach for `cargo test`
-/ `pnpm test` only for tight inner-loop iteration on a single language,
-and confirm with `bazelisk test //...` before declaring done.
+iterating costs only what you actually touched. For a tight inner loop,
+narrow the *bazel* invocation to the package you're touching
+(`bazelisk test //frankweiler/backend/etl/...`) — don't shell out to
+`cargo` / `pnpm`, which bypass the cache and can disagree with CI.
 
 **Do not add `--test_tag_filters=-manual,-external` to this invocation.**
 The canonical line is the bare `bazelisk test //...`. Filtering on
@@ -281,8 +288,8 @@ insta_update(
 # Source of truth — run this before claiming tests pass
 bazelisk test //...
 
-# Rust-only inner loop (faster, narrower)
-cargo test --manifest-path frankweiler/backend/Cargo.toml
+# Narrower inner loop (faster) — still bazel, so the cache stays warm
+bazelisk test //frankweiler/backend/...
 
 # Rebuild the fixture ingest (dump.sql + qmd.tar)
 bazelisk build //tests/fixtures:ingested_tng

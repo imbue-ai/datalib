@@ -1,6 +1,6 @@
 //! GitLab downloader: identity + every MR the user authored / was
 //! assigned to / was a reviewer on, plus all discussion notes. Writes a
-//! single doltlite database at `<data_root>/raw/<name>.doltlite_db`;
+//! single doltlite database at `<data_root>/raw/<name>/entities.doltlite_db`;
 //! see [`db`] for schema and [`frankweiler_etl::doltlite_raw`] for
 //! design rationale.
 //!
@@ -36,9 +36,9 @@ pub const DEFAULT_SCOPES: &[&str] = &["created_by_me", "assigned_to_me", "review
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
-    /// Path to the doltlite database file. If the caller passes a
-    /// legacy directory, it's rewritten to `<dir>.doltlite_db`.
-    /// Ignored for opening when `db` is `Some`.
+    /// Path to the doltlite database file. The entity db lives inside
+    /// the per-source directory as `entities.doltlite_db` (the dir is
+    /// created if needed). Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
     /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
     /// instead of opening from `db_path`. See the matching field on
