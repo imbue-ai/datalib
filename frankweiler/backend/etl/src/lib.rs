@@ -1,14 +1,14 @@
-//! Frankweiler ETL framework crate. Per-provider Extract + Translate
-//! code lives in sibling crates named `frankweiler-etl-<provider>`
+//! Frankweiler ETL framework crate. Per-provider Extract +
+//! Render-and-index-md code lives in sibling crates named `frankweiler-etl-<provider>`
 //! (e.g. [`frankweiler_etl_slack`]). The framework provides:
 //!
 //! - [`load`] — the provider-agnostic Load step; ships as the
-//!   `grid-rows-load` binary. The cross-provider Translate→Load
+//!   `grid-rows-load` binary. The cross-provider render-and-index-md→Load
 //!   wire contract (sidecar shape, `emit_sidecar` helper) now lives
 //!   in the standalone `frankweiler-index-lib` crate; load just
 //!   reads through it.
 //! - [`events`] — stable structured event vocabulary used by every
-//!   Extract/Translate step. Initialization of the tracing subscriber
+//!   Extract/render-and-index-md step. Initialization of the tracing subscriber
 //!   that consumes these events lives in the shared `frankweiler_obs`
 //!   crate so non-ETL binaries can use it too.
 //!

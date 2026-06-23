@@ -4,5 +4,5 @@
 //! provider-agnostic and lives at [`frankweiler_etl::load`].
 
 pub mod extract;
+pub mod render_and_index_md;
 pub mod synthesize;
-pub mod translate;

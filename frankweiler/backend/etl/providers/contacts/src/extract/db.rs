@@ -233,7 +233,7 @@ impl RawDb {
     /// label without a second query. Same shape regardless of
     /// whether the row landed via CardDAV sync-collection or
     /// [`super::vcf_dir::fetch`].
-    pub async fn load_all_for_translate(&self) -> Result<Vec<LoadedRawContact>> {
+    pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
         let rows = sqlx::query(
             "SELECT c.id AS id,
                     c.uid AS uid,

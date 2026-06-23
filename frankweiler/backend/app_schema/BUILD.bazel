@@ -1,0 +1,29 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "app_schema",
+    srcs = [
+        "src/feedback.rs",
+        "src/lib.rs",
+        "src/sync_jobs.rs",
+    ],
+    crate_name = "app_schema",
+    edition = "2021",
+    proc_macro_deps = [
+        "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+    ],
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "app_schema_unittests",
+    size = "small",
+    crate = ":app_schema",
+    edition = "2021",
+)

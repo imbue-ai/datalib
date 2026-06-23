@@ -3,7 +3,7 @@
 //! `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an integration
 //! test tagged `manual` and is run via `cargo test`.
 
-use frankweiler_etl_chatgpt::translate::parse::{parse_api_dir, shred};
+use frankweiler_etl_chatgpt::render_and_index_md::parse::{parse_api_dir, shred};
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {

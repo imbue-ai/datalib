@@ -208,7 +208,7 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
 /// what changed since the last render, which is both cheaper (the
 /// prolly-tree diff is already in dolt's hot path) and the single
 /// source of truth — see [`crate::render_cursor`] and the per-provider
-/// `translate::parse` for the new shape.
+/// `render_and_index_md::parse` for the new shape.
 ///
 /// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
 /// or — for the canonical path — the derive macro, which generates

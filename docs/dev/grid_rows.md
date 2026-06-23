@@ -27,27 +27,22 @@ Three forces pushed us this direction:
 
 ## Source of truth
 
-`schemas/grid_rows.schema.json` defines the row shape. Each property
-carries:
+The hand-written `GridRow` struct in
+`frankweiler/backend/schema/src/grid_rows.rs` defines the row shape — it
+is the single source of truth, with no codegen step. Each field carries:
 
-- `x-sql-type` — portable DDL type (the SQL subset shared by Dolt and
-  MySQL).
-- `x-mapping` — per-provider expression that documents how the column is
-  derived. Read by humans, not by code; lives next to the column it
-  describes so it can't drift.
-- `description` — emitted as Rust `///`, Python field docstring, and
-  TypeScript JSDoc.
+- `#[col(sql = "…")]` — portable DDL type (the SQL subset shared by Dolt
+  and MySQL). Nullability is inferred from `Option<T>`.
+- `#[derived(name = "…", sql = "…")]` — a column computed at load time
+  (e.g. `when_ts_utc` / `when_offset`, derived from `when_ts`). Present in
+  the DDL but absent from the struct.
+- doc comment — the per-provider mapping documenting how the column is
+  derived, kept next to the field so it can't drift.
 
-`schemas/codegen.py` produces:
-
-| Output                                                  | Used by                                          |
-|---------------------------------------------------------|--------------------------------------------------|
-| `frankweiler/backend/schema/src/generated/grid_rows.rs` | producer (per-provider `translate/grid_rows.rs`) and consumer (`core/src/db.rs`) |
-| `frankweiler/ui/src/generated/grid_rows.ts` (genrule)   | TypeScript consumers                             |
-
-The generated `DDL` constant is used both at load time
-(`init_schema` in `etl/src/load.rs`) and from the `dump.sql`
-portable-DDL emitter.
+`#[derive(PortableTable)]` (in `frankweiler/backend/etl/macros`) produces
+from the struct the `DDL`, `COLUMNS`, and `TABLES` module consts. The
+`DDL` constant is used at load time (`init_schema` in `etl/src/load.rs`)
+and from the `dump.sql` portable-DDL emitter.
 
 ## Producer side: per-provider `translate/grid_rows.rs`
 
@@ -69,17 +64,17 @@ ahead of their messages. The row mapper translates each row into a
 
 ## Adding a column
 
-1. Edit `schemas/grid_rows.schema.json`. Add the property; include an
-   `x-mapping` entry per provider so future-you knows where the value
-   comes from.
-2. Run codegen (see `README.md` → "Regenerating the cross-language types").
-3. Add the column to each per-provider `translate/grid_rows.rs`
+1. Add the field to the `GridRow` struct in
+   `frankweiler/backend/schema/src/grid_rows.rs`, with a `#[col(sql = "…")]`
+   portable type and a doc comment carrying the per-provider mapping so
+   future-you knows where the value comes from.
+2. Add the column to each per-provider `translate/grid_rows.rs`
    `GridRow` builder.
-4. Update `dolt_repo.rs`'s `SELECT`, the destructured row, and
+3. Update `dolt_repo.rs`'s `SELECT`, the destructured row, and
    `SearchRow` in `search.rs` if the column should reach the API.
-5. Add it to the column manifest in `frankweiler/backend/http/src/lib.rs`
+4. Add it to the column manifest in `frankweiler/backend/http/src/lib.rs`
    if the grid should display it.
-6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## Adding a provider
 

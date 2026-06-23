@@ -18,5 +18,5 @@
 //!   from_me)` triple.
 
 pub mod extract;
+pub mod render_and_index_md;
 pub mod schema_raw;
-pub mod translate;

@@ -27,8 +27,8 @@ rust_library(
     },
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
+        "//frankweiler/backend/app_schema:app_schema",
         "//frankweiler/backend/core:frankweiler_core",
-        "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",

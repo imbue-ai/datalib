@@ -15,7 +15,7 @@ Parts of this are not novel — the data pipeline aspect shares shape with Flume
 This document describes the principles we strive towards for the **ingestion (extract) side**: how raw data lands on disk, what shape it has at rest, and the operational properties (monitorable, stoppable, resumable, incrementally cheap, verifiable) the extract stage aims for. It is aspirational as much as descriptive: a new provider, table, or transformation should be judged against it, and divergences should be either justified or fixed.
 
 ## Related documents
-The downstream stages — translate, load, indexing, view, annotation — are mostly the subject of [`docs/dev/post_ingestion_architecture.md`](/docs/dev/post_ingestion_architecture.md). Where understanding "extract" requires a downstream concept (the sidecar contract translate emits, the `GridRow` projection the UI reads), this document touches on it briefly.
+The downstream stages — translate, load, indexing, view, annotation — are covered by the focused dev notes [`docs/dev/grid_rows.md`](grid_rows.md) and [`docs/dev/edges.md`](edges.md). Where understanding "extract" requires a downstream concept (the sidecar contract translate emits, the `GridRow` projection the UI reads), this document touches on it briefly.
 
 Practitioner-facing material — how we test, how to add a provider, how the schema evolves, and the open questions — lives in the companion [`data_architecture_ingestion_practices.md`](/docs/dev/data_architecture_ingestion_practices.md).
 

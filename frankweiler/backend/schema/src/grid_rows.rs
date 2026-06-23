@@ -1,0 +1,366 @@
+// Provider-agnostic union table that backs the AG Grid in frankweiler.
+// Every searchable entity in the system (chat conversations, individual
+// messages, content blocks, slack messages, ...) emits one row here at
+// ingest time, keyed by a provider-namespaced UUID. The Rust grid
+// backend reads this table from <root>/backend_index.doltlite_db with a
+// single query and renders rows directly. Per-provider tables
+// (anthropic_*, openai_*, slack_*) remain the authoritative store for
+// raw payloads + render input; grid_rows is the denormalized
+// projection.
+//
+// Hand-written row struct; the `CREATE TABLE` DDL + column metadata are
+// derived from it by `#[derive(PortableTable)]`. This struct is the
+// single source of truth for column names, types, and the per-provider
+// mappings documented per field below.
+
+use frankweiler_etl_macros::PortableTable;
+use serde::{Deserialize, Serialize};
+
+/// One row in the grid_rows table. Producers (provider translate steps)
+/// emit one or more GridRow per source entity; consumers (the grid
+/// backend + UI) read them as a single union.
+#[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
+#[portable_table(table = "grid_rows", primary_key = "uuid")]
+pub struct GridRow {
+    /// Stable, globally-unique row identifier. Must be deterministic from
+    /// the source entity so re-ingest is idempotent.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: anthropic_conversations.conversation_uuid
+    ///   anthropic.message: anthropic_messages.message_uuid
+    ///   anthropic.block: format!('{}:{}', message_uuid, block_index)
+    ///   openai.chat: openai_conversations.conversation_id
+    ///   openai.message: openai_messages.message_id
+    ///   slack.thread: uuidv5(SLACK_NS, 'slack:{team}:{channel}:{thread_ts}')
+    ///   slack.message: uuidv5(SLACK_NS, 'slack:{team}:{channel}:{ts}')
+    ///   github.pr: uuidv5(GITHUB_NS, 'github:{repo}:pr:{number}')
+    ///   github.issue_comment: uuidv5(GITHUB_NS, 'github:{repo}:issue_comment:{id}')
+    ///   github.pr_review: uuidv5(GITHUB_NS, 'github:{repo}:pr_review:{id}')
+    ///   github.pr_review_comment: uuidv5(GITHUB_NS, 'github:{repo}:pr_review_comment:{id}')
+    ///   gitlab.mr: uuidv5(GITLAB_NS, 'gitlab:{project}:mr:{iid}')
+    ///   gitlab.note: uuidv5(GITLAB_NS, 'gitlab:{project}:note:{id}')
+    ///   notion.page: page_id (already a Notion UUID)
+    ///   notion.heading: uuidv5(NOTION_NS, 'notion:heading:{page_id}:{block_id}')
+    ///   notion.thread: discussion_id (already a Notion UUID)
+    ///   notion.comment: comment_id (already a Notion UUID)
+    #[col(sql = "VARCHAR(96)")]
+    pub uuid: String,
+    /// Which provider this row originated from. Determines which
+    /// per-provider table to consult for the raw payload.
+    #[col(sql = "VARCHAR(32)")]
+    pub provider: String,
+    /// Row category as displayed in the Kind column. Drives the row-type
+    /// filter (chat: vs message:) and the icon.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: 'Chat'
+    ///   anthropic.message.human: 'User Input'
+    ///   anthropic.message.assistant: 'LLM Response'
+    ///   anthropic.block.thinking: 'LLM Thinking'
+    ///   anthropic.block.tool_*: 'Tool Call'
+    ///   openai.chat: 'Chat'
+    ///   openai.message.user: 'User Input'
+    ///   openai.message.assistant.thoughts|reasoning_recap: 'LLM Thinking'
+    ///   openai.message.assistant.*: 'LLM Response'
+    ///   openai.message.system|*: 'Tool Call'
+    ///   slack.thread: 'Slack Thread'
+    ///   slack.message: 'Slack Message'
+    ///   github.pr: 'GitHub PR'
+    ///   github.issue_comment: 'GitHub PR Comment'
+    ///   github.pr_review: 'GitHub Review'
+    ///   github.pr_review_comment: 'GitHub Review Comment'
+    ///   gitlab.mr: 'GitLab MR'
+    ///   gitlab.note: 'GitLab Discussion Note'
+    ///   notion.page: 'Notion Page' (or 'Notion Database' for collection_view_page)
+    ///   notion.heading.h1: 'Notion Heading 1'
+    ///   notion.heading.h2: 'Notion Heading 2'
+    ///   notion.heading.h3: 'Notion Heading 3'
+    ///   notion.thread: 'Notion Comment Thread'
+    ///   notion.comment: 'Notion Comment'
+    #[col(sql = "VARCHAR(32)")]
+    pub kind: String,
+    /// Human-friendly provider label shown in the Source column.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: 'Claude'
+    ///   openai: 'ChatGPT'
+    ///   slack: 'Slack'
+    ///   github: 'GitHub'
+    ///   gitlab: 'GitLab'
+    ///   notion: 'Notion'
+    #[col(sql = "VARCHAR(32)")]
+    pub source_label: String,
+    /// ISO-8601 timestamp with explicit offset, used for global sort and
+    /// before:/after: filters. Synthesized for blocks/messages without
+    /// their own timestamp by bumping microseconds off the parent's
+    /// timestamp so within-conversation order stays stable. Nullable:
+    /// some entities aren't event-shaped (e.g. contacts without a `REV:`
+    /// field) and we never fabricate a stamp — null means 'no
+    /// source-side timestamp exists'. Null rows are excluded by
+    /// before:/after: filters.
+    ///
+    /// `when_ts_utc` / `when_offset` are DERIVED from this column at load
+    /// time (frankweiler_time::split_when_ts) — they live in the DB but
+    /// not on this struct. `when_ts_utc` is the column the grid sorts and
+    /// before:/after:-filters on (a single zone + fixed width make
+    /// lexical order match chronological order); `when_offset` recovers
+    /// the original local wall-clock for display.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: IFNULL(created_at, updated_at)
+    ///   anthropic.message: messages.created_at
+    ///   anthropic.block: blocks.start_timestamp OR bump_micros(parent_msg.created_at, block_index+1)
+    ///   openai.chat: IFNULL(create_time, update_time)
+    ///   openai.message: messages.create_time OR bump_micros(parent_conv.create_time, msg_idx+1)
+    ///   slack.message: slack_messages.ts (Slack ts is unix-seconds-with-fractional, formatted as ISO-8601 in UTC)
+    ///   github.pr: pull_request.updated_at OR created_at
+    ///   github.comment: comment.created_at
+    ///   gitlab.mr: merge_request.updated_at OR created_at
+    ///   gitlab.note: note.created_at
+    ///   notion.page: block.last_edited_time (Notion ms epoch, formatted ISO-8601 UTC)
+    ///   notion.heading: parent_page.last_edited_time (headings inherit page's last_edited_time)
+    ///   notion.thread: first comment.created_time
+    ///   notion.comment: comment.created_time
+    #[col(sql = "VARCHAR(40)")]
+    #[derived(name = "when_ts_utc", sql = "VARCHAR(40)")]
+    #[derived(name = "when_offset", sql = "VARCHAR(8)")]
+    pub when_ts: Option<String>,
+    /// Display name of the message author. For LLM responses this is
+    /// typically the model slug; for user inputs, the account; for Slack,
+    /// the user real_name.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: ''
+    ///   anthropic.message.human: account_uuid
+    ///   anthropic.message.assistant: conversation.raw_json.model OR sender
+    ///   openai.message.user: account_id
+    ///   openai.message.assistant: model_slug OR role
+    ///   slack.message: users.real_name OR users.name
+    ///   github: comment.user.login OR pull_request.user.login
+    ///   gitlab: note.author.username OR merge_request.author.username
+    ///   notion.page: notion_user.name for block.last_edited_by_id (or created_by for headings)
+    ///   notion.heading: notion_user.name for parent_page.last_edited_by_id
+    ///   notion.thread: notion_user.name for first comment.created_by_id
+    ///   notion.comment: notion_user.name for comment.created_by_id
+    #[col(sql = "VARCHAR(255)")]
+    pub author: Option<String>,
+    /// Account identifier (provider-native). Drives the account: filter.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations.account_uuid
+    ///   openai: openai_conversations.account_id
+    ///   slack: slack_workspaces.team_id
+    ///   github: self_identity.viewer.login (the host account that fetched the data)
+    ///   gitlab: self_identity.current_user.username
+    ///   notion: notion_space.name (workspace name; one per ingest)
+    #[col(sql = "VARCHAR(96)")]
+    pub account: Option<String>,
+    /// Project identifier. For anthropic this is the project UUID; for
+    /// github/gitlab this is the repo full name (e.g. 'owner/repo' or
+    /// 'group/.../project_path'). Null for providers without a project
+    /// notion (openai, slack).
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations.project_uuid
+    ///   openai: null
+    ///   slack: null
+    ///   github: pull_request.base.repo.full_name (e.g. 'enterprise-d/replicator-firmware')
+    ///   gitlab: merge_request.references.full or project_path (e.g. 'enterprise-d/holodeck')
+    ///   notion: null (Notion does not have a per-page project notion; workspace lives in `account`)
+    #[col(sql = "VARCHAR(96)")]
+    pub project: Option<String>,
+    /// Anthropic-only. Owning organization UUID, used to disambiguate
+    /// conversations that share a logged-in account but live in different
+    /// orgs (e.g. a personal Max plan vs. a Team-plan workspace). Stable,
+    /// opaque key; pair with `org_name` for display. Null for
+    /// non-Anthropic rows.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations._source.org_uuid
+    #[col(sql = "VARCHAR(96)")]
+    pub org_uuid: Option<String>,
+    /// Anthropic-only. Human-readable org display name (from
+    /// `/api/organizations`), corresponding to `org_uuid`. Shown in the
+    /// Org column; the row also carries `org_uuid` for stable filtering.
+    /// Null for non-Anthropic rows.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations._source.org_name
+    #[col(sql = "VARCHAR(255)")]
+    pub org_name: Option<String>,
+    /// Channel display name. For Slack this is the channel (e.g. 'bridge',
+    /// 'engineering'); for chat providers it is the chat's display name
+    /// (group subject or 1:1 counterpart). Null for providers without a
+    /// channel/chat concept. Drives the Channel column and a future
+    /// channel: filter.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: null
+    ///   openai: null
+    ///   slack: slack_channels.channel_name
+    ///   whatsapp: chat display name (wa_chat.subject for groups, JID label for 1:1)
+    ///   signal: chat name (recipients.display_name / phone number)
+    ///   github: null
+    ///   gitlab: null
+    #[col(sql = "VARCHAR(255)")]
+    pub channel: Option<String>,
+    /// Human-readable parent conversation title — drives the Conversation
+    /// Name grid column. For Chat rows this duplicates the row's own
+    /// title; for messages/blocks it carries the parent thread's title so
+    /// each grid row stands alone without a join.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: anthropic_conversations.name
+    ///   openai: openai_conversations.title
+    ///   slack: slack_channels.channel_name + thread root snippet
+    ///   github: pull_request.title (carried onto every child comment/review row)
+    ///   gitlab: merge_request.title (carried onto every child note row)
+    ///   notion.page: block.properties.title (plain-text join)
+    ///   notion.heading: parent_page.properties.title
+    ///   notion.thread: parent_page.properties.title
+    ///   notion.comment: parent_page.properties.title
+    #[col(sql = "TEXT")]
+    pub conversation_name: Option<String>,
+    /// Parent conversation / thread UUID. For Chat / Slack Thread rows
+    /// this equals `uuid`. For Message / block rows it points at the
+    /// parent so the chat preview pane knows which thread to open.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: = uuid (conversation_uuid)
+    ///   anthropic.message: messages.conversation_uuid
+    ///   anthropic.block: parent_message.conversation_uuid
+    ///   openai.chat: = uuid (conversation_id)
+    ///   openai.message: messages.conversation_id
+    ///   slack.thread: = uuid (thread root uuid)
+    ///   slack.message: thread root uuid
+    ///   github.pr: = uuid (PR uuid)
+    ///   github.comment: parent PR uuid
+    ///   gitlab.mr: = uuid (MR uuid)
+    ///   gitlab.note: parent MR uuid
+    ///   notion.page: = uuid (page_id)
+    ///   notion.heading: parent page_id
+    ///   notion.thread: = uuid (discussion_id)
+    ///   notion.comment: parent discussion_id
+    #[col(sql = "VARCHAR(96)")]
+    pub conversation_uuid: String,
+    /// Zero-based index of this message within its conversation, in the
+    /// same order the QMD file renders messages. Used by ChatPreviewPane
+    /// to scroll to and highlight the clicked message via
+    /// `[data-msg-index="{index}"]`. Null for Chat / Slack Thread rows.
+    #[col(sql = "INT")]
+    pub message_index: Option<i64>,
+    /// Path used by the row to open the full thread in the right-hand
+    /// preview. Today: `/chat/{conversation_uuid}`.
+    #[col(sql = "VARCHAR(255)")]
+    pub entire_chat: String,
+    /// Full searchable body for this row. The Rust backend computes the
+    /// displayed snippet from `text` + the user's free-text needle at
+    /// query time, so we store the full body here rather than a
+    /// pre-truncated snippet.
+    ///
+    /// Per-provider mapping:
+    ///   anthropic.chat: summary OR name
+    ///   anthropic.message: messages.text
+    ///   anthropic.block: blocks.text OR raw_json.thinking OR type
+    ///   openai.chat: title
+    ///   openai.message: messages.text
+    ///   slack.thread: root message text
+    ///   slack.message: messages.text (with mention/emoji rendering)
+    ///   github.pr: pull_request.title + body
+    ///   github.comment: comment.body
+    ///   gitlab.mr: merge_request.title + description
+    ///   gitlab.note: note.body
+    ///   notion.page: page title + full plain-text body of all child blocks (recursive)
+    ///   notion.heading: heading block's plain-text title
+    ///   notion.thread: concatenated plain-text of every comment in the discussion
+    ///   notion.comment: comment.text rendered to plain text
+    #[col(sql = "LONGTEXT")]
+    pub text: String,
+    /// Deep link of the form
+    /// `slack://channel?team={team_id}&id={channel_id}&message={ts}` (or
+    /// the https equivalent). Populated only for Slack rows; drives the
+    /// 'Open in Slack' right-click context menu item.
+    #[col(sql = "VARCHAR(512)")]
+    pub slack_link: Option<String>,
+    /// Path to the rendered Markdown file for this row's
+    /// conversation/thread, relative to the data root. All paths are
+    /// rooted under `rendered_md/<provider>/...`. Set on every row
+    /// (chat-level rows point at their own .md; message/block rows
+    /// inherit their parent thread's). The chat preview pane uses this to
+    /// load the conversation directly — no glob, no frontmatter scan.
+    /// (Column name retained as `qmd_path` for historical reasons.)
+    ///
+    /// Per-provider mapping:
+    ///   anthropic: rendered_md/anthropic/{account_uuid}/{org_uuid}/llm_chats/{conversation_uuid}/index.md
+    ///   openai: rendered_md/openai/{account_id|unknown}/llm_chats/{conversation_id}__{slug(title)}.md
+    ///   slack: rendered_md/slack/{team_id}/{channel_name}/threads/{thread_uuid}__{slug(root_text[:80])}.md
+    ///   github: rendered_md/github/{owner}/{repo}/pr-{number}__{slug(title)}/index.md (PR), or .../threads/{thread_uuid}__{slug}.md (comment threads)
+    ///   gitlab: rendered_md/gitlab/{group}/{project}/mr-{iid}__{slug(title)}/index.md (MR), or .../threads/{discussion_uuid}__{slug}.md (discussion threads)
+    ///   notion: rendered_md/notion/{space_slug}__{short_id}/{...nested page slugs}/{page_slug}__{short_id}.md (pages + headings); .../comments/{thread_short_id}__{snippet}.md (comment threads)
+    #[col(sql = "VARCHAR(512)")]
+    pub qmd_path: Option<String>,
+    /// Canonical URL pointing back to the original source on the
+    /// provider's web UI. For GitHub/GitLab this is the html_url/web_url
+    /// of the PR/MR or comment; null for providers without a stable
+    /// public link.
+    ///
+    /// Per-provider mapping:
+    ///   github.pr: pull_request.html_url
+    ///   github.comment: comment.html_url
+    ///   gitlab.mr: merge_request.web_url
+    ///   gitlab.note: merge_request.web_url + '#note_' + note.id
+    #[col(sql = "VARCHAR(1024)")]
+    pub source_url: Option<String>,
+    /// Git commit SHA associated with the row, used to reconstruct exact
+    /// source state. For PRs/MRs this is the head SHA at the time of
+    /// ingest; for review/diff comments it's the commit the comment is
+    /// anchored to.
+    ///
+    /// Per-provider mapping:
+    ///   github.pr: pull_request.head.sha
+    ///   github.pr_review: review.commit_id
+    ///   github.pr_review_comment: comment.commit_id OR comment.original_commit_id
+    ///   gitlab.mr: merge_request.sha (head)
+    ///   gitlab.note: note.position.head_sha (if diff note) else null
+    #[col(sql = "VARCHAR(64)")]
+    pub git_sha: Option<String>,
+    /// Provider-native primary identifier for this entity (e.g. numeric
+    /// GitHub/GitLab id, PR number). Preserved alongside our uuid so we
+    /// can round-trip back to the provider's API.
+    ///
+    /// Per-provider mapping:
+    ///   github.pr: pull_request.number
+    ///   github.issue_comment: comment.id
+    ///   github.pr_review: review.id
+    ///   github.pr_review_comment: comment.id
+    ///   gitlab.mr: merge_request.iid
+    ///   gitlab.note: note.id
+    #[col(sql = "VARCHAR(128)")]
+    pub external_id: Option<String>,
+    /// Notion-only. UUID of the page this row belongs to. For page rows
+    /// this equals `uuid`; for heading / comment thread / comment rows it
+    /// points at the containing page so the grid can filter every row
+    /// that lives in a given document. Null for non-Notion rows.
+    #[col(sql = "VARCHAR(96)")]
+    pub notion_page_uuid: Option<String>,
+    /// Notion-only. UUID of the specific block this row is anchored to.
+    /// For heading rows this is the heading block; for comment-thread
+    /// rows it is the block the discussion is attached to
+    /// (`discussion.parent_id` when parent_table='block'); for individual
+    /// comment rows it is the same as the parent thread's block. Null for
+    /// page-level rows and non-Notion rows.
+    #[col(sql = "VARCHAR(96)")]
+    pub notion_block_uuid: Option<String>,
+    /// FK into the `markdowns` table — every rendered `.md` file gets one
+    /// row in `markdowns`, and every grid_row that lives inside that file
+    /// points at it. Many-to-1. A single upstream 'conversation' can
+    /// shard across multiple markdowns when a provider renders one file
+    /// per period (beeper); `markdown_uuid` is the addressing primitive
+    /// the rest of the system (notably `/api/chat/{markdown_uuid}`) uses.
+    /// Nullable today because the column is being introduced ahead of the
+    /// producer-side population pass; will become NOT NULL once every
+    /// renderer emits it. Drives incremental re-render (skip if
+    /// `markdowns.row_set_hash` unchanged) and per-markdown re-ingest.
+    #[col(sql = "VARCHAR(96)")]
+    pub markdown_uuid: Option<String>,
+}

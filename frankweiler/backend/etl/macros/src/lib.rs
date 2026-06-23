@@ -1,16 +1,23 @@
 //! Proc-macros for the frankweiler ETL crates.
 //!
-//! Two derives today:
+//! Derives today:
 //!
 //!   - [`WirePayloadRow`] — DDL + bulk-upsert plumbing for any row
 //!     struct that maps to a wire-payload entity table (id + payload
 //!     + promoted columns).
+//!   - [`RawTable`] — the general form of `WirePayloadRow`, covering
+//!     both payload-shaped and payload-less raw-store tables.
 //!   - [`CasEdgeRow`] — every per-provider CAS edge table (each
 //!     attachment / blob-link table) follows the same four-column
 //!     shape; this derive emits the
 //!     [`frankweiler_etl::blob_cas::CasEdgeRow`] +
 //!     [`frankweiler_etl::bulk::BulkUpsertable`] impls so the
 //!     provider's `schema_raw.rs` is just the struct.
+//!   - [`PortableTable`] — the consumer-side counterpart: emits the
+//!     portable `CREATE TABLE` DDL + `TABLES`/`COLUMNS` consts for the
+//!     denormalized presentation tables (`grid_rows`, `edges`,
+//!     `markdowns`, `feedback`, `sync_jobs`) that back the grid / UI.
+//!     Replaces the old `schemas/codegen.py` JSON-Schema path.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -871,4 +878,236 @@ fn is_plain_string(ty: &Type) -> bool {
 
 fn is_option_string(ty: &Type) -> bool {
     matches!(classify(ty), Some(PromotedKind::TextNullable))
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PortableTable
+// ─────────────────────────────────────────────────────────────────────
+
+/// Derive the portable `CREATE TABLE` surface (`DDL` + `TABLES` +
+/// `COLUMNS` module consts) for a hand-written *presentation* row
+/// struct — the denormalized tables that back the grid / UI
+/// (`grid_rows`, `edges`, `markdowns`, `feedback`, `sync_jobs`).
+///
+/// This is the sibling of [`WirePayloadRow`]/[`RawTable`] for the
+/// *consumer* side of the system. Where those derive the raw-store
+/// wire shape (id + payload + promoted columns, `TEXT`/`INTEGER`/`REAL`,
+/// plus a `BulkUpsertable` impl bound through sqlx), `PortableTable`
+/// covers flat typed tables whose columns use portable MySQL/Dolt/SQLite
+/// types (`VARCHAR(n)`, `LONGTEXT`, `JSON`, `DOUBLE`, …) and whose rows
+/// are written by hand-rolled `INSERT`s. So this derive emits **only**
+/// the DDL/metadata consts — no `BulkUpsertable`, no serde (the struct
+/// derives `Serialize`/`Deserialize` itself).
+///
+/// It replaces the old `schemas/codegen.py` JSON-Schema → Rust path:
+/// the struct is the single source of truth, the same way extract's
+/// `schema_raw.rs` already is.
+///
+/// **Struct attribute.** `#[portable_table(table = "grid_rows",
+/// primary_key = "uuid")]`. Both keys are required. `primary_key`
+/// accepts a comma-separated list for composite keys.
+///
+/// **Per-field attribute.** `#[col(sql = "VARCHAR(96)")]` gives the
+/// portable SQL base type. Required on every field. Nullability is
+/// inferred from the Rust type: `Option<T>` → nullable (bare type),
+/// anything else → `… NOT NULL`.
+///
+/// **Derived columns.** Some tables carry columns that live in the DB
+/// but are computed at load time and so are absent from the struct
+/// (e.g. `grid_rows.when_ts_utc` / `when_offset`, derived from
+/// `when_ts`). Declare them with a repeatable field attribute on the
+/// column they follow: `#[derived(name = "when_ts_utc", sql =
+/// "VARCHAR(40)")]`. Derived columns are always nullable and are
+/// emitted into the DDL + `COLUMNS` immediately after their host field.
+///
+/// **Example.**
+/// ```ignore
+/// #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
+/// #[portable_table(table = "edges", primary_key = "edge_uuid")]
+/// pub struct EdgeRow {
+///     #[col(sql = "VARCHAR(96)")]
+///     pub edge_uuid: String,
+///     #[col(sql = "VARCHAR(96)")]
+///     pub src_markdown_uuid: String,
+///     #[col(sql = "VARCHAR(64)")]
+///     pub label: Option<String>,
+/// }
+/// ```
+///
+/// emits module-level `pub const TABLES`, `pub const DDL`, and
+/// `pub const COLUMNS` matching the byte shape `codegen.py` produced.
+#[proc_macro_derive(PortableTable, attributes(portable_table, col, derived))]
+pub fn derive_portable_table(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_portable_table(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+struct PortableColumn {
+    name: String,
+    decl: String,
+}
+
+fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_name = input.ident.clone();
+    let (table, primary_key) = parse_portable_table_attr(&input.attrs, &struct_name)?;
+    let fields = collect_named_fields(&input)?;
+
+    let mut columns: Vec<PortableColumn> = Vec::new();
+    for f in &fields {
+        let name = f.ident.as_ref().expect("named field").to_string();
+        let sql = parse_col_attr(f)?;
+        // Nullability follows the Rust type: Option<T> → nullable.
+        let decl = if is_option(&f.ty) {
+            format!("{name} {sql}")
+        } else {
+            format!("{name} {sql} NOT NULL")
+        };
+        columns.push(PortableColumn { name, decl });
+        // Load-time-derived columns trail their host field, always
+        // nullable (they are absent from the struct).
+        for (dname, dsql) in parse_derived_attrs(f)? {
+            columns.push(PortableColumn {
+                decl: format!("{dname} {dsql}"),
+                name: dname,
+            });
+        }
+    }
+
+    let mut decl_lines: Vec<String> = columns.iter().map(|c| c.decl.clone()).collect();
+    decl_lines.push(format!("PRIMARY KEY ({primary_key})"));
+    let body = decl_lines.join(",\n    ");
+    let ddl = format!("CREATE TABLE IF NOT EXISTS {table} (\n    {body}\n)");
+
+    let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
+    let struct_name_lit = LitStr::new(&struct_name.to_string(), proc_macro2::Span::call_site());
+    let ddl_lit = LitStr::new(&ddl, proc_macro2::Span::call_site());
+    let col_lits: Vec<LitStr> = columns
+        .iter()
+        .map(|c| LitStr::new(&c.name, proc_macro2::Span::call_site()))
+        .collect();
+
+    Ok(quote! {
+        /// `(table_name, Rust struct name)` for the table this schema defines.
+        pub const TABLES: &[(&str, &str)] = &[(#table_lit, #struct_name_lit)];
+
+        /// Portable `CREATE TABLE IF NOT EXISTS` — the SQL subset
+        /// accepted by Dolt, MySQL, and SQLite.
+        pub const DDL: &[(&str, &str)] = &[(#table_lit, #ddl_lit)];
+
+        /// Column names, in declaration order (struct fields plus any
+        /// load-time-derived columns).
+        pub const COLUMNS: &[(&str, &[&str])] = &[(#table_lit, &[#(#col_lits),*])];
+    })
+}
+
+fn parse_portable_table_attr(
+    attrs: &[Attribute],
+    struct_name: &Ident,
+) -> syn::Result<(String, String)> {
+    for attr in attrs {
+        if !attr.path().is_ident("portable_table") {
+            continue;
+        }
+        let mut table: Option<String> = None;
+        let mut primary_key: Option<String> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("table") {
+                table = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else if meta.path.is_ident("primary_key") {
+                primary_key = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "unknown #[portable_table(...)] key; supported keys: `table`, `primary_key`",
+                ))
+            }
+        })?;
+        let table = table.ok_or_else(|| {
+            syn::Error::new_spanned(attr, "#[portable_table(table = \"...\")] is required")
+        })?;
+        let primary_key = primary_key.ok_or_else(|| {
+            syn::Error::new_spanned(attr, "#[portable_table(primary_key = \"...\")] is required")
+        })?;
+        return Ok((table, primary_key));
+    }
+    Err(syn::Error::new_spanned(
+        struct_name,
+        "#[derive(PortableTable)] requires #[portable_table(table = \"…\", primary_key = \"…\")]",
+    ))
+}
+
+/// Read the required `#[col(sql = "…")]` portable type for one field.
+fn parse_col_attr(field: &Field) -> syn::Result<String> {
+    for attr in &field.attrs {
+        if !attr.path().is_ident("col") {
+            continue;
+        }
+        let mut sql: Option<String> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("sql") {
+                sql = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else {
+                Err(meta.error("unknown #[col(...)] key; supported keys: `sql`"))
+            }
+        })?;
+        return sql
+            .ok_or_else(|| syn::Error::new_spanned(attr, "#[col(sql = \"...\")] is required"));
+    }
+    Err(syn::Error::new_spanned(
+        field,
+        "every #[derive(PortableTable)] field needs #[col(sql = \"…\")]",
+    ))
+}
+
+/// Collect the repeatable `#[derived(name = "…", sql = "…")]` columns
+/// that trail a field.
+fn parse_derived_attrs(field: &Field) -> syn::Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for attr in &field.attrs {
+        if !attr.path().is_ident("derived") {
+            continue;
+        }
+        let mut name: Option<String> = None;
+        let mut sql: Option<String> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                name = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else if meta.path.is_ident("sql") {
+                sql = Some(meta.value()?.parse::<LitStr>()?.value());
+                Ok(())
+            } else {
+                Err(meta.error("unknown #[derived(...)] key; supported keys: `name`, `sql`"))
+            }
+        })?;
+        let name = name.ok_or_else(|| {
+            syn::Error::new_spanned(
+                attr,
+                "#[derived(name = \"...\", sql = \"...\")] needs `name`",
+            )
+        })?;
+        let sql = sql.ok_or_else(|| {
+            syn::Error::new_spanned(
+                attr,
+                "#[derived(name = \"...\", sql = \"...\")] needs `sql`",
+            )
+        })?;
+        out.push((name, sql));
+    }
+    Ok(out)
+}
+
+fn is_option(ty: &Type) -> bool {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return false;
+    };
+    path.segments
+        .last()
+        .map(|seg| seg.ident == "Option")
+        .unwrap_or(false)
 }

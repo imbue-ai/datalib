@@ -23,7 +23,7 @@
 //!   [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //!   §"Object identity" (e.g. `uuidv5(GITLAB_NS, "gitlab:{proj}:mr:{iid}")`,
 //!   `uuidv5(GITLAB_NS, "gitlab:{proj}:note:{id}")` keyed off
-//!   `note.web_url`-style ids) live in `crate::translate::parse`
+//!   `note.web_url`-style ids) live in `crate::render_and_index_md::parse`
 //!   alongside the `GITLAB_UUID_NS` constant, since UUIDv5 minting is
 //!   a translate-side concern — extract keeps the raw upstream
 //!   identifiers.

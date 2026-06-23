@@ -11,6 +11,7 @@ rust_binary(
     srcs = [
         "src/main.rs",
         "src/progress.rs",
+        "src/render_and_index_md.rs",
         "src/summary.rs",
     ],
     edition = "2021",
@@ -58,7 +59,9 @@ rust_binary(
         "@frankweiler_crates//:chrono",
         "@frankweiler_crates//:clap",
         "@frankweiler_crates//:indicatif",
+        "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:serde_yaml",
         "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:tracing",

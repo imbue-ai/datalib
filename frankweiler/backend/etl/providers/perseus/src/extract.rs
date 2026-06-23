@@ -17,7 +17,7 @@
 //! runner we use). If we ever need playback fixtures here, the
 //! shell-out is one function and easy to swap.
 //!
-//! The translate path under [`crate::translate`] currently expects
+//! The translate path under [`crate::render_and_index_md`] currently expects
 //! the **Thucydides Histories** pair specifically — `perseus-grc2.xml`
 //! and `1st1K-eng1.xml`. The default [`PerseusSync::files`] list
 //! ([`DEFAULT_FILES`]) matches that, so an empty / `sync: {}` block

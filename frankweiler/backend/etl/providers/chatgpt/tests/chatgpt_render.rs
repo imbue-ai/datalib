@@ -1,4 +1,4 @@
-//! Golden test for ChatGPT translate::render against the TNG fixture.
+//! Golden test for ChatGPT render_and_index_md::render against the TNG fixture.
 //!
 //! The expected snapshot is byte-equal to what `src/ingest/render.py`
 //! produces for the same fixture; the .snap was seeded from a Python
@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl_chatgpt::translate::parse::parse_api_dir;
-use frankweiler_etl_chatgpt::translate::render::render_all;
+use frankweiler_etl_chatgpt::render_and_index_md::parse::parse_api_dir;
+use frankweiler_etl_chatgpt::render_and_index_md::render::render_all;
 
 fn fixture_dir() -> PathBuf {
     // Bazel sets `CHATGPT_FIXTURE_DIR` to a runfiles-relative path

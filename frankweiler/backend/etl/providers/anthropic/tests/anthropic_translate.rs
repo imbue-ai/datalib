@@ -3,7 +3,7 @@
 //! via `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an
 //! integration test tagged `manual` and is run via `cargo test`.
 
-use frankweiler_etl_anthropic::translate::parse::{parse_export, shred};
+use frankweiler_etl_anthropic::render_and_index_md::parse::{parse_export, shred};
 use std::collections::HashSet;
 use std::path::PathBuf;
 

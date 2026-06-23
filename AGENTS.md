@@ -6,14 +6,15 @@ the union-table architecture behind the grid.
 ## Repo layout
 
 ```
-schemas/         cross-language source of truth. Each *.schema.json gets
-                 codegen-emitted Rust (struct + const DDL) and TypeScript
-                 artifacts. See docs/dev/grid_rows.md.
 frankweiler/
   backend/     Rust workspace. ETL (extract/translate/load), HTTP API,
-               qmd_indexer, Tauri backend. Per-provider crates under
-               etl/providers/<p>/ each emit *.grid_rows.json sidecars
-               that the shared Load step upserts into Dolt.
+               qmd_indexer, Tauri backend. Row schemas are hand-written
+               Rust structs: schema/ (render schema — grid_rows/edges/
+               markdowns) and app_schema/ (feedback/sync_jobs), each
+               deriving its CREATE TABLE DDL via #[derive(PortableTable)].
+               Per-provider crates under etl/providers/<p>/ each emit
+               *.grid_rows.json sidecars that the shared Load step
+               upserts into Dolt.
   ui/         Vue + AG Grid frontend.
 tests/         goldens under tests/__snapshots__/ (Bazel-driven).
 tests/fixtures/  TNG-themed source JSON + cached `ingested/` artifact.
@@ -72,21 +73,24 @@ The Vue grid is backed by a single denormalized table, `grid_rows`,
 populated at the end of every ingest from the authoritative per-provider
 tables. The Rust backend (`frankweiler/backend/core/src/db.rs`) issues
 *one* SELECT against `grid_rows` to render the grid — no per-provider
-branches in the query path. Schema (column names, types, per-provider
-mappings) lives in `schemas/grid_rows.schema.json`; codegen produces
-matching Python/Rust/TypeScript types. See `docs/dev/grid_rows.md` for the
-full architecture.
+branches in the query path. The schema (column names, types, per-provider
+mappings) is the hand-written `GridRow` struct in
+`frankweiler/backend/schema/src/grid_rows.rs`; `#[derive(PortableTable)]`
+produces the `CREATE TABLE` DDL from it. See `docs/dev/grid_rows.md` for
+the full architecture.
 
 When you add or change a `grid_rows` column:
 
-1. Edit `schemas/grid_rows.schema.json` (don't forget `x-mapping`).
-2. Re-run codegen (see README).
-3. Update each provider's `translate/grid_rows.rs` to populate the new
+1. Add the field to the `GridRow` struct in
+   `frankweiler/backend/schema/src/grid_rows.rs` with a `#[col(sql = "…")]`
+   portable type (keep the per-provider mapping in the field's doc
+   comment). Load-time-derived columns use `#[derived(…)]`.
+2. Update each provider's `translate/grid_rows.rs` to populate the new
    column from that provider's parsed data.
-4. Update the row mapper in `frankweiler/backend/core/src/dolt_repo.rs`
+3. Update the row mapper in `frankweiler/backend/core/src/dolt_repo.rs`
    to read it back, plus `SearchRow` in `search.rs` if the column reaches
    the API.
-5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+4. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 ## QMDs are write-only
 
@@ -116,9 +120,9 @@ cascades selection (`preview_selection`) → message (`preview_message`)
 → whole-thread (`page_header`); the page-header
 `FeedbackButton` is `page_header`. The producer-side types and DOM
 breadcrumb walker live in `frankweiler/ui/src/feedback/context.ts`;
-the backend-side row + discriminated payload schema lives in
-`schemas/feedback.schema.json` and is codegen'd into all three
-languages.
+the backend-side row + discriminated payload schema is the hand-written
+`FeedbackRow` (+ `FeedbackContext` variants) in
+`frankweiler/backend/app_schema/src/feedback.rs`.
 
 Each `POST /api/feedback` inserts a row **and** runs
 `SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
@@ -164,8 +168,9 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 
 Then add `requirement("newpkg")` to the relevant `BUILD.bazel` `deps`.
 A `uv run` smoke test won't catch a missing Bazel dep — the venv has it.
-Run `bazelisk build //…` (or `//schemas:codegen`) to verify. Python is
-now only used for schema codegen; everything else is Rust.
+Run `bazelisk build //…` to verify. Python is only used for fixture /
+test-pipeline tooling (`tests/fixtures/`) and scripts; everything in the
+shipping path is Rust.
 
 ## Running tests
 

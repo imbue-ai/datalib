@@ -20,7 +20,7 @@
 //! ```
 
 use frankweiler_etl_github::extract::{self as github, parse_pr_ref, FetchOptions};
-use frankweiler_etl_github::translate::{parse_api_dir, render_github};
+use frankweiler_etl_github::render_and_index_md::{parse_api_dir, render_github};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -62,7 +62,7 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_rel = frankweiler_etl_github::translate::render::pr_qmd_path_rel(
+    let qmd_rel = frankweiler_etl_github::render_and_index_md::render::pr_qmd_path_rel(
         &pr.repo_full_name,
         pr.pr_number,
     );
@@ -76,7 +76,7 @@ async fn github_live_single_pr_snapshot() {
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use frankweiler_etl_github::translate::parse::CommentSection;
+    use frankweiler_etl_github::render_and_index_md::parse::CommentSection;
     if parsed
         .comments
         .iter()

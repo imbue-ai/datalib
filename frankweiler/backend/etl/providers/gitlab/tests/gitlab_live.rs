@@ -20,7 +20,7 @@
 //! ```
 
 use frankweiler_etl_gitlab::extract::{self as gitlab, parse_mr_ref, FetchOptions};
-use frankweiler_etl_gitlab::translate::{parse_api_dir, render_gitlab};
+use frankweiler_etl_gitlab::render_and_index_md::{parse_api_dir, render_gitlab};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -61,7 +61,7 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_rel = frankweiler_etl_gitlab::translate::render::mr_qmd_path_rel(
+    let qmd_rel = frankweiler_etl_gitlab::render_and_index_md::render::mr_qmd_path_rel(
         &mr.project_full_path,
         mr.mr_iid,
     );
@@ -75,7 +75,7 @@ async fn gitlab_live_single_mr_snapshot() {
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use frankweiler_etl_gitlab::translate::parse::NoteSection;
+    use frankweiler_etl_gitlab::render_and_index_md::parse::NoteSection;
     if parsed
         .notes
         .iter()

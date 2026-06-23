@@ -3,7 +3,7 @@
 //!
 //! Materializes a Beeper Texts-shaped data directory from the
 //! `fixtures/beeper_tng/` SQL files into a tempdir, runs
-//! `extract::fetch` + `translate::render_all` against it, and
+//! `extract::fetch` + `render_and_index_md::render_all` against it, and
 //! asserts the on-disk doltlite output + rendered markdown.
 //!
 //! Requires the system `sqlite3` CLI (macOS ships with it; on
@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_beeper::extract::{self, FetchOptions, FetchSummary};
-use frankweiler_etl_beeper::translate::{self, Period};
+use frankweiler_etl_beeper::render_and_index_md::{self, Period};
 
 /// Path to the fixture directory on disk. Bazel stages the fixture
 /// at a runfiles-relative path and exposes it via
@@ -210,7 +210,7 @@ fn tng_fixture_extract_landed_data() -> Result<()> {
     Ok(())
 }
 
-// translate::parse uses `block_in_place` to bridge into sqlx,
+// render_and_index_md::parse uses `block_in_place` to bridge into sqlx,
 // which requires a multi-thread runtime context. Plain `#[test]`
 // doesn't provide one; use `#[tokio::test(flavor = "multi_thread")]`
 // for any test that calls into translate.
@@ -222,7 +222,7 @@ async fn tng_fixture_translate_per_month_with_cross_month_reaction() -> Result<(
     let out_db = tmp.path().join("out.doltlite_db");
     run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
 
-    let parsed = translate::parse::parse(&out_db, Period::Month)?;
+    let parsed = render_and_index_md::parse::parse(&out_db, Period::Month)?;
 
     // 4 docs total: GC-Riker/2024-03, Signal-Data/2024-03,
     // Signal-Data/2024-04, Signal-Crusher/2024-04.
@@ -291,14 +291,14 @@ async fn tng_fixture_render_to_markdown_files() -> Result<()> {
     let out_db = tmp.path().join("out.doltlite_db");
     run_extract(out_db.clone(), beeper_dir, vec!["signal", "googlechat"]).await?;
 
-    let parsed = translate::parse::parse(&out_db, Period::Month)?;
+    let parsed = render_and_index_md::parse::parse(&out_db, Period::Month)?;
     let rendered_root = tmp.path().join("rendered");
     let mut rendered: Vec<RenderedMarkdown> = Vec::new();
     let mut on_doc = |d: RenderedMarkdown| -> anyhow::Result<()> {
         rendered.push(d);
         Ok(())
     };
-    let summary = translate::render::render_all(
+    let summary = render_and_index_md::render::render_all(
         &parsed,
         &rendered_root,
         "tng",

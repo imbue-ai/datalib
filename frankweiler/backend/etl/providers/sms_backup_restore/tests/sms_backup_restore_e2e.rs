@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_sms_backup_restore::extract::{self, db_path_for, FetchOptions, RawDb};
-use frankweiler_etl_sms_backup_restore::translate;
+use frankweiler_etl_sms_backup_restore::render_and_index_md;
 
 fn fixture_root() -> PathBuf {
     // Under Bazel the fixture is staged into runfiles and pointed at by
@@ -100,7 +100,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 docs.push(d);
                 Ok(())
             };
-            translate::render(
+            render_and_index_md::render(
                 &raw_dir,
                 &out_dir,
                 "sms_backup_restore",

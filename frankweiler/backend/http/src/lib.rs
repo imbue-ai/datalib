@@ -19,6 +19,8 @@
 //! and lets the UI render markdown once. We never parse a QMD back into
 //! structured data; structured fields come from `grid_rows`.
 
+use app_schema::feedback::FeedbackRow;
+use app_schema::sync_jobs::SyncJobRow;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -33,8 +35,6 @@ use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
 use frankweiler_core::repo::{DynRepo, EdgeRowOut, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
-use frankweiler_schema::feedback::FeedbackRow;
-use frankweiler_schema::sync_jobs::SyncJobRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;

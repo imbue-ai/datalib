@@ -25,8 +25,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use app_schema::sync_jobs::SyncJobRow;
 use frankweiler_core::repo::DynRepo;
-use frankweiler_schema::sync_jobs::SyncJobRow;
 use serde::Serialize;
 use tokio::sync::broadcast;
 

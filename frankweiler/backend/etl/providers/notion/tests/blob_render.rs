@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 
 use frankweiler_etl::blob_cas::BlobBundle;
-use frankweiler_etl_notion::translate::parse::ParsedNotionOfficial;
-use frankweiler_etl_notion::translate::render::render_notion_official;
+use frankweiler_etl_notion::render_and_index_md::parse::ParsedNotionOfficial;
+use frankweiler_etl_notion::render_and_index_md::render::render_notion_official;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
