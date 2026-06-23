@@ -18,8 +18,12 @@ rust_library(
     crate_name = "frankweiler_etl_perseus",
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
+    proc_macro_deps = [
+        "@frankweiler_crates//:async-trait",
+    ],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/perseus_config:frankweiler_etl_perseus_config",
         "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/time:frankweiler_time",

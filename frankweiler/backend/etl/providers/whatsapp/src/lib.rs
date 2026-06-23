@@ -18,5 +18,6 @@
 //!   from_me)` triple.
 
 pub mod extract;
+pub mod processor;
 pub mod render_and_index_md;
 pub mod schema_raw;

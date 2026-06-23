@@ -9,4 +9,5 @@
 //! Translate (frames → markdown + grid_rows) is a follow-up.
 
 pub mod extract;
+pub mod processor;
 pub mod render_and_index_md;

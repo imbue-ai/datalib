@@ -23,5 +23,6 @@
 pub mod connections;
 pub mod extract;
 pub mod posts;
+pub mod processor;
 pub mod render;
 pub mod synthesize;

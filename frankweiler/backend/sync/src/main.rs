@@ -1634,52 +1634,142 @@ enum ExtractKind {
     },
 }
 
-/// Build the email source's extract [`ExtractPlan`] on the Program-A
-/// `DataProcessor` path. The provider owns its config: we re-parse the
-/// email-specific slice straight from the source's serialized stanza (the same
-/// round-trip the render registry uses), so the orchestrator names no email
-/// config fields and builds no `ExtractKind`. The plan's `processors` are
-/// email's extract processors; they own the store (open/commit/checkpoint).
-fn email_processor_plan(
+/// Build the Program-A [`SourcePlan`] for a migrated provider, or `None` if the
+/// source's `type:` hasn't been migrated yet (the caller falls back to the
+/// legacy `ExtractKind` path). The provider owns its config: we re-parse its
+/// slice from the source's serialized stanza (the same round-trip the render
+/// registry uses), so the orchestrator names no provider config fields and
+/// builds no `ExtractKind`. Returns the full plan; callers take the wave they
+/// need (`extract` in the extract phase, `translate` in the translate phase).
+///
+/// This is the single seam every provider migration plugs into: add one arm.
+fn build_source_plan(
+    src: &SourceConfig,
+    cfg: &Config,
+    playback_root: Option<&Path>,
+) -> Option<Result<frankweiler_etl::processor::SourcePlan>> {
+    let shared = src.resolved_shared(cfg);
+    let common = frankweiler_etl::processor::PlanCommon {
+        name: src.name().to_string(),
+        raw_path: src.resolved_raw_path(&cfg.data_root),
+        input_path: src.resolved_input_path(&cfg.data_root),
+        blob_size_limit_bytes: shared.blob_size_limit_bytes,
+        playback_root: playback_root.map(|p| p.to_path_buf()),
+        event_tape_enabled: shared.event_tape.unwrap_or_default().enabled,
+        max_sequential_failures: shared.extract_params.max_sequential_failures(),
+    };
+    let stanza = match serde_yaml::to_value(src).context("serialize source stanza") {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
+    };
+    let plan = match src.type_str() {
+        "email" => serde_yaml::from_value::<frankweiler_etl_email_config::EmailConfig>(stanza)
+            .context("parse email config")
+            .and_then(|c| frankweiler_etl_email::processor::plan(common, c)),
+        "claude_api" | "claude_export" => {
+            serde_yaml::from_value::<frankweiler_etl_anthropic_config::AnthropicConfig>(stanza)
+                .context("parse anthropic config")
+                .and_then(|c| frankweiler_etl_anthropic::processor::plan(common, c))
+        }
+        "chatgpt_api" => {
+            serde_yaml::from_value::<frankweiler_etl_chatgpt_config::ChatgptConfig>(stanza)
+                .context("parse chatgpt config")
+                .and_then(|c| frankweiler_etl_chatgpt::processor::plan(common, c))
+        }
+        "github_api" => {
+            serde_yaml::from_value::<frankweiler_etl_github_config::GithubConfig>(stanza)
+                .context("parse github config")
+                .and_then(|c| frankweiler_etl_github::processor::plan(common, c))
+        }
+        "gitlab_api" => {
+            serde_yaml::from_value::<frankweiler_etl_gitlab_config::GitlabConfig>(stanza)
+                .context("parse gitlab config")
+                .and_then(|c| frankweiler_etl_gitlab::processor::plan(common, c))
+        }
+        "sms_backup_restore" => serde_yaml::from_value::<
+            frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
+        >(stanza)
+        .context("parse sms_backup_restore config")
+        .and_then(|c| frankweiler_etl_sms_backup_restore::processor::plan(common, c)),
+        "google_takeout" => serde_yaml::from_value::<
+            frankweiler_etl_google_takeout_config::GoogleTakeoutConfig,
+        >(stanza)
+        .context("parse google_takeout config")
+        .and_then(|c| frankweiler_etl_google_takeout::processor::plan(common, c)),
+        "carddav" => {
+            serde_yaml::from_value::<frankweiler_etl_carddav_config::CarddavConfig>(stanza)
+                .context("parse carddav config")
+                .and_then(|c| frankweiler_etl_contacts::processor::plan(common, c))
+        }
+        "beeper" => serde_yaml::from_value::<frankweiler_etl_beeper_config::BeeperConfig>(stanza)
+            .context("parse beeper config")
+            .and_then(|c| frankweiler_etl_beeper::processor::plan(common, c)),
+        "signal_backup" => {
+            serde_yaml::from_value::<frankweiler_etl_signal_config::SignalConfig>(stanza)
+                .context("parse signal config")
+                .and_then(|c| frankweiler_etl_signal::processor::plan(common, c))
+        }
+        "yolink" => serde_yaml::from_value::<frankweiler_etl_yolink_config::YolinkConfig>(stanza)
+            .context("parse yolink config")
+            .and_then(|c| frankweiler_etl_yolink::processor::plan(common, c)),
+        "slack_api" => serde_yaml::from_value::<frankweiler_etl_slack_config::SlackConfig>(stanza)
+            .context("parse slack config")
+            .and_then(|c| frankweiler_etl_slack::processor::plan(common, c)),
+        "perseus" => {
+            serde_yaml::from_value::<frankweiler_etl_perseus_config::PerseusConfig>(stanza)
+                .context("parse perseus config")
+                .and_then(|c| frankweiler_etl_perseus::processor::plan(common, c))
+        }
+        "linkedin" => {
+            serde_yaml::from_value::<frankweiler_etl_linkedin_config::LinkedinConfig>(stanza)
+                .context("parse linkedin config")
+                .and_then(|c| frankweiler_etl_linkedin::processor::plan(common, c))
+        }
+        "whatsapp_backup" => {
+            serde_yaml::from_value::<frankweiler_etl_whatsapp_config::WhatsappConfig>(stanza)
+                .context("parse whatsapp config")
+                .and_then(|c| frankweiler_etl_whatsapp::processor::plan(common, c))
+        }
+        "notion_api" => {
+            serde_yaml::from_value::<frankweiler_etl_notion_config::NotionConfig>(stanza)
+                .context("parse notion config")
+                .and_then(|c| frankweiler_etl_notion::processor::plan(common, c))
+        }
+        // Every provider is migrated; nothing falls through to ExtractKind.
+        _ => return None,
+    };
+    Some(plan)
+}
+
+/// Wrap a migrated source's extract processors in an [`ExtractPlan`] carrying
+/// the common per-source machinery (progress, metrics, diagnostics). The store
+/// itself — pool, DDL, commit, interrupt `Checkpoint` — is owned by the
+/// processors, so `kind`/`db`/`event_tape` are all `None`.
+fn extract_plan_from_processors(
     src: &SourceConfig,
     cfg: &Config,
     now: &str,
     control: &frankweiler_etl::control::ExtractControl,
-) -> Result<ExtractPlan> {
-    let name = src.name().to_string();
-    let type_str = src.type_str();
-    let out_dir = src.resolved_raw_path(&cfg.data_root);
-    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
-    let config: frankweiler_etl_email_config::EmailConfig =
-        serde_yaml::from_value(stanza).context("parse email config")?;
-    let source_plan =
-        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
-            name: name.clone(),
-            raw_path: out_dir.clone(),
-            input_path: src.resolved_input_path(&cfg.data_root),
-            config,
-            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
-        })?;
-    Ok(ExtractPlan {
-        name,
-        type_str,
-        out_dir,
+    processors: Vec<Box<dyn frankweiler_etl::processor::DataProcessor>>,
+) -> ExtractPlan {
+    ExtractPlan {
+        name: src.name().to_string(),
+        type_str: src.type_str(),
+        out_dir: src.resolved_raw_path(&cfg.data_root),
         now: now.to_string(),
         progress: Progress::noop(),
         kind: None,
-        processors: source_plan.extract,
+        processors,
         // Placeholder; `run_extract_phase` swaps in the shared sink from
         // `CtrlcState` before the processors run.
         checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
         control: control.clone(),
         db: None,
-        // Email never consumed the wire-event tape (only slack does), so
-        // there's nothing to attach.
         event_tape: None,
         metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
         extract_params: src.resolved_shared(cfg).extract_params,
         diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
-    })
+    }
 }
 
 impl ExtractPlan {
@@ -1694,11 +1784,14 @@ impl ExtractPlan {
         if !src.is_managed() {
             return None;
         }
-        // Program A pilot: email is migrated to the `DataProcessor` path and
-        // builds its own processors (owning its store). The remaining 12
-        // providers stay on the `ExtractKind` dispatch below.
-        if matches!(src, SourceConfig::Email { .. }) {
-            return Some(email_processor_plan(src, cfg, now, control));
+        // Migrated providers build their own `DataProcessor`s (owning their
+        // store) via `build_source_plan`; the rest stay on the `ExtractKind`
+        // dispatch below. As each provider lands, its arm appears in
+        // `build_source_plan` and its `ExtractKind` arm here is deleted.
+        if let Some(res) = build_source_plan(src, cfg, playback_root) {
+            return Some(
+                res.map(|sp| extract_plan_from_processors(src, cfg, now, control, sp.extract)),
+            );
         }
         let name = src.name().to_string();
         let type_str = src.type_str();
@@ -2538,13 +2631,15 @@ fn render_and_index_md_source(
     _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
-    // Program A pilot: email's translate wave runs through its
-    // `DataProcessor` (the provider owns its config + render path) instead of
-    // the opaque-stanza render registry. The other 12 stay on `renderer_for`.
-    if src.type_str() == "email" {
-        return render_email_translate(
-            src,
-            cfg,
+    // Migrated providers render through their translate `DataProcessor`s
+    // (provider owns its config + render path); the rest stay on the
+    // opaque-stanza `renderer_for` registry. Same `build_source_plan` seam the
+    // extract phase uses, so a provider is migrated in exactly one place.
+    if let Some(res) = build_source_plan(src, cfg, None) {
+        let source_plan = res?;
+        return render_processor_translate(
+            src.name(),
+            &source_plan.translate,
             root,
             progress,
             prior_fingerprints,
@@ -2574,40 +2669,28 @@ fn render_and_index_md_source(
     renderer.run(&ctx, on_doc_complete)
 }
 
-/// Run email's translate wave on the Program-A `DataProcessor` path. Builds
-/// the email `SourcePlan` (provider-owned config) and drives its translate
-/// processors, fusing Load through `on_doc_complete` exactly like the render
-/// registry. Called from a `spawn_blocking` thread, so `block_on` is safe.
-fn render_email_translate(
-    src: &SourceConfig,
-    cfg: &Config,
+/// Drive a migrated source's translate wave (its translate `DataProcessor`s),
+/// fusing Load through `on_doc_complete` exactly like the render registry.
+/// Called from a `spawn_blocking` thread.
+fn render_processor_translate(
+    name: &str,
+    processors: &[Box<dyn frankweiler_etl::processor::DataProcessor>],
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
-    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
-    let config: frankweiler_etl_email_config::EmailConfig =
-        serde_yaml::from_value(stanza).context("parse email config")?;
-    let source_plan =
-        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
-            name: src.name().to_string(),
-            raw_path: src.resolved_raw_path(&cfg.data_root),
-            input_path: src.resolved_input_path(&cfg.data_root),
-            config,
-            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
-        })?;
     // Translate processors don't persist a raw store, so they register no
     // checkpoints and read no extract control; supply throwaway values to
     // satisfy the (extract-shaped) `RunCtx`.
     let checkpoints = frankweiler_etl::processor::CheckpointSink::new();
     let control = frankweiler_etl::control::ExtractControl::default();
     let now = String::new();
-    for proc in &source_plan.translate {
+    for proc in processors {
         // `ctx` reborrows `on_doc_complete` for this iteration and drops at the
         // end of it, returning the unique borrow before the next processor.
         let ctx = frankweiler_etl::processor::RunCtx::for_translate(
-            src.name(),
+            name,
             root,
             &now,
             progress,

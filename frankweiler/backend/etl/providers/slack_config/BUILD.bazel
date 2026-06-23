@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Schema-only config crate for slack_api (Program A goal #1). Bazel-only.
+rust_library(
+    name = "frankweiler_etl_slack_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_slack_config",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "slack_config_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_slack_config",
+    edition = "2021",
+)
