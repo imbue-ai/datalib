@@ -133,6 +133,10 @@ sources:
   # Credentials via latchkey.
   - name: fastmail
     type: email
+    # Webmail each message's `↗` outlink points at: `fastmail` for a
+    # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
+    # any other server (no outlink rendered).
+    outlink_format: fastmail
     sync:
       hostname: api.fastmail.com
       # account_id: u12345678        # defaults to the session's primary mail account
@@ -145,6 +149,7 @@ sources:
   - name: gmail-takeout
     type: email
     input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+    outlink_format: gmail   # render each message's `↗` outlink to Gmail
     mbox:
       account_id: gmail_alice
       display_name: Alice's Gmail
