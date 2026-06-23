@@ -26,6 +26,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | YoLink | `yolink` | Web API | Per-device sensor CSV history |
 | Signal | `signal_backup` | Android backup file | Messages + media |
 | WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
+| SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 
 See [`docs/user/config_examples/all_sources.yaml`](docs/user/config_examples/all_sources.yaml)
