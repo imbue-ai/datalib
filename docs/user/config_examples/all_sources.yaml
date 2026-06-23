@@ -133,6 +133,10 @@ sources:
   # Credentials via latchkey.
   - name: fastmail
     type: email
+    # Webmail each message's `↗` outlink points at: `fastmail` for a
+    # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
+    # any other server (no outlink rendered).
+    outlink_format: fastmail
     sync:
       hostname: api.fastmail.com
       # account_id: u12345678        # defaults to the session's primary mail account
@@ -145,6 +149,7 @@ sources:
   - name: gmail-takeout
     type: email
     input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+    outlink_format: gmail   # render each message's `↗` outlink to Gmail
     mbox:
       account_id: gmail_alice
       display_name: Alice's Gmail
@@ -251,3 +256,42 @@ sources:
     fetch_photos: true
     extract_params:
       maximum_sequential_failed_requests: 20
+
+  # --- Google Takeout (data export) -----------------------------------------
+
+  # File-backed: point `input_path` at the unzipped Google Takeout root
+  # (the directory that contains `Maps/`, `YouTube and YouTube Music/`,
+  # `Google Chat/`, etc.). No credentials — Takeout is your own export.
+  #
+  # One provider, many feeds: every feed is OFF by default, so opt into the
+  # slices you want under `sync:`. Today only `google_chat` and
+  # `google_voice` render into browsable Markdown conversations; the rest
+  # (maps, youtube, gemini) are extracted into the per-source raw store and
+  # queryable there, but don't render to Markdown yet.
+  #
+  # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
+  # it is NOT one of the feeds here.
+  - name: google-takeout
+    type: google_takeout
+    input_path: ~/backups/Takeout
+    sync:
+      google_chat: true              # DMs + bots + attachments → Markdown
+      google_voice: true             # texts, voicemails, calls → Markdown
+      google_voice_include_spam: false  # also walk Voice/Spam/ when google_voice is on
+      maps_reviews: false            # raw store only (no Markdown render yet)
+      maps_saved_places: false       # raw store only
+      maps_photos: false             # raw store only
+      youtube_watch_history: false   # raw store only
+      youtube_subscriptions: false   # raw store only
+      gemini_apps: false             # raw store only
+
+  # --- SMS Backup & Restore (Android export) --------------------------------
+
+  # File-backed: point `input_path` at the directory holding the Android
+  # "SMS Backup & Restore" app's `sms-*.xml` / `calls-*.xml` files. No API,
+  # no credentials. Extract ingests each SMS / MMS / call as its own raw row
+  # (MMS attachment bytes go to the CAS); translate renders one chat per
+  # phone number.
+  - name: sms-backup-restore
+    type: sms_backup_restore
+    input_path: ~/backups/SMSBackupRestore

@@ -19,12 +19,14 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | GitLab | `gitlab_api` | Web API (latchkey) | Merge requests |
 | Notion | `notion_api` | Web API (latchkey) | Pages (inbox + page subtrees) |
 | Email | `email` | JMAP server (latchkey) **or** Google Takeout `.mbox` | Mail messages |
+| Google Takeout | `google_takeout` | Export tree on disk | Google Chat + Voice messages (rendered to markdown); Maps reviews / saved places / photos, YouTube watch history + subscriptions, and Gemini Apps activity (extracted to the raw store, not yet rendered) |
 | Contacts | `carddav` | CardDAV server (latchkey) **or** local `.vcf` files | Contacts |
 | Beeper | `beeper` | Local Beeper Texts data dir | Signal, Google Chat, etc. |
 | Perseus | `perseus` | Download | TEI editions from PerseusDL |
 | YoLink | `yolink` | Web API | Per-device sensor CSV history |
 | Signal | `signal_backup` | Android backup file | Messages + media |
 | WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
+| SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
 
 See [`docs/user/config_examples/all_sources.yaml`](docs/user/config_examples/all_sources.yaml)
