@@ -43,7 +43,14 @@ Same `Sidecar { header, rows }` shape as the other providers:
 
 ## Run it
 
+The translate step is an in-process library (the `render_and_index_md`
+module, called from `frankweiler-sync`); there is no standalone
+`gitlab-translate` binary and no Bazel target for it. Run a sync to
+exercise it, and rendered docs land under
+`/tmp/gitlab-mirror/rendered_md/gitlab/...`.
+
+To exercise the renderer in isolation, run its tests:
+
 ```sh
-cargo run -p frankweiler-etl-gitlab --bin gitlab-translate -- --out /tmp/gitlab-mirror
-# rendered docs land under /tmp/gitlab-mirror/rendered_md/gitlab/...
+bazelisk test //frankweiler/backend/etl/providers/gitlab:gitlab_unittests
 ```

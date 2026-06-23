@@ -121,8 +121,9 @@ pub struct ParsedGithubApi {
 }
 
 /// Read raw payloads out of the doltlite DB. `path` may be either a
-/// `.doltlite_db` file or the legacy directory shape — both resolve to
-/// the same sqlite file via [`db_path_for`].
+/// `.doltlite_db` file or the per-source directory (whose entity db is
+/// `entities.doltlite_db`) — both resolve to the same sqlite file via
+/// [`db_path_for`].
 pub fn parse_api_dir(path: &Path) -> Result<ParsedGithubApi> {
     let db_path = db_path_for(path);
     if !db_path.exists() {

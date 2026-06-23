@@ -13,7 +13,7 @@
 //! )
 //! ```
 //!
-//! Bytes live in the sibling `<name>.blobs.doltlite_db` CAS keyed by
+//! Bytes live in the sibling `blobs.doltlite_db` CAS keyed by
 //! blake3. The render side joins `contact_photos` → `cas_objects` to
 //! materialize the image next to the contact's markdown.
 //!

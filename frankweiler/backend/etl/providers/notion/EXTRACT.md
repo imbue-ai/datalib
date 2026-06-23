@@ -44,8 +44,8 @@ Cloudflare and rejects anything without a browser TLS fingerprint.
 canonical choice:
 
 ```sh
-cargo build -p latchkey-curl-shim
-export LATCHKEY_CURL=$(pwd)/frankweiler/backend/target/debug/latchkey-curl-shim
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL=$(pwd)/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim
 ```
 
 If `LATCHKEY_CURL` is unset, the downloader looks for the shim in the

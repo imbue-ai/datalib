@@ -2,7 +2,7 @@
 
 The chatgpt translate step is an in-process library (called from
 `frankweiler-sync`, no standalone bin) that reads the doltlite db at
-`<out>/raw/<name>.doltlite_db` (written by `chatgpt-download`) and
+`<out>/raw/<name>/entities.doltlite_db` (written by `chatgpt-download`) and
 emits, per ChatGPT conversation, a `.md` plus a co-located
 `.grid_rows.json` sidecar under
 `<out>/rendered_md/openai/<account>/llm_chats/<conv>__<slug>.md`.
@@ -63,8 +63,7 @@ The renderer + grid_rows emitter are pinned by insta snapshots
 against the TNG-themed fixture at `tests/fixtures/chatgpt_api/`.
 
 ```sh
-cd frankweiler/backend
-cargo test -p frankweiler-etl-chatgpt --test chatgpt_render
+bazelisk test //frankweiler/backend/etl/providers/chatgpt:chatgpt_render
 ```
 
 Tagged `manual` in Bazel — the fixture lives in `CARGO_MANIFEST_DIR`

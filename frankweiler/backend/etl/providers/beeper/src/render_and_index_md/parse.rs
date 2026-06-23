@@ -116,8 +116,8 @@ pub fn parse_raw_dir(input: &Path) -> Result<ParsedBeeper> {
     parse(input, Period::Month)
 }
 
-/// Open the doltlite raw store at `<input>.doltlite_db` (or the
-/// path itself if it's already that file) and produce one
+/// Open the doltlite raw store at `<input>/entities.doltlite_db` (or
+/// the path itself if it's already that file) and produce one
 /// [`DocBucket`] per `(room, period)` pair with events ready for
 /// rendering.
 pub fn parse(input: &Path, period: Period) -> Result<ParsedBeeper> {

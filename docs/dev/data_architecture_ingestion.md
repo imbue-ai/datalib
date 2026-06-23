@@ -23,7 +23,7 @@ Practitioner-facing material — how we test, how to add a provider, how the sch
 
 The ETL pipeline currently has three stages, all running **in-process inside `frankweiler-sync`** — one binary, one process, one config-driven walk over enabled sources:
 
-1. **Extract** — pull from upstream, UPSERT into `<data_root>/raw/<data_source>.doltlite_db` (entities) and `<data_root>/raw/<data_source>.blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
+1. **Extract** — pull from upstream, UPSERT into `<data_root>/raw/<data_source>/entities.doltlite_db` (entities) and `<data_root>/raw/<data_source>/blobs.doltlite_db` (a single `cas_objects` table keyed by blake3 hash).
 2. **Translate (currently: Render + Index)** — derive sidecar `.md` + `.grid_rows.json` under `rendered_md/<provider>/...` from the raw store, in-process, deterministically, and index them using qmd.
 3. **Load (currently: view in UI)** — feed the sidecar tree into the canonical `grid_rows` table to drive the UI
 
@@ -36,11 +36,13 @@ The per-stage modules within a provider crate form a strict layer with a single 
 upstream → extract → translate → load
 ```
 
-- **`extract`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/raw/<name>.doltlite_db`, and nothing else. It must NOT depend on `translate`, `render`, `frankweiler_schema::grid_rows::GridRow`, sidecar types, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how translate consumes the tables.
-- **`translate`** depends on `extract` (it reads the raw store and projects to the normalized POD + sidecar shape). `extract::schema_raw` is part of the contract translate consumes.
+- **`extract`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/raw/<name>/entities.doltlite_db`, and nothing else. It must NOT depend on `translate`, `render`, `frankweiler_schema::grid_rows::GridRow`, sidecar types, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how translate consumes the tables.
+- **`translate`** depends on `extract` (it reads the raw store and projects to the normalized POD + sidecar shape). `extract::schema_raw` is part of the contract translate consumes. **Translate reads only the raw store, never the original source.** Its sole input is `<data_root>/raw/<name>/` (`SourceConfig::resolved_raw_path`); it must never reach back into upstream (the API) or into a file-backed source's `input_path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
 - **`load`** is provider-agnostic; it lives at [`src/load.rs`](/frankweiler/backend/etl/src/load.rs) and depends on no provider's extract or translate. Its input contract is the sidecar tree.
 
 Why the discipline matters: extract is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if translate has bugs or hasn't been written yet. Translate can then be re-implemented or extended without touching extract, and disabling a translate path for one provider doesn't disturb that provider's extract.
+
+Why translate's read-only-from-the-raw-store rule matters: the raw store is the boundary between "the outside world" and "our copy." Once extract has captured the bytes, everything downstream is reproducible offline and stable — re-rendering yields the same result whether or not the upstream still exists, has changed, or is reachable. The original `input_path` export can be deleted, the API token can expire, the phone backup can be wiped: render still produces exactly what we hold. This is also what lets `raw_path` move a source's store anywhere (a bigger disk, an archive) without the renderer caring — it reads the resolved raw directory and nothing else.
 
 # Schemas first, but also simple
 > *"Show me your flowchart and conceal your tables, and I shall continue to be mystified. Show me your tables, and I won't usually need your flowchart; it'll be obvious."* -- Fred Brooks, The Mythical Man Month (1975)
@@ -107,7 +109,7 @@ Attachment bytes are split out of the entity database into a sibling content-add
 - Attachments can be big, and Dolt DBs are (purposefully) difficult to erase from.  Even garbage collecting unused attachments wouldn't delete them from the doltlite DB storage.
 - Someday we might want to share a BLOB store across multiple data sources (Perkeep-style).
 
- Each source has both `raw/<name>.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `raw/<name>.blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
+ Each source has both `raw/<name>/entities.doltlite_db` (entities + a per-provider `<provider>_attachments` edge table mapping `(owning, ref) → blake3`) and `raw/<name>/blobs.doltlite_db` (`cas_objects` keyed by blake3). Full schema + helpers in [port guide §7](/frankweiler/backend/etl/DOLTLITE_RAW_PORT_GUIDE.md#7-blobs).
 
 **Per-provider CAS edge tables**
 
@@ -124,10 +126,19 @@ Per-bucket attachment-fetch flow is consolidated into three shared pieces in `fr
 
 ## [Doltlite](https://github.com/dolthub/doltlite) is our primary raw store
 
-For raw ingestion, each data source writes into two DBs:
+For raw ingestion, each data source owns a directory `<data_root>/raw/<name>/` holding two DBs:
 
-- <data_source>.doltlite_db: Event payloads and metadata, attachment edges
-- <data_source>.blobs.doltlite_db: a CAS of BLOB data specific to that database.
+- entities.doltlite_db: Event payloads and metadata, attachment edges
+- blobs.doltlite_db: a CAS of BLOB data specific to that database.
+
+That directory is resolved by `SourceConfig::resolved_raw_path` — defaulting
+to `<data_root>/raw/<name>` but overridable per source via `raw_path:` in the
+config, identically for every source. It's a single resolver used by both
+sides: the extractor writes there and the renderer reads there. The
+filenames inside it (`entities.doltlite_db`, `blobs.doltlite_db`, `events/`)
+are the constants in `frankweiler_etl::raw_layout`, the one place the layout
+is defined. This is distinct from a file-backed source's `input_path:`, which
+says where the data is read *from* (a `.mbox`, a Takeout export, …).
 
 We use doltlite because:
 

@@ -1,9 +1,9 @@
 //! Content-addressable blob store + per-bucket attachment bundle.
 //!
-//! Each raw source ends up with two doltlite files:
+//! Each raw source owns a directory holding two doltlite files:
 //!
-//!   `<data_root>/raw/<name>.doltlite_db`        — entities + per-provider CAS edge table
-//!   `<data_root>/raw/<name>.blobs.doltlite_db`  — pure CAS (this module)
+//!   `<data_root>/raw/<name>/entities.doltlite_db`  — entities + per-provider CAS edge table
+//!   `<data_root>/raw/<name>/blobs.doltlite_db`     — pure CAS (this module)
 //!
 //! Bytes are keyed by their blake3 hash and stored exactly once in
 //! `cas_objects`. Each provider declares its own `(<owning>, <ref>,
@@ -45,15 +45,13 @@ pub const CAS_OBJECTS_DDL: &str = "CREATE TABLE IF NOT EXISTS cas_objects (
 // Path helpers
 // ─────────────────────────────────────────────────────────────────────
 
-/// Given the entity db path (e.g. `/x/raw/slack.doltlite_db`), return
-/// the sibling CAS path `/x/raw/slack.blobs.doltlite_db`.
+/// Given the entity db path (e.g. `/x/raw/slack/entities.doltlite_db`),
+/// return the sibling CAS path `/x/raw/slack/blobs.doltlite_db`. Both
+/// files live inside the per-source directory; the filename comes from
+/// [`crate::raw_layout::BLOBS_DB`].
 pub fn cas_path_for(entity_db_path: &Path) -> PathBuf {
-    let stem = entity_db_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("blobs");
     let parent = entity_db_path.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{stem}.blobs.doltlite_db"))
+    crate::raw_layout::blobs_db(parent)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1001,11 +999,11 @@ mod tests {
     }
 
     #[test]
-    fn cas_path_for_swaps_extension() {
-        let p = Path::new("/tmp/raw/slack.doltlite_db");
+    fn cas_path_for_is_sibling_inside_dir() {
+        let p = Path::new("/tmp/raw/slack/entities.doltlite_db");
         assert_eq!(
             cas_path_for(p),
-            PathBuf::from("/tmp/raw/slack.blobs.doltlite_db")
+            PathBuf::from("/tmp/raw/slack/blobs.doltlite_db")
         );
     }
 

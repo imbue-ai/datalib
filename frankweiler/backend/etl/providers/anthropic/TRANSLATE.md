@@ -67,8 +67,7 @@ The renderer + grid_rows emitter are pinned by insta snapshots
 against the TNG-themed fixture at `tests/fixtures/anthropic_api/`.
 
 ```sh
-cd frankweiler/backend
-cargo test -p frankweiler-etl-anthropic --test anthropic_render
+bazelisk test //frankweiler/backend/etl/providers/anthropic:anthropic_render
 ```
 
 Tagged `manual` in Bazel — the fixture lives in `CARGO_MANIFEST_DIR`

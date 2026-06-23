@@ -238,10 +238,15 @@ and should be faster.
 
 ```
 ~/datalib/
-├── raw/                            # one doltlite file per source
-│   ├── claude_web.doltlite_db
-│   ├── slack.doltlite_db
-│   ├── fastmail.doltlite_db        # (mbox source lands here too)
+├── raw/                            # one directory per source
+│   ├── claude_web/
+│   │   ├── entities.doltlite_db
+│   │   └── blobs.doltlite_db
+│   ├── slack/
+│   │   ├── entities.doltlite_db
+│   │   └── blobs.doltlite_db
+│   ├── fastmail/                   # (mbox source lands here too)
+│   │   └── …
 │   └── …
 ├── rendered_md/                    # one .md per conversation, bucketed by provider
 │   ├── anthropic/

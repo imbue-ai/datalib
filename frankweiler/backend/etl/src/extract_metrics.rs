@@ -315,7 +315,7 @@ async fn count_rows(pool: &sqlx::SqlitePool, table: &str) -> Option<u64> {
 }
 
 /// Snapshot a source's pair of raw-store files (entity + sibling CAS).
-/// `entity_path` is the `<name>.doltlite_db`; the CAS path is derived.
+/// `entity_path` is the `entities.doltlite_db`; the CAS path is derived.
 pub async fn snapshot_source(entity_path: &Path) -> (DbSnapshot, DbSnapshot) {
     let blobs_path = crate::blob_cas::cas_path_for(entity_path);
     let events = snapshot_db_file(entity_path).await;

@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the Notion provider.
 //!
 //! Replaces the per-entity JSONL trees with a single sqlx-managed
-//! sqlite (eventually doltlite) file at `<data_root>/raw/<name>.doltlite_db`.
+//! sqlite (eventually doltlite) file at `<data_root>/raw/<name>/entities.doltlite_db`.
 //! Schema is owned by this provider; the shared bookkeeping tables
 //! (`blobs`, `sync_runs`) and the open / start_run
 //! / blob plumbing live in [`frankweiler_etl::doltlite_raw`].
@@ -597,13 +597,13 @@ mod tests {
     }
 
     #[test]
-    fn db_path_for_handles_legacy_directory() {
+    fn db_path_for_places_db_inside_directory() {
         let p = std::path::Path::new("/tmp/raw/notion-api");
         assert_eq!(
             db_path_for(p),
-            std::path::PathBuf::from("/tmp/raw/notion-api.doltlite_db")
+            std::path::PathBuf::from("/tmp/raw/notion-api/entities.doltlite_db")
         );
-        let p2 = std::path::Path::new("/tmp/raw/notion-api.doltlite_db");
+        let p2 = std::path::Path::new("/tmp/raw/notion-api/entities.doltlite_db");
         assert_eq!(db_path_for(p2), p2);
     }
 }

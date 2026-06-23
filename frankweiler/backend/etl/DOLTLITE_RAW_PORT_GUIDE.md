@@ -28,13 +28,17 @@ For a provider `<name>`, the raw store goes from this:
 to this:
 
 ```
-<data_root>/raw/<name>.doltlite_db
+<data_root>/raw/<name>/
+  entities.doltlite_db   # object payloads + sync-run logs + per-provider CAS edge table
+  blobs.doltlite_db      # blob bytes (cas_objects, keyed by blake3)
+  events/                # plain-text JSONL tape (debug-only, safe to delete)
 ```
 
-**That's it.** A single sqlite file is the entire output of the
-download. No `raw/<name>/` dir, no `raw/<name>/blobs/` dir. Object
-payloads, sync-run logs, AND blob bytes all live in
-tables inside that one `.doltlite_db`.
+**That's it.** Each source owns the directory `<data_root>/raw/<name>/`.
+The structured data lives in two doltlite files — object payloads and
+sync-run logs in `entities.doltlite_db`, blob bytes in a sibling
+`blobs.doltlite_db` CAS (see §7) — instead of a tree of loose `.json` /
+`.jsonl` files and a `blobs/` dir of individual attachments.
 
 Blob bytes get materialized to disk **next to the rendered markdown**
 at translate time, following Notion's page-dir layout:
@@ -207,8 +211,9 @@ you write a custom SELECT that returns `payload`, wrap it manually.
 
 ### 7. Blobs
 
-Bytes live in a **sibling CAS file** — `<name>.blobs.doltlite_db` —
-not in the entity db. The CAS holds a single `cas_objects` table keyed
+Bytes live in a **sibling CAS file** — `blobs.doltlite_db`, alongside
+`entities.doltlite_db` in the source's `raw/<name>/` directory — not in
+the entity db. The CAS holds a single `cas_objects` table keyed
 by blake3 hash. The entity db carries `blob_refs` (PK = upstream-stable
 id, fallback `{owning_id}:{slot}`) with a nullable `blake3` column
 pointing into the CAS. See `frankweiler_etl::blob_cas` for the full
@@ -546,12 +551,16 @@ insta_update(
 
 ## Quick test loop
 
+Bazel is the only supported build/test driver — it keeps the action
+cache warm and matches CI; don't shell out to `cargo`. Narrow the
+invocation to your provider for a tight inner loop.
+
 ```bash
 # 1. Inner-loop while writing your port:
-cargo test -p frankweiler-etl-<name>
+bazelisk test //frankweiler/backend/etl/providers/<name>/...
 
 # 2. Round-trip via playback:
-cargo test -p frankweiler-etl-<name> --test playback_roundtrip
+bazelisk test //frankweiler/backend/etl/providers/<name>:<name>_playback_roundtrip
 
 # 3. Live golden (needs LATCHKEY_CURL set):
 bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
@@ -572,11 +581,11 @@ of `AGENTS.md` at the repo root.
 
 A successful port produces:
 
-- All cargo tests green
 - `bazelisk test //...` green (no filter)
-- `manifest.snap` collapses `raw/<name>/<files...>` to one
-  `raw/<name>.doltlite_db` row, plus blob rows shift from
-  `raw/<name>/blobs/...` to `rendered_md/.../<entity>/blobs/<file>`.
+- `manifest.snap` collapses `raw/<name>/<files...>` to the per-source
+  `raw/<name>/entities.doltlite_db` + `raw/<name>/blobs.doltlite_db`
+  rows, plus blob rows shift from `raw/<name>/blobs/...` to
+  `rendered_md/.../<entity>/blobs/<file>`.
 - `rendered_md/` paths shift from `<entity>.md` to `<entity>/index.md`
   (page-dir layout). The blob link target inside the .md changes
   from `../../../raw/<src>/blobs/...` to `blobs/<filename>`. Re-record.
@@ -584,7 +593,7 @@ A successful port produces:
   `qmd_path` columns shift to the page-dir form
   (`<entity>/index.md`); `source_fingerprint` may drift too if you
   dropped synthetic keys from the payload.
-- `raw/<name>.doltlite_db.snap`: just a `<binary N bytes>` marker;
+- `raw/<name>/entities.doltlite_db.snap`: just a `<binary N bytes>` marker;
   the byte count will change as you populate the new tables. Expect
   small drifts on subsequent edits (JSONB encoding, schema changes,
   page-alignment quirks) — review the size delta as a sanity check

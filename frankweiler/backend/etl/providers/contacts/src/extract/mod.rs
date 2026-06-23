@@ -35,9 +35,9 @@ use db::{addressbook_pk, ContactRow};
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
 /// other provider crate exposes.
 pub struct FetchOptions {
-    /// Doltlite database path. May be either a `<...>.doltlite_db`
-    /// file or the legacy directory shape; [`db_path_for`] resolves
-    /// either form. Ignored for opening when `db` is `Some`.
+    /// Doltlite database path. [`db_path_for`] places the entity db
+    /// inside the per-source directory as `entities.doltlite_db` (the
+    /// dir is created if needed). Ignored for opening when `db` is `Some`.
     pub db_path: PathBuf,
     /// Pre-opened raw DB. When `Some`, `fetch` uses this directly
     /// instead of opening from `db_path`. See the matching field on

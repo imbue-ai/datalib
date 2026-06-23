@@ -1,7 +1,7 @@
 # Slack Extract
 
 `slack-download` mirrors a Slack workspace into a single doltlite db
-at `<out>/raw/<name>.doltlite_db`. Per-entity tables (channels, users,
+at `<out>/raw/<name>/entities.doltlite_db`. Per-entity tables (channels, users,
 messages, replies, files) are each keyed by their upstream Slack
 identifier; payloads are stored as JSONB blobs in a `payload` column
 alongside per-run bookkeeping and file/blob bytes. The old

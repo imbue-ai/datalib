@@ -433,17 +433,19 @@ pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL];
 // Path helper
 // ─────────────────────────────────────────────────────────────────────
 
-/// Resolve the doltlite database path for a given source.
+/// Resolve the doltlite entity database path for a given source.
 ///
-/// Accepts either an explicit `.doltlite_db` file or the legacy
-/// directory shape (`<data_root>/raw/<name>`), which is rewritten to a
-/// sibling `<name>.doltlite_db` file. This lets the sync
-/// orchestrator's `resolved_input_path` contract stay unchanged.
+/// Accepts either an explicit `.doltlite_db` file (returned as-is) or
+/// the per-source raw directory, in which case the entity database is
+/// the [`crate::raw_layout::ENTITIES_DB`] file inside it. The directory
+/// layout (entities + blobs + event tape) is owned by
+/// [`crate::raw_layout`]; this helper just adds the file-vs-dir
+/// convenience on top.
 pub fn db_path_for(p: &Path) -> PathBuf {
     if p.extension().and_then(|s| s.to_str()) == Some("doltlite_db") {
         return p.to_path_buf();
     }
-    p.with_extension("doltlite_db")
+    crate::raw_layout::entities_db(p)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1811,13 +1813,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn db_path_for_handles_legacy_dir() {
+    async fn db_path_for_places_db_inside_dir() {
         let p = Path::new("/tmp/raw/whatever");
         assert_eq!(
             db_path_for(p),
-            PathBuf::from("/tmp/raw/whatever.doltlite_db")
+            PathBuf::from("/tmp/raw/whatever/entities.doltlite_db")
         );
-        let q = Path::new("/tmp/raw/whatever.doltlite_db");
+        let q = Path::new("/tmp/raw/whatever/entities.doltlite_db");
         assert_eq!(db_path_for(q), q);
     }
 

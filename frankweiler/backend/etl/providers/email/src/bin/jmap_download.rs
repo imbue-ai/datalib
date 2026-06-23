@@ -14,8 +14,8 @@ use tracing::{info_span, Instrument};
     about = "Mirror a JMAP mail account into a single doltlite db."
 )]
 struct Args {
-    /// Output path. Resolves to `<path>.doltlite_db` if it doesn't
-    /// already carry the extension.
+    /// Output path. The entity db lives inside the per-source directory
+    /// as `entities.doltlite_db` (the dir is created if needed).
     #[arg(long, env = "JMAP_OUT")]
     out: PathBuf,
 

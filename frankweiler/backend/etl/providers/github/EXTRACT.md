@@ -53,8 +53,9 @@ snapshot test.
 ## Run it
 
 ```sh
-export LATCHKEY_CURL=$PWD/target/debug/latchkey-curl-shim   # for parity with other providers
-cargo run -p frankweiler-etl-github --bin github-download -- \
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim   # for parity with other providers
+bazelisk run //frankweiler/backend/etl/providers/github:github_download -- \
     --out /tmp/github-mirror \
     --pull-request imbue-ai/mngr#1650
 ```

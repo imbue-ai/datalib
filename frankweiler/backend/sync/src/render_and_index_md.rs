@@ -36,15 +36,14 @@ pub struct RenderCtx<'a> {
     /// Workspace root — the parent of the `rendered_md/` tree the step
     /// writes markdown + `.grid_rows.json` sidecars into.
     pub root: &'a Path,
-    /// Data root, for providers that resolve their raw store at the
-    /// canonical `<data_root>/raw/<name>` location rather than from
-    /// `input_path`.
-    pub data_root: &'a Path,
     /// Source name (`sources[].name` in config.yaml).
     pub name: &'a str,
-    /// `src.resolved_input_path(data_root)` — the user-facing input (a
-    /// raw store dir, an export dir, or a single `.vcf` / `.mbox`).
-    pub input_path: &'a Path,
+    /// `src.resolved_raw_path(data_root)` — the source's raw store
+    /// directory (holds `entities.doltlite_db`, `blobs.doltlite_db`, and
+    /// the `events/` tape; see [`frankweiler_etl::raw_layout`]). The same
+    /// directory extract wrote, now read back. Every provider reads here;
+    /// none needs the original `input_path` export location.
+    pub raw_path: &'a Path,
     /// Progress hook for the per-source bar.
     pub progress: &'a Progress,
     /// Per-markdown source fingerprints from the prior run, for providers
@@ -76,7 +75,7 @@ pub fn renderer_for(type_str: &str, stanza: &Value) -> Result<Box<dyn RenderAndI
         "gitlab_api" => Box::new(Gitlab),
         "notion_api" => Box::new(Notion),
         "beeper" => Box::new(Beeper::from_stanza(stanza)?),
-        "carddav" => Box::new(Carddav::from_stanza(stanza)?),
+        "carddav" => Box::new(Carddav),
         "linkedin" => Box::new(Linkedin),
         "google_takeout" => Box::new(GoogleTakeout),
         "sms_backup_restore" => Box::new(SmsBackupRestore),
@@ -126,21 +125,6 @@ impl PeriodStanza {
     }
 }
 
-/// Presence of a `sync:` block — distinguishes live-API sources from
-/// file-backed ones for carddav / email.
-#[derive(Deserialize, Default)]
-struct SyncPresence {
-    #[serde(default)]
-    sync: Option<Value>,
-}
-impl SyncPresence {
-    fn parse(stanza: &Value) -> Result<bool> {
-        let s: SyncPresence =
-            serde_yaml::from_value(stanza.clone()).context("parse sync presence")?;
-        Ok(s.sync.is_some())
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // Chat-style, render-cursor-driven providers
 // ─────────────────────────────────────────────────────────────────────
@@ -154,10 +138,10 @@ impl RenderAndIndexMd for Anthropic {
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read anthropic render cursor {}", cursor_path.display()))?;
         let parsed = parse(
-            ctx.input_path,
+            ctx.raw_path,
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
-        .with_context(|| format!("anthropic parse {}", ctx.input_path.display()))?;
+        .with_context(|| format!("anthropic parse {}", ctx.raw_path.display()))?;
         render_all(&parsed, ctx.root, ctx.name, ctx.progress, on_doc)
             .context("anthropic render_all")
             .map(|_| ())
@@ -173,10 +157,10 @@ impl RenderAndIndexMd for Chatgpt {
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read chatgpt render cursor {}", cursor_path.display()))?;
         let parsed = parse(
-            ctx.input_path,
+            ctx.raw_path,
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
-        .with_context(|| format!("chatgpt parse {}", ctx.input_path.display()))?;
+        .with_context(|| format!("chatgpt parse {}", ctx.raw_path.display()))?;
         render_all(&parsed, ctx.root, ctx.name, ctx.progress, on_doc)
             .context("chatgpt render_all")
             .map(|_| ())
@@ -191,10 +175,10 @@ impl RenderAndIndexMd for Slack {
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;
         let parsed = parse(
-            ctx.input_path,
+            ctx.raw_path,
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
-        .with_context(|| format!("slack parse {}", ctx.input_path.display()))?;
+        .with_context(|| format!("slack parse {}", ctx.raw_path.display()))?;
         render_all(&parsed, ctx.root, ctx.name, ctx.progress, on_doc)
             .context("slack render_all")
             .map(|_| ())
@@ -218,12 +202,12 @@ impl RenderAndIndexMd for Signal {
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
         let parsed = parse(
-            ctx.input_path,
+            ctx.raw_path,
             self.period,
             ctx.name,
             cursor.as_ref().map(|c| c.last_rendered_hash.as_str()),
         )
-        .with_context(|| format!("signal parse {}", ctx.input_path.display()))?;
+        .with_context(|| format!("signal parse {}", ctx.raw_path.display()))?;
         render_all(&parsed, ctx.root, ctx.name, ctx.progress, on_doc)
             .context("signal render_all")
             .map(|_| ())
@@ -238,8 +222,8 @@ struct Github;
 impl RenderAndIndexMd for Github {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_github::render_and_index_md::{parse_api_dir, render_github};
-        let parsed = parse_api_dir(ctx.input_path)
-            .with_context(|| format!("github parse {}", ctx.input_path.display()))?;
+        let parsed = parse_api_dir(ctx.raw_path)
+            .with_context(|| format!("github parse {}", ctx.raw_path.display()))?;
         render_github(
             &parsed,
             ctx.root,
@@ -256,8 +240,8 @@ struct Gitlab;
 impl RenderAndIndexMd for Gitlab {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_gitlab::render_and_index_md::{parse_api_dir, render_gitlab};
-        let parsed = parse_api_dir(ctx.input_path)
-            .with_context(|| format!("gitlab parse {}", ctx.input_path.display()))?;
+        let parsed = parse_api_dir(ctx.raw_path)
+            .with_context(|| format!("gitlab parse {}", ctx.raw_path.display()))?;
         render_gitlab(
             &parsed,
             ctx.root,
@@ -276,8 +260,8 @@ impl RenderAndIndexMd for Notion {
         use frankweiler_etl_notion::render_and_index_md::{
             parse_api_dir, render::render_notion_official,
         };
-        let parsed = parse_api_dir(ctx.input_path)
-            .with_context(|| format!("notion parse {}", ctx.input_path.display()))?;
+        let parsed = parse_api_dir(ctx.raw_path)
+            .with_context(|| format!("notion parse {}", ctx.raw_path.display()))?;
         render_notion_official(
             &parsed,
             ctx.root,
@@ -304,9 +288,9 @@ impl RenderAndIndexMd for Beeper {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_beeper::render_and_index_md::render_all;
         let parsed =
-            frankweiler_etl_beeper::render_and_index_md::parse::parse(ctx.input_path, self.period)
-                .with_context(|| format!("beeper parse {}", ctx.input_path.display()))?;
-        let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(ctx.input_path);
+            frankweiler_etl_beeper::render_and_index_md::parse::parse(ctx.raw_path, self.period)
+                .with_context(|| format!("beeper parse {}", ctx.raw_path.display()))?;
+        let raw_db_path = frankweiler_etl::doltlite_raw::db_path_for(ctx.raw_path);
         render_all(
             &parsed,
             ctx.root,
@@ -353,8 +337,8 @@ impl Perseus {
 impl RenderAndIndexMd for Perseus {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_perseus::render_and_index_md::{align, parse, render};
-        let parsed = parse::parse(ctx.input_path)
-            .with_context(|| format!("perseus parse {}", ctx.input_path.display()))?;
+        let parsed = parse::parse(ctx.raw_path)
+            .with_context(|| format!("perseus parse {}", ctx.raw_path.display()))?;
         // Within-section sentence alignment is opt-in per edition pair via
         // `sync.alignment_pairs` (captured as `self.pairs`). Each pair
         // loads the Ancient-Greek-BERT encoder (async: hf-hub fetch +
@@ -386,12 +370,12 @@ impl RenderAndIndexMd for WhatsApp {
         // WhatsApp doesn't expose a `period` knob on its sync block today —
         // default to month bucketing, same as signal.
         let period = Period::from_config(None).context("default whatsapp period")?;
-        let parsed = parse(ctx.input_path, period, ctx.name)
-            .with_context(|| format!("whatsapp parse {}", ctx.input_path.display()))?;
+        let parsed = parse(ctx.raw_path, period, ctx.name)
+            .with_context(|| format!("whatsapp parse {}", ctx.raw_path.display()))?;
         render_all(
             &parsed.chats,
             &parsed.blobs_by_chat,
-            ctx.input_path,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -404,19 +388,16 @@ impl RenderAndIndexMd for WhatsApp {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Raw-store-rooted providers (input lives at <data_root>/raw/<name>)
+// File-backed providers (data came from an export; render reads the raw
+// store we wrote, `ctx.raw_path`, ignoring the original export location)
 // ─────────────────────────────────────────────────────────────────────
 
 struct Linkedin;
 impl RenderAndIndexMd for Linkedin {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
-        // `input_path` is the export dir; the raw store (where extract
-        // wrote the message tables) is the canonical
-        // `<data_root>/raw/<name>` location. Every message-shaped feed
-        // (DMs + AI-coach transcripts) renders.
-        let raw_dir = ctx.data_root.join("raw").join(ctx.name);
+        // Every message-shaped feed (DMs + AI-coach transcripts) renders.
         frankweiler_etl_linkedin::render::render(
-            &raw_dir,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -427,7 +408,7 @@ impl RenderAndIndexMd for Linkedin {
         // Connections render as first-class contacts via the shared
         // contact renderer (sibling of the chat path above).
         frankweiler_etl_linkedin::connections::render_connections(
-            &raw_dir,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -438,7 +419,7 @@ impl RenderAndIndexMd for Linkedin {
         // Your own posts (Shares) and the comments you left, grouped one
         // chat-style thread per post, with linkouts back to linkedin.com.
         frankweiler_etl_linkedin::posts::render_posts(
-            &raw_dir,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -453,10 +434,9 @@ struct GoogleTakeout;
 impl RenderAndIndexMd for GoogleTakeout {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         // Only the Google Chat feed renders; the other feeds stay
-        // queryable in the raw store at `<data_root>/raw/<name>`.
-        let raw_dir = ctx.data_root.join("raw").join(ctx.name);
+        // queryable in the raw store.
         frankweiler_etl_google_takeout::render_and_index_md::render(
-            &raw_dir,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -470,11 +450,9 @@ impl RenderAndIndexMd for GoogleTakeout {
 struct SmsBackupRestore;
 impl RenderAndIndexMd for SmsBackupRestore {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
-        // Texts + calls render as one chat per phone number, from the raw
-        // store at `<data_root>/raw/<name>`.
-        let raw_dir = ctx.data_root.join("raw").join(ctx.name);
+        // Texts + calls render as one chat per phone number.
         frankweiler_etl_sms_backup_restore::render_and_index_md::render(
-            &raw_dir,
+            ctx.raw_path,
             ctx.root,
             ctx.name,
             ctx.progress,
@@ -486,31 +464,16 @@ impl RenderAndIndexMd for SmsBackupRestore {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Providers with a db_dir that depends on live-sync vs. file mode
+// Contacts / email — read the raw store; live-sync vs. file mode no
+// longer affects the path (both land at `ctx.raw_path`)
 // ─────────────────────────────────────────────────────────────────────
 
-struct Carddav {
-    /// Live CardDAV sync lands its data at `input_path`; the vcf-file
-    /// mode lands it at `<data_root>/raw/<name>` instead.
-    from_sync: bool,
-}
-impl Carddav {
-    fn from_stanza(stanza: &Value) -> Result<Self> {
-        Ok(Carddav {
-            from_sync: SyncPresence::parse(stanza).context("carddav config")?,
-        })
-    }
-}
+struct Carddav;
 impl RenderAndIndexMd for Carddav {
     fn run(&self, ctx: &RenderCtx, on_doc: &mut OnDoc) -> Result<()> {
         use frankweiler_etl_contacts::extract::db_path_for as carddav_db_path_for;
         use frankweiler_etl_contacts::render_and_index_md::{parse, render};
-        let db_dir = if self.from_sync {
-            ctx.input_path.to_path_buf()
-        } else {
-            ctx.data_root.join("raw").join(ctx.name)
-        };
-        let db_path = carddav_db_path_for(&db_dir);
+        let db_path = carddav_db_path_for(ctx.raw_path);
         let parsed = parse::parse(&db_path)
             .with_context(|| format!("carddav parse {}", db_path.display()))?;
         render::render_all(
@@ -537,7 +500,6 @@ enum OutlinkFlavor {
 }
 
 struct Email {
-    from_sync: bool,
     outlink: Option<frankweiler_etl_email::render_and_index_md::render::OutlinkFormat>,
 }
 impl Email {
@@ -545,8 +507,6 @@ impl Email {
         use frankweiler_etl_email::render_and_index_md::render::OutlinkFormat;
         #[derive(Deserialize, Default)]
         struct EmailStanza {
-            #[serde(default)]
-            sync: Option<Value>,
             #[serde(default)]
             outlink_format: Option<OutlinkFlavor>,
         }
@@ -556,10 +516,7 @@ impl Email {
             OutlinkFlavor::Gmail => OutlinkFormat::Gmail,
             OutlinkFlavor::Fastmail => OutlinkFormat::Fastmail,
         });
-        Ok(Email {
-            from_sync: s.sync.is_some(),
-            outlink,
-        })
+        Ok(Email { outlink })
     }
 }
 impl RenderAndIndexMd for Email {
@@ -568,12 +525,7 @@ impl RenderAndIndexMd for Email {
         use frankweiler_etl_email::render_and_index_md::parse::parse;
         use frankweiler_etl_email::render_and_index_md::render::render_all;
 
-        let db_dir = if self.from_sync {
-            ctx.input_path.to_path_buf()
-        } else {
-            ctx.data_root.join("raw").join(ctx.name)
-        };
-        let db = jmap_db_path_for(&db_dir);
+        let db = jmap_db_path_for(ctx.raw_path);
         if !db.exists() {
             status_line!(
                 "[render_and_index_md] {} (email): no raw db at {} — skipping",
@@ -647,23 +599,15 @@ mod tests {
     }
 
     #[test]
-    fn sync_presence_detects_block() {
-        assert!(SyncPresence::parse(&yaml("sync:\n  host: dav.example\n")).unwrap());
-        assert!(!SyncPresence::parse(&yaml("input_path: /tmp/cards\n")).unwrap());
-    }
-
-    #[test]
-    fn email_reads_outlink_and_sync_presence() {
+    fn email_reads_outlink() {
         let e = Email::from_stanza(&yaml("sync:\n  host: x\noutlink_format: gmail\n")).unwrap();
-        assert!(e.from_sync);
         assert!(matches!(e.outlink, Some(OutlinkFormat::Gmail)));
 
         let e = Email::from_stanza(&yaml("outlink_format: fastmail\n")).unwrap();
         assert!(matches!(e.outlink, Some(OutlinkFormat::Fastmail)));
 
-        // mbox / file mode: no sync block, no outlink.
+        // mbox / file mode: no outlink.
         let e = Email::from_stanza(&yaml("input_path: /tmp/mail.mbox\n")).unwrap();
-        assert!(!e.from_sync);
         assert!(e.outlink.is_none());
     }
 

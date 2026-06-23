@@ -48,8 +48,9 @@ discovery and pulls one MR + all its discussions.
 ## Run it
 
 ```sh
-export LATCHKEY_CURL=$PWD/target/debug/latchkey-curl-shim
-cargo run -p frankweiler-etl-gitlab --bin gitlab-download -- \
+bazelisk build //frankweiler/backend/etl:latchkey_curl_shim
+export LATCHKEY_CURL=$PWD/bazel-bin/frankweiler/backend/etl/latchkey_curl_shim
+bazelisk run //frankweiler/backend/etl/providers/gitlab:gitlab_download -- \
     --out /tmp/gitlab-mirror \
     --merge-request generally-intelligent/generally_intelligent!7643
 ```

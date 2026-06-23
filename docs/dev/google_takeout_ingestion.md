@@ -97,8 +97,8 @@ disturb the maps tables.
 ## Layout on disk
 
 ```
-<data_root>/raw/<name>.doltlite_db              # all entity tables
-<data_root>/raw/<name>.blobs.doltlite_db        # CAS for attached bytes
+<data_root>/raw/<name>/entities.doltlite_db       # all entity tables
+<data_root>/raw/<name>/blobs.doltlite_db         # CAS for attached bytes
 ```
 
 Same shape as every other provider. `<name>` is the source's `name:`

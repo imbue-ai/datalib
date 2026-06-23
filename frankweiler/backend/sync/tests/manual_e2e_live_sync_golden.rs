@@ -46,7 +46,7 @@
 //!     real signal there.
 //!   * The tempdir `data_root` prefix is replaced with the stable token
 //!     `<data_root>` wherever it appears in a path string, so a path keeps its
-//!     meaningful suffix (`<data_root>/raw/tiny-slack.doltlite_db`) without
+//!     meaningful suffix (`<data_root>/raw/tiny-slack/entities.doltlite_db`) without
 //!     the per-run `/var/folders/…/.tmpXXXX` churn.
 //!   * `source_fingerprint:` lines in `.md` frontmatter get the same
 //!     treatment.
@@ -468,7 +468,7 @@ fn manual_e2e_live_sync_golden() {
     //
     // Scoped to the providers that have adopted the split. Add a DB here
     // as each provider migrates; the long-term goal is every provider.
-    let stability_dbs = ["tiny-slack.doltlite_db"];
+    let stability_dbs = ["tiny-slack/entities.doltlite_db"];
     let before: Vec<(&str, Value)> = stability_dbs
         .iter()
         .map(|name| (*name, content_tables(&data_root.join("raw").join(name))))
