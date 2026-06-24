@@ -13,7 +13,6 @@ use async_trait::async_trait;
 
 use frankweiler_etl::http::HttpResponse;
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 use frankweiler_etl_notion_config::{NotionApiSync, NotionConfig};
 
 use crate::extract;
@@ -58,15 +57,9 @@ impl DataProcessor for NotionExtract {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let db = extract::RawDb::open(&extract::db_path_for(&self.raw_path)).await?;
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        let entity_db = extract::db_path_for(&self.raw_path);
+        let db = extract::RawDb::open(&entity_db).await?;
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // Notion has no listing endpoint; in playback mode we derive seeds by
         // scanning the fixture tree for every synthesized page response.
         // Outside playback we honor the configured subtree seeds verbatim.
@@ -111,7 +104,7 @@ impl DataProcessor for NotionExtract {
             s.official_requests,
             s.unofficial_requests,
         );
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 

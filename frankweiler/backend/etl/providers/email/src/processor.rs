@@ -8,7 +8,7 @@
 //! nothing.
 //!
 //! Storage ownership lives here, not in the orchestrator: [`EmailExtract`]
-//! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
+//! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
 //! for interrupt-safety, and issues its own post-extract `dolt_commit`. The
 //! orchestrator never sees a pool or a commit. (The per-source *report* is
 //! still assembled orchestrator-side for now — tracked in issue #37.)
@@ -19,7 +19,6 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
@@ -132,14 +131,7 @@ impl DataProcessor for EmailExtract {
         // `dolt_commit` ever crosses back to the orchestrator.
         let entity_db = extract::db_path_for(&self.raw_path);
         let db = extract::RawDb::open(&entity_db).await?;
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
 
         let summary = match &self.mode {
             ExtractMode::Jmap(sync) => {
@@ -202,7 +194,7 @@ impl DataProcessor for EmailExtract {
 
         // The source's post-extract commit + pool close (uniform across
         // providers); keeps the old `{stats} commit={h}` summary suffix.
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 

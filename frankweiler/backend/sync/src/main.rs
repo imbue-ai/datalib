@@ -231,10 +231,9 @@ async fn main() {
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
             status_line!("[frankweiler-sync] caught Ctrl-C; committing partial state…");
-            interrupt_commit_all(&c_sig).await;
-            // Re-snapshot each source's files (post-commit) and record
-            // what changed, even on an interrupted run.
-            let reports = interrupt_build_reports(&c_sig).await;
+            // Fires each source's opaque interrupt hook, which commits + returns
+            // its own partial "what changed" report (source-side).
+            let reports = interrupt_commit_all(&c_sig).await;
             let mut s = s_sig.lock().unwrap();
             s.interrupted = true;
             s.interrupted_extract_reports = reports;
@@ -317,79 +316,28 @@ struct CtrlcState {
     /// Open pool to the index doltlite_db. Populated after
     /// `open_index_pool`. The handler issues one commit against this
     /// pool to capture whatever rows the translate phase already wrote.
+    /// (This is the orchestrator's *own* index store, not a source's.)
     index_pool: Option<sqlx::sqlite::SqlitePool>,
-    /// Per-source live pools to the extract doltlite_dbs. Populated
-    /// at the start of `run_extract_phase` (before any download begins)
-    /// and never reopened. The SIGINT handler commits against these
-    /// pools directly — no `commit_run_at_path` reopen race because
-    /// these are the *same* connections the extract workers are using.
-    extract_pools: Vec<ExtractPoolEntry>,
-    /// Per-source report contexts (paths, before-snapshots, live
-    /// counters), registered alongside `extract_pools`. On Ctrl-C —
-    /// after the pools are committed — the handler re-snapshots each
-    /// source's files and assembles a report from these, so an
-    /// interrupted run still records what changed.
-    extract_reports: Vec<ReportCtx>,
-    /// Opaque interrupt-commit hooks registered by Program-A
-    /// `DataProcessor`-based sources (today: email). The handler fires each
-    /// on Ctrl-C; unlike `extract_pools` it carries no pool and no doltlite
-    /// knowledge — the source's `Checkpoint` impl owns the commit. Shared by
-    /// `Arc` into every migrated source's `RunCtx`.
+    /// Opaque interrupt hooks registered by every doltlite-backed source. On
+    /// Ctrl-C the handler fires each — the source's `Checkpoint` impl commits
+    /// its partial state AND returns its partial `ExtractReport`, both
+    /// source-side. The orchestrator carries no pool and no doltlite knowledge
+    /// for any source. Shared by `Arc` into every source's `RunCtx`.
     checkpoints: Arc<frankweiler_etl::processor::CheckpointSink>,
 }
 
-/// Everything needed to assemble a source's [`ExtractReport`] after the
-/// fact: the entity-db path (the CAS path is derived), the before-extract
-/// snapshots, and the live counters. Held by both `run_extract_phase`
-/// (for the clean-completion path) and [`CtrlcState`] (for the interrupt
-/// path).
-#[derive(Clone)]
-struct ReportCtx {
-    name: String,
-    entity_path: PathBuf,
-    before_events: frankweiler_etl::extract_metrics::DbSnapshot,
-    before_blobs: frankweiler_etl::extract_metrics::DbSnapshot,
-    metrics: Arc<frankweiler_etl::extract_metrics::ExtractMetrics>,
-    diagnostics: Arc<frankweiler_obs::diagnostics::Diagnostics>,
-}
-
-impl ReportCtx {
-    /// Re-snapshot the source's files (the "after" endpoint) and fold in
-    /// the live counters and captured diagnostics. Safe once the source has
-    /// committed + released its writer; the snapshot uses an independent
-    /// read-only connection.
-    async fn assemble(&self) -> frankweiler_etl::extract_metrics::ExtractReport {
-        frankweiler_etl::extract_metrics::assemble_report(
-            &self.entity_path,
-            &self.before_events,
-            &self.before_blobs,
-            &self.metrics,
-            &self.diagnostics,
-        )
-        .await
-    }
-}
-
-/// Entry in [`CtrlcState::extract_pools`] — the source's display name
-/// and the open pool. We log the name on commit so a user reading the
-/// interrupt summary can tell which source the commit hash belongs to.
-#[derive(Clone)]
-struct ExtractPoolEntry {
-    name: String,
-    pool: sqlx::sqlite::SqlitePool,
-}
-
-/// Commit every doltlite database the run has touched. Called from the
-/// SIGINT handler; each individual failure is downgraded to a stderr
-/// warning so one stuck file doesn't block the others.
-async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
-    let (pool_opt, extract_pools, checkpoints) = {
+/// On Ctrl-C, commit the orchestrator's own index pool and fire every source's
+/// opaque interrupt `Checkpoint`. Each hook commits the source's partial state
+/// AND returns its partial `ExtractReport` — both assembled *source-side*, so
+/// the orchestrator never reads a source store. Returns the collected
+/// `(name, report)` pairs for the interrupted-run summary. Each failure is
+/// downgraded to a stderr warning so one stuck source doesn't block the others.
+async fn interrupt_commit_all(
+    state: &Arc<Mutex<CtrlcState>>,
+) -> Vec<(String, frankweiler_etl::extract_metrics::ExtractReport)> {
+    let (pool_opt, checkpoints) = {
         let s = state.lock().unwrap();
-        (
-            s.index_pool.clone(),
-            s.extract_pools.clone(),
-            s.checkpoints.snapshot(),
-        )
+        (s.index_pool.clone(), s.checkpoints.snapshot())
     };
     if let Some(pool) = pool_opt {
         let msg = "frankweiler-sync: interrupted (Ctrl-C); committing partial state".to_string();
@@ -399,59 +347,29 @@ async fn interrupt_commit_all(state: &Arc<Mutex<CtrlcState>>) {
             Err(e) => status_line!("[frankweiler-sync] interrupt index commit failed: {e:#}"),
         }
     }
-    for entry in extract_pools {
-        let msg = format!("extract {}: interrupted (Ctrl-C)", entry.name);
-        match frankweiler_etl::doltlite_raw::commit_run(&entry.pool, &msg).await {
-            Ok(Some(h)) => status_line!(
-                "[frankweiler-sync] interrupt extract commit {}: {h}",
-                entry.name
-            ),
-            Ok(None) => {}
-            Err(e) => status_line!(
-                "[frankweiler-sync] interrupt extract commit failed for {}: {e:#}",
-                entry.name
-            ),
-        }
-    }
-    // Program-A processor-based sources (email): fire each registered opaque
-    // interrupt-commit hook. The orchestrator knows only that each persists
-    // partial state — the `dolt_commit` is encapsulated in the source's
-    // `Checkpoint` impl.
+    let mut reports = Vec::new();
     for entry in checkpoints {
         match entry.hook.checkpoint().await {
-            Ok(()) => status_line!("[frankweiler-sync] interrupt checkpoint {}: ok", entry.name),
+            Ok(report) => {
+                status_line!("[frankweiler-sync] interrupt checkpoint {}: ok", entry.name);
+                if let Some(report) = report {
+                    if !report.is_empty() {
+                        status_line!(
+                            "[frankweiler-sync] extract {} (interrupted): {}",
+                            entry.name,
+                            report.summary_line()
+                        );
+                        reports.push((entry.name.clone(), report));
+                    }
+                }
+            }
             Err(e) => status_line!(
                 "[frankweiler-sync] interrupt checkpoint failed for {}: {e:#}",
                 entry.name
             ),
         }
     }
-}
-
-/// Build per-source extract reports on a Ctrl-C interrupt. Call *after*
-/// [`interrupt_commit_all`] so the after-snapshots see committed rows.
-/// Logs a one-line summary per source as it goes and returns the
-/// `(name, report)` pairs for the JSON summary. Best-effort: empty
-/// reports (file-tree-backed sources, sources that never started) are
-/// dropped.
-async fn interrupt_build_reports(
-    state: &Arc<Mutex<CtrlcState>>,
-) -> Vec<(String, frankweiler_etl::extract_metrics::ExtractReport)> {
-    let ctxs = { state.lock().unwrap().extract_reports.clone() };
-    let mut out = Vec::new();
-    for ctx in ctxs {
-        let report = ctx.assemble().await;
-        if report.is_empty() {
-            continue;
-        }
-        status_line!(
-            "[frankweiler-sync] extract {} (interrupted): {}",
-            ctx.name,
-            report.summary_line()
-        );
-        out.push((ctx.name.clone(), report));
-    }
-    out
+    reports
 }
 
 /// Walk the anyhow error chain top-to-bottom (so the user reads
@@ -1158,35 +1076,12 @@ async fn run_extract_phase(
         }
     }
 
-    // Snapshot every source's raw-store files BEFORE any writer opens,
-    // so each source's report has an honest before/after baseline for
-    // bytes and per-table row counts. Keyed by source name; the same
-    // contexts are registered with the SIGINT state so an interrupted
-    // run can still produce reports. Sources with no doltlite store
-    // (file-tree-backed) snapshot as empty and get dropped later when
-    // the report turns out empty.
-    let mut report_ctxs: std::collections::HashMap<String, ReportCtx> =
-        std::collections::HashMap::new();
-    for plan in &plans {
-        let entity_path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
-        let (before_events, before_blobs) =
-            frankweiler_etl::extract_metrics::snapshot_source(&entity_path).await;
-        let ctx = ReportCtx {
-            name: plan.name.clone(),
-            entity_path,
-            before_events,
-            before_blobs,
-            metrics: plan.metrics.clone(),
-            diagnostics: plan.diagnostics.clone(),
-        };
-        report_ctxs.insert(plan.name.clone(), ctx.clone());
-        ctrlc.lock().unwrap().extract_reports.push(ctx);
-    }
-
-    // Every source is a Program-A `DataProcessor` set that owns its store: the
-    // orchestrator opens no pool and registers no `ExtractPoolEntry`. Each
-    // source shares the SIGINT `CheckpointSink` and registers its own opaque
-    // `Checkpoint` when it opens its store inside `run`.
+    // Every source owns its store: the before-snapshot, commit, and "what
+    // changed" report are all assembled source-side (inside each provider's
+    // extract processor via `RawStoreSession`). The orchestrator no longer
+    // snapshots any source's doltlite — it only shares the SIGINT
+    // `CheckpointSink`; each source registers its own opaque `Checkpoint` when
+    // it opens its store inside `run`.
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
         plan.checkpoints = ctrlc.lock().unwrap().checkpoints.clone();
@@ -1226,7 +1121,7 @@ async fn run_extract_phase(
     }
 
     if cfg.sync.parallel {
-        let mut set: JoinSet<(String, &'static str, Result<String>)> = JoinSet::new();
+        let mut set: JoinSet<(String, &'static str, Result<ExtractRun>)> = JoinSet::new();
         for plan in plans {
             let name = plan.name.clone();
             let type_str = plan.type_str;
@@ -1237,7 +1132,7 @@ async fn run_extract_phase(
                     .await
                     .with_context(|| format!("extract {name} (type={type_str})"));
                 match &r {
-                    Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                    Ok((s, _)) => tracing::info!(source = %name, summary = %s, "extract: done"),
                     Err(e) => tracing::error!(
                         source = %name,
                         error = %format!("{e:#}"),
@@ -1249,10 +1144,7 @@ async fn run_extract_phase(
         }
         while let Some(joined) = set.join_next().await {
             match joined {
-                Ok((name, type_str, r)) => {
-                    let outcome = summary::outcome_from(&name, type_str, r);
-                    outcomes.push(finalize_extract_outcome(outcome, &report_ctxs).await);
-                }
+                Ok((name, type_str, r)) => outcomes.push(extract_outcome(&name, type_str, r)),
                 Err(e) => {
                     // Task panicked — we don't know which source. Record
                     // a generic outcome so the panic shows up in the
@@ -1272,15 +1164,14 @@ async fn run_extract_phase(
                 .await
                 .with_context(|| format!("extract {name} (type={type_str})"));
             match &r {
-                Ok(s) => tracing::info!(source = %name, summary = %s, "extract: done"),
+                Ok((s, _)) => tracing::info!(source = %name, summary = %s, "extract: done"),
                 Err(e) => tracing::error!(
                     source = %name,
                     error = %format!("{e:#}"),
                     "extract: FAIL"
                 ),
             };
-            let outcome = summary::outcome_from(&name, type_str, r);
-            outcomes.push(finalize_extract_outcome(outcome, &report_ctxs).await);
+            outcomes.push(extract_outcome(&name, type_str, r));
         }
     }
 
@@ -1305,27 +1196,29 @@ async fn run_extract_phase(
     outcomes
 }
 
-/// Attach the general "what changed" report to a just-finished source's
-/// outcome. Runs at join time — the source has already committed, closed
-/// its writer, and cleared its progress bar — so the after-snapshot is
-/// lock-safe and the INFO line lands "as the bar goes away". A no-op for
-/// sources with no registered context (e.g. a `<unknown>` panic record).
-async fn finalize_extract_outcome(
-    outcome: PhaseOutcome,
-    report_ctxs: &std::collections::HashMap<String, ReportCtx>,
-) -> PhaseOutcome {
-    let Some(ctx) = report_ctxs.get(&outcome.name) else {
-        return outcome;
+/// Build a source's extract [`PhaseOutcome`] from its run result, attaching the
+/// source-assembled "what changed" report (if any). The report was built inside
+/// the provider's processor and rides up in the result — the orchestrator never
+/// reads the store or constructs a doltlite path.
+fn extract_outcome(name: &str, type_str: &'static str, r: Result<ExtractRun>) -> PhaseOutcome {
+    let (summary_result, report) = match r {
+        Ok((summary, report)) => (Ok(summary), report),
+        Err(e) => (Err(e), None),
     };
-    let report = ctx.assemble().await;
-    if !report.is_empty() {
-        tracing::info!(
-            source = %outcome.name,
-            summary = %report.summary_line(),
-            "extract: report"
-        );
+    let outcome = summary::outcome_from(name, type_str, summary_result);
+    match report {
+        Some(report) => {
+            if !report.is_empty() {
+                tracing::info!(
+                    source = %name,
+                    summary = %report.summary_line(),
+                    "extract: report"
+                );
+            }
+            outcome.with_report(report)
+        }
+        None => outcome,
     }
-    outcome.with_report(report)
 }
 
 /// One source's extract closure. Holds owned data so it can be moved
@@ -1522,7 +1415,7 @@ impl ExtractPlan {
     /// context so the shared write/HTTP chokepoints record into it for the
     /// whole download. Everything is awaited on this one task, so the
     /// context is visible to every chokepoint the provider reaches.
-    async fn run(self) -> Result<String> {
+    async fn run(self) -> Result<ExtractRun> {
         let metrics = self.metrics.clone();
         let diagnostics = self.diagnostics.clone();
         // Install all three ambient contexts for the whole source extract on
@@ -1543,14 +1436,17 @@ impl ExtractPlan {
     }
 
     /// Run a Program-A processor-based source's extract wave. Each processor
-    /// owns its store and registers its own `Checkpoint`; the orchestrator
-    /// supplies only the storage-agnostic [`RunCtx`]. No pool, no commit, no
-    /// `dolt_commit` here — that all lives inside the processor.
-    async fn run_processors(self) -> Result<String> {
+    /// owns its store and registers its own `Checkpoint`, and a store-backed
+    /// processor assembles + publishes its own [`ExtractReport`] (source-side)
+    /// into a [`ReportCell`]; the orchestrator reads it back here and threads it
+    /// up with the result. No pool, no commit, no `dolt_commit`, no
+    /// `snapshot_source` here — that all lives inside the processor.
+    async fn run_processors(self) -> Result<ExtractRun> {
         // `root` is unused by extract processors (they derive their own store
         // path from config); pass the source's out_dir to satisfy the ctx.
         // `prior_fingerprints` is a translate-wave concern — empty here.
         let empty_fingerprints = std::collections::HashMap::new();
+        let report_cell = frankweiler_etl::processor::ReportCell::new();
         let mut summaries = Vec::with_capacity(self.processors.len());
         for proc in &self.processors {
             let ctx = frankweiler_etl::processor::RunCtx::for_extract(
@@ -1561,6 +1457,9 @@ impl ExtractPlan {
                 &self.control,
                 &empty_fingerprints,
                 self.checkpoints.as_ref(),
+                self.metrics.clone(),
+                self.diagnostics.clone(),
+                &report_cell,
             );
             let summary = proc
                 .run(&ctx)
@@ -1569,9 +1468,18 @@ impl ExtractPlan {
             summaries.push(summary);
         }
         self.progress.finish_and_clear();
-        Ok(summaries.join(" | "))
+        Ok((summaries.join(" | "), report_cell.take()))
     }
 }
+
+/// One extract source's result: its one-line summary plus the source-assembled
+/// "what changed" report (when it keeps a doltlite store). The report is built
+/// inside the provider's processor and rides the result up to the orchestrator,
+/// which attaches it to the `PhaseOutcome` — it never reads the store itself.
+type ExtractRun = (
+    String,
+    Option<frankweiler_etl::extract_metrics::ExtractReport>,
+);
 
 // ─────────────────────────────────────────────────────────────────────
 // Render-and-index-md phase
@@ -1811,6 +1719,25 @@ mod interrupt_tests {
         dr::has_dolt_extensions(pool).await
     }
 
+    /// A minimal source interrupt hook for the test: commits the held pool with
+    /// the source's interrupt message (the same shape `RawStoreCheckpoint`
+    /// produces), and reports nothing. Stands in for a real doltlite-backed
+    /// source's `Checkpoint` without the snapshot/report machinery.
+    struct TestPoolCheckpoint {
+        pool: sqlx::sqlite::SqlitePool,
+        message: String,
+    }
+
+    #[async_trait::async_trait]
+    impl frankweiler_etl::processor::Checkpoint for TestPoolCheckpoint {
+        async fn checkpoint(
+            &self,
+        ) -> Result<Option<frankweiler_etl::extract_metrics::ExtractReport>> {
+            dr::commit_run(&self.pool, &self.message).await?;
+            Ok(None)
+        }
+    }
+
     /// Populate `CtrlcState` with one index pool + one pre-opened
     /// extract pool, call [`interrupt_commit_all`], then verify:
     ///   * the index pool got exactly one new commit
@@ -1894,22 +1821,24 @@ mod interrupt_tests {
             .await
             .unwrap();
 
-        // Build the shared state EXACTLY as the run() body would:
-        // index pool live + extract_pools populated with the live
-        // pre-opened per-source pools (registered as `run_extract_phase`
-        // opens them).
+        // Build the shared state EXACTLY as the run() body would: index pool
+        // live + each source's opaque interrupt `Checkpoint` registered in the
+        // shared `CheckpointSink` (as the source does when it opens its store).
+        let checkpoints = Arc::new(frankweiler_etl::processor::CheckpointSink::new());
+        checkpoints.register(
+            "source_a",
+            Arc::new(TestPoolCheckpoint {
+                pool: extract_pool.clone(),
+                message: "extract source_a: interrupted (Ctrl-C)".to_string(),
+            }),
+        );
         let state = Arc::new(Mutex::new(CtrlcState {
             index_pool: Some(index_pool.clone()),
-            extract_pools: vec![ExtractPoolEntry {
-                name: "source_a".to_string(),
-                pool: extract_pool.clone(),
-            }],
-            extract_reports: Vec::new(),
-            ..Default::default()
+            checkpoints,
         }));
 
         // Invoke the same function the SIGINT handler invokes.
-        interrupt_commit_all(&state).await;
+        let _reports = interrupt_commit_all(&state).await;
 
         // ── Verify ────────────────────────────────────────────────
         // Index DB: exactly one new dolt_log entry, with the

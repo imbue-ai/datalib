@@ -16,7 +16,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 
 use frankweiler_etl_carddav_config::{CarddavConfig, CarddavSync};
 
@@ -92,14 +91,7 @@ impl DataProcessor for CarddavExtract {
         // opaque interrupt-commit hook, do the work, commit, close.
         let entity_db = extract::db_path_for(&self.raw_path);
         let db = extract::RawDb::open(&entity_db).await?;
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
 
         let summary = match &self.mode {
             ExtractMode::Server(sync) => {
@@ -144,7 +136,7 @@ impl DataProcessor for CarddavExtract {
 
         // The source's post-extract commit + pool close (uniform across
         // providers); keeps the old `{stats} commit={h}` summary suffix.
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 

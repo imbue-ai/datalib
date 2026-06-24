@@ -32,6 +32,10 @@ rust_binary(
     rustc_env_files = ["rustc_env.txt"],
     stamp = -1,
     visibility = ["//visibility:public"],
+    proc_macro_deps = [
+        # Used by the interrupt-test `Checkpoint` impl (#[cfg(test)]).
+        "@frankweiler_crates//:async-trait",
+    ],
     deps = [
         "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "//frankweiler/backend/etl:frankweiler_etl",
