@@ -36,28 +36,6 @@ struct YolinkExtract {
     sync: YolinkSync,
 }
 
-/// Convert this crate's schema-only `YolinkSync` into the `frankweiler_core`
-/// type that `extract::fetch`'s `FetchOptions.sync` still expects, field by
-/// field. The two structs are intentionally distinct (the config crate has no
-/// core dependency); this is the seam where they meet.
-fn to_core_sync(s: &YolinkSync) -> frankweiler_core::config::YolinkSync {
-    frankweiler_core::config::YolinkSync {
-        overlap_minutes: s.overlap_minutes,
-        window_days: s.window_days,
-        devices: s
-            .devices
-            .iter()
-            .map(|d| frankweiler_core::config::YolinkDevice {
-                name: d.name.clone(),
-                kind: d.kind.clone(),
-                start: d.start.clone(),
-                family_device_id: d.family_device_id.clone(),
-                device_udid: d.device_udid.clone(),
-            })
-            .collect(),
-    }
-}
-
 #[async_trait]
 impl DataProcessor for YolinkExtract {
     fn id(&self) -> &str {
@@ -77,7 +55,7 @@ impl DataProcessor for YolinkExtract {
         let s = extract::fetch(extract::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
-            sync: to_core_sync(&self.sync),
+            sync: self.sync.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
         })

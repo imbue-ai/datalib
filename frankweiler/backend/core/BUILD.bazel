@@ -54,24 +54,8 @@ rust_test(
     ],
 )
 
-# Parse + validate the checked-in example configs under
-# docs/user/config_examples/ against the real `frankweiler_core::config`
-# schema (deny_unknown_fields), so documented stanzas can't silently
-# drift from the structs.
-rust_test(
-    name = "config_examples_test",
-    srcs = ["tests/config_examples.rs"],
-    data = [
-        "//docs/user/config_examples:all_sources.yaml",
-        "//docs/user/config_examples:claude_only.yaml",
-        "//docs/user/config_examples:sample_config.yaml",
-    ],
-    edition = "2021",
-    deps = [
-        ":frankweiler_core",
-        "@frankweiler_crates//:runfiles",
-    ],
-)
+# (config_examples_test moved to //frankweiler/backend/ingest_config with the
+# config module.)
 
 # Insta snapshot of the TNG fixture's `backend_index.doltlite_db` contents. Catches
 # silent data drift in the load pipeline — most recently the

@@ -29,6 +29,7 @@ rust_library(
     deps = [
         "//frankweiler/backend/app_schema:app_schema",
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",
@@ -63,6 +64,7 @@ rust_test(
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:sqlx",
@@ -79,6 +81,7 @@ rust_test(
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "@frankweiler_crates//:axum",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:tempfile",
@@ -98,6 +101,7 @@ rust_binary(
     deps = [
         ":frankweiler_http",
         "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:axum",

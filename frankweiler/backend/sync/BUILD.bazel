@@ -33,7 +33,7 @@ rust_binary(
     stamp = -1,
     visibility = ["//visibility:public"],
     deps = [
-        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",
         "//frankweiler/backend/etl/providers/beeper:frankweiler_etl_beeper",

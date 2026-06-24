@@ -1,0 +1,51 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+exports_files(["Cargo.toml"])
+
+# The orchestrator's config: the app `Config` envelope + the `SourceConfig`
+# discriminated union over `type:`. Relocated out of `frankweiler_core::config`
+# so it sits above the providers (and `http` links it without `core`'s db/repo
+# code). `ExtractParams` lives in `frankweiler_etl` (below the providers) and is
+# re-exported here.
+rust_library(
+    name = "frankweiler_ingest_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_ingest_config",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "ingest_config_unittests",
+    size = "small",
+    crate = ":frankweiler_ingest_config",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# Validates the checked-in `docs/user/config_examples/*.yaml` against the
+# loader, so the docs can't drift from `SourceConfig`. Moved here with the
+# config module.
+rust_test(
+    name = "config_examples_test",
+    srcs = ["tests/config_examples.rs"],
+    data = [
+        "//docs/user/config_examples:all_sources.yaml",
+        "//docs/user/config_examples:claude_only.yaml",
+        "//docs/user/config_examples:sample_config.yaml",
+    ],
+    edition = "2021",
+    deps = [
+        ":frankweiler_ingest_config",
+        "@frankweiler_crates//:runfiles",
+    ],
+)
