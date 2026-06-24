@@ -47,7 +47,7 @@
 //! | `Important`                  | keyword `$important`        |
 //! | (any other user label)       | role=`null`, name kept      |
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -122,6 +122,13 @@ pub struct FetchOptions {
     /// Account-row config from the source YAML (display name, email,
     /// is_personal flag). See [`MboxAccountConfig`].
     pub account_config: MboxAccountConfig,
+    /// When non-empty, only ingest messages carrying at least one
+    /// `X-Gmail-Labels` label whose full path (POSIX-like, e.g.
+    /// `Work/Projects`) exactly matches one of these. Empty = ingest
+    /// every message. Mirrors the JMAP `only_mailbox_labels` filter;
+    /// Gmail nested labels are already stored as `Parent/Child` strings
+    /// so the match is a direct string compare against the raw label.
+    pub only_labels: Vec<String>,
     /// Skip attachment bytes whose size exceeds this. The
     /// `email_attachments` row still lands (so we record what was
     /// referenced), but the bytes never enter the CAS — translate
@@ -139,6 +146,7 @@ impl Default for FetchOptions {
             input_path: PathBuf::new(),
             account_id_override: None,
             account_config: MboxAccountConfig::default(),
+            only_labels: Vec::new(),
             blob_size_limit_bytes: None,
             progress: Progress::noop(),
             control: ExtractControl::default(),
@@ -234,7 +242,17 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         opts.progress.inc(skipped_total_bytes);
     }
 
-    let mut accumulator = Accumulator::new(account_id.clone());
+    let label_filter: Option<HashSet<String>> = if opts.only_labels.is_empty() {
+        None
+    } else {
+        Some(
+            opts.only_labels
+                .iter()
+                .map(|s| s.trim().to_string())
+                .collect(),
+        )
+    };
+    let mut accumulator = Accumulator::new(account_id.clone(), label_filter);
     let mut summary = FetchSummary::default();
     let mut batch = PendingBatch::default();
     let mut emails_seen: u64 = 0;
@@ -460,6 +478,11 @@ struct Accumulator {
     mailboxes: BTreeMap<String, MailboxEntry>,
     threads: BTreeMap<String, Vec<ThreadMember>>,
     seen_email_ids: BTreeSet<String>,
+    /// When `Some`, only messages carrying a label whose full path is
+    /// in this set are ingested (the rest are dropped before any row or
+    /// blob lands). `None` = ingest everything. See
+    /// [`FetchOptions::only_labels`].
+    label_filter: Option<HashSet<String>>,
 }
 
 struct MailboxEntry {
@@ -474,12 +497,13 @@ struct ThreadMember {
 }
 
 impl Accumulator {
-    fn new(account_id: String) -> Self {
+    fn new(account_id: String, label_filter: Option<HashSet<String>>) -> Self {
         Self {
             account_id,
             mailboxes: BTreeMap::new(),
             threads: BTreeMap::new(),
             seen_email_ids: BTreeSet::new(),
+            label_filter,
         }
     }
 
@@ -526,6 +550,17 @@ impl Accumulator {
             .and_then(header_text)
             .unwrap_or_default();
         let labels = split_gmail_labels(&label_header);
+
+        // Label filter: drop the message before any row/blob/thread
+        // bookkeeping if none of its labels is in the allow-set. Matched
+        // on the raw label string (Gmail nested labels are already
+        // `Parent/Child` paths), trimmed to mirror the JMAP resolver.
+        if let Some(allow) = &self.label_filter {
+            if !labels.iter().any(|l| allow.contains(l.trim())) {
+                return Ok(false);
+            }
+        }
+
         let (mailbox_ids, keywords) = self.resolve_labels(&labels);
 
         // Date — load-bearing for thread ordering, so computed up front.
