@@ -31,11 +31,11 @@ use sqlx::sqlite::SqlitePool;
 use tokio::process::Command;
 use tracing::{info, warn};
 
-use frankweiler_core::config::{YolinkDevice, YolinkSync};
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::control::ExtractControl;
 use frankweiler_etl::doltlite_raw as dr;
 use frankweiler_etl::progress::Progress;
+use frankweiler_etl_yolink_config::{YolinkDevice, YolinkSync};
 
 use schema_raw::{full_ddl, YolinkDeviceRow, YolinkReadingRow, DATA_TABLES};
 

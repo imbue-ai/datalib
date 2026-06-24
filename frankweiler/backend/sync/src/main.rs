@@ -55,7 +55,6 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_core::config::{load_config, Config, SourceConfig};
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::load::{
     apply_one, init_schema, load_cursors, load_fingerprints, RenderedMarkdown,
@@ -69,6 +68,7 @@ use frankweiler_etl_github::synthesize::GithubSynth;
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use frankweiler_etl_slack::synthesize::SlackSynth;
+use frankweiler_ingest_config::{load_config, Config, SourceConfig};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinSet;
 
@@ -114,7 +114,7 @@ const FRANKWEILER_VERSION_RESOLVED: &str = {
 )]
 struct Args {
     /// Path to the YAML config. Defaults to `$FRANKWEILER_CONFIG` or
-    /// `~/.config/frankweiler/config.yaml`. See `frankweiler_core::config`.
+    /// `~/.config/frankweiler/config.yaml`. See `frankweiler_ingest_config`.
     #[arg(long, env = "FRANKWEILER_CONFIG")]
     config: Option<PathBuf>,
 
@@ -1360,7 +1360,7 @@ struct ExtractPlan {
     /// as the ambient [`frankweiler_etl::retry::RetryGuard`] for the
     /// duration of `run()` so the shared HTTP chokepoint enforces them for
     /// every provider, without provider-side code.
-    extract_params: frankweiler_core::config::ExtractParams,
+    extract_params: frankweiler_ingest_config::ExtractParams,
     /// Per-source WARN/ERROR capture buffer, installed as the ambient
     /// diagnostics context for the duration of `run()` so the global
     /// [`frankweiler_obs::diagnostics`] layer collects every warning/error

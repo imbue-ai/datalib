@@ -152,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
     // Self-contained config: the app reads/writes `<root>/config.yaml`,
     // so a fresh data root needs no external `~/.config` file. The Setup
     // tab creates it; the worker drives `frankweiler-sync` against it.
-    let config_path = Arc::new(frankweiler_core::config::root_config_path(&root));
+    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
     eprintln!("config: {}", config_path.display());
 
     // Live progress fan-out: the worker + enqueue/cancel handlers publish

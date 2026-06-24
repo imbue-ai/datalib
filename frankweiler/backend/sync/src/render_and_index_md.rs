@@ -11,7 +11,7 @@
 //! reads `outlink_format`, `Perseus` reads `sync.alignment_pairs`). This
 //! is the "config lives with the step, orchestrator forwards an opaque
 //! subtree" direction from issue #23's comment thread: the registry has
-//! no dependency on `frankweiler_core::config` at all.
+//! no dependency on `frankweiler_ingest_config` at all.
 //!
 //! The tradeoff vs. matching a typed `SourceConfig` enum is that an
 //! unknown `type` is a runtime error here rather than a compile error —
@@ -637,7 +637,7 @@ mod tests {
     /// period (`year`) so the assertion can't pass by falling back to `Month`.
     #[test]
     fn typed_config_roundtrips_through_to_value() {
-        use frankweiler_core::config::Config;
+        use frankweiler_ingest_config::Config;
         let cfg: Config = serde_yaml::from_str(concat!(
             "data_root: /tmp/x\n",
             "sources:\n",
