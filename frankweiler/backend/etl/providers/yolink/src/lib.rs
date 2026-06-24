@@ -8,3 +8,4 @@
 //! story (it's short).
 
 pub mod extract;
+pub mod processor;

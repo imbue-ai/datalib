@@ -823,8 +823,8 @@ pub struct JobsAllParams {
 /// root has none yet (eases migration for existing installs).
 fn load_effective_config(
     s: &AppState,
-) -> Result<frankweiler_core::config::Config, frankweiler_core::config::ConfigError> {
-    use frankweiler_core::config::{default_config_path, load_config};
+) -> Result<frankweiler_ingest_config::Config, frankweiler_ingest_config::ConfigError> {
+    use frankweiler_ingest_config::{default_config_path, load_config};
     if s.config_path.exists() {
         load_config(Some(s.config_path.as_path()))
     } else {
@@ -854,7 +854,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path.as_ref().clone();
     let exists = path.exists();
     let yaml = std::fs::read_to_string(&path).unwrap_or_default();
-    let (parsed_ok, error, source_count) = match frankweiler_core::config::load_config(Some(&path))
+    let (parsed_ok, error, source_count) = match frankweiler_ingest_config::load_config(Some(&path))
     {
         Ok(c) => (true, None, c.sources.len()),
         Err(e) => (false, Some(format!("{e}")), 0),
@@ -905,7 +905,7 @@ async fn put_config(
         eprintln!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    match frankweiler_core::config::load_config(Some(&tmp)) {
+    match frankweiler_ingest_config::load_config(Some(&tmp)) {
         Ok(cfg) => {
             let n = cfg.sources.len();
             if let Err(e) = std::fs::rename(&tmp, &path) {

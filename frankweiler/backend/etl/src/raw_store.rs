@@ -54,3 +54,31 @@ impl Checkpoint for PoolCheckpoint {
         Ok(())
     }
 }
+
+/// The source's post-extract commit, made uniform across providers: commit the
+/// write pool (`extract <name>: <summary>`), append the resulting
+/// `commit=<hash>` to the summary exactly as the old orchestrator did, then
+/// `close()` the pool so the translate phase can re-open the file without
+/// racing a still-draining writer. Best-effort — a commit failure logs and
+/// returns the bare summary (the data is already on disk).
+///
+/// Consumes the pool: every store-backed extract processor calls this as the
+/// last step of its `run`, so the "open → register checkpoint → fetch →
+/// commit+close" shape is identical everywhere.
+pub async fn commit_and_close(pool: SqlitePool, source_name: &str, summary: String) -> String {
+    let msg = format!("extract {source_name}: {summary}");
+    let out = match crate::doltlite_raw::commit_run(&pool, &msg).await {
+        Ok(Some(h)) => format!("{summary} commit={h}"),
+        Ok(None) => summary,
+        Err(e) => {
+            tracing::error!(
+                source = %source_name,
+                error = %format!("{e:#}"),
+                "extract commit FAILED",
+            );
+            summary
+        }
+    };
+    pool.close().await;
+    out
+}

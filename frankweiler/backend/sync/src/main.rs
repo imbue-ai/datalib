@@ -51,16 +51,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_core::config::{
-    load_config, BeeperSync, CarddavSync, ChatgptApiSync, ClaudeApiSync, Config, GithubApiSync,
-    GitlabApiSync, NotionApiSync, PerseusSync, SignalSync, SlackApiSync, SourceConfig,
-    WhatsAppSync, YolinkSync,
-};
-use frankweiler_etl::http::{HttpResponse, PLAYBACK_ENV};
+use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::load::{
     apply_one, init_schema, load_cursors, load_fingerprints, RenderedMarkdown,
 };
@@ -73,6 +68,7 @@ use frankweiler_etl_github::synthesize::GithubSynth;
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use frankweiler_etl_slack::synthesize::SlackSynth;
+use frankweiler_ingest_config::{load_config, Config, SourceConfig};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinSet;
 
@@ -118,7 +114,7 @@ const FRANKWEILER_VERSION_RESOLVED: &str = {
 )]
 struct Args {
     /// Path to the YAML config. Defaults to `$FRANKWEILER_CONFIG` or
-    /// `~/.config/frankweiler/config.yaml`. See `frankweiler_core::config`.
+    /// `~/.config/frankweiler/config.yaml`. See `frankweiler_ingest_config`.
     #[arg(long, env = "FRANKWEILER_CONFIG")]
     config: Option<PathBuf>,
 
@@ -1187,76 +1183,14 @@ async fn run_extract_phase(
         ctrlc.lock().unwrap().extract_reports.push(ctx);
     }
 
-    // Open every doltlite-backed source's writable pool BEFORE
-    // starting any download. A source whose pool open fails is
-    // recorded as a phase error and dropped from the work set —
-    // better to fail-fast than to spend minutes pulling data we can't
-    // write. Successful opens are registered with the SIGINT state so
-    // the interrupt commit path commits against the *same* pool the
-    // worker uses (no second-connection lock race).
-    //
-    // File-tree-backed kinds (e.g. Perseus) return `Ok(None)` from
-    // `open_extract_db` — they have no doltlite_db to open, no pool
-    // to register, and no post-extract dolt_commit. Their plan still
-    // runs; we just keep `plan.db == None`.
+    // Every source is a Program-A `DataProcessor` set that owns its store: the
+    // orchestrator opens no pool and registers no `ExtractPoolEntry`. Each
+    // source shares the SIGINT `CheckpointSink` and registers its own opaque
+    // `Checkpoint` when it opens its store inside `run`.
     let mut opened: Vec<ExtractPlan> = Vec::with_capacity(plans.len());
     for mut plan in plans {
-        // Program-A processor-based sources (email) own their store: the
-        // orchestrator opens no pool and registers no `ExtractPoolEntry`.
-        // Instead they share the SIGINT `CheckpointSink` and register their
-        // own opaque `Checkpoint` when they open the store inside `run`.
-        if plan.kind.is_none() {
-            plan.checkpoints = ctrlc.lock().unwrap().checkpoints.clone();
-            opened.push(plan);
-            continue;
-        }
-        let path = frankweiler_etl::doltlite_raw::db_path_for(&plan.out_dir);
-        // Per-source narration: without this the pre-open loop runs
-        // silently and a stall on any one source looks like the whole
-        // sync hung. `doltlite_raw::open` logs its own start/finish too,
-        // but only the orchestrator knows the source name.
-        tracing::info!(
-            source = %plan.name,
-            kind = plan.type_str,
-            path = %path.display(),
-            "extract pre-open: opening writable doltlite pool"
-        );
-        match open_extract_db(plan.kind.as_ref().expect("legacy plan has a kind"), &path).await {
-            Ok(Some(mut db)) => {
-                ctrlc.lock().unwrap().extract_pools.push(ExtractPoolEntry {
-                    name: plan.name.clone(),
-                    pool: db.pool().clone(),
-                });
-                if let Some(tape) = plan.event_tape.clone() {
-                    tracing::info!(
-                        source = %plan.name,
-                        events_dir = %tape.dir().display(),
-                        "event tape enabled — mirroring upserts to JSONL"
-                    );
-                    db.attach_event_tape(tape);
-                }
-                plan.db = Some(db);
-                opened.push(plan);
-            }
-            Ok(None) => {
-                // File-tree-backed: nothing to pre-open.
-                opened.push(plan);
-            }
-            Err(e) => {
-                tracing::error!(
-                    source = %plan.name,
-                    kind = plan.type_str,
-                    path = %path.display(),
-                    error = %format!("{e:#}"),
-                    "extract pre-open FAILED"
-                );
-                outcomes.push(PhaseOutcome::err(
-                    &plan.name,
-                    plan.type_str,
-                    &e.context(format!("open writable doltlite for {}", path.display())),
-                ));
-            }
-        }
+        plan.checkpoints = ctrlc.lock().unwrap().checkpoints.clone();
+        opened.push(plan);
     }
     let mut plans = opened;
 
@@ -1403,14 +1337,9 @@ struct ExtractPlan {
     out_dir: PathBuf,
     now: String,
     progress: Progress,
-    /// Legacy enum-dispatch kind. `None` for sources migrated to the
-    /// Program-A `DataProcessor` path (`processors` non-empty), which own
-    /// their store (open/commit/checkpoint) instead of going through the
-    /// `(ExtractKind, DbHandle)` match.
-    kind: Option<ExtractKind>,
-    /// Program-A processors for a migrated source (today: email only). When
-    /// non-empty this plan runs them via `run_processors` instead of the
-    /// `kind` match; the orchestrator opens no pool and issues no commit.
+    /// The source's Program-A `DataProcessor`s for the extract wave. They own
+    /// their store (open/commit/checkpoint); the orchestrator opens no pool and
+    /// issues no commit.
     processors: Vec<Box<dyn frankweiler_etl::processor::DataProcessor>>,
     /// Shared interrupt-commit sink (from [`CtrlcState`]) the processors
     /// register their [`Checkpoint`](frankweiler_etl::processor::Checkpoint)
@@ -1421,15 +1350,6 @@ struct ExtractPlan {
     /// from the CLI through `ExtractPlan::for_source` into each
     /// provider's `FetchOptions.control`.
     control: frankweiler_etl::control::ExtractControl,
-    /// Pre-opened raw DB handle, populated by the open phase in
-    /// `run_extract_phase` before any download starts. `None` only
-    /// during the brief window between `for_source` and the open
-    /// pass; by the time `run()` is invoked this is always `Some`.
-    db: Option<DbHandle>,
-    /// Plain-text JSONL mirror of every upsert. `Some` when the
-    /// source (or the global default) has `event_tape: { enabled: true }`.
-    /// Attached to the provider's `RawDb` after `open_extract_db`.
-    event_tape: Option<Arc<frankweiler_etl::event_tape::EventTape>>,
     /// Live "what changed" counters for this source, installed as the
     /// ambient extract-metrics context for the duration of `run()` so the
     /// shared write/HTTP chokepoints record into it. Shared (via the
@@ -1440,7 +1360,7 @@ struct ExtractPlan {
     /// as the ambient [`frankweiler_etl::retry::RetryGuard`] for the
     /// duration of `run()` so the shared HTTP chokepoint enforces them for
     /// every provider, without provider-side code.
-    extract_params: frankweiler_core::config::ExtractParams,
+    extract_params: frankweiler_ingest_config::ExtractParams,
     /// Per-source WARN/ERROR capture buffer, installed as the ambient
     /// diagnostics context for the duration of `run()` so the global
     /// [`frankweiler_obs::diagnostics`] layer collects every warning/error
@@ -1449,237 +1369,129 @@ struct ExtractPlan {
     diagnostics: Arc<frankweiler_obs::diagnostics::Diagnostics>,
 }
 
-/// Typed wrapper around each provider's `RawDb`. Held by [`ExtractPlan`]
-/// after a successful pre-open so the same connection serves the
-/// download, the post-extract commit, and (via [`CtrlcState`]) any
-/// interrupt commit. Variants match the [`ExtractKind`] variants 1:1.
-enum DbHandle {
-    Anthropic(frankweiler_etl_anthropic::extract::RawDb),
-    Chatgpt(frankweiler_etl_chatgpt::extract::RawDb),
-    Slack(frankweiler_etl_slack::extract::RawDb),
-    Github(frankweiler_etl_github::extract::RawDb),
-    Gitlab(frankweiler_etl_gitlab::extract::RawDb),
-    Notion(frankweiler_etl_notion::extract::RawDb),
-    Beeper(frankweiler_etl_beeper::extract::RawDb),
-    Carddav(frankweiler_etl_contacts::extract::RawDb),
-    Linkedin(frankweiler_etl_linkedin::extract::RawDb),
-    GoogleTakeout(frankweiler_etl_google_takeout::extract::RawDb),
-    Yolink(frankweiler_etl_yolink::extract::RawDb),
-    Signal(frankweiler_etl_signal::extract::RawDb),
-    WhatsApp(frankweiler_etl_whatsapp::extract::RawDb),
-    SmsBackupRestore(frankweiler_etl_sms_backup_restore::extract::RawDb),
+fn build_source_plan(
+    src: &SourceConfig,
+    cfg: &Config,
+    playback_root: Option<&Path>,
+) -> Option<Result<frankweiler_etl::processor::SourcePlan>> {
+    let shared = src.resolved_shared(cfg);
+    let common = frankweiler_etl::processor::PlanCommon {
+        name: src.name().to_string(),
+        raw_path: src.resolved_raw_path(&cfg.data_root),
+        input_path: src.resolved_input_path(&cfg.data_root),
+        blob_size_limit_bytes: shared.blob_size_limit_bytes,
+        playback_root: playback_root.map(|p| p.to_path_buf()),
+        event_tape_enabled: shared.event_tape.unwrap_or_default().enabled,
+        max_sequential_failures: shared.extract_params.max_sequential_failures(),
+    };
+    let stanza = match serde_yaml::to_value(src).context("serialize source stanza") {
+        Ok(s) => s,
+        Err(e) => return Some(Err(e)),
+    };
+    let plan = match src.type_str() {
+        "email" => serde_yaml::from_value::<frankweiler_etl_email_config::EmailConfig>(stanza)
+            .context("parse email config")
+            .and_then(|c| frankweiler_etl_email::processor::plan(common, c)),
+        "claude_api" | "claude_export" => {
+            serde_yaml::from_value::<frankweiler_etl_anthropic_config::AnthropicConfig>(stanza)
+                .context("parse anthropic config")
+                .and_then(|c| frankweiler_etl_anthropic::processor::plan(common, c))
+        }
+        "chatgpt_api" => {
+            serde_yaml::from_value::<frankweiler_etl_chatgpt_config::ChatgptConfig>(stanza)
+                .context("parse chatgpt config")
+                .and_then(|c| frankweiler_etl_chatgpt::processor::plan(common, c))
+        }
+        "github_api" => {
+            serde_yaml::from_value::<frankweiler_etl_github_config::GithubConfig>(stanza)
+                .context("parse github config")
+                .and_then(|c| frankweiler_etl_github::processor::plan(common, c))
+        }
+        "gitlab_api" => {
+            serde_yaml::from_value::<frankweiler_etl_gitlab_config::GitlabConfig>(stanza)
+                .context("parse gitlab config")
+                .and_then(|c| frankweiler_etl_gitlab::processor::plan(common, c))
+        }
+        "sms_backup_restore" => serde_yaml::from_value::<
+            frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
+        >(stanza)
+        .context("parse sms_backup_restore config")
+        .and_then(|c| frankweiler_etl_sms_backup_restore::processor::plan(common, c)),
+        "google_takeout" => serde_yaml::from_value::<
+            frankweiler_etl_google_takeout_config::GoogleTakeoutConfig,
+        >(stanza)
+        .context("parse google_takeout config")
+        .and_then(|c| frankweiler_etl_google_takeout::processor::plan(common, c)),
+        "carddav" => {
+            serde_yaml::from_value::<frankweiler_etl_carddav_config::CarddavConfig>(stanza)
+                .context("parse carddav config")
+                .and_then(|c| frankweiler_etl_contacts::processor::plan(common, c))
+        }
+        "beeper" => serde_yaml::from_value::<frankweiler_etl_beeper_config::BeeperConfig>(stanza)
+            .context("parse beeper config")
+            .and_then(|c| frankweiler_etl_beeper::processor::plan(common, c)),
+        "signal_backup" => {
+            serde_yaml::from_value::<frankweiler_etl_signal_config::SignalConfig>(stanza)
+                .context("parse signal config")
+                .and_then(|c| frankweiler_etl_signal::processor::plan(common, c))
+        }
+        "yolink" => serde_yaml::from_value::<frankweiler_etl_yolink_config::YolinkConfig>(stanza)
+            .context("parse yolink config")
+            .and_then(|c| frankweiler_etl_yolink::processor::plan(common, c)),
+        "slack_api" => serde_yaml::from_value::<frankweiler_etl_slack_config::SlackConfig>(stanza)
+            .context("parse slack config")
+            .and_then(|c| frankweiler_etl_slack::processor::plan(common, c)),
+        "perseus" => {
+            serde_yaml::from_value::<frankweiler_etl_perseus_config::PerseusConfig>(stanza)
+                .context("parse perseus config")
+                .and_then(|c| frankweiler_etl_perseus::processor::plan(common, c))
+        }
+        "linkedin" => {
+            serde_yaml::from_value::<frankweiler_etl_linkedin_config::LinkedinConfig>(stanza)
+                .context("parse linkedin config")
+                .and_then(|c| frankweiler_etl_linkedin::processor::plan(common, c))
+        }
+        "whatsapp_backup" => {
+            serde_yaml::from_value::<frankweiler_etl_whatsapp_config::WhatsappConfig>(stanza)
+                .context("parse whatsapp config")
+                .and_then(|c| frankweiler_etl_whatsapp::processor::plan(common, c))
+        }
+        "notion_api" => {
+            serde_yaml::from_value::<frankweiler_etl_notion_config::NotionConfig>(stanza)
+                .context("parse notion config")
+                .and_then(|c| frankweiler_etl_notion::processor::plan(common, c))
+        }
+        // Every provider is migrated; nothing falls through to ExtractKind.
+        _ => return None,
+    };
+    Some(plan)
 }
 
-impl DbHandle {
-    fn pool(&self) -> &sqlx::sqlite::SqlitePool {
-        match self {
-            DbHandle::Anthropic(d) => d.pool(),
-            DbHandle::Chatgpt(d) => d.pool(),
-            DbHandle::Slack(d) => d.pool(),
-            DbHandle::Github(d) => d.pool(),
-            DbHandle::Gitlab(d) => d.pool(),
-            DbHandle::Notion(d) => d.pool(),
-            DbHandle::Beeper(d) => d.pool(),
-            DbHandle::Carddav(d) => d.pool(),
-            DbHandle::Linkedin(d) => d.pool(),
-            DbHandle::GoogleTakeout(d) => d.pool(),
-            DbHandle::Yolink(d) => d.pool(),
-            DbHandle::Signal(d) => d.pool(),
-            DbHandle::WhatsApp(d) => d.pool(),
-            DbHandle::SmsBackupRestore(d) => d.pool(),
-        }
-    }
-
-    /// Attach a JSONL event tape to the inner `RawDb`. Today only the
-    /// slack provider's `RawDb` supports this; the rest are no-ops
-    /// until they grow the same hook (see `docs/dev/data_architecture_ingestion.md`
-    /// § "Wire-event tape (JSONL)").
-    fn attach_event_tape(&mut self, tape: Arc<frankweiler_etl::event_tape::EventTape>) {
-        match self {
-            DbHandle::Slack(d) => d.attach_event_tape(tape),
-            _ => {
-                // Other providers: tape not wired through yet.
-            }
-        }
-    }
-}
-
-/// Open the per-provider `RawDb` at `path`. Dispatched on the kind so
-/// each provider's DDL (and table layout) gets applied. The returned
-/// handle owns the writer lock for the file until it (and every clone
-/// of its pool) is dropped — see `doltlite_raw::open` for why we pin
-/// `max_connections=1`.
-///
-/// Returns `Ok(None)` for file-tree-backed kinds (e.g. Perseus), which
-/// have no doltlite_db to open and no pool to register.
-async fn open_extract_db(kind: &ExtractKind, path: &Path) -> Result<Option<DbHandle>> {
-    Ok(Some(match kind {
-        ExtractKind::Anthropic { .. } => {
-            DbHandle::Anthropic(frankweiler_etl_anthropic::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Chatgpt { .. } => {
-            DbHandle::Chatgpt(frankweiler_etl_chatgpt::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Slack { .. } => {
-            DbHandle::Slack(frankweiler_etl_slack::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Github { .. } => {
-            DbHandle::Github(frankweiler_etl_github::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Gitlab { .. } => {
-            DbHandle::Gitlab(frankweiler_etl_gitlab::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Notion { .. } => {
-            DbHandle::Notion(frankweiler_etl_notion::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Beeper { .. } => {
-            DbHandle::Beeper(frankweiler_etl_beeper::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Carddav { .. } | ExtractKind::CarddavFile { .. } => {
-            DbHandle::Carddav(frankweiler_etl_contacts::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Linkedin { .. } => {
-            DbHandle::Linkedin(frankweiler_etl_linkedin::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::GoogleTakeout { .. } => DbHandle::GoogleTakeout(
-            frankweiler_etl_google_takeout::extract::RawDb::open(path).await?,
-        ),
-        ExtractKind::Yolink { .. } => {
-            DbHandle::Yolink(frankweiler_etl_yolink::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::Signal { .. } => {
-            DbHandle::Signal(frankweiler_etl_signal::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::WhatsApp { .. } => {
-            DbHandle::WhatsApp(frankweiler_etl_whatsapp::extract::RawDb::open(path).await?)
-        }
-        ExtractKind::SmsBackupRestore { .. } => DbHandle::SmsBackupRestore(
-            frankweiler_etl_sms_backup_restore::extract::RawDb::open(path).await?,
-        ),
-        // File-tree-backed: no doltlite to open.
-        ExtractKind::Perseus { .. } => return Ok(None),
-    }))
-}
-
-enum ExtractKind {
-    Anthropic {
-        sync: ClaudeApiSync,
-    },
-    Chatgpt {
-        sync: ChatgptApiSync,
-    },
-    Slack {
-        sync: SlackApiSync,
-        blob_size_limit_bytes: Option<u64>,
-    },
-    Github {
-        sync: GithubApiSync,
-    },
-    Gitlab {
-        sync: GitlabApiSync,
-    },
-    Notion {
-        sync: NotionApiSync,
-        playback_root: Option<PathBuf>,
-    },
-    Beeper {
-        sync: BeeperSync,
-    },
-    Carddav {
-        sync: CarddavSync,
-    },
-    /// File-tree vCard walker — the `sync:`-less carddav path. Reads
-    /// `.vcf` files under `input_path` and writes them into the raw
-    /// doltlite store using the same row shape CardDAV produces, so
-    /// translate has one input contract regardless of source.
-    CarddavFile {
-        input_path: PathBuf,
-        account_id_override: Option<String>,
-    },
-    /// LinkedIn export directory walker. `input_path` is the unzipped
-    /// export full of CSVs; the raw doltlite store lives at
-    /// `<data_root>/raw/<name>` like the other file-backed providers.
-    Linkedin {
-        input_path: PathBuf,
-        fetch_photos: bool,
-    },
-    /// Google Takeout export directory walker. `input_path` is the
-    /// unzipped Takeout root; `sync` selects which feeds to ingest.
-    GoogleTakeout {
-        input_path: PathBuf,
-        sync: frankweiler_etl_google_takeout::extract::SyncFlags,
-    },
-    Perseus {
-        sync: PerseusSync,
-    },
-    // Email (Jmap / EmailMbox) is migrated to the Program-A `DataProcessor`
-    // path — see `email_processor_plan` — so it has no `ExtractKind` variant.
-    Yolink {
-        sync: YolinkSync,
-    },
-    Signal {
-        sync: SignalSync,
-        snapshot_root: PathBuf,
-    },
-    WhatsApp {
-        sync: WhatsAppSync,
-        backup_dir: PathBuf,
-    },
-    /// "SMS Backup & Restore" export directory walker. `input_path` is
-    /// the directory holding `sms-*.xml` / `calls-*.xml`; the raw
-    /// doltlite store lands at `<data_root>/raw/<name>` like the other
-    /// file-backed providers.
-    SmsBackupRestore {
-        input_path: PathBuf,
-    },
-}
-
-/// Build the email source's extract [`ExtractPlan`] on the Program-A
-/// `DataProcessor` path. The provider owns its config: we re-parse the
-/// email-specific slice straight from the source's serialized stanza (the same
-/// round-trip the render registry uses), so the orchestrator names no email
-/// config fields and builds no `ExtractKind`. The plan's `processors` are
-/// email's extract processors; they own the store (open/commit/checkpoint).
-fn email_processor_plan(
+/// Wrap a source's extract processors in an [`ExtractPlan`] carrying the common
+/// per-source machinery (progress, metrics, diagnostics). The store itself —
+/// pool, DDL, commit, interrupt `Checkpoint` — is owned by the processors.
+fn extract_plan_from_processors(
     src: &SourceConfig,
     cfg: &Config,
     now: &str,
     control: &frankweiler_etl::control::ExtractControl,
-) -> Result<ExtractPlan> {
-    let name = src.name().to_string();
-    let type_str = src.type_str();
-    let out_dir = src.resolved_raw_path(&cfg.data_root);
-    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
-    let config: frankweiler_etl_email_config::EmailConfig =
-        serde_yaml::from_value(stanza).context("parse email config")?;
-    let source_plan =
-        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
-            name: name.clone(),
-            raw_path: out_dir.clone(),
-            input_path: src.resolved_input_path(&cfg.data_root),
-            config,
-            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
-        })?;
-    Ok(ExtractPlan {
-        name,
-        type_str,
-        out_dir,
+    processors: Vec<Box<dyn frankweiler_etl::processor::DataProcessor>>,
+) -> ExtractPlan {
+    ExtractPlan {
+        name: src.name().to_string(),
+        type_str: src.type_str(),
+        out_dir: src.resolved_raw_path(&cfg.data_root),
         now: now.to_string(),
         progress: Progress::noop(),
-        kind: None,
-        processors: source_plan.extract,
+        processors,
         // Placeholder; `run_extract_phase` swaps in the shared sink from
         // `CtrlcState` before the processors run.
         checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
         control: control.clone(),
-        db: None,
-        // Email never consumed the wire-event tape (only slack does), so
-        // there's nothing to attach.
-        event_tape: None,
         metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
         extract_params: src.resolved_shared(cfg).extract_params,
         diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
-    })
+    }
 }
 
 impl ExtractPlan {
@@ -1694,159 +1506,11 @@ impl ExtractPlan {
         if !src.is_managed() {
             return None;
         }
-        // Program A pilot: email is migrated to the `DataProcessor` path and
-        // builds its own processors (owning its store). The remaining 12
-        // providers stay on the `ExtractKind` dispatch below.
-        if matches!(src, SourceConfig::Email { .. }) {
-            return Some(email_processor_plan(src, cfg, now, control));
-        }
-        let name = src.name().to_string();
-        let type_str = src.type_str();
-        // Where we store our raw version — one resolver for both extract
-        // (write, here) and render (read), overridable per source via
-        // `raw_path:`. File-backed sources read their *input* (the
-        // export) from `resolved_input_path` separately, below.
-        let out_dir = src.resolved_raw_path(&cfg.data_root);
-        let kind = match src {
-            SourceConfig::ClaudeApi { sync, .. } => ExtractKind::Anthropic {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::ChatgptApi { sync, .. } => ExtractKind::Chatgpt {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::SlackApi { sync, .. } => ExtractKind::Slack {
-                sync: sync.clone().unwrap_or_default(),
-                blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
-            },
-            SourceConfig::GithubApi { sync, .. } => ExtractKind::Github {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::GitlabApi { sync, .. } => ExtractKind::Gitlab {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::NotionApi { sync, .. } => ExtractKind::Notion {
-                sync: sync.clone().unwrap_or_default(),
-                playback_root: playback_root.map(|p| p.to_path_buf()),
-            },
-            SourceConfig::Beeper { sync, .. } => ExtractKind::Beeper {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::Carddav { sync, .. } => match sync.clone() {
-                Some(sync) => ExtractKind::Carddav { sync },
-                None => {
-                    // No `sync:` block — file-tree mode. `input_path:`
-                    // points at the user's .vcf file (or a directory of
-                    // them); we write our raw store to `out_dir`.
-                    ExtractKind::CarddavFile {
-                        input_path: src.resolved_input_path(&cfg.data_root),
-                        account_id_override: None,
-                    }
-                }
-            },
-            SourceConfig::Linkedin { fetch_photos, .. } => {
-                // File-backed: `input_path:` points at the user's export
-                // directory; we write our raw store to `out_dir`.
-                ExtractKind::Linkedin {
-                    input_path: src.resolved_input_path(&cfg.data_root),
-                    fetch_photos: *fetch_photos,
-                }
-            }
-            SourceConfig::SmsBackupRestore { .. } => {
-                // File-backed: `input_path:` points at the directory of
-                // sms-*.xml / calls-*.xml; we write our raw store to
-                // `out_dir`.
-                ExtractKind::SmsBackupRestore {
-                    input_path: src.resolved_input_path(&cfg.data_root),
-                }
-            }
-            SourceConfig::GoogleTakeout { sync, .. } => {
-                // File-backed: `input_path:` points at the unzipped
-                // Takeout root; we write our raw store to `out_dir`.
-                let s = sync.clone().unwrap_or_default();
-                let flags = frankweiler_etl_google_takeout::extract::SyncFlags {
-                    maps_reviews: s.maps_reviews,
-                    maps_saved_places: s.maps_saved_places,
-                    maps_photos: s.maps_photos,
-                    youtube_watch_history: s.youtube_watch_history,
-                    youtube_subscriptions: s.youtube_subscriptions,
-                    google_chat: s.google_chat,
-                    gemini_apps: s.gemini_apps,
-                    google_voice: s.google_voice,
-                    google_voice_include_spam: s.google_voice_include_spam,
-                };
-                ExtractKind::GoogleTakeout {
-                    input_path: src.resolved_input_path(&cfg.data_root),
-                    sync: flags,
-                }
-            }
-            SourceConfig::Perseus { sync, .. } => ExtractKind::Perseus {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::Yolink { sync, .. } => ExtractKind::Yolink {
-                sync: sync.clone().unwrap_or_default(),
-            },
-            SourceConfig::SignalBackup { sync, .. } => {
-                let sync = sync.clone().ok_or_else(|| {
-                    anyhow::anyhow!("signal_backup source {name} missing sync.snapshot_dir")
-                });
-                match sync {
-                    Ok(sync) => {
-                        let snapshot_root = sync.snapshot_dir.clone();
-                        ExtractKind::Signal {
-                            sync,
-                            snapshot_root,
-                        }
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
-            }
-            SourceConfig::WhatsAppBackup { sync, .. } => {
-                let sync = sync.clone().ok_or_else(|| {
-                    anyhow::anyhow!("whatsapp_backup source {name} missing sync.backup_dir")
-                });
-                match sync {
-                    Ok(sync) => {
-                        let backup_dir = sync.backup_dir.clone();
-                        ExtractKind::WhatsApp { sync, backup_dir }
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
-            }
-            SourceConfig::ClaudeExport { .. } => return None,
-            // Email is handled by the `DataProcessor` path (early return at
-            // the top of `for_source`); it never reaches this match.
-            SourceConfig::Email { .. } => {
-                unreachable!("email is migrated to the DataProcessor path")
-            }
-        };
-        // Opt-out: tape is on unless the source (or the global) explicitly
-        // sets `event_tape: { enabled: false }`. None → default → enabled.
-        let event_tape = src
-            .resolved_shared(cfg)
-            .event_tape
-            .unwrap_or_default()
-            .enabled
-            .then(|| {
-                Arc::new(frankweiler_etl::event_tape::EventTape::new(
-                    frankweiler_etl::raw_layout::events_dir(&out_dir),
-                ))
-            });
-        Some(Ok(Self {
-            name,
-            type_str,
-            out_dir,
-            now: now.to_string(),
-            progress: Progress::noop(),
-            kind: Some(kind),
-            processors: Vec::new(),
-            checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
-            control: control.clone(),
-            db: None,
-            event_tape,
-            metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
-            extract_params: src.resolved_shared(cfg).extract_params,
-            diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
-        }))
+        // Every provider builds its own `DataProcessor`s (owning their store)
+        // via `build_source_plan`; there is no `ExtractKind` path any more.
+        build_source_plan(src, cfg, playback_root).map(|res| {
+            res.map(|sp| extract_plan_from_processors(src, cfg, now, control, sp.extract))
+        })
     }
 
     /// Returns a one-line per-source summary on success. Provider-specific
@@ -1872,587 +1536,10 @@ impl ExtractPlan {
             diagnostics,
             frankweiler_etl::retry::scope(
                 guard,
-                frankweiler_etl::extract_metrics::scope(metrics, self.run_inner()),
+                frankweiler_etl::extract_metrics::scope(metrics, self.run_processors()),
             ),
         )
         .await
-    }
-
-    async fn run_inner(self) -> Result<String> {
-        // Program-A processor path (email): the source owns its store, so
-        // there is no orchestrator pool, no `(ExtractKind, DbHandle)` match,
-        // and no orchestrator commit. Run the processors and return.
-        if !self.processors.is_empty() {
-            return self.run_processors().await;
-        }
-        let progress = self.progress.clone();
-        let name = self.name.clone();
-        let control = self.control.clone();
-        // Pre-open phase in `run_extract_phase` populates `self.db`
-        // for every doltlite-backed kind; file-tree-backed kinds
-        // (Perseus) legitimately leave it `None`. The pool we capture
-        // here is used for the post-extract commit and the
-        // deterministic `pool.close().await` below — both no-op when
-        // there's no pool.
-        let pool = self.db.as_ref().map(|d| d.pool().clone());
-        let kind = self
-            .kind
-            .expect("non-processor extract plan must carry an ExtractKind");
-        let result: Result<String> = match (kind, self.db) {
-            (ExtractKind::Anthropic { sync }, Some(DbHandle::Anthropic(db))) => {
-                frankweiler_etl_anthropic::extract::fetch(
-                    frankweiler_etl_anthropic::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        // Auto-resolve: users.json (from the bulk export)
-                        // is expected to live alongside the source's
-                        // input_path. In playback mode the genrule
-                        // pre-seeds it there.
-                        export_dir: Some(self.out_dir.clone()),
-                        overlap: sync
-                            .refresh_most_recent_n_chat_count
-                            .map(|v| v as usize)
-                            .unwrap_or(0),
-                        sleep_between: Duration::ZERO,
-                        conv_uuids: sync.conv_uuids.clone(),
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={} \
-                         forbidden_retry_attempts={} forbidden_retry_recoveries={}",
-                        s.fetched,
-                        s.skipped,
-                        s.errors,
-                        s.forbidden_orgs,
-                        s.total,
-                        s.requests,
-                        s.forbidden_retry_attempts,
-                        s.forbidden_retry_recoveries,
-                    )
-                })
-            }
-            (ExtractKind::Chatgpt { sync }, Some(DbHandle::Chatgpt(db))) => {
-                frankweiler_etl_chatgpt::extract::fetch(
-                    frankweiler_etl_chatgpt::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        max_pages: sync.max_pages.map(|v| v as usize),
-                        limit: sync.limit.map(|v| v as usize),
-                        sleep_between: Duration::ZERO,
-                        conv_uuids: sync.conv_uuids.clone(),
-                        fetched_at: Some(self.now.clone()),
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "fetched={} skipped={} errors={} listing={} requests={}",
-                        s.fetched, s.skipped, s.errors, s.listing, s.requests,
-                    )
-                })
-            }
-            (
-                ExtractKind::Slack {
-                    sync,
-                    blob_size_limit_bytes,
-                },
-                Some(DbHandle::Slack(db)),
-            ) => frankweiler_etl_slack::extract::fetch(
-                frankweiler_etl_slack::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    channels: sync.channels.clone(),
-                    since: sync
-                        .since
-                        .clone()
-                        .unwrap_or_else(|| frankweiler_etl_slack::extract::DEFAULT_SINCE.into()),
-                    refresh_window_days: sync.refresh_window_days.unwrap_or(0),
-                    members_only: !sync.all_channels && sync.channels.is_none(),
-                    media: sync.media,
-                    blob_size_limit_bytes,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                let media = s
-                    .media
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("msgs={} replies={} media[{}]", s.messages, s.replies, media)
-            }),
-            (ExtractKind::Github { sync }, Some(DbHandle::Github(db))) => {
-                let targets = sync
-                    .pull_requests
-                    .iter()
-                    .map(|s| frankweiler_etl_github::extract::parse_pr_ref(s))
-                    .collect::<Result<Vec<_>>>()
-                    .context("parse github pull_requests refs")?;
-                frankweiler_etl_github::extract::fetch(
-                    frankweiler_etl_github::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        // Same fix as gitlab below: don't force full_sync,
-                        // so discovery narrows via saved `sync_scope_state`.
-                        // Unlike gitlab, github's per-PR loop has no skip
-                        // optimization yet, so every discovered PR still
-                        // gets four API calls — but narrowing keeps the
-                        // discovered set small to begin with.
-                        refresh_window_days: sync
-                            .refresh_window_days
-                            .map(|v| v.max(0) as u32)
-                            .unwrap_or(0),
-                        max_prs: sync.max_prs.map(|v| v as usize),
-                        targets,
-                        sleep_between: Duration::ZERO,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={})",
-                        s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments,
-                    )
-                })
-            }
-            (ExtractKind::Gitlab { sync }, Some(DbHandle::Gitlab(db))) => {
-                let targets = sync
-                    .merge_requests
-                    .iter()
-                    .map(|s| frankweiler_etl_gitlab::extract::parse_mr_ref(s))
-                    .collect::<Result<Vec<_>>>()
-                    .context("parse gitlab merge_requests refs")?;
-                frankweiler_etl_gitlab::extract::fetch(
-                    frankweiler_etl_gitlab::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        // full_sync stays false (FetchOptions default) so the
-                        // gitlab provider honors saved `sync_scope_state` and
-                        // narrows discovery via `updated_after`. The previous
-                        // unconditional `true` here disabled the entire
-                        // incremental path — every run re-discovered and
-                        // re-fetched every MR in the user's scope. The
-                        // `--reset-and-redownload` flag still forces a clean
-                        // re-pull via `db.reset()` when actually needed.
-                        refresh_window_days: sync
-                            .refresh_window_days
-                            .map(|v| v.max(0) as u32)
-                            .unwrap_or(0),
-                        max_mrs: sync.max_mrs.map(|v| v as usize),
-                        targets,
-                        sleep_between: Duration::ZERO,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "mrs(new={} skipped_unchanged={}) discussions(new={}) requests={}",
-                        s.new_mrs, s.skipped_unchanged_mrs, s.new_discussions, s.requests,
-                    )
-                })
-            }
-            (ExtractKind::Beeper { sync }, Some(DbHandle::Beeper(db))) => {
-                frankweiler_etl_beeper::extract::fetch(
-                    frankweiler_etl_beeper::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        sources: sync.sources.clone(),
-                        beeper_data_dir: sync.beeper_data_dir.clone(),
-                        media: sync.media,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                    "rooms={} users={} events={} blobs={} blob_errors={} enriched={} orphaned={}",
-                    s.rooms,
-                    s.users,
-                    s.events,
-                    s.blobs,
-                    s.blob_errors,
-                    s.events_enriched,
-                    s.events_orphaned,
-                )
-                })
-            }
-            (ExtractKind::Carddav { sync }, Some(DbHandle::Carddav(db))) => {
-                frankweiler_etl_contacts::extract::fetch(
-                    frankweiler_etl_contacts::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        server_url: sync.server_url.clone(),
-                        addressbooks: sync.addressbooks.clone(),
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "addressbooks={} new={} updated={} deleted={} errors={} requests={}",
-                        s.addressbooks,
-                        s.contacts_new,
-                        s.contacts_updated,
-                        s.contacts_deleted,
-                        s.errors,
-                        s.requests,
-                    )
-                })
-            }
-            (
-                ExtractKind::CarddavFile {
-                    input_path,
-                    account_id_override,
-                },
-                Some(DbHandle::Carddav(db)),
-            ) => frankweiler_etl_contacts::extract::vcf_dir::fetch(
-                frankweiler_etl_contacts::extract::vcf_dir::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    input_path,
-                    account_id_override,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "addressbooks={} new={} updated={} files_skipped={} errors={}",
-                    s.addressbooks, s.contacts_new, s.contacts_updated, s.files_skipped, s.errors,
-                )
-            }),
-            (
-                ExtractKind::Linkedin {
-                    input_path,
-                    fetch_photos,
-                },
-                Some(DbHandle::Linkedin(db)),
-            ) => {
-                frankweiler_etl_linkedin::extract::fetch(
-                    frankweiler_etl_linkedin::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        input_path,
-                        fetch_photos,
-                        // Piggyback the shared give-up knob: stop the photo
-                        // sweep after this many consecutive failures.
-                        photo_max_consecutive_failures: self
-                            .extract_params
-                            .max_sequential_failures(),
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "files={} rows={} parse_errors={}",
-                        s.files, s.rows, s.parse_errors,
-                    )
-                })
-            }
-            (
-                ExtractKind::SmsBackupRestore { input_path },
-                Some(DbHandle::SmsBackupRestore(db)),
-            ) => frankweiler_etl_sms_backup_restore::extract::fetch(
-                frankweiler_etl_sms_backup_restore::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    input_path,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
-                    s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
-                )
-            }),
-            (
-                ExtractKind::GoogleTakeout { input_path, sync },
-                Some(DbHandle::GoogleTakeout(db)),
-            ) => frankweiler_etl_google_takeout::extract::fetch(
-                frankweiler_etl_google_takeout::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    input_path,
-                    sync,
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "maps(reviews={} saved={} photos={}) youtube(watch={} subs={}) \
-                         chat(groups={} users={} messages={}) gemini(activity={}) \
-                         blobs={} parse_errors={}",
-                    s.maps_reviews,
-                    s.maps_saved_places,
-                    s.maps_photos,
-                    s.youtube_watch_history,
-                    s.youtube_subscriptions,
-                    s.chat_groups,
-                    s.chat_users,
-                    s.chat_messages,
-                    s.gemini_activity,
-                    s.blobs_stored,
-                    s.parse_errors,
-                )
-            }),
-            // Perseus is file-tree-backed (raw XML files on disk), not
-            // doltlite — so it has no `DbHandle` and skips both the
-            // pre-open and the post-extract dolt_commit. The pre-open
-            // phase in `run_extract_phase` leaves `plan.db == None`
-            // for this kind.
-            (ExtractKind::Perseus { sync }, _) => frankweiler_etl_perseus::extract::fetch(
-                frankweiler_etl_perseus::extract::FetchOptions {
-                    out_dir: self.out_dir.clone(),
-                    files: sync.files.clone(),
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "fetched={} skipped={} bytes={} requests={}",
-                    s.fetched, s.skipped, s.bytes, s.requests,
-                )
-            }),
-            (ExtractKind::Yolink { sync }, Some(DbHandle::Yolink(db))) => {
-                frankweiler_etl_yolink::extract::fetch(
-                    frankweiler_etl_yolink::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        sync: sync.clone(),
-                        progress: progress.clone(),
-                        control: control.clone(),
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "devices={} windows={} readings={} errors={} requests={}",
-                        s.devices, s.windows, s.readings, s.errors, s.requests,
-                    )
-                })
-            }
-            (
-                ExtractKind::Notion {
-                    sync,
-                    playback_root,
-                },
-                Some(DbHandle::Notion(db)),
-            ) => {
-                // Notion has no listing endpoint; in playback mode we
-                // derive seeds by scanning the fixture tree for every
-                // synthesized page response. Outside playback we honor
-                // the configured subtree seeds verbatim.
-                let mut seeds: Vec<String> = sync
-                    .subtrees
-                    .as_ref()
-                    .map(|t| t.pages.clone())
-                    .unwrap_or_default();
-                if let Some(pb) = playback_root.as_ref() {
-                    let derived =
-                        derive_notion_seeds(&pb.join("notion")).context("derive notion seeds")?;
-                    seeds.extend(derived);
-                }
-                seeds.sort();
-                seeds.dedup();
-                frankweiler_etl_notion::extract::fetch(
-                    frankweiler_etl_notion::extract::FetchOptions {
-                        db_path: self.out_dir.clone(),
-                        db: Some(db),
-                        subtree_pages: seeds,
-                        inbox: sync.inbox.as_ref().is_some_and(|i| i.enabled),
-                        inbox_mirror_referenced: sync
-                            .inbox
-                            .as_ref()
-                            .and_then(|i| i.mirror_referenced_pages)
-                            .unwrap_or(true),
-                        space: sync.inbox.as_ref().and_then(|i| i.space.clone()),
-                        sleep_between: Duration::ZERO,
-                        progress: progress.clone(),
-                        control: control.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .map(|s| {
-                    format!(
-                        "pages(new={}/upd={}) blocks(new={}/upd={}) comments(new={}/upd={}) requests(official={}/unofficial={})",
-                        s.new_pages,
-                        s.upd_pages,
-                        s.new_blocks,
-                        s.upd_blocks,
-                        s.new_comments,
-                        s.upd_comments,
-                        s.official_requests,
-                        s.unofficial_requests,
-                    )
-                })
-            }
-            (
-                ExtractKind::Signal {
-                    sync,
-                    snapshot_root,
-                },
-                Some(DbHandle::Signal(db)),
-            ) => frankweiler_etl_signal::extract::fetch(
-                frankweiler_etl_signal::extract::FetchOptions {
-                    db_path: self.out_dir.clone(),
-                    db: Some(db),
-                    snapshot_root,
-                    // Default: `<snapshot_root>/files/XX/<name>` —
-                    // the layout Signal Android produces. Override
-                    // via a future SignalSync knob if it matters.
-                    files_root: None,
-                    aep_env_var: sync.aep_env_var.clone(),
-                    progress: progress.clone(),
-                    control: control.clone(),
-                },
-            )
-            .await
-            .map(|s| {
-                format!(
-                    "recipients={} chats={} chat_items={} media_files={} snapshot={}",
-                    s.recipients, s.chats, s.chat_items, s.media_files, s.snapshot,
-                )
-            }),
-            (ExtractKind::WhatsApp { sync, backup_dir }, Some(DbHandle::WhatsApp(db))) => {
-                let env_var = sync
-                    .key_env_var
-                    .clone()
-                    .unwrap_or_else(|| "WHATSAPP_BACKUP_DECRYPTION_KEY".to_string());
-                let key_hex = std::env::var(&env_var)
-                    .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
-                match key_hex.and_then(|h| frankweiler_whatsapp_backup::decode_hex_key(&h)) {
-                    Ok(root_key) => {
-                        frankweiler_etl_whatsapp::extract::fetch(&backup_dir, &root_key, &db)
-                            .await
-                            .map(|s| {
-                                format!(
-                            "jids={} chats={} messages={} message_text={} message_media={} \
-                             reactions={} media_files={}",
-                            s.jids,
-                            s.chats,
-                            s.messages,
-                            s.message_text,
-                            s.message_media,
-                            s.message_add_on_reaction,
-                            s.media_files,
-                        )
-                            })
-                    }
-                    Err(e) => Err(e),
-                }
-            }
-            // Email (Jmap / EmailMbox) is migrated to the Program-A
-            // `DataProcessor` path (`EmailExtract`), so it no longer appears
-            // in this match.
-            // matching DbHandle variant, so any mismatch here would
-            // be a bug in `open_extract_db`. We don't try to recover.
-            _ => unreachable!("ExtractKind / DbHandle variant mismatch"),
-        };
-        // Remove the per-source bar from the live list rather than
-        // leaving a finished one behind — the orchestrator logs the
-        // metrics-rich INFO line as the bar goes away (see the join
-        // path in `run_extract_phase`).
-        progress.finish_and_clear();
-        // One commit per source at the end of extract, against the
-        // *same* pool the worker just used. No reopen — under doltlite
-        // a second pool against the same file would race the writer's
-        // outstanding session and surface as "database is locked", even
-        // on a clean completion (the SqlitePool drop closes connections
-        // asynchronously, so the file lock can outlive the function
-        // return).
-        //
-        // Best-effort: a commit failure doesn't fail the extract — the
-        // data is still on disk, dolt_log just won't have an entry for
-        // this run. We attach a `; commit=<hash>` suffix to the stats
-        // string on success so the orchestrator's JSON summary carries
-        // the identifier.
-        let commit_outcome: Result<String> = match (&pool, &result) {
-            (Some(pool), Ok(stats)) => {
-                let msg = format!("extract {name}: {stats}");
-                // Timing the commit makes "database is locked" episodes
-                // legible: a 2+s elapsed before failure points at pool
-                // contention rather than dolt internals.
-                tracing::info!(source = %name, "extract commit: starting dolt_commit");
-                let started = std::time::Instant::now();
-                let outcome = frankweiler_etl::doltlite_raw::commit_run(pool, &msg).await;
-                let elapsed_ms = started.elapsed().as_millis() as u64;
-                match outcome {
-                    Ok(Some(h)) => {
-                        tracing::info!(
-                            source = %name,
-                            commit = %h,
-                            elapsed_ms,
-                            "extract commit: done"
-                        );
-                        Ok(format!("{stats} commit={h}"))
-                    }
-                    Ok(None) => {
-                        tracing::info!(
-                            source = %name,
-                            elapsed_ms,
-                            "extract commit: skipped (no dolt extensions)"
-                        );
-                        Ok(stats.clone())
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            source = %name,
-                            elapsed_ms,
-                            error = %format!("{e:#}"),
-                            "extract commit FAILED"
-                        );
-                        Ok(stats.clone())
-                    }
-                }
-            }
-            // File-tree-backed kind (Perseus): no dolt_commit, no
-            // commit hash to append — just pass the stats through.
-            (None, Ok(stats)) => Ok(stats.clone()),
-            // Fetch errored — return whatever string for the
-            // placeholder; the `match result` below replaces it with
-            // the original error.
-            (_, Err(_)) => Ok(String::new()),
-        };
-        // Release the writer's connection deterministically so
-        // downstream phases (translate, load) that re-open the file
-        // through a different code path don't race the still-closing
-        // pool. `pool.close().await` waits for every outstanding
-        // connection to drain. No-op for file-tree-backed kinds.
-        if let Some(pool) = pool {
-            pool.close().await;
-        }
-        match result {
-            Ok(_) => commit_outcome,
-            Err(e) => Err(e),
-        }
     }
 
     /// Run a Program-A processor-based source's extract wave. Each processor
@@ -2486,42 +1573,6 @@ impl ExtractPlan {
     }
 }
 
-/// Walk `<playback>/notion/*.json`, decode each as an `HttpResponse`,
-/// parse the body as JSON, and collect every `id` whose `object` is
-/// `"page"`. Notion's BFS dedupes naturally so over-seeding is safe.
-fn derive_notion_seeds(notion_dir: &Path) -> Result<Vec<String>> {
-    let mut seeds = Vec::new();
-    if !notion_dir.is_dir() {
-        return Ok(seeds);
-    }
-    for entry in
-        fs::read_dir(notion_dir).with_context(|| format!("read_dir {}", notion_dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let resp: HttpResponse = match serde_json::from_slice(&bytes) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let body: serde_json::Value = match serde_json::from_slice(&resp.body) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        if body.get("object").and_then(|v| v.as_str()) == Some("page") {
-            if let Some(id) = body.get("id").and_then(|v| v.as_str()) {
-                seeds.push(id.to_string());
-            }
-        }
-    }
-    seeds.sort();
-    seeds.dedup();
-    Ok(seeds)
-}
-
 // ─────────────────────────────────────────────────────────────────────
 // Render-and-index-md phase
 // ─────────────────────────────────────────────────────────────────────
@@ -2538,76 +1589,44 @@ fn render_and_index_md_source(
     _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
-    // Program A pilot: email's translate wave runs through its
-    // `DataProcessor` (the provider owns its config + render path) instead of
-    // the opaque-stanza render registry. The other 12 stay on `renderer_for`.
-    if src.type_str() == "email" {
-        return render_email_translate(
-            src,
-            cfg,
-            root,
-            progress,
-            prior_fingerprints,
-            on_doc_complete,
-        );
-    }
-    let raw_dir = src.resolved_raw_path(&cfg.data_root);
-    let name = src.name();
-    // The render registry is config-opaque: it dispatches on the `type`
-    // string and parses any knobs out of this stanza itself. We hand it
-    // the source serialized back to YAML; once the config loader carries
-    // raw stanzas natively this round-trip goes away.
-    let stanza = serde_yaml::to_value(src).context("serialize source config stanza")?;
-    let renderer = render_and_index_md::renderer_for(src.type_str(), &stanza)?;
-    status_line!(
-        "[render_and_index_md] {name} ({}): {}",
-        src.type_str(),
-        raw_dir.display()
-    );
-    let ctx = render_and_index_md::RenderCtx {
+    // Every source renders through its translate `DataProcessor`s (the provider
+    // owns its config + render path) — the same `build_source_plan` seam the
+    // extract phase uses, so a provider is wired in exactly one place. (The old
+    // opaque-stanza `renderer_for` registry is gone.)
+    let source_plan =
+        build_source_plan(src, cfg, None).expect("every source type builds a SourcePlan")?;
+    render_processor_translate(
+        src.name(),
+        &source_plan.translate,
         root,
-        name,
-        raw_path: &raw_dir,
         progress,
         prior_fingerprints,
-    };
-    renderer.run(&ctx, on_doc_complete)
+        on_doc_complete,
+    )
 }
 
-/// Run email's translate wave on the Program-A `DataProcessor` path. Builds
-/// the email `SourcePlan` (provider-owned config) and drives its translate
-/// processors, fusing Load through `on_doc_complete` exactly like the render
-/// registry. Called from a `spawn_blocking` thread, so `block_on` is safe.
-fn render_email_translate(
-    src: &SourceConfig,
-    cfg: &Config,
+/// Drive a migrated source's translate wave (its translate `DataProcessor`s),
+/// fusing Load through `on_doc_complete` exactly like the render registry.
+/// Called from a `spawn_blocking` thread.
+fn render_processor_translate(
+    name: &str,
+    processors: &[Box<dyn frankweiler_etl::processor::DataProcessor>],
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
-    let stanza = serde_yaml::to_value(src).context("serialize email source stanza")?;
-    let config: frankweiler_etl_email_config::EmailConfig =
-        serde_yaml::from_value(stanza).context("parse email config")?;
-    let source_plan =
-        frankweiler_etl_email::processor::plan(frankweiler_etl_email::processor::EmailPlanArgs {
-            name: src.name().to_string(),
-            raw_path: src.resolved_raw_path(&cfg.data_root),
-            input_path: src.resolved_input_path(&cfg.data_root),
-            config,
-            blob_size_limit_bytes: src.resolved_shared(cfg).blob_size_limit_bytes,
-        })?;
     // Translate processors don't persist a raw store, so they register no
     // checkpoints and read no extract control; supply throwaway values to
     // satisfy the (extract-shaped) `RunCtx`.
     let checkpoints = frankweiler_etl::processor::CheckpointSink::new();
     let control = frankweiler_etl::control::ExtractControl::default();
     let now = String::new();
-    for proc in &source_plan.translate {
+    for proc in processors {
         // `ctx` reborrows `on_doc_complete` for this iteration and drops at the
         // end of it, returning the unique borrow before the next processor.
         let ctx = frankweiler_etl::processor::RunCtx::for_translate(
-            src.name(),
+            name,
             root,
             &now,
             progress,

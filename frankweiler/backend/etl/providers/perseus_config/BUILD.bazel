@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Schema-only config crate for perseus (Program A goal #1). Bazel-only.
+rust_library(
+    name = "frankweiler_etl_perseus_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_perseus_config",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "perseus_config_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_perseus_config",
+    edition = "2021",
+)

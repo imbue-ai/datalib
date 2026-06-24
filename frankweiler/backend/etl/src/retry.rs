@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use frankweiler_core::config::ExtractParams;
+use crate::extract_params::ExtractParams;
 
 /// Per-source give-up state, accumulated at the shared HTTP chokepoint for
 /// the duration of one source's extract. Cheap to clone behind the `Arc`

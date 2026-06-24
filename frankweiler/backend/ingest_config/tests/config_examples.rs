@@ -11,7 +11,7 @@
 //! `type` plus both input modes for `email` and `carddav`, so this test
 //! doubles as a "did someone add a source without documenting it?" nudge.
 
-use frankweiler_core::config::load_config;
+use frankweiler_ingest_config::load_config;
 
 /// Resolve a `docs/user/config_examples/<name>` file from the test's runfiles
 /// tree (declared as a `data` dep in BUILD.bazel). Mirrors the runfiles

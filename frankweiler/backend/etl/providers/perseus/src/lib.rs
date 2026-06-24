@@ -74,6 +74,7 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 pub mod extract;
+pub mod processor;
 pub mod render_and_index_md;
 
 /// Frozen UUIDv5 seed string. Despite the name carrying `perseus-grc2`,
