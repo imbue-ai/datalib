@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 
 use crate::extract;
@@ -21,13 +21,10 @@ use crate::extract;
 /// Build the SourcePlan: always an extract (file-backed ingest of the export at
 /// `input_path`) plus a translate. The orchestrator only calls `plan().extract`
 /// when the source is managed; the config carries no knobs (sms has none).
-pub fn plan(common: PlanCommon, _config: SmsBackupRestoreConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        input_path,
-        ..
-    } = common;
+pub fn plan(ctx: PlanContext, config: SmsBackupRestoreConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
 
     let mut plan = SourcePlan::new();
     plan.extract.push(Box::new(SmsExtract {

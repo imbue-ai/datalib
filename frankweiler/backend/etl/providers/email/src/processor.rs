@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
@@ -28,15 +28,12 @@ use crate::render_and_index_md::render::OutlinkFormat;
 /// Build email's [`SourcePlan`]: always a translate processor, plus an extract
 /// processor when the source is managed (a `sync:` block, or an `.mbox` at
 /// `input_path`). The provider owns every email-specific decision; the
-/// orchestrator passes only the envelope-level [`PlanCommon`].
-pub fn plan(common: PlanCommon, config: EmailConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        input_path,
-        blob_size_limit_bytes,
-        ..
-    } = common;
+/// orchestrator passes only the envelope-level [`PlanContext`].
+pub fn plan(ctx: PlanContext, config: EmailConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
 
     let outlink = config.outlink_format.map(outlink_format);
     let only_extract_labels = config.only_extract_labels.clone();

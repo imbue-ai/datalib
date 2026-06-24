@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::extract;
@@ -26,8 +26,9 @@ use crate::extract;
 /// (managed). `backup_dir` is required inside `sync:`, so a `sync:` block is
 /// the only thing that distinguishes a managed extract source — there is no
 /// translate-only `whatsapp_backup`; an absent `sync:` is an error.
-pub fn plan(common: PlanCommon, config: WhatsappConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: WhatsappConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
 
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(WhatsappRender {

@@ -71,36 +71,22 @@ impl SourcePlan {
     }
 }
 
-/// The provider-agnostic inputs a `plan()` builder needs, resolved by the
-/// orchestrator from the source envelope. Each provider's `plan(common,
-/// config)` pairs this with its own typed config (which it parses from the
-/// source stanza); everything provider-specific lives in the config, and
-/// everything envelope-level lives here. Built once per source and reused for
-/// both waves.
+/// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part
+/// of its (already-normalized) config: the source's orchestrator-owned identity
+/// and, in synth/playback mode, the fixture root. Everything else a `plan()`
+/// once received separately — the resolved paths, blob cap, event-tape flag,
+/// extract give-up bound — the provider now reads straight from `config.common`
+/// (a resolved [`frankweiler_source_common::SourceCommon`]), since the
+/// orchestrator's `normalize()` resolved it at load. Built once per source.
 #[derive(Debug, Clone)]
-pub struct PlanCommon {
-    /// `sources[].name`.
+pub struct PlanContext {
+    /// `sources[].name` — the source's identity in the orchestrator's list
+    /// (used for processor IDs and labels). Orchestrator-owned; deliberately
+    /// NOT part of any provider's config schema.
     pub name: String,
-    /// Resolved raw-store directory (`resolved_raw_path`) — where a
-    /// store-backed source keeps its `entities.doltlite_db`.
-    pub raw_path: std::path::PathBuf,
-    /// Resolved input path (`resolved_input_path`) — the export a file-backed
-    /// source reads. Equals the default raw dir for pure-API sources.
-    pub input_path: std::path::PathBuf,
-    /// Merged (global ⊕ source) blob size cap. Consumed only by providers that
-    /// download attachments (slack, email); ignored by the rest.
-    pub blob_size_limit_bytes: Option<u64>,
     /// Playback-fixture root, when the orchestrator is in synth/playback mode.
-    /// Only notion consumes it (to derive BFS seeds); ignored by the rest.
+    /// Only notion consumes it (to derive BFS seeds); `None` on the live path.
     pub playback_root: Option<std::path::PathBuf>,
-    /// Whether the wire-event tape is enabled for this source (resolved
-    /// global ⊕ source). Only slack's extract consumes it (the one provider
-    /// whose `RawDb` supports `attach_event_tape`); ignored by the rest.
-    pub event_tape_enabled: bool,
-    /// Resolved give-up bound (`extract_params.max_sequential_failures()`).
-    /// Only linkedin consumes it (to cap its profile-photo sweep); ignored by
-    /// the rest.
-    pub max_sequential_failures: u64,
 }
 
 /// An opaque "persist what you have" hook. A processor that buffers work into

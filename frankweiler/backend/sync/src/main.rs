@@ -728,7 +728,6 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
 
     let prior_fingerprints = Arc::new(prior_fingerprints);
     let prior_cursors = Arc::new(prior_cursors);
-    let cfg_arc = Arc::new(cfg.clone());
     let root_arc: Arc<PathBuf> = Arc::new(root.clone());
     let now_arc: Arc<String> = Arc::new(now.clone());
     // One shared write-serialization lock for every per-source worker.
@@ -1263,48 +1262,42 @@ struct ExtractPlan {
 fn build_source_plan(
     entry: &SourceEntry,
     playback_root: Option<&Path>,
-) -> Option<Result<frankweiler_etl::processor::SourcePlan>> {
-    // The shared envelope is already resolved (defaults folded + paths resolved)
-    // by `Config::normalize()` at load — just project it into `PlanCommon`.
-    let sc = entry.source.common();
-    let common = frankweiler_etl::processor::PlanCommon {
+) -> Result<frankweiler_etl::processor::SourcePlan> {
+    // Config is config, runtime is runtime: the provider reads paths/caps/bounds
+    // straight off its (already-normalized) `config.common`; the orchestrator
+    // only supplies the genuinely-runtime bits — the source's identity and the
+    // playback root. The typed config IS the enum payload (no YAML round-trip),
+    // so we hand each subtree straight to the provider's `plan()`.
+    let ctx = frankweiler_etl::processor::PlanContext {
         name: entry.name.clone(),
-        raw_path: sc.raw_path().to_path_buf(),
-        input_path: sc.input_or_raw_path().to_path_buf(),
-        blob_size_limit_bytes: sc.blob_size_limit_bytes,
         playback_root: playback_root.map(|p| p.to_path_buf()),
-        event_tape_enabled: sc.event_tape_enabled(),
-        max_sequential_failures: sc.extract_params.max_sequential_failures(),
     };
-    // The provider's typed config IS the enum payload now — no YAML round-trip;
-    // hand each subtree straight to the provider's `plan()`.
-    let plan = match &entry.source {
-        SourceConfig::Email(c) => frankweiler_etl_email::processor::plan(common, c.clone()),
+    match &entry.source {
+        SourceConfig::Email(c) => frankweiler_etl_email::processor::plan(ctx, c.clone()),
         SourceConfig::ClaudeApi(c) | SourceConfig::ClaudeExport(c) => {
-            frankweiler_etl_anthropic::processor::plan(common, c.clone())
+            frankweiler_etl_anthropic::processor::plan(ctx, c.clone())
         }
-        SourceConfig::ChatgptApi(c) => frankweiler_etl_chatgpt::processor::plan(common, c.clone()),
-        SourceConfig::GithubApi(c) => frankweiler_etl_github::processor::plan(common, c.clone()),
-        SourceConfig::GitlabApi(c) => frankweiler_etl_gitlab::processor::plan(common, c.clone()),
+        SourceConfig::ChatgptApi(c) => frankweiler_etl_chatgpt::processor::plan(ctx, c.clone()),
+        SourceConfig::GithubApi(c) => frankweiler_etl_github::processor::plan(ctx, c.clone()),
+        SourceConfig::GitlabApi(c) => frankweiler_etl_gitlab::processor::plan(ctx, c.clone()),
         SourceConfig::SmsBackupRestore(c) => {
-            frankweiler_etl_sms_backup_restore::processor::plan(common, c.clone())
+            frankweiler_etl_sms_backup_restore::processor::plan(ctx, c.clone())
         }
         SourceConfig::GoogleTakeout(c) => {
-            frankweiler_etl_google_takeout::processor::plan(common, c.clone())
+            frankweiler_etl_google_takeout::processor::plan(ctx, c.clone())
         }
-        SourceConfig::Carddav(c) => frankweiler_etl_contacts::processor::plan(common, c.clone()),
-        SourceConfig::Beeper(c) => frankweiler_etl_beeper::processor::plan(common, c.clone()),
-        SourceConfig::SignalBackup(c) => frankweiler_etl_signal::processor::plan(common, c.clone()),
-        SourceConfig::Yolink(c) => frankweiler_etl_yolink::processor::plan(common, c.clone()),
-        SourceConfig::SlackApi(c) => frankweiler_etl_slack::processor::plan(common, c.clone()),
-        SourceConfig::Perseus(c) => frankweiler_etl_perseus::processor::plan(common, c.clone()),
-        SourceConfig::Linkedin(c) => frankweiler_etl_linkedin::processor::plan(common, c.clone()),
+        SourceConfig::Carddav(c) => frankweiler_etl_contacts::processor::plan(ctx, c.clone()),
+        SourceConfig::Beeper(c) => frankweiler_etl_beeper::processor::plan(ctx, c.clone()),
+        SourceConfig::SignalBackup(c) => frankweiler_etl_signal::processor::plan(ctx, c.clone()),
+        SourceConfig::Yolink(c) => frankweiler_etl_yolink::processor::plan(ctx, c.clone()),
+        SourceConfig::SlackApi(c) => frankweiler_etl_slack::processor::plan(ctx, c.clone()),
+        SourceConfig::Perseus(c) => frankweiler_etl_perseus::processor::plan(ctx, c.clone()),
+        SourceConfig::Linkedin(c) => frankweiler_etl_linkedin::processor::plan(ctx, c.clone()),
         SourceConfig::WhatsAppBackup(c) => {
-            frankweiler_etl_whatsapp::processor::plan(common, c.clone())
+            frankweiler_etl_whatsapp::processor::plan(ctx, c.clone())
         }
-        SourceConfig::NotionApi(c) => frankweiler_etl_notion::processor::plan(common, c.clone()),
-    };
-    Some(plan)
+        SourceConfig::NotionApi(c) => frankweiler_etl_notion::processor::plan(ctx, c.clone()),
+    }
 }
 
 /// Wrap a source's extract processors in an [`ExtractPlan`] carrying the common
@@ -1347,8 +1340,10 @@ impl ExtractPlan {
         }
         // Every provider builds its own `DataProcessor`s (owning their store)
         // via `build_source_plan`; there is no `ExtractKind` path any more.
-        build_source_plan(entry, playback_root)
-            .map(|res| res.map(|sp| extract_plan_from_processors(entry, now, control, sp.extract)))
+        Some(
+            build_source_plan(entry, playback_root)
+                .map(|sp| extract_plan_from_processors(entry, now, control, sp.extract)),
+        )
     }
 
     /// Returns a one-line per-source summary on success. Provider-specific
@@ -1445,8 +1440,7 @@ fn render_and_index_md_source(
     // owns its config + render path) — the same `build_source_plan` seam the
     // extract phase uses, so a provider is wired in exactly one place. (The old
     // opaque-stanza `renderer_for` registry is gone.)
-    let source_plan =
-        build_source_plan(entry, None).expect("every source type builds a SourcePlan")?;
+    let source_plan = build_source_plan(entry, None)?;
     render_processor_translate(
         entry.name(),
         &source_plan.translate,

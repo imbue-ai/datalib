@@ -9,15 +9,16 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_github_config::{GithubApiSync, GithubConfig};
 
 use crate::extract;
 
 /// Build github's [`SourcePlan`]: always a translate processor; an extract
 /// processor when `sync:` is present (github is managed iff `sync:` present).
-pub fn plan(common: PlanCommon, config: GithubConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: GithubConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(GithubRender {
         id: format!("github/{name}/translate"),

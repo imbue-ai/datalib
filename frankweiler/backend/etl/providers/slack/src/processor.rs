@@ -2,7 +2,7 @@
 //!
 //! Slack is the one provider that consumes the wire-event tape: its extract
 //! processor wires its own `EventTape` onto its `RawDb` (when enabled via the
-//! resolved shared config, surfaced as `PlanCommon::event_tape_enabled`) — so
+//! resolved shared config, surfaced via `config.common.event_tape_enabled()`) — so
 //! the orchestrator no longer needs the `HasEventTape` capability or the
 //! `DbHandle::attach_event_tape` no-op-for-everyone-else hook.
 
@@ -12,19 +12,16 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_slack_config::{SlackApiSync, SlackConfig};
 
 use crate::extract;
 
-pub fn plan(common: PlanCommon, config: SlackConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        blob_size_limit_bytes,
-        event_tape_enabled,
-        ..
-    } = common;
+pub fn plan(ctx: PlanContext, config: SlackConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
+    let event_tape_enabled = config.common.event_tape_enabled();
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(SlackRender {
         id: format!("slack/{name}/translate"),

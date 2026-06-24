@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_beeper_config::{BeeperConfig, BeeperSync};
 
 use crate::extract;
@@ -23,9 +23,10 @@ use crate::extract;
 /// Build beeper's [`SourcePlan`]: always a translate processor (which bakes in
 /// the `period` parsed from config), plus an extract processor when `sync:` is
 /// present (managed). The provider owns the period decision; the orchestrator
-/// passes only the envelope-level [`PlanCommon`].
-pub fn plan(common: PlanCommon, config: BeeperConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+/// passes only the envelope-level [`PlanContext`].
+pub fn plan(ctx: PlanContext, config: BeeperConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
 
     // The render period is parsed from config once, at plan time, and baked
     // into the translate processor. Defaults to month when absent.

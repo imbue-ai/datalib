@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 
 use frankweiler_etl_carddav_config::{CarddavConfig, CarddavSync};
 
@@ -25,14 +25,11 @@ use crate::extract;
 /// extract processor (server mode when `sync:` is present, else file mode
 /// ingesting `.vcf` exports under `input_path`). The provider owns every
 /// carddav-specific decision; the orchestrator passes only the
-/// envelope-level [`PlanCommon`].
-pub fn plan(common: PlanCommon, config: CarddavConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        input_path,
-        ..
-    } = common;
+/// envelope-level [`PlanContext`].
+pub fn plan(ctx: PlanContext, config: CarddavConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
 
     let mut plan = SourcePlan::new();
 

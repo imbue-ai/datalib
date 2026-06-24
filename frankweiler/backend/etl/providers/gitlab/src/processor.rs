@@ -9,15 +9,16 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
 
 use crate::extract;
 
 /// Build the SourcePlan: always a translate processor; an extract processor
 /// when `sync:` is present (managed).
-pub fn plan(common: PlanCommon, config: GitlabConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: GitlabConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(GitlabRender {
         id: format!("gitlab/{name}/translate"),
