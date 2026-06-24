@@ -5,8 +5,9 @@ exports_files(["Cargo.toml"])
 # The orchestrator's config: the app `Config` envelope + the `SourceConfig`
 # discriminated union over `type:`. Relocated out of `frankweiler_core::config`
 # so it sits above the providers (and `http` links it without `core`'s db/repo
-# code). `ExtractParams` lives in `frankweiler_etl` (below the providers) and is
-# re-exported here.
+# code). Issue #41: each `SourceConfig` arm is a newtype over a provider
+# `*-config` crate (config defined once); the shared `SourceCommon`/`Defaults`/
+# `ExtractParams` come from `source_common`.
 rust_library(
     name = "frankweiler_ingest_config",
     srcs = glob(["src/**/*.rs"]),
@@ -15,7 +16,24 @@ rust_library(
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
-        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/anthropic_config:frankweiler_etl_anthropic_config",
+        "//frankweiler/backend/etl/providers/beeper_config:frankweiler_etl_beeper_config",
+        "//frankweiler/backend/etl/providers/carddav_config:frankweiler_etl_carddav_config",
+        "//frankweiler/backend/etl/providers/chatgpt_config:frankweiler_etl_chatgpt_config",
+        "//frankweiler/backend/etl/providers/email_config:frankweiler_etl_email_config",
+        "//frankweiler/backend/etl/providers/github_config:frankweiler_etl_github_config",
+        "//frankweiler/backend/etl/providers/gitlab_config:frankweiler_etl_gitlab_config",
+        "//frankweiler/backend/etl/providers/google_takeout_config:frankweiler_etl_google_takeout_config",
+        "//frankweiler/backend/etl/providers/linkedin_config:frankweiler_etl_linkedin_config",
+        "//frankweiler/backend/etl/providers/notion_config:frankweiler_etl_notion_config",
+        "//frankweiler/backend/etl/providers/perseus_config:frankweiler_etl_perseus_config",
+        "//frankweiler/backend/etl/providers/signal_config:frankweiler_etl_signal_config",
+        "//frankweiler/backend/etl/providers/slack_config:frankweiler_etl_slack_config",
+        "//frankweiler/backend/etl/providers/sms_backup_restore_config:frankweiler_etl_sms_backup_restore_config",
+        "//frankweiler/backend/etl/providers/whatsapp_config:frankweiler_etl_whatsapp_config",
+        "//frankweiler/backend/etl/providers/yolink_config:frankweiler_etl_yolink_config",
+        "//frankweiler/backend/source_common:frankweiler_source_common",
+        "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_yaml",
         "@frankweiler_crates//:thiserror",

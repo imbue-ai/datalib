@@ -1,23 +1,43 @@
 //! Ingest config: the orchestrator's view of `config.yaml` — the app envelope
-//! (`Config`) plus the `SourceConfig` discriminated union over `type:`.
+//! ([`Config`]) plus a [`SourceConfig`] discriminated union over `type:`.
 //!
 //! Relocated out of `frankweiler_core::config` (Program A): it sits *above* the
 //! providers (it names every source `type:`), so `http` can link the config
-//! schema without pulling `core`'s db/repo/search code. The cross-source
-//! extract knob [`ExtractParams`] moved the other way — into the base
-//! `frankweiler_etl` crate, which the shared retry chokepoint consumes below the
-//! providers — and is re-exported here so existing call sites still resolve.
+//! schema without pulling `core`'s db/repo/search code.
 //!
-//! NOTE (follow-up): the per-provider `*Sync` structs below still live here in
-//! parallel with each provider's `*-config` crate. Folding the `SourceConfig`
-//! oneof onto `email_config::EmailConfig` etc. (so each is defined once) is a
-//! clean follow-up; it needs care around serde `flatten` + `deny_unknown_fields`
-//! to keep config parsing byte-identical.
+//! **Compose, don't flatten (issue #41).** Each `type:` arm of [`SourceConfig`]
+//! is a *newtype* over the provider's own `*-config` crate (`SlackConfig`,
+//! `EmailConfig`, …), so every provider's config is defined exactly once, in its
+//! crate. Each provider config *composes* a [`SourceCommon`] (`common:`) for the
+//! shared per-source envelope. `name`/`enabled` stay orchestrator-owned here.
+//!
+//! **One mechanism: [`Config::normalize`].** All cross-node derivation — folding
+//! the global `defaults:` into each source's `common`, and resolving
+//! `raw_path`/`input_path` from `data_root` — happens once, eagerly, at load.
+//! Downstream code receives a fully-resolved, self-contained tree and never
+//! re-derives anything (there are no lazy `resolved_*` accessors).
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub use frankweiler_etl::extract_params::ExtractParams;
+pub use frankweiler_source_common::{Defaults, EventTapeConfig, ExtractParams, SourceCommon};
+
+use frankweiler_etl_anthropic_config::AnthropicConfig;
+use frankweiler_etl_beeper_config::BeeperConfig;
+use frankweiler_etl_carddav_config::CarddavConfig;
+use frankweiler_etl_chatgpt_config::ChatgptConfig;
+use frankweiler_etl_email_config::EmailConfig;
+use frankweiler_etl_github_config::GithubConfig;
+use frankweiler_etl_gitlab_config::GitlabConfig;
+use frankweiler_etl_google_takeout_config::GoogleTakeoutConfig;
+use frankweiler_etl_linkedin_config::LinkedinConfig;
+use frankweiler_etl_notion_config::NotionConfig;
+use frankweiler_etl_perseus_config::PerseusConfig;
+use frankweiler_etl_signal_config::SignalConfig;
+use frankweiler_etl_slack_config::SlackConfig;
+use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
+use frankweiler_etl_whatsapp_config::WhatsappConfig;
+use frankweiler_etl_yolink_config::YolinkConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -30,91 +50,21 @@ pub struct Config {
     pub dolt: DoltConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    /// Knobs that can be set both globally (here) and overridden on any
-    /// individual source. Flattened so YAML stays flat: top-level entries
-    /// like `blob_size_limit_bytes:` sit next to `data_root:`, and the
-    /// same fields on a source entry sit next to `name:` / `type:`.
-    #[serde(flatten, default)]
-    pub shared: SharedConfig,
+    /// Global base values for the propagatable per-source knobs. Pure authoring
+    /// sugar: [`Config::normalize`] folds these into every source's `common` at
+    /// load; DO NOT read after load — consumers use the resolved per-source
+    /// `common`.
     #[serde(default)]
-    pub sources: Vec<SourceConfig>,
-}
-
-/// Settings that have a sensible global default but that any individual
-/// source may want to override. The same struct is `#[serde(flatten)]`-ed
-/// onto both `Config` and `SourceCommon`; resolution merges the two with
-/// the source's value winning. Empty fields fall through to the global.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SharedConfig {
-    /// Skip downloading any blob attachment larger than this many bytes.
-    /// `None` (the default) = no limit. Provider download paths consult
-    /// the size advertised in the source's metadata (e.g. Slack's `size`
-    /// on a file object) before pulling bytes. Attachments whose size is
-    /// not known up front are downloaded normally — there's nothing to
-    /// gate against.
+    pub defaults: Defaults,
     #[serde(default)]
-    pub blob_size_limit_bytes: Option<u64>,
-    /// Append a JSONL line per upsert into
-    /// `<data_root>/raw/<name>/events/<table>.jsonl`. Write-only mirror
-    /// of the raw store, never read by the pipeline. See
-    /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)".
-    #[serde(default)]
-    pub event_tape: Option<EventTapeConfig>,
-    /// Cross-source extract knobs (rate-limit give-up bounds). Settable
-    /// globally and overridable per-source; merged field-by-field. See
-    /// [`ExtractParams`]; consumed by the shared HTTP retry guard
-    /// (`frankweiler_etl::retry`).
-    #[serde(default)]
-    pub extract_params: ExtractParams,
+    pub sources: Vec<SourceEntry>,
 }
 
-// `ExtractParams` now lives in `frankweiler_etl::extract_params` (re-exported at
-// the top of this module) so the base crate's retry chokepoint can consume it
-// below the providers.
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EventTapeConfig {
-    /// Tape is on unless explicitly disabled. See
-    /// `docs/dev/data_architecture_ingestion.md` § "Wire-event tape (JSONL)" — the
-    /// tape is a plain-text mirror of the raw store, intended to be
-    /// always present so a human can `tail -f` the wire payload off
-    /// any source without opening doltlite.
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-impl Default for EventTapeConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
-
-impl SharedConfig {
-    /// Merge `self` (a global default) with a per-source override.
-    /// Source-level `Some(...)` wins; `None` falls through.
-    pub fn merge(&self, source: &SharedConfig) -> SharedConfig {
-        SharedConfig {
-            blob_size_limit_bytes: source.blob_size_limit_bytes.or(self.blob_size_limit_bytes),
-            event_tape: source
-                .event_tape
-                .clone()
-                .or_else(|| self.event_tape.clone()),
-            extract_params: self.extract_params.merge(&source.extract_params),
-        }
-    }
-}
-
-/// Settings for `frankweiler-sync` — the one-shot pipeline that walks
-/// every enabled source's Extract → Translate → Load chain. Outputs land
-/// directly under `Config.data_root` in fixed subdirs (`rendered_md/`,
-/// `dolt_db/`, `qmd/`), so there's no `out:` knob anymore.
+/// Settings for `frankweiler-sync` — the one-shot pipeline that walks every
+/// enabled source's Extract → Translate → Load chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// Run extract AND translate for all enabled sources concurrently.
-    /// The translate phase shares a WAL-mode sqlx pool against the
-    /// index doltlite, so per-doc writes serialize at the SQLite level
-    /// but task scheduling stays non-blocking.
     #[serde(default = "default_true")]
     pub parallel: bool,
 }
@@ -126,801 +76,178 @@ impl Default for SyncConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Sources: one `type:` discriminator. `type` collapses what used to be three
-// fields (`provider`, `kind`, `provenance`) into one — think of `type:` as
-// the name of a constructor and the rest of the source dict as its arguments.
-// Mirrors `SourceConfig` in `src/ingest/config.py`.
+// Sources. A source entry is the orchestrator-owned envelope (`name`/`enabled`)
+// plus a nested `source:` discriminated union over `type:`. `type` collapses
+// what used to be three fields (`provider`, `kind`, `provenance`) into one —
+// think of `type:` as the name of a constructor and the rest of `source:` as
+// its arguments. Mirrors `SourceConfig` in `src/ingest/config.py`.
 // ---------------------------------------------------------------------------
 
+/// One entry of `sources:`. The orchestrator owns `name` (identity in the list)
+/// and `enabled` (run-or-not); everything the provider needs lives under
+/// `source:`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceCommon {
+pub struct SourceEntry {
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Where this source's data comes *from*: the export the extractor
-    /// reads (a `.mbox`, a `.vcf`, an unzipped Takeout root, a LinkedIn
-    /// export dir, …). File-backed sources only — for API sources the
-    /// data arrives off the wire and this is unused. This is NOT where
-    /// we keep our version of the data; that's [`Self::raw_path`].
-    #[serde(default)]
-    pub input_path: Option<PathBuf>,
-    /// Where *we* keep our raw store for this source — the directory
-    /// holding `entities.doltlite_db`, `blobs.doltlite_db`, and the
-    /// `events/` tape. Overridable identically for every source (API or
-    /// file-backed); defaults to `<data_root>/raw/<name>`. Resolved by
-    /// [`SourceConfig::resolved_raw_path`]. Independent of `input_path`.
-    #[serde(default)]
-    pub raw_path: Option<PathBuf>,
-    // Per-source overrides for the global [`SharedConfig`] knobs. Each
-    // field here mirrors one on `SharedConfig`; they're not nested behind
-    // a `shared:` key (and not `#[serde(flatten)]`-ed either, because
-    // `deny_unknown_fields` on the enum variants doesn't compose with
-    // nested flatten in serde). Resolved via `SourceConfig::resolved_shared`.
-    #[serde(default)]
-    pub blob_size_limit_bytes: Option<u64>,
-    #[serde(default)]
-    pub event_tape: Option<EventTapeConfig>,
-    #[serde(default)]
-    pub extract_params: ExtractParams,
+    pub source: SourceConfig,
 }
 
-impl SourceCommon {
-    /// Per-source overrides as a `SharedConfig`, for merging against the
-    /// global. Mirrors the flatten relationship on `Config`.
-    fn shared_override(&self) -> SharedConfig {
-        SharedConfig {
-            blob_size_limit_bytes: self.blob_size_limit_bytes,
-            event_tape: self.event_tape.clone(),
-            extract_params: self.extract_params.clone(),
-        }
+impl SourceEntry {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn type_str(&self) -> &'static str {
+        self.source.type_str()
+    }
+    pub fn is_managed(&self) -> bool {
+        self.source.is_managed()
+    }
+    /// Resolved raw-store directory (valid after [`Config::normalize`]).
+    pub fn raw_path(&self) -> &Path {
+        self.source.common().raw_path()
+    }
+    /// Resolved input path: explicit `input_path` else the raw dir (valid after
+    /// [`Config::normalize`]).
+    pub fn input_path(&self) -> &Path {
+        self.source.common().input_or_raw_path()
     }
 }
 
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ClaudeApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    /// Force-refetch the N most-recently-updated conversations in
-    /// each org on every run, even if the listing's `updated_at`
-    /// matches what we already have on disk. Catches the case where
-    /// upstream adds messages without bumping `updated_at`, and
-    /// keeps the chat you're actively using fresh. Default 0.
-    #[serde(default)]
-    pub refresh_most_recent_n_chat_count: Option<i64>,
-    /// When non-empty, restrict the fetch to exactly these conversation
-    /// UUIDs. Accepts either the bare UUID or a paste-able browser URL
-    /// (`https://claude.ai/chat/<uuid>`); URLs are normalized to the
-    /// trailing path segment. Skips org listing entirely; each UUID is
-    /// looked up across all orgs the account has access to.
-    #[serde(default)]
-    pub conv_uuids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ChatgptApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    #[serde(default)]
-    pub max_pages: Option<i64>,
-    #[serde(default)]
-    pub limit: Option<i64>,
-    #[serde(default)]
-    pub sleep_between: Option<f64>,
-    /// When non-empty, restrict the fetch to exactly these conversation
-    /// IDs. Accepts either the bare id or a paste-able browser URL
-    /// (`https://chatgpt.com/c/<id>`); URLs are normalized to the
-    /// trailing path segment. Skips paginated listing entirely;
-    /// `me.json` is still fetched.
-    #[serde(default)]
-    pub conv_uuids: Vec<String>,
-}
-
-/// Tunables for the Perseus Digital Library provider (TEI editions
-/// rendered into chapters + paragraphs — see `frankweiler_etl_perseus`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct PerseusSync {
-    /// Subpaths within `PerseusDL/canonical-greekLit` at
-    /// `refs/heads/master/data/`. Each entry is fetched verbatim from
-    /// `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/{subpath}`
-    /// and written to `<input_path>/<basename>`. Empty/omitted falls
-    /// back to every published edition/translation of Thucydides'
-    /// Histories plus `__cts__.xml` (see `extract::DEFAULT_FILES`), so a
-    /// bare `sync: {}` block ingests the whole multi-edition corpus.
-    #[serde(default)]
-    pub files: Vec<String>,
-    /// Edition pairs to sentence-align within each section, as
-    /// `[edition_a, edition_b]` tuples of edition ids (the
-    /// `tlg0003.tlg001.<id>.xml` suffix — e.g. `perseus-grc2`,
-    /// `1st1K-eng1`). For each listed pair the translate step loads
-    /// Ancient-Greek-BERT and aligns multi-sentence sections, wrapping
-    /// each aligned edition's sentences in anchor spans and emitting
-    /// `bilingual-alignment` edges between them. This dominates the
-    /// translate runtime, so it defaults to empty (no alignment): every
-    /// edition then renders with section-level anchors only, which is
-    /// fast and good enough for plain reading. Supersedes the old
-    /// `sentence_alignment` boolean.
-    ///
-    /// ```yaml
-    /// alignment_pairs:
-    ///   - [perseus-grc2, perseus-eng6]
-    /// ```
-    #[serde(default)]
-    pub alignment_pairs: Vec<[String; 2]>,
-}
-
-/// Tunables for the CardDAV provider (Apple, Fastmail, Google
-/// contacts — see `frankweiler_etl_contacts`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct CarddavSync {
-    /// Server URL. Discovery walks
-    /// `current-user-principal` → `addressbook-home-set` from here.
-    /// Examples:
-    ///   - `https://contacts.icloud.com/`
-    ///   - `https://carddav.fastmail.com/`
-    ///   - `https://www.googleapis.com/carddav/v1/principals/`
-    pub server_url: String,
-    /// Restrict the run to the named addressbooks (matched against
-    /// each addressbook's `displayname` returned in PROPFIND).
-    /// `None`/missing = sync every addressbook the server lists
-    /// under the principal.
-    #[serde(default)]
-    pub addressbooks: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct SlackApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    #[serde(default)]
-    pub channels: Option<Vec<String>>,
-    #[serde(default)]
-    pub since: Option<String>,
-    #[serde(default)]
-    pub all_channels: bool,
-    #[serde(default = "default_true")]
-    pub media: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct GithubApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    #[serde(default)]
-    pub max_prs: Option<i64>,
-    /// Explicit PR refs to fetch. Each entry is a paste-able reference
-    /// — either `owner/repo#NUM`, `owner/repo/pull/NUM`, or a full
-    /// github.com PR URL. When non-empty, discovery is skipped and only
-    /// these PRs are fetched; mirrors the `conv_uuids` shape used by
-    /// the other providers so URLs paste straight in from the browser.
-    #[serde(default)]
-    pub pull_requests: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct GitlabApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    #[serde(default)]
-    pub max_mrs: Option<i64>,
-    /// Explicit MR refs to fetch. Each entry is a paste-able reference
-    /// — either `namespace/project!IID` or a gitlab.com MR URL. When
-    /// non-empty, discovery is skipped and only these MRs are fetched.
-    #[serde(default)]
-    pub merge_requests: Vec<String>,
-}
-
+/// Discriminated union over the literal `type:` field. Each arm is a *newtype*
+/// over the provider's own `*-config` type, so provider config is defined once.
+/// serde reads `type:`, strips it, and deserializes the remaining keys into the
+/// inner config (which composes `common:` for the shared envelope). No
+/// `flatten` anywhere.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NotionInbox {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default)]
-    pub types: Option<Vec<String>>,
-    #[serde(default)]
-    pub notification_page_size: Option<i64>,
-    #[serde(default)]
-    pub max_notification_pages: Option<i64>,
-    #[serde(default)]
-    pub space: Option<String>,
-    /// When `false`, walk the inbox to discover referenced page IDs (and
-    /// log them) but don't BFS into them. Useful for keeping the inbox
-    /// signal without dragging hundreds of unrelated pages through the
-    /// mirror. Defaults to `true` for back-compat.
-    #[serde(default)]
-    pub mirror_referenced_pages: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct NotionSubtrees {
-    /// Page IDs at the root of each subtree to walk. Accepts bare page
-    /// IDs (dashed or undashed) or paste-able browser URLs
-    /// (`https://www.notion.so/<workspace>/<title>-<hex32>`); URLs are
-    /// reduced to the trailing 32-hex token before being passed through
-    /// `format_uuid` in the notion extractor.
-    #[serde(default)]
-    pub pages: Vec<String>,
-    #[serde(default)]
-    pub max_pages: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct BeeperSync {
-    /// Canonical chat network names to ingest (`"signal"`,
-    /// `"googlechat"`, future: `"slack"`, `"whatsapp"`, …). Empty
-    /// list is an error at fetch time — caller should pick at least
-    /// one explicitly.
-    #[serde(default)]
-    pub sources: Vec<String>,
-    /// Override for Beeper Texts' data dir. Defaults to
-    /// `~/Library/Application Support/BeeperTexts` on macOS.
-    #[serde(default)]
-    pub beeper_data_dir: Option<PathBuf>,
-    /// Copy cached media bytes into the `blobs` table. Off = metadata
-    /// + source URL only.
-    #[serde(default = "default_true")]
-    pub media: bool,
-    /// Period each rendered markdown document covers. One of
-    /// `"month"` (default), `"day"`, `"year"`, or `"all"` (single
-    /// file per conversation). Reactions render in the period of
-    /// the message they target, regardless of when the reaction
-    /// itself landed.
-    #[serde(default)]
-    pub period: Option<String>,
-}
-
-/// Account-row data for the mbox extract path. The sync orchestrator
-/// pipes these fields through to `frankweiler_etl_email::mbox` so the
-/// synthesized `accounts` row matches JMAP's shape (display name,
-/// canonical email address, personal-vs-shared flag).
-///
-/// All fields are optional. Defaults: `account_id` falls back to the
-/// mbox file stem; `display_name` ← `account_id`; `is_personal` ←
-/// `true`. Provided primarily so YAML for an mbox-backed source can
-/// say "this Google Takeout export is for alice@example.com" without
-/// having to encode that info in the file path.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct MboxSync {
-    /// Account id used as the PK in `accounts` and the FK from every
-    /// `emails`/`mailboxes`/`threads` row. Stable; renaming re-keys.
-    #[serde(default)]
-    pub account_id: Option<String>,
-    /// Human-readable label for the account (e.g. "Alice's Gmail").
-    #[serde(default)]
-    pub display_name: Option<String>,
-    /// Canonical email address for the account.
-    #[serde(default)]
-    pub email_address: Option<String>,
-    /// `true` if this is a personal account (the default); `false`
-    /// for a shared inbox / mailing list archive.
-    #[serde(default)]
-    pub is_personal: Option<bool>,
-}
-
-/// Tunables for the email provider. Today this is JMAP-backed
-/// (Fastmail / any RFC 8620 + RFC 8621 server) when `sync:` is
-/// present, and Google Takeout mbox-backed when it's omitted —
-/// both paths live in `frankweiler_etl_jmap`. Named `EmailSync`
-/// rather than `JmapApiSync` because the source variant covers
-/// more than the JMAP API surface.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct EmailSync {
-    /// JMAP server hostname. Session discovered at
-    /// `https://<hostname>/.well-known/jmap`. Examples:
-    ///   - `api.fastmail.com`
-    ///   - `mail.example.com` (any RFC 8620 server)
-    pub hostname: String,
-    /// JMAP account id. Defaults to the session's
-    /// `primaryAccounts['urn:ietf:params:jmap:mail']`.
-    #[serde(default)]
-    pub account_id: Option<String>,
-    /// Force full Email/query enumeration even if an `Email/changes`
-    /// state token is stored. Defaults to false (incremental).
-    #[serde(default)]
-    pub full_resync: bool,
-}
-
-/// How to build a public "open this email in the webmail" link for the
-/// `↗` outlink on each rendered email. The provider that owns the
-/// account decides the URL shape; we only have the standard identifiers
-/// (RFC 822 `Message-ID`, JMAP email/thread ids, mailbox names), so each
-/// variant uses the most robust scheme those allow.
-///
-///   * `gmail` — `https://mail.google.com/mail/u/0/#search/rfc822msgid:<id>`
-///     (uses the `Message-ID`; the opaque `#inbox/FMfcg…` permalink id
-///     isn't reconstructable from a Takeout export, but this search URL
-///     lands on the same message).
-///   * `fastmail` — `https://app.fastmail.com/mail/<mailbox>/<emailId>.<threadId>`
-///     (the `?u=<id>` account hint isn't in our extract data; the link
-///     resolves without it for a logged-in account).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EmailOutlink {
-    Gmail,
-    Fastmail,
-}
-
-/// Tunables for the Yolink provider (per-device CSV downloads from
-/// `us.yosmart.com/download/...` — see `frankweiler_etl_yolink`).
-///
-/// Each device is identified by two opaque 32-hex IDs:
-///
-/// - `family_device_id` — the first path segment of the download URL;
-///   visible in any URL the YoLink/Safehous app generates for this
-///   device and stable over time.
-/// - `device_udid` — the second secret used in the MD5 signing of
-///   the per-window URL (`md5(family_device_id + start_ms + end_ms +
-///   device_udid)`). Same value the official `Home.getDeviceList` API
-///   returns as `deviceUDID`.
-///
-/// REDACT: both values are device-history-read secrets — they let
-/// anyone with the pair pull all CSV history for the device, forever
-/// (no rotation path). Scrub from any committed/public configs.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct YolinkSync {
-    /// Re-fetch overlap (minutes). On resume, the run's start
-    /// cursor is `last_observed - overlap` (so samples that landed
-    /// just past the previous run's tail get a second shot).
-    /// During a run, each fetch covers `window_days + overlap`
-    /// (the trailing edge of one window reaches into the leading
-    /// edge of the next). Both paths dedupe via the readings PK.
-    /// Default 5.
-    #[serde(default)]
-    pub overlap_minutes: Option<i64>,
-    /// Stride (days) between successive window-starts. Each
-    /// in-run cursor lands on `start + n*window_days`, so all
-    /// devices sharing a `start:` hit identical (start_ms, end_ms)
-    /// pairs each run — useful for any future per-window response
-    /// caching, and for keeping the `dolt log` history aligned.
-    /// The actual HTTP request covers `[cursor, cursor + stride +
-    /// overlap]`. Default 7.
-    #[serde(default)]
-    pub window_days: Option<i64>,
-    /// Devices to fetch. Each entry's `name` is the row key in the
-    /// raw DB, so renaming one re-keys its history — keep it stable.
-    #[serde(default)]
-    pub devices: Vec<YolinkDevice>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct YolinkDevice {
-    /// Stable label; becomes the PK in `yolink_devices` and the FK
-    /// from `yolink_readings`. Pick something human-readable
-    /// (`basement_freezer`, `main_fridge`); changing it later
-    /// orphans prior history.
-    pub name: String,
-    /// `temperature_humidity` (Temperature(℃), Humidity(%RH)
-    /// columns) or `watermeter` (Water Meter(GAL), Water
-    /// Consumption(GAL)). Drives the column-header check in the
-    /// CSV parser; also stored verbatim in the `yolink_devices`
-    /// table so what the user typed is what `dolt diff` shows.
-    pub kind: String,
-    /// Earliest timepoint to ever pull, as `YYYY-MM-DD`. First fetch
-    /// walks forward from here in `window_days` chunks. Picked once
-    /// when you start collecting; the watermark in the DB takes over
-    /// after that.
-    pub start: String,
-    /// First URL path segment — the `<32hex>` in
-    /// `https://us.yosmart.com/download/<32hex>/...`. The downloader
-    /// uses this verbatim and also feeds it into the MD5 that signs
-    /// the per-window URL.
-    pub family_device_id: String,
-    /// Per-device UUID returned by the YoLink open API as `deviceUDID`.
-    /// Mixed into the MD5 signature. REDACT before publishing.
-    pub device_udid: String,
-}
-
-/// Signal-Android directory-format backup. The provider walks the
-/// newest `signal-backup-*` subdir under the source's `input_path`,
-/// decrypts it using the AEP read from `$aep_env_var` at extract time,
-/// and UPSERTs frames into a doltlite raw store. No network; no
-/// credentials in this struct — the secret lives in the user's shell
-/// (or .envrc.private).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct SignalSync {
-    /// Directory containing one or more `signal-backup-*` snapshot
-    /// subdirs (Signal Android's "Save backup" target). The newest is
-    /// ingested. Required; the source's `input_path` is reserved for
-    /// the raw doltlite store and defaults to `${data_root}/raw/<name>`.
-    pub snapshot_dir: PathBuf,
-    /// Env var holding the AEP (Account Entropy Pool). Defaults to
-    /// `SIGNAL_BACKUP_PASSPHRASE` when omitted. Overridable so a multi-account
-    /// setup can scope per-account secrets at the shell layer.
-    #[serde(default)]
-    pub aep_env_var: Option<String>,
-    /// Period-bucketing knob for the rendered markdown tree —
-    /// `month` (default), `day`, `year`, or `all`. Shared across
-    /// every chat provider via `frankweiler_etl::periodize::Period`;
-    /// signal accepts the same strings beeper does so a unified
-    /// config can tune both at once.
-    #[serde(default)]
-    pub period: Option<String>,
-}
-
-/// WhatsApp Android crypt15 backup. Points at the `WhatsApp/` directory
-/// the user pulls off their phone (containing `Databases/msgstore.db.crypt15`
-/// and a sibling `Media/` tree of plaintext attachments). The 32-byte
-/// root key is hex-encoded in the env var named by `key_env_var`
-/// (defaults to `WHATSAPP_BACKUP_DECRYPTION_KEY`).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct WhatsAppSync {
-    /// Directory containing `Databases/msgstore.db.crypt15` and the
-    /// `Media/` tree. Required; the source's `input_path` is reserved
-    /// for the raw doltlite store and defaults to
-    /// `${data_root}/raw/<name>`.
-    pub backup_dir: PathBuf,
-    /// Env var holding the 32-byte root key as 64 hex chars. Defaults
-    /// to `WHATSAPP_BACKUP_DECRYPTION_KEY`.
-    #[serde(default)]
-    pub key_env_var: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub struct NotionApiSync {
-    #[serde(default)]
-    pub refresh_window_days: Option<i64>,
-    #[serde(default)]
-    pub inbox: Option<NotionInbox>,
-    #[serde(default)]
-    pub subtrees: Option<NotionSubtrees>,
-}
-
-/// Per-feed opt-in switches for a Google Takeout export. Mirrors
-/// `frankweiler_etl_google_takeout::extract::SyncFlags` (the orchestrator
-/// maps one to the other); defaults are all `false` so a fresh user
-/// enables each feed consciously. Kept here — not imported from the
-/// provider crate — so `frankweiler-core` stays free of provider deps.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(deny_unknown_fields, default)]
-pub struct GoogleTakeoutSync {
-    pub maps_reviews: bool,
-    pub maps_saved_places: bool,
-    pub maps_photos: bool,
-    pub youtube_watch_history: bool,
-    pub youtube_subscriptions: bool,
-    pub google_chat: bool,
-    pub gemini_apps: bool,
-    /// Google Voice (`Voice/` subtree): texts, voicemails, calls, bills.
-    pub google_voice: bool,
-    /// When `google_voice` is on, also process `Voice/Spam/`.
-    pub google_voice_include_spam: bool,
-}
-
-/// Discriminated union over the literal `type:` field. Variant payloads
-/// flatten the common (name/enabled/input_path) fields so the YAML shape
-/// reads `type: <kind>` with the shared fields inline.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceConfig {
-    ClaudeExport {
-        #[serde(flatten)]
-        common: SourceCommon,
-    },
-    ClaudeApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<ClaudeApiSync>,
-    },
-    ChatgptApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<ChatgptApiSync>,
-    },
-    SlackApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<SlackApiSync>,
-    },
-    GithubApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<GithubApiSync>,
-    },
-    GitlabApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<GitlabApiSync>,
-    },
-    NotionApi {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<NotionApiSync>,
-    },
-    /// Email source. `sync:` present → JMAP server (Fastmail etc.);
-    /// `sync:` absent → translate-only mode against an `.mbox` at
-    /// `input_path` (e.g. a Google Takeout export). Both paths
-    /// share `frankweiler_etl_jmap`.
-    Email {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<EmailSync>,
-        /// Account-row config for the mbox path (display name, email
-        /// address, is_personal). Ignored when `sync:` is present
-        /// (JMAP carries that info itself). See [`MboxSync`].
-        #[serde(default)]
-        mbox: Option<MboxSync>,
-        /// Webmail to build each email's `↗` outlink for. Set `gmail`
-        /// for a Google Takeout `.mbox`, `fastmail` for a Fastmail JMAP
-        /// account. Omit for any other server (no outlink). See
-        /// [`EmailOutlink`].
-        #[serde(default)]
-        outlink_format: Option<EmailOutlink>,
-        /// Limit **extraction** to mailboxes whose full label path
-        /// (POSIX-like, e.g. `Work/Projects`) exactly matches one of
-        /// these — nested labels must be listed explicitly. Empty =
-        /// extract every mailbox. Applies to both the JMAP and `.mbox`
-        /// paths; Fastmail forbids `/` in a label so the separator is
-        /// unambiguous. Independent of [`only_render_labels`].
-        #[serde(default)]
-        only_extract_labels: Vec<String>,
-        /// Limit **rendering** to threads with at least one email under
-        /// one of these mailbox label paths (same exact-match,
-        /// POSIX-like semantics as [`only_extract_labels`]). Empty =
-        /// render everything extracted. Separate list, so a giant inbox
-        /// can be extracted in full but rendered down to a subset.
-        #[serde(default)]
-        only_render_labels: Vec<String>,
-    },
-    Beeper {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<BeeperSync>,
-    },
-    Carddav {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<CarddavSync>,
-    },
-    /// LinkedIn data export ("takeout"). Always file-backed — there's no
-    /// API to sync from, so `input_path:` points at the unzipped export
-    /// directory full of CSVs. Extract ingests every CSV generically;
-    /// translate renders the message feeds + connections.
-    Linkedin {
-        #[serde(flatten)]
-        common: SourceCommon,
-        /// Fetch each connection's profile photo (scrape `og:image` from
-        /// their public profile page) into the per-source CAS, once.
-        /// Off by default — it makes outbound web requests to LinkedIn,
-        /// which we don't want implicitly. See the linkedin `photos`
-        /// module for the once-only fetch contract.
-        #[serde(default)]
-        fetch_photos: bool,
-    },
-    /// Google Takeout export. File-backed — `input_path:` points at the
-    /// unzipped Takeout root. The `sync:` block opts into individual
-    /// feeds (maps, youtube, google_chat, gemini, …). Translate renders
-    /// the Google Chat feed.
-    GoogleTakeout {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<GoogleTakeoutSync>,
-    },
-    /// Perseus Digital Library TEI editions. The `sync:` block names
-    /// which TEI files to download from `PerseusDL/canonical-greekLit`
-    /// (or, in translate-only mode with `sync:` omitted, expects the
-    /// files to already be on disk at `input_path`).
-    Perseus {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<PerseusSync>,
-    },
-    /// Yolink time-series sensors (water meter, temperature/humidity
-    /// fridge & freezer sensors). The `sync:` block names a list of
-    /// devices with captured download URLs; the extractor walks each
-    /// device's time-window in forward steps from `start`. No
-    /// translate / render path yet — extract-only.
-    Yolink {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<YolinkSync>,
-    },
-    /// Signal Android directory-format backup. Extract-only for now.
-    SignalBackup {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<SignalSync>,
-    },
-    /// WhatsApp Android crypt15 backup. Extract-only for now —
-    /// translate/render lands in a follow-up. Mirrors a curated
-    /// subset of `msgstore.db` into `wa_*` tables in the raw store.
-    ///
-    /// The explicit `rename` overrides `serde`'s `snake_case` derivation,
-    /// which would otherwise produce `whats_app_backup` from
-    /// `WhatsAppBackup` (because PascalCase "WhatsApp" has two
-    /// capitalized segments).
+    ClaudeExport(AnthropicConfig),
+    ClaudeApi(AnthropicConfig),
+    ChatgptApi(ChatgptConfig),
+    SlackApi(SlackConfig),
+    GithubApi(GithubConfig),
+    GitlabApi(GitlabConfig),
+    NotionApi(NotionConfig),
+    Email(EmailConfig),
+    Beeper(BeeperConfig),
+    Carddav(CarddavConfig),
+    Linkedin(LinkedinConfig),
+    GoogleTakeout(GoogleTakeoutConfig),
+    Perseus(PerseusConfig),
+    Yolink(YolinkConfig),
+    SignalBackup(SignalConfig),
+    /// Explicit `rename` overrides serde's `snake_case`, which would otherwise
+    /// derive `whats_app_backup` from the two capitalized segments of
+    /// `WhatsAppBackup`.
     #[serde(rename = "whatsapp_backup")]
-    WhatsAppBackup {
-        #[serde(flatten)]
-        common: SourceCommon,
-        #[serde(default)]
-        sync: Option<WhatsAppSync>,
-    },
-    /// "SMS Backup & Restore" (Android) export. Always file-backed —
-    /// there's no API, so `input_path:` points at the directory holding
-    /// the app's `sms-*.xml` / `calls-*.xml` files. Extract ingests each
-    /// SMS / MMS / call into its own raw row (MMS attachment bytes go to
-    /// the CAS); translate renders one chat per phone number.
-    SmsBackupRestore {
-        #[serde(flatten)]
-        common: SourceCommon,
-    },
+    WhatsAppBackup(WhatsappConfig),
+    SmsBackupRestore(SmsBackupRestoreConfig),
+}
+
+/// Dispatch an expression over the payload of any variant, binding it to `$c`.
+/// Works because every payload composes a `common: SourceCommon` field and
+/// exposes `validate()`.
+macro_rules! over_payload {
+    ($self:expr, $c:ident => $e:expr) => {
+        match $self {
+            SourceConfig::ClaudeExport($c) | SourceConfig::ClaudeApi($c) => $e,
+            SourceConfig::ChatgptApi($c) => $e,
+            SourceConfig::SlackApi($c) => $e,
+            SourceConfig::GithubApi($c) => $e,
+            SourceConfig::GitlabApi($c) => $e,
+            SourceConfig::NotionApi($c) => $e,
+            SourceConfig::Email($c) => $e,
+            SourceConfig::Beeper($c) => $e,
+            SourceConfig::Carddav($c) => $e,
+            SourceConfig::Linkedin($c) => $e,
+            SourceConfig::GoogleTakeout($c) => $e,
+            SourceConfig::Perseus($c) => $e,
+            SourceConfig::Yolink($c) => $e,
+            SourceConfig::SignalBackup($c) => $e,
+            SourceConfig::WhatsAppBackup($c) => $e,
+            SourceConfig::SmsBackupRestore($c) => $e,
+        }
+    };
 }
 
 impl SourceConfig {
+    /// The shared per-source envelope (`common:`).
     pub fn common(&self) -> &SourceCommon {
-        match self {
-            SourceConfig::ClaudeExport { common }
-            | SourceConfig::ClaudeApi { common, .. }
-            | SourceConfig::ChatgptApi { common, .. }
-            | SourceConfig::SlackApi { common, .. }
-            | SourceConfig::GithubApi { common, .. }
-            | SourceConfig::GitlabApi { common, .. }
-            | SourceConfig::NotionApi { common, .. }
-            | SourceConfig::Email { common, .. }
-            | SourceConfig::Beeper { common, .. }
-            | SourceConfig::Carddav { common, .. }
-            | SourceConfig::Linkedin { common, .. }
-            | SourceConfig::GoogleTakeout { common, .. }
-            | SourceConfig::Perseus { common, .. }
-            | SourceConfig::Yolink { common, .. }
-            | SourceConfig::SignalBackup { common, .. }
-            | SourceConfig::WhatsAppBackup { common, .. }
-            | SourceConfig::SmsBackupRestore { common, .. } => common,
-        }
+        over_payload!(self, c => &c.common)
     }
 
-    pub fn name(&self) -> &str {
-        &self.common().name
+    /// Mutable access to the envelope — used by [`Config::normalize`].
+    pub fn common_mut(&mut self) -> &mut SourceCommon {
+        over_payload!(self, c => &mut c.common)
     }
 
-    pub fn enabled(&self) -> bool {
-        self.common().enabled
+    /// Provider-local validation, delegated to the owning `*-config` crate.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        over_payload!(self, c => c.validate())
     }
 
     /// Wire-format discriminator value (`"slack_api"`, `"claude_export"`, …).
-    /// Matches the `type:` value in YAML.
     pub fn type_str(&self) -> &'static str {
         match self {
-            SourceConfig::ClaudeExport { .. } => "claude_export",
-            SourceConfig::ClaudeApi { .. } => "claude_api",
-            SourceConfig::ChatgptApi { .. } => "chatgpt_api",
-            SourceConfig::SlackApi { .. } => "slack_api",
-            SourceConfig::GithubApi { .. } => "github_api",
-            SourceConfig::GitlabApi { .. } => "gitlab_api",
-            SourceConfig::NotionApi { .. } => "notion_api",
-            SourceConfig::Email { .. } => "email",
-            SourceConfig::Beeper { .. } => "beeper",
-            SourceConfig::Carddav { .. } => "carddav",
-            SourceConfig::Linkedin { .. } => "linkedin",
-            SourceConfig::GoogleTakeout { .. } => "google_takeout",
-            SourceConfig::Perseus { .. } => "perseus",
-            SourceConfig::Yolink { .. } => "yolink",
-            SourceConfig::SignalBackup { .. } => "signal_backup",
-            SourceConfig::WhatsAppBackup { .. } => "whatsapp_backup",
-            SourceConfig::SmsBackupRestore { .. } => "sms_backup_restore",
+            SourceConfig::ClaudeExport(_) => "claude_export",
+            SourceConfig::ClaudeApi(_) => "claude_api",
+            SourceConfig::ChatgptApi(_) => "chatgpt_api",
+            SourceConfig::SlackApi(_) => "slack_api",
+            SourceConfig::GithubApi(_) => "github_api",
+            SourceConfig::GitlabApi(_) => "gitlab_api",
+            SourceConfig::NotionApi(_) => "notion_api",
+            SourceConfig::Email(_) => "email",
+            SourceConfig::Beeper(_) => "beeper",
+            SourceConfig::Carddav(_) => "carddav",
+            SourceConfig::Linkedin(_) => "linkedin",
+            SourceConfig::GoogleTakeout(_) => "google_takeout",
+            SourceConfig::Perseus(_) => "perseus",
+            SourceConfig::Yolink(_) => "yolink",
+            SourceConfig::SignalBackup(_) => "signal_backup",
+            SourceConfig::WhatsAppBackup(_) => "whatsapp_backup",
+            SourceConfig::SmsBackupRestore(_) => "sms_backup_restore",
         }
     }
 
-    /// True when this source has a `sync:` block — i.e. the worker is
-    /// allowed to download into it.
+    /// True when the worker is allowed to download into / build the raw store
+    /// for this source — a `sync:` block, or (for file-backed sources) an
+    /// `input_path:` export on disk. `claude_export` is never managed (it is a
+    /// pure translate-only view of a local export).
     pub fn is_managed(&self) -> bool {
         match self {
-            SourceConfig::ClaudeExport { .. } => false,
-            SourceConfig::ClaudeApi { sync, .. } => sync.is_some(),
-            SourceConfig::ChatgptApi { sync, .. } => sync.is_some(),
-            SourceConfig::SlackApi { sync, .. } => sync.is_some(),
-            SourceConfig::GithubApi { sync, .. } => sync.is_some(),
-            SourceConfig::GitlabApi { sync, .. } => sync.is_some(),
-            SourceConfig::NotionApi { sync, .. } => sync.is_some(),
-            // Email: `sync:` present → JMAP API path; `sync:` absent +
-            // `input_path:` pointing at an mbox → file-backed extract
-            // path. Both are "managed" in that we own the raw doltlite
-            // store. The orchestrator's `ExtractPlan::for_source` decides
-            // which extractor to dispatch.
-            SourceConfig::Email { sync, common, .. } => {
-                sync.is_some() || common.input_path.is_some()
-            }
-            SourceConfig::Beeper { sync, .. } => sync.is_some(),
-            // Carddav: `sync:` present → CardDAV server path; `sync:`
-            // absent + `input_path:` → file-tree walker that ingests
-            // .vcf files into the raw doltlite store. Both write the
-            // same row shape; translate has one input contract.
-            SourceConfig::Carddav { sync, common, .. } => {
-                sync.is_some() || common.input_path.is_some()
-            }
-            // LinkedIn is file-backed only: managed (we own the raw
-            // doltlite store) iff an `input_path:` export dir is set.
-            SourceConfig::Linkedin { common, .. } => common.input_path.is_some(),
-            // Google Takeout is file-backed: managed iff an `input_path:`
-            // (the unzipped Takeout root) is set.
-            SourceConfig::GoogleTakeout { common, .. } => common.input_path.is_some(),
-            SourceConfig::Perseus { sync, .. } => sync.is_some(),
-            SourceConfig::Yolink { sync, .. } => sync.is_some(),
-            SourceConfig::SignalBackup { sync, .. } => sync.is_some(),
-            SourceConfig::WhatsAppBackup { sync, .. } => sync.is_some(),
-            // SMS Backup & Restore is file-backed only: managed (we own
-            // the raw doltlite store) iff an `input_path:` export dir is
-            // set.
-            SourceConfig::SmsBackupRestore { common, .. } => common.input_path.is_some(),
-        }
-    }
-
-    /// Merged view of [`SharedConfig`] for this source: the source's own
-    /// fields win, with `None` falling back to the global at `cfg.shared`.
-    pub fn resolved_shared(&self, cfg: &Config) -> SharedConfig {
-        cfg.shared.merge(&self.common().shared_override())
-    }
-
-    /// Where this source's data comes *from*: the explicit `input_path:`
-    /// (tilde-expanded) if set, else the per-source default
-    /// `<data_root>/raw/<name>`. Meaningful for file-backed sources (the
-    /// export to read); for API sources `input_path:` is unset. This is
-    /// the *source* of the data — see [`Self::resolved_raw_path`] for
-    /// where we *store* our version of it.
-    pub fn resolved_input_path(&self, data_root: &Path) -> PathBuf {
-        if let Some(p) = &self.common().input_path {
-            expand_tilde(&p.display().to_string())
-        } else {
-            data_root.join("raw").join(self.name())
-        }
-    }
-
-    /// Where *we* keep this source's raw store: the explicit `raw_path:`
-    /// (tilde-expanded) if set, else `<data_root>/raw/<name>`. This is
-    /// the directory the extractor writes (`entities.doltlite_db`,
-    /// `blobs.doltlite_db`, `events/`) and the renderer reads — one
-    /// resolver for both sides. Overridable identically for every source,
-    /// independent of where the data came *from* ([`Self::resolved_input_path`]).
-    pub fn resolved_raw_path(&self, data_root: &Path) -> PathBuf {
-        if let Some(p) = &self.common().raw_path {
-            expand_tilde(&p.display().to_string())
-        } else {
-            data_root.join("raw").join(self.name())
+            SourceConfig::ClaudeExport(_) => false,
+            SourceConfig::ClaudeApi(c) => c.sync.is_some(),
+            SourceConfig::ChatgptApi(c) => c.sync.is_some(),
+            SourceConfig::SlackApi(c) => c.sync.is_some(),
+            SourceConfig::GithubApi(c) => c.sync.is_some(),
+            SourceConfig::GitlabApi(c) => c.sync.is_some(),
+            SourceConfig::NotionApi(c) => c.sync.is_some(),
+            // Email/Carddav: `sync:` → live server; else an export at
+            // `input_path` → file-backed mode. Both own the raw store.
+            SourceConfig::Email(c) => c.sync.is_some() || c.common.input_path.is_some(),
+            SourceConfig::Carddav(c) => c.sync.is_some() || c.common.input_path.is_some(),
+            SourceConfig::Beeper(c) => c.sync.is_some(),
+            // File-backed only: managed iff an `input_path:` export is set.
+            SourceConfig::Linkedin(c) => c.common.input_path.is_some(),
+            SourceConfig::GoogleTakeout(c) => c.common.input_path.is_some(),
+            SourceConfig::Perseus(c) => c.sync.is_some(),
+            SourceConfig::Yolink(c) => c.sync.is_some(),
+            SourceConfig::SignalBackup(c) => c.sync.is_some(),
+            SourceConfig::WhatsAppBackup(c) => c.sync.is_some(),
+            SourceConfig::SmsBackupRestore(c) => c.common.input_path.is_some(),
         }
     }
 }
 
 /// Settings for the single doltlite file the backend reads/writes.
-///
-/// doltlite is a SQLite fork; the SQL store is just a file on disk,
-/// `<Config.data_root>/<dolt.db_filename>`. No subprocess, no TCP port,
-/// no auth — the file system is the access boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DoltConfig {
     /// Filename of the doltlite database, relative to `Config.data_root`.
-    /// Defaults to `backend_index.doltlite_db`.
     #[serde(default = "default_dolt_db_filename")]
     pub db_filename: String,
 }
@@ -940,29 +267,20 @@ impl Default for DoltConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmdConfig {
     /// Path to the qmd index file. `${data_root}` is expanded against
-    /// `Config.data_root` after load. Defaults to the canonical location the
-    /// `frankweiler-qmd-indexer` writes to.
+    /// `Config.data_root` after load.
     #[serde(default = "default_qmd_index_path")]
     pub index_path: String,
-    /// npm package version of `@tobilu/qmd` to invoke via `npx`. Must
-    /// match the version the indexer wrote with — the on-disk SQLite
-    /// schema isn't versioned in a way the runner can detect.
+    /// npm package version of `@tobilu/qmd` to invoke via `npx`.
     #[serde(default = "default_qmd_version")]
     pub qmd_version: String,
-    /// qmd collection name passed to `qmd collection add` at index time;
-    /// also forms the `qmd://<collection>/…` URIs the runner reads back.
+    /// qmd collection name; also forms the `qmd://<collection>/…` URIs.
     #[serde(default = "default_qmd_collection")]
     pub collection: String,
-    /// Skip building the qmd index during `frankweiler-sync`. Useful in
-    /// CI environments without Node.js, or when iterating on the ETL
-    /// pipeline and the embedding step is too slow.
+    /// Skip building the qmd index during `frankweiler-sync`.
     #[serde(default)]
     pub skip: bool,
-    /// Directory where `qmd` should cache its ~300MB embedding model.
-    /// Defaults to `~/.cache/qmd/models` (matching qmd's own default),
-    /// so a standalone `qmd` run and the sync runner share one cache.
-    /// The sync runner symlinks this into its scratch workspace so the
-    /// model blob stays outside the data root.
+    /// Directory where `qmd` caches its embedding model. Defaults to
+    /// `~/.cache/qmd/models`.
     #[serde(default)]
     pub models_dir: Option<PathBuf>,
 }
@@ -1012,31 +330,30 @@ pub enum ConfigError {
     Yaml(#[from] serde_yaml::Error),
     #[error("duplicate source names: {0:?}")]
     DuplicateSourceNames(Vec<String>),
-    #[error(
-        "notion_api source {0:?} sync: must enable inbox or list at least one \
-         subtree page (set `inbox.enabled: true` and/or `subtrees.pages: [...]`)"
-    )]
-    NotionSyncEmpty(String),
     #[error("source name must be non-empty")]
     EmptySourceName,
-    #[error("yolink source {0:?} sync: must list at least one device")]
-    YolinkNoDevices(String),
-    #[error("yolink source {0:?} has duplicate device names: {1:?}")]
-    YolinkDuplicateDeviceNames(String, Vec<String>),
-    #[error(
-        "yolink source {0:?} device {1:?}: kind must be 'thsensor' or 'watermeter', got {2:?}"
-    )]
-    YolinkBadDeviceKind(String, String, String),
-    #[error("yolink source {0:?} device {1:?}: start must be YYYY-MM-DD, got {2:?}")]
-    YolinkBadDeviceStart(String, String, String),
-    #[error(
-        "yolink source {0:?} device {1:?}: {2} must be 32 lowercase-hex characters, got {3:?}"
-    )]
-    YolinkBadDeviceHex(String, String, &'static str, String),
+    /// A provider's own `validate()` (delegated to its `*-config` crate)
+    /// rejected the source.
+    #[error("source {0:?}: {1}")]
+    SourceInvalid(String, #[source] anyhow::Error),
 }
 
 impl Config {
-    /// Resolve `${data_root}` and `~` in derived paths after load.
+    /// The single locus of config mechanism: fold the global `defaults:` into
+    /// each source's `common`, then resolve paths from `data_root`. Run once,
+    /// at load, right after deserialize. Afterwards every source is fully
+    /// explicit and self-contained.
+    fn normalize(&mut self) {
+        let data_root = self.data_root.clone();
+        let defaults = self.defaults.clone();
+        for entry in &mut self.sources {
+            let common = entry.source.common_mut();
+            common.fold_defaults(&defaults);
+            common.resolve_paths(&data_root, &entry.name);
+        }
+    }
+
+    /// Resolve `${data_root}` and `~` in the qmd index path after load.
     pub fn resolved_qmd_index(&self) -> PathBuf {
         let s = self
             .qmd
@@ -1050,137 +367,62 @@ impl Config {
         self.data_root.join("rendered_md")
     }
 
-    /// Validate cross-source invariants: non-empty names, unique names, and
-    /// per-source sync constraints (currently just Notion). Called by
-    /// `load_config` after deserialize.
+    /// Validate cross-source invariants (non-empty + unique names) and each
+    /// source's provider-local rules (delegated to its `*-config` crate).
+    /// Called by [`load_config`] after [`Config::normalize`].
     fn validate(&self) -> Result<(), ConfigError> {
         let mut names: Vec<&str> = Vec::with_capacity(self.sources.len());
-        for s in &self.sources {
-            let name = s.name();
-            if name.trim().is_empty() {
+        for entry in &self.sources {
+            let name = entry.name.trim();
+            if name.is_empty() {
                 return Err(ConfigError::EmptySourceName);
             }
-            if let SourceConfig::NotionApi {
-                sync: Some(sync), ..
-            } = s
-            {
-                let inbox_on = sync.inbox.as_ref().is_some_and(|i| i.enabled);
-                let subtrees_on = sync.subtrees.as_ref().is_some_and(|t| !t.pages.is_empty());
-                if !inbox_on && !subtrees_on {
-                    return Err(ConfigError::NotionSyncEmpty(name.into()));
-                }
-            }
-            if let SourceConfig::Yolink {
-                sync: Some(sync), ..
-            } = s
-            {
-                if sync.devices.is_empty() {
-                    return Err(ConfigError::YolinkNoDevices(name.into()));
-                }
-                let mut dev_names: Vec<&str> =
-                    sync.devices.iter().map(|d| d.name.as_str()).collect();
-                dev_names.sort_unstable();
-                let dupes: Vec<String> = dev_names
-                    .windows(2)
-                    .filter(|w| w[0] == w[1])
-                    .map(|w| w[0].to_string())
-                    .collect();
-                if !dupes.is_empty() {
-                    let mut d = dupes;
-                    d.dedup();
-                    return Err(ConfigError::YolinkDuplicateDeviceNames(name.into(), d));
-                }
-                for d in &sync.devices {
-                    match d.kind.as_str() {
-                        "temperature_humidity" | "watermeter" => {}
-                        other => {
-                            return Err(ConfigError::YolinkBadDeviceKind(
-                                name.into(),
-                                d.name.clone(),
-                                other.into(),
-                            ))
-                        }
-                    }
-                    if !is_yyyy_mm_dd(&d.start) {
-                        return Err(ConfigError::YolinkBadDeviceStart(
-                            name.into(),
-                            d.name.clone(),
-                            d.start.clone(),
-                        ));
-                    }
-                    if !is_hex32(&d.family_device_id) {
-                        return Err(ConfigError::YolinkBadDeviceHex(
-                            name.into(),
-                            d.name.clone(),
-                            "family_device_id",
-                            d.family_device_id.clone(),
-                        ));
-                    }
-                    if !is_hex32(&d.device_udid) {
-                        return Err(ConfigError::YolinkBadDeviceHex(
-                            name.into(),
-                            d.name.clone(),
-                            "device_udid",
-                            d.device_udid.clone(),
-                        ));
-                    }
-                }
-            }
+            entry
+                .source
+                .validate()
+                .map_err(|e| ConfigError::SourceInvalid(entry.name.clone(), e))?;
             names.push(name);
         }
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
-        let dupes: Vec<String> = sorted
+        names.sort_unstable();
+        let mut dupes: Vec<String> = names
             .windows(2)
             .filter(|w| w[0] == w[1])
             .map(|w| w[0].to_string())
             .collect();
         if !dupes.is_empty() {
-            let mut d = dupes;
-            d.dedup();
-            return Err(ConfigError::DuplicateSourceNames(d));
+            dupes.dedup();
+            return Err(ConfigError::DuplicateSourceNames(dupes));
         }
         Ok(())
     }
 
-    /// Sources with `enabled: true` (default). Mirrors `Config.enabled_sources`
-    /// in `src/ingest/config.py`.
     /// Enabled sources, optionally narrowed to a single source by name.
     ///
-    /// When `$FRANKWEILER_ONLY_SOURCE` is set and non-empty, only the
-    /// source whose `name:` matches is yielded. The UI-driven worker
-    /// sets this for a per-source "Sync now" so one source's button
-    /// doesn't re-run the whole config; unset (the common CLI case)
-    /// yields every enabled source.
-    pub fn enabled_sources(&self) -> impl Iterator<Item = &SourceConfig> {
+    /// When `$FRANKWEILER_ONLY_SOURCE` is set and non-empty, only the matching
+    /// source is yielded (the UI's per-source "Sync now"); unset yields every
+    /// enabled source.
+    pub fn enabled_sources(&self) -> impl Iterator<Item = &SourceEntry> {
         let only = std::env::var("FRANKWEILER_ONLY_SOURCE")
             .ok()
             .filter(|s| !s.is_empty());
-        self.sources.iter().filter(move |s| {
-            if !s.enabled() {
+        self.sources.iter().filter(move |e| {
+            if !e.enabled {
                 return false;
             }
             match only.as_deref() {
-                Some(name) => s.name() == name,
+                Some(name) => e.name == name,
                 None => true,
             }
         })
     }
 
     /// Absolute path to the single doltlite file this backend reads/writes.
-    ///
-    /// Resolves to `<root>/<dolt.db_filename>`.
     pub fn dolt_db_path(&self) -> PathBuf {
         self.data_root.join(&self.dolt.db_filename)
     }
 }
 
-/// Path to the config file that lives *inside* a data root:
-/// `<root>/config.yaml`. This is what makes a data root self-contained
-/// — the app reads and writes its own config here instead of relying on
-/// a separate `~/.config/frankweiler/config.yaml`. The HTTP backend
-/// prefers this path; [`default_config_path`] remains the fallback for
-/// the standalone CLI.
+/// Path to the config file that lives *inside* a data root: `<root>/config.yaml`.
 pub fn root_config_path(data_root: &Path) -> PathBuf {
     data_root.join("config.yaml")
 }
@@ -1210,30 +452,13 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     let raw = std::fs::read_to_string(p)?;
     let mut cfg: Config = serde_yaml::from_str(&raw)?;
     cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
+    cfg.normalize();
     cfg.validate()?;
     Ok(cfg)
 }
 
-/// Cheap `YYYY-MM-DD` shape check. Doesn't validate that the date
-/// is real (Feb 30 etc.) — the extractor's `NaiveDate::parse_from_str`
-/// catches that and surfaces a richer error at runtime. We just want
-/// to bounce obvious typos at config-load time.
-fn is_yyyy_mm_dd(s: &str) -> bool {
-    let bytes = s.as_bytes();
-    if bytes.len() != 10 {
-        return false;
-    }
-    bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[..4].iter().all(|b| b.is_ascii_digit())
-        && bytes[5..7].iter().all(|b| b.is_ascii_digit())
-        && bytes[8..10].iter().all(|b| b.is_ascii_digit())
-}
-
-fn is_hex32(s: &str) -> bool {
-    s.len() == 32
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+fn default_true() -> bool {
+    true
 }
 
 fn expand_tilde(s: &str) -> PathBuf {
@@ -1270,7 +495,7 @@ mod tests {
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
             sync: SyncConfig::default(),
-            shared: SharedConfig::default(),
+            defaults: Defaults::default(),
             sources: Vec::new(),
         };
         let resolved = cfg.resolved_qmd_index();
@@ -1293,7 +518,7 @@ mod tests {
             backend: BackendConfig::default(),
             dolt: DoltConfig::default(),
             sync: SyncConfig::default(),
-            shared: SharedConfig::default(),
+            defaults: Defaults::default(),
             sources: Vec::new(),
         };
         assert_eq!(cfg.dolt_db_path(), tmp.join("backend_index.doltlite_db"));
@@ -1301,18 +526,7 @@ mod tests {
 
     #[test]
     fn loads_dolt_block_from_yaml() {
-        let tmp = tempdir();
-        let root = tmp.join("data");
-        std::fs::create_dir_all(&root).unwrap();
-        let cfg_path = tmp.join("config.yaml");
-        std::fs::write(
-            &cfg_path,
-            format!(
-                "data_root: {}\ndolt:\n  db_filename: my.db\n",
-                root.display()
-            ),
-        )
-        .unwrap();
+        let (cfg_path, root) = write_cfg("data_root: __ROOT__\ndolt:\n  db_filename: my.db\n");
         let cfg = load_config(Some(&cfg_path)).unwrap();
         assert_eq!(cfg.dolt.db_filename, "my.db");
         assert_eq!(cfg.dolt_db_path(), root.join("my.db"));
@@ -1334,27 +548,34 @@ mod tests {
             "data_root: __ROOT__
 sources:
   - name: claude-export
-    type: claude_export
+    source:
+      type: claude_export
   - name: claude-api
-    type: claude_api
-    sync: {refresh_window_days: 14, refresh_most_recent_n_chat_count: 2}
+    source:
+      type: claude_api
+      sync: {refresh_window_days: 14, refresh_most_recent_n_chat_count: 2}
   - name: chatgpt
-    type: chatgpt_api
-    sync: {max_pages: 5}
+    source:
+      type: chatgpt_api
+      sync: {max_pages: 5}
   - name: slack
-    type: slack_api
-    sync: {channels: ['c1','c2'], media: false}
+    source:
+      type: slack_api
+      sync: {channels: ['c1','c2'], media: false}
   - name: gh
-    type: github_api
-    sync: {max_prs: 50}
+    source:
+      type: github_api
+      sync: {max_prs: 50}
   - name: gl
-    type: gitlab_api
-    sync: {max_mrs: 50}
+    source:
+      type: gitlab_api
+      sync: {max_mrs: 50}
   - name: notion
-    type: notion_api
-    sync:
-      inbox: {enabled: true}
-      subtrees: {pages: ['p1']}
+    source:
+      type: notion_api
+      sync:
+        inbox: {enabled: true}
+        subtrees: {pages: ['p1']}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
@@ -1367,8 +588,8 @@ sources:
             .find(|s| s.name() == "slack")
             .expect("slack source");
         assert!(slack.is_managed());
-        if let SourceConfig::SlackApi { sync, .. } = slack {
-            let sync = sync.as_ref().unwrap();
+        if let SourceConfig::SlackApi(c) = &slack.source {
+            let sync = c.sync.as_ref().unwrap();
             assert_eq!(
                 sync.channels.as_deref(),
                 Some(&["c1".to_string(), "c2".to_string()][..])
@@ -1380,12 +601,43 @@ sources:
     }
 
     #[test]
+    fn bare_source_with_no_config_keys_parses() {
+        // claude_export has no required keys: `source: {type: claude_export}`
+        // must deserialize into an all-default AnthropicConfig.
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: x
+    source: {type: claude_export}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        assert_eq!(cfg.sources.len(), 1);
+        assert!(!cfg.sources[0].is_managed());
+    }
+
+    #[test]
+    fn rejects_unknown_type() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - name: x
+    source: {type: not_a_provider}
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::Yaml(_))
+        ));
+    }
+
+    #[test]
     fn rejects_duplicate_source_names() {
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:
-  - {name: dup, type: claude_export}
-  - {name: dup, type: claude_export}
+  - {name: dup, source: {type: claude_export}}
+  - {name: dup, source: {type: claude_export}}
 ",
         );
         assert!(matches!(
@@ -1400,27 +652,28 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: yolink
-    type: yolink
-    sync:
-      window_days: 7
-      devices:
-        - name: water_valve
-          kind: watermeter
-          start: '2026-04-05'
-          family_device_id: '00112233445566778899aabbccddeeff'
-          device_udid: 'ffeeddccbbaa99887766554433221100'
-        - name: basement_freezer
-          kind: temperature_humidity
-          start: '2026-04-05'
-          family_device_id: '0123456789abcdef0123456789abcdef'
-          device_udid: 'fedcba9876543210fedcba9876543210'
+    source:
+      type: yolink
+      sync:
+        window_days: 7
+        devices:
+          - name: water_valve
+            kind: watermeter
+            start: '2026-04-05'
+            family_device_id: '00112233445566778899aabbccddeeff'
+            device_udid: 'ffeeddccbbaa99887766554433221100'
+          - name: basement_freezer
+            kind: temperature_humidity
+            start: '2026-04-05'
+            family_device_id: '0123456789abcdef0123456789abcdef'
+            device_udid: 'fedcba9876543210fedcba9876543210'
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
         let yl = cfg.sources.iter().find(|s| s.name() == "yolink").unwrap();
         assert!(yl.is_managed());
-        if let SourceConfig::Yolink { sync, .. } = yl {
-            let sync = sync.as_ref().unwrap();
+        if let SourceConfig::Yolink(c) = &yl.source {
+            let sync = c.sync.as_ref().unwrap();
             assert_eq!(sync.window_days, Some(7));
             assert_eq!(sync.devices.len(), 2);
             assert_eq!(sync.devices[0].name, "water_valve");
@@ -1436,20 +689,20 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: yolink
-    type: yolink
-    sync:
-      devices:
-        - name: x
-          kind: door_sensor
-          start: '2026-04-05'
-          family_device_id: '00112233445566778899aabbccddeeff'
-          device_udid: 'ffeeddccbbaa99887766554433221100'
+    source:
+      type: yolink
+      sync:
+        devices:
+          - name: x
+            kind: door_sensor
+            start: '2026-04-05'
+            family_device_id: '00112233445566778899aabbccddeeff'
+            device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::YolinkBadDeviceKind(_, _, _))
-        ));
+        let err = load_config(Some(&cfg_path)).unwrap_err();
+        assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
+        assert!(err.to_string().contains("unknown kind"));
     }
 
     #[test]
@@ -1458,20 +711,20 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: yolink
-    type: yolink
-    sync:
-      devices:
-        - name: x
-          kind: temperature_humidity
-          start: '2026-04-05'
-          family_device_id: 'not-hex'
-          device_udid: 'ffeeddccbbaa99887766554433221100'
+    source:
+      type: yolink
+      sync:
+        devices:
+          - name: x
+            kind: temperature_humidity
+            start: '2026-04-05'
+            family_device_id: 'not-hex'
+            device_udid: 'ffeeddccbbaa99887766554433221100'
 ",
         );
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::YolinkBadDeviceHex(_, _, "family_device_id", _))
-        ));
+        let err = load_config(Some(&cfg_path)).unwrap_err();
+        assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
+        assert!(err.to_string().contains("family_device_id"));
     }
 
     #[test]
@@ -1480,15 +733,15 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: yolink
-    type: yolink
-    sync:
-      devices: []
+    source:
+      type: yolink
+      sync:
+        devices: []
 ",
         );
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::YolinkNoDevices(_))
-        ));
+        let err = load_config(Some(&cfg_path)).unwrap_err();
+        assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
+        assert!(err.to_string().contains("at least one device"));
     }
 
     #[test]
@@ -1497,15 +750,15 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: n
-    type: notion_api
-    sync:
-      inbox: {enabled: false}
+    source:
+      type: notion_api
+      sync:
+        inbox: {enabled: false}
 ",
         );
-        assert!(matches!(
-            load_config(Some(&cfg_path)),
-            Err(ConfigError::NotionSyncEmpty(_))
-        ));
+        let err = load_config(Some(&cfg_path)).unwrap_err();
+        assert!(matches!(err, ConfigError::SourceInvalid(_, _)));
+        assert!(err.to_string().contains("inbox or list at least one"));
     }
 
     #[test]
@@ -1514,16 +767,15 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: slack
-    type: slack_api
-    sync: {channels: ['c']}
+    source:
+      type: slack_api
+      sync: {channels: ['c']}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        let s = &cfg.sources[0];
-        assert_eq!(
-            s.resolved_input_path(&cfg.data_root),
-            root.join("raw/slack")
-        );
+        // API source: no explicit input_path → input resolves to the raw dir.
+        assert_eq!(cfg.sources[0].input_path(), root.join("raw/slack"));
+        assert!(cfg.sources[0].source.common().input_path.is_none());
     }
 
     #[test]
@@ -1532,25 +784,22 @@ sources:
             "data_root: __ROOT__
 sources:
   - name: slack
-    type: slack_api
-    sync: {channels: ['c']}
+    source:
+      type: slack_api
+      sync: {channels: ['c']}
   - name: gh
-    type: github_api
-    raw_path: /mnt/big/gh-raw
-    sync: {}
+    source:
+      type: github_api
+      common:
+        raw_path: /mnt/big/gh-raw
+      sync: {}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        // Default: <data_root>/raw/<name>, same shape for every source.
-        assert_eq!(
-            cfg.sources[0].resolved_raw_path(&cfg.data_root),
-            root.join("raw/slack")
-        );
-        // Override: the store can live anywhere, independent of data_root.
-        assert_eq!(
-            cfg.sources[1].resolved_raw_path(&cfg.data_root),
-            PathBuf::from("/mnt/big/gh-raw")
-        );
+        // Default: <data_root>/raw/<name>.
+        assert_eq!(cfg.sources[0].raw_path(), root.join("raw/slack"));
+        // Override: the store can live anywhere.
+        assert_eq!(cfg.sources[1].raw_path(), PathBuf::from("/mnt/big/gh-raw"));
     }
 
     #[test]
@@ -1558,8 +807,8 @@ sources:
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:
-  - {name: on, type: claude_export}
-  - {name: off, type: claude_export, enabled: false}
+  - {name: on, source: {type: claude_export}}
+  - {name: off, enabled: false, source: {type: claude_export}}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
@@ -1568,67 +817,66 @@ sources:
     }
 
     #[test]
-    fn shared_global_falls_through_when_source_omits() {
+    fn defaults_fall_through_when_source_omits() {
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
-blob_size_limit_bytes: 5000000
+defaults:
+  blob_size_limit_bytes: 5000000
 sources:
   - name: slack
-    type: slack_api
-    sync: {channels: ['c']}
+    source:
+      type: slack_api
+      sync: {channels: ['c']}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        assert_eq!(cfg.shared.blob_size_limit_bytes, Some(5_000_000));
-        let resolved = cfg.sources[0].resolved_shared(&cfg);
-        assert_eq!(resolved.blob_size_limit_bytes, Some(5_000_000));
-    }
-
-    #[test]
-    fn shared_source_overrides_global() {
-        let (cfg_path, _root) = write_cfg(
-            "data_root: __ROOT__
-blob_size_limit_bytes: 5000000
-sources:
-  - name: slack
-    type: slack_api
-    blob_size_limit_bytes: 100000
-    sync: {channels: ['c']}
-  - name: gh
-    type: github_api
-    sync: {}
-",
-        );
-        let cfg = load_config(Some(&cfg_path)).unwrap();
-        let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
-        let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
+        // After normalize(), the global default is folded into the source.
         assert_eq!(
-            slack.resolved_shared(&cfg).blob_size_limit_bytes,
-            Some(100_000)
-        );
-        // sibling source still inherits the global default
-        assert_eq!(
-            gh.resolved_shared(&cfg).blob_size_limit_bytes,
+            cfg.sources[0].source.common().blob_size_limit_bytes,
             Some(5_000_000)
         );
     }
 
     #[test]
-    fn shared_unset_means_unlimited() {
+    fn defaults_source_overrides_global() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+defaults:
+  blob_size_limit_bytes: 5000000
+sources:
+  - name: slack
+    source:
+      type: slack_api
+      common:
+        blob_size_limit_bytes: 100000
+      sync: {channels: ['c']}
+  - name: gh
+    source:
+      type: github_api
+      sync: {}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
+        let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
+        assert_eq!(slack.source.common().blob_size_limit_bytes, Some(100_000));
+        // sibling still inherits the global default
+        assert_eq!(gh.source.common().blob_size_limit_bytes, Some(5_000_000));
+    }
+
+    #[test]
+    fn defaults_unset_means_unlimited() {
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 sources:
   - name: slack
-    type: slack_api
-    sync: {channels: ['c']}
+    source:
+      type: slack_api
+      sync: {channels: ['c']}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        assert_eq!(cfg.shared.blob_size_limit_bytes, None);
-        assert_eq!(
-            cfg.sources[0].resolved_shared(&cfg).blob_size_limit_bytes,
-            None
-        );
+        assert_eq!(cfg.sources[0].source.common().blob_size_limit_bytes, None);
     }
 
     #[test]
@@ -1643,39 +891,41 @@ sources:
 
     #[test]
     fn extract_params_source_overrides_one_field_only() {
-        // Global sets both; the source overrides only the failure count.
-        // The unset (minutes) field must fall through to the global, and a
-        // sibling source inherits both globals.
+        // Global sets both; the source overrides only the failure count. The
+        // unset (minutes) field falls through to the global; a sibling inherits
+        // both globals.
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
-extract_params:
-  maximum_time_without_progress_in_minutes: 10
-  maximum_sequential_failed_requests: 5
+defaults:
+  extract_params:
+    maximum_time_without_progress_in_minutes: 10
+    maximum_sequential_failed_requests: 5
 sources:
   - name: slack
-    type: slack_api
-    extract_params:
-      maximum_sequential_failed_requests: 99
-    sync: {channels: ['c']}
+    source:
+      type: slack_api
+      common:
+        extract_params:
+          maximum_sequential_failed_requests: 99
+      sync: {channels: ['c']}
   - name: gh
-    type: github_api
-    sync: {}
+    source:
+      type: github_api
+      sync: {}
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
         let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
         let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
 
-        let slack_ep = slack.resolved_shared(&cfg).extract_params;
+        let slack_ep = &slack.source.common().extract_params;
         assert_eq!(slack_ep.max_sequential_failures(), 99);
-        // field the source omitted falls through to the global (10 min)
         assert_eq!(
             slack_ep.max_time_without_progress(),
             std::time::Duration::from_secs(10 * 60)
         );
 
-        // sibling inherits both globals
-        let gh_ep = gh.resolved_shared(&cfg).extract_params;
+        let gh_ep = &gh.source.common().extract_params;
         assert_eq!(gh_ep.max_sequential_failures(), 5);
         assert_eq!(
             gh_ep.max_time_without_progress(),
@@ -1683,11 +933,7 @@ sources:
         );
     }
 
-    /// Pytest-tmp_path-style: every call yields a brand-new, uniquely-named
-    /// directory under the OS temp area. We use `tempfile::TempDir` for the
-    /// uniqueness guarantee (mkdtemp under the hood) and detach it with
-    /// `.into_path()` so the caller can return a `PathBuf` and tests can
-    /// run in parallel without colliding on a shared name.
+    /// Pytest-tmp_path-style: a brand-new, uniquely-named temp dir per call.
     fn tempdir() -> PathBuf {
         tempfile::TempDir::with_prefix("fw-cfg-")
             .expect("create tempdir")
