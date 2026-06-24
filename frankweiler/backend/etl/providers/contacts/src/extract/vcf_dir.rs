@@ -29,7 +29,7 @@ use frankweiler_etl::file_checkpoint::{self, FileFingerprint};
 use frankweiler_etl::progress::Progress;
 
 use super::api::{vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
-use super::db::{addressbook_pk, RawDb};
+use super::db::{addressbook_pk, db_path_for, RawDb};
 use super::schema_raw::{synthesized_name_uid, ContactRow};
 
 pub struct FetchOptions {
@@ -135,9 +135,12 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     }
 
     // Lift inline vCard photos into the per-source CAS (consistent
-    // contact_photos shape, shared with the LinkedIn provider). The
-    // local-file path opens the db directly at `opts.db_path`.
-    if let Err(e) = super::photos::lift_photos_to_cas(&db, &opts.db_path).await {
+    // contact_photos shape, shared with the LinkedIn provider). `db_path`
+    // is the per-source *directory*, so resolve it to the entity db file
+    // before deriving the CAS sibling — otherwise `cas_path_for` walks up
+    // to the shared `raw/` parent and the store leaks to
+    // `raw/blobs.doltlite_db` (mirrors the CardDAV path in `mod.rs`).
+    if let Err(e) = super::photos::lift_photos_to_cas(&db, &db_path_for(&opts.db_path)).await {
         warn!(event = "carddav_vcf_photo_lift_failed", error = %e);
     }
     Ok(summary)
@@ -324,6 +327,58 @@ fn split_vcards(body: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Production shape: the processor passes the per-source *directory* as
+    // `db_path` (e.g. `raw/fastmail_contacts`) and a `db` already opened at
+    // its `entities.doltlite_db`. The inline-photo CAS must land beside that
+    // entity db — `raw/fastmail_contacts/blobs.doltlite_db` — not one level
+    // up in the shared `raw/` root. Passing the bare dir to `cas_path_for`
+    // (which derives the sibling via `.parent()`) leaks the store to
+    // `raw/blobs.doltlite_db`; this pins it to the per-source dir.
+    #[tokio::test]
+    async fn inline_photo_cas_lands_in_per_source_dir_not_parent() {
+        // The shared raw root and the per-source dir within it.
+        let raw_root = tempfile::tempdir().unwrap();
+        let source_dir = raw_root.path().join("fastmail_contacts");
+        std::fs::create_dir_all(&source_dir).unwrap();
+
+        // A Google/Fastmail-style export dir with one inline-photo vCard
+        // (Picard's comm-badge mugshot, the PNG from the photo-decode test).
+        let export = tempfile::tempdir().unwrap();
+        let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQMAAAAl21bKAAAAA1BMVEX/AAAZ4gk3AAAAAXRSTlMAQObYZgAAAApJREFUCNdjYAAAAAIAAeIhvDMAAAAASUVORK5CYII=";
+        std::fs::write(
+            export.path().join("Bridge.vcf"),
+            format!(
+                "BEGIN:VCARD\nVERSION:3.0\nUID:picard\nFN:Jean-Luc Picard\n\
+                 PHOTO;ENCODING=b;TYPE=PNG:{png_b64}\nEND:VCARD\n"
+            ),
+        )
+        .unwrap();
+
+        // Open the db where the processor would: the entity db inside the dir.
+        let entity_db = db_path_for(&source_dir);
+        let db = RawDb::open(&entity_db).await.unwrap();
+        let summary = fetch(FetchOptions {
+            db_path: source_dir.clone(),
+            db: Some(db),
+            input_path: export.path().to_path_buf(),
+            account_id_override: None,
+            progress: Progress::default(),
+            control: ExtractControl::default(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(summary.contacts_new, 1);
+
+        assert!(
+            source_dir.join("blobs.doltlite_db").exists(),
+            "photo CAS must sit beside entities.doltlite_db in the source dir",
+        );
+        assert!(
+            !raw_root.path().join("blobs.doltlite_db").exists(),
+            "photo CAS must not leak into the shared raw/ parent",
+        );
+    }
 
     #[tokio::test]
     async fn fetch_walks_directory_and_writes_rows() {

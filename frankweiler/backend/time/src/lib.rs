@@ -249,6 +249,47 @@ pub fn parse_yyyy_mm_dd_assumed_utc(s: &str) -> Result<IsoOffsetTimestamp, Times
     ))
 }
 
+/// Coerce an upstream ISO-8601 timestamp into a grid-ready `when_ts`:
+/// RFC 3339 with an explicit offset.
+///
+/// Some feeds ship *basic* ISO 8601 — no `-`/`:` separators, e.g. the
+/// vCard `REV` Fastmail exports (`20260605T191839Z`). That form is valid
+/// ISO 8601 but not RFC 3339, so it slips past producers and gets
+/// rejected at `GridRow::build`, silently dropping the row's
+/// `.grid_rows.json`. This normalizes it; already-valid values pass
+/// through **verbatim** so callers that persist them don't churn
+/// historical strings.
+///
+/// - Already RFC 3339 with an offset (incl. bare `Z`) → returned as-is.
+/// - **Basic** ISO 8601 (`YYYYMMDDTHHMMSS[.fff]` + `Z` / numeric offset)
+///   → canonicalized to seconds precision with an explicit offset
+///   (`2026-06-05T19:18:39+00:00`).
+/// - Anything else → `None` (the caller drops the timestamp rather than
+///   emit one the grid would reject).
+pub fn coerce_when_ts(s: &str) -> Option<String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // Extended forms (with separators), including bare `Z`, are already
+    // grid-valid — keep them exactly as written.
+    if validate_iso_offset(s).is_ok() {
+        return Some(s.to_string());
+    }
+    // Basic forms: chrono's `%z` wants a numeric offset, so fold a trailing
+    // `Z` (UTC) to `+0000` first, then try with and without sub-seconds.
+    let folded = match s.strip_suffix('Z').or_else(|| s.strip_suffix('z')) {
+        Some(prefix) => format!("{prefix}+0000"),
+        None => s.to_string(),
+    };
+    for fmt in ["%Y%m%dT%H%M%S%z", "%Y%m%dT%H%M%S%.f%z"] {
+        if let Ok(dt) = DateTime::parse_from_str(&folded, fmt) {
+            return Some(IsoOffsetTimestamp(dt).to_rfc3339_secs());
+        }
+    }
+    None
+}
+
 /// String-in/string-out shim for callsites that hold raw RFC 3339
 /// strings (e.g. translate code carrying upstream timestamps through
 /// to `GridRow.when_ts`). Tolerates `Z` (treated as `+00:00`). Returns
@@ -397,6 +438,33 @@ mod tests {
             parse_strict("2026-06-10T21:23:00"),
             Err(TimestampParseError::Invalid { .. })
         ));
+    }
+
+    #[test]
+    fn coerce_when_ts_canonicalizes_basic_iso_and_preserves_valid() {
+        // Basic ISO 8601 (no separators), Fastmail's vCard REV shape.
+        assert_eq!(
+            coerce_when_ts("20260605T191839Z").as_deref(),
+            Some("2026-06-05T19:18:39+00:00")
+        );
+        // Basic ISO 8601 with a numeric offset.
+        assert_eq!(
+            coerce_when_ts("20260605T121839-0700").as_deref(),
+            Some("2026-06-05T12:18:39-07:00")
+        );
+        // Already grid-valid extended forms pass through verbatim (no churn).
+        assert_eq!(
+            coerce_when_ts("2370-04-15T00:00:00Z").as_deref(),
+            Some("2370-04-15T00:00:00Z")
+        );
+        assert_eq!(
+            coerce_when_ts("2026-06-05T12:18:39-07:00").as_deref(),
+            Some("2026-06-05T12:18:39-07:00")
+        );
+        // Unparseable / offset-less → None (caller drops it).
+        assert_eq!(coerce_when_ts("not a timestamp"), None);
+        assert_eq!(coerce_when_ts("20260605T191839"), None);
+        assert_eq!(coerce_when_ts(""), None);
     }
 
     #[test]

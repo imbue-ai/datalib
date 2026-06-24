@@ -106,7 +106,13 @@ fn normalize(contact: &ParsedContact, source_name: &str) -> NormalizedContact {
         group_label: contact.addressbook.clone(),
         display_name: contact.display_name.clone(),
         external_id: Some(contact.uid.clone()),
-        when_ts: contact.revision.clone(),
+        // vCard `REV` → grid-ready `when_ts`. Fastmail emits *basic* ISO 8601
+        // (`20260605T191839Z`), which isn't RFC 3339 and would be rejected at
+        // `GridRow::build`; coerce it (already-valid values pass through).
+        when_ts: contact
+            .revision
+            .as_deref()
+            .and_then(frankweiler_time::coerce_when_ts),
         // CardDAV carries no per-contact public web URL (see the prior
         // note in this file's history re: Fastmail's internal short ids).
         source_url: None,
@@ -212,6 +218,22 @@ mod tests {
             ]
         );
         assert_eq!(n.fields[0].value, "Starfleet — USS Enterprise");
+    }
+
+    // Fastmail exports the vCard `REV` in *basic* ISO 8601 (no separators,
+    // e.g. `20260605T191839Z`). That string is not RFC 3339, so flowing it
+    // straight into `when_ts` makes `GridRow::build` reject the row and drops
+    // the contact's `.grid_rows.json`. Normalize must canonicalize it to an
+    // explicit-offset RFC 3339 `when_ts` the grid accepts.
+    #[test]
+    fn normalize_canonicalizes_basic_iso_rev() {
+        let mut c = sample();
+        c.revision = Some("20260605T191839Z".to_string());
+        let n = normalize(&c, "fastmail_contacts");
+        assert_eq!(n.when_ts.as_deref(), Some("2026-06-05T19:18:39+00:00"));
+        // The grid's own contract must accept it (this is what was failing).
+        frankweiler_time::validate_iso_offset(n.when_ts.as_deref().unwrap())
+            .expect("normalized when_ts must satisfy GridRow's RFC 3339 contract");
     }
 
     #[test]
