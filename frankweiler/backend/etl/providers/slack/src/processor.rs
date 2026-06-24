@@ -13,7 +13,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 use frankweiler_etl_slack_config::{SlackApiSync, SlackConfig};
 
 use crate::extract;
@@ -59,15 +58,9 @@ impl DataProcessor for SlackExtract {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let mut db = extract::RawDb::open(&extract::db_path_for(&self.raw_path)).await?;
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        let entity_db = extract::db_path_for(&self.raw_path);
+        let mut db = extract::RawDb::open(&entity_db).await?;
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
         // resolved shared config leaves it enabled. (The orchestrator used to
         // attach this; now the one provider that consumes it does.)
@@ -106,7 +99,7 @@ impl DataProcessor for SlackExtract {
             .collect::<Vec<_>>()
             .join(" ");
         let summary = format!("msgs={} replies={} media[{}]", s.messages, s.replies, media);
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 

@@ -27,9 +27,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::control::ExtractControl;
+use crate::extract_metrics::{ExtractMetrics, ExtractReport};
 use crate::load::RenderedMarkdown;
 use crate::progress::Progress;
 use crate::synthesize::Synthesizer;
+use frankweiler_obs::diagnostics::Diagnostics;
 
 /// One config-driven, monitorable unit of work the orchestrator runs.
 /// Single method.
@@ -113,8 +115,37 @@ pub struct PlanCommon {
 #[async_trait]
 pub trait Checkpoint: Send + Sync {
     /// Best-effort persist of whatever the owning processor has buffered so
-    /// far, so an interrupt doesn't lose it.
-    async fn checkpoint(&self) -> Result<()>;
+    /// far, so an interrupt doesn't lose it. Returns the source's partial
+    /// "what changed" [`ExtractReport`] when it has one — assembled
+    /// source-side, so the orchestrator collects it without ever reading the
+    /// store. `None` for sources that keep no reportable store.
+    async fn checkpoint(&self) -> Result<Option<ExtractReport>>;
+}
+
+/// A one-slot mailbox a store-backed extract processor publishes its
+/// [`ExtractReport`] into; the orchestrator reads it back through the run
+/// result. Interior-mutable so the source can publish through a shared
+/// `&RunCtx`.
+#[derive(Default)]
+pub struct ReportCell {
+    inner: Mutex<Option<ExtractReport>>,
+}
+
+impl ReportCell {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Publish the source's report (replaces any prior one — a source has at
+    /// most one store-backed extract processor).
+    pub fn publish(&self, report: ExtractReport) {
+        *self.inner.lock().unwrap() = Some(report);
+    }
+
+    /// Take the published report, if any.
+    pub fn take(&self) -> Option<ExtractReport> {
+        self.inner.lock().unwrap().take()
+    }
 }
 
 /// An optional capability: a processor that can synthesize its own playback
@@ -162,7 +193,10 @@ impl CheckpointSink {
         Self::default()
     }
 
-    fn register(&self, name: &str, hook: Arc<dyn Checkpoint>) {
+    /// Register an interrupt-commit hook. Normally called via
+    /// [`RunCtx::register_checkpoint`]; public so tests can populate a sink
+    /// directly.
+    pub fn register(&self, name: &str, hook: Arc<dyn Checkpoint>) {
         self.inner.lock().unwrap().push(RegisteredCheckpoint {
             name: name.to_string(),
             hook,
@@ -197,6 +231,15 @@ pub struct RunCtx<'a> {
     pub prior_fingerprints: &'a HashMap<String, String>,
     /// Where extract processors register their interrupt-commit hooks.
     checkpoints: &'a CheckpointSink,
+    /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
+    /// observability the source folds into its own [`ExtractReport`]. `None` on
+    /// a translate context. (Observability, not storage: the orchestrator
+    /// installs these as ambient scopes; the source reads them to self-report.)
+    metrics: Option<Arc<ExtractMetrics>>,
+    diagnostics: Option<Arc<Diagnostics>>,
+    /// Where an extract processor publishes its source-assembled report; the
+    /// orchestrator reads it back through the run result. `None` on translate.
+    report: Option<&'a ReportCell>,
     /// Where translate processors send finished documents (fused Load).
     /// `None` on an extract context.
     emit: Option<DocSink<'a>>,
@@ -215,6 +258,9 @@ impl<'a> RunCtx<'a> {
         control: &'a ExtractControl,
         prior_fingerprints: &'a HashMap<String, String>,
         checkpoints: &'a CheckpointSink,
+        metrics: Arc<ExtractMetrics>,
+        diagnostics: Arc<Diagnostics>,
+        report: &'a ReportCell,
     ) -> Self {
         Self {
             name,
@@ -224,6 +270,9 @@ impl<'a> RunCtx<'a> {
             control,
             prior_fingerprints,
             checkpoints,
+            metrics: Some(metrics),
+            diagnostics: Some(diagnostics),
+            report: Some(report),
             emit: None,
         }
     }
@@ -249,6 +298,9 @@ impl<'a> RunCtx<'a> {
             control,
             prior_fingerprints,
             checkpoints,
+            metrics: None,
+            diagnostics: None,
+            report: None,
             emit: Some(DocSink {
                 cb: Mutex::new(on_doc),
             }),
@@ -260,6 +312,43 @@ impl<'a> RunCtx<'a> {
     /// Ctrl-C mid-download can still flush partial state.
     pub fn register_checkpoint(&self, name: &str, hook: Arc<dyn Checkpoint>) {
         self.checkpoints.register(name, hook);
+    }
+
+    /// Open a doltlite [`RawStoreSession`](crate::raw_store::RawStoreSession)
+    /// over a source's write `pool`: captures the before-snapshot and registers
+    /// the session's interrupt-commit `Checkpoint` (which also reports on
+    /// interrupt). The processor calls `session.finish(self, summary)` after
+    /// the fetch. This is the uniform "doltlite-backed source" entry point —
+    /// all the snapshot/commit/report machinery lives in `etl`, not here and
+    /// not in the orchestrator.
+    pub async fn open_store(
+        &self,
+        pool: sqlx::sqlite::SqlitePool,
+        entity_path: std::path::PathBuf,
+    ) -> crate::raw_store::RawStoreSession {
+        crate::raw_store::RawStoreSession::open(pool, entity_path, self).await
+    }
+
+    /// The ambient extract metrics for this source (extract context only).
+    pub fn metrics(&self) -> Arc<ExtractMetrics> {
+        self.metrics
+            .clone()
+            .expect("metrics() on a non-extract RunCtx")
+    }
+
+    /// The ambient diagnostics buffer for this source (extract context only).
+    pub fn diagnostics(&self) -> Arc<Diagnostics> {
+        self.diagnostics
+            .clone()
+            .expect("diagnostics() on a non-extract RunCtx")
+    }
+
+    /// Publish the source-assembled [`ExtractReport`] for this source. No-op on
+    /// a context without a report cell.
+    pub fn publish_report(&self, report: ExtractReport) {
+        if let Some(cell) = self.report {
+            cell.publish(report);
+        }
     }
 
     /// Emit a finished rendered document (translate processors only). Errors

@@ -6,7 +6,7 @@
 //! [`SourcePlan`] the orchestrator drives.
 //!
 //! Storage ownership lives here, not in the orchestrator: [`WhatsappExtract`]
-//! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
+//! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
 //! for interrupt-safety, and issues its own post-extract `dolt_commit`. The
 //! orchestrator never sees a pool or a commit.
 
@@ -17,7 +17,6 @@ use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 use frankweiler_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::extract;
@@ -68,16 +67,9 @@ impl DataProcessor for WhatsappExtract {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db_path = frankweiler_etl::doltlite_raw::db_path_for(&self.raw_path);
         let db = extract::RawDb::open(&db_path).await?;
-        // Clone the write pool BEFORE fetch borrows `&db`: the pool feeds both
-        // the interrupt checkpoint and the final commit_and_close.
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        // Open the session (snapshot + interrupt hook) BEFORE fetch borrows
+        // `&db`: it captures the write pool the commit + report run against.
+        let session = ctx.open_store(db.pool().clone(), db_path).await;
 
         // Read the hex root key from the configured env var (default
         // WHATSAPP_BACKUP_DECRYPTION_KEY), decode it, then decrypt + mirror.
@@ -102,7 +94,7 @@ impl DataProcessor for WhatsappExtract {
             s.message_add_on_reaction,
             s.media_files,
         );
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 

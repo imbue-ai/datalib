@@ -14,7 +14,6 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
-use frankweiler_etl::raw_store::PoolCheckpoint;
 use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 
 use crate::extract;
@@ -59,15 +58,9 @@ impl DataProcessor for SmsExtract {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let db = extract::RawDb::open(&extract::db_path_for(&self.raw_path)).await?;
-        let pool = db.pool().clone();
-        ctx.register_checkpoint(
-            &self.id,
-            PoolCheckpoint::new(
-                pool.clone(),
-                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
-            ),
-        );
+        let entity_db = extract::db_path_for(&self.raw_path);
+        let db = extract::RawDb::open(&entity_db).await?;
+        let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let s = extract::fetch(extract::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
@@ -80,7 +73,7 @@ impl DataProcessor for SmsExtract {
             "sms={} mms={} calls={} attachments={} blobs={} parse_errors={}",
             s.sms, s.mms, s.calls, s.attachments, s.blobs_stored, s.parse_errors,
         );
-        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+        Ok(session.finish(ctx, summary).await)
     }
 }
 
