@@ -1336,6 +1336,7 @@ name = "frankweiler-etl"
 version = "0.12.2"
 dependencies = [
  "anyhow",
+ "async-trait",
  "blake3",
  "chrono",
  "clap",

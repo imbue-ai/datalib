@@ -17,6 +17,9 @@ rust_library(
     # `frankweiler_etl` gets it in runfiles; `latchkey::ensure_curl_shim`
     # then resolves it via the bazel runfiles lookup in `resolve()`.
     data = [":latchkey_curl_shim"],
+    proc_macro_deps = [
+        "@frankweiler_crates//:async-trait",
+    ],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/obs:frankweiler_obs",

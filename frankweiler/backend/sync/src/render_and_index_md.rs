@@ -54,7 +54,12 @@ pub struct RenderCtx<'a> {
 
 /// One callback per rendered markdown — hands the document (its path +
 /// row set) to the orchestrator's inline Load step.
-pub type OnDoc<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + 'a;
+///
+/// `Send` so the same callback type flows into a Program-A translate
+/// `DataProcessor`'s `RunCtx` (whose `run` future is `Send`). The
+/// orchestrator's Load closure is already `Send` (it's moved into a
+/// `spawn_blocking` task), so this is a no-op widening for every caller.
+pub type OnDoc<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
 /// A provider's render-and-index-md step. One implementation per data
 /// source; [`renderer_for`] selects it.
