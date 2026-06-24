@@ -8,6 +8,11 @@
 # phone, or an export on disk. Delete the sources you don't want, or set
 # `enabled: false` on them.
 #
+# Shape: each entry has the orchestrator-owned `name:`/`enabled:` at the top,
+# then everything the provider needs nested under `source:` — the `type:`
+# discriminator, the shared `common:` envelope (paths + cross-source knobs),
+# and the provider-specific keys (`sync:`, etc.).
+#
 # Sources that support more than one input mode include a stanza for
 # each: `email` (JMAP server vs. Google Takeout .mbox) and `carddav`
 # contacts (CalDAV server vs. local .vcf files).
@@ -19,24 +24,26 @@ data_root: ~/datalib  # Base dir; everything is written under here. `~` is expan
 
 # Where each source's raw store lives. By default a source's raw data
 # (entities.doltlite_db + blobs.doltlite_db + the events/ tape) lands in
-# `<data_root>/raw/<name>/`. ANY source may override that directory with
-# a per-source `raw_path:` (see the commented example on claude-api
-# below) — it can point anywhere, e.g. a bigger disk. This is purely
-# about where WE store our copy; it's independent of `input_path:`, which
+# `<data_root>/raw/<name>/`. ANY source may override that directory with a
+# per-source `common.raw_path:` (see the commented example on claude-api
+# below) — it can point anywhere, e.g. a bigger disk. This is purely about
+# where WE store our copy; it's independent of `common.input_path:`, which
 # says where a file-backed source's data is read FROM.
 
-# Global default applied to every source unless overridden per-source.
-blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
-
-# How hard a source's download retries upstream rate limits before the
-# orchestrator gives up on it. The shared HTTP layer always respects a
-# `Retry-After` on a 429 (and otherwise backs off exponentially); these two
-# knobs only decide *when to stop*. Both are optional — omit the block (or
-# any field) to take the built-in defaults shown here. Overridable per
-# source (see the slack stanza below).
-extract_params:
-  maximum_time_without_progress_in_minutes: 30  # give up after this long with no successful request
-  maximum_sequential_failed_requests: 50         # ...or this many failures in a row
+# Global defaults, folded into every source's `common` at load. A source's own
+# `common:` overrides these field-by-field; an unset field takes the built-in
+# default.
+defaults:
+  blob_size_limit_bytes: 5000000  # 5 MB — skip larger file/media uploads.
+  # How hard a source's download retries upstream rate limits before the
+  # orchestrator gives up on it. The shared HTTP layer always respects a
+  # `Retry-After` on a 429 (and otherwise backs off exponentially); these two
+  # knobs only decide *when to stop*. Both are optional — omit (or any field)
+  # to take the built-in defaults shown here. Overridable per source (see the
+  # slack stanza below).
+  extract_params:
+    maximum_time_without_progress_in_minutes: 30  # give up after this long with no successful request
+    maximum_sequential_failed_requests: 50         # ...or this many failures in a row
 
 sources:
   # --- Claude / Anthropic ---------------------------------------------------
@@ -45,52 +52,59 @@ sources:
   # latchkey at runtime (see first_time_user.md). Bare `sync: {}` fetches
   # every conversation across every org; the knobs bound incremental work.
   - name: claude-api
-    type: claude_api
-    # raw_path: /mnt/big/datalib-raw/claude-api  # optional: store our raw copy elsewhere
-    sync:
-      refresh_window_days: 7              # treat anything older than this as cold
-      refresh_most_recent_n_chat_count: 3 # force-refetch top-N by updated_at
-      # conv_uuids:                       # or: fetch only these (UUIDs or paste-able URLs)
-      #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
+    source:
+      type: claude_api
+      # common:
+      #   raw_path: /mnt/big/datalib-raw/claude-api  # optional: store our raw copy elsewhere
+      sync:
+        refresh_window_days: 7              # treat anything older than this as cold
+        refresh_most_recent_n_chat_count: 3 # force-refetch top-N by updated_at
+        # conv_uuids:                       # or: fetch only these (UUIDs or paste-able URLs)
+        #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
 
   # Translate-only mode for a Claude data export already on disk. No
   # network, no credentials — just points at the unpacked export.
   - name: claude-export
-    type: claude_export
-    input_path: ~/backups/claude-export
+    source:
+      type: claude_export
+      common:
+        input_path: ~/backups/claude-export
 
   # --- ChatGPT --------------------------------------------------------------
 
   # ChatGPT conversation mirror. Credentials via latchkey.
   - name: chatgpt
-    type: chatgpt_api
-    sync:
-      refresh_window_days: 7
-      max_pages: 20        # pagination cap on listing
-      limit: 100           # records per page
-      sleep_between: 0.5   # seconds between requests (be polite)
-      # conv_uuids:
-      #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789
+    source:
+      type: chatgpt_api
+      sync:
+        refresh_window_days: 7
+        max_pages: 20        # pagination cap on listing
+        limit: 100           # records per page
+        sleep_between: 0.5   # seconds between requests (be polite)
+        # conv_uuids:
+        #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789
 
   # --- Slack ----------------------------------------------------------------
 
   # Slack workspace mirror. Credentials via latchkey. Omit `channels`
   # (or set `all_channels: true`) to mirror every channel the account sees.
   - name: slack
-    type: slack_api
-    blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
-    # Per-source override of the global extract_params: Slack rate-limits
-    # aggressively, so tolerate more failures in a row before giving up.
-    # Unset fields (here, the time budget) fall through to the global.
-    extract_params:
-      maximum_sequential_failed_requests: 100
-    sync:
-      media: true            # pull file attachments into blobs
-      all_channels: false
-      channels:
-        - project-data-liberation
-        - general
-      # refresh_window_days: 30
+    source:
+      type: slack_api
+      common:
+        blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
+        # Per-source override of the global extract_params: Slack rate-limits
+        # aggressively, so tolerate more failures in a row before giving up.
+        # Unset fields (here, the time budget) fall through to the global.
+        extract_params:
+          maximum_sequential_failed_requests: 100
+      sync:
+        media: true            # pull file attachments into blobs
+        all_channels: false
+        channels:
+          - project-data-liberation
+          - general
+        # refresh_window_days: 30
 
   # --- GitHub ---------------------------------------------------------------
 
@@ -98,42 +112,45 @@ sources:
   # discovery is skipped and only those PRs are fetched; entries are
   # paste-able refs (`owner/repo#NUM`, `owner/repo/pull/NUM`, or a URL).
   - name: github
-    type: github_api
-    sync:
-      refresh_window_days: 30
-      max_prs: 50
-      pull_requests:
-        - imbue-ai/datalib#40
-        - https://github.com/imbue-ai/datalib/pull/41
+    source:
+      type: github_api
+      sync:
+        refresh_window_days: 30
+        max_prs: 50
+        pull_requests:
+          - imbue-ai/datalib#40
+          - https://github.com/imbue-ai/datalib/pull/41
 
   # --- GitLab ---------------------------------------------------------------
 
   # GitLab MR mirror. Credentials via latchkey. `merge_requests` entries
   # are `namespace/project!IID` or a gitlab.com MR URL.
   - name: gitlab
-    type: gitlab_api
-    sync:
-      refresh_window_days: 30
-      max_mrs: 50
-      merge_requests:
-        - mygroup/myproject!100
-        - https://gitlab.com/mygroup/myproject/-/merge_requests/101
+    source:
+      type: gitlab_api
+      sync:
+        refresh_window_days: 30
+        max_mrs: 50
+        merge_requests:
+          - mygroup/myproject!100
+          - https://gitlab.com/mygroup/myproject/-/merge_requests/101
 
   # --- Notion ---------------------------------------------------------------
 
   # Notion mirror. Credentials via latchkey. At least one of `inbox`
   # (enabled) or `subtrees.pages` must be present.
   - name: notion
-    type: notion_api
-    sync:
-      refresh_window_days: 7
-      inbox:
-        enabled: true
-        mirror_referenced_pages: true
-      subtrees:
-        max_pages: 200
-        pages:
-          - https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef
+    source:
+      type: notion_api
+      sync:
+        refresh_window_days: 7
+        inbox:
+          enabled: true
+          mirror_referenced_pages: true
+        subtrees:
+          max_pages: 200
+          pages:
+            - https://www.notion.so/myworkspace/Project-Wiki-0123456789abcdef0123456789abcdef
 
   # --- Email: two input modes -----------------------------------------------
 
@@ -141,42 +158,45 @@ sources:
   # presence of `sync:` selects JMAP mode; `hostname` is required.
   # Credentials via latchkey.
   - name: fastmail
-    type: email
-    # Webmail each message's `↗` outlink points at: `fastmail` for a
-    # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
-    # any other server (no outlink rendered).
-    outlink_format: fastmail
-    sync:
-      hostname: api.fastmail.com
-      # account_id: u12345678        # defaults to the session's primary mail account
-      full_resync: false
-    # Mailbox label filters. Labels are POSIX-like paths into the folder
-    # tree (Fastmail forbids `/` in a label, so a `/` is always a
-    # parent/child separator); matching is EXACT — `Work` does NOT pull
-    # in `Work/Projects`, list nested labels explicitly. Both lists are
-    # independent; omit or leave empty for "everything".
-    only_extract_labels: []          # extract only these mailboxes; empty = all
-    only_render_labels: []           # render only threads touching these; empty = all
-    # e.g. extract the whole account but only render two branches:
-    #   only_render_labels: [Inbox, "Work/Projects"]
+    source:
+      type: email
+      # Webmail each message's `↗` outlink points at: `fastmail` for a
+      # Fastmail JMAP account, `gmail` for a Google Takeout mbox. Omit for
+      # any other server (no outlink rendered).
+      outlink_format: fastmail
+      sync:
+        hostname: api.fastmail.com
+        # account_id: u12345678        # defaults to the session's primary mail account
+        full_resync: false
+      # Mailbox label filters. Labels are POSIX-like paths into the folder
+      # tree (Fastmail forbids `/` in a label, so a `/` is always a
+      # parent/child separator); matching is EXACT — `Work` does NOT pull
+      # in `Work/Projects`, list nested labels explicitly. Both lists are
+      # independent; omit or leave empty for "everything".
+      only_extract_labels: []          # extract only these mailboxes; empty = all
+      only_render_labels: []           # render only threads touching these; empty = all
+      # e.g. extract the whole account but only render two branches:
+      #   only_render_labels: [Inbox, "Work/Projects"]
 
   # Mode B — Google Takeout .mbox on disk. No `sync:` block → translate-only
-  # mbox mode, reading the file at `input_path`. The `mbox:` block just
-  # labels the synthesized account row.
+  # mbox mode, reading the file at `common.input_path`. The `mbox:` block
+  # just labels the synthesized account row.
   - name: gmail-takeout
-    type: email
-    input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
-    outlink_format: gmail   # render each message's `↗` outlink to Gmail
-    mbox:
-      account_id: gmail_alice
-      display_name: Alice's Gmail
-      email_address: alice@gmail.com
-      is_personal: true
-    # Same label filters as JMAP mode — here they match the Gmail labels
-    # in each message's `X-Gmail-Labels` header (already `Parent/Child`
-    # paths for nested labels). Exact match; empty = everything.
-    only_extract_labels: []          # ingest only messages carrying these labels
-    only_render_labels: []           # render only threads touching these labels
+    source:
+      type: email
+      common:
+        input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+      outlink_format: gmail   # render each message's `↗` outlink to Gmail
+      mbox:
+        account_id: gmail_alice
+        display_name: Alice's Gmail
+        email_address: alice@gmail.com
+        is_personal: true
+      # Same label filters as JMAP mode — here they match the Gmail labels
+      # in each message's `X-Gmail-Labels` header (already `Parent/Child`
+      # paths for nested labels). Exact match; empty = everything.
+      only_extract_labels: []          # ingest only messages carrying these labels
+      only_render_labels: []           # render only threads touching these labels
 
   # --- Contacts (CardDAV): two input modes ----------------------------------
 
@@ -184,41 +204,47 @@ sources:
   # mode; `server_url` is required. Credentials via latchkey. Omit
   # `addressbooks` to sync every addressbook under the principal.
   - name: icloud-contacts
-    type: carddav
-    sync:
-      server_url: https://contacts.icloud.com/
-      addressbooks:
-        - Contacts
+    source:
+      type: carddav
+      sync:
+        server_url: https://contacts.icloud.com/
+        addressbooks:
+          - Contacts
 
   # Mode B — local vCard files. No `sync:` block → reads `.vcf` files from
-  # the directory at `input_path`.
+  # the directory at `common.input_path`.
   - name: vcard-contacts
-    type: carddav
-    input_path: ~/backups/contacts_vcf
+    source:
+      type: carddav
+      common:
+        input_path: ~/backups/contacts_vcf
 
   # --- Beeper ---------------------------------------------------------------
 
   # Beeper Texts mirror. Reads the local Beeper Texts data dir; pick the
   # chat networks to ingest (at least one required).
   - name: beeper
-    type: beeper
-    sync:
-      sources:
-        - signal
-        - googlechat
-      media: true
-      period: month   # month (default) | day | year | all
-      # beeper_data_dir: ~/Library/Application Support/BeeperTexts  # macOS default
+    source:
+      type: beeper
+      sync:
+        sources:
+          - signal
+          - googlechat
+        media: true
+        period: month   # month (default) | day | year | all
+        # beeper_data_dir: ~/Library/Application Support/BeeperTexts  # macOS default
 
   # --- Perseus Digital Library ----------------------------------------------
 
   # TEI editions from PerseusDL/canonical-greekLit. Bare `sync: {}` pulls
   # the default Thucydides Histories pair; list `files` to pick others.
   - name: perseus
-    type: perseus
-    input_path: ~/backups/perseus
-    sync:
-      files: []
+    source:
+      type: perseus
+      common:
+        input_path: ~/backups/perseus
+      sync:
+        files: []
 
   # --- YoLink sensors -------------------------------------------------------
 
@@ -227,16 +253,17 @@ sources:
   # and both IDs are exactly 32 lowercase-hex chars.
   # REDACT: family_device_id + device_udid are non-rotatable read secrets.
   - name: yolink
-    type: yolink
-    sync:
-      window_days: 7
-      overlap_minutes: 5
-      devices:
-        - name: basement_freezer
-          kind: temperature_humidity
-          start: 2026-01-01
-          family_device_id: 0123456789abcdef0123456789abcdef
-          device_udid: fedcba9876543210fedcba9876543210
+    source:
+      type: yolink
+      sync:
+        window_days: 7
+        overlap_minutes: 5
+        devices:
+          - name: basement_freezer
+            kind: temperature_humidity
+            start: 2026-01-01
+            family_device_id: 0123456789abcdef0123456789abcdef
+            device_udid: fedcba9876543210fedcba9876543210
 
   # --- Signal (Android backup) ----------------------------------------------
 
@@ -244,11 +271,12 @@ sources:
   # using the AEP read from the named env var at extract time. See
   # docs/user/getting_your_data.md for pulling the backup off the phone.
   - name: signal
-    type: signal_backup
-    sync:
-      snapshot_dir: ~/backups/SignalBackups
-      aep_env_var: SIGNAL_BACKUP_PASSPHRASE   # default if omitted
-      period: month
+    source:
+      type: signal_backup
+      sync:
+        snapshot_dir: ~/backups/SignalBackups
+        aep_env_var: SIGNAL_BACKUP_PASSPHRASE   # default if omitted
+        period: month
 
   # --- WhatsApp (Android crypt15 backup) ------------------------------------
 
@@ -256,15 +284,16 @@ sources:
   # `Databases/msgstore.db.crypt15` and a `Media/` tree). The 32-byte root
   # key is hex-encoded in the named env var.
   - name: whatsapp
-    type: whatsapp_backup
-    sync:
-      backup_dir: ~/backups/WhatsApp
-      key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted
+    source:
+      type: whatsapp_backup
+      sync:
+        backup_dir: ~/backups/WhatsApp
+        key_env_var: WHATSAPP_BACKUP_DECRYPTION_KEY   # default if omitted
 
   # --- LinkedIn (data export) -----------------------------------------------
 
-  # File-backed: point `input_path` at an unzipped LinkedIn "Get a copy of
-  # your data" export. Extract ingests every CSV; translate renders the
+  # File-backed: point `common.input_path` at an unzipped LinkedIn "Get a copy
+  # of your data" export. Extract ingests every CSV; translate renders the
   # message feeds and your connections (as first-class contacts).
   #
   # `fetch_photos` (default false) scrapes each connection's public profile
@@ -273,15 +302,17 @@ sources:
   # `extract_params` override below bounds that: stop the photo sweep after
   # 20 consecutive failures (LinkedIn rate-limits bursts).
   - name: linkedin
-    type: linkedin
-    input_path: ~/backups/LinkedInDataExport
-    fetch_photos: true
-    extract_params:
-      maximum_sequential_failed_requests: 20
+    source:
+      type: linkedin
+      common:
+        input_path: ~/backups/LinkedInDataExport
+        extract_params:
+          maximum_sequential_failed_requests: 20
+      fetch_photos: true
 
   # --- Google Takeout (data export) -----------------------------------------
 
-  # File-backed: point `input_path` at the unzipped Google Takeout root
+  # File-backed: point `common.input_path` at the unzipped Google Takeout root
   # (the directory that contains `Maps/`, `YouTube and YouTube Music/`,
   # `Google Chat/`, etc.). No credentials — Takeout is your own export.
   #
@@ -294,26 +325,30 @@ sources:
   # NOTE: Gmail is a separate `email` source (it reads the Takeout `.mbox`);
   # it is NOT one of the feeds here.
   - name: google-takeout
-    type: google_takeout
-    input_path: ~/backups/Takeout
-    sync:
-      google_chat: true              # DMs + bots + attachments → Markdown
-      google_voice: true             # texts, voicemails, calls → Markdown
-      google_voice_include_spam: false  # also walk Voice/Spam/ when google_voice is on
-      maps_reviews: false            # raw store only (no Markdown render yet)
-      maps_saved_places: false       # raw store only
-      maps_photos: false             # raw store only
-      youtube_watch_history: false   # raw store only
-      youtube_subscriptions: false   # raw store only
-      gemini_apps: false             # raw store only
+    source:
+      type: google_takeout
+      common:
+        input_path: ~/backups/Takeout
+      sync:
+        google_chat: true              # DMs + bots + attachments → Markdown
+        google_voice: true             # texts, voicemails, calls → Markdown
+        google_voice_include_spam: false  # also walk Voice/Spam/ when google_voice is on
+        maps_reviews: false            # raw store only (no Markdown render yet)
+        maps_saved_places: false       # raw store only
+        maps_photos: false             # raw store only
+        youtube_watch_history: false   # raw store only
+        youtube_subscriptions: false   # raw store only
+        gemini_apps: false             # raw store only
 
   # --- SMS Backup & Restore (Android export) --------------------------------
 
-  # File-backed: point `input_path` at the directory holding the Android
+  # File-backed: point `common.input_path` at the directory holding the Android
   # "SMS Backup & Restore" app's `sms-*.xml` / `calls-*.xml` files. No API,
   # no credentials. Extract ingests each SMS / MMS / call as its own raw row
   # (MMS attachment bytes go to the CAS); translate renders one chat per
   # phone number.
   - name: sms-backup-restore
-    type: sms_backup_restore
-    input_path: ~/backups/SMSBackupRestore
+    source:
+      type: sms_backup_restore
+      common:
+        input_path: ~/backups/SMSBackupRestore

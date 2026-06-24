@@ -347,28 +347,33 @@ def _yaml(
         "sources:",
     ]
     for name, (type_str, path) in sources.items():
+        # New (#41) shape: orchestrator-owned `name` at the entry level; the
+        # provider config nested under `source:` (type + the shared `common:`
+        # envelope + provider-specific keys).
         lines.append(f"  - name: {name}")
-        lines.append(f"    type: {type_str}")
-        lines.append(f"    input_path: {path}")
+        lines.append("    source:")
+        lines.append(f"      type: {type_str}")
+        lines.append("      common:")
+        lines.append(f"        input_path: {path}")
         if type_str == "notion_api":
-            lines.append("    sync:")
+            lines.append("      sync:")
             if notion_seed:
-                lines.append(f"      subtrees: {{pages: ['{notion_seed}']}}")
+                lines.append(f"        subtrees: {{pages: ['{notion_seed}']}}")
             else:
-                lines.append("      inbox: {enabled: true}")
+                lines.append("        inbox: {enabled: true}")
         elif type_str == "slack_api":
             # Disable media so extract doesn't fall back to the direct
             # `latchkey curl -v` path for file downloads (not on PATH in
             # the bazel sandbox, and the fixtures don't exercise media).
-            lines.append("    sync: {media: false}")
+            lines.append("      sync: {media: false}")
         elif type_str == "beeper":
             # `sources` here is the canonical-network list that
             # filters which rooms get ingested. `beeper_data_dir`
             # points at the materialized BeeperTexts fixture.
-            lines.append("    sync:")
-            lines.append("      sources: ['signal', 'googlechat']")
+            lines.append("      sync:")
+            lines.append("        sources: ['signal', 'googlechat']")
             if beeper_data_dir is not None:
-                lines.append(f"      beeper_data_dir: {beeper_data_dir}")
+                lines.append(f"        beeper_data_dir: {beeper_data_dir}")
         elif type_str == "carddav":
             # File-tree mode: no `sync:` block (otherwise we'd be in
             # CardDAV-server mode). The extract phase walks
@@ -381,46 +386,46 @@ def _yaml(
             # store under `input_path`. AEP comes from the
             # SIGNAL_BACKUP_PASSPHRASE env var injected by main().
             if signal_snapshot_root is not None:
-                lines.append("    sync:")
-                lines.append(f"      snapshot_dir: {signal_snapshot_root}")
+                lines.append("      sync:")
+                lines.append(f"        snapshot_dir: {signal_snapshot_root}")
             else:
-                lines.append("    sync: {}")
+                lines.append("      sync: {}")
         elif type_str == "email":
             # Mbox mode: no `sync:` block (would otherwise trigger
             # the JMAP path). Account metadata is supplied via the
-            # `mbox:` block at the source level so the synthesized
-            # `accounts` row carries display name + canonical
-            # address — same shape JMAP would produce.
-            lines.append("    mbox:")
-            lines.append("      account_id: picard@enterprise.starfleet")
-            lines.append("      display_name: Jean-Luc Picard")
-            lines.append("      email_address: picard@enterprise.starfleet")
-            lines.append("      is_personal: true")
+            # `mbox:` block so the synthesized `accounts` row carries
+            # display name + canonical address — same shape JMAP would
+            # produce.
+            lines.append("      mbox:")
+            lines.append("        account_id: picard@enterprise.starfleet")
+            lines.append("        display_name: Jean-Luc Picard")
+            lines.append("        email_address: picard@enterprise.starfleet")
+            lines.append("        is_personal: true")
             # Google-Takeout-shaped .mbox → Gmail webmail outlinks.
-            lines.append("    outlink_format: gmail")
+            lines.append("      outlink_format: gmail")
         elif type_str == "whatsapp_backup":
             # WhatsApp extractor needs `backup_dir` (the dir containing
             # `Databases/msgstore.db.crypt15` + `Media/`). Root key
             # comes from the WHATSAPP_BACKUP_DECRYPTION_KEY env var
             # injected by main().
             if whatsapp_dir is not None:
-                lines.append("    sync:")
-                lines.append(f"      backup_dir: {whatsapp_dir}")
+                lines.append("      sync:")
+                lines.append(f"        backup_dir: {whatsapp_dir}")
             else:
-                lines.append("    sync: {}")
+                lines.append("      sync: {}")
         elif type_str == "linkedin":
             # File-backed CSV walk (no `sync:` block). Turn on the
             # connection-photo fetch so the pipeline exercises the
             # og:image → CAS path — hermetically, against the playback
             # fixtures LinkedinSynth wrote in the synth phase.
-            lines.append("    fetch_photos: true")
+            lines.append("      fetch_photos: true")
         elif type_str == "google_takeout":
             # Opt into the rendering feeds: Google Chat and Google Voice
             # (incl. its Spam folder, to exercise that path). The other
             # feeds stay off for the central pipeline (their extract is
             # covered by the provider's own fixture_walk test).
             lines.append(
-                "    sync: {google_chat: true, google_voice: true, "
+                "      sync: {google_chat: true, google_voice: true, "
                 "google_voice_include_spam: true}"
             )
         elif type_str == "sms_backup_restore":
@@ -430,7 +435,7 @@ def _yaml(
             # `calls-*.xml`; translate renders one chat per number.
             pass
         elif type_str != "claude_export":
-            lines.append("    sync: {}")
+            lines.append("      sync: {}")
     return "\n".join(lines) + "\n"
 
 

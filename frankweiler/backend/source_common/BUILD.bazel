@@ -22,20 +22,3 @@ rust_test(
     crate = ":frankweiler_source_common",
     edition = "2021",
 )
-
-# Throwaway #41 smoke test: a real newtype-union over slack_config/email_config
-# with nested `common:` (composition, no flatten) + normalize(). Removed once
-# the real Config/SourceConfig land in ingest_config.
-rust_test(
-    name = "compose_smoke_test",
-    size = "small",
-    srcs = ["tests/compose_smoke.rs"],
-    edition = "2021",
-    deps = [
-        ":frankweiler_source_common",
-        "//frankweiler/backend/etl/providers/email_config:frankweiler_etl_email_config",
-        "//frankweiler/backend/etl/providers/slack_config:frankweiler_etl_slack_config",
-        "@frankweiler_crates//:serde",
-        "@frankweiler_crates//:serde_yaml",
-    ],
-)

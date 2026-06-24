@@ -962,34 +962,42 @@ data_root: {data_root}
 
 sources: []
 
-# Uncomment and adapt the sources you want. Each needs a unique `name`.
+# Uncomment and adapt the sources you want. Each needs a unique `name`; the
+# provider config lives under `source:` (the `type:` plus its keys).
 #
 #  - name: claude
-#    type: claude_api
-#    sync: {{}}            # incremental pull of your Claude conversations
+#    source:
+#      type: claude_api
+#      sync: {{}}            # incremental pull of your Claude conversations
 #
 #  - name: chatgpt
-#    type: chatgpt_api
-#    sync: {{}}
+#    source:
+#      type: chatgpt_api
+#      sync: {{}}
 #
 #  - name: slack
-#    type: slack_api
-#    sync:
-#      media: true
-#      channels: ["general"]   # omit / use all_channels: true for everything
+#    source:
+#      type: slack_api
+#      sync:
+#        media: true
+#        channels: ["general"]   # omit / use all_channels: true for everything
 #
 #  - name: github
-#    type: github_api
-#    sync: {{}}
+#    source:
+#      type: github_api
+#      sync: {{}}
 #
 #  - name: fastmail
-#    type: email
-#    sync:
-#      hostname: api.fastmail.com
+#    source:
+#      type: email
+#      sync:
+#        hostname: api.fastmail.com
 #
 #  - name: contacts          # translate-only: no `sync:` block
-#    type: carddav
-#    input_path: ~/Downloads/contacts.vcf
+#    source:
+#      type: carddav
+#      common:
+#        input_path: ~/Downloads/contacts.vcf
 "#
     )
 }
