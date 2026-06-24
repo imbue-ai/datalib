@@ -60,17 +60,19 @@ in the YAML `sync:` block:
 
 ```yaml
 sources:
-  - type: google_takeout
-    name: my_takeout
-    input_path: ~/backups/Takeout
-    sync:
-      maps_reviews: true
-      maps_saved_places: true
-      maps_photos: true
-      youtube_watch_history: true
-      youtube_subscriptions: true
-      google_chat: true
-      gemini_apps: true
+  - name: my_takeout
+    source:
+      type: google_takeout
+      common:
+        input_path: ~/backups/Takeout
+      sync:
+        maps_reviews: true
+        maps_saved_places: true
+        maps_photos: true
+        youtube_watch_history: true
+        youtube_subscriptions: true
+        google_chat: true
+        gemini_apps: true
 ```
 
 Each `true` enables one walker module. Defaults are all `false` so a

@@ -20,8 +20,8 @@
 //!     rename in `schemas/grid_rows.schema.json` breaks the build
 //!     instead of silently producing stale sidecars.
 //!   * **The same `bazel run //...:sync` UX as every other source.**
-//!     Add `- name: perseus, type: perseus` to `config.yaml` and one
-//!     command renders + loads + qmd-indexes.
+//!     Add a `- name: perseus` source (`source: {type: perseus}`) to
+//!     `config.yaml` and one command renders + loads + qmd-indexes.
 //!   * **A real Bazel test target** ([rust_test
 //!     `perseus_translate_test`]) that catches regressions before they
 //!     reach a user's data root.
@@ -30,8 +30,9 @@
 //!
 //! ```yaml
 //! - name: perseus
-//!   type: perseus
-//!   sync: {}            # default: Thucydides Histories (grc + eng)
+//!   source:
+//!     type: perseus
+//!     sync: {}            # default: Thucydides Histories (grc + eng)
 //! ```
 //!
 //! With a bare `sync: {}` block, `bazel run //frankweiler/backend/sync`
@@ -48,11 +49,12 @@
 //!
 //! ```yaml
 //! - name: perseus
-//!   type: perseus
-//!   sync:
-//!     files:
-//!       - tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml
-//!       - tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml
+//!   source:
+//!     type: perseus
+//!     sync:
+//!       files:
+//!         - tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml
+//!         - tlg0003/tlg001/tlg0003.tlg001.1st1K-eng1.xml
 //! ```
 //!
 //! Each entry is a subpath under

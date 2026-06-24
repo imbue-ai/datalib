@@ -26,10 +26,11 @@ bridge-agnostic schema. We re-shape that into our `rooms` / `users` /
 3. Configure the source in YAML:
    ```yaml
    - name: beeper
-     type: beeper
-     sync:
-       sources: ["signal", "googlechat"]
-       media: true
+     source:
+       type: beeper
+       sync:
+         sources: ["signal", "googlechat"]
+         media: true
    ```
 
 That's it.
