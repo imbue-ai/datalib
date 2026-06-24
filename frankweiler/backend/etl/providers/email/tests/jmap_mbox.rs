@@ -5,7 +5,7 @@
 //! the sync orchestrator picks up when a `type: email` source has no
 //! `sync:` block and `input_path` points at an `.mbox` file.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use frankweiler_etl::load::RenderedMarkdown;
@@ -134,6 +134,115 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert_eq!(ids1, ids2);
 }
 
+/// Extract-time label filter: `only_labels` keeps only messages
+/// carrying a matching `X-Gmail-Labels` label. Two of the six fixture
+/// messages are filed under `Sent` (`Inbox,Sent` and `Sent,Important`),
+/// so the filter lands exactly those two — and both end up in the `Sent`
+/// mailbox.
+#[tokio::test(flavor = "multi_thread")]
+async fn mbox_only_labels_filters_extraction() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("e.doltlite_db");
+    let db = RawDb::open(&db_path).await.unwrap();
+    let pool = db.pool().clone();
+    mbox::fetch(mbox::FetchOptions {
+        db_path: db_path.clone(),
+        db: Some(db),
+        input_path: fixture_path(),
+        account_id_override: Some("enterprise".to_string()),
+        only_labels: vec!["Sent".to_string()],
+        ..Default::default()
+    })
+    .await
+    .expect("mbox extract fetch with label filter");
+    pool.close().await;
+
+    let db = RawDb::open(&db_path).await.unwrap();
+    let emails = db.load_emails().await.unwrap();
+    let mailboxes = db.load_mailboxes().await.unwrap();
+    let joins = db.load_email_joins().await.unwrap();
+
+    // Only the two Sent-labeled messages survived (vs. 6 unfiltered).
+    assert_eq!(emails.len(), 2, "only Sent-labeled messages should land");
+
+    // Every retained email is filed under the Sent mailbox.
+    let sent_id = mailboxes
+        .iter()
+        .find(|m| m["name"] == "Sent")
+        .expect("Sent mailbox present")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for em in &emails {
+        let mboxes = joins.mailboxes.get(&em.id).cloned().unwrap_or_default();
+        assert!(
+            mboxes.contains(&sent_id),
+            "retained email {} not in Sent mailbox",
+            em.id
+        );
+    }
+}
+
+/// Render-time label filter: extract everything, then render only the
+/// threads touching a label. Thread-level inclusion — a whole thread
+/// renders if any of its emails is filed under an allowed mailbox. The
+/// expected thread set is computed from the parsed joins so the
+/// assertion stays correct regardless of fixture threading details; it
+/// must be a non-empty strict subset of the full set to be meaningful.
+#[tokio::test(flavor = "multi_thread")]
+async fn render_only_labels_filters_to_thread_subset() {
+    let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
+    let parsed = parse(&db_path_for(&db_path), None).expect("parse cold start");
+
+    // "Sent" is a flat mbox label, so its full path equals its name.
+    let sent_id = parsed
+        .mailboxes
+        .iter()
+        .find(|m| m["name"] == "Sent")
+        .expect("Sent mailbox present")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let expected: HashSet<String> = parsed
+        .docs
+        .iter()
+        .filter(|b| {
+            b.emails.iter().any(|e| {
+                b.joins
+                    .mailboxes
+                    .get(&e.id)
+                    .is_some_and(|ids| ids.contains(&sent_id))
+            })
+        })
+        .map(|b| thread_uuid(&b.account_id, &b.thread_id))
+        .collect();
+    assert!(!expected.is_empty(), "fixture should have a Sent thread");
+    assert!(
+        expected.len() < parsed.docs.len(),
+        "filter must be a strict subset to be a meaningful test"
+    );
+
+    let tmp = tempfile::tempdir().unwrap();
+    let progress = Progress::noop();
+    let mut docs: Vec<RenderedMarkdown> = Vec::new();
+    render_all(
+        &parsed,
+        tmp.path(),
+        "star-trek-mbox",
+        Some(OutlinkFormat::Gmail),
+        &["Sent".to_string()],
+        &progress,
+        &mut |doc| {
+            docs.push(doc);
+            Ok(())
+        },
+    )
+    .expect("render_all with render-label filter");
+
+    let rendered: HashSet<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();
+    assert_eq!(rendered, expected, "rendered exactly the Sent threads");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn star_trek_mbox_renders_through_render_all() {
     let (_tmp_extract, db_path) = fetch_into_tmp(fixture_path()).await;
@@ -147,6 +256,7 @@ async fn star_trek_mbox_renders_through_render_all() {
         tmp.path(),
         "star-trek-mbox",
         Some(OutlinkFormat::Gmail),
+        &[],
         &progress,
         &mut |doc| {
             docs.push(doc);

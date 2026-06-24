@@ -168,10 +168,15 @@ pub struct FetchOptions {
     /// Skip stored `state` tokens and re-enumerate via `Email/query`.
     /// Mailboxes still re-fetch via `Mailbox/get`.
     pub full_resync: bool,
-    /// When non-empty, only emails whose `mailboxIds` intersect this
-    /// set get persisted. Implemented client-side after `Email/get`,
-    /// since `Email/changes` is account-scoped on JMAP.
-    pub only_mailbox_ids: Vec<String>,
+    /// When non-empty, restrict the sync to mailboxes whose full label
+    /// path (POSIX-like, e.g. `Work/Projects`; see
+    /// [`crate::mailbox_labels`]) exactly matches one of these. Empty =
+    /// every mailbox the account exposes. The paths are resolved to
+    /// JMAP mailbox ids once `Mailbox/get` has run, then the filter is
+    /// pushed server-side on full enumeration and applied client-side
+    /// after `Email/get` on the incremental path (since `Email/changes`
+    /// is account-scoped on JMAP).
+    pub only_mailbox_labels: Vec<String>,
     /// Skip downloading any blob whose advertised size exceeds this.
     /// `None` = no limit.
     pub blob_size_limit_bytes: Option<u64>,
@@ -241,7 +246,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             "hostname": opts.hostname,
             "account_id": account_id,
             "full_resync": opts.full_resync,
-            "only_mailbox_ids": opts.only_mailbox_ids,
+            "only_mailbox_labels": opts.only_mailbox_labels,
         }),
     )
     .await?;
@@ -284,16 +289,40 @@ async fn run_sync(
         .unwrap_or_else(|| json!({}));
     upsert_account(db, &now, account_id, &account_payload).await?;
 
-    let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_ids.is_empty() {
-        None
-    } else {
-        Some(opts.only_mailbox_ids.iter().cloned().collect())
-    };
-
     // ── mailboxes ───────────────────────────────────────────────────
     opts.progress.set_message("email: mailboxes");
     sync_mailboxes(db, &now, session, account_id, opts, &mut summary).await?;
     opts.progress.inc(1);
+
+    // Resolve the configured label paths to mailbox ids now that the
+    // full tree is in the db (`Mailbox/get` always re-lists, even on an
+    // incremental run). Empty config = no filter (sync every mailbox).
+    // An all-unmatched filter resolves to an empty set, which means
+    // "match nothing" — loud-warned below so a typo'd path doesn't
+    // silently drop the whole account.
+    let mailbox_filter: Option<HashSet<String>> = if opts.only_mailbox_labels.is_empty() {
+        None
+    } else {
+        let payloads = db.load_mailboxes().await?;
+        let nodes: Vec<crate::mailbox_labels::MailboxNode> = payloads
+            .iter()
+            .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
+            .collect();
+        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
+        if !resolved.unmatched.is_empty() {
+            warn!(
+                event = "jmap_label_filter_unmatched",
+                unmatched = ?resolved.unmatched,
+                "only_extract_labels matched no mailbox; check spelling / parent path",
+            );
+        }
+        info!(
+            event = "jmap_label_filter",
+            requested = opts.only_mailbox_labels.len(),
+            resolved_mailboxes = resolved.ids.len(),
+        );
+        Some(resolved.ids)
+    };
 
     // ── emails (+ collect threadIds) ────────────────────────────────
     opts.progress.set_message("email: emails");
@@ -581,10 +610,16 @@ async fn full_enumerate_emails(
     summary: &mut FetchSummary,
     touched_threads: &mut HashSet<String>,
 ) -> Result<()> {
-    // Decide filter: if only_mailbox_ids is set, push it server-side
-    // as an OR over inMailbox.
+    // Decide filter: if a label filter resolved to mailbox ids, push it
+    // server-side as an OR over inMailbox.
     let filter = match mailbox_filter {
         None => Value::Null,
+        Some(set) if set.is_empty() => {
+            // Label filter resolved to zero mailboxes (all paths
+            // unmatched). Nothing can match — skip enumeration rather
+            // than send a degenerate empty-OR filter.
+            return Ok(());
+        }
         Some(set) if set.len() == 1 => {
             json!({"inMailbox": set.iter().next().unwrap()})
         }
