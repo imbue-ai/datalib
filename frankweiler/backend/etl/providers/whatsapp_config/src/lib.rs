@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The whatsapp-owned slice of a `whatsapp_backup` source. `sync:` present →
@@ -11,6 +12,10 @@ use serde::{Deserialize, Serialize};
 /// already-on-disk raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhatsappConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<WhatsAppSync>,
 }

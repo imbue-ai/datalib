@@ -2,6 +2,7 @@
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `CarddavConfig` without linking the provider.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The carddav-owned slice of a `carddav` source. `sync:` present →
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// ingesting `.vcf` exports under `input_path`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CarddavConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<CarddavSync>,
 }

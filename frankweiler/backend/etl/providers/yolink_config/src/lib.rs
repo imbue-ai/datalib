@@ -7,12 +7,17 @@
 //! free of a core dependency. The provider's `processor` converts these into
 //! the core `YolinkSync`/`YolinkDevice` its `extract::fetch` still expects.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The yolink-owned slice of a `yolink` source. `sync:` drives the
 /// per-device download; absent means no extract is contributed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct YolinkConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<YolinkSync>,
 }
@@ -149,6 +154,7 @@ mod tests {
 
     fn cfg(devices: Vec<YolinkDevice>) -> YolinkConfig {
         YolinkConfig {
+            common: Default::default(),
             sync: Some(YolinkSync {
                 overlap_minutes: None,
                 window_days: None,

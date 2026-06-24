@@ -1,10 +1,15 @@
 //! Provider-owned config schema for the `slack_api` source (Program A goal #1).
 //! Schema-only (serde + anyhow).
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SlackConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<SlackApiSync>,
 }

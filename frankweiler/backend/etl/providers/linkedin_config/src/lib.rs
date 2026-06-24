@@ -6,12 +6,17 @@
 //! envelope-level `PlanCommon`. Bazel-only by design (no Cargo.toml).
 
 use anyhow::Result;
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// Typed config for a `linkedin` source. `fetch_photos` lives at the top
 /// level (LinkedIn has no managed `sync:` block).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LinkedinConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     /// Whether to download connection profile photos during extract.
     #[serde(default)]
     pub fetch_photos: bool,

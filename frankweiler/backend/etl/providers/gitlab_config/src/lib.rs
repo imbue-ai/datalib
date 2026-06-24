@@ -2,6 +2,7 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can name
 //! `GitlabConfig` without linking the provider.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The gitlab-owned slice of a `gitlab_api` source. `sync:` present → live
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<GitlabApiSync>,
 }

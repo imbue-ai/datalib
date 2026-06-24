@@ -2,6 +2,7 @@
 //! (Program A goal #1). Schema-only (serde + anyhow), so the orchestrator and
 //! `http` can name `AnthropicConfig` without linking the provider.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The anthropic-owned slice of a `claude_api` (or `claude_export`) source.
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// translate-only over an already-on-disk export (`claude_export`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnthropicConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<ClaudeApiSync>,
 }

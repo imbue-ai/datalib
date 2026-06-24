@@ -2,6 +2,7 @@
 //! goal #1). Schema-only (serde + anyhow), so the orchestrator and `http`
 //! can name `NotionConfig` without linking the provider.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The notion-owned slice of a `notion_api` source. `sync:` present → live
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// already-on-disk API capture.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotionConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<NotionApiSync>,
 }
@@ -96,6 +101,7 @@ mod tests {
     #[test]
     fn sync_with_inbox_enabled_validates() {
         let cfg = NotionConfig {
+            common: Default::default(),
             sync: Some(NotionApiSync {
                 inbox: Some(NotionInbox {
                     enabled: true,
@@ -114,6 +120,7 @@ mod tests {
     #[test]
     fn sync_with_subtree_pages_validates() {
         let cfg = NotionConfig {
+            common: Default::default(),
             sync: Some(NotionApiSync {
                 subtrees: Some(NotionSubtrees {
                     pages: vec!["abc123".into()],
@@ -128,6 +135,7 @@ mod tests {
     #[test]
     fn sync_without_inbox_or_subtrees_is_rejected() {
         let cfg = NotionConfig {
+            common: Default::default(),
             sync: Some(NotionApiSync::default()),
         };
         let err = cfg.validate().unwrap_err();
@@ -139,6 +147,7 @@ mod tests {
     #[test]
     fn sync_with_inbox_disabled_and_empty_subtrees_is_rejected() {
         let cfg = NotionConfig {
+            common: Default::default(),
             sync: Some(NotionApiSync {
                 inbox: Some(NotionInbox {
                     enabled: false,

@@ -8,6 +8,7 @@
 //! `frankweiler_etl_google_takeout::extract::SyncFlags`, so the SyncFlags
 //! duplication is now provider-owned rather than orchestrator-owned.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The google_takeout-owned slice of a `google_takeout` source. File-backed:
@@ -15,6 +16,10 @@ use serde::{Deserialize, Serialize};
 /// individual feeds; absent → all feeds off (default).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GoogleTakeoutConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<GoogleTakeoutSync>,
 }
