@@ -21,10 +21,12 @@ rust_library(
     visibility = ["//frankweiler:__subpackages__"],
     proc_macro_deps = [
         "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+        "@frankweiler_crates//:async-trait",
     ],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/contact-common:frankweiler_etl_contact_common",
+        "//frankweiler/backend/etl/providers/carddav_config:frankweiler_etl_carddav_config",
         "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/time:frankweiler_time",

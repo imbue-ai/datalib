@@ -1,0 +1,121 @@
+//! Program-A `DataProcessor`s for the github (`github_api`) source. github
+//! contributes a translate processor (always) and an extract processor when
+//! `sync:` is present (managed). The source owns its raw store (open/commit/
+//! checkpoint); the orchestrator only drives `run`.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+
+use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::raw_store::PoolCheckpoint;
+use frankweiler_etl_github_config::{GithubApiSync, GithubConfig};
+
+use crate::extract;
+
+/// Build github's [`SourcePlan`]: always a translate processor; an extract
+/// processor when `sync:` is present (github is managed iff `sync:` present).
+pub fn plan(common: PlanCommon, config: GithubConfig) -> Result<SourcePlan> {
+    let PlanCommon { name, raw_path, .. } = common;
+    let mut plan = SourcePlan::new();
+    plan.translate.push(Box::new(GithubRender {
+        id: format!("github/{name}/translate"),
+        raw_path: raw_path.clone(),
+    }));
+    if let Some(sync) = config.sync {
+        plan.extract.push(Box::new(GithubExtract {
+            id: format!("github/{name}/extract"),
+            raw_path,
+            sync,
+        }));
+    }
+    Ok(plan)
+}
+
+struct GithubExtract {
+    id: String,
+    raw_path: PathBuf,
+    sync: GithubApiSync,
+}
+
+#[async_trait]
+impl DataProcessor for GithubExtract {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        let db = extract::RawDb::open(&extract::db_path_for(&self.raw_path)).await?;
+        let pool = db.pool().clone();
+        ctx.register_checkpoint(
+            &self.id,
+            PoolCheckpoint::new(
+                pool.clone(),
+                format!("extract {}: interrupted (Ctrl-C)", ctx.name),
+            ),
+        );
+        let targets = self
+            .sync
+            .pull_requests
+            .iter()
+            .map(|s| extract::parse_pr_ref(s))
+            .collect::<Result<Vec<_>>>()
+            .context("parse github pull_requests refs")?;
+        let s = extract::fetch(extract::FetchOptions {
+            db_path: self.raw_path.clone(),
+            db: Some(db),
+            // Same fix as gitlab: don't force full_sync, so discovery narrows
+            // via saved `sync_scope_state`. Unlike gitlab, github's per-PR
+            // loop has no skip optimization yet, so every discovered PR still
+            // gets four API calls — but narrowing keeps the discovered set
+            // small to begin with.
+            refresh_window_days: self
+                .sync
+                .refresh_window_days
+                .map(|v| v.max(0) as u32)
+                .unwrap_or(0),
+            max_prs: self.sync.max_prs.map(|v| v as usize),
+            targets,
+            sleep_between: Duration::ZERO,
+            progress: ctx.progress.clone(),
+            control: ctx.control.clone(),
+            ..Default::default()
+        })
+        .await?;
+        let summary = format!(
+            "prs(new={}) issue_comments(new={}) reviews(new={}) review_comments(new={})",
+            s.new_prs, s.new_issue_comments, s.new_reviews, s.new_review_comments,
+        );
+        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
+    }
+}
+
+struct GithubRender {
+    id: String,
+    raw_path: PathBuf,
+}
+
+#[async_trait]
+impl DataProcessor for GithubRender {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
+        use crate::render_and_index_md::{parse_api_dir, render_github};
+        let parsed = parse_api_dir(&self.raw_path)
+            .with_context(|| format!("github parse {}", self.raw_path.display()))?;
+        let mut on_doc = |md| ctx.emit_doc(md);
+        render_github(
+            &parsed,
+            ctx.root,
+            ctx.progress,
+            ctx.prior_fingerprints,
+            &mut on_doc,
+        )
+        .context("render_github")?;
+        Ok("rendered".into())
+    }
+}

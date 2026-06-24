@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::doltlite_raw::commit_run;
-use frankweiler_etl::processor::{DataProcessor, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
 use frankweiler_etl::raw_store::PoolCheckpoint;
 
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
@@ -27,35 +26,18 @@ use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSyn
 use crate::extract;
 use crate::render_and_index_md::render::OutlinkFormat;
 
-/// Everything the orchestrator must resolve from the source envelope before
-/// email can build its processors: the resolved store/input paths and the
-/// merged shared knobs. Email owns the rest (parsed into [`EmailConfig`]).
-pub struct EmailPlanArgs {
-    /// `sources[].name`.
-    pub name: String,
-    /// Resolved raw-store directory (`resolved_raw_path`) — where email keeps
-    /// its `entities.doltlite_db`.
-    pub raw_path: PathBuf,
-    /// Resolved input path (`resolved_input_path`) — the `.mbox` for file mode.
-    pub input_path: PathBuf,
-    /// The email-owned config slice (parsed from the source's YAML stanza).
-    pub config: EmailConfig,
-    /// Merged (global ⊕ source) blob size cap.
-    pub blob_size_limit_bytes: Option<u64>,
-}
-
 /// Build email's [`SourcePlan`]: always a translate processor, plus an extract
 /// processor when the source is managed (a `sync:` block, or an `.mbox` at
-/// `input_path`). Mirrors the dispatch the orchestrator's `ExtractPlan` did
-/// for email, but owned by the provider.
-pub fn plan(args: EmailPlanArgs) -> Result<SourcePlan> {
-    let EmailPlanArgs {
+/// `input_path`). The provider owns every email-specific decision; the
+/// orchestrator passes only the envelope-level [`PlanCommon`].
+pub fn plan(common: PlanCommon, config: EmailConfig) -> Result<SourcePlan> {
+    let PlanCommon {
         name,
         raw_path,
         input_path,
-        config,
         blob_size_limit_bytes,
-    } = args;
+        ..
+    } = common;
 
     let outlink = config.outlink_format.map(outlink_format);
     let only_extract_labels = config.only_extract_labels.clone();
@@ -218,25 +200,9 @@ impl DataProcessor for EmailExtract {
             }
         };
 
-        // Post-extract commit against the same pool — the source's job now,
-        // matching the orchestrator's old `{stats} commit={h}` suffix so the
-        // run log is unchanged.
-        let commit_msg = format!("extract {}: {summary}", ctx.name);
-        let final_summary = match commit_run(&pool, &commit_msg).await {
-            Ok(Some(h)) => format!("{summary} commit={h}"),
-            Ok(None) => summary,
-            Err(e) => {
-                tracing::error!(
-                    source = %ctx.name,
-                    error = %format!("{e:#}"),
-                    "email extract commit FAILED"
-                );
-                summary
-            }
-        };
-        // Drain the writer connection before translate re-opens the file.
-        pool.close().await;
-        Ok(final_summary)
+        // The source's post-extract commit + pool close (uniform across
+        // providers); keeps the old `{stats} commit={h}` summary suffix.
+        Ok(frankweiler_etl::raw_store::commit_and_close(pool, ctx.name, summary).await)
     }
 }
 

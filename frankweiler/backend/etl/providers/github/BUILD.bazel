@@ -13,10 +13,12 @@ rust_library(
     edition = "2021",
     proc_macro_deps = [
         "//frankweiler/backend/etl/macros:frankweiler_etl_macros",
+        "@frankweiler_crates//:async-trait",
     ],
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/github_config:frankweiler_etl_github_config",
         "//frankweiler/backend/index_lib:frankweiler_index_lib",
         "//frankweiler/backend/schema:frankweiler_schema",
         "//frankweiler/backend/time:frankweiler_time",
