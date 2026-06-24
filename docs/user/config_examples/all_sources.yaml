@@ -149,8 +149,16 @@ sources:
     sync:
       hostname: api.fastmail.com
       # account_id: u12345678        # defaults to the session's primary mail account
-      only_mailbox_ids: []           # empty = every mailbox the account exposes
       full_resync: false
+    # Mailbox label filters. Labels are POSIX-like paths into the folder
+    # tree (Fastmail forbids `/` in a label, so a `/` is always a
+    # parent/child separator); matching is EXACT — `Work` does NOT pull
+    # in `Work/Projects`, list nested labels explicitly. Both lists are
+    # independent; omit or leave empty for "everything".
+    only_extract_labels: []          # extract only these mailboxes; empty = all
+    only_render_labels: []           # render only threads touching these; empty = all
+    # e.g. extract the whole account but only render two branches:
+    #   only_render_labels: [Inbox, "Work/Projects"]
 
   # Mode B — Google Takeout .mbox on disk. No `sync:` block → translate-only
   # mbox mode, reading the file at `input_path`. The `mbox:` block just
@@ -164,6 +172,11 @@ sources:
       display_name: Alice's Gmail
       email_address: alice@gmail.com
       is_personal: true
+    # Same label filters as JMAP mode — here they match the Gmail labels
+    # in each message's `X-Gmail-Labels` header (already `Parent/Child`
+    # paths for nested labels). Exact match; empty = everything.
+    only_extract_labels: []          # ingest only messages carrying these labels
+    only_render_labels: []           # render only threads touching these labels
 
   # --- Contacts (CardDAV): two input modes ----------------------------------
 

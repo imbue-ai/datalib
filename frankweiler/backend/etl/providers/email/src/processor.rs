@@ -58,6 +58,8 @@ pub fn plan(args: EmailPlanArgs) -> Result<SourcePlan> {
     } = args;
 
     let outlink = config.outlink_format.map(outlink_format);
+    let only_extract_labels = config.only_extract_labels.clone();
+    let only_render_labels = config.only_render_labels.clone();
 
     let mut plan = SourcePlan::new();
 
@@ -67,6 +69,7 @@ pub fn plan(args: EmailPlanArgs) -> Result<SourcePlan> {
         raw_path: raw_path.clone(),
         name: name.clone(),
         outlink,
+        only_render_labels,
     }));
 
     // Extract present iff managed: `sync:` → JMAP; else an `.mbox` → mbox mode.
@@ -99,6 +102,7 @@ pub fn plan(args: EmailPlanArgs) -> Result<SourcePlan> {
             raw_path,
             mode,
             blob_size_limit_bytes,
+            only_extract_labels,
         }));
     }
 
@@ -129,6 +133,9 @@ pub struct EmailExtract {
     raw_path: PathBuf,
     mode: ExtractMode,
     blob_size_limit_bytes: Option<u64>,
+    /// Full mailbox label paths to limit extraction to (empty = every
+    /// mailbox). Applies to both JMAP and mbox modes.
+    only_extract_labels: Vec<String>,
 }
 
 #[async_trait]
@@ -160,7 +167,7 @@ impl DataProcessor for EmailExtract {
                     hostname: sync.hostname.clone(),
                     account_id: sync.account_id.clone(),
                     full_resync: sync.full_resync,
-                    only_mailbox_ids: sync.only_mailbox_ids.clone(),
+                    only_mailbox_labels: self.only_extract_labels.clone(),
                     blob_size_limit_bytes: self.blob_size_limit_bytes,
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
@@ -192,6 +199,7 @@ impl DataProcessor for EmailExtract {
                         email_address: account_config.email_address.clone(),
                         is_personal: account_config.is_personal,
                     },
+                    only_labels: self.only_extract_labels.clone(),
                     blob_size_limit_bytes: self.blob_size_limit_bytes,
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
@@ -239,6 +247,9 @@ pub struct EmailRender {
     raw_path: PathBuf,
     name: String,
     outlink: Option<OutlinkFormat>,
+    /// Render only threads with at least one email under one of these mailbox
+    /// label paths (empty = render everything extracted).
+    only_render_labels: Vec<String>,
 }
 
 #[async_trait]
@@ -275,6 +286,7 @@ impl DataProcessor for EmailRender {
             ctx.root,
             &self.name,
             self.outlink,
+            &self.only_render_labels,
             ctx.progress,
             &mut on_doc,
         )?;

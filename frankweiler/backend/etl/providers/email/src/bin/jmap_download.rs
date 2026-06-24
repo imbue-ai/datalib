@@ -32,10 +32,11 @@ struct Args {
     #[arg(long, default_value_t = false)]
     full_resync: bool,
 
-    /// Restrict the sync to these mailbox ids (comma-separated). Empty
-    /// = every mailbox the account exposes.
+    /// Restrict the sync to mailboxes whose full label path matches one
+    /// of these (comma-separated, POSIX-like e.g. `Work/Projects`).
+    /// Empty = every mailbox the account exposes.
     #[arg(long, value_delimiter = ',')]
-    only_mailbox_ids: Vec<String>,
+    only_mailbox_labels: Vec<String>,
 
     /// Skip downloading any blob whose advertised size exceeds this.
     #[arg(long, env = "JMAP_BLOB_SIZE_LIMIT_BYTES")]
@@ -55,7 +56,7 @@ async fn main() -> Result<()> {
         hostname: args.hostname.clone(),
         account_id: args.account_id.clone(),
         full_resync: args.full_resync,
-        only_mailbox_ids: args.only_mailbox_ids.clone(),
+        only_mailbox_labels: args.only_mailbox_labels.clone(),
         blob_size_limit_bytes: args.blob_size_limit_bytes,
         ..Default::default()
     };

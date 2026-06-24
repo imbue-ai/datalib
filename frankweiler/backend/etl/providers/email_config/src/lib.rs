@@ -39,6 +39,18 @@ pub struct EmailConfig {
     /// other server (no outlink).
     #[serde(default)]
     pub outlink_format: Option<EmailOutlink>,
+    /// Limit **extraction** to mailboxes whose full label path (POSIX-like,
+    /// e.g. `Work/Projects`) exactly matches one of these — nested labels must
+    /// be listed explicitly. Empty = extract everything. Applies to both the
+    /// JMAP and `.mbox` paths. Independent of `only_render_labels`.
+    #[serde(default)]
+    pub only_extract_labels: Vec<String>,
+    /// Limit **rendering** to threads with at least one email under one of
+    /// these mailbox label paths (same exact-match semantics). Empty = render
+    /// everything extracted. Separate list, so a giant inbox can be extracted
+    /// in full but rendered down to a subset.
+    #[serde(default)]
+    pub only_render_labels: Vec<String>,
 }
 
 impl EmailConfig {
@@ -68,9 +80,6 @@ pub struct EmailSync {
     /// JMAP account id. Defaults to the session's mail primary account.
     #[serde(default)]
     pub account_id: Option<String>,
-    /// Restrict the sync to these JMAP Mailbox ids. Empty = every mailbox.
-    #[serde(default)]
-    pub only_mailbox_ids: Vec<String>,
     /// Force full `Email/query` enumeration even if a `changes` state token
     /// is stored. Defaults to false (incremental).
     #[serde(default)]

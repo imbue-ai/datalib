@@ -506,6 +506,11 @@ enum OutlinkFlavor {
 
 struct Email {
     outlink: Option<frankweiler_etl_email::render_and_index_md::render::OutlinkFormat>,
+    /// Render-time label filter (full POSIX-like mailbox paths). Empty =
+    /// render every thread. Separate from the extract-time
+    /// `only_extract_labels`, so a giant inbox can be extracted in full
+    /// but rendered down to a subset.
+    only_render_labels: Vec<String>,
 }
 impl Email {
     fn from_stanza(stanza: &Value) -> Result<Self> {
@@ -514,6 +519,8 @@ impl Email {
         struct EmailStanza {
             #[serde(default)]
             outlink_format: Option<OutlinkFlavor>,
+            #[serde(default)]
+            only_render_labels: Vec<String>,
         }
         let s: EmailStanza =
             serde_yaml::from_value(stanza.clone()).context("parse email config")?;
@@ -521,7 +528,10 @@ impl Email {
             OutlinkFlavor::Gmail => OutlinkFormat::Gmail,
             OutlinkFlavor::Fastmail => OutlinkFormat::Fastmail,
         });
-        Ok(Email { outlink })
+        Ok(Email {
+            outlink,
+            only_render_labels: s.only_render_labels,
+        })
     }
 }
 impl RenderAndIndexMd for Email {
@@ -553,6 +563,7 @@ impl RenderAndIndexMd for Email {
             ctx.root,
             ctx.name,
             self.outlink,
+            &self.only_render_labels,
             ctx.progress,
             on_doc,
         )
