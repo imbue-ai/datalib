@@ -1589,42 +1589,20 @@ fn render_and_index_md_source(
     _prior_cursors: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut render_and_index_md::OnDoc,
 ) -> Result<()> {
-    // Migrated providers render through their translate `DataProcessor`s
-    // (provider owns its config + render path); the rest stay on the
-    // opaque-stanza `renderer_for` registry. Same `build_source_plan` seam the
-    // extract phase uses, so a provider is migrated in exactly one place.
-    if let Some(res) = build_source_plan(src, cfg, None) {
-        let source_plan = res?;
-        return render_processor_translate(
-            src.name(),
-            &source_plan.translate,
-            root,
-            progress,
-            prior_fingerprints,
-            on_doc_complete,
-        );
-    }
-    let raw_dir = src.resolved_raw_path(&cfg.data_root);
-    let name = src.name();
-    // The render registry is config-opaque: it dispatches on the `type`
-    // string and parses any knobs out of this stanza itself. We hand it
-    // the source serialized back to YAML; once the config loader carries
-    // raw stanzas natively this round-trip goes away.
-    let stanza = serde_yaml::to_value(src).context("serialize source config stanza")?;
-    let renderer = render_and_index_md::renderer_for(src.type_str(), &stanza)?;
-    status_line!(
-        "[render_and_index_md] {name} ({}): {}",
-        src.type_str(),
-        raw_dir.display()
-    );
-    let ctx = render_and_index_md::RenderCtx {
+    // Every source renders through its translate `DataProcessor`s (the provider
+    // owns its config + render path) — the same `build_source_plan` seam the
+    // extract phase uses, so a provider is wired in exactly one place. (The old
+    // opaque-stanza `renderer_for` registry is gone.)
+    let source_plan =
+        build_source_plan(src, cfg, None).expect("every source type builds a SourcePlan")?;
+    render_processor_translate(
+        src.name(),
+        &source_plan.translate,
         root,
-        name,
-        raw_path: &raw_dir,
         progress,
         prior_fingerprints,
-    };
-    renderer.run(&ctx, on_doc_complete)
+        on_doc_complete,
+    )
 }
 
 /// Drive a migrated source's translate wave (its translate `DataProcessor`s),
