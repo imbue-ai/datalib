@@ -198,7 +198,11 @@ c. Open [claude.ai](https://claude.ai) in a logged-in browser tab and
 ## 3. Sample configuration
 
 Download [**sample_config.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/sample_config.yaml)
-into your working dir.
+into your working dir (the `~/datalib` data_root from step 1):
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/docs/user/config_examples/sample_config.yaml -o sample_config.yaml
+```
 
 This config enables the Slack source, the Claude API source, and an
 email source that reads a Google Takeout `.mbox` from disk — enough to
@@ -213,7 +217,11 @@ You can also feel free to comment out some of the YAML stanzas that identify dif
 
 If you only want to mirror your Claude conversations, download
 [**claude_only.yaml**](https://github.com/imbue-ai/datalib/blob/main/docs/user/config_examples/claude_only.yaml)
-instead — it has just the `claude_api` stanza.
+instead — it has just the `claude_api` stanza:
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/docs/user/config_examples/claude_only.yaml -o claude_only.yaml
+```
 
 For a reference listing every supported source type with realistic
 defaults (including both input modes for email and contacts), see
