@@ -49,13 +49,17 @@ pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
 }
 
+/// `data_root/system/backend_index` — the dir holding the grid_rows/markdowns
+/// index DB (and its `CACHEDIR.TAG`).
+pub fn backend_index_dir(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(BACKEND_INDEX_DIR)
+}
+
 /// `data_root/system/backend_index/db.doltlite_db` — the grid_rows/markdowns
 /// index DB. The http server resolves this from `data_root` alone (it never
 /// reads the config), so this helper is the contract between writer and reader.
 pub fn backend_index_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root)
-        .join(BACKEND_INDEX_DIR)
-        .join(BACKEND_INDEX_DB)
+    backend_index_dir(data_root).join(BACKEND_INDEX_DB)
 }
 
 /// `data_root/system/qmd` — the qmd index directory. qmd writes
@@ -73,4 +77,65 @@ pub fn media_dir(data_root: &Path) -> PathBuf {
 /// `data_root/system/state`.
 pub fn state_dir(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(STATE_DIR)
+}
+
+/// Body of the `CACHEDIR.TAG` files we drop into derived directories. The
+/// first line is the spec-mandated magic that `restic`/`borg`/`tar
+/// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
+/// The rest is a human hint. Only the per-stanza `raw/` stores are precious —
+/// everything tagged here is 100% derived and rebuilt from raw by
+/// `frankweiler-sync --skip-extract`.
+pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+    # This directory holds derived, rebuildable data (not a backup source).\n\
+    # frankweiler regenerates it from the sibling/per-stanza raw/ stores via\n\
+    # `frankweiler-sync --skip-extract`. Safe for backups to skip.\n\
+    # See https://bford.info/cachedir/\n";
+
+/// Drop a `CACHEDIR.TAG` into `dir` (if `dir` exists and the tag is absent),
+/// marking it and everything below as derived cache so `--exclude-caches`
+/// backups skip it. Best-effort: a write failure is swallowed — the tag is a
+/// backup hint, never load-bearing for the pipeline.
+pub fn mark_derived_cache(dir: &Path) {
+    if !dir.is_dir() {
+        return;
+    }
+    let tag = dir.join("CACHEDIR.TAG");
+    if !tag.exists() {
+        let _ = std::fs::write(&tag, CACHEDIR_TAG_BODY);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cachedir_tag_body_has_spec_signature() {
+        // The first line must be the exact magic or `--exclude-caches` tools
+        // won't recognize it.
+        assert!(CACHEDIR_TAG_BODY.starts_with("Signature: 8a477f597d28d172789f06886806bc55\n"));
+    }
+
+    #[test]
+    fn mark_derived_cache_writes_tag_once_and_skips_missing() {
+        let td = tempfile::tempdir().unwrap();
+        let derived = td.path().join("rendered_md");
+
+        // Missing dir: no-op, no panic, nothing created.
+        mark_derived_cache(&derived);
+        assert!(!derived.exists());
+
+        std::fs::create_dir_all(&derived).unwrap();
+        mark_derived_cache(&derived);
+        let tag = derived.join("CACHEDIR.TAG");
+        assert!(tag.is_file());
+        assert!(std::fs::read_to_string(&tag)
+            .unwrap()
+            .starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
+
+        // Idempotent: a second call doesn't clobber a user-edited tag.
+        std::fs::write(&tag, "custom").unwrap();
+        mark_derived_cache(&derived);
+        assert_eq!(std::fs::read_to_string(&tag).unwrap(), "custom");
+    }
 }

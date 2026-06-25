@@ -996,6 +996,26 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     } else {
         status_line!("[frankweiler-sync] qmd index: skipped (qmd.skip=true)");
     }
+
+    // Mark the genuinely-derived trees as rebuildable cache (drops a
+    // `CACHEDIR.TAG`), so `restic`/`borg`/`tar --exclude-caches` backups skip
+    // them automatically. Tagged are the trees regenerable from the per-stanza
+    // `raw/` stores: each `<stanza>/rendered_md/`, the grid_rows/markdowns index
+    // (`system/backend_index/`), the qmd index (`system/qmd/`), and served
+    // attachments (`system/media/`, re-materializable from the raw blob CAS;
+    // tagged when present). NOT tagged: `system/state/` (job logs / operational
+    // history — not rebuildable). `mark_derived_cache` is a no-op on a dir that
+    // doesn't exist, so absent trees are simply skipped.
+    frankweiler_etl::layout::mark_derived_cache(&frankweiler_etl::layout::backend_index_dir(&root));
+    frankweiler_etl::layout::mark_derived_cache(&frankweiler_etl::layout::qmd_dir(&root));
+    frankweiler_etl::layout::mark_derived_cache(&frankweiler_etl::layout::media_dir(&root));
+    for src in cfg.enabled_sources() {
+        frankweiler_etl::layout::mark_derived_cache(&frankweiler_etl::layout::rendered_md_root(
+            &root,
+            src.name(),
+        ));
+    }
+
     Ok(())
 }
 

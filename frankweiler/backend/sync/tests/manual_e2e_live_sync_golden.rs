@@ -403,6 +403,22 @@ fn manual_e2e_live_sync_golden() {
             .is_file(),
         "backend index DB must live at system/backend_index/db.doltlite_db"
     );
+    // Only the genuinely-derived index dirs are tagged as rebuildable cache so
+    // `--exclude-caches` backups skip them (the per-stanza `rendered_md/` tags
+    // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
+    // walk below). The backend index is always produced here; qmd is skipped in
+    // this test so its tag may be absent. `system/state/` must NOT be tagged —
+    // job logs are operational history, not rebuildable from raw.
+    assert!(
+        data_root
+            .join("system/backend_index/CACHEDIR.TAG")
+            .is_file(),
+        "system/backend_index/ must carry a CACHEDIR.TAG marking it as derived cache"
+    );
+    assert!(
+        !data_root.join("system/state/CACHEDIR.TAG").exists(),
+        "system/state/ (operational history) must NOT be tagged as cache"
+    );
 
     // Snapshot each stanza's `raw/` and `rendered_md/` trees, mirroring the
     // on-disk per-stanza layout. `system/` (the aggregate index + qmd) is
@@ -579,11 +595,12 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         // `.foo.doltlite_db-lock`) for in-process flock coordination.
         // They're ephemeral, content-free, and would clutter goldens
         // with hidden-dotfile noise. Skip anything whose name ends in
-        // `-lock`.
+        // `-lock`. Also skip the constant `CACHEDIR.TAG` marker (backup
+        // hint, not rendered content — asserted separately above).
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock"))
+            .is_some_and(|n| n.ends_with("-lock") || n == "CACHEDIR.TAG")
         {
             continue;
         }

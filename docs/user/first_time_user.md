@@ -261,6 +261,21 @@ and should be faster.
 └── sync_summary_<timestamp>.json   # one per run
 ```
 
+> **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
+> tree, the search DB (`system/backend_index/`), the qmd index (`system/qmd/`),
+> and served attachments (`system/media/`) — are all rebuildable from your raw
+> stores, and each carries a `CACHEDIR.TAG`, so cache-aware backups skip them
+> automatically:
+>
+> ```sh
+> restic backup ~/datalib --exclude-caches        # or: borg create --exclude-caches
+> tar --exclude-caches -czf datalib-backup.tgz ~/datalib
+> ```
+>
+> What's left in the backup is exactly what you want to keep: the per-stanza
+> `<name>/raw/` stores (your precious captured data), `config.yaml`, and
+> `system/state/` (sync job logs — operational history, not rebuildable).
+
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 

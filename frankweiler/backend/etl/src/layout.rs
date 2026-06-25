@@ -16,6 +16,11 @@
 
 use std::path::{Path, PathBuf};
 
+// Re-exported so the orchestrator (`frankweiler-sync`, which deliberately does
+// not depend on `frankweiler_core`) can mark the derived index dirs as cache
+// through the one crate it does depend on.
+pub use frankweiler_core::layout::{backend_index_dir, mark_derived_cache, media_dir, qmd_dir};
+
 /// Directory holding everything one stanza produces: `<data_root>/<stanza>`.
 pub fn stanza_dir(data_root: &Path, stanza: &str) -> PathBuf {
     data_root.join(stanza)
