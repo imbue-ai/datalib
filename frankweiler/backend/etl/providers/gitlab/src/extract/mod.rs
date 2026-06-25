@@ -1,6 +1,6 @@
 //! GitLab downloader: identity + every MR the user authored / was
 //! assigned to / was a reviewer on, plus all discussion notes. Writes a
-//! single doltlite database at `<data_root>/raw/<name>/entities.doltlite_db`;
+//! single doltlite database at `<data_root>/<name>/raw/entities.doltlite_db`;
 //! see [`db`] for schema and [`frankweiler_etl::doltlite_raw`] for
 //! design rationale.
 //!

@@ -1,7 +1,7 @@
 //! ChatGPT downloader entry point. Port of `src/download/chatgpt_web.py`.
 //!
 //! Writes into a single doltlite database file
-//! (`<data_root>/raw/<name>/entities.doltlite_db`) — one row per `/me` response,
+//! (`<data_root>/<name>/raw/entities.doltlite_db`) — one row per `/me` response,
 //! per conversation, and per attached file. See `db.rs` for the schema
 //! and `frankweiler_etl::doltlite_raw` for the design rationale.
 //!

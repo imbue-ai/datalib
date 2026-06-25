@@ -26,12 +26,15 @@
 //! `latchkey curl`. Then snapshots the produced data tree, one `.snap` per
 //! file under `<FRANKWEILER_MANUAL_E2E_DIR>/snapshots/`, mirroring the layout:
 //!
+//! The data root is grouped by stanza (`<stanza>/raw`, `<stanza>/rendered_md`)
+//! with aggregates under `system/`; the snapshot tree mirrors that:
+//!
 //!   snapshots/
-//!     manifest.snap                              ← list of paths
-//!     raw/tiny-slack/raw_api/auth.test/run-_.snap
-//!     raw/notion-api/notion_official_page/created/events.snap
-//!     rendered_md/slack/.../threads/<uuid>.md.snap
-//!     rendered_md/slack/.../threads/<uuid>.grid_rows.json.snap
+//!     manifest.snap                                       ← list of paths
+//!     tiny-slack/raw/raw_api/auth.test/run-_.snap
+//!     tiny-slack/rendered_md/<chat_uuid>/all.md.snap
+//!     tiny-slack/rendered_md/<chat_uuid>/all.grid_rows.json.snap
+//!     notion-api/raw/notion_official_page/created/events.snap
 //!     …
 //!
 //! Per-file `.snap`s mean `cargo insta review` walks them one at a time,
@@ -49,7 +52,7 @@
 //!     real signal there.
 //!   * The tempdir `data_root` prefix is replaced with the stable token
 //!     `<data_root>` wherever it appears in a path string, so a path keeps its
-//!     meaningful suffix (`<data_root>/raw/tiny-slack/entities.doltlite_db`) without
+//!     meaningful suffix (`<data_root>/tiny-slack/raw/entities.doltlite_db`) without
 //!     the per-run `/var/folders/…/.tmpXXXX` churn.
 //!   * `source_fingerprint:` lines in `.md` frontmatter get the same
 //!     treatment.
@@ -59,7 +62,8 @@
 //!     channels/users and churn on every join/leave.
 //!   * Binary media files become `<binary N bytes>` markers.
 //!
-//! Dolt + qmd are deliberately skipped — too noisy / not deterministic.
+//! The aggregate index + qmd under `system/` are deliberately skipped —
+//! too noisy / not deterministic (the doltlite commit hashes churn).
 //!
 //! Tagged `manual` in Bazel and `#[ignore]` in cargo. Easiest path is
 //! `manual_e2e_run.sh` next to this test (it sets the env var + forwards creds):
@@ -385,9 +389,40 @@ fn manual_e2e_live_sync_golden() {
         assert_json_snapshot!("sync_summary", summary_json);
     });
 
+    // Layout invariant: data_root is a flat set of stanza dirs plus the one
+    // reserved `system/` dir — never the old top-level `raw/` or
+    // `rendered_md/`, and the aggregate index DB lives under `system/`. Guards
+    // against a regression to the pre-grouping layout.
+    assert!(
+        !data_root.join("raw").exists() && !data_root.join("rendered_md").exists(),
+        "old top-level raw/ or rendered_md/ found — data_root must be grouped by stanza"
+    );
+    assert!(
+        data_root
+            .join("system/backend_index/db.doltlite_db")
+            .is_file(),
+        "backend index DB must live at system/backend_index/db.doltlite_db"
+    );
+
+    // Snapshot each stanza's `raw/` and `rendered_md/` trees, mirroring the
+    // on-disk per-stanza layout. `system/` (the aggregate index + qmd) is
+    // skipped — see the module header.
+    let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
+        .expect("read data_root")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "system")
+        .collect();
+    stanzas.sort();
+
     let mut manifest: Vec<String> = Vec::new();
-    snapshot_tree(&data_root.join("raw"), "raw", &mut manifest);
-    snapshot_tree(&data_root.join("rendered_md"), "rendered_md", &mut manifest);
+    for stanza in &stanzas {
+        for sub in ["raw", "rendered_md"] {
+            let dir = data_root.join(stanza).join(sub);
+            snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
+        }
+    }
     manifest.sort();
 
     // Prune orphaned `.snap` files left behind when the set of produced
@@ -472,10 +507,10 @@ fn manual_e2e_live_sync_golden() {
     //
     // Scoped to the providers that have adopted the split. Add a DB here
     // as each provider migrates; the long-term goal is every provider.
-    let stability_dbs = ["tiny-slack/entities.doltlite_db"];
+    let stability_dbs = ["tiny-slack/raw/entities.doltlite_db"];
     let before: Vec<(&str, Value)> = stability_dbs
         .iter()
-        .map(|name| (*name, content_tables(&data_root.join("raw").join(name))))
+        .map(|name| (*name, content_tables(&data_root.join(name))))
         .collect();
 
     let now3 = "2026-05-21T18:10:00Z";
@@ -490,7 +525,7 @@ fn manual_e2e_live_sync_golden() {
     assert!(status3.success(), "third sync (reset) failed: {status3:?}");
 
     for (name, before_v) in &before {
-        let after_v = content_tables(&data_root.join("raw").join(name));
+        let after_v = content_tables(&data_root.join(name));
         assert_eq!(
             before_v, &after_v,
             "{name}: content tables drifted across --reset-and-redownload. \
@@ -582,43 +617,47 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
     }
 }
 
-/// Delete `.snap` files under `snapshots/{raw,rendered_md}` that don't
-/// correspond to a key in `manifest` — orphans from a prior run whose
-/// produced paths have since changed. No-op outside update mode (a check
-/// run surfaces the change via the `manifest` snapshot diff instead, and
-/// must never mutate the version-controlled golden).
+/// Delete per-stanza `.snap` files (those under a `raw/` or `rendered_md/`
+/// segment) that don't correspond to a key in `manifest` — orphans from a
+/// prior run whose produced paths have since changed. The top-level meta snaps
+/// (`manifest`, `sync_summary*`) are left untouched. No-op outside update mode
+/// (a check run surfaces the change via the `manifest` snapshot diff instead,
+/// and must never mutate the version-controlled golden).
 fn prune_orphan_snapshots(manifest: &[String]) {
     if !insta_update_mode() {
         return;
     }
     let base = snap_base();
+    if !base.is_dir() {
+        return;
+    }
     let keys: std::collections::HashSet<&str> = manifest.iter().map(String::as_str).collect();
-    for top in ["raw", "rendered_md"] {
-        let dir = base.join(top);
-        if !dir.is_dir() {
+    for entry in WalkDir::new(&base) {
+        let entry = entry.expect("walk snapshot tree");
+        if !entry.file_type().is_file() {
             continue;
         }
-        for entry in WalkDir::new(&dir) {
-            let entry = entry.expect("walk snapshot tree");
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let p = entry.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("snap") {
-                continue;
-            }
-            // Snapshot path mirrors the data layout: a file at
-            // `<base>/<top>/<canonical_rel>.snap` corresponds to manifest
-            // key `<top>/<canonical_rel>`.
-            let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
-            let key = rel.strip_suffix(".snap").unwrap_or(&rel);
-            if !keys.contains(key) {
-                std::fs::remove_file(p)
-                    .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
-            }
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("snap") {
+            continue;
         }
-        remove_empty_dirs(&dir);
+        // Snapshot path mirrors the data layout: a file at
+        // `<base>/<stanza>/<sub>/<canonical_rel>.snap` corresponds to manifest
+        // key `<stanza>/<sub>/<canonical_rel>`. Only the per-stanza tree snaps
+        // are managed by the manifest; the top-level meta snaps aren't keyed
+        // there, so we only ever prune snaps living under a `raw/` or
+        // `rendered_md/` path segment.
+        let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
+        let key = rel.strip_suffix(".snap").unwrap_or(&rel);
+        let is_tree_snap = key
+            .split('/')
+            .any(|seg| seg == "raw" || seg == "rendered_md");
+        if is_tree_snap && !keys.contains(key) {
+            std::fs::remove_file(p)
+                .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
+        }
     }
+    remove_empty_dirs(&base);
 }
 
 /// True when insta is writing snapshots (the `.update` target sets

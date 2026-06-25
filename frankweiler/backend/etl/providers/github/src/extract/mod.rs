@@ -1,6 +1,6 @@
 //! GitHub downloader: identity + every authored/commented/@mentioned PR
 //! plus its comments + reviews. Writes a single doltlite database at
-//! `<data_root>/raw/<name>/entities.doltlite_db`; see [`db`] for the schema and
+//! `<data_root>/<name>/raw/entities.doltlite_db`; see [`db`] for the schema and
 //! [`frankweiler_etl::doltlite_raw`] for the design rationale.
 //!
 //! Port of `src/download/github_web.py`. Two refinements vs Python:

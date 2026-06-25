@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use super::parse::ParsedNotionOfficial;
 use super::render::{
-    notion_thread_url, notion_url, page_qmd_path_rel, slugify, thread_qmd_path_rel, thread_snippet,
+    notion_thread_url, notion_url, page_qmd_path_rel, slugify, thread_qmd_path_rel,
 };
 
 pub const RENDER_VERSION: u32 = 1;
@@ -184,7 +184,12 @@ fn short_author(uid: &str, user_names: &HashMap<String, String>) -> Option<Strin
     }
 }
 
-fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> Result<GridRow> {
+fn page_row(
+    page: &Value,
+    title: &str,
+    stanza: &str,
+    user_names: &HashMap<String, String>,
+) -> Result<GridRow> {
     let pid = page
         .get("id")
         .and_then(|v| v.as_str())
@@ -212,7 +217,7 @@ fn page_row(page: &Value, title: &str, user_names: &HashMap<String, String>) -> 
         .conversation_uuid(pid.clone())
         .entire_chat(format!("/notion/page/{pid}"))
         .text(title.to_string())
-        .qmd_path(Some(page_qmd_path_rel(&pid, title)))
+        .qmd_path(Some(page_qmd_path_rel(stanza, &pid)))
         .source_url(Some(notion_url(&pid)))
         .notion_page_uuid(Some(pid.clone()))
         .markdown_uuid(Some(pid))
@@ -226,14 +231,14 @@ fn thread_rows(
     members_sorted: &[Value],
     page_id: &str,
     page_title: &str,
+    stanza: &str,
     parent_block_id: Option<&str>,
     user_names: &HashMap<String, String>,
 ) -> Result<Vec<GridRow>> {
     if members_sorted.is_empty() {
         return Ok(Vec::new());
     }
-    let snippet = thread_snippet(&comment_text_plain(&members_sorted[0]));
-    let thread_qmd = thread_qmd_path_rel(page_id, page_title, disc_id, &snippet);
+    let thread_qmd = thread_qmd_path_rel(stanza, page_id, disc_id);
     let thread_url = notion_thread_url(page_id, Some(disc_id), parent_block_id);
     let mut rows: Vec<GridRow> = Vec::new();
     let first = &members_sorted[0];
@@ -375,7 +380,7 @@ pub struct ThreadDocument {
     pub source_fingerprint: String,
 }
 
-pub fn gather_documents(parsed: &ParsedNotionOfficial) -> Result<DocumentRows> {
+pub fn gather_documents(parsed: &ParsedNotionOfficial, stanza: &str) -> Result<DocumentRows> {
     // Phase-by-phase timing for `notion_unittests`'s
     // `gather_documents_is_linear_in_blocks` regression test (and any
     // real sync where this function appears in a flame graph). Each
@@ -564,7 +569,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> Result<DocumentRows> {
             .cloned()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "(untitled)".into());
-        let row = page_row(page, &title, &parsed.user_names)?;
+        let row = page_row(page, &title, stanza, &parsed.user_names)?;
         let empty: Vec<&Value> = Vec::new();
         let blocks = blocks_by_page.get(&pid).unwrap_or(&empty);
         let comments = comments_by_page.get(&pid).unwrap_or(&empty);
@@ -629,6 +634,7 @@ pub fn gather_documents(parsed: &ParsedNotionOfficial) -> Result<DocumentRows> {
             &members,
             &page_id,
             &page_title,
+            stanza,
             parent_block_id.as_deref(),
             &parsed.user_names,
         )?;
@@ -761,7 +767,7 @@ mod tests {
         };
 
         let start = Instant::now();
-        let docs = gather_documents(&parsed).expect("valid notion grid rows");
+        let docs = gather_documents(&parsed, "notion").expect("valid notion grid rows");
         let elapsed = start.elapsed();
         // Surface the wall time on stderr so `bazel test
         // --test_output=streamed` shows it next to the

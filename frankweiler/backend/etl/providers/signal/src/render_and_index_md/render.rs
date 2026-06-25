@@ -3,8 +3,8 @@
 //! One `.md` per `(chat, period_key)` bucket. Layout under `out_dir`:
 //!
 //! ```text
-//! rendered_md/signal/<source_name>/<chat-slug>/<period_key>.md
-//! rendered_md/signal/<source_name>/<chat-slug>/<period_key>.grid_rows.json
+//! <stanza>/rendered_md/<chat_uuid>/<period_key>.md
+//! <stanza>/rendered_md/<chat_uuid>/<period_key>.grid_rows.json
 //! ```
 //!
 //! Each chat item in a bucket becomes one line of the markdown body:
@@ -126,7 +126,7 @@ pub fn render_all(
     // cursor unwritten — next run is another cold start, which is the
     // right behavior since we have no way to anchor the diff.
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, "signal", source_name);
+        let cursor_path = render_cursor::cursor_path(out_dir, source_name);
         render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
             .with_context(|| format!("write signal render cursor {}", cursor_path.display()))?;
     }
@@ -166,14 +166,8 @@ fn render_one(
     let chat_title = format!("Signal · {recipient_display}");
     let doc_title = format!("{chat_title} ({})", doc.period_key);
 
-    let (md_path, json_path, page_dir) = output_paths(
-        out_dir,
-        source_name,
-        &chat.id,
-        &recipient_display,
-        &chat_uuid,
-        &doc.period_key,
-    );
+    let (md_path, json_path, page_dir) =
+        output_paths(out_dir, source_name, &chat_uuid, &doc.period_key);
 
     // No prior-fingerprint check here: parse already filtered out
     // unchanged buckets before they reach render. Reaching this
@@ -293,23 +287,13 @@ fn render_one(
 fn output_paths(
     out_dir: &Path,
     source_name: &str,
-    chat_id: &str,
-    recipient_display: &str,
     chat_uuid: &str,
     period_key: &str,
 ) -> (PathBuf, PathBuf, PathBuf) {
-    // One directory per chat, with period_key files inside —
-    // mirrors beeper's `<network>/<room_uuid>/<period_key>.md` shape.
-    let chat_slug = format!(
-        "chat-{chat_id}__{slug}__{short}",
-        slug = slugify(recipient_display),
-        short = &chat_uuid[..8],
-    );
-    let page_dir = out_dir
-        .join("rendered_md")
-        .join("signal")
-        .join(source_name)
-        .join(&chat_slug);
+    // One directory per chat keyed by the chat's stable UUID — never a
+    // title-derived slug, so a contact/group rename re-renders in place.
+    // period_key files live inside; mirrors beeper's `<room_uuid>/<period>.md`.
+    let page_dir = frankweiler_etl::layout::rendered_md_root(out_dir, source_name).join(chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
     let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
     (md_path, json_path, page_dir)
@@ -516,19 +500,4 @@ fn iso_ts(date_sent_ms: i64) -> String {
             );
             "1970-01-01T00:00:00+00:00".to_string()
         })
-}
-
-fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut last_dash = true;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
 }

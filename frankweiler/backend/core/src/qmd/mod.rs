@@ -8,11 +8,11 @@
 //! `data-section-uuid`, falling back to the whole document when the line
 //! can't be pinned.
 //!
-//! The data root is the same `<frankweiler_root>` everything else lives
-//! under. qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`,
-//! so we point `XDG_CACHE_HOME` directly at the data root and the index
-//! lands at `<root>/qmd/index.sqlite` alongside `rendered_md/` and
-//! `backend_index.doltlite_db`.
+//! qmd writes its index under `$XDG_CACHE_HOME/qmd/index.sqlite`, so we point
+//! `XDG_CACHE_HOME` at `<root>/system` and the index lands at
+//! `<root>/system/qmd/index.sqlite` alongside the other aggregate processors
+//! (see [`crate::layout`]). The *scan* root stays `<root>` so qmd still finds
+//! every stanza's `rendered_md/`.
 
 pub mod daemon;
 pub mod mapping;
@@ -25,16 +25,17 @@ pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION, DEFAULT_QMD_VER
 use std::path::{Path, PathBuf};
 
 /// Canonical sub-path of the qmd index, relative to `<root>`. qmd writes
-/// here when invoked with `XDG_CACHE_HOME=<root>`.
-pub const QMD_INDEX_REL: &str = "qmd/index.sqlite";
+/// here when invoked with `XDG_CACHE_HOME=<root>/system` (see
+/// [`qmd_cache_home`]).
+pub const QMD_INDEX_REL: &str = "system/qmd/index.sqlite";
 
 /// Resolve the qmd index file path under a data root.
 pub fn qmd_index_path(root: &Path) -> PathBuf {
-    root.join(QMD_INDEX_REL)
+    crate::layout::qmd_dir(root).join("index.sqlite")
 }
 
-/// Resolve the XDG_CACHE_HOME the qmd CLI should run with for a data root.
-/// This is the data root itself — qmd will write `qmd/index.sqlite` under it.
+/// Resolve the `XDG_CACHE_HOME` the qmd CLI should run with for a data root:
+/// `<root>/system`, so qmd writes its `qmd/index.sqlite` under `system/`.
 pub fn qmd_cache_home(root: &Path) -> PathBuf {
-    root.to_path_buf()
+    crate::layout::system_dir(root)
 }

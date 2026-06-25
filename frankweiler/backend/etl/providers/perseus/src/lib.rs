@@ -1,6 +1,6 @@
 //! Perseus Digital Library provider for [`frankweiler_etl`]: renders
-//! the TEI editions of classical works into the shared `rendered_md/`
-//! + `.grid_rows.json` tree.
+//! the TEI editions of classical works into the stanza's
+//! `<stanza>/rendered_md/` + `.grid_rows.json` tree.
 //!
 //! Today this is wired for **Thucydides' Histories** (`tlg0003.tlg001`)
 //! only — the Greek (`perseus-grc2`) and the English (`1st1K-eng1`)
@@ -38,7 +38,7 @@
 //! With a bare `sync: {}` block, `bazel run //frankweiler/backend/sync`
 //! downloads the default Thucydides pair from
 //! `PerseusDL/canonical-greekLit` (master branch) to
-//! `<data_root>/raw/perseus/`, and Translate + Load + qmd-index pick
+//! `<data_root>/perseus/raw/`, and Translate + Load + qmd-index pick
 //! them up on the same run. **No latchkey registration is required**
 //! — these URLs are public, so [`extract`] shells out to `curl`
 //! directly rather than threading through the shared `latchkey_curl`

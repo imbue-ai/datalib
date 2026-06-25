@@ -1,5 +1,5 @@
 //! Render one `index.md` per book plus one `.md` per (chapter,
-//! edition) under `<out_dir>/rendered_md/perseus/thucydides/histories/`,
+//! edition) under `<out_dir>/<stanza>/rendered_md/thucydides/histories/`,
 //! each with a sibling `.grid_rows.json` sidecar carrying all rows for
 //! that doc.
 //!
@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
+use frankweiler_etl::layout::rendered_md_root;
 use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_index_lib::emit_sidecar;
@@ -157,7 +158,7 @@ fn render_book(
 ) -> Result<()> {
     let m_uuid = book_uuid(&book.n);
     let fingerprint = compute_book_fingerprint(book);
-    let book_dir = out_dir.join(book_dir_rel(&book.n));
+    let book_dir = rendered_md_root(out_dir, source_name).join(book_content_rel(&book.n));
     fs::create_dir_all(&book_dir).with_context(|| format!("mkdir -p {}", book_dir.display()))?;
     let md_path = book_dir.join("index.md");
     let sidecar_path = book_dir.join("index.grid_rows.json");
@@ -172,7 +173,7 @@ fn render_book(
     let md = render_book_md(book);
     fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = vec![book_grid_row(book, &m_uuid)?];
+    let rows = vec![book_grid_row(source_name, book, &m_uuid)?];
     let edges: Vec<EdgeRow> = Vec::new();
     emit_sidecar(
         &sidecar_path,
@@ -214,7 +215,7 @@ fn render_chapter(
 ) -> Result<()> {
     let m_uuid = chapter_uuid(&book.n, &chapter.n, &edition.id);
     let fingerprint = compute_chapter_fingerprint(book, chapter, edition, alignments);
-    let rel = chapter_md_rel(&book.n, &chapter.n, &edition.id);
+    let rel = chapter_md_rel(source_name, &book.n, &chapter.n, &edition.id);
     let md_path = out_dir.join(&rel);
     let sidecar_path = md_path.with_file_name(format!(
         "{}.grid_rows.json",
@@ -281,14 +282,24 @@ fn render_chapter(
     Ok(())
 }
 
-fn book_dir_rel(book_n: &str) -> PathBuf {
+/// Book directory path under `rendered_md/`, relative to the stanza's
+/// `rendered_md` root: `thucydides/histories/book_{NN}`. Content-only —
+/// the `<stanza>/rendered_md/` prefix is added by the callers (absolute
+/// via `layout::rendered_md_root`, rel-string via `book_dir_rel`).
+fn book_content_rel(book_n: &str) -> PathBuf {
     let bn: u32 = book_n.parse().unwrap_or(0);
-    PathBuf::from(format!(
-        "rendered_md/perseus/thucydides/histories/book_{bn:02}"
-    ))
+    PathBuf::from(format!("thucydides/histories/book_{bn:02}"))
 }
 
-fn chapter_md_rel(book_n: &str, ch_n: &str, edition_id: &str) -> String {
+/// Book directory as a `<data_root>`-relative path string:
+/// `<stanza>/rendered_md/thucydides/histories/book_{NN}`.
+fn book_dir_rel(stanza: &str, book_n: &str) -> PathBuf {
+    PathBuf::from(stanza)
+        .join("rendered_md")
+        .join(book_content_rel(book_n))
+}
+
+fn chapter_md_rel(stanza: &str, book_n: &str, ch_n: &str, edition_id: &str) -> String {
     let ci: u32 = ch_n.parse().unwrap_or(0);
     // `_<edition>.md`, not `.<edition>.md`: qmd's docid normalization
     // collapses `.x.md` to `-x.md` but our `norm_path` keeps the dot,
@@ -296,7 +307,7 @@ fn chapter_md_rel(book_n: &str, ch_n: &str, edition_id: &str) -> String {
     // ids contain no dots (the work prefix is stripped at parse time).
     format!(
         "{}/chapter_{ci:03}_{edition_id}.md",
-        book_dir_rel(book_n).display()
+        book_dir_rel(stanza, book_n).display()
     )
 }
 
@@ -452,7 +463,7 @@ fn synth_when_ts(book_n: &str, ch_n: i64) -> String {
     render_synth_ts(ts_base() + Duration::seconds(offset))
 }
 
-fn book_grid_row(book: &Book, bk_uuid: &str) -> Result<GridRow> {
+fn book_grid_row(stanza: &str, book: &Book, bk_uuid: &str) -> Result<GridRow> {
     GridRow::builder()
         .uuid(bk_uuid.to_string())
         .provider("perseus")
@@ -468,7 +479,7 @@ fn book_grid_row(book: &Book, bk_uuid: &str) -> Result<GridRow> {
         .text(book_text_for_grid(book))
         .qmd_path(Some(format!(
             "{}/index.md",
-            book_dir_rel(&book.n).display()
+            book_dir_rel(stanza, &book.n).display()
         )))
         .source_url(Some(format!(
             "https://scaife.perseus.org/reader/{TLG0003_TLG001}:{}/",

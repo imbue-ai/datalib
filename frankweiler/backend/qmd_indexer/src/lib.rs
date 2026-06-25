@@ -30,7 +30,10 @@ use frankweiler_obs::status_line;
 
 pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
-pub const DEFAULT_MASK: &str = "**/*.md";
+/// Only index per-stanza rendered markdown — `<root>/<stanza>/rendered_md/**`.
+/// The leading `*/` is exactly one stanza segment, so this never descends into
+/// `<root>/system/` (where the qmd index itself and other aggregates live).
+pub const DEFAULT_MASK: &str = "*/rendered_md/**/*.md";
 
 /// Options for an indexer run. Construct with `IndexOptions::new(root)` and
 /// override fields as needed.
@@ -121,7 +124,10 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         .canonicalize()
         .with_context(|| format!("root does not exist: {}", opts.root.display()))?;
 
-    let cache_home = root.clone();
+    // qmd writes `<XDG_CACHE_HOME>/qmd/index.sqlite`; point it at `<root>/system`
+    // so the index lands at `<root>/system/qmd/`. The collection-add scan root
+    // below stays `<root>` so qmd still sees every stanza's `rendered_md/`.
+    let cache_home = frankweiler_core::qmd::qmd_cache_home(&root);
     let qmd_dir = cache_home.join("qmd");
     std::fs::create_dir_all(&qmd_dir)
         .with_context(|| format!("failed to create {}", qmd_dir.display()))?;

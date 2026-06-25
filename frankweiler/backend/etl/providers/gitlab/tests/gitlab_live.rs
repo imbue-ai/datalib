@@ -52,9 +52,11 @@ async fn gitlab_live_single_mr_snapshot() {
     let mr = &parsed.merge_requests[0];
 
     let render_root = tmp.clone();
+    let stanza = "gitlab";
     render_gitlab(
         &parsed,
         &render_root,
+        stanza,
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
@@ -62,6 +64,7 @@ async fn gitlab_live_single_mr_snapshot() {
     .expect("render_gitlab failed");
 
     let qmd_rel = frankweiler_etl_gitlab::render_and_index_md::render::mr_qmd_path_rel(
+        stanza,
         &mr.project_full_path,
         mr.mr_iid,
     );

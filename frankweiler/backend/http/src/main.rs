@@ -6,9 +6,10 @@
 //! `frankweiler-http` — single-binary search backend.
 //!
 //! Usage: `frankweiler-http <data_root> [--no-open]`. The data root is
-//! the directory that `frankweiler-sync` writes into: it contains
-//! `backend_index.doltlite_db` (the SQL store), the `media/` symlinked
-//! attachments, and `accounts.json`. The directory is created on demand
+//! the directory that `frankweiler-sync` writes into: it contains one
+//! directory per source stanza plus `system/` holding the SQL store
+//! (`system/backend_index/db.doltlite_db`), the `system/media/` symlinked
+//! attachments, and the qmd index. The directory is created on demand
 //! — first-run users get an empty index that fills in once they run a
 //! sync.
 //!
@@ -22,7 +23,7 @@
 //! the default.
 //!
 //! Backend: [`DoltRepo`](frankweiler_core::dolt_repo::DoltRepo) over a
-//! `sqlx::SqlitePool` against `<data_root>/backend_index.doltlite_db`.
+//! `sqlx::SqlitePool` against `<data_root>/system/backend_index/db.doltlite_db`.
 //! No subprocess, no TCP port to MySQL.
 
 use clap::Parser;
@@ -34,7 +35,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
-const DOLT_DB_FILENAME: &str = "backend_index.doltlite_db";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -108,7 +108,7 @@ async fn main() -> anyhow::Result<()> {
         // still shares the cache rather than silently pulling ~2 GB
         // into the data dir. Tolerate a pre-existing *real* dir rather
         // than hard-failing an existing install — we just won't share.
-        let qmd_dir = root.join("qmd");
+        let qmd_dir = frankweiler_core::layout::qmd_dir(&root);
         let models_dir = frankweiler_qmd_indexer::default_models_dir();
         if let Err(e) = std::fs::create_dir_all(&models_dir)
             .map_err(anyhow::Error::from)
@@ -205,7 +205,7 @@ fn run_qmd_pull(cfg: &QmdDaemonConfig) -> anyhow::Result<()> {
 }
 
 async fn build_repo(root: Arc<PathBuf>) -> anyhow::Result<DynRepo> {
-    let db_path = root.join(DOLT_DB_FILENAME);
+    let db_path = frankweiler_core::layout::backend_index_db(&root);
     eprintln!("dolt db: {}", db_path.display());
     let repo = DoltRepo::open(&db_path, root)
         .await

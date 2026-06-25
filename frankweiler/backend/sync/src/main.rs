@@ -601,7 +601,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     fs::create_dir_all(&cfg.data_root)
         .with_context(|| format!("create data_root: {}", cfg.data_root.display()))?;
     let root = cfg.data_root.canonicalize()?;
-    fs::create_dir_all(root.join("rendered_md"))?;
+    // Per-stanza renderers each create their own `<root>/<stanza>/rendered_md/`
+    // tree; there's no single shared rendered_md dir to pre-create anymore.
     status_line!("[frankweiler-sync] data_root = {}", root.display());
 
     {
@@ -970,8 +971,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     drop(index_pool);
     status_line!("[frankweiler-sync] wrote {}", cfg.dolt_db_path().display());
     status_line!(
-        "[frankweiler-sync] wrote {}/",
-        root.join("rendered_md").display()
+        "[frankweiler-sync] wrote per-stanza rendered_md under {}/",
+        root.display()
     );
 
     // ── QMD index ──────────────────────────────────────────────────
@@ -998,7 +999,8 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
     Ok(())
 }
 
-/// Open the index doltlite at `<data_root>/<dolt.db_filename>`. Created
+/// Open the index doltlite at `<data_root>/system/backend_index/db.doltlite_db`.
+/// Created
 /// if missing. WAL mode so `apply_one` from the translate-side
 /// per-doc callback can write concurrently with reads; the caller is
 /// responsible for the closing TRUNCATE checkpoint so the on-disk
@@ -1088,11 +1090,11 @@ async fn run_extract_phase(
 
     // Each provider creates whatever on-disk layout it needs:
     //   - doltlite-backed (anthropic, chatgpt, notion, slack) write to
-    //     `<data_root>/raw/<name>/entities.doltlite_db`; `doltlite_raw::open`
+    //     `<data_root>/<name>/raw/entities.doltlite_db`; `doltlite_raw::open`
     //     creates the file's parent dir automatically.
     //   - file-tree-backed (github, gitlab) call `create_dir_all` on
     //     their out_dir as their first extract step.
-    // We used to pre-create `<data_root>/raw/<name>/` here for everyone,
+    // We used to pre-create `<data_root>/<name>/raw/` here for everyone,
     // which left empty leftover dirs for the doltlite-backed providers.
     //
     // One MultiProgress for the whole extract phase; one bar per plan
@@ -1691,8 +1693,15 @@ mod interrupt_tests {
     #[tokio::test]
     async fn interrupt_commit_all_commits_index_and_extract_dbs() {
         let d = tempdir().unwrap();
-        let index_db = d.path().join("backend_index.doltlite_db");
-        let extract_db = d.path().join("raw").join("source_a.doltlite_db");
+        let index_db = d.path().join("system/backend_index/db.doltlite_db");
+        let extract_db = d
+            .path()
+            .join("source_a")
+            .join("raw")
+            .join("entities.doltlite_db");
+        for db in [&index_db, &extract_db] {
+            std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+        }
 
         // Sanity-prime the index DB so dolt_log has a head to count from.
         // Use the same DDL the real index DB carries — empty extra DDL

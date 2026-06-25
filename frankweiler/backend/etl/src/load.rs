@@ -472,11 +472,10 @@ pub async fn apply_one(
     apply_markdown(write_lock, md, &qmd_rel, now_override).await
 }
 
-/// Walk `<out>/rendered_md/` for every `*.grid_rows.json` sidecar and
-/// rebuild the index by calling [`apply_one`] for each. Off the hot
-/// path now — sync's translate step writes through `apply_one` per doc
-/// directly — but useful as a disaster-recovery / "reindex from disk"
-/// tool.
+/// Walk every stanza's `<out>/<stanza>/rendered_md/` for `*.grid_rows.json`
+/// sidecars and rebuild the index by calling [`apply_one`] for each. Off the
+/// hot path now — sync's translate step writes through `apply_one` per doc
+/// directly — but useful as a disaster-recovery / "reindex from disk" tool.
 pub async fn load_all(
     pool: &SqlitePool,
     out_dir: &Path,
@@ -490,10 +489,20 @@ pub async fn load_all(
     // writes, but load_all is a disaster-recovery tool, not on the
     // hot path; per-call auto-commit is fine.
     let write_lock = WriteLock::new(pool.clone());
-    let rendered_root = out_dir.join("rendered_md");
+    // data_root holds one dir per stanza (each with a `rendered_md/` tree)
+    // plus the reserved `system/` dir. Walk each stanza's rendered_md; skip
+    // `system/` (the aggregate indices live there, no sidecars).
     let mut sidecars: Vec<PathBuf> = Vec::new();
-    if rendered_root.exists() {
-        collect_sidecars(&rendered_root, &mut sidecars);
+    if let Ok(entries) = fs::read_dir(out_dir) {
+        for entry in entries.flatten() {
+            if entry.file_name() == frankweiler_core::layout::SYSTEM_DIR {
+                continue;
+            }
+            let rendered_root = entry.path().join("rendered_md");
+            if rendered_root.is_dir() {
+                collect_sidecars(&rendered_root, &mut sidecars);
+            }
+        }
     }
     sidecars.sort();
 

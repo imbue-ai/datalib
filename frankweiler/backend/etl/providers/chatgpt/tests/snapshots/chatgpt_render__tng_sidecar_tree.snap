@@ -1,8 +1,8 @@
 ---
-source: etl/providers/chatgpt/tests/chatgpt_render.rs
+source: frankweiler/backend/etl/providers/chatgpt/tests/chatgpt_render.rs
 expression: sbundle
 ---
-=== rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.grid_rows.json ===
+=== chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "68fa0001-fake-7000-8000-positronic0001",
@@ -28,7 +28,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
       "text": "User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.\nCompose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.\nUpon the bridge, where duty bids us stand,\nA tabby of the warmest tangerine,\nWith feline grace defies the captain's hand\nAnd treads the helm with footfall light, serene.\n\nNo Klingon foe nor anomaly arrayed\nCan match the menace of his sudden leap;\nThe console glows where Spot in mirth has played,\nAnd alarms ring out where he chose to sleep.\n\nYet Data, faithful keeper, smiles unseen —\nAn android's joy, though circuited and spare —\nFor in this beast a mystery serene\nReflects the very life he hopes to share.\n\nSo bless thee, Spot, of fur and quiet purr:\nThou art my muse, my console saboteur.\nCurious. The closing couplet is satisfying. Thank you.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md",
       "source_url": "https://chatgpt.com/c/68fa0001-fake-7000-8000-positronic0001",
       "git_sha": null,
       "external_id": null,
@@ -54,7 +54,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
       "text": "User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -80,7 +80,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
       "text": "Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -106,7 +106,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
       "text": "Upon the bridge, where duty bids us stand,\nA tabby of the warmest tangerine,\nWith feline grace defies the captain's hand\nAnd treads the helm with footfall light, serene.\n\nNo Klingon foe nor anomaly arrayed\nCan match the menace of his sudden leap;\nThe console glows where Spot in mirth has played,\nAnd alarms ring out where he chose to sleep.\n\nYet Data, faithful keeper, smiles unseen —\nAn android's joy, though circuited and spare —\nFor in this beast a mystery serene\nReflects the very life he hopes to share.\n\nSo bless thee, Spot, of fur and quiet purr:\nThou art my muse, my console saboteur.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -132,7 +132,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0001-fake-7000-8000-positronic0001",
       "text": "Curious. The closing couplet is satisfying. Thank you.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -142,7 +142,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.grid_rows.json ===
+=== chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "68fa0002-fake-7000-8000-positronic0002",
@@ -168,7 +168,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0002-fake-7000-8000-positronic0002",
       "text": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.\n```python\nimport numpy as np\nx = np.array([1,2,3,4,5])\ny = np.array([2.1, 4.0, 9.1, 15.8, 25.0])\ncoeffs = np.polyfit(x, y, 2)\nprint(coeffs)\n```\nThe fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.md",
       "source_url": "https://chatgpt.com/c/68fa0002-fake-7000-8000-positronic0002",
       "git_sha": null,
       "external_id": null,
@@ -194,7 +194,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0002-fake-7000-8000-positronic0002",
       "text": "Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -220,7 +220,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0002-fake-7000-8000-positronic0002",
       "text": "```python\nimport numpy as np\nx = np.array([1,2,3,4,5])\ny = np.array([2.1, 4.0, 9.1, 15.8, 25.0])\ncoeffs = np.polyfit(x, y, 2)\nprint(coeffs)\n```",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -246,7 +246,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0002-fake-7000-8000-positronic0002",
       "text": "The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -256,7 +256,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/openai/chatgpt_api/chat-68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-subspace-harmonic-stabi__68fa0003/all.grid_rows.json ===
+=== chatgpt_api/rendered_md/68fa0003-fake-7000-8000-positronic0003/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "68fa0003-fake-7000-8000-positronic0003",
@@ -282,7 +282,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0003-fake-7000-8000-positronic0003",
       "text": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?\nThe premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-subspace-harmonic-stabi__68fa0003/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0003-fake-7000-8000-positronic0003/all.md",
       "source_url": "https://chatgpt.com/c/68fa0003-fake-7000-8000-positronic0003",
       "git_sha": null,
       "external_id": null,
@@ -308,7 +308,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0003-fake-7000-8000-positronic0003",
       "text": "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-subspace-harmonic-stabi__68fa0003/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0003-fake-7000-8000-positronic0003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -334,7 +334,7 @@ expression: sbundle
       "entire_chat": "/chat/68fa0003-fake-7000-8000-positronic0003",
       "text": "The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.",
       "slack_link": null,
-      "qmd_path": "rendered_md/openai/chatgpt_api/chat-68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-subspace-harmonic-stabi__68fa0003/all.md",
+      "qmd_path": "chatgpt_api/rendered_md/68fa0003-fake-7000-8000-positronic0003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,

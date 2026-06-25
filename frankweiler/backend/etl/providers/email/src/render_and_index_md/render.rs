@@ -233,7 +233,7 @@ pub fn render_all(
     .context("email chat-common render")?;
 
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(root, "email", source_name);
+        let cursor_path = render_cursor::cursor_path(root, source_name);
         render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
             .with_context(|| format!("write email render cursor {}", cursor_path.display()))?;
     }

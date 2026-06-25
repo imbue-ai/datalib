@@ -1,6 +1,7 @@
 //! `grid-rows-load` — provider-agnostic Load step. Walks
-//! `<out>/rendered_md/**/*.grid_rows.json` (written by any Translate
-//! step) and inserts rows into the doltlite file at `<out>/<db_filename>`.
+//! `<out>/<stanza>/rendered_md/**/*.grid_rows.json` (written by any Translate
+//! step) and inserts rows into the doltlite file at
+//! `<out>/system/backend_index/db.doltlite_db`.
 //!
 //! Incremental: a `markdowns_loaded(qmd_path PK, source_fingerprint)`
 //! table tracks which documents have already been ingested. Sidecars
@@ -31,17 +32,17 @@ use tracing::{debug, info, info_span};
 )]
 struct Args {
     /// Input root. The loader reads
-    /// `<out>/rendered_md/**/*.grid_rows.json` across every provider
+    /// `<out>/<stanza>/rendered_md/**/*.grid_rows.json` across every stanza
     /// subtree.
     #[arg(long, env = "FW_OUT")]
     out: PathBuf,
 
     /// Path to the doltlite database file. Defaults to
-    /// `<out>/backend_index.doltlite_db`.
+    /// `<out>/system/backend_index/db.doltlite_db`.
     #[arg(long, env = "DOLT_DB_PATH")]
     dolt_db_path: Option<PathBuf>,
 
-    /// After loading, run the qmd indexer over `<out>/rendered_md/`. qmd
+    /// After loading, run the qmd indexer over `<out>`. qmd
     /// update is incremental — repeated invocations only re-index changed
     /// `.md` files.
     #[arg(long, env = "FW_QMD_INDEX")]
@@ -64,7 +65,7 @@ async fn main() -> Result<()> {
     let db_path = args
         .dolt_db_path
         .clone()
-        .unwrap_or_else(|| args.out.join("backend_index.doltlite_db"));
+        .unwrap_or_else(|| frankweiler_core::layout::backend_index_db(&args.out));
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).ok();
     }

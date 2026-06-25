@@ -5,7 +5,7 @@
 plus a co-located `grid_rows` sidecar for the UI's flat-row view.
 
 ```
-<root>/rendered_md/github/<owner>/<repo>/pr-<num>__<slug>/
+<root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/
     index.md                # the unified PR doc
     index.grid_rows.json     # sidecar: one row for the PR + one per comment
 ```
@@ -58,7 +58,7 @@ The translate step is an in-process library (the `render_and_index_md`
 module, called from `frankweiler-sync`); there is no standalone
 `github-translate` binary and no Bazel target for it. Run a sync to
 exercise it, and rendered docs land under
-`/tmp/github-mirror/rendered_md/github/...`.
+`/tmp/github-mirror/<stanza>/rendered_md/...`.
 
 To exercise the renderer in isolation, run its tests:
 

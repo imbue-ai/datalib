@@ -155,8 +155,12 @@ fn ordered_comments(comments: &[CommentRow]) -> Vec<&CommentRow> {
     out
 }
 
-pub fn rows_for_pr(pr: &PullRequestRow, comments: &[CommentRow]) -> Result<Vec<GridRow>> {
-    let qmd = super::render::pr_qmd_path_rel(&pr.repo_full_name, pr.pr_number);
+pub fn rows_for_pr(
+    pr: &PullRequestRow,
+    comments: &[CommentRow],
+    stanza: &str,
+) -> Result<Vec<GridRow>> {
+    let qmd = super::render::pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
     let entire_chat = format!("/chat/{}", pr.uuid);
 
     let mut rows: Vec<GridRow> = Vec::new();

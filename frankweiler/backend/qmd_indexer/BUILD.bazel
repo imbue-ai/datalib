@@ -12,6 +12,7 @@ rust_library(
     edition = "2021",
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
+        "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/obs:frankweiler_obs",
         "@frankweiler_crates//:anyhow",
     ],

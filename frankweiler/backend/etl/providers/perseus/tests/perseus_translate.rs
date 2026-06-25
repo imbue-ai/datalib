@@ -75,13 +75,13 @@ fn renders_all_books_chapters_and_editions() {
 
     let book1 = out
         .path()
-        .join("rendered_md/perseus/thucydides/histories/book_01/index.md");
+        .join("perseus/rendered_md/thucydides/histories/book_01/index.md");
     assert!(book1.exists(), "missing {}", book1.display());
 
     // Book 1 chapter 1, Greek side has both sections. Unaligned
     // editions render section text verbatim (no per-sentence spans).
     let ch11_grc = out.path().join(format!(
-        "rendered_md/perseus/thucydides/histories/book_01/chapter_001_{GRC}.md"
+        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{GRC}.md"
     ));
     let body = std::fs::read_to_string(&ch11_grc).unwrap();
     assert!(body.contains("Θουκυδίδης Ἀθηναῖος ξυνέγραψε."));
@@ -91,7 +91,7 @@ fn renders_all_books_chapters_and_editions() {
 
     // English side: section 2 is the deliberate translation gap.
     let ch11_eng = out.path().join(format!(
-        "rendered_md/perseus/thucydides/histories/book_01/chapter_001_{ENG}.md"
+        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{ENG}.md"
     ));
     let body_eng = std::fs::read_to_string(&ch11_eng).unwrap();
     assert!(body_eng.contains("the Athenian wrote"));
@@ -100,7 +100,7 @@ fn renders_all_books_chapters_and_editions() {
 
     // Book 2 chapter 2: bare chapter text → section "1".
     let ch22_grc = out.path().join(format!(
-        "rendered_md/perseus/thucydides/histories/book_02/chapter_002_{GRC}.md"
+        "perseus/rendered_md/thucydides/histories/book_02/chapter_002_{GRC}.md"
     ));
     let body22 = std::fs::read_to_string(&ch22_grc).unwrap();
     assert!(body22.contains("### 2.2.1"));
@@ -113,7 +113,7 @@ fn sidecars_carry_stable_uuids_and_provider_metadata() {
     render_fixture(&parsed, out.path());
 
     let sidecar_path = out.path().join(format!(
-        "rendered_md/perseus/thucydides/histories/book_01/chapter_001_{GRC}.grid_rows.json"
+        "perseus/rendered_md/thucydides/histories/book_01/chapter_001_{GRC}.grid_rows.json"
     ));
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sidecar_path).unwrap()).unwrap();
@@ -140,7 +140,7 @@ fn sidecars_carry_stable_uuids_and_provider_metadata() {
 
     let book_sidecar = out
         .path()
-        .join("rendered_md/perseus/thucydides/histories/book_01/index.grid_rows.json");
+        .join("perseus/rendered_md/thucydides/histories/book_01/index.grid_rows.json");
     let bv: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&book_sidecar).unwrap()).unwrap();
     assert_eq!(bv["rows"][0]["uuid"], book_uuid("1"));

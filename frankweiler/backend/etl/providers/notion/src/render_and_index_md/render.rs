@@ -1,10 +1,11 @@
 //! Render Notion pages (mirrored by the official API) to markdown.
 //!
-//! Port of `src/ingest/render_notion_official.py`. Each page becomes
-//! `<slug>__<id8>/index.md`; sub-pages render as sibling directories.
-//! Comment threads land under `<page-dir>/threads/<disc-id8>__<slug>.md`,
-//! deep-linked to the anchor block via `<a id="b-…">` markers emitted
-//! around each block.
+//! Port of `src/ingest/render_notion_official.py`. Pages land under the
+//! stanza's rendered-markdown tree at
+//! `<stanza>/rendered_md/pages/<page_id>/index.md`; sub-pages render as
+//! sibling directories. Comment threads land under
+//! `<page-dir>/threads/<discussion_id>.md`, deep-linked to the anchor
+//! block via `<a id="b-…">` markers emitted around each block.
 //!
 //! When debugging "what is this block type supposed to render as?", a
 //! useful cross-reference is the actively-maintained Node renderer at
@@ -71,7 +72,7 @@ pub fn short_id(uuid_str: &str) -> String {
     s
 }
 
-pub fn page_dir_segment(page_id: &str, _title: &str) -> String {
+pub fn page_dir_segment(page_id: &str) -> String {
     page_id.to_string()
 }
 
@@ -573,7 +574,7 @@ fn render_block(block: &Value, ctx: &RenderCtx<'_>, depth: usize) -> Vec<String>
                 .sub_pages_dir
                 .get(block_id)
                 .cloned()
-                .unwrap_or_else(|| page_dir_segment(block_id, &title));
+                .unwrap_or_else(|| page_dir_segment(block_id));
             let href = format!("../{seg}/index.md");
             lines.push(format!("{indent}- 📄 [{title}]({href})"));
             lines.push(String::new());
@@ -824,13 +825,7 @@ fn collect_sub_pages_dir(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let title = b
-                .get("child_page")
-                .and_then(|v| v.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            out.insert(bid.clone(), page_dir_segment(&bid, &title));
+            out.insert(bid.clone(), page_dir_segment(&bid));
         } else {
             let bid = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
             if let Some(ch) = children_by_parent.get(bid) {
@@ -871,7 +866,7 @@ fn render_one_page(
         .cloned()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(untitled)".into());
-    let seg = page_dir_segment(pid, &title);
+    let seg = page_dir_segment(pid);
     let page_dir = pages_root.join(&seg);
     fs::create_dir_all(&page_dir)?;
     let sub_pages_dir = collect_sub_pages_dir(pid, children_by_parent);
@@ -993,7 +988,7 @@ pub fn thread_snippet(comment_rich_text_plain: &str) -> String {
     s.chars().take(60).collect()
 }
 
-pub fn thread_filename(discussion_id: &str, _snippet: &str) -> String {
+pub fn thread_filename(discussion_id: &str) -> String {
     format!("{discussion_id}.md")
 }
 
@@ -1017,11 +1012,9 @@ fn render_thread(
         let bb = b.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
         aa.cmp(bb)
     });
-    let first_text = rich_text_plain(sorted[0].get("rich_text"));
-    let snippet = thread_snippet(&first_text);
     let threads_dir = page_dir.join("threads");
     fs::create_dir_all(&threads_dir)?;
-    let target = threads_dir.join(thread_filename(discussion_id, &snippet));
+    let target = threads_dir.join(thread_filename(discussion_id));
 
     let thread_url = notion_thread_url(page_id, Some(discussion_id), parent_block_id);
 
@@ -1093,30 +1086,28 @@ fn render_thread(
     Ok(Some(target))
 }
 
-pub fn pages_subdir() -> PathBuf {
-    PathBuf::from("rendered_md").join("notion").join("pages")
+/// Markdown-root-relative `pages` dir for a stanza:
+/// `<stanza>/rendered_md/pages`. Mirrors the absolute path built in
+/// `render_notion_official` via `frankweiler_etl::layout::rendered_md_root`.
+pub fn pages_subdir(stanza: &str) -> PathBuf {
+    PathBuf::from(stanza).join("rendered_md").join("pages")
 }
 
-pub fn page_qmd_path_rel(page_id: &str, page_title_str: &str) -> String {
-    let seg = page_dir_segment(page_id, page_title_str);
-    pages_subdir()
+pub fn page_qmd_path_rel(stanza: &str, page_id: &str) -> String {
+    let seg = page_dir_segment(page_id);
+    pages_subdir(stanza)
         .join(seg)
         .join("index.md")
         .to_string_lossy()
         .into_owned()
 }
 
-pub fn thread_qmd_path_rel(
-    page_id: &str,
-    page_title_str: &str,
-    discussion_id: &str,
-    snippet: &str,
-) -> String {
-    let seg = page_dir_segment(page_id, page_title_str);
-    pages_subdir()
+pub fn thread_qmd_path_rel(stanza: &str, page_id: &str, discussion_id: &str) -> String {
+    let seg = page_dir_segment(page_id);
+    pages_subdir(stanza)
         .join(seg)
         .join("threads")
-        .join(thread_filename(discussion_id, snippet))
+        .join(thread_filename(discussion_id))
         .to_string_lossy()
         .into_owned()
 }
@@ -1124,12 +1115,16 @@ pub fn thread_qmd_path_rel(
 pub fn render_notion_official(
     parsed: &ParsedNotionOfficial,
     root: &Path,
+    stanza: &str,
     progress: &Progress,
     prior_fingerprints: &HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    let pages_root = root.join(pages_subdir());
+    // Absolute pages dir: `<root>/<stanza>/rendered_md/pages`. Built via the
+    // shared `rendered_md_root` helper; stays identical to the rel strings
+    // produced by `pages_subdir(stanza)` / `page_qmd_path_rel`.
+    let pages_root = frankweiler_etl::layout::rendered_md_root(root, stanza).join("pages");
     fs::create_dir_all(&pages_root)?;
 
     if parsed.pages.is_empty() && parsed.blocks.is_empty() && parsed.comments.is_empty() {
@@ -1151,7 +1146,7 @@ pub fn render_notion_official(
     // Pre-compute every document's row set + fingerprint up front so
     // the per-doc loop can decide skip/render against priors before
     // doing any IO.
-    let docs = gather_documents(parsed)?;
+    let docs = gather_documents(parsed, stanza)?;
     let page_doc_by_uuid: HashMap<String, &PageDocument> = docs
         .pages
         .iter()
@@ -1173,12 +1168,7 @@ pub fn render_notion_official(
         let Some(pid) = page.get("id").and_then(|v| v.as_str()).map(String::from) else {
             continue;
         };
-        let title = page_titles
-            .get(&pid)
-            .cloned()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "(untitled)".into());
-        let page_dir = pages_root.join(page_dir_segment(&pid, &title));
+        let page_dir = pages_root.join(page_dir_segment(&pid));
         let md_path = page_dir.join("index.md");
 
         let fingerprint = page_doc_by_uuid
@@ -1277,18 +1267,16 @@ pub fn render_notion_official(
         } else {
             None
         };
-        let page_dir = pages_root.join(page_dir_segment(&page_id, &title));
+        let page_dir = pages_root.join(page_dir_segment(&page_id));
 
         let fingerprint = thread_doc_by_uuid
             .get(&disc_id)
             .map(|d| d.source_fingerprint.clone());
 
-        // We need the rendered thread's md_path to do the on-disk
-        // skip check. render_thread is deterministic and
-        // thread_filename ignores the snippet (PK is discussion_id),
-        // so we can call thread_qmd_path_rel with an empty snippet
-        // and still get the right path.
-        let thread_md_rel = thread_qmd_path_rel(&page_id, &title, &disc_id, "");
+        // We need the rendered thread's md_path to do the on-disk skip
+        // check. render_thread is deterministic and thread_filename keys
+        // purely on discussion_id, so the rel path is fully determined.
+        let thread_md_rel = thread_qmd_path_rel(stanza, &page_id, &disc_id);
         let thread_md_path = root.join(&thread_md_rel);
 
         if let Some(fp) = fingerprint.as_ref() {

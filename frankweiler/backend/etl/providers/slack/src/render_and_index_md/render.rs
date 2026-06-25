@@ -117,7 +117,7 @@ pub fn render_all(
     // managed to read HEAD at scan time. Without HEAD the next run is
     // another cold start (the right behavior — nothing to anchor on).
     if let Some(head) = parsed.scan.new_head.as_deref() {
-        let cursor_path = render_cursor::cursor_path(out_dir, "slack", source_name);
+        let cursor_path = render_cursor::cursor_path(out_dir, source_name);
         render_cursor::write(&cursor_path, head, parsed.scan.scan_elapsed)
             .with_context(|| format!("write slack render cursor {}", cursor_path.display()))?;
     }

@@ -110,8 +110,7 @@ impl DataProcessor for SignalRender {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render_and_index_md::{parse, render_all};
 
-        let cursor_path =
-            frankweiler_etl::render_cursor::cursor_path(ctx.root, "signal", &self.name);
+        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read signal render cursor {}", cursor_path.display()))?;
         let parsed = parse(

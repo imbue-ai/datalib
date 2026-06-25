@@ -281,7 +281,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // skipped, no on_doc_complete calls. The load-bearing assertion
     // for the incremental story: dolt_diff says "nothing changed" →
     // we render nothing.
-    let cursor_path = render_cursor::cursor_path(&data_root, "signal", "signal-tng");
+    let cursor_path = render_cursor::cursor_path(&data_root, "signal-tng");
     let cursor =
         render_cursor::read(&cursor_path)?.expect("first render should have written the cursor");
     assert!(

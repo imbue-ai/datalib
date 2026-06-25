@@ -2,8 +2,8 @@
 //!
 //! Layout:
 //! ```text
-//! <root>/rendered_md/github/<owner>/<repo>/pr-<num>__<slug>/index.md
-//! <root>/rendered_md/github/<owner>/<repo>/pr-<num>__<slug>/index.grid_rows.json
+//! <root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/index.md
+//! <root>/<stanza>/rendered_md/<owner>/<repo>/pr-<num>/index.grid_rows.json
 //! ```
 //!
 //! Section order in the doc:
@@ -64,17 +64,16 @@ pub fn slugify(name: &str) -> String {
 }
 
 /// Relative path from the data root to a PR's `index.md`.
-pub fn pr_qmd_path_rel(repo_full_name: &str, pr_number: u32) -> String {
+pub fn pr_qmd_path_rel(stanza: &str, repo_full_name: &str, pr_number: u32) -> String {
     let (owner, repo) = repo_full_name
         .split_once('/')
         .unwrap_or(("unknown", repo_full_name));
-    format!("rendered_md/github/{owner}/{repo}/pr-{pr_number}/index.md")
+    format!("{stanza}/rendered_md/{owner}/{repo}/pr-{pr_number}/index.md")
 }
 
-fn pr_dir(root: &Path, repo: &str, num: u32) -> PathBuf {
+fn pr_dir(root: &Path, stanza: &str, repo: &str, num: u32) -> PathBuf {
     let (owner, name) = repo.split_once('/').unwrap_or(("unknown", repo));
-    root.join("rendered_md")
-        .join("github")
+    frankweiler_etl::layout::rendered_md_root(root, stanza)
         .join(owner)
         .join(name)
         .join(format!("pr-{num}"))
@@ -137,8 +136,13 @@ fn comment_header(c: &CommentRow) -> String {
     format!("**@{who}**{state}{reply} @ {when}{link}")
 }
 
-fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> Result<PathBuf> {
-    let dir = pr_dir(root, &pr.repo_full_name, pr.pr_number);
+fn render_one_pr(
+    pr: &PullRequestRow,
+    comments: &[CommentRow],
+    root: &Path,
+    stanza: &str,
+) -> Result<PathBuf> {
+    let dir = pr_dir(root, stanza, &pr.repo_full_name, pr.pr_number);
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let md_path = dir.join("index.md");
 
@@ -308,7 +312,7 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
     // sidecar
-    let rows = rows_for_pr(pr, comments)?;
+    let rows = rows_for_pr(pr, comments, stanza)?;
     let sidecar_path = md_path.with_extension("grid_rows.json");
     emit_sidecar(
         &sidecar_path,
@@ -325,6 +329,7 @@ fn render_one_pr(pr: &PullRequestRow, comments: &[CommentRow], root: &Path) -> R
 pub fn render_github(
     parsed: &ParsedGithubApi,
     root: &Path,
+    stanza: &str,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -343,7 +348,7 @@ pub fn render_github(
         let key = (pr.repo_full_name.clone(), pr.pr_number);
         let comments = by_pr.remove(&key).unwrap_or_default();
         let fingerprint = fingerprint_for_pr(pr, &comments);
-        let md_rel = pr_qmd_path_rel(&pr.repo_full_name, pr.pr_number);
+        let md_rel = pr_qmd_path_rel(stanza, &pr.repo_full_name, pr.pr_number);
         let md_path = root.join(&md_rel);
 
         if prior_fingerprints.get(&pr.uuid).map(String::as_str) == Some(fingerprint.as_str())
@@ -354,8 +359,8 @@ pub fn render_github(
             continue;
         }
 
-        render_one_pr(pr, &comments, root)?;
-        let rows = rows_for_pr(pr, &comments)?;
+        render_one_pr(pr, &comments, root, stanza)?;
+        let rows = rows_for_pr(pr, &comments, stanza)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: pr.uuid.clone(),
             source_name: String::new(),

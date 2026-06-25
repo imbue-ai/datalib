@@ -4,10 +4,10 @@ TNG fixture's rendered markdown tree and emits an overlay tar containing the
 resulting SQLite index.
 
 The output is an *overlay* on top of `qmd.tar`: it shares the same `qmd/`
-prefix so the two tars layer cleanly. Extracting both with
+staging prefix so the two tars layer cleanly. Extracting both with
 `tar -x --strip-components=1` into a directory yields a complete root data
-directory — markdown tree under `<root>/rendered_md/...` plus the qmd index
-at `<root>/qmd/index.sqlite`.
+directory — markdown trees under `<root>/<stanza>/rendered_md/...` plus the
+qmd index at `<root>/system/qmd/index.sqlite`.
 
 Why a script:
   1. The ingested fixture is a tar (`qmd.tar`) — we have to extract it to a
@@ -93,16 +93,18 @@ def main() -> int:
     if r.returncode != 0:
         return r.returncode
 
-    produced = work / "qmd" / "index.sqlite"
+    # The indexer pins XDG_CACHE_HOME at `<root>/system`, so qmd writes its
+    # index under `<root>/system/qmd/` (see core::layout).
+    produced = work / "system" / "qmd" / "index.sqlite"
     if not produced.exists():
         sys.stderr.write(f"qmd_indexer did not produce {produced}\n")
         return 1
 
-    # Emit an overlay tar mirroring qmd.tar's layout: paths rooted at
-    # "qmd/..." so callers can extract both archives into the same root
-    # directory and have everything end up in the right place. Skip the
-    # `models` symlink — it points at a shared cache outside the data root.
-    overlay_root = work / "qmd"
+    # Emit an overlay tar that layers onto qmd.tar: every entry is prefixed
+    # with the `qmd/` staging dir so callers strip one component and land the
+    # index at `<root>/system/qmd/index.sqlite`. Skip the `models` symlink —
+    # it points at a shared cache outside the data root.
+    overlay_root = work / "system" / "qmd"
     models_link = overlay_root / "models"
 
     def is_under(p: Path, parent: Path) -> bool:
@@ -120,8 +122,8 @@ def main() -> int:
         and not is_under(p, models_link)
     )
     with tarfile.open(out_tar_path, "w") as tf:
-        # Include the `qmd/qmd/` directory entry itself for completeness.
-        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/qmd")
+        # Include the `qmd/system/qmd/` directory entry itself for completeness.
+        ti = tf.gettarinfo(str(overlay_root), arcname="qmd/system/qmd")
         ti.mtime = 0
         ti.uid = 0
         ti.gid = 0
@@ -129,7 +131,7 @@ def main() -> int:
         ti.gname = ""
         tf.addfile(ti)
         for p in entries:
-            arcname = "qmd/qmd/" + str(p.relative_to(overlay_root))
+            arcname = "qmd/system/qmd/" + str(p.relative_to(overlay_root))
             ti = tf.gettarinfo(str(p), arcname=arcname)
             ti.mtime = 0
             ti.uid = 0

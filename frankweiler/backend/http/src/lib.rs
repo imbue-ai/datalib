@@ -163,9 +163,10 @@ pub struct FeedbackResponse {
 }
 
 pub fn router(state: AppState) -> Router {
-    // Slack image attachments are symlinked into `<root>/media/slack/<file_id>/`
-    // by ingest; serve them verbatim so QMD-embedded `![](...)` URLs resolve.
-    let media_dir = state.root.join("media");
+    // Slack image attachments are symlinked into
+    // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
+    // QMD-embedded `![](...)` URLs resolve.
+    let media_dir = frankweiler_core::layout::media_dir(&state.root);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))
@@ -1133,7 +1134,8 @@ async fn sync_job_cancel(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Tail the per-job log written by the worker at `<root>/state/job-logs/{id}.log`.
+/// Tail the per-job log written by the worker at
+/// `<root>/system/state/job-logs/{id}.log`.
 /// 404 when the file doesn't exist yet — the UI polls `/jobs/{id}` for state
 /// and only follows the log link once it appears.
 async fn sync_job_log(
@@ -1151,7 +1153,9 @@ async fn sync_job_log(
     if id.contains('/') || id.contains('\\') || id.contains("..") {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let path = s.root.join("state/job-logs").join(format!("{id}.log"));
+    let path = frankweiler_core::layout::state_dir(&s.root)
+        .join("job-logs")
+        .join(format!("{id}.log"));
     match std::fs::read_to_string(&path) {
         Ok(body) => Ok((
             StatusCode::OK,

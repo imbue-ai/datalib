@@ -3,10 +3,11 @@
 //! threads through. Provider-agnostic: everything provider-specific
 //! arrives via [`ContactRenderProfile`] + the [`NormalizedContact`]s.
 //!
-//! Layout under `out_dir`:
-//!   `rendered_md/<provider>/<source_name>/<group-slug>/<uuid>__<slug>.md`
-//!   `rendered_md/<provider>/<source_name>/<group-slug>/<uuid>__<slug>.grid_rows.json`
-//!   `rendered_md/<provider>/<source_name>/<group-slug>/blobs/<uuid>.<ext>`
+//! Layout under `out_dir` (one directory per contact, keyed by the stable
+//! contact UUID):
+//!   `<stanza>/rendered_md/<contact_uuid>/index.md`
+//!   `<stanza>/rendered_md/<contact_uuid>/index.grid_rows.json`
+//!   `<stanza>/rendered_md/<contact_uuid>/blobs/<uuid>.<ext>`
 //!
 //! Per-contact granularity (rather than one `.md` per group) lets the
 //! qmd embedding index treat each person as a searchable document —
@@ -118,8 +119,7 @@ fn render_one(
     let m_uuid = &contact.contact_uuid;
     let fingerprint = compute_fingerprint(profile.render_version, contact);
 
-    let (md_path, json_path, page_dir) =
-        output_paths(out_dir, profile.provider, source_name, contact);
+    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, contact);
     if prior_fingerprints.get(m_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
     {
@@ -183,24 +183,17 @@ fn render_one(
 
 fn output_paths(
     out_dir: &Path,
-    provider: &str,
     source_name: &str,
     contact: &NormalizedContact,
 ) -> (PathBuf, PathBuf, PathBuf) {
-    let page_dir = out_dir
-        .join("rendered_md")
-        .join(provider)
-        .join(source_name)
-        .join(group_slug(&contact.group_label));
-    // The contact_uuid is filename-safe and unique; the slug is a
-    // human hint. Full uuid lives in the frontmatter + grid row.
-    let stem = format!(
-        "{}__{}",
-        contact.contact_uuid,
-        slugify(display_or_id(contact)),
-    );
-    let md_path = page_dir.join(format!("{stem}.md"));
-    let json_path = page_dir.join(format!("{stem}.grid_rows.json"));
+    // One directory per contact, keyed by the stable contact UUID — never a
+    // name/group-label slug, so a rename or regrouping re-renders in place.
+    // The contact's `blobs/` (photo) live inside this dir. Display name and
+    // group label still live in the frontmatter + grid row.
+    let page_dir =
+        frankweiler_etl::layout::rendered_md_root(out_dir, source_name).join(&contact.contact_uuid);
+    let md_path = page_dir.join("index.md");
+    let json_path = page_dir.join("index.grid_rows.json");
     (md_path, json_path, page_dir)
 }
 
@@ -386,32 +379,6 @@ fn yaml_safe(s: &str) -> String {
     }
 }
 
-fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut last_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash && !out.is_empty() {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
-}
-
-/// Group label → a filesystem- and bazel-label-safe directory name.
-/// Falls back to `"group"` when the label slugs to nothing.
-fn group_slug(label: &str) -> String {
-    let s = slugify(label);
-    if s.is_empty() {
-        "group".to_string()
-    } else {
-        s
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,11 +450,5 @@ mod tests {
             row.conversation_name.as_deref(),
             Some("LinkedIn Connections")
         );
-    }
-
-    #[test]
-    fn group_slug_is_safe_and_nonempty() {
-        assert_eq!(group_slug("LinkedIn Connections"), "linkedin-connections");
-        assert_eq!(group_slug("???"), "group");
     }
 }

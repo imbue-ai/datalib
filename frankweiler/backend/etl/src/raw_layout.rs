@@ -2,7 +2,7 @@
 //!
 //! Each data source owns a directory — `SourceConfig::resolved_raw_path`
 //! in the config crate decides *where* (a `raw_path:` override, else
-//! `<data_root>/raw/<name>`). This module is the single source of truth
+//! `<data_root>/<name>/raw`). This module is the single source of truth
 //! for *what lives inside* that directory, shared by both sides of the
 //! pipeline: extractors write these files, renderers read them.
 //!

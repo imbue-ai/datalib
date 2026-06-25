@@ -129,7 +129,8 @@ genrule(
             "frankweiler/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
         ]),
         # Copy the doltlite (SQLite-compatible) file out of the workspace.
-        "cp $(RULEDIR)/sync_workspace/backend_index.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
+        # It now lives under the reserved `system/` dir (see core::layout).
+        "cp $(RULEDIR)/sync_workspace/system/backend_index/db.doltlite_db $(execpath ingested/backend_index.doltlite_db)",
         # Tar the rendered_md tree hermetically into qmd.tar.
         " ".join([
             "python3 $(execpath tar_qmd.py)",
