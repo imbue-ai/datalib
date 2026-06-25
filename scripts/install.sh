@@ -11,13 +11,14 @@
 #   FRANKWEILER_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
 #   FRANKWEILER_VERSION       release tag to install (default: latest)
 #
-# Only macOS arm64 (aarch64-apple-darwin) is supported today.
+# Supported platforms (one published release tarball each):
+#   macOS arm64     -> aarch64-apple-darwin
+#   Linux x86_64    -> x86_64-unknown-linux-gnu
+#   Linux arm64     -> aarch64-unknown-linux-gnu
 
 set -eu
 
 REPO="imbue-ai/datalib"
-TRIPLE="aarch64-apple-darwin"
-TARBALL="frankweiler-${TRIPLE}.tar.gz"
 INSTALL_DIR="${FRANKWEILER_INSTALL_DIR:-${HOME}/.local/bin}"
 VERSION="${FRANKWEILER_VERSION:-latest}"
 
@@ -25,12 +26,18 @@ say() { printf 'frankweiler-install: %s\n' "$1"; }
 err() { printf 'frankweiler-install: error: %s\n' "$1" >&2; exit 1; }
 
 # --- platform check ---
+# Map uname's kernel/arch to the Rust target triple in the published
+# tarball names. These three triples are exactly what the release
+# workflow builds (see .github/workflows/release.yml's matrix).
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
-    Darwin/arm64) ;;
-    *) err "unsupported platform ${os}/${arch}; only macOS arm64 is supported today" ;;
+    Darwin/arm64)               TRIPLE="aarch64-apple-darwin" ;;
+    Linux/x86_64)               TRIPLE="x86_64-unknown-linux-gnu" ;;
+    Linux/aarch64 | Linux/arm64) TRIPLE="aarch64-unknown-linux-gnu" ;;
+    *) err "unsupported platform ${os}/${arch}; supported: macOS arm64, Linux x86_64, Linux arm64" ;;
 esac
+TARBALL="frankweiler-${TRIPLE}.tar.gz"
 
 # --- tool check ---
 need() { command -v "$1" >/dev/null 2>&1 || err "required tool not found: $1"; }
@@ -62,12 +69,19 @@ fi
 # --- optional checksum verification ---
 if curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
         -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}" 2>/dev/null; then
-    if command -v shasum >/dev/null 2>&1; then
+    # The .sha256 file lists the bare filename, so cd into tmpdir for
+    # the `-c` check. Linux ships `sha256sum`; macOS ships `shasum`.
+    # Both consume the same "HASH  filename" format the release writes.
+    if command -v sha256sum >/dev/null 2>&1; then
         say "verifying checksum"
-        # The .sha256 file lists the bare filename; cd into tmpdir so
-        # `shasum -c` finds it.
+        (cd "${tmpdir}" && sha256sum -c "${TARBALL}.sha256") \
+            || err "checksum verification failed"
+    elif command -v shasum >/dev/null 2>&1; then
+        say "verifying checksum"
         (cd "${tmpdir}" && shasum -a 256 -c "${TARBALL}.sha256") \
             || err "checksum verification failed"
+    else
+        say "no sha256 tool found; skipping checksum verification"
     fi
 else
     say "checksum file not published; skipping verification"

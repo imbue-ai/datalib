@@ -35,40 +35,53 @@ Codenames in this project (`frankweiler`, etc.) are inspired by
 
 ## 0. Setup pre-reqs
 
-If you don't already have them, you'll need a few host tools on `PATH`:
+If you don't already have it, you'll need `node` on `PATH`:
 
 ```sh
-brew install node gh
+brew install node
 ```
 
-- `gh` — used below to pull the release tarball (since the repo is not public)
 - `node` — the qmd indexer shells out to latchkey, and `npx -y @tobilu/qmd@<version>` 
   during the index phase.
 
-To access the Imbue-private repo, also make sure you're authenticated with GitHub for the `gh` download:
+## 1. Install the CLI and make a data_root playground (here it's `~/datalib`)
+
+Now that the repo is public, you can install the binaries straight from the
+GitHub Releases with a one-line `curl` script — no `gh` and no GitHub auth:
 
 ```sh
-gh auth login
+curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 ```
 
-## 1. Make a data_root playground and download the CLI (here it's `~/datalib`)
+This downloads the latest release tarball, verifies its checksum, and drops
+`frankweiler-sync`, `frankweiler-http`, and the latchkey curl shim into
+`~/.local/bin`. If that directory isn't already on your `PATH`, the script
+prints the exact line to add to your `~/.zshrc` — add it and restart your
+shell so the `frankweiler-*` commands resolve.
 
-This is where the tools will download your data.
+Two optional knobs:
 
-The tools themselves can run from anywhere, but for now, you can just download them directly into the data_root directory and run them from there.
+- `FRANKWEILER_INSTALL_DIR` — install somewhere else, e.g.
+  `FRANKWEILER_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
+- `FRANKWEILER_VERSION` — pin a release tag instead of `latest`, e.g.
+  `FRANKWEILER_VERSION=v0.13.0 curl -LsSf …/install.sh | sh`.
+
+> The install script supports macOS arm64 (Apple Silicon) and Linux
+> (x86_64 / arm64); it auto-detects your platform and pulls the matching
+> release tarball. The rest of this guide is written macOS-first (Homebrew,
+> `pbpaste`) — on Linux, substitute your package manager and clipboard tool.
+
+Next, make the data_root playground — this is where the tools will download
+your data — and work from there:
 
 ```sh
-# Make the data_root as our playground.
 mkdir -p ~/datalib && cd ~/datalib
-
-gh release download --repo imbue-ai/datalib --clobber --pattern '*.tar.gz' -D /tmp \
-    && tar -xzf /tmp/frankweiler-aarch64-apple-darwin.tar.gz --strip-components=1
 ```
 
-Verify:
+Verify the install:
 
 ```sh
-./frankweiler-sync --version
+frankweiler-sync --version
 ```
 
 ## 2. Get access to some data
@@ -209,7 +222,7 @@ defaults (including both input modes for email and contacts), see
 ## 4. Run the sync
 
 ```sh
-./frankweiler-sync --config ./sample_config.yaml
+frankweiler-sync --config ./sample_config.yaml
 ```
 
 The first time you run this, it is slow and takes a long time to download everything.
@@ -285,7 +298,7 @@ skipped / errors). Exit code is non-zero if any source errored.
 embedded — point it at your data root and it serves everything:
 
 ```sh
-./frankweiler-http ./
+frankweiler-http ./
 ```
 
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
