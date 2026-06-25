@@ -49,7 +49,7 @@ and from the `dump.sql` portable-DDL emitter.
 Each provider crate under `frankweiler/backend/etl/providers/<p>/`
 emits `*.grid_rows.json` sidecars next to its rendered markdown. The
 shared Load step (`frankweiler/backend/etl/src/load.rs`) walks every
-sidecar under `<root>/rendered_md/`, upserts each conversation's row
+sidecar under `<root>/<stanza>/rendered_md/`, upserts each conversation's row
 set into Dolt, and stamps the corresponding `documents` row with the
 `row_set_hash` used to skip unchanged re-renders next time.
 

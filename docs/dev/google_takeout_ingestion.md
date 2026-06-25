@@ -2,7 +2,7 @@
 
 **Status:** draft, iterating with thad.
 **Scope:** raw-extract only. No translate, no `GridRow`s, no
-`rendered_md/` sidecars in this first pass. Wire-tape JSONL is **not**
+`<name>/rendered_md/` sidecars in this first pass. Wire-tape JSONL is **not**
 emitted (the data didn't come off a wire).
 
 ## Motivation
@@ -99,8 +99,8 @@ disturb the maps tables.
 ## Layout on disk
 
 ```
-<data_root>/raw/<name>/entities.doltlite_db       # all entity tables
-<data_root>/raw/<name>/blobs.doltlite_db         # CAS for attached bytes
+<data_root>/<name>/raw/entities.doltlite_db       # all entity tables
+<data_root>/<name>/raw/blobs.doltlite_db         # CAS for attached bytes
 ```
 
 Same shape as every other provider. `<name>` is the source's `name:`

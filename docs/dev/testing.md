@@ -42,7 +42,7 @@ Always review the diff before committing. See [`/AGENTS.md`](/AGENTS.md)
 runs the **full sync pipeline against the real world** — every source, hitting
 live provider APIs through host-side latchkey credentials and reading the
 file-based exports (LinkedIn, Google Takeout, SMS Backup & Restore, CardDAV
-contacts) — then snapshots the produced `raw/` + `rendered_md/` trees and the
+contacts) — then snapshots the produced per-stanza `<name>/raw/` + `<name>/rendered_md/` trees and the
 `sync_summary` JSON. It's the only test that catches render-side drift against
 real payloads. Tagged `manual` + `external` + `no-sandbox`, so it is **not**
 part of `bazelisk test //...`; you run it explicitly. See

@@ -102,7 +102,7 @@ whole migration.
 
 ### `frankweiler_etl::render_cursor`
 
-A small JSON file at `<out_dir>/rendered_md/<provider>/<source_name>/_render_cursor.json`.
+A small JSON file at `<out_dir>/<stanza>/rendered_md/_render_cursor.json`.
 
 ```json
 {
