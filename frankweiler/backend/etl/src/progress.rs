@@ -170,6 +170,11 @@ impl ProgressSink for FanOut {
             s.set_length(total);
         }
     }
+    fn finish_and_clear(&self) {
+        for s in &self.sinks {
+            s.finish_and_clear();
+        }
+    }
     fn inc(&self, delta: u64) {
         for s in &self.sinks {
             s.inc(delta);
@@ -189,5 +194,75 @@ impl ProgressSink for FanOut {
         Arc::new(FanOut {
             sinks: self.sinks.iter().map(|s| s.child(prefix)).collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A sink that just counts how many times `finish_and_clear` fired, so a
+    /// test can assert a wrapping sink (e.g. `FanOut`) forwards the call
+    /// instead of silently hitting the no-op default trait method. Children
+    /// share the same counter — mirroring how a real leaf sink spawns its own
+    /// child bars — so the count survives nesting through `FanOut::child`.
+    #[derive(Default, Clone)]
+    struct RecordingSink {
+        finish_and_clear: Arc<AtomicUsize>,
+    }
+    impl ProgressSink for RecordingSink {
+        fn finish_and_clear(&self) {
+            self.finish_and_clear.fetch_add(1, Ordering::SeqCst);
+        }
+        fn child(&self, _prefix: &str) -> Arc<dyn ProgressSink> {
+            Arc::new(self.clone())
+        }
+    }
+
+    // Regression: `FanOut` once implemented `inc`/`finish`/etc. but *not*
+    // `finish_and_clear`, so the orchestrator's end-of-run
+    // `progress.finish_and_clear()` fell through to the empty default trait
+    // method and never reached the wrapped indicatif bar. The outer bar was
+    // never finished, so it stayed pinned at N/N with a forever-decaying
+    // per-second rate. This asserts the call reaches every wrapped sink.
+    #[test]
+    fn fanout_forwards_finish_and_clear_to_every_sink() {
+        let a = Arc::new(RecordingSink::default());
+        let b = Arc::new(RecordingSink::default());
+        let sinks: Vec<Arc<dyn ProgressSink>> = vec![a.clone(), b.clone()];
+        let fan = FanOut::new(sinks);
+
+        fan.finish_and_clear();
+
+        assert_eq!(
+            a.finish_and_clear.load(Ordering::SeqCst),
+            1,
+            "FanOut must forward finish_and_clear to its first sink",
+        );
+        assert_eq!(
+            b.finish_and_clear.load(Ordering::SeqCst),
+            1,
+            "FanOut must forward finish_and_clear to its second sink",
+        );
+    }
+
+    // The same gap affected inner per-unit bars: providers call
+    // `inner.finish_and_clear()` on a `FanOut::child`, which is itself a
+    // `FanOut`, so the forward has to work through nesting too.
+    #[test]
+    fn fanout_child_forwards_finish_and_clear() {
+        let leaf = Arc::new(RecordingSink::default());
+        let sinks: Vec<Arc<dyn ProgressSink>> = vec![leaf.clone()];
+        let fan = FanOut::new(sinks);
+
+        let child = fan.child("inner");
+        child.finish_and_clear();
+
+        assert_eq!(
+            leaf.finish_and_clear.load(Ordering::SeqCst),
+            1,
+            "FanOut child must forward finish_and_clear down to the leaf sink",
+        );
     }
 }
