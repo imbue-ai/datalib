@@ -1,7 +1,7 @@
 # Data architecture plan of attack
 
 Plan derived from the audit ([`data_architecture_audit.md`](data_architecture_audit.md))
-and Thad's inline comments on it. Companion to [`data_architecture_ingestion.md`](data_architecture_ingestion.md)
+and Thad's inline comments on it. Companion to [`data_architecture_ingestion.md`](../data_architecture_ingestion.md)
 (the principles) and the audit (the findings).
 
 ## Guiding priorities

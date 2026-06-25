@@ -80,7 +80,7 @@ docker run --rm -p 8731:8731 \
 | Host path                      | Container path             | Mode at sync time | Why                                                                                          |
 |--------------------------------|----------------------------|-------------------|----------------------------------------------------------------------------------------------|
 | `$LATCHKEY_DIR`                | `/root/.latchkey`          | `:ro`             | latchkey's encrypted credential store. Needs RW only during `services register` / `auth set` / `auth browser-prepare`. |
-| `$DATA_ROOT`                   | `/data`                    | RW                | `config.yaml`, the doltlite DB (`backend_index.doltlite_db`), per-provider `raw_api/` dumps, rendered `*.qmd` files, the qmd search index under `.frankweiler/qmd/`. |
+| `$DATA_ROOT`                   | `/data`                    | RW                | `config.yaml`, one directory per source stanza (`<name>/raw/` + `<name>/rendered_md/`), and the aggregates under `system/` (`system/backend_index/db.doltlite_db`, `system/qmd/`). |
 | `~/.cache/qmd/models`          | `/root/.cache/qmd/models`  | RW (optional)     | qmd's embedding/reranker/expansion model cache (~2.25 GB). The image already ships the three default models pre-baked at `/root/.cache/qmd/models/`, so this mount is only needed if you've set `QMD_EMBED_MODEL=…` to override the default to an unbaked model, or you want to share a cache with a host `qmd` install. |
 
 Default `ENV` inside the image already sets `FRANKWEILER_ROOT=/data` and

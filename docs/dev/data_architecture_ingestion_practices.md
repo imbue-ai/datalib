@@ -321,7 +321,7 @@ Note: This is not yet handled in a meaningful way.  We haven't decided yet what 
 
 **Desired principle**: removing a `sources:` entry should leave the
 system clean. A single GC pass should reclaim the source's raw store,
-its blob CAS contribution, its `rendered_md/<name>/` tree, and its
+its blob CAS contribution, its `<name>/rendered_md/` tree, and its
 `grid_rows` rows — without disturbing other sources that share the CAS.
 
 **Open**: today we have `blob_cas::gc_orphans()` for the blob side, but
@@ -335,7 +335,7 @@ from their config, what is the expected sequence of operations?
 provider type (two Slack workspaces, three GitHub orgs, two ChatGPT
 accounts) by virtue of each having its own `sources:` entry with a
 distinct `name:`. `GridRow.account` and the per-account segments in
-`rendered_md/<provider>/<account>/...` exist to keep them disjoint.
+`<stanza>/rendered_md/<account>/...` exist to keep them disjoint.
 
 **Open**: this should be documented as a first-class case, not an
 incidental side effect of "each `name:` gets its own raw store." Are
@@ -418,7 +418,7 @@ level too.
 ### grid_rows itself lives in doltlite
 
 The `grid_rows` table (the projection consumed by the UI) lives in
-`<data_root>/backend_index.doltlite_db`, just like raw stores. The "doltlite
+`<data_root>/system/backend_index/db.doltlite_db`, just like raw stores. The "doltlite
 is our storage layer" claim should apply to every store the system writes —
 raw, blob CAS, and the backend index — not just to raw. Worth saying
 explicitly in

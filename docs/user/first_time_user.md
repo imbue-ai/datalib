@@ -228,7 +228,7 @@ and should be faster.
   bar as each new / updated / overlap conversation is fetched from
   `claude.ai/api`. New conversations are fetched first.
 - A `translate` phase: each conversation rendered into intelligible Markdown (including image attachments).
-- A SQL `index` phase: rows written into the doltlite SQL store at `<data_root>/backend_index.doltlite_db`.
+- A SQL `index` phase: rows written into the doltlite SQL store at `<data_root>/system/backend_index/db.doltlite_db`.
 - A `qmd index` phase: builds the search index. **First run is slow** —
   embedding ~5–10 minutes per thousand chunks on CPU. It's resumable, so
   Ctrl-C and re-run is safe. Re-runs after the backlog drains take
@@ -238,25 +238,26 @@ and should be faster.
 
 ```
 ~/datalib/
-├── raw/                            # one directory per source
-│   ├── claude_web/
+├── claude_web/                     # one directory per source stanza …
+│   ├── raw/                        #   its captured raw stores …
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   ├── slack/
+│   └── rendered_md/                #   … and its rendered .md tree (UUID-keyed)
+│       └── …
+├── slack/
+│   ├── raw/
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.doltlite_db
-│   ├── fastmail/                   # (mbox source lands here too)
-│   │   └── …
+│   └── rendered_md/
+├── fastmail/                       # (mbox source lands here too)
 │   └── …
-├── rendered_md/                    # one .md per conversation, bucketed by provider
-│   ├── anthropic/
-│   ├── slack/
-│   ├── jmap/                       # email (JMAP + mbox both render here)
-│   └── …
-├── backend_index.doltlite_db       # doltlite SQL store (grid rows + audit log)
-├── qmd/
-│   ├── index.sqlite                # search index hit by hybrid / vector queries
-│   └── models -> ~/.cache/qmd/models
+├── …
+├── system/                         # everything that isn't a source
+│   ├── backend_index/
+│   │   └── db.doltlite_db          # doltlite SQL store (grid rows + audit log)
+│   └── qmd/
+│       ├── index.sqlite            # search index hit by hybrid / vector queries
+│       └── models -> ~/.cache/qmd/models
 └── sync_summary_<timestamp>.json   # one per run
 ```
 
@@ -290,7 +291,7 @@ pointing `qmd` at the sqlite file under your data root via the
 `INDEX_PATH` env var:
 
 ```sh
-INDEX_PATH=~/datalib/qmd/index.sqlite \
+INDEX_PATH=~/datalib/system/qmd/index.sqlite \
     npx -y @tobilu/qmd query "hello"
 ```
 

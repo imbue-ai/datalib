@@ -6,7 +6,7 @@ schema is the hand-written `EdgeRow` struct at
 `frankweiler/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`); the table is created by
 `init_schema` in `frankweiler/backend/etl/src/load.rs` and persists in
-`<root>/backend_index.doltlite_db` alongside `grid_rows` and
+`<root>/system/backend_index/db.doltlite_db` alongside `grid_rows` and
 `markdowns`.
 
 ## Data model

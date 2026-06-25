@@ -140,7 +140,7 @@ specific ports with `FRANKWEILER_PORT` (Vite) and `FRANKWEILER_BIND`
 (backend). Ctrl-C tears both down.
 
 Data root resolution (the rendered Markdown feeds the search index, but
-`backend_index.doltlite_db` remains the source of truth):
+`system/backend_index/db.doltlite_db` remains the source of truth):
 
 1. positional arg to `bazelisk run //frankweiler:dev` (or `:serve`)
 2. `$FRANKWEILER_ROOT`
@@ -162,16 +162,16 @@ own `*_render` (and where applicable `*_download`) binary; the shared Load
 step is `//frankweiler/backend/etl:grid_rows_load`. The ETL orchestrator at
 `//frankweiler/backend/sync` shows the end-to-end wiring: parse each
 provider's raw dir, render markdown + sidecars, then load them into
-`<root>/backend_index.doltlite_db`.
+`<root>/system/backend_index/db.doltlite_db`.
 
 ### QMD search index (default-on, incremental)
 
 `grid_rows_load --qmd-index` rebuilds the qmd search index over `<root>`
 after the markdown tree is rendered + loaded. The indexer
 (`frankweiler/backend/qmd_indexer/`) shells out to `npx -y @tobilu/qmd@<version>`
-with `XDG_CACHE_HOME=<root>`, so the index lands at `<root>/qmd/index.sqlite`
-(over the `**/*.md` mask), alongside `rendered_md/` and
-`backend_index.doltlite_db`. This is what the search bar's hybrid / vector
+with `XDG_CACHE_HOME=<root>/system`, so the index lands at `<root>/system/qmd/index.sqlite`
+(the scan root stays `<root>` over the `*/rendered_md/**/*.md` mask), alongside the per-stanza
+`<name>/rendered_md/` trees and `system/backend_index/db.doltlite_db`. This is what the search bar's hybrid / vector
 queries hit (see `frankweiler/backend/core/src/qmd/`).
 
 Design notes:

@@ -1,6 +1,6 @@
 # Data Architecture Audit
 
-Audit of the ETL codebase against [`data_architecture_ingestion.md`](data_architecture_ingestion.md),
+Audit of the ETL codebase against [`data_architecture_ingestion.md`](../data_architecture_ingestion.md),
 produced 2026-06-09.
 
 > **2026-06-12 superseded findings**: every "pre-seed before fetch" /
