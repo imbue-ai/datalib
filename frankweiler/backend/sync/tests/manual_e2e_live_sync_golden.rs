@@ -15,7 +15,10 @@
 //!     config.yaml          ← the sync config (file sources point at sources/)
 //!     sources/             ← LinkedIn / Takeout / SMS … export data
 //!     snapshots/           ← the golden .snap tree (below)
-//!     run.sh               ← sets the env var and runs this test / .update
+//!
+//! The runner is `manual_e2e_run.sh`, which lives next to this test in the code
+//! repo (it's code, not data); it sets `FRANKWEILER_MANUAL_E2E_DIR` (defaulting
+//! to the canonical checkout) and invokes the test / `.update`.
 //!
 //! Spawns the sync binary against that `config.yaml` (with a few test-only
 //! tweaks: tempdir `data_root`, `qmd.skip=true`, slack
@@ -62,12 +65,12 @@
 //! The aggregate index + qmd under `system/` are deliberately skipped —
 //! too noisy / not deterministic (the doltlite commit hashes churn).
 //!
-//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Easiest path is the
-//! `run.sh` in `FRANKWEILER_MANUAL_E2E_DIR` (it sets the env var + creds):
+//! Tagged `manual` in Bazel and `#[ignore]` in cargo. Easiest path is
+//! `manual_e2e_run.sh` next to this test (it sets the env var + forwards creds):
 //!
 //! ```sh
-//! ~/data_liberation_manual_e2e_test_data/run.sh           # run + diff
-//! ~/data_liberation_manual_e2e_test_data/run.sh --update  # accept new goldens
+//! frankweiler/backend/sync/manual_e2e_run.sh           # run + diff
+//! frankweiler/backend/sync/manual_e2e_run.sh --update  # accept new goldens
 //! ```
 //!
 //! Or directly, with the env var + creds set yourself:
@@ -286,8 +289,9 @@ const SKIP_PATH_SEGMENTS: &[&str] = &["conversations.list", "users.list", "event
 /// External, out-of-repo home for this manual test's `config.yaml`, the
 /// file-based `sources/`, and the golden `snapshots/`. Kept outside the repo
 /// so the (slightly sensitive) source data is never shared when the repo is
-/// open-sourced; versioned separately in a private repo. `run.sh` in that dir
-/// sets `FRANKWEILER_MANUAL_E2E_DIR` and invokes this test. `None` when unset.
+/// open-sourced; versioned separately in a private repo. `manual_e2e_run.sh`
+/// (in the code repo) sets `FRANKWEILER_MANUAL_E2E_DIR` and invokes this test.
+/// `None` when unset.
 fn e2e_dir() -> Option<PathBuf> {
     std::env::var("FRANKWEILER_MANUAL_E2E_DIR")
         .ok()

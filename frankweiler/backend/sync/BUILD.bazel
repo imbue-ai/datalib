@@ -110,8 +110,8 @@ rust_test(
 # source data, and the golden snapshots all live OUTSIDE this repo, in
 # $FRANKWEILER_MANUAL_E2E_DIR (a private repo) — so nothing sensitive is
 # committed here. `no-sandbox` lets the test read that absolute host path
-# directly; `run.sh` in that dir forwards the env var (see its header).
-# Manual: hits the network, needs latchkey creds.
+# directly; `manual_e2e_run.sh` (next to this BUILD) sets the env var and runs
+# it. Manual: hits the network, needs latchkey creds.
 rust_test(
     name = "manual_e2e_live_sync_golden",
     srcs = ["tests/manual_e2e_live_sync_golden.rs"],
@@ -145,7 +145,7 @@ rust_test(
 # `.snap`s straight into `$FRANKWEILER_MANUAL_E2E_DIR/snapshots` (an absolute
 # host path), so nothing lands in the repo's source tree. Export
 # FRANKWEILER_MANUAL_E2E_DIR + LATCHKEY_CURL on the host before invoking
-# (`bazel run` forwards the client env) — `run.sh` in that dir does both.
+# (`bazel run` forwards the client env) — `manual_e2e_run.sh` does both.
 insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
