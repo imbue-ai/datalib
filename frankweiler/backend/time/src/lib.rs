@@ -18,7 +18,7 @@
 //!    legal — and it should be used sparingly, only when we've audited
 //!    the upstream and confirmed naive-means-UTC.
 //!
-//! See [`docs/dev/data_architecture_plan.md`](/docs/dev/data_architecture_plan.md)
+//! See [`docs/dev/archived/data_architecture_plan.md`](/docs/dev/archived/data_architecture_plan.md)
 //! §P0.5 for the architectural backstory, and
 //! [`docs/dev/data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md)
 //! for the "no fabricated values" principle.
