@@ -34,3 +34,4 @@
 //!   we'd hash is already on the user's disk.
 
 pub mod extract;
+pub mod processor;

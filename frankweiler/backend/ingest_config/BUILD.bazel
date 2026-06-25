@@ -21,6 +21,7 @@ rust_library(
         "//frankweiler/backend/etl/providers/carddav_config:frankweiler_etl_carddav_config",
         "//frankweiler/backend/etl/providers/chatgpt_config:frankweiler_etl_chatgpt_config",
         "//frankweiler/backend/etl/providers/email_config:frankweiler_etl_email_config",
+        "//frankweiler/backend/etl/providers/fsindex_config:frankweiler_etl_fsindex_config",
         "//frankweiler/backend/etl/providers/github_config:frankweiler_etl_github_config",
         "//frankweiler/backend/etl/providers/gitlab_config:frankweiler_etl_gitlab_config",
         "//frankweiler/backend/etl/providers/google_takeout_config:frankweiler_etl_google_takeout_config",

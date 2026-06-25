@@ -3,6 +3,22 @@ load("//tools:insta.bzl", "insta_update")
 
 exports_files(["Cargo.toml"])
 
+# TNG-themed synthetic directory tree used as a scan root by the fsindex
+# e2e test and dropped into the dev/e2e data root (as `fsindex_scan/`) by
+# `//tests/fixtures:materialize_tng_root`. The leading-dot `.fsindex.yaml`
+# breadcrumb is matched explicitly — the default glob skips dotfiles.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(
+        [
+            "tests/fixtures/fsindex_tng/**/*",
+            "tests/fixtures/fsindex_tng/**/.fsindex.yaml",
+        ],
+        allow_empty = False,
+    ),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "frankweiler_etl_fsindex",
     srcs = glob(
@@ -11,9 +27,13 @@ rust_library(
     ),
     crate_name = "frankweiler_etl_fsindex",
     edition = "2021",
+    proc_macro_deps = [
+        "@frankweiler_crates//:async-trait",
+    ],
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/fsindex_config:frankweiler_etl_fsindex_config",
         "//frankweiler/backend/time:frankweiler_time",
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:blake3",
@@ -92,4 +112,25 @@ rust_test(
 insta_update(
     name = "extract_smoke_test.update",
     test = ":extract_smoke_test",
+)
+
+# End-to-end scan of the checked-in TNG-themed tree: points extract at the
+# fixture, asserts the landed `files` rows (entry set + `'*.tmp'` ignore +
+# `.fsindex.yaml` exclusion). The fixture is staged via `data = [":tng_fixture"]`.
+rust_test(
+    name = "fsindex_tng_e2e",
+    srcs = ["tests/fsindex_tng_e2e.rs"],
+    crate_root = "tests/fsindex_tng_e2e.rs",
+    data = [":tng_fixture"],
+    edition = "2021",
+    env = {
+        "FSINDEX_TNG_DIR": "frankweiler/backend/etl/providers/fsindex/tests/fixtures/fsindex_tng",
+    },
+    deps = [
+        ":frankweiler_etl_fsindex",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
 )
