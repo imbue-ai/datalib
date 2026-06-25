@@ -262,10 +262,10 @@ and should be faster.
 ```
 
 > **Backups:** the bulky **derived** artifacts — each `<name>/rendered_md/`
-> tree, the search DB (`system/backend_index/`), and the qmd index
-> (`system/qmd/`) — are 100% rebuilt from raw by a `frankweiler-sync
-> --skip-extract` re-run, and each carries a `CACHEDIR.TAG`, so cache-aware
-> backups skip them automatically:
+> tree, the search DB (`system/backend_index/`), the qmd index (`system/qmd/`),
+> and served attachments (`system/media/`) — are all rebuildable from your raw
+> stores, and each carries a `CACHEDIR.TAG`, so cache-aware backups skip them
+> automatically:
 >
 > ```sh
 > restic backup ~/datalib --exclude-caches        # or: borg create --exclude-caches
