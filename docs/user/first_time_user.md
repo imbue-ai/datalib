@@ -261,6 +261,12 @@ and should be faster.
 └── sync_summary_<timestamp>.json   # one per run
 ```
 
+> **Backups:** only the `*/raw/` subtrees (plus your `config.yaml`) hold
+> precious data — everything else (`*/rendered_md/`, `system/`) is 100% derived
+> and is rebuilt from raw by a `frankweiler-sync --skip-extract` re-run. A
+> backup can safely skip the derived trees, e.g.
+> `restic backup ~/datalib --exclude='**/rendered_md' --exclude=system`.
+
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 
