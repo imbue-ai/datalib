@@ -403,6 +403,15 @@ fn manual_e2e_live_sync_golden() {
             .is_file(),
         "backend index DB must live at system/backend_index/db.doltlite_db"
     );
+    // Derived trees are tagged as rebuildable cache so `--exclude-caches`
+    // backups skip them (only `<stanza>/raw/` is precious). The `system/` tag
+    // covers the whole aggregate subtree; per-stanza `rendered_md/` tags are
+    // checked implicitly via the manifest (CACHEDIR.TAG is skipped in the walk
+    // below, so it doesn't churn the golden).
+    assert!(
+        data_root.join("system/CACHEDIR.TAG").is_file(),
+        "system/ must carry a CACHEDIR.TAG marking it as derived cache"
+    );
 
     // Snapshot each stanza's `raw/` and `rendered_md/` trees, mirroring the
     // on-disk per-stanza layout. `system/` (the aggregate index + qmd) is
@@ -579,11 +588,12 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         // `.foo.doltlite_db-lock`) for in-process flock coordination.
         // They're ephemeral, content-free, and would clutter goldens
         // with hidden-dotfile noise. Skip anything whose name ends in
-        // `-lock`.
+        // `-lock`. Also skip the constant `CACHEDIR.TAG` marker (backup
+        // hint, not rendered content — asserted separately above).
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock"))
+            .is_some_and(|n| n.ends_with("-lock") || n == "CACHEDIR.TAG")
         {
             continue;
         }

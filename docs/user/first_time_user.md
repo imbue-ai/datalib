@@ -261,6 +261,20 @@ and should be faster.
 └── sync_summary_<timestamp>.json   # one per run
 ```
 
+> **Backups:** only the `*/raw/` subtrees (plus your `config.yaml`) hold
+> precious data — everything else (`*/rendered_md/`, `system/`) is 100% derived
+> and is rebuilt from raw by a `frankweiler-sync --skip-extract` re-run. The
+> derived trees each carry a `CACHEDIR.TAG`, so any backup tool with
+> cache-awareness skips them automatically:
+>
+> ```sh
+> restic backup ~/datalib --exclude-caches        # or: borg create --exclude-caches
+> tar --exclude-caches -czf raw-backup.tgz ~/datalib
+> ```
+>
+> (Equivalently, back up just the raw stores explicitly with
+> `--exclude='**/rendered_md' --exclude=system`.)
+
 A final `Summary` line reports per-source counts (new / updated /
 skipped / errors). Exit code is non-zero if any source errored.
 
