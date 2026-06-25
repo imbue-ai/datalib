@@ -16,8 +16,14 @@ use frankweiler_etl_perseus_config::PerseusConfig;
 use crate::extract;
 
 pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
+    // Perseus is genuinely file-tree-backed — it reads TEI `.xml` directly,
+    // with no doltlite store, so `raw_path` (our store dir) has no meaning
+    // here. Both waves key off the input path (the TEI tree): extract fetches
+    // into it, translate reads from it. For a managed source `input_path:` is
+    // unset and `input_or_raw_path()` falls back to `<data_root>/raw/perseus`;
+    // for a translate-only source it's the pre-staged tree named by `input_path:`.
     let name = ctx.name;
-    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
     let pairs: Vec<(String, String)> = config
         .sync
         .as_ref()
@@ -31,7 +37,7 @@ pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(PerseusRender {
         id: format!("perseus/{name}/translate"),
-        raw_path: raw_path.clone(),
+        input_path: input_path.clone(),
         name: name.clone(),
         pairs,
     }));
@@ -40,7 +46,7 @@ pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
     if let Some(sync) = config.sync {
         plan.extract.push(Box::new(PerseusExtract {
             id: format!("perseus/{name}/extract"),
-            raw_path,
+            input_path,
             files: sync.files,
         }));
     }
@@ -49,7 +55,7 @@ pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
 
 struct PerseusExtract {
     id: String,
-    raw_path: PathBuf,
+    input_path: PathBuf,
     files: Vec<String>,
 }
 
@@ -62,7 +68,7 @@ impl DataProcessor for PerseusExtract {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         // File-tree-backed: no pool, no checkpoint, no commit.
         let s = extract::fetch(extract::FetchOptions {
-            out_dir: self.raw_path.clone(),
+            out_dir: self.input_path.clone(),
             files: self.files.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
@@ -77,7 +83,7 @@ impl DataProcessor for PerseusExtract {
 
 struct PerseusRender {
     id: String,
-    raw_path: PathBuf,
+    input_path: PathBuf,
     name: String,
     pairs: Vec<(String, String)>,
 }
@@ -90,8 +96,8 @@ impl DataProcessor for PerseusRender {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         use crate::render_and_index_md::{align, parse, render};
-        let parsed = parse::parse(&self.raw_path)
-            .with_context(|| format!("perseus parse {}", self.raw_path.display()))?;
+        let parsed = parse::parse(&self.input_path)
+            .with_context(|| format!("perseus parse {}", self.input_path.display()))?;
         // Within-section sentence alignment is opt-in and dominates runtime; it
         // is async (model load + hf-hub fetch). We're driven by `futures`'
         // executor (the translate phase), which enters no tokio context, so we
