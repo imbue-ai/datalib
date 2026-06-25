@@ -352,3 +352,22 @@ sources:
       type: sms_backup_restore
       common:
         input_path: ~/backups/SMSBackupRestore
+
+  # --- fsindex (directory-tree scanner) -------------------------------------
+
+  # File-backed: point `common.input_path` at any local directory tree. fsindex
+  # walks it Unison-style (fast incremental rescans keyed on mtime/size/inode)
+  # and records `(path, kind, size, blake3, optional identity uuid)` for every
+  # entry in a raw store. EXTRACT-ONLY: it renders nothing (filesystem entries
+  # aren't chat-shaped), so there are no Markdown conversations — the index is
+  # queryable in the per-source raw store.
+  #
+  # `stamp` is off by default so the scan stays read-only against its input.
+  # Set it to true to let the scanner write `.fsindex.yaml` UUID breadcrumbs
+  # into directories that opt in via `stamp_me_with_uuid`.
+  - name: fsindex-home
+    source:
+      type: fsindex
+      common:
+        input_path: ~/Documents
+      # stamp: false   # default; true → write UUID breadcrumbs into the tree

@@ -1305,6 +1305,7 @@ fn build_source_plan(
         SourceConfig::SmsBackupRestore(c) => {
             frankweiler_etl_sms_backup_restore::processor::plan(ctx, c.clone())
         }
+        SourceConfig::Fsindex(c) => frankweiler_etl_fsindex::processor::plan(ctx, c.clone()),
         SourceConfig::GoogleTakeout(c) => {
             frankweiler_etl_google_takeout::processor::plan(ctx, c.clone())
         }
@@ -1586,6 +1587,15 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (sms_backup_restore): skipped (file-backed, no extract HTTP)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Fsindex(_) => {
+                // Directory scan reads the local tree directly — no HTTP to
+                // play back; synth is a no-op.
+                status_line!(
+                    "[synth] {} (fsindex): skipped (file-backed, no extract HTTP)",
                     src.name()
                 );
                 continue;

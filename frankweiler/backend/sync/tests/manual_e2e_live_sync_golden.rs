@@ -248,6 +248,18 @@ const VOLATILE_KEYS: &[&str] = &[
     // start/stop timestamps and content fields stay put.
     "elapsed_ms",
     "network_seconds",
+    // fsindex's `file_stats` rescan-cursor + `scan_meta` columns. The
+    // filesystem-mechanical fields (mtime/ctime, inode, dev) are per-checkout
+    // / per-machine, and `last_scan_at` is wall-clock — all churn run-to-run
+    // even when the scanned bytes are identical. The deterministic content
+    // (kind, size, blake3, path) lives in the `files` table and is preserved.
+    // `scanner_version` is redacted so a version bump doesn't churn the golden.
+    "mtime_ns",
+    "ctime_ns",
+    "inode",
+    "dev",
+    "last_scan_at",
+    "scanner_version",
 ];
 
 /// Live counters on an embedded GitHub *repo* object (a PR payload carries the

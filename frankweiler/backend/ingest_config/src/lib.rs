@@ -27,6 +27,7 @@ use frankweiler_etl_beeper_config::BeeperConfig;
 use frankweiler_etl_carddav_config::CarddavConfig;
 use frankweiler_etl_chatgpt_config::ChatgptConfig;
 use frankweiler_etl_email_config::EmailConfig;
+use frankweiler_etl_fsindex_config::FsindexConfig;
 use frankweiler_etl_github_config::GithubConfig;
 use frankweiler_etl_gitlab_config::GitlabConfig;
 use frankweiler_etl_google_takeout_config::GoogleTakeoutConfig;
@@ -147,6 +148,10 @@ pub enum SourceConfig {
     #[serde(rename = "whatsapp_backup")]
     WhatsAppBackup(WhatsappConfig),
     SmsBackupRestore(SmsBackupRestoreConfig),
+    /// Directory-tree scanner (Unison-style fast rescan). File-backed and
+    /// **extract-only** — it indexes the tree at `input_path` into a raw store
+    /// and renders nothing.
+    Fsindex(FsindexConfig),
 }
 
 /// Dispatch an expression over the payload of any variant, binding it to `$c`.
@@ -171,6 +176,7 @@ macro_rules! over_payload {
             SourceConfig::SignalBackup($c) => $e,
             SourceConfig::WhatsAppBackup($c) => $e,
             SourceConfig::SmsBackupRestore($c) => $e,
+            SourceConfig::Fsindex($c) => $e,
         }
     };
 }
@@ -211,6 +217,7 @@ impl SourceConfig {
             SourceConfig::SignalBackup(_) => "signal_backup",
             SourceConfig::WhatsAppBackup(_) => "whatsapp_backup",
             SourceConfig::SmsBackupRestore(_) => "sms_backup_restore",
+            SourceConfig::Fsindex(_) => "fsindex",
         }
     }
 
@@ -240,6 +247,8 @@ impl SourceConfig {
             SourceConfig::SignalBackup(c) => c.sync.is_some(),
             SourceConfig::WhatsAppBackup(c) => c.sync.is_some(),
             SourceConfig::SmsBackupRestore(c) => c.common.input_path.is_some(),
+            // File-backed only: managed iff an `input_path:` scan root is set.
+            SourceConfig::Fsindex(c) => c.common.input_path.is_some(),
         }
     }
 }
