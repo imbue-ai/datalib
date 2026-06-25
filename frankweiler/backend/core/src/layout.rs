@@ -49,13 +49,17 @@ pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)
 }
 
+/// `data_root/system/backend_index` — the dir holding the grid_rows/markdowns
+/// index DB (and its `CACHEDIR.TAG`).
+pub fn backend_index_dir(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(BACKEND_INDEX_DIR)
+}
+
 /// `data_root/system/backend_index/db.doltlite_db` — the grid_rows/markdowns
 /// index DB. The http server resolves this from `data_root` alone (it never
 /// reads the config), so this helper is the contract between writer and reader.
 pub fn backend_index_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root)
-        .join(BACKEND_INDEX_DIR)
-        .join(BACKEND_INDEX_DB)
+    backend_index_dir(data_root).join(BACKEND_INDEX_DB)
 }
 
 /// `data_root/system/qmd` — the qmd index directory. qmd writes
