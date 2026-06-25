@@ -1,21 +1,26 @@
 data_root: ~/datalib  # Where the downloaded data gets written.
 
-# Optional: bound how long a source keeps retrying upstream rate limits
-# before the orchestrator gives up on it. The shared HTTP layer always
-# honors a 429 `Retry-After` (else backs off exponentially); these decide
-# when to stop. Defaults shown; overridable per source. Omit to take them.
-# extract_params:
-#   maximum_time_without_progress_in_minutes: 30
-#   maximum_sequential_failed_requests: 50
+# Optional global defaults, folded into every source at load. A source's own
+# `common:` overrides these field-by-field. Uncomment to set them.
+# defaults:
+#   # Bound how long a source keeps retrying upstream rate limits before the
+#   # orchestrator gives up on it. The shared HTTP layer always honors a 429
+#   # `Retry-After` (else backs off exponentially); these decide when to stop.
+#   # Defaults shown.
+#   extract_params:
+#     maximum_time_without_progress_in_minutes: 30
+#     maximum_sequential_failed_requests: 50
 
 sources:
   # Google Takeout Gmail export. `sync:` is intentionally omitted —
   # that puts the email provider in translate-only mbox mode, reading
-  # the file at `input_path` instead of talking to a JMAP server.
+  # the file at `common.input_path` instead of talking to a JMAP server.
   # Point this at the .mbox unpacked from your Takeout zip.
   - name: gmail-takeout
-    type: email
-    input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
+    source:
+      type: email
+      common:
+        input_path: ~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox
 
   # Slack workspace mirror. Credentials come from `latchkey` at runtime
   # (see the "Register Slack with latchkey" section in the first-time
@@ -23,12 +28,14 @@ sources:
   # omit it (or set `all_channels: true`) to mirror every channel the
   # account can see. `media: true` pulls file attachments into blobs.
   - name: slack
-    type: slack_api
-    blob_size_limit_bytes: 1000000  # 1 MB — skip larger file uploads
-    sync:
-      media: true
-      channels:
-        - "project-data-liberation"
+    source:
+      type: slack_api
+      common:
+        blob_size_limit_bytes: 1000000  # 1 MB — skip larger file uploads
+      sync:
+        media: true
+        channels:
+          - "project-data-liberation"
 
   # Anthropic / claude.ai conversation mirror. Credentials come from
   # `latchkey` at runtime (see the "Register Claude web with latchkey"
@@ -36,7 +43,8 @@ sources:
   # every conversation across every org the account can see; uncomment
   # the knobs below to bound the work on incremental re-runs.
   - name: anthropic-api
-    type: claude_api
-    sync: {}
-      # refresh_most_recent_n_chat_count: 3   # force-refetch top-N by updated_at
-      # refresh_window_days: 7   # treat anything older than this as cold
+    source:
+      type: claude_api
+      sync: {}
+        # refresh_most_recent_n_chat_count: 3   # force-refetch top-N by updated_at
+        # refresh_window_days: 7   # treat anything older than this as cold

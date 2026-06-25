@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The signal-owned slice of a `signal_backup` source. `sync:` present →
@@ -12,6 +13,10 @@ use serde::{Deserialize, Serialize};
 /// store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SignalConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<SignalSync>,
 }

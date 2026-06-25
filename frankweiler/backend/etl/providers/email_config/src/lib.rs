@@ -14,18 +14,22 @@
 //! `ingest-config` oneof lands (Program A step 3), [`EmailConfig`] becomes the
 //! variant payload directly — same type, no reparse.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
-/// The email-owned slice of a `type: email` source. The envelope fields
-/// (`name`/`enabled`/`input_path`/`raw_path` and the shared cross-source
-/// knobs) belong to the source envelope, not to email, and are resolved by
-/// the orchestrator; everything email-specific lives here.
+/// The full config for a `type: email` source: the shared `common:` envelope
+/// (paths + cross-source knobs, composed from `source_common` and resolved by
+/// the orchestrator's `normalize()`) plus everything email-specific. `name`
+/// and `enabled` stay orchestrator-owned and are NOT here.
 ///
 /// `sync:` present → JMAP server (Fastmail / any RFC 8620+8621 server);
-/// `sync:` absent + an `.mbox` at `input_path` → file-backed mbox mode (e.g.
-/// a Google Takeout export). Both paths live in `frankweiler_etl_email`.
+/// `sync:` absent + an `.mbox` at `common.input_path` → file-backed mbox mode
+/// (e.g. a Google Takeout export). Both paths live in `frankweiler_etl_email`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EmailConfig {
+    /// Shared per-source envelope (paths + cross-source tunables).
+    #[serde(default)]
+    pub common: SourceCommon,
     /// JMAP sync knobs. `Some` selects the live-server extract path.
     #[serde(default)]
     pub sync: Option<EmailSync>,

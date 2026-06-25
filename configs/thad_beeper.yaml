@@ -12,11 +12,12 @@ dolt:
 
 sources:
   - name: beeper
-    type: beeper
-    sync:
-      # Canonical chat-network names to ingest. Each maps to one or
-      # more accountID prefixes inside BeeperTexts/index.db.
-      sources: ["signal", "googlechat"]
-      # Copy cached media bytes (avatars, attachments) into the blobs
-      # table. Off = metadata + source URL only.
-      media: true
+    source:
+      type: beeper
+      sync:
+        # Canonical chat-network names to ingest. Each maps to one or
+        # more accountID prefixes inside BeeperTexts/index.db.
+        sources: ["signal", "googlechat"]
+        # Copy cached media bytes (avatars, attachments) into the blobs
+        # table. Off = metadata + source URL only.
+        media: true

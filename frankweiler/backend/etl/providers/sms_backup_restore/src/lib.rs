@@ -20,8 +20,10 @@
 //!
 //! ```yaml
 //! - name: sms_backup_restore
-//!   type: sms_backup_restore
-//!   input_path: ~/backups/SMSBackupRestore
+//!   source:
+//!     type: sms_backup_restore
+//!     common:
+//!       input_path: ~/backups/SMSBackupRestore
 //! ```
 
 pub mod extract;

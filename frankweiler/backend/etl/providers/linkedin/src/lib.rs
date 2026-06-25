@@ -16,8 +16,10 @@
 //!
 //! ```yaml
 //! - name: linkedin
-//!   type: linkedin
-//!   input_path: ~/backups/Basic_LinkedInDataExport_06-16-2026
+//!   source:
+//!     type: linkedin
+//!     common:
+//!       input_path: ~/backups/Basic_LinkedInDataExport_06-16-2026
 //! ```
 
 pub mod connections;

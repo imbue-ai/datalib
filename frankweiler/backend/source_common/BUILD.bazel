@@ -1,0 +1,24 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Schema-only foundation crate (Program A): the shared per-source `common`
+# envelope (SourceCommon), the global Defaults block, and the cross-source
+# ExtractParams knobs. Sits BELOW the providers (frankweiler_etl depends on it
+# for ExtractParams) and is composed by every provider `*-config` crate, so it
+# must stay dependency-light — serde only. Bazel-only.
+rust_library(
+    name = "frankweiler_source_common",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_source_common",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "@frankweiler_crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "source_common_unittests",
+    size = "small",
+    crate = ":frankweiler_source_common",
+    edition = "2021",
+)

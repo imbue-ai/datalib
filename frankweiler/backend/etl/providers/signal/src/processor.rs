@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_signal_config::{SignalConfig, SignalSync};
 
 use crate::extract;
@@ -19,8 +19,9 @@ use crate::extract;
 /// raw_path + name); an extract processor when `sync:` is present (bakes the
 /// snapshot_dir + aep_env_var). A managed signal source with no `sync:` block
 /// is a config error — signal requires a `snapshot_dir`.
-pub fn plan(common: PlanCommon, config: SignalConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: SignalConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
 
     // `period` is baked from `sync.period` (default `month`); a `sync:`-less
     // source renders with the default period.

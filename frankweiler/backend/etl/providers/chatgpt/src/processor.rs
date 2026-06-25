@@ -7,13 +7,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
 
 use crate::extract;
 
-pub fn plan(common: PlanCommon, config: ChatgptConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: ChatgptConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(ChatgptRender {
         id: format!("chatgpt/{name}/translate"),

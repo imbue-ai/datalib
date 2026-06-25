@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::http::HttpResponse;
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_notion_config::{NotionApiSync, NotionConfig};
 
 use crate::extract;
@@ -20,13 +20,10 @@ use crate::extract;
 /// Build the SourcePlan: always a translate processor; an extract processor
 /// when `sync:` is present (managed mirror). Translate-only `notion_api`
 /// sources (no `sync:`) yield translate only.
-pub fn plan(common: PlanCommon, config: NotionConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        playback_root,
-        ..
-    } = common;
+pub fn plan(ctx: PlanContext, config: NotionConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let playback_root = ctx.playback_root;
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(NotionRender {
         id: format!("notion/{name}/translate"),

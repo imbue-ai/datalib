@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
 use crate::extract;
@@ -23,13 +23,10 @@ use crate::extract;
 /// feeds), always an extract processor (file-backed; gated upstream by the
 /// orchestrator's extract decision). The extract bakes the input/raw paths and
 /// the SyncFlags built from `config.sync`.
-pub fn plan(common: PlanCommon, config: GoogleTakeoutConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        input_path,
-        ..
-    } = common;
+pub fn plan(ctx: PlanContext, config: GoogleTakeoutConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
     let mut plan = SourcePlan::new();
     plan.translate.push(Box::new(GoogleTakeoutRender {
         id: format!("google_takeout/{name}/translate"),

@@ -9,15 +9,16 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_yolink_config::{YolinkConfig, YolinkSync};
 
 use crate::extract;
 
 /// Build the SourcePlan: an extract processor when `sync:` is present;
 /// `translate` is always empty (yolink has no render path).
-pub fn plan(common: PlanCommon, config: YolinkConfig) -> Result<SourcePlan> {
-    let PlanCommon { name, raw_path, .. } = common;
+pub fn plan(ctx: PlanContext, config: YolinkConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
     let mut plan = SourcePlan::new();
     if let Some(sync) = config.sync {
         plan.extract.push(Box::new(YolinkExtract {

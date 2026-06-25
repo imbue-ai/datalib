@@ -11,23 +11,20 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanCommon, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
 use frankweiler_etl_linkedin_config::LinkedinConfig;
 
 use crate::extract;
 
 /// Build linkedin's [`SourcePlan`]: always a render (translate) processor and
 /// an extract processor. The provider owns every linkedin-specific decision;
-/// the orchestrator passes only the envelope-level [`PlanCommon`] plus the
+/// the orchestrator passes only the envelope-level [`PlanContext`] plus the
 /// typed [`LinkedinConfig`].
-pub fn plan(common: PlanCommon, config: LinkedinConfig) -> Result<SourcePlan> {
-    let PlanCommon {
-        name,
-        raw_path,
-        input_path,
-        max_sequential_failures,
-        ..
-    } = common;
+pub fn plan(ctx: PlanContext, config: LinkedinConfig) -> Result<SourcePlan> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let max_sequential_failures = config.common.extract_params.max_sequential_failures();
 
     let mut plan = SourcePlan::new();
 

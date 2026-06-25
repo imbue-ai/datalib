@@ -2,5 +2,6 @@ data_root: ~/claude_data_liberated  # Where the downloaded data gets written.
 
 sources:
   - name: claude_chats
-    type: claude_api
-    sync: {}
+    source:
+      type: claude_api
+      sync: {}

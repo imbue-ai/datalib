@@ -68,7 +68,7 @@ use frankweiler_etl_github::synthesize::GithubSynth;
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use frankweiler_etl_slack::synthesize::SlackSynth;
-use frankweiler_ingest_config::{load_config, Config, SourceConfig};
+use frankweiler_ingest_config::{load_config, Config, SourceConfig, SourceEntry};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::task::JoinSet;
 
@@ -728,7 +728,6 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
 
     let prior_fingerprints = Arc::new(prior_fingerprints);
     let prior_cursors = Arc::new(prior_cursors);
-    let cfg_arc = Arc::new(cfg.clone());
     let root_arc: Arc<PathBuf> = Arc::new(root.clone());
     let now_arc: Arc<String> = Arc::new(now.clone());
     // One shared write-serialization lock for every per-source worker.
@@ -774,7 +773,6 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         let bar = make_bar(&render_and_index_md_multi, name.clone());
         let mp = render_and_index_md_multi.clone();
         let src_owned = src.clone();
-        let cfg_t = cfg_arc.clone();
         let root_t = root_arc.clone();
         // Separate clone for the on_doc_complete closure so the outer
         // `render_and_index_md_source` call can still borrow `root_t`.
@@ -820,7 +818,6 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
 
             let res = render_and_index_md_source(
                 &src_owned,
-                &cfg_t,
                 root_t.as_path(),
                 &progress,
                 &pfp,
@@ -1067,7 +1064,7 @@ async fn run_extract_phase(
     let mut outcomes: Vec<PhaseOutcome> = Vec::new();
     let mut plans: Vec<ExtractPlan> = Vec::new();
     for s in cfg.enabled_sources() {
-        let Some(plan_res) = ExtractPlan::for_source(s, cfg, playback_root, now, control) else {
+        let Some(plan_res) = ExtractPlan::for_source(s, playback_root, now, control) else {
             continue;
         };
         match plan_res {
@@ -1263,117 +1260,60 @@ struct ExtractPlan {
 }
 
 fn build_source_plan(
-    src: &SourceConfig,
-    cfg: &Config,
+    entry: &SourceEntry,
     playback_root: Option<&Path>,
-) -> Option<Result<frankweiler_etl::processor::SourcePlan>> {
-    let shared = src.resolved_shared(cfg);
-    let common = frankweiler_etl::processor::PlanCommon {
-        name: src.name().to_string(),
-        raw_path: src.resolved_raw_path(&cfg.data_root),
-        input_path: src.resolved_input_path(&cfg.data_root),
-        blob_size_limit_bytes: shared.blob_size_limit_bytes,
+) -> Result<frankweiler_etl::processor::SourcePlan> {
+    // Config is config, runtime is runtime: the provider reads paths/caps/bounds
+    // straight off its (already-normalized) `config.common`; the orchestrator
+    // only supplies the genuinely-runtime bits — the source's identity and the
+    // playback root. The typed config IS the enum payload (no YAML round-trip),
+    // so we hand each subtree straight to the provider's `plan()`.
+    let ctx = frankweiler_etl::processor::PlanContext {
+        name: entry.name.clone(),
         playback_root: playback_root.map(|p| p.to_path_buf()),
-        event_tape_enabled: shared.event_tape.unwrap_or_default().enabled,
-        max_sequential_failures: shared.extract_params.max_sequential_failures(),
     };
-    let stanza = match serde_yaml::to_value(src).context("serialize source stanza") {
-        Ok(s) => s,
-        Err(e) => return Some(Err(e)),
-    };
-    let plan = match src.type_str() {
-        "email" => serde_yaml::from_value::<frankweiler_etl_email_config::EmailConfig>(stanza)
-            .context("parse email config")
-            .and_then(|c| frankweiler_etl_email::processor::plan(common, c)),
-        "claude_api" | "claude_export" => {
-            serde_yaml::from_value::<frankweiler_etl_anthropic_config::AnthropicConfig>(stanza)
-                .context("parse anthropic config")
-                .and_then(|c| frankweiler_etl_anthropic::processor::plan(common, c))
+    match &entry.source {
+        SourceConfig::Email(c) => frankweiler_etl_email::processor::plan(ctx, c.clone()),
+        SourceConfig::ClaudeApi(c) | SourceConfig::ClaudeExport(c) => {
+            frankweiler_etl_anthropic::processor::plan(ctx, c.clone())
         }
-        "chatgpt_api" => {
-            serde_yaml::from_value::<frankweiler_etl_chatgpt_config::ChatgptConfig>(stanza)
-                .context("parse chatgpt config")
-                .and_then(|c| frankweiler_etl_chatgpt::processor::plan(common, c))
+        SourceConfig::ChatgptApi(c) => frankweiler_etl_chatgpt::processor::plan(ctx, c.clone()),
+        SourceConfig::GithubApi(c) => frankweiler_etl_github::processor::plan(ctx, c.clone()),
+        SourceConfig::GitlabApi(c) => frankweiler_etl_gitlab::processor::plan(ctx, c.clone()),
+        SourceConfig::SmsBackupRestore(c) => {
+            frankweiler_etl_sms_backup_restore::processor::plan(ctx, c.clone())
         }
-        "github_api" => {
-            serde_yaml::from_value::<frankweiler_etl_github_config::GithubConfig>(stanza)
-                .context("parse github config")
-                .and_then(|c| frankweiler_etl_github::processor::plan(common, c))
+        SourceConfig::GoogleTakeout(c) => {
+            frankweiler_etl_google_takeout::processor::plan(ctx, c.clone())
         }
-        "gitlab_api" => {
-            serde_yaml::from_value::<frankweiler_etl_gitlab_config::GitlabConfig>(stanza)
-                .context("parse gitlab config")
-                .and_then(|c| frankweiler_etl_gitlab::processor::plan(common, c))
+        SourceConfig::Carddav(c) => frankweiler_etl_contacts::processor::plan(ctx, c.clone()),
+        SourceConfig::Beeper(c) => frankweiler_etl_beeper::processor::plan(ctx, c.clone()),
+        SourceConfig::SignalBackup(c) => frankweiler_etl_signal::processor::plan(ctx, c.clone()),
+        SourceConfig::Yolink(c) => frankweiler_etl_yolink::processor::plan(ctx, c.clone()),
+        SourceConfig::SlackApi(c) => frankweiler_etl_slack::processor::plan(ctx, c.clone()),
+        SourceConfig::Perseus(c) => frankweiler_etl_perseus::processor::plan(ctx, c.clone()),
+        SourceConfig::Linkedin(c) => frankweiler_etl_linkedin::processor::plan(ctx, c.clone()),
+        SourceConfig::WhatsAppBackup(c) => {
+            frankweiler_etl_whatsapp::processor::plan(ctx, c.clone())
         }
-        "sms_backup_restore" => serde_yaml::from_value::<
-            frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig,
-        >(stanza)
-        .context("parse sms_backup_restore config")
-        .and_then(|c| frankweiler_etl_sms_backup_restore::processor::plan(common, c)),
-        "google_takeout" => serde_yaml::from_value::<
-            frankweiler_etl_google_takeout_config::GoogleTakeoutConfig,
-        >(stanza)
-        .context("parse google_takeout config")
-        .and_then(|c| frankweiler_etl_google_takeout::processor::plan(common, c)),
-        "carddav" => {
-            serde_yaml::from_value::<frankweiler_etl_carddav_config::CarddavConfig>(stanza)
-                .context("parse carddav config")
-                .and_then(|c| frankweiler_etl_contacts::processor::plan(common, c))
-        }
-        "beeper" => serde_yaml::from_value::<frankweiler_etl_beeper_config::BeeperConfig>(stanza)
-            .context("parse beeper config")
-            .and_then(|c| frankweiler_etl_beeper::processor::plan(common, c)),
-        "signal_backup" => {
-            serde_yaml::from_value::<frankweiler_etl_signal_config::SignalConfig>(stanza)
-                .context("parse signal config")
-                .and_then(|c| frankweiler_etl_signal::processor::plan(common, c))
-        }
-        "yolink" => serde_yaml::from_value::<frankweiler_etl_yolink_config::YolinkConfig>(stanza)
-            .context("parse yolink config")
-            .and_then(|c| frankweiler_etl_yolink::processor::plan(common, c)),
-        "slack_api" => serde_yaml::from_value::<frankweiler_etl_slack_config::SlackConfig>(stanza)
-            .context("parse slack config")
-            .and_then(|c| frankweiler_etl_slack::processor::plan(common, c)),
-        "perseus" => {
-            serde_yaml::from_value::<frankweiler_etl_perseus_config::PerseusConfig>(stanza)
-                .context("parse perseus config")
-                .and_then(|c| frankweiler_etl_perseus::processor::plan(common, c))
-        }
-        "linkedin" => {
-            serde_yaml::from_value::<frankweiler_etl_linkedin_config::LinkedinConfig>(stanza)
-                .context("parse linkedin config")
-                .and_then(|c| frankweiler_etl_linkedin::processor::plan(common, c))
-        }
-        "whatsapp_backup" => {
-            serde_yaml::from_value::<frankweiler_etl_whatsapp_config::WhatsappConfig>(stanza)
-                .context("parse whatsapp config")
-                .and_then(|c| frankweiler_etl_whatsapp::processor::plan(common, c))
-        }
-        "notion_api" => {
-            serde_yaml::from_value::<frankweiler_etl_notion_config::NotionConfig>(stanza)
-                .context("parse notion config")
-                .and_then(|c| frankweiler_etl_notion::processor::plan(common, c))
-        }
-        // Every provider is migrated; nothing falls through to ExtractKind.
-        _ => return None,
-    };
-    Some(plan)
+        SourceConfig::NotionApi(c) => frankweiler_etl_notion::processor::plan(ctx, c.clone()),
+    }
 }
 
 /// Wrap a source's extract processors in an [`ExtractPlan`] carrying the common
 /// per-source machinery (progress, metrics, diagnostics). The store itself —
 /// pool, DDL, commit, interrupt `Checkpoint` — is owned by the processors.
 fn extract_plan_from_processors(
-    src: &SourceConfig,
-    cfg: &Config,
+    entry: &SourceEntry,
     now: &str,
     control: &frankweiler_etl::control::ExtractControl,
     processors: Vec<Box<dyn frankweiler_etl::processor::DataProcessor>>,
 ) -> ExtractPlan {
+    let sc = entry.source.common();
     ExtractPlan {
-        name: src.name().to_string(),
-        type_str: src.type_str(),
-        out_dir: src.resolved_raw_path(&cfg.data_root),
+        name: entry.name.clone(),
+        type_str: entry.type_str(),
+        out_dir: sc.raw_path().to_path_buf(),
         now: now.to_string(),
         progress: Progress::noop(),
         processors,
@@ -1382,28 +1322,28 @@ fn extract_plan_from_processors(
         checkpoints: Arc::new(frankweiler_etl::processor::CheckpointSink::new()),
         control: control.clone(),
         metrics: frankweiler_etl::extract_metrics::ExtractMetrics::new(),
-        extract_params: src.resolved_shared(cfg).extract_params,
+        extract_params: sc.extract_params.clone(),
         diagnostics: frankweiler_obs::diagnostics::Diagnostics::new(),
     }
 }
 
 impl ExtractPlan {
-    /// `None` when the source is translate-only (no `sync:` block).
+    /// `None` when the source is translate-only (not managed).
     fn for_source(
-        src: &SourceConfig,
-        cfg: &Config,
+        entry: &SourceEntry,
         playback_root: Option<&Path>,
         now: &str,
         control: &frankweiler_etl::control::ExtractControl,
     ) -> Option<Result<Self>> {
-        if !src.is_managed() {
+        if !entry.is_managed() {
             return None;
         }
         // Every provider builds its own `DataProcessor`s (owning their store)
         // via `build_source_plan`; there is no `ExtractKind` path any more.
-        build_source_plan(src, cfg, playback_root).map(|res| {
-            res.map(|sp| extract_plan_from_processors(src, cfg, now, control, sp.extract))
-        })
+        Some(
+            build_source_plan(entry, playback_root)
+                .map(|sp| extract_plan_from_processors(entry, now, control, sp.extract)),
+        )
     }
 
     /// Returns a one-line per-source summary on success. Provider-specific
@@ -1489,8 +1429,7 @@ type ExtractRun = (
 /// workspace's `rendered_md/` + sidecar tree. ClaudeExport shares the
 /// anthropic renderer since the on-disk shape is the same.
 fn render_and_index_md_source(
-    src: &SourceConfig,
-    cfg: &Config,
+    entry: &SourceEntry,
     root: &Path,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
@@ -1501,10 +1440,9 @@ fn render_and_index_md_source(
     // owns its config + render path) — the same `build_source_plan` seam the
     // extract phase uses, so a provider is wired in exactly one place. (The old
     // opaque-stanza `renderer_for` registry is gone.)
-    let source_plan =
-        build_source_plan(src, cfg, None).expect("every source type builds a SourcePlan")?;
+    let source_plan = build_source_plan(entry, None)?;
     render_processor_translate(
-        src.name(),
+        entry.name(),
         &source_plan.translate,
         root,
         progress,
@@ -1566,18 +1504,18 @@ fn render_processor_translate(
 fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
     fs::create_dir_all(out).with_context(|| format!("create {}", out.display()))?;
     for src in cfg.enabled_sources() {
-        let input = src.resolved_input_path(&cfg.data_root);
-        let synth: Box<dyn Synthesizer> = match src {
-            SourceConfig::ClaudeApi { .. } | SourceConfig::ClaudeExport { .. } => {
+        let input = src.input_path().to_path_buf();
+        let synth: Box<dyn Synthesizer> = match &src.source {
+            SourceConfig::ClaudeApi(_) | SourceConfig::ClaudeExport(_) => {
                 Box::new(AnthropicSynth::new(input.clone()))
             }
-            SourceConfig::ChatgptApi { .. } => Box::new(ChatgptSynth::new(input.clone())),
-            SourceConfig::SlackApi { .. } => Box::new(SlackSynth::new(input.clone())),
-            SourceConfig::GithubApi { .. } => Box::new(GithubSynth::new(input.clone())),
-            SourceConfig::GitlabApi { .. } => Box::new(GitlabSynth::new(input.clone())),
-            SourceConfig::NotionApi { .. } => Box::new(NotionSynth::new(input.clone())),
-            SourceConfig::Beeper { .. } => Box::new(BeeperSynth::new(input.clone())),
-            SourceConfig::Carddav { .. } => {
+            SourceConfig::ChatgptApi(_) => Box::new(ChatgptSynth::new(input.clone())),
+            SourceConfig::SlackApi(_) => Box::new(SlackSynth::new(input.clone())),
+            SourceConfig::GithubApi(_) => Box::new(GithubSynth::new(input.clone())),
+            SourceConfig::GitlabApi(_) => Box::new(GitlabSynth::new(input.clone())),
+            SourceConfig::NotionApi(_) => Box::new(NotionSynth::new(input.clone())),
+            SourceConfig::Beeper(_) => Box::new(BeeperSynth::new(input.clone())),
+            SourceConfig::Carddav(_) => {
                 // No synthesizer yet — the carddav translate path is
                 // a follow-up. Skip synth quietly so a config that
                 // mixes carddav with synth-supported sources doesn't
@@ -1588,7 +1526,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::Email { .. } => {
+            SourceConfig::Email(_) => {
                 // No synthesizer yet — JMAP playback fixtures are a
                 // follow-up. Skip quietly.
                 status_line!(
@@ -1597,12 +1535,12 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::Linkedin { fetch_photos, .. } => {
+            SourceConfig::Linkedin(c) => {
                 // File-backed for the CSV walk; the only HTTP it makes is
                 // the optional connection-photo fetch. Synthesize those
                 // fixtures iff that's enabled, else there's nothing to
                 // play back.
-                if *fetch_photos {
+                if c.fetch_photos {
                     Box::new(frankweiler_etl_linkedin::synthesize::LinkedinSynth::new(
                         input.clone(),
                     ))
@@ -1614,7 +1552,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                     continue;
                 }
             }
-            SourceConfig::GoogleTakeout { .. } => {
+            SourceConfig::GoogleTakeout(_) => {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (google_takeout): skipped (file-backed, no extract HTTP)",
@@ -1622,7 +1560,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::SmsBackupRestore { .. } => {
+            SourceConfig::SmsBackupRestore(_) => {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (sms_backup_restore): skipped (file-backed, no extract HTTP)",
@@ -1630,7 +1568,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::Perseus { .. } => {
+            SourceConfig::Perseus(_) => {
                 // Perseus has no extract phase (no HTTP playback to
                 // synthesize against), so synth is a no-op.
                 status_line!(
@@ -1639,7 +1577,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::SignalBackup { .. } => {
+            SourceConfig::SignalBackup(_) => {
                 // No playback synthesizer yet — Signal extract is
                 // local-file-only, no HTTP to play back.
                 status_line!(
@@ -1648,7 +1586,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::Yolink { .. } => {
+            SourceConfig::Yolink(_) => {
                 // No playback synthesizer for yolink yet — would need
                 // to capture per-window CSV bodies into a fixture
                 // tree. Skip quietly so a mixed config doesn't error.
@@ -1658,7 +1596,7 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 );
                 continue;
             }
-            SourceConfig::WhatsAppBackup { .. } => {
+            SourceConfig::WhatsAppBackup(_) => {
                 // WhatsApp extract is local-file-only (decrypt + mirror);
                 // no HTTP playback. Skip synth the same way Signal does.
                 status_line!(

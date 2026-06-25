@@ -2,6 +2,7 @@
 //! #1). Schema-only (serde + anyhow), so the orchestrator can name
 //! `GithubConfig` without linking the provider.
 
+use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The github-owned slice of a `github_api` source. `sync:` present → managed
@@ -9,6 +10,10 @@ use serde::{Deserialize, Serialize};
 /// capture.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GithubConfig {
+    /// Shared per-source envelope (paths + cross-source tunables), resolved by
+    /// the orchestrator's `normalize()`.
+    #[serde(default)]
+    pub common: SourceCommon,
     #[serde(default)]
     pub sync: Option<GithubApiSync>,
 }

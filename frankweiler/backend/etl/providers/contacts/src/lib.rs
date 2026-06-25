@@ -39,8 +39,10 @@
 //!
 //!   ```yaml
 //!   - name: contacts
-//!     type: carddav
-//!     input_path: ~/Downloads/contacts.vcf
+//!     source:
+//!       type: carddav
+//!       common:
+//!         input_path: ~/Downloads/contacts.vcf
 //!   ```
 //!
 //!   No `sync:` block ⇒ extract is skipped; the translate path
