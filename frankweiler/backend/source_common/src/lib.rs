@@ -54,7 +54,7 @@ pub struct SourceCommon {
     pub input_path: Option<PathBuf>,
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
     /// `blobs.doltlite_db`, the `events/` tape). Defaults to
-    /// `<data_root>/raw/<name>`; `normalize()` fills this so it is always
+    /// `<data_root>/<name>/raw`; `normalize()` fills this so it is always
     /// `Some` afterward.
     #[serde(default)]
     pub raw_path: Option<PathBuf>,
@@ -99,11 +99,15 @@ impl SourceCommon {
 
     /// Resolve paths against the (already tilde-expanded) `data_root` and the
     /// source's `name`. Fills [`Self::raw_path`] with the
-    /// `<data_root>/raw/<name>` default when unset; tilde-expands an explicit
+    /// `<data_root>/<name>/raw` default when unset; tilde-expands an explicit
     /// `input_path` but leaves it `None` when omitted. Run once in
     /// `normalize()`.
+    ///
+    /// Layout: every artifact a stanza produces is grouped under
+    /// `<data_root>/<name>/` (`raw/` here, `rendered_md/` on the translate
+    /// side), so a source's whole footprint is one self-contained subtree.
     pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
-        let default_raw = data_root.join("raw").join(name);
+        let default_raw = data_root.join(name).join("raw");
         self.raw_path = Some(match self.raw_path.take() {
             Some(p) => expand_tilde(&p.display().to_string()),
             None => default_raw,
@@ -192,11 +196,11 @@ mod tests {
     fn resolve_paths_defaults_raw_keeps_input_none() {
         let mut common = SourceCommon::default();
         common.resolve_paths(Path::new("/data"), "slack");
-        assert_eq!(common.raw_path(), Path::new("/data/raw/slack"));
+        assert_eq!(common.raw_path(), Path::new("/data/slack/raw"));
         // input_path stays None (load-bearing for is_managed); input_or_raw
         // then falls back to the raw dir for API sources.
         assert!(common.input_path.is_none());
-        assert_eq!(common.input_or_raw_path(), Path::new("/data/raw/slack"));
+        assert_eq!(common.input_or_raw_path(), Path::new("/data/slack/raw"));
     }
 
     #[test]
@@ -206,7 +210,7 @@ mod tests {
             ..Default::default()
         };
         common.resolve_paths(Path::new("/data"), "gmail");
-        assert_eq!(common.raw_path(), Path::new("/data/raw/gmail")); // still defaulted
+        assert_eq!(common.raw_path(), Path::new("/data/gmail/raw")); // still defaulted
         assert_eq!(common.input_or_raw_path(), Path::new("/exports/mail.mbox"));
     }
 }

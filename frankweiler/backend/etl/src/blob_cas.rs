@@ -2,8 +2,8 @@
 //!
 //! Each raw source owns a directory holding two doltlite files:
 //!
-//!   `<data_root>/raw/<name>/entities.doltlite_db`  — entities + per-provider CAS edge table
-//!   `<data_root>/raw/<name>/blobs.doltlite_db`     — pure CAS (this module)
+//!   `<data_root>/<name>/raw/entities.doltlite_db`  — entities + per-provider CAS edge table
+//!   `<data_root>/<name>/raw/blobs.doltlite_db`     — pure CAS (this module)
 //!
 //! Bytes are keyed by their blake3 hash and stored exactly once in
 //! `cas_objects`. Each provider declares its own `(<owning>, <ref>,

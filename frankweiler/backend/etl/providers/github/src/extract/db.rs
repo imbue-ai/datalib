@@ -2,7 +2,7 @@
 //!
 //! Replaces the event-store tree of `<entity>/{created,updated}/events.jsonl`
 //! files with a single sqlite database at
-//! `<data_root>/raw/<name>/entities.doltlite_db`. Shared bookkeeping tables
+//! `<data_root>/<name>/raw/entities.doltlite_db`. Shared bookkeeping tables
 //! (`blobs`, `sync_runs`) and the open / blob
 //! plumbing live in [`frankweiler_etl::doltlite_raw`]; the primary-key
 //! policy that governs every object table here is documented there.

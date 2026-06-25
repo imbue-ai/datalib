@@ -1,6 +1,6 @@
 //! Doltlite-backed raw store for the Beeper provider.
 //!
-//! Single sqlite file at `<data_root>/raw/<name>/entities.doltlite_db`. Shared
+//! Single sqlite file at `<data_root>/<name>/raw/entities.doltlite_db`. Shared
 //! bookkeeping tables (`blobs`, `sync_runs`) and
 //! the open / blob plumbing live in [`frankweiler_etl::doltlite_raw`];
 //! the primary-key policy is documented there.

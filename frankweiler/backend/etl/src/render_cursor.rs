@@ -4,7 +4,8 @@
 //! plus the wall-clock cost of the most recent `dolt_diff_<table>`
 //! scan so we can see how the diff query scales as the raw store grows.
 //!
-//! Lives at `<out_dir>/rendered_md/<provider>/<source_name>/_render_cursor.json`.
+//! Lives at `<data_root>/<stanza>/rendered_md/_render_cursor.json` — one
+//! cursor per stanza, at the root of that stanza's rendered-md tree.
 //! Assumes a single renderer process — no locking, no atomic-rename
 //! dance.
 //!
@@ -38,14 +39,10 @@ pub struct RenderCursor {
     pub last_render_at: Option<String>,
 }
 
-/// Standard cursor path for `<provider>/<source_name>`. Matches the
-/// directory layout every chat-style provider already writes into.
-pub fn cursor_path(out_dir: &Path, provider: &str, source_name: &str) -> PathBuf {
-    out_dir
-        .join("rendered_md")
-        .join(provider)
-        .join(source_name)
-        .join("_render_cursor.json")
+/// Standard cursor path for a stanza: one cursor at the root of that stanza's
+/// rendered-md tree, `<data_root>/<stanza>/rendered_md/_render_cursor.json`.
+pub fn cursor_path(data_root: &Path, stanza: &str) -> PathBuf {
+    crate::layout::rendered_md_root(data_root, stanza).join("_render_cursor.json")
 }
 
 pub fn read(path: &Path) -> Result<Option<RenderCursor>> {
@@ -85,7 +82,7 @@ mod tests {
     #[test]
     fn round_trip_with_scan_ms() {
         let td = tempfile::tempdir().unwrap();
-        let p = cursor_path(td.path(), "signal", "my-source");
+        let p = cursor_path(td.path(), "my-source");
         write(&p, "abc123", Some(Duration::from_millis(42))).unwrap();
         let read_back = read(&p).unwrap().unwrap();
         assert_eq!(read_back.last_rendered_hash, "abc123");
@@ -96,14 +93,14 @@ mod tests {
     #[test]
     fn missing_cursor_is_none() {
         let td = tempfile::tempdir().unwrap();
-        let p = cursor_path(td.path(), "signal", "missing");
+        let p = cursor_path(td.path(), "missing");
         assert!(read(&p).unwrap().is_none());
     }
 
     #[test]
     fn cold_start_scan_ms_is_omitted() {
         let td = tempfile::tempdir().unwrap();
-        let p = cursor_path(td.path(), "email", "src");
+        let p = cursor_path(td.path(), "src");
         write(&p, "h", None).unwrap();
         let s = std::fs::read_to_string(&p).unwrap();
         assert!(

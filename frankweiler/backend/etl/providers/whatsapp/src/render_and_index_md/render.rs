@@ -83,7 +83,7 @@ pub fn render_all(
     // every period bucket of that chat with identical bytes (mtimes
     // bump). Same-bytes rewrites are fine; if a downstream consumer
     // grows sensitive to mtime, reintroduce a per-bucket compare.
-    let cursor_path = render_cursor::cursor_path(out_dir, "whatsapp", source_name);
+    let cursor_path = render_cursor::cursor_path(out_dir, source_name);
     let prior = render_cursor::read(&cursor_path)?;
     let db_path = doltlite_raw::db_path_for(raw_dir);
 
@@ -302,7 +302,7 @@ mod tests {
             2,
             "first render should emit one doc per chat, got {docs1:?}"
         );
-        let cursor_path = render_cursor::cursor_path(&out_dir, "whatsapp", "test");
+        let cursor_path = render_cursor::cursor_path(&out_dir, "test");
         assert!(
             cursor_path.exists(),
             "cursor file missing after first render"

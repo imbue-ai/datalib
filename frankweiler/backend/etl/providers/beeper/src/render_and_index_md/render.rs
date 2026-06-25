@@ -104,7 +104,7 @@ fn render_one(
 ) -> Result<RenderOutcome> {
     let markdown_uuid = beeper_markdown_uuid(&room.room_uuid, &doc.period_key);
     let fingerprint = compute_fingerprint(doc);
-    let (md_path, json_path, page_dir) = output_paths(out_dir, room, &doc.period_key);
+    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, room, &doc.period_key);
 
     if prior_fingerprints.get(&markdown_uuid).map(String::as_str) == Some(fingerprint.as_str())
         && md_path.exists()
@@ -166,16 +166,18 @@ fn render_one(
 }
 
 /// Where this doc's `.md`, `.grid_rows.json`, and `blobs/` directory
-/// live: `<out>/rendered_md/beeper/<network>/<room_uuid>/<period>.md`.
-/// Mirrors slack / chatgpt / anthropic — every provider rendered
-/// document lives under `rendered_md/`. Blobs live alongside at the
-/// room level (`<room_uuid>/blobs/`) rather than per-period, since a
-/// single image can be referenced by multiple period files via its
-/// reactions.
-fn output_paths(out_dir: &Path, room: &Room, period_key: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let page_dir = out_dir
-        .join("rendered_md")
-        .join("beeper")
+/// live: `<out>/<stanza>/rendered_md/<network>/<room_uuid>/<period>.md`.
+/// `<network>` and `<room_uuid>` are stable identifiers (a Beeper stanza
+/// bridges multiple networks). Blobs live alongside at the room level
+/// (`<room_uuid>/blobs/`) rather than per-period, since a single image can
+/// be referenced by multiple period files via its reactions.
+fn output_paths(
+    out_dir: &Path,
+    source_name: &str,
+    room: &Room,
+    period_key: &str,
+) -> (PathBuf, PathBuf, PathBuf) {
+    let page_dir = frankweiler_etl::layout::rendered_md_root(out_dir, source_name)
         .join(&room.network)
         .join(&room.room_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));

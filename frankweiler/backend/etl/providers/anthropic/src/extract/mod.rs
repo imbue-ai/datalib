@@ -2,7 +2,7 @@
 //! `src/download/claude_web.py`.
 //!
 //! Writes into a single doltlite database file
-//! (`<data_root>/raw/<name>/entities.doltlite_db`). Conversations are stored as
+//! (`<data_root>/<name>/raw/entities.doltlite_db`). Conversations are stored as
 //! the **raw** `/api/...` payload — the export-shape normalization
 //! used to happen here at fetch time, but now lives in `translate`
 //! so the raw store stays as close to the wire as possible.

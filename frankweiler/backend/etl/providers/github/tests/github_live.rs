@@ -52,9 +52,11 @@ async fn github_live_single_pr_snapshot() {
     let pr = &parsed.pull_requests[0];
 
     let render_root = tmp.clone();
+    let stanza = "github_live";
     render_github(
         &parsed,
         &render_root,
+        stanza,
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
@@ -63,6 +65,7 @@ async fn github_live_single_pr_snapshot() {
 
     // The rendered doc must exist.
     let qmd_rel = frankweiler_etl_github::render_and_index_md::render::pr_qmd_path_rel(
+        stanza,
         &pr.repo_full_name,
         pr.pr_number,
     );

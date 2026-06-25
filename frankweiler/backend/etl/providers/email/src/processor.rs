@@ -230,8 +230,7 @@ impl DataProcessor for EmailRender {
         // Two-phase parse driven by the render cursor's commit, identical to
         // the old registry path; `prior_fingerprints` is intentionally unused
         // for email (the cursor is the single source of truth).
-        let cursor_path =
-            frankweiler_etl::render_cursor::cursor_path(ctx.root, "email", &self.name);
+        let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)?;
         let parsed = parse(&db, cursor.as_ref().map(|c| c.last_rendered_hash.as_str()))?;
 

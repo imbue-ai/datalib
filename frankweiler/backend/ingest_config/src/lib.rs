@@ -244,25 +244,13 @@ impl SourceConfig {
     }
 }
 
-/// Settings for the single doltlite file the backend reads/writes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DoltConfig {
-    /// Filename of the doltlite database, relative to `Config.data_root`.
-    #[serde(default = "default_dolt_db_filename")]
-    pub db_filename: String,
-}
-
-fn default_dolt_db_filename() -> String {
-    "backend_index.doltlite_db".into()
-}
-
-impl Default for DoltConfig {
-    fn default() -> Self {
-        Self {
-            db_filename: default_dolt_db_filename(),
-        }
-    }
-}
+/// Settings for the backend index doltlite DB. Its location is canonical —
+/// `data_root/system/backend_index/db.doltlite_db` (see
+/// [`frankweiler_core::layout`]) — because the http server resolves it from
+/// `data_root` alone and never reads this config; an override here couldn't be
+/// honored on the read side, so there's nothing to configure (yet).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DoltConfig {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmdConfig {
@@ -332,10 +320,42 @@ pub enum ConfigError {
     DuplicateSourceNames(Vec<String>),
     #[error("source name must be non-empty")]
     EmptySourceName,
+    /// A source name is used verbatim as a directory component under
+    /// `data_root/<name>/`, so it must be a POSIX-portable filename:
+    /// `[A-Za-z0-9._-]` only, and not `.` or `..`.
+    #[error("invalid source name {0:?}: {1}")]
+    InvalidSourceName(String, &'static str),
     /// A provider's own `validate()` (delegated to its `*-config` crate)
     /// rejected the source.
     #[error("source {0:?}: {1}")]
     SourceInvalid(String, #[source] anyhow::Error),
+}
+
+/// A source `name` becomes a directory component (`data_root/<name>/raw`,
+/// `data_root/<name>/rendered_md/…`), so it must be a portable, unambiguous
+/// path segment. Accept the POSIX "portable filename character set"
+/// (`[A-Za-z0-9._-]`); reject path separators, `.`/`..`, and a leading `-`
+/// (which would read as a flag to CLI tools).
+fn validate_source_name(name: &str) -> Result<(), &'static str> {
+    if frankweiler_core::layout::RESERVED_STANZA_NAMES.contains(&name) {
+        return Err("name is reserved (collides with the data_root/system directory)");
+    }
+    if name == "." || name == ".." {
+        return Err("name must not be '.' or '..'");
+    }
+    if name.starts_with('-') {
+        return Err("name must not start with '-'");
+    }
+    if let Some(bad) = name
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+    {
+        return Err(match bad {
+            '/' => "name must not contain '/'",
+            _ => "name may only contain ASCII letters, digits, '.', '_', '-'",
+        });
+    }
+    Ok(())
 }
 
 impl Config {
@@ -377,6 +397,9 @@ impl Config {
             if name.is_empty() {
                 return Err(ConfigError::EmptySourceName);
             }
+            if let Err(reason) = validate_source_name(name) {
+                return Err(ConfigError::InvalidSourceName(name.to_string(), reason));
+            }
             entry
                 .source
                 .validate()
@@ -416,9 +439,10 @@ impl Config {
         })
     }
 
-    /// Absolute path to the single doltlite file this backend reads/writes.
+    /// Absolute path to the backend index doltlite DB:
+    /// `data_root/system/backend_index/db.doltlite_db`.
     pub fn dolt_db_path(&self) -> PathBuf {
-        self.data_root.join(&self.dolt.db_filename)
+        frankweiler_core::layout::backend_index_db(&self.data_root)
     }
 }
 
@@ -504,13 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn dolt_defaults() {
-        let cfg = DoltConfig::default();
-        assert_eq!(cfg.db_filename, "backend_index.doltlite_db");
-    }
-
-    #[test]
-    fn dolt_db_path_default() {
+    fn dolt_db_path_is_canonical_under_system() {
         let tmp = tempdir();
         let cfg = Config {
             data_root: tmp.clone(),
@@ -521,15 +539,10 @@ mod tests {
             defaults: Defaults::default(),
             sources: Vec::new(),
         };
-        assert_eq!(cfg.dolt_db_path(), tmp.join("backend_index.doltlite_db"));
-    }
-
-    #[test]
-    fn loads_dolt_block_from_yaml() {
-        let (cfg_path, root) = write_cfg("data_root: __ROOT__\ndolt:\n  db_filename: my.db\n");
-        let cfg = load_config(Some(&cfg_path)).unwrap();
-        assert_eq!(cfg.dolt.db_filename, "my.db");
-        assert_eq!(cfg.dolt_db_path(), root.join("my.db"));
+        assert_eq!(
+            cfg.dolt_db_path(),
+            tmp.join("system/backend_index/db.doltlite_db")
+        );
     }
 
     fn write_cfg(yaml: &str) -> (PathBuf, PathBuf) {
@@ -643,6 +656,35 @@ sources:
         assert!(matches!(
             load_config(Some(&cfg_path)),
             Err(ConfigError::DuplicateSourceNames(_))
+        ));
+    }
+
+    #[test]
+    fn validate_source_name_rules() {
+        // The reserved `system` dir name and POSIX-unsafe components are
+        // rejected; ordinary names with `[A-Za-z0-9._-]` pass.
+        assert!(validate_source_name("slack-work").is_ok());
+        assert!(validate_source_name("github_imbue").is_ok());
+        assert!(validate_source_name("v1.2").is_ok());
+        assert!(validate_source_name("system").is_err()); // reserved
+        assert!(validate_source_name("slack/work").is_err()); // separator
+        assert!(validate_source_name(".").is_err());
+        assert!(validate_source_name("..").is_err());
+        assert!(validate_source_name("-leading").is_err()); // reads as a CLI flag
+        assert!(validate_source_name("space name").is_err());
+    }
+
+    #[test]
+    fn rejects_reserved_source_name() {
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+sources:
+  - {name: system, source: {type: claude_export}}
+",
+        );
+        assert!(matches!(
+            load_config(Some(&cfg_path)),
+            Err(ConfigError::InvalidSourceName(_, _))
         ));
     }
 
@@ -774,7 +816,7 @@ sources:
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
         // API source: no explicit input_path → input resolves to the raw dir.
-        assert_eq!(cfg.sources[0].input_path(), root.join("raw/slack"));
+        assert_eq!(cfg.sources[0].input_path(), root.join("slack/raw"));
         assert!(cfg.sources[0].source.common().input_path.is_none());
     }
 
@@ -796,8 +838,8 @@ sources:
 ",
         );
         let cfg = load_config(Some(&cfg_path)).unwrap();
-        // Default: <data_root>/raw/<name>.
-        assert_eq!(cfg.sources[0].raw_path(), root.join("raw/slack"));
+        // Default: <data_root>/<name>/raw.
+        assert_eq!(cfg.sources[0].raw_path(), root.join("slack/raw"));
         // Override: the store can live anywhere.
         assert_eq!(cfg.sources[1].raw_path(), PathBuf::from("/mnt/big/gh-raw"));
     }

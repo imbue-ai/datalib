@@ -128,13 +128,7 @@ fn render_one(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let fingerprint = compute_fingerprint(profile.render_version, chat, doc);
-    let (md_path, json_path, page_dir) = output_paths(
-        out_dir,
-        profile.provider,
-        source_name,
-        chat,
-        &doc.period_key,
-    );
+    let (md_path, json_path, page_dir) = output_paths(out_dir, source_name, chat, &doc.period_key);
 
     if prior_fingerprints
         .get(&doc.markdown_uuid)
@@ -252,35 +246,19 @@ fn materialize_attachment_bytes(
     out
 }
 
-/// `<out>/rendered_md/<provider>/<source_name>/<chat-slug>/<period>.md`
-/// plus the matching sidecar and parent dir. Mirror of slack /
-/// beeper's path shape so every provider lands under
-/// `rendered_md/<provider>/`.
+/// `<out>/<stanza>/rendered_md/<chat_uuid>/<period>.md` plus the matching
+/// sidecar and parent dir. The directory is the chat's stable UUID — never a
+/// title-derived slug — so an upstream rename (channel/title change)
+/// re-renders in place instead of orphaning the old file at a stale path. The
+/// human title still lives in the markdown frontmatter and the grid_rows DB.
 fn output_paths(
     out_dir: &Path,
-    provider: &str,
     source_name: &str,
     chat: &NormalizedChat,
     period_key: &str,
 ) -> (PathBuf, PathBuf, PathBuf) {
-    // Cap the human-readable slug component: a `display` can be huge
-    // (ChatGPT uses the whole first message as an untitled conversation's
-    // title), and the full path must stay under the filesystem's
-    // name limit. The slug is cosmetic — `chat.id` + `chat_uuid` carry
-    // identity — so truncating is safe. slugify() is ASCII, so byte
-    // truncation can't split a char.
-    let slug = slugify(&chat.display);
-    let slug = slug[..slug.len().min(80)].trim_end_matches('-');
-    let chat_slug = format!(
-        "chat-{id}__{slug}__{short}",
-        id = chat.id,
-        short = &chat.chat_uuid[..8.min(chat.chat_uuid.len())],
-    );
-    let page_dir = out_dir
-        .join("rendered_md")
-        .join(provider)
-        .join(source_name)
-        .join(&chat_slug);
+    let page_dir =
+        frankweiler_etl::layout::rendered_md_root(out_dir, source_name).join(&chat.chat_uuid);
     let md_path = page_dir.join(format!("{period_key}.md"));
     let json_path = page_dir.join(format!("{period_key}.grid_rows.json"));
     (md_path, json_path, page_dir)
@@ -739,21 +717,6 @@ fn human_bytes(n: i64) -> String {
     } else {
         format!("{:.2} GiB", n / (1024.0 * 1024.0 * 1024.0))
     }
-}
-
-fn slugify(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut last_dash = true;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
 }
 
 #[cfg(test)]

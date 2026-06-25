@@ -2,8 +2,8 @@
 //!
 //! Layout:
 //! ```text
-//! <root>/rendered_md/gitlab/<namespace>/<project>/mr-<iid>__<slug>/index.md
-//! <root>/rendered_md/gitlab/<namespace>/<project>/mr-<iid>__<slug>/index.grid_rows.json
+//! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.md
+//! <root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/index.grid_rows.json
 //! ```
 //!
 //! Section order in the doc:
@@ -59,12 +59,12 @@ pub fn slugify(name: &str) -> String {
     }
 }
 
-pub fn mr_qmd_path_rel(project_full_path: &str, iid: u32) -> String {
-    format!("rendered_md/gitlab/{project_full_path}/mr-{iid}/index.md")
+pub fn mr_qmd_path_rel(stanza: &str, project_full_path: &str, iid: u32) -> String {
+    format!("{stanza}/rendered_md/{project_full_path}/mr-{iid}/index.md")
 }
 
-fn mr_dir(root: &Path, project: &str, iid: u32) -> PathBuf {
-    let mut p = root.join("rendered_md").join("gitlab");
+fn mr_dir(root: &Path, stanza: &str, project: &str, iid: u32) -> PathBuf {
+    let mut p = frankweiler_etl::layout::rendered_md_root(root, stanza);
     for part in project.split('/') {
         p = p.join(part);
     }
@@ -121,8 +121,13 @@ fn note_header(n: &NoteRow) -> String {
     format!("**@{who}**{reply} @ {when}{link}")
 }
 
-fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result<PathBuf> {
-    let dir = mr_dir(root, &mr.project_full_path, mr.mr_iid);
+fn render_one_mr(
+    mr: &MergeRequestRow,
+    notes: &[NoteRow],
+    root: &Path,
+    stanza: &str,
+) -> Result<PathBuf> {
+    let dir = mr_dir(root, stanza, &mr.project_full_path, mr.mr_iid);
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let md_path = dir.join("index.md");
 
@@ -259,7 +264,7 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
     }
     fs::write(&md_path, &out).with_context(|| format!("write {}", md_path.display()))?;
 
-    let rows = rows_for_mr(mr, notes)?;
+    let rows = rows_for_mr(stanza, mr, notes)?;
     let sidecar_path = md_path.with_extension("grid_rows.json");
     emit_sidecar(
         &sidecar_path,
@@ -276,6 +281,7 @@ fn render_one_mr(mr: &MergeRequestRow, notes: &[NoteRow], root: &Path) -> Result
 pub fn render_gitlab(
     parsed: &ParsedGitlabApi,
     root: &Path,
+    stanza: &str,
     progress: &Progress,
     prior_fingerprints: &std::collections::HashMap<String, String>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -293,7 +299,7 @@ pub fn render_gitlab(
         let key = (mr.project_full_path.clone(), mr.mr_iid);
         let notes = by_mr.remove(&key).unwrap_or_default();
         let fingerprint = fingerprint_for_mr(mr, &notes);
-        let md_rel = mr_qmd_path_rel(&mr.project_full_path, mr.mr_iid);
+        let md_rel = mr_qmd_path_rel(stanza, &mr.project_full_path, mr.mr_iid);
         let md_path = root.join(&md_rel);
 
         if prior_fingerprints.get(&mr.uuid).map(String::as_str) == Some(fingerprint.as_str())
@@ -304,8 +310,8 @@ pub fn render_gitlab(
             continue;
         }
 
-        render_one_mr(mr, &notes, root)?;
-        let rows = rows_for_mr(mr, &notes)?;
+        render_one_mr(mr, &notes, root, stanza)?;
+        let rows = rows_for_mr(stanza, mr, &notes)?;
         on_doc_complete(RenderedMarkdown {
             markdown_uuid: mr.uuid.clone(),
             source_name: String::new(),

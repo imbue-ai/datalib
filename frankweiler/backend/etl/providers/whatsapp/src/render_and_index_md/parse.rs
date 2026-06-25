@@ -51,7 +51,7 @@ pub struct ParsedWhatsApp {
 /// Open the raw store and build the normalized chat tree.
 ///
 /// `raw_dir` is the source's `input_path` (sync sets it to
-/// `<data_root>/raw/whatsapp/`); the doltlite file is found via
+/// `<data_root>/whatsapp/raw/`); the doltlite file is found via
 /// `doltlite_raw::db_path_for`. `period` controls how items are
 /// bucketed into rendered .md files.
 /// `source_name` is the YAML source name; goes into every UUID seed

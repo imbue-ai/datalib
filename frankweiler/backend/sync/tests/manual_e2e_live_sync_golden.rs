@@ -46,7 +46,7 @@
 //!     real signal there.
 //!   * The tempdir `data_root` prefix is replaced with the stable token
 //!     `<data_root>` wherever it appears in a path string, so a path keeps its
-//!     meaningful suffix (`<data_root>/raw/tiny-slack/entities.doltlite_db`) without
+//!     meaningful suffix (`<data_root>/tiny-slack/raw/entities.doltlite_db`) without
 //!     the per-run `/var/folders/…/.tmpXXXX` churn.
 //!   * `source_fingerprint:` lines in `.md` frontmatter get the same
 //!     treatment.

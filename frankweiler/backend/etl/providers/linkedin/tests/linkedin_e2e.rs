@@ -101,7 +101,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
     fs::create_dir_all(&export)?;
     build_export(&export)?;
 
-    // The raw store lives alongside, mirroring `<data_root>/raw/<name>`.
+    // The raw store lives alongside, mirroring `<data_root>/<name>/raw`.
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
 

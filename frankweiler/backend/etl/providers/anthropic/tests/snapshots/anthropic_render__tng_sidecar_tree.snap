@@ -1,8 +1,8 @@
 ---
-source: etl/providers/anthropic/tests/anthropic_render.rs
+source: frankweiler/backend/etl/providers/anthropic/tests/anthropic_render.rs
 expression: sbundle
 ---
-=== rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.grid_rows.json ===
+=== anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "c0000003-1701-4d00-8000-00000000c003",
@@ -28,7 +28,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.\n<details><summary>Thinking</summary>\n\n> \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.\n\n</details>\n<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>\n\n```json\n{\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n</details>\nFor a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.\n<details><summary>Tool result: web_fetch</summary>\n\n```json\n{\n  \"is_missing\": false,\n  \"metadata\": {\n    \"site_domain\": \"memory-alpha.test\"\n  },\n  \"text\": \"nuqneH (lit. \\\"what do you want\\\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \\\"qaleghneS\\\" (\\\"I am honored to see you\\\").\",\n  \"title\": \"Klingon language — Memory Alpha (test mirror)\",\n  \"type\": \"knowledge\",\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n\n</details>\nPerfect. Make it so.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": "https://claude.ai/chat/c0000003-1701-4d00-8000-00000000c003",
       "git_sha": null,
       "external_id": null,
@@ -54,7 +54,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Look up the Klingon greeting \"nuqneH\" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -80,7 +80,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "<details><summary>Thinking</summary>\n\n> \"nuqneH\" literally means \"what do you want\" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.\n\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -106,7 +106,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "<details><summary>Tool use: web_fetch — Fetching: Klingon language reference</summary>\n\n```json\n{\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -132,7 +132,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "For a dispatch to Chancellor K'mpec, open with \"qaleghneS, Chancellor — nuqneH?\" (\"I am honored to see you — what do you want?\"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -158,7 +158,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "<details><summary>Tool result: web_fetch</summary>\n\n```json\n{\n  \"is_missing\": false,\n  \"metadata\": {\n    \"site_domain\": \"memory-alpha.test\"\n  },\n  \"text\": \"nuqneH (lit. \\\"what do you want\\\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \\\"qaleghneS\\\" (\\\"I am honored to see you\\\").\",\n  \"title\": \"Klingon language — Memory Alpha (test mirror)\",\n  \"type\": \"knowledge\",\n  \"url\": \"https://memory-alpha.test/wiki/Klingon_language\"\n}\n```\n\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -184,7 +184,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000003-1701-4d00-8000-00000000c003",
       "text": "Perfect. Make it so.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000003-1701-4d00-8000-00000000c003__klingon-diplomatic-greeting-drafting__c0000003/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000003-1701-4d00-8000-00000000c003/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -194,7 +194,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/anthropic/anthropic_api/chat-c0000004-1701-4d00-8000-00000000c004__tricorder-image-diagnostic__c0000004/all.grid_rows.json ===
+=== anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "c0000004-1701-4d00-8000-00000000c004",
@@ -220,7 +220,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "What's wrong with this medical-tricorder readout?\nThe readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000004-1701-4d00-8000-00000000c004__tricorder-image-diagnostic__c0000004/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.md",
       "source_url": "https://claude.ai/chat/c0000004-1701-4d00-8000-00000000c004",
       "git_sha": null,
       "external_id": null,
@@ -246,7 +246,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "What's wrong with this medical-tricorder readout?",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000004-1701-4d00-8000-00000000c004__tricorder-image-diagnostic__c0000004/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -272,7 +272,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000004-1701-4d00-8000-00000000c004",
       "text": "The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000004-1701-4d00-8000-00000000c004__tricorder-image-diagnostic__c0000004/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000004-1701-4d00-8000-00000000c004/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -282,7 +282,7 @@ expression: sbundle
     }
   ]
 }
-=== rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.grid_rows.json ===
+=== anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.grid_rows.json ===
 {
   "header": {
     "markdown_uuid": "c0000005-1701-4d00-8000-00000000c005",
@@ -308,7 +308,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.\n<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>\n\n```json\n{\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>\n<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>\n\n```json\n{\n  \"relay\": \"backup-2\",\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>\nYes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.\n<details><summary>Tool result: starfleet_db_query (error)</summary>\n\n```\nERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)\n```\n</details>\n<details><summary>Tool result: starfleet_db_query</summary>\n\nSignature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.\n\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": "https://claude.ai/chat/c0000005-1701-4d00-8000-00000000c005",
       "git_sha": null,
       "external_id": null,
@@ -334,7 +334,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -360,7 +360,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "<details><summary>Tool use: starfleet_db_query — Querying Starfleet tactical DB</summary>\n\n```json\n{\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -386,7 +386,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "<details><summary>Tool use: starfleet_db_query — Retrying via backup relay</summary>\n\n```json\n{\n  \"relay\": \"backup-2\",\n  \"signature\": \"7-of-9-alpha\",\n  \"table\": \"borg_shield_signatures\"\n}\n```\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -412,7 +412,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -438,7 +438,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "<details><summary>Tool result: starfleet_db_query (error)</summary>\n\n```\nERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)\n```\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,
@@ -464,7 +464,7 @@ expression: sbundle
       "entire_chat": "/chat/c0000005-1701-4d00-8000-00000000c005",
       "text": "<details><summary>Tool result: starfleet_db_query</summary>\n\nSignature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.\n\n</details>",
       "slack_link": null,
-      "qmd_path": "rendered_md/anthropic/anthropic_api/chat-c0000005-1701-4d00-8000-00000000c005__borg-encryption-signature-lookup__c0000005/all.md",
+      "qmd_path": "anthropic_api/rendered_md/c0000005-1701-4d00-8000-00000000c005/all.md",
       "source_url": null,
       "git_sha": null,
       "external_id": null,

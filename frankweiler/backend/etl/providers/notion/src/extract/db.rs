@@ -1,7 +1,7 @@
 //! Doltlite-backed raw store for the Notion provider.
 //!
 //! Replaces the per-entity JSONL trees with a single sqlx-managed
-//! sqlite (eventually doltlite) file at `<data_root>/raw/<name>/entities.doltlite_db`.
+//! sqlite (eventually doltlite) file at `<data_root>/<name>/raw/entities.doltlite_db`.
 //! Schema is owned by this provider; the shared bookkeeping tables
 //! (`blobs`, `sync_runs`) and the open / start_run
 //! / blob plumbing live in [`frankweiler_etl::doltlite_raw`].

@@ -1,8 +1,8 @@
 ---
-source: etl/providers/slack/tests/slack_render.rs
+source: frankweiler/backend/etl/providers/slack/tests/slack_render.rs
 expression: bundle
 ---
-=== rendered_md/slack/slack_api/chat-18661749-ed35-5c92-aa13-7cb73be53387__bridge__18661749/all.md ===
+=== slack_api/rendered_md/18661749-ed35-5c92-aa13-7cb73be53387/all.md ===
 ---
 title: "#bridge: Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271  (all)"
 provider: slack
@@ -27,7 +27,7 @@ Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 27
 </div>
 
 
-=== rendered_md/slack/slack_api/chat-8074b3b0-3bd4-5232-843f-c8278649d1a2__bridge__8074b3b0/all.md ===
+=== slack_api/rendered_md/8074b3b0-3bd4-5232-843f-c8278649d1a2/all.md ===
 ---
 title: "#bridge: Mr. Data, status report. (all)"
 provider: slack
@@ -72,7 +72,7 @@ Set a course, Mr. Data. Warp factor five.
 </div>
 
 
-=== rendered_md/slack/slack_api/chat-a93e15fa-68d5-5d53-aa9a-590e01b83275__ten-forward__a93e15fa/all.md ===
+=== slack_api/rendered_md/a93e15fa-68d5-5d53-aa9a-590e01b83275/all.md ===
 ---
 title: "#ten-forward: Anyone up for poker tonight? (all)"
 provider: slack
@@ -107,7 +107,7 @@ I do not understand the appeal of this Earth game.
 </div>
 
 
-=== rendered_md/slack/slack_api/chat-b220c513-3e7b-5301-8b0d-13f9b8cf63fc__engineering__b220c513/all.md ===
+=== slack_api/rendered_md/b220c513-3e7b-5301-8b0d-13f9b8cf63fc/all.md ===
 ---
 title: "#engineering: Warp core efficiency at 99.7%. (all)"
 provider: slack
@@ -132,7 +132,7 @@ Warp core efficiency at 99.7%.
 </div>
 
 
-=== rendered_md/slack/slack_api/chat-b5ff7879-d563-59d6-8e89-906b6975dca1__bridge__b5ff7879/all.md ===
+=== slack_api/rendered_md/b5ff7879-d563-59d6-8e89-906b6975dca1/all.md ===
 ---
 title: "#bridge: I recommend raising shields, Captain. (all)"
 provider: slack
@@ -157,7 +157,7 @@ I recommend raising shields, Captain.
 </div>
 
 
-=== rendered_md/slack/slack_api/chat-be617fe9-49d3-5fe1-b75d-0e210465c5bb__bridge__be617fe9/all.md ===
+=== slack_api/rendered_md/be617fe9-49d3-5fe1-b75d-0e210465c5bb/all.md ===
 ---
 title: "#bridge: New combadge prototypes — thoughts? (all)"
 provider: slack

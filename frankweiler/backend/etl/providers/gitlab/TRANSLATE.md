@@ -5,7 +5,7 @@
 plus a co-located `grid_rows` sidecar.
 
 ```
-<root>/rendered_md/gitlab/<namespace>/<project>/mr-<iid>__<slug>/
+<root>/<stanza>/rendered_md/<namespace>/<project>/mr-<iid>__<slug>/
     index.md                # the unified MR doc
     index.grid_rows.json     # sidecar: one row for the MR + one per note
 ```
@@ -47,7 +47,7 @@ The translate step is an in-process library (the `render_and_index_md`
 module, called from `frankweiler-sync`); there is no standalone
 `gitlab-translate` binary and no Bazel target for it. Run a sync to
 exercise it, and rendered docs land under
-`/tmp/gitlab-mirror/rendered_md/gitlab/...`.
+`/tmp/gitlab-mirror/<stanza>/rendered_md/...`.
 
 To exercise the renderer in isolation, run its tests:
 

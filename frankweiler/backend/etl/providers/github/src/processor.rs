@@ -105,6 +105,7 @@ impl DataProcessor for GithubRender {
         render_github(
             &parsed,
             ctx.root,
+            ctx.name,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,

@@ -2,7 +2,7 @@
 //! optional inbox discovery via the unofficial `getNotificationLog`.
 //!
 //! Writes into a single doltlite database file
-//! (`<data_root>/raw/<name>/entities.doltlite_db`) — one row per page / block /
+//! (`<data_root>/<name>/raw/entities.doltlite_db`) — one row per page / block /
 //! comment, full payload in a JSON column. See `DOLTLITE_RAW.md` for the
 //! schema and rationale. The downstream `render_and_index_md::parse` and
 //! `synthesize` stages consume the DB directly.

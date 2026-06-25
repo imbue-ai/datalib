@@ -1,7 +1,7 @@
 //! Slack downloader entry point.
 //!
 //! Captures Slack data into a single doltlite db at
-//! `<data_root>/raw/<name>/entities.doltlite_db` — one row per workspace
+//! `<data_root>/<name>/raw/entities.doltlite_db` — one row per workspace
 //! (`auth.test`), user, channel, message, reply page, and attachment
 //! edge, plus the shared `cas_objects` blob store. See `db.rs` and
 //! `schema_raw.rs` for the table layout.

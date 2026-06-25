@@ -66,6 +66,7 @@ fn image_blob_lands_next_to_markdown() {
     let summary = render_notion_official(
         &parsed,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
@@ -73,10 +74,11 @@ fn image_blob_lands_next_to_markdown() {
     .expect("render ok");
     assert_eq!(summary.rendered, 1);
 
-    // Page dir is `pages/<page_id>/` per render's page_dir_segment.
+    // Page dir is `<stanza>/rendered_md/pages/<page_id>/` per render's
+    // rendered_md_root + page_dir_segment.
     let page_dir = root
-        .join("rendered_md")
         .join("notion")
+        .join("rendered_md")
         .join("pages")
         .join(pid);
     let md = fs::read_to_string(page_dir.join("index.md")).expect("md exists");
@@ -134,14 +136,15 @@ fn missing_blob_falls_back_to_upstream_url() {
     render_notion_official(
         &parsed,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
     )
     .expect("render ok");
     let md = fs::read_to_string(
-        root.join("rendered_md")
-            .join("notion")
+        root.join("notion")
+            .join("rendered_md")
             .join("pages")
             .join(pid)
             .join("index.md"),
@@ -153,8 +156,8 @@ fn missing_blob_falls_back_to_upstream_url() {
     );
     // And: no blobs dir was created (nothing to write).
     assert!(!root
-        .join("rendered_md")
         .join("notion")
+        .join("rendered_md")
         .join("pages")
         .join(pid)
         .join("blobs")
@@ -231,6 +234,7 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
     render_notion_official(
         &parsed,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |_doc| Ok(()),
@@ -238,8 +242,8 @@ fn file_upload_image_renders_as_real_image_not_fallback() {
     .expect("render ok");
 
     let md = fs::read_to_string(
-        root.join("rendered_md")
-            .join("notion")
+        root.join("notion")
+            .join("rendered_md")
             .join("pages")
             .join(pid)
             .join("index.md"),
@@ -321,6 +325,7 @@ fn incremental_renders_only_changed_page() {
     let summary1 = render_notion_official(
         &parsed_v1,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
         &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
@@ -370,6 +375,7 @@ fn incremental_renders_only_changed_page() {
     let summary2 = render_notion_official(
         &parsed_v2,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
         &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
@@ -403,8 +409,8 @@ fn incremental_renders_only_changed_page() {
 
     // ── disk: page B's md now contains the new paragraph text. ──────
     let page_b_md = fs::read_to_string(
-        root.join("rendered_md")
-            .join("notion")
+        root.join("notion")
+            .join("rendered_md")
             .join("pages")
             .join(page_b)
             .join("index.md"),
@@ -421,6 +427,7 @@ fn incremental_renders_only_changed_page() {
     let summary3 = render_notion_official(
         &parsed_v2,
         root,
+        "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &priors_v2,
         &mut |_doc| panic!("steady state should skip every doc"),

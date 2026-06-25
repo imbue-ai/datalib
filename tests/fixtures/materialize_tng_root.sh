@@ -6,12 +6,12 @@
 #   * `bazelisk test //frankweiler/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
-#   backend_index.doltlite_db               doltlite (SQLite-compatible) file the backend reads.
-#   rendered_md/...         Conversation markdown tree (from qmd.tar).
-#   qmd/index.sqlite        QMD index (from qmd-index.tar).
-#   qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
-#   config.yaml             { data_root, dolt.db_filename } — backend reads via
-#                           FRANKWEILER_CONFIG.
+#   <stanza>/rendered_md/...           Conversation markdown trees (from qmd.tar).
+#   system/backend_index/db.doltlite_db  doltlite (SQLite-compatible) file the backend reads.
+#   system/qmd/index.sqlite            QMD index (from qmd-index.tar).
+#   system/qmd/models -> ~/.cache/qmd/models  (shared, populated externally)
+#   config.yaml                        { data_root } — backend reads via
+#                                      FRANKWEILER_CONFIG.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -45,20 +45,20 @@ command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1
 mkdir -p "$OUT_ROOT"
 
 # Both archives are rooted at `qmd/` (the genrule's staging dir name);
-# strip that one component so providers / index land directly under
-# <root>/, where the backend's scanners look.
+# strip that one component so the per-stanza markdown trees land at
+# `<root>/<stanza>/rendered_md/...` and the index at `<root>/system/qmd/`,
+# where the backend's scanners look.
 tar -xf "$QMD_TAR"       -C "$OUT_ROOT" --strip-components=1
 tar -xf "$QMD_INDEX_TAR" -C "$OUT_ROOT" --strip-components=1
 
-# Drop the doltlite file straight in — the backend opens it directly
-# via `<data_root>/<dolt.db_filename>`.
-cp "$DB_FILE" "$OUT_ROOT/backend_index.doltlite_db"
-chmod u+w "$OUT_ROOT/backend_index.doltlite_db"
+# Drop the doltlite file into its canonical home under `system/`; the
+# backend opens it directly via `<data_root>/system/backend_index/db.doltlite_db`.
+mkdir -p "$OUT_ROOT/system/backend_index"
+cp "$DB_FILE" "$OUT_ROOT/system/backend_index/db.doltlite_db"
+chmod u+w "$OUT_ROOT/system/backend_index/db.doltlite_db"
 
 cat > "$OUT_ROOT/config.yaml" <<EOF
 data_root: $OUT_ROOT
-dolt:
-  db_filename: backend_index.doltlite_db
 EOF
 
 # qmd models live once in ~/.cache/qmd/models (~1.6 GB) and every data
@@ -87,7 +87,7 @@ if (( ${#missing[@]} > 0 )); then
   } >&2
   exit 3
 fi
-mkdir -p "$OUT_ROOT/qmd"
-ln -sfn "$SHARED_MODELS" "$OUT_ROOT/qmd/models"
+mkdir -p "$OUT_ROOT/system/qmd"
+ln -sfn "$SHARED_MODELS" "$OUT_ROOT/system/qmd/models"
 
 echo "$OUT_ROOT"

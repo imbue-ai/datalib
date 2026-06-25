@@ -108,6 +108,7 @@ impl DataProcessor for GitlabRender {
         render_gitlab(
             &parsed,
             ctx.root,
+            ctx.name,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,

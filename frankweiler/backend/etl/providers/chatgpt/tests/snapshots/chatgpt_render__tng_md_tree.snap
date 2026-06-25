@@ -1,8 +1,8 @@
 ---
-source: etl/providers/chatgpt/tests/chatgpt_render.rs
+source: frankweiler/backend/etl/providers/chatgpt/tests/chatgpt_render.rs
 expression: bundle
 ---
-=== rendered_md/openai/chatgpt_api/chat-68fa0001-fake-7000-8000-positronic0001__sonnet-on-a-cat-named-spot__68fa0001/all.md ===
+=== chatgpt_api/rendered_md/68fa0001-fake-7000-8000-positronic0001/all.md ===
 ---
 title: "Sonnet on a Cat Named Spot (all)"
 provider: openai
@@ -67,7 +67,7 @@ Curious. The closing couplet is satisfying. Thank you.
 </div>
 
 
-=== rendered_md/openai/chatgpt_api/chat-68fa0002-fake-7000-8000-positronic0002__polynomial-fit-for-sensor-calibration__68fa0002/all.md ===
+=== chatgpt_api/rendered_md/68fa0002-fake-7000-8000-positronic0002/all.md ===
 ---
 title: "Polynomial Fit for Sensor Calibration (all)"
 provider: openai
@@ -114,7 +114,7 @@ The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The r
 </div>
 
 
-=== rendered_md/openai/chatgpt_api/chat-68fa0003-fake-7000-8000-positronic0003__i-have-been-reviewing-the-daystrom-institute-archives-on-subspace-harmonic-stabi__68fa0003/all.md ===
+=== chatgpt_api/rendered_md/68fa0003-fake-7000-8000-positronic0003/all.md ===
 ---
 title: "I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? (all)"
 provider: openai

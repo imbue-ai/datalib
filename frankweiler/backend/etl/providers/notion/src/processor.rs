@@ -124,6 +124,7 @@ impl DataProcessor for NotionRender {
         render_notion_official(
             &parsed,
             ctx.root,
+            ctx.name,
             ctx.progress,
             ctx.prior_fingerprints,
             &mut on_doc,
