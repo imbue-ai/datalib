@@ -23,6 +23,7 @@ use frankweiler_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use tracing::warn;
 
+use super::attachment_path;
 use super::db::RawDb;
 use super::schema_raw::{ChatAttachmentRow, ChatGroupRow, ChatMessageRow, ChatUserRow};
 use super::time as time_parser;
@@ -161,10 +162,34 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
                                     }
                                     n_attachments += 1;
                                     let owning = row.id_and_payload.id.clone();
-                                    let attach_path = dir.join(&export_name);
-                                    match std::fs::read(&attach_path) {
+                                    // Google truncates long on-disk names
+                                    // while keeping the full name in the
+                                    // JSON, so resolve via prefix match
+                                    // rather than an exact join (issue #64).
+                                    let resolved =
+                                        match attachment_path::resolve(&dir, &export_name) {
+                                            attachment_path::Resolved::Exact(p)
+                                            | attachment_path::Resolved::Truncated(p) => p,
+                                            attachment_path::Resolved::Missing => {
+                                                warn!(
+                                                    event = "chat_attachment_missing",
+                                                    message_id = %owning,
+                                                    export_name = %export_name,
+                                                );
+                                                acc.add_failed(
+                                                    &owning,
+                                                    &export_name,
+                                                    "attachment file missing on disk",
+                                                );
+                                                continue;
+                                            }
+                                        };
+                                    match std::fs::read(&resolved) {
                                         Ok(bytes) => {
-                                            let ct = guess_content_type(&attach_path);
+                                            // Content type from the resolved
+                                            // file's extension (truncation
+                                            // preserves it).
+                                            let ct = guess_content_type(&resolved);
                                             acc.add_fetched(
                                                 &owning,
                                                 &export_name,
@@ -175,7 +200,7 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
                                         }
                                         Err(e) => {
                                             warn!(
-                                                event = "chat_attachment_missing",
+                                                event = "chat_attachment_unreadable",
                                                 message_id = %owning,
                                                 export_name = %export_name,
                                                 error = %e,
@@ -183,7 +208,7 @@ pub async fn ingest(db: &RawDb, root: &Path, progress: &Progress) -> Result<Chat
                                             acc.add_failed(
                                                 &owning,
                                                 &export_name,
-                                                "attachment file missing on disk",
+                                                "attachment unreadable",
                                             );
                                         }
                                     }

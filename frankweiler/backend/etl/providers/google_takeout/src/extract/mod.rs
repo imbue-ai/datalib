@@ -5,6 +5,7 @@
 //! in individually via [`SyncFlags`] so a fresh user has to enable
 //! each one consciously.
 
+pub mod attachment_path;
 pub mod db;
 pub mod gemini_apps;
 pub mod google_chat;
