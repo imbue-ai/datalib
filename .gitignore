@@ -13,7 +13,11 @@ target/
 dolt_repo/
 playwright-report/
 test-results/
-.claude/
+# Ignore personal/local Claude state (settings.local.json, etc.) but keep
+# shared project skills under version control. Ignoring `.claude/*` (contents)
+# rather than `.claude/` (the dir) is what lets the negation re-include skills.
+.claude/*
+!.claude/skills/
 *.snap.new
 
 # Per-user bazel overrides — currently the BuildBuddy API key.
