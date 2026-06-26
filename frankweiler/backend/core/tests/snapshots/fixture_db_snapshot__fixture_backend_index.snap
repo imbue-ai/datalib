@@ -47,6 +47,20 @@ expression: snapshot
       "updated_at": "2369-05-28T15:20:00+00:00"
     },
     {
+      "created_at": "2025-02-11T11:33:35+00:00",
+      "kind": "chat",
+      "markdown_uuid": "1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "md_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-02.md",
+      "provider": "google_takeout",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "e2d8f6dfca7041e6d2a29392d163cc04a2d228bde4038ffc75c82e8a22dae576",
+      "source_fingerprint": "09590390bcca9c72a0b999d847fd47d8aa46c26e2346a2af46fbebf87ebce663",
+      "source_name": "google-takeout",
+      "title": "Jean-Luc Picard, William Riker",
+      "updated_at": "2025-02-11T11:33:35+00:00"
+    },
+    {
       "created_at": "2369-04-09T00:00:00+00:00",
       "kind": "chat",
       "markdown_uuid": "1ccdcb0c-d89c-55fa-b087-458fcc3df616",
@@ -171,20 +185,6 @@ expression: snapshot
       "source_name": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot",
       "updated_at": "2369-04-15T11:30:00Z"
-    },
-    {
-      "created_at": "2025-02-11T11:33:35+00:00",
-      "kind": "chat",
-      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "md_path": "google-takeout/rendered_md/84463d4a-865e-51f2-8dbe-cd5687604e6d/all.md",
-      "provider": "google_takeout",
-      "rendered_at": "2369-04-15T00:00:00+00:00",
-      "renderer_version": "rust-v1.1",
-      "row_set_hash": "147783317fbc76e7045fd30da2ca725c16de1d3ff2f3bbe708d13cced580e239",
-      "source_fingerprint": "da258604025e4df4facdf13e336d7395072b8cd03253143289e12332e246d6cd",
-      "source_name": "google-takeout",
-      "title": "Jean-Luc Picard, William Riker",
-      "updated_at": "2025-02-11T11:34:00+00:00"
     },
     {
       "created_at": "2369-04-14T20:30:00+00:00",
@@ -605,6 +605,20 @@ expression: snapshot
       "source_name": "tng_email",
       "title": "Bridge status display",
       "updated_at": "2026-01-07T09:00:00+00:00"
+    },
+    {
+      "created_at": "2025-03-05T21:34:00+00:00",
+      "kind": "chat",
+      "markdown_uuid": "f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "md_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-03.md",
+      "provider": "google_takeout",
+      "rendered_at": "2369-04-15T00:00:00+00:00",
+      "renderer_version": "rust-v1.1",
+      "row_set_hash": "34e58d81c13dbce80eea02912000cf5b79f49229b18faf86251e631abac9eeac",
+      "source_fingerprint": "5403b4f5924f1101229261c5443b624b324d3377ff2a470d4e41b4167f8be413",
+      "source_name": "google-takeout",
+      "title": "Jean-Luc Picard, William Riker",
+      "updated_at": "2025-03-05T21:34:00+00:00"
     }
   ],
   "dolt_log": [
@@ -612,7 +626,7 @@ expression: snapshot
       "message": "Initialize data repository"
     },
     {
-      "message": "frankweiler-sync: markdowns_loaded=43 markdowns_total=43 rows_inserted=150 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,tng_contacts,signal,whatsapp,tng_email,google-takeout,linkedin,sms-backup-restore]"
+      "message": "frankweiler-sync: markdowns_loaded=44 markdowns_total=44 rows_inserted=151 sources=[anthropic-api,chatgpt-api,slack,github,gitlab,notion,beeper,tng_contacts,signal,whatsapp,tng_email,google-takeout,linkedin,sms-backup-restore]"
     }
   ],
   "grid_rows": [
@@ -1043,6 +1057,31 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": null,
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "e24be9cd-5f57-5f73-98b4-595c839ba5f2",
+      "entire_chat": "/chat/1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "external_id": "TNG-BRIDGE",
+      "git_sha": null,
+      "kind": "Google Chat",
+      "markdown_uuid": "1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-02.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 34,
+      "text_sha": "sha256:bf5b91d49c7f8f062f6b4a71eeadc3a6cbddf91ab8d8f5a2c7adf7fa507ee607",
+      "uuid": "1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "when_ts": "2025-02-11T11:33:35+00:00"
+    },
+    {
+      "account": null,
       "author": "William Riker",
       "channel": "Jean-Luc Picard, William Riker",
       "conversation_name": "Jean-Luc Picard, William Riker",
@@ -1343,31 +1382,6 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "Jean-Luc Picard",
-      "channel": "Jean-Luc Picard, William Riker",
-      "conversation_name": "Jean-Luc Picard, William Riker",
-      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
-      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "external_id": null,
-      "git_sha": null,
-      "kind": "Google Chat Message",
-      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "message_index": 0,
-      "notion_block_uuid": null,
-      "notion_page_uuid": null,
-      "project": null,
-      "provider": "google_takeout",
-      "qmd_path": "google-takeout/rendered_md/84463d4a-865e-51f2-8dbe-cd5687604e6d/all.md",
-      "slack_link": null,
-      "source_label": "Google Chat",
-      "source_url": null,
-      "text_len": 34,
-      "text_sha": "sha256:bf5b91d49c7f8f062f6b4a71eeadc3a6cbddf91ab8d8f5a2c7adf7fa507ee607",
-      "uuid": "32fdd05b-ea6e-5cab-94ed-3024393836c0",
-      "when_ts": "2025-02-11T11:33:35+00:00"
-    },
-    {
-      "account": null,
       "author": "Me",
       "channel": "Jean-Luc Picard",
       "conversation_name": "Jean-Luc Picard",
@@ -1590,6 +1604,31 @@ expression: snapshot
       "text_sha": "sha256:0be317168a72d6bbeb1bdf019fbad90b4897a2fcfd7627ac1de9e18501dbd249",
       "uuid": "486e1044-4ddc-5430-9800-c717957920ca",
       "when_ts": "2369-04-15T14:00:01Z"
+    },
+    {
+      "account": null,
+      "author": "William Riker",
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "e24be9cd-5f57-5f73-98b4-595c839ba5f2",
+      "entire_chat": "/chat/f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "external_id": null,
+      "git_sha": null,
+      "kind": "Google Chat Message",
+      "markdown_uuid": "f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-03.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 9,
+      "text_sha": "sha256:8beccd798ddb29ccf3e9616dc8ac5d2fcb9d80d0acebc0bf427ca4c1aea01a39",
+      "uuid": "492bf5f1-ed33-5f86-9f66-2d86c01048e5",
+      "when_ts": "2025-03-05T21:34:00+00:00"
     },
     {
       "account": null,
@@ -2190,31 +2229,6 @@ expression: snapshot
       "text_sha": "sha256:f98dcef4bfe9aa683c5ecd712d7f4aba6f6b850a46ad123f1ae4f48157c33c5d",
       "uuid": "70c76bbb-e431-5ab9-9118-61407fbccf09",
       "when_ts": "2369-05-28T15:10:00+00:00"
-    },
-    {
-      "account": null,
-      "author": null,
-      "channel": "Jean-Luc Picard, William Riker",
-      "conversation_name": "Jean-Luc Picard, William Riker",
-      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
-      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "external_id": "spaces/AAAAtng-bridge",
-      "git_sha": null,
-      "kind": "Google Chat",
-      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "message_index": null,
-      "notion_block_uuid": null,
-      "notion_page_uuid": null,
-      "project": null,
-      "provider": "google_takeout",
-      "qmd_path": "google-takeout/rendered_md/84463d4a-865e-51f2-8dbe-cd5687604e6d/all.md",
-      "slack_link": null,
-      "source_label": "Google Chat",
-      "source_url": null,
-      "text_len": 44,
-      "text_sha": "sha256:db43a35dc783e64c18709ad057e11e987fdf6ff30dde8a7ab7f455bf01dfe233",
-      "uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "when_ts": "2025-02-11T11:33:35+00:00"
     },
     {
       "account": "T_NCC1701D",
@@ -3567,6 +3581,31 @@ expression: snapshot
       "when_ts": "2369-04-15T10:00:00Z"
     },
     {
+      "account": null,
+      "author": "Jean-Luc Picard",
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "e24be9cd-5f57-5f73-98b4-595c839ba5f2",
+      "entire_chat": "/chat/1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "external_id": null,
+      "git_sha": null,
+      "kind": "Google Chat Message",
+      "markdown_uuid": "1a35a681-1336-5a7d-a7d6-ed25354f11de",
+      "message_index": 0,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-02.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 34,
+      "text_sha": "sha256:bf5b91d49c7f8f062f6b4a71eeadc3a6cbddf91ab8d8f5a2c7adf7fa507ee607",
+      "uuid": "c77df140-12a6-5ec6-b44e-63d53a9abed2",
+      "when_ts": "2025-02-11T11:33:35+00:00"
+    },
+    {
       "account": "linkedin",
       "author": "Jean-Luc Picard",
       "channel": "Connections",
@@ -3843,31 +3882,6 @@ expression: snapshot
     },
     {
       "account": null,
-      "author": "William Riker",
-      "channel": "Jean-Luc Picard, William Riker",
-      "conversation_name": "Jean-Luc Picard, William Riker",
-      "conversation_uuid": "84463d4a-865e-51f2-8dbe-cd5687604e6d",
-      "entire_chat": "/chat/70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "external_id": null,
-      "git_sha": null,
-      "kind": "Google Chat Message",
-      "markdown_uuid": "70dce3d6-9b79-560d-ae31-508a97ae2d85",
-      "message_index": 1,
-      "notion_block_uuid": null,
-      "notion_page_uuid": null,
-      "project": null,
-      "provider": "google_takeout",
-      "qmd_path": "google-takeout/rendered_md/84463d4a-865e-51f2-8dbe-cd5687604e6d/all.md",
-      "slack_link": null,
-      "source_label": "Google Chat",
-      "source_url": null,
-      "text_len": 9,
-      "text_sha": "sha256:8beccd798ddb29ccf3e9616dc8ac5d2fcb9d80d0acebc0bf427ca4c1aea01a39",
-      "uuid": "f31f6f21-0dcf-5f64-859f-f359e1b8a623",
-      "when_ts": "2025-02-11T11:34:00+00:00"
-    },
-    {
-      "account": null,
       "author": "Will Riker",
       "channel": "Will Riker",
       "conversation_name": "Signal · Will Riker (2364-04)",
@@ -3915,6 +3929,31 @@ expression: snapshot
       "text_sha": "sha256:030e41e1b64beab4afa41be7a6aea072671af13cef4d53496411b54fbd2d3d39",
       "uuid": "f568b5f9-c761-5a5d-be84-35cf144c21ba",
       "when_ts": "2026-01-07T09:00:00+00:00"
+    },
+    {
+      "account": null,
+      "author": null,
+      "channel": "Jean-Luc Picard, William Riker",
+      "conversation_name": "Jean-Luc Picard, William Riker",
+      "conversation_uuid": "e24be9cd-5f57-5f73-98b4-595c839ba5f2",
+      "entire_chat": "/chat/f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "external_id": "TNG-BRIDGE",
+      "git_sha": null,
+      "kind": "Google Chat",
+      "markdown_uuid": "f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "project": null,
+      "provider": "google_takeout",
+      "qmd_path": "google-takeout/rendered_md/e24be9cd-5f57-5f73-98b4-595c839ba5f2/2025-03.md",
+      "slack_link": null,
+      "source_label": "Google Chat",
+      "source_url": null,
+      "text_len": 9,
+      "text_sha": "sha256:8beccd798ddb29ccf3e9616dc8ac5d2fcb9d80d0acebc0bf427ca4c1aea01a39",
+      "uuid": "f5894334-ae7e-58f7-904b-1dd5144f7044",
+      "when_ts": "2025-03-05T21:34:00+00:00"
     },
     {
       "account": null,
@@ -4368,8 +4407,8 @@ expression: snapshot
     }
   ],
   "summary": {
-    "documents_count": 43,
+    "documents_count": 44,
     "dolt_log_count": 2,
-    "grid_rows_count": 150
+    "grid_rows_count": 151
   }
 }
