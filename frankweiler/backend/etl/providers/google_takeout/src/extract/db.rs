@@ -67,4 +67,11 @@ impl RawDb {
     pub async fn load_payloads(&self, table: &str) -> Result<Vec<Value>> {
         dr::load_payloads(&self.pool, table).await
     }
+
+    /// Like [`Self::load_payloads`], but yields `(id, payload)` so the
+    /// caller can join a row against a sibling table. Used by the chat
+    /// renderer to map a `chat_groups` directory name to its members.
+    pub async fn load_payloads_with_id(&self, table: &str) -> Result<Vec<(String, Value)>> {
+        dr::load_payloads_with_id(&self.pool, table).await
+    }
 }
