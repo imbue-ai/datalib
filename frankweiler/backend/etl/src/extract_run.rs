@@ -360,4 +360,53 @@ mod tests {
         assert_eq!(s["new"], 4);
         assert_eq!(s["error"].as_str().unwrap(), "upstream 503");
     }
+
+    #[tokio::test]
+    async fn new_table_first_run_reports_added_rows_not_dropped_delta() {
+        // Repro for the `dolt_diff_<table> read failed; delta dropped`
+        // warning seen on every provider's *first* sync. A table created
+        // during a run but not yet committed shows up in `dolt_status` as
+        // "new table", but doltlite hasn't materialized its
+        // `dolt_diff_<table>` virtual table yet (it only exists for tables
+        // present at HEAD). The diff query in `compute_deltas` then errors
+        // with "no such table: dolt_diff_<table>" and the row delta is
+        // silently dropped.
+        //
+        // The fix commits the schema right after `open` applies the DDL, so
+        // the table exists at HEAD and the data inserts diff cleanly as
+        // "added". Verified by hand with the doltlite CLI: a CREATE+INSERT
+        // with no commit makes `dolt_diff_<table>` unresolvable; a commit of
+        // the empty schema first makes the inserts show up as `added`.
+        const NEW_TABLE_DDL: &str =
+            "CREATE TABLE IF NOT EXISTS discussions (id TEXT PRIMARY KEY, payload TEXT)";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("new_table_first_run.doltlite_db");
+        let pool = crate::doltlite_raw::open(&path, &[NEW_TABLE_DDL])
+            .await
+            .unwrap();
+        if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
+            // Stock libsqlite3 has no dolt_* virtual tables; nothing to test.
+            return;
+        }
+        // Simulate a first-run extract: insert rows into the just-created
+        // table WITHOUT an intervening commit.
+        for i in 0..3 {
+            sqlx::query("INSERT INTO discussions (id, payload) VALUES (?, ?)")
+                .bind(format!("d{i}"))
+                .bind("{}")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let deltas = compute_deltas(&pool)
+            .await
+            .expect("doltlite extensions present => Some(deltas)");
+        let d = deltas.get("discussions").unwrap_or_else(|| {
+            panic!("discussions delta was dropped instead of reported as added; got {deltas:?}")
+        });
+        assert_eq!(
+            d.added, 3,
+            "all 3 rows of the newly-created table should count as added; got {d:?}"
+        );
+    }
 }

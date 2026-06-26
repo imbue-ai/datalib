@@ -329,6 +329,56 @@ fn sync_binary() -> PathBuf {
     panic!("FRANKWEILER_SYNC_BIN not set and no cargo-provided binary path")
 }
 
+/// Root for this run's `data_root`, persisted pytest-`tmp_path`-style: each
+/// run gets its own dir under a stable base, and only the most recent
+/// [`KEEP_RUNS`] are retained. Lets you peek at the last few runs' working
+/// doltlite DBs / rendered output (e.g. to inspect a `dolt_diff_<table>`
+/// warning with the doltlite client) without unbounded disk growth. Unlike a
+/// `tempfile` tempdir these survive the process — including when a snapshot
+/// assertion panics mid-run.
+fn persistent_run_root() -> PathBuf {
+    /// How many recent runs to keep (this run + the previous KEEP_RUNS-1).
+    const KEEP_RUNS: usize = 3;
+    let base = std::env::temp_dir().join("frankweiler-e2e-runs");
+    std::fs::create_dir_all(&base).expect("create e2e runs base");
+
+    // Sortable, chronological dir name: zero-padded millis since the epoch,
+    // so a lexical sort is a chronological sort. 13 digits covers ms
+    // timestamps through the year ~2286.
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let run_root = base.join(format!("run-{millis:013}"));
+    std::fs::create_dir_all(&run_root).expect("create run root");
+
+    // Prune older runs, keeping the newest KEEP_RUNS (this one included).
+    let mut runs: Vec<PathBuf> = std::fs::read_dir(&base)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("run-"))
+        })
+        .collect();
+    runs.sort();
+    if runs.len() > KEEP_RUNS {
+        for old in &runs[..runs.len() - KEEP_RUNS] {
+            let _ = std::fs::remove_dir_all(old);
+        }
+    }
+    eprintln!(
+        "[test] run_root = {} (keeping newest {KEEP_RUNS} runs under {})",
+        run_root.display(),
+        base.display()
+    );
+    run_root
+}
+
 #[test]
 #[ignore]
 fn manual_e2e_live_sync_golden() {
@@ -351,15 +401,19 @@ fn manual_e2e_live_sync_golden() {
     );
     let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
 
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let data_root = tmp.path().join("data");
+    // Persist the run dir pytest-`tmp_path`-style (see `persistent_run_root`)
+    // rather than a self-deleting tempdir, so you can always peek at the last
+    // few runs' working doltlite DBs / rendered output afterward — e.g. to
+    // inspect a `dolt_diff_<table>` warning with the doltlite client.
+    let run_root = persistent_run_root();
+    let data_root = run_root.join("data");
     std::fs::create_dir_all(&data_root).unwrap();
-    // Capture the tempdir data_root so snapshots can normalize its absolute
+    // Capture the data_root so snapshots can normalize its absolute
     // prefix out of every embedded path (see `norm_data_root`).
     DATA_ROOT.set(data_root.to_string_lossy().into_owned()).ok();
 
     let cfg_out = rewrite_config(&cfg_text, &data_root);
-    let cfg_path = tmp.path().join("config.yaml");
+    let cfg_path = run_root.join("config.yaml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
     let bin = sync_binary();

@@ -556,6 +556,19 @@ pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
             })?;
         }
     }
+    // Seal the schema into its own commit before handing back the pool.
+    // doltlite only materializes the `dolt_diff_<table>` virtual table for
+    // tables that exist at HEAD, so a freshly-created (but uncommitted)
+    // table reads as "new table" in `dolt_status` while `dolt_diff_<table>`
+    // doesn't resolve at all. Committing here puts every table at HEAD, so
+    // the run's data writes diff cleanly as added/modified/removed instead
+    // of making `compute_deltas` drop the delta with a spurious warning on
+    // each provider's first sync. No-op (handled inside `commit_run`) when
+    // the tree is already clean — the common warm-DB path — and on stock
+    // libsqlite3, where there are no dolt extensions.
+    commit_run(&pool, "schema: apply DDL")
+        .await
+        .context("commit schema after DDL")?;
     tracing::info!(
         path = %db_path.display(),
         elapsed_ms = started.elapsed().as_millis() as u64,
