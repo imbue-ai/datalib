@@ -45,7 +45,20 @@ use frankweiler_etl_macros::CasEdgeRow;
 /// Used by `extract::db::RawDb::reset` to wipe per-row state without
 /// touching blobs or bookkeeping. Also drives [`full_ddl`] when it
 /// asks the shared layer for paired `<table>_bookkeeping` DDLs.
-pub const DATA_TABLES: &[&str] = &["pages", "blocks", "databases", "users", "comments"];
+/// `notion_image_attachments` is the CAS-edge table; like every other
+/// provider's attachment edge (anthropic's `anthropic_attachments`,
+/// chatgpt's `chatgpt_attachments`, …) it belongs here so it gets a
+/// paired `_bookkeeping` sidecar — `store_blob`/`record_blob_error` write
+/// to it via `bulk_upsert_in_tx`, which stamps that sidecar — and so a
+/// reset wipes its edge rows along with the rest of the per-row state.
+pub const DATA_TABLES: &[&str] = &[
+    "pages",
+    "blocks",
+    "databases",
+    "users",
+    "comments",
+    "notion_image_attachments",
+];
 
 /// `pages` — one row per Notion page UUID.
 ///

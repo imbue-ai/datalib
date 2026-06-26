@@ -540,6 +540,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_blob_succeeds_and_records_edge() {
+        // Regression: `notion_image_attachments` was created without its
+        // paired `_bookkeeping` sidecar (the table was missing from
+        // DATA_TABLES, unlike every other provider's CAS-edge table). So
+        // `store_blob` -> `bulk_upsert_in_tx` -> `bulk_upsert_bookkeeping`
+        // failed with "no such table: notion_image_attachments_bookkeeping"
+        // and the fetched image bytes were dropped on every run.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("blob.doltlite_db"))
+            .await
+            .unwrap();
+        let block_id = "364a550f-af95-8007-9bac-f40d5d9eb53c";
+        let ref_id = format!("{block_id}:image");
+        assert!(
+            !db.blob_exists(&ref_id).await.unwrap(),
+            "edge should not exist before store"
+        );
+        let hash = db
+            .store_blob(block_id, &ref_id, Some("image/png"), b"\x89PNG fake bytes")
+            .await
+            .expect("store_blob should succeed once the bookkeeping sidecar exists");
+        assert_eq!(hash.len(), 64, "blake3 hex hash");
+        assert!(
+            db.blob_exists(&ref_id).await.unwrap(),
+            "edge with non-null blake3 should exist after store"
+        );
+    }
+
+    #[tokio::test]
     async fn record_page_error_bumps_attempt_count() {
         let dir = tempfile::tempdir().unwrap();
         let db = RawDb::open(&dir.path().join("y.doltlite_db"))
