@@ -87,6 +87,28 @@ services info chatgpt` reports `invalid` or requests come back `HTTP
 Claude, the Chrome-impersonating shim clears Cloudflare, so no
 `cf_clearance` cookie is needed.
 
+## Fastmail
+
+`fastmail` isn't a built-in latchkey service, so it needs a one-time
+custom registration. It serves the JMAP API from `api.fastmail.com` and
+downloads (attachments, blobs) from `fastmailusercontent.com`, so
+register both base URLs, then stage the token command (`$(pbpaste)`
+keeps the live token out of your shell history):
+
+```sh
+npx -y latchkey services register fastmail \
+  --base-api-url="https://api.fastmail.com/" \
+  --base-api-url="https://www.fastmailusercontent.com/"
+npx -y latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
+```
+
+Fastmail authenticates with an API token (a bearer token, not a
+password). Create one at
+[app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
+under **Integrations** → **API tokens** → **New API token**, give it
+read access to your mail, and copy it. With the token on the clipboard,
+run the staged `auth set` command.
+
 ## Signal
 
 Signal stores encrypted backups on the phone. Enable backups in the app
