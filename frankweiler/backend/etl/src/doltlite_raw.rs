@@ -1534,6 +1534,35 @@ pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>>
     Ok(out)
 }
 
+/// Like [`load_payloads`], but also returns each row's `id` so callers
+/// can correlate the payload with a sibling table (e.g. mapping a chat
+/// group's takeout directory name to its members). Same NULL-payload
+/// skipping and `ORDER BY id` determinism.
+pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
+    let sql = format!(
+        "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
+    );
+    let rows = sqlx::query(&sql)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("select {table} id+payloads"))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let id: String = match r.try_get("id") {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let payload: String = match r.try_get("payload") {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if let Ok(v) = serde_json::from_str::<Value>(&payload) {
+            out.push((id, v));
+        }
+    }
+    Ok(out)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // sync_scope_state
 // ─────────────────────────────────────────────────────────────────────

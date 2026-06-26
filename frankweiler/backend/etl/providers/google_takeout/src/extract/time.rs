@@ -40,6 +40,16 @@ fn tz_abbrev_offset_minutes(abbr: &str) -> Option<i32> {
     }
 }
 
+/// Normalize the Unicode spaces Google sprinkles into recent exports
+/// to plain ASCII spaces. Newer Takeout `created_date`/grid timestamps
+/// use a narrow no-break space (U+202F) — and occasionally a regular
+/// no-break space (U+00A0) — before the AM/PM marker, which the chrono
+/// format's literal space separator does not reliably match. No-op for
+/// the older all-ASCII strings.
+fn normalize_spaces(s: &str) -> String {
+    s.replace('\u{202f}', " ").replace('\u{00a0}', " ")
+}
+
 /// Split a timestamp string like `"Jun 4, 2026, 11:48:37 AM PDT"`
 /// into `(body, tz_abbreviation)` by peeling off the trailing
 /// whitespace-separated token. Returns `None` when there's no
@@ -65,7 +75,8 @@ fn finalize(naive: NaiveDateTime, offset_minutes: i32) -> Option<String> {
 /// `"Tuesday, February 11, 2025 at 11:33:35 AM UTC"`. Returns
 /// `Some(rfc3339)` on success.
 pub fn parse_chat_long_form(s: &str) -> Option<String> {
-    let (body, abbr) = split_trailing_abbrev(s)?;
+    let s = normalize_spaces(s);
+    let (body, abbr) = split_trailing_abbrev(&s)?;
     let offset = tz_abbrev_offset_minutes(abbr)?;
     // Strip the weekday prefix ("Tuesday, ") — chrono can't parse
     // English weekdays alongside a full date in one shot, and the
@@ -83,7 +94,8 @@ pub fn parse_chat_long_form(s: &str) -> Option<String> {
 /// `"Jun 4, 2026, 11:48:37 AM PDT"` (YouTube watch-history,
 /// Gemini activity cells).
 pub fn parse_mdl_grid(s: &str) -> Option<String> {
-    let (body, abbr) = split_trailing_abbrev(s)?;
+    let s = normalize_spaces(s);
+    let (body, abbr) = split_trailing_abbrev(&s)?;
     let offset = tz_abbrev_offset_minutes(abbr)?;
     let normalized = body.replace(',', "");
     // `%b` parses short month names ("Jun"); `%l` is a 12-hour clock
@@ -107,6 +119,14 @@ mod tests {
         frankweiler_time::parse_strict(&out).expect("rfc3339 with offset");
         assert!(out.starts_with("2025-02-11T11:33:35"));
         assert!(out.ends_with("+00:00") || out.ends_with("Z"));
+    }
+
+    #[test]
+    fn chat_long_form_narrow_no_break_space() {
+        // Recent exports use U+202F before AM/PM; must still parse.
+        let out = parse_chat_long_form("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC")
+            .expect("should parse with narrow no-break space");
+        assert!(out.starts_with("2025-02-11T11:33:35"));
     }
 
     #[test]

@@ -87,7 +87,9 @@ pub fn render(
         tokio::runtime::Handle::current().block_on(async {
             let db = RawDb::open(&db_path).await?;
             let messages = db.load_payloads("chat_messages").await?;
-            let groups = db.load_payloads("chat_groups").await?;
+            // (dir name, group_info payload) — the directory name carries
+            // the space id, which `group_info.json` itself does not.
+            let groups = db.load_payloads_with_id("chat_groups").await?;
             let voice_messages = db.load_payloads("voice_messages").await?;
             let voice_blobs = load_voice_blobs(&db, &voice_messages).await?;
             anyhow::Ok((messages, groups, voice_messages, voice_blobs))
@@ -161,24 +163,32 @@ async fn load_voice_blobs(
     Ok(out)
 }
 
-/// One [`NormalizedChat`] per space, items sorted oldest-first.
-fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
-    // space_name -> participant display, from group_info payloads.
+/// One [`NormalizedChat`] per space, periodized into month buckets
+/// (oldest-first) like the Voice / Signal / WhatsApp renderers.
+///
+/// `groups` is `(takeout dir name, group_info payload)`. The directory
+/// name (`"DM <spaceId>"`, `"Space <spaceId>"`) carries the space id —
+/// `group_info.json` itself has only a `members` array — so we key the
+/// member display off the dir's trailing token, which matches the space
+/// id parsed out of each message's `message_id` (`"<space>/<topic>/…"`).
+fn build_chats(messages: &[Value], groups: &[(String, Value)]) -> Vec<NormalizedChat> {
+    // space id -> participant display, from each group dir's members.
     let mut display_by_space: HashMap<String, String> = HashMap::new();
-    for g in groups {
-        if let Some(space) = g.get("name").and_then(Value::as_str) {
-            let members: Vec<&str> = g
-                .get("members")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|m| m.get("name").and_then(Value::as_str))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if !members.is_empty() {
-                display_by_space.insert(space.to_string(), members.join(", "));
-            }
+    for (dir, payload) in groups {
+        let space = space_of_dir(dir);
+        let mut members: Vec<String> = payload
+            .get("members")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| m.get("name").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        members.dedup();
+        if !members.is_empty() {
+            display_by_space.insert(space, members.join(", "));
         }
     }
 
@@ -223,6 +233,21 @@ fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
             .collect();
         items.sort_by_key(|i| i.date_ms);
 
+        // Month buckets (`YYYY-MM`), oldest first — one rendered doc per
+        // month so a busy space isn't a single monolithic page.
+        let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
+        for it in items {
+            by_month.entry(month_of(it.date_ms)).or_default().push(it);
+        }
+        let buckets: Vec<NormalizedDoc> = by_month
+            .into_iter()
+            .map(|(period_key, items)| NormalizedDoc {
+                markdown_uuid: uuid5(&format!("doc:{space}:{period_key}")),
+                period_key,
+                items,
+            })
+            .collect();
+
         let display = display_by_space
             .get(&space)
             .cloned()
@@ -239,33 +264,44 @@ fn build_chats(messages: &[Value], groups: &[Value]) -> Vec<NormalizedChat> {
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
-                period_key: "all".to_string(),
-                markdown_uuid: uuid5(&format!("doc:{space}:all")),
-                items,
-            }],
+            buckets,
         });
     }
     chats
 }
 
-/// `spaces/AAAA/topics/T1/messages/M1` -> `spaces/AAAA`. Falls back to
-/// the whole id when it doesn't have the expected shape.
+/// The owning space id for a message. Real Takeout `message_id`s are
+/// `"<space>/<topic>/<message>"`, so the first path segment is the
+/// space. Falls back to the whole id when there's no `/`.
 fn space_of(message_id: &str) -> String {
-    let parts: Vec<&str> = message_id.split('/').collect();
-    if parts.len() >= 2 && parts[0] == "spaces" {
-        format!("spaces/{}", parts[1])
-    } else {
-        message_id.to_string()
-    }
+    message_id
+        .split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(message_id)
+        .to_string()
+}
+
+/// The space id embedded in a `chat_groups` directory name. Takeout
+/// names group dirs `"DM <spaceId>"` / `"Space <spaceId>"` / etc., so
+/// the trailing whitespace-separated token is the space id — the same
+/// value [`space_of`] parses out of a `message_id`.
+fn space_of_dir(dir: &str) -> String {
+    dir.rsplit(' ')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(dir)
+        .to_string()
 }
 
 /// Parse Google Chat's `Tuesday, February 11, 2025 at 11:33:35 AM UTC`
-/// timestamp to unix millis. Returns 0 on any unexpected shape.
+/// timestamp to unix millis. Recent exports use a narrow no-break space
+/// (U+202F) before AM/PM; normalize it first. Returns 0 on any
+/// unexpected shape.
 fn parse_date_ms(s: &str) -> i64 {
-    let s = s.trim();
-    chrono::NaiveDateTime::parse_from_str(s, "%A, %B %d, %Y at %I:%M:%S %p UTC")
-        .or_else(|_| chrono::NaiveDateTime::parse_from_str(s, "%A, %B %e, %Y at %I:%M:%S %p UTC"))
+    let s = s.trim().replace('\u{202f}', " ").replace('\u{00a0}', " ");
+    chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %d, %Y at %I:%M:%S %p UTC")
+        .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%A, %B %e, %Y at %I:%M:%S %p UTC"))
         .map(|dt| dt.and_utc().timestamp_millis())
         .unwrap_or(0)
 }
@@ -546,16 +582,24 @@ mod tests {
 
     #[test]
     fn groups_by_space_and_renders_display() {
+        // Real Takeout shape: message_id is "<space>/<topic>/<message>",
+        // and group_info.json has only `members` (no `name`); the space
+        // id lives in the takeout directory name ("DM AAA").
         let messages = vec![
-            json!({"message_id":"spaces/AAA/topics/T1/messages/M2","created_date":"Tuesday, February 11, 2025 at 11:34:00 AM UTC","creator":{"name":"William Riker","email":"r@e"},"text":"Aye, sir."}),
-            json!({"message_id":"spaces/AAA/topics/T1/messages/M1","created_date":"Tuesday, February 11, 2025 at 11:33:35 AM UTC","creator":{"name":"Jean-Luc Picard","email":"p@e"},"text":"Set a course."}),
+            json!({"message_id":"AAA/T1/M2","created_date":"Tuesday, February 11, 2025 at 11:34:00\u{202f}AM UTC","creator":{"name":"William Riker","email":"r@e"},"text":"Aye, sir."}),
+            json!({"message_id":"AAA/T1/M1","created_date":"Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC","creator":{"name":"Jean-Luc Picard","email":"p@e"},"text":"Set a course."}),
         ];
-        let groups = vec![
-            json!({"name":"spaces/AAA","members":[{"name":"Jean-Luc Picard"},{"name":"William Riker"}]}),
-        ];
+        let groups = vec![(
+            "DM AAA".to_string(),
+            json!({"members":[{"name":"Jean-Luc Picard"},{"name":"William Riker"}]}),
+        )];
         let chats = build_chats(&messages, &groups);
-        assert_eq!(chats.len(), 1);
+        assert_eq!(chats.len(), 1, "two messages in one space => one chat");
+        assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
+        // Both messages are the same month => one bucket, sorted oldest-first.
+        assert_eq!(chats[0].buckets.len(), 1);
+        assert_eq!(chats[0].buckets[0].period_key, "2025-02");
         assert_eq!(
             chats[0].buckets[0].items[0].text.as_deref(),
             Some("Set a course.")
@@ -563,9 +607,41 @@ mod tests {
     }
 
     #[test]
+    fn periodizes_into_month_buckets() {
+        // Same space, two different months => two buckets (not one
+        // monolithic "all" doc), like Signal/WhatsApp/Voice.
+        let messages = vec![
+            json!({"message_id":"BBB/T1/M1","created_date":"Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC","creator":{"name":"Picard","email":"p@e"},"text":"Feb."}),
+            json!({"message_id":"BBB/T2/M2","created_date":"Wednesday, March 5, 2025 at 9:34:00\u{202f}PM UTC","creator":{"name":"Riker","email":"r@e"},"text":"March."}),
+        ];
+        let groups: Vec<(String, Value)> = vec![];
+        let chats = build_chats(&messages, &groups);
+        assert_eq!(chats.len(), 1);
+        let keys: Vec<&str> = chats[0]
+            .buckets
+            .iter()
+            .map(|b| b.period_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["2025-02", "2025-03"]);
+        // Falls back to the bare space id when no group dir provided members.
+        assert_eq!(chats[0].display, "BBB");
+    }
+
+    #[test]
     fn space_prefix() {
-        assert_eq!(space_of("spaces/AAA/topics/T1/messages/M1"), "spaces/AAA");
+        // Real shape: first path segment is the space id.
+        assert_eq!(space_of("AAA/T1/M1"), "AAA");
         assert_eq!(space_of("weird"), "weird");
+        // Dir name carries the space id in its trailing token.
+        assert_eq!(space_of_dir("DM AAA"), "AAA");
+        assert_eq!(space_of_dir("Space FooBar"), "FooBar");
+    }
+
+    #[test]
+    fn parse_date_ms_handles_narrow_no_break_space() {
+        let feb = parse_date_ms("Tuesday, February 11, 2025 at 11:33:35\u{202f}AM UTC");
+        assert!(feb > 0, "narrow no-break space must still parse");
+        assert_eq!(month_of(feb), "2025-02");
     }
 
     #[test]
