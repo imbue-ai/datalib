@@ -38,3 +38,4 @@ for one fully-commented stanza per source.
   CLI and mirror your own data.
 - [**First-time dev guide**](docs/dev/first_time_dev.md) — build and hack on
   datalib from source.
+- [**Doing a release**](docs/dev/releasing.md) — bump, test, commit, tag, push.
