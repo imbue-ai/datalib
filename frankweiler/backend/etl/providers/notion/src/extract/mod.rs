@@ -185,7 +185,7 @@ async fn fetch_image_blobs(db: &RawDb, blocks: &[Value], summary: &mut FetchSumm
                     .store_blob(block_id, &blob_id, content_type, &resp.body)
                     .await
                 {
-                    tracing::warn!(blob = %blob_id, error = %e, "blob upsert failed");
+                    tracing::warn!(blob = %blob_id, error = %format!("{e:#}"), "blob upsert failed");
                     summary.failed_blobs += 1;
                 } else {
                     summary.new_blobs += 1;
