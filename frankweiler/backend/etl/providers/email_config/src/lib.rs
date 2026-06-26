@@ -88,6 +88,15 @@ pub struct EmailSync {
     /// is stored. Defaults to false (incremental).
     #[serde(default)]
     pub full_resync: bool,
+    /// How many `.eml` blob downloads to run concurrently in the
+    /// end-of-sync blob phase. JMAP has no bulk-download method — each
+    /// `.eml` is one HTTP GET against the substituted `downloadUrl` — so
+    /// the only lever for a large initial backfill is fetching several at
+    /// once. `None` uses the built-in default
+    /// ([`DEFAULT_BLOB_CONCURRENCY`](../frankweiler_etl_email/extract/constant.DEFAULT_BLOB_CONCURRENCY.html));
+    /// `1` restores the old strictly-serial behavior. Clamped to ≥ 1.
+    #[serde(default)]
+    pub blob_download_concurrency: Option<usize>,
 }
 
 /// Account-row data for the mbox extract path, so the synthesized `accounts`

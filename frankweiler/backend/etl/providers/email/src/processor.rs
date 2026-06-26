@@ -140,6 +140,7 @@ impl DataProcessor for EmailExtract {
                     full_resync: sync.full_resync,
                     only_mailbox_labels: self.only_extract_labels.clone(),
                     blob_size_limit_bytes: self.blob_size_limit_bytes,
+                    blob_download_concurrency: sync.blob_download_concurrency,
                     progress: ctx.progress.clone(),
                     control: ctx.control.clone(),
                 })
