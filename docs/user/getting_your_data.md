@@ -91,23 +91,29 @@ Claude, the Chrome-impersonating shim clears Cloudflare, so no
 
 `fastmail` isn't a built-in latchkey service, so it needs a one-time
 custom registration. It serves the JMAP API from `api.fastmail.com` and
-downloads (attachments, blobs) from `fastmailusercontent.com`, so
-register both base URLs, then stage the token command (`$(pbpaste)`
-keeps the live token out of your shell history):
+downloads (attachments, blobs) from `fastmailusercontent.com`. Latchkey
+routes by URL host but `register` only takes one `--base-api-url` per
+service, so register the two hosts as two services:
 
 ```sh
 npx -y latchkey services register fastmail \
-  --base-api-url="https://api.fastmail.com/" \
+  --base-api-url="https://api.fastmail.com/"
+npx -y latchkey services register fastmail-content \
   --base-api-url="https://www.fastmailusercontent.com/"
-npx -y latchkey auth set fastmail -H "Authorization: Bearer $(pbpaste)"
 ```
 
 Fastmail authenticates with an API token (a bearer token, not a
 password). Create one at
 [app.fastmail.com/settings/security](https://app.fastmail.com/settings/security)
 under **Integrations** → **API tokens** → **New API token**, give it
-read access to your mail, and copy it. With the token on the clipboard,
-run the staged `auth set` command.
+read access to your mail, and copy it. Then attach the same token to
+both services (`$(pbpaste)` keeps the live token out of your shell
+history):
+
+```sh
+npx -y latchkey auth set fastmail         -H "Authorization: Bearer $(pbpaste)"
+npx -y latchkey auth set fastmail-content -H "Authorization: Bearer $(pbpaste)"
+```
 
 ## Signal
 
