@@ -10,6 +10,11 @@ We use [SemVer](https://semver.org/) `vMAJOR.MINOR.PATCH`. Pick the bump:
 patch for fixes, **minor** for new features / the usual cadence, major for
 breaking changes.
 
+> 💡 There's an agent skill that drives this whole flow: `/release [patch |
+> minor | major | X.Y.Z]` (defined in `.claude/skills/release/`). It performs
+> every step below and pauses for your confirmation before the tag push. This
+> doc is the canonical reference the skill points back to.
+
 ## 0. Start clean
 
 ```sh
