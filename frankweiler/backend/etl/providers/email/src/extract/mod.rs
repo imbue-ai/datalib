@@ -36,6 +36,7 @@ use frankweiler_etl::extract_run::ExtractRun;
 use frankweiler_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
+use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 
 pub use db::{block_on_load_all, db_path_for, LoadedRaw, RawDb};
@@ -128,6 +129,13 @@ const THREAD_GET_BATCH: usize = 100;
 const CHANGES_MAX: u64 = 5_000;
 /// Per-request timeout for blob downloads. Big attachments take time.
 const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
+/// Default number of `.eml` downloads to keep in flight in the blob
+/// phase when the config leaves `blob_download_concurrency` unset. JMAP
+/// has no bulk-download method, so concurrency is the only lever for a
+/// large initial backfill; this value is a polite-but-useful fan-out
+/// against the download endpoint. Override per-source in the `sync:`
+/// block; set `1` to restore strictly-serial fetching.
+const DEFAULT_BLOB_CONCURRENCY: usize = 8;
 
 /// Envelope-only `Email/get` properties. Body parts (`bodyValues`,
 /// `textBody`, `htmlBody`, `preview`) are deliberately omitted: the
@@ -180,6 +188,9 @@ pub struct FetchOptions {
     /// Skip downloading any blob whose advertised size exceeds this.
     /// `None` = no limit.
     pub blob_size_limit_bytes: Option<u64>,
+    /// How many `.eml` downloads to keep in flight at once during the
+    /// blob phase. `None` → [`DEFAULT_BLOB_CONCURRENCY`]; clamped to ≥ 1.
+    pub blob_download_concurrency: Option<usize>,
     pub progress: frankweiler_etl::progress::Progress,
     /// Cross-provider knobs (`--reset-and-redownload`, etc).
     pub control: frankweiler_etl::control::ExtractControl,
@@ -855,6 +866,10 @@ async fn sync_blobs(
     // NULL `blake3` and an error stamp on `email_blobs_bookkeeping`.
     let mut acc = CasEdgeAccumulator::new();
 
+    // Split the worklist: oversize `.eml`s are recorded as failures up
+    // front (no GET), the rest become owned download jobs. The oversize
+    // check is cheap and serial; only the network GETs fan out.
+    let mut jobs: Vec<(String, String)> = Vec::new();
     for (blob_id, job) in wanted {
         if let Some(limit) = opts.blob_size_limit_bytes {
             if let Some(sz) = job.advertised_size {
@@ -869,12 +884,59 @@ async fn sync_blobs(
                 }
             }
         }
+        jobs.push((blob_id, job.owning_id));
+    }
 
+    // Bounded fan-out. JMAP exposes no bulk-blob method, so each `.eml`
+    // is its own GET; the win on a large backfill is having up to
+    // `concurrency` of them in flight at once. The downloads run on the
+    // runtime while this single task drains completions and feeds the
+    // accumulator — so `acc` mutation stays serial and lock-free even
+    // though the network I/O is concurrent.
+    let concurrency = opts
+        .blob_download_concurrency
+        .unwrap_or(DEFAULT_BLOB_CONCURRENCY)
+        .max(1);
+    info!(
+        event = "jmap_blobs_fetch",
+        pending = jobs.len(),
+        concurrency
+    );
+
+    // Inner per-`.eml` bar nested under the outer phase bar (which only
+    // ticks once for the whole blob phase). The worklist is fully
+    // materialized, so we know the exact total up front and can render
+    // real N/total progress as downloads complete.
+    let inner = opts.progress.child("email: blobs");
+    inner.set_length(Some(jobs.len() as u64));
+    inner.set_message("fetching .eml");
+
+    // Build a download task from an owned (blob_id, owning_id). The
+    // `downloadUrl` is substituted here (borrowing `session`) so the
+    // spawned future owns only `String`s and is `Send + 'static`.
+    let spawn_one = |set: &mut JoinSet<EmlFetchOutcome>, blob_id: String, owning_id: String| {
         let url = session.download_url_for(account_id, &blob_id, "message.eml", "message/rfc822");
-        match api::download_bytes(&url, BLOB_TIMEOUT).await {
+        set.spawn(async move {
+            let result = api::download_bytes(&url, BLOB_TIMEOUT).await;
+            (blob_id, owning_id, result)
+        });
+    };
+
+    let mut pending = jobs.into_iter();
+    let mut set: JoinSet<EmlFetchOutcome> = JoinSet::new();
+    for _ in 0..concurrency {
+        match pending.next() {
+            Some((blob_id, owning_id)) => spawn_one(&mut set, blob_id, owning_id),
+            None => break,
+        }
+    }
+
+    while let Some(joined) = set.join_next().await {
+        let (blob_id, owning_id, result) = joined.context("blob download task panicked")?;
+        match result {
             Ok((bytes, content_type)) => {
                 acc.add_fetched(
-                    &job.owning_id,
+                    &owning_id,
                     &blob_id,
                     bytes,
                     Some(content_type.unwrap_or_else(|| "message/rfc822".to_string())),
@@ -885,10 +947,16 @@ async fn sync_blobs(
             Err(e) => {
                 summary.blobs_errored += 1;
                 warn!(event = "jmap_blob_error", blob_id = %blob_id, error = %e);
-                acc.add_failed(&job.owning_id, &blob_id, e.to_string());
+                acc.add_failed(&owning_id, &blob_id, e.to_string());
             }
         }
+        inner.inc(1);
+        // Backfill the freed slot so `concurrency` GETs stay in flight.
+        if let Some((blob_id, owning_id)) = pending.next() {
+            spawn_one(&mut set, blob_id, owning_id);
+        }
     }
+    inner.finish_and_clear();
 
     acc.flush(db.pool(), db.cas(), |email_id, blob_id, blake3| {
         EmlBlobRow {
@@ -906,6 +974,11 @@ struct EmlJob {
     owning_id: String,
     advertised_size: Option<i64>,
 }
+
+/// One blob download task's result: `(blob_id, owning_id, bytes-or-err)`.
+/// The ids ride along so the draining loop can route the outcome to the
+/// accumulator without tracking which task was which.
+type EmlFetchOutcome = (String, String, Result<(Vec<u8>, Option<String>)>);
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers

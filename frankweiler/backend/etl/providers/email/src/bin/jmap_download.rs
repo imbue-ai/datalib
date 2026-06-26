@@ -42,6 +42,11 @@ struct Args {
     #[arg(long, env = "JMAP_BLOB_SIZE_LIMIT_BYTES")]
     blob_size_limit_bytes: Option<u64>,
 
+    /// How many `.eml` downloads to keep in flight in the blob phase.
+    /// Unset uses the built-in default; `1` is strictly serial.
+    #[arg(long, env = "JMAP_BLOB_DOWNLOAD_CONCURRENCY")]
+    blob_download_concurrency: Option<usize>,
+
     #[command(flatten)]
     obs: ObsArgs,
 }
@@ -58,6 +63,7 @@ async fn main() -> Result<()> {
         full_resync: args.full_resync,
         only_mailbox_labels: args.only_mailbox_labels.clone(),
         blob_size_limit_bytes: args.blob_size_limit_bytes,
+        blob_download_concurrency: args.blob_download_concurrency,
         ..Default::default()
     };
 
