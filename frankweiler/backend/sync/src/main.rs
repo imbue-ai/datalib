@@ -1309,6 +1309,7 @@ fn build_source_plan(
         SourceConfig::GoogleTakeout(c) => {
             frankweiler_etl_google_takeout::processor::plan(ctx, c.clone())
         }
+        SourceConfig::Hermes(c) => frankweiler_etl_hermes::processor::plan(ctx, c.clone()),
         SourceConfig::Carddav(c) => frankweiler_etl_contacts::processor::plan(ctx, c.clone()),
         SourceConfig::Beeper(c) => frankweiler_etl_beeper::processor::plan(ctx, c.clone()),
         SourceConfig::SignalBackup(c) => frankweiler_etl_signal::processor::plan(ctx, c.clone()),
@@ -1579,6 +1580,15 @@ fn run_synthesize(cfg: &Config, out: &Path) -> Result<()> {
                 // File-backed (no HTTP to play back); synth is a no-op.
                 status_line!(
                     "[synth] {} (google_takeout): skipped (file-backed, no extract HTTP)",
+                    src.name()
+                );
+                continue;
+            }
+            SourceConfig::Hermes(_) => {
+                // File-backed local-agent export (no HTTP, translate-only);
+                // synth is a no-op.
+                status_line!(
+                    "[synth] {} (hermes): skipped (file-backed, translate-only)",
                     src.name()
                 );
                 continue;

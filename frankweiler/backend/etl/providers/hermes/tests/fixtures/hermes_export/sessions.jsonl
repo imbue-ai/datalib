@@ -1,0 +1,2 @@
+{"session_id":"s_cli_001","source":"cli","title":"Rename a file in bash","model":"anthropic/claude-sonnet-4","user_id":"alice","started_at":1790000000.0,"role":"user","content":"How do I rename a file in bash?","timestamp":1790000001.0}
+{"session_id":"s_cli_001","role":"assistant","content":"Use `mv old_name new_name`.","timestamp":1790000002.0}

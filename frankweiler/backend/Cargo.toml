@@ -16,6 +16,7 @@ members = [
     "etl/providers/contacts",
     "etl/providers/github",
     "etl/providers/google_takeout",
+    "etl/providers/hermes",
     "etl/providers/gitlab",
     "etl/providers/email",
     "etl/providers/linkedin",
