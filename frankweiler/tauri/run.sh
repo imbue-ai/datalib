@@ -6,11 +6,9 @@
 #
 # `tauri build --debug` runs the config's beforeBuildCommand (bazel
 # doltlite archive + pnpm UI bundle) and produces the .app, so there are
-# no prerequisite steps to remember. We then launch the binary *inside*
-# the bundle: on macOS a bare `cargo run` binary has no app context, so
-# the native folder picker never presents and the app spins — the same
-# binary run from within `Frankweiler.app` gets real app context and the
-# dialog works. A data-root argument is forwarded to skip the picker
+# no prerequisite steps to remember. We then launch it with `open` so
+# macOS treats it as a real app (see the launch block below for why that
+# matters). A data-root argument is forwarded to skip the folder picker
 # (see `explicit_data_root` in src/main.rs), which also makes the app
 # scriptable/testable without a GUI click.
 set -euo pipefail
@@ -26,8 +24,25 @@ source "$here/../../scripts/ensure_pnpm.sh"
 # beforeBuildCommand, re-bundles. Seconds when nothing changed.
 pnpm dlx @tauri-apps/cli@2 build --debug
 
-# macOS: the in-bundle binary (real app context). Elsewhere `tauri
-# build` emits a plain binary and there is no bundle-context problem.
-app="$here/target/debug/bundle/macos/Frankweiler.app/Contents/MacOS/frankweiler-tauri"
-[[ -x "$app" ]] || app="$here/target/debug/frankweiler-tauri"
-exec "$app" "$@"
+# macOS: launch through LaunchServices (`open`), NOT by exec'ing the
+# binary inside the bundle. A bundle binary run directly gets NSBundle
+# context (so dialogs at least appear), but LaunchServices never
+# registers it as a foreground app — the result is no Dock tile, no app
+# activation (the cursor won't switch to I-beam over text fields, and
+# the folder picker isn't key so clicking to navigate does nothing).
+# `open` registers and activates it like a normal double-click.
+#   -n          fresh instance (don't reattach to a stale one)
+#   --args "$@" forward an optional data root (skips the picker)
+# The in-process backend log goes to the unified log, not this terminal
+# (a GUI app launched via LaunchServices is detached from the tty):
+#   log stream --level info --predicate 'process == "frankweiler-tauri"'
+# For inline backend logs while debugging, run the binary directly with
+# a data root instead: `cargo run -- ~/root`.
+app_bundle="$here/target/debug/bundle/macos/Frankweiler.app"
+if [[ -d "$app_bundle" ]]; then
+  exec open -n "$app_bundle" --args "$@"
+fi
+
+# Non-macOS: `tauri build` emits a plain binary and there is no
+# bundle-registration problem, so run it directly.
+exec "$here/target/debug/frankweiler-tauri" "$@"
