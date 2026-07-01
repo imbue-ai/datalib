@@ -28,6 +28,7 @@ store, so you can run SOTA AI and data tools on it, on your own terms.
 | WhatsApp | `whatsapp_backup` | Android `crypt15` backup | Messages + media |
 | SMS Backup & Restore | `sms_backup_restore` | Android export dir on disk | SMS / MMS / calls (one chat per number) |
 | LinkedIn | `linkedin` | "Get a copy of your data" export | Messages + connections as contacts |
+| Hermes Agent | `hermes` | Local agent history on this machine (`sync: {}`; OpenClaw-compatible), or a session export dir | Local-agent conversations (chat + tool calls, reasoning, model/surface) |
 
 See [`docs/user/config_examples/all_sources.yaml`](docs/user/config_examples/all_sources.yaml)
 for one fully-commented stanza per source.

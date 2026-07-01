@@ -1621,6 +1621,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-hermes"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "frankweiler-etl",
+ "frankweiler-etl-chat-common",
+ "frankweiler-obs",
+ "frankweiler-time",
+ "insta",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "frankweiler-etl-linkedin"
 version = "0.14.0"
 dependencies = [
