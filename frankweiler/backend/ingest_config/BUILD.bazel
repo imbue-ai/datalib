@@ -25,6 +25,7 @@ rust_library(
         "//frankweiler/backend/etl/providers/github_config:frankweiler_etl_github_config",
         "//frankweiler/backend/etl/providers/gitlab_config:frankweiler_etl_gitlab_config",
         "//frankweiler/backend/etl/providers/google_takeout_config:frankweiler_etl_google_takeout_config",
+        "//frankweiler/backend/etl/providers/hermes_config:frankweiler_etl_hermes_config",
         "//frankweiler/backend/etl/providers/linkedin_config:frankweiler_etl_linkedin_config",
         "//frankweiler/backend/etl/providers/notion_config:frankweiler_etl_notion_config",
         "//frankweiler/backend/etl/providers/perseus_config:frankweiler_etl_perseus_config",

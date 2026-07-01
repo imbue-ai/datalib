@@ -340,6 +340,31 @@ sources:
         youtube_subscriptions: false   # raw store only
         gemini_apps: false             # raw store only
 
+  # --- Hermes Agent (local-agent transcripts) -------------------------------
+
+  # File-backed: point `common.input_path` at a directory of Hermes Agent
+  # session exports. Translate-only — no network, no credentials, and it never
+  # opens a live `$HERMES_HOME/state.db` (export your sessions to a directory
+  # first). Renders one browsable Markdown conversation per session, preserving
+  # the platform surface (cli/telegram/discord/cron/…), model/provider, tool
+  # calls, and reasoning as role-distinguished message rows.
+  #
+  # Accepts three on-disk shapes in the same directory:
+  #   * `*.jsonl` — one message/event object per line, grouped by `session_id`
+  #   * `*.json`  — a session snapshot object with a `messages: [...]` array
+  #   * OpenClaw-compatible records using the generic aliases
+  #     `conversation_id`/`thread_id`, `author.role`, `text`, `created_at`
+  # so OpenClaw / legacy local-agent exports that emit that generic shape work
+  # against this same source.
+  #
+  # PRIVACY: exported system prompts, memory, and tool output can contain
+  # secrets — treat the export directory as sensitive.
+  - name: hermes
+    source:
+      type: hermes
+      common:
+        input_path: ~/backups/hermes-export
+
   # --- SMS Backup & Restore (Android export) --------------------------------
 
   # File-backed: point `common.input_path` at the directory holding the Android

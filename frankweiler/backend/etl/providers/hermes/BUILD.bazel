@@ -1,0 +1,74 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:insta.bzl", "insta_update")
+
+exports_files(["Cargo.toml"])
+
+# Synthetic Hermes / OpenClaw-compatible export fixture used by the render
+# golden test. Two sessions plus a generic-shape file (see tests/fixtures).
+filegroup(
+    name = "hermes_fixture",
+    srcs = glob(["tests/fixtures/hermes_export/**/*.json*"]),
+    visibility = ["//visibility:public"],
+)
+
+rust_library(
+    name = "frankweiler_etl_hermes",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "frankweiler_etl_hermes",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    proc_macro_deps = [
+        "@frankweiler_crates//:async-trait",
+    ],
+    deps = [
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/chat-common:frankweiler_etl_chat_common",
+        "//frankweiler/backend/etl/providers/hermes_config:frankweiler_etl_hermes_config",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:chrono",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "hermes_unittests",
+    size = "small",
+    crate = ":frankweiler_etl_hermes",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:serde_json",
+    ],
+)
+
+# Render golden: parse the synthetic export and snapshot the rendered Markdown
+# tree + grid_rows sidecars. Fixture is staged via `data` and located through
+# HERMES_FIXTURE_DIR (CARGO_MANIFEST_DIR is the cargo fallback).
+rust_test(
+    name = "hermes_render",
+    srcs = ["tests/hermes_render.rs"],
+    crate_root = "tests/hermes_render.rs",
+    data = glob(["tests/snapshots/*.snap"], allow_empty = True) + [":hermes_fixture"],
+    edition = "2021",
+    env = {
+        "HERMES_FIXTURE_DIR": "frankweiler/backend/etl/providers/hermes/tests/fixtures/hermes_export",
+        "INSTA_WORKSPACE_ROOT": ".",
+    },
+    deps = [
+        ":frankweiler_etl_hermes",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+insta_update(
+    name = "hermes_render.update",
+    test = ":hermes_render",
+    extra_data = [":hermes_fixture"],
+    extra_env = {
+        "HERMES_FIXTURE_DIR": "frankweiler/backend/etl/providers/hermes/tests/fixtures/hermes_export",
+    },
+)

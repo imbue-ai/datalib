@@ -1,0 +1,136 @@
+---
+source: frankweiler/backend/etl/providers/hermes/tests/hermes_render.rs
+expression: bundle
+---
+=== hermes/rendered_md/2fd25af5-f2ca-5736-9a9d-cc6fd0d1be84/all.md ===
+---
+title: "Legacy reminder (all)"
+provider: hermes
+source_label: "Hermes"
+chat_uuid: 2fd25af5-f2ca-5736-9a9d-cc6fd0d1be84
+markdown_uuid: 2fd25af5-f2ca-5736-9a9d-cc6fd0d1be84
+period: all
+display: "Legacy reminder"
+project: openclaw
+item_count: 2
+source_fingerprint: b37a1670fc3158baa026566f0759a2406e3ceb5ff35172758a203aabe7a6f0ee
+---
+
+<h1 class="page-title" data-page-title-uuid="2fd25af5-f2ca-5736-9a9d-cc6fd0d1be84">Legacy reminder (all)</h1>
+
+<div id="m-8174d66c-8eaa-5993-bec9-453387860380" data-section-uuid="8174d66c-8eaa-5993-bec9-453387860380" class="msg msg--hermes">
+
+## 2026-09-21 14:16:40 UTC — User
+
+remind me to water the plants tomorrow
+
+</div>
+
+<div id="m-e8657bf9-a21f-596d-b3e2-e93219d8818a" data-section-uuid="e8657bf9-a21f-596d-b3e2-e93219d8818a" class="msg msg--hermes">
+
+## 2026-09-21 14:16:41 UTC — Assistant
+
+Reminder set for tomorrow.
+
+</div>
+
+
+=== hermes/rendered_md/56afc50e-f4b4-57d5-bf07-2f4edeee153a/all.md ===
+---
+title: "Rename a file in bash (all)"
+provider: hermes
+source_label: "Hermes"
+chat_uuid: 56afc50e-f4b4-57d5-bf07-2f4edeee153a
+markdown_uuid: 56afc50e-f4b4-57d5-bf07-2f4edeee153a
+period: all
+display: "Rename a file in bash"
+account: alice
+project: cli
+item_count: 2
+source_fingerprint: 42bcfaeda9ff86c3ab204bded06ee8cc3fb140f80835edcc7b10dd9a965670e9
+---
+
+<h1 class="page-title" data-page-title-uuid="56afc50e-f4b4-57d5-bf07-2f4edeee153a">Rename a file in bash (all)</h1>
+
+<div id="m-6c59da91-2a95-5103-b1e5-a17592d8cd4d" data-section-uuid="6c59da91-2a95-5103-b1e5-a17592d8cd4d" class="msg msg--hermes">
+
+## 2026-09-21 14:13:21 UTC — User
+
+How do I rename a file in bash?
+
+</div>
+
+<div id="m-435d9909-638c-5e01-9055-ae87e204442b" data-section-uuid="435d9909-638c-5e01-9055-ae87e204442b" class="msg msg--hermes">
+
+## 2026-09-21 14:13:22 UTC — anthropic/claude-sonnet-4
+
+Use `mv old_name new_name`.
+
+</div>
+
+
+=== hermes/rendered_md/de1981f0-5f22-5a75-8662-fa2625d450fb/all.md ===
+---
+title: "Debug gateway (all)"
+provider: hermes
+source_label: "Hermes"
+chat_uuid: de1981f0-5f22-5a75-8662-fa2625d450fb
+markdown_uuid: de1981f0-5f22-5a75-8662-fa2625d450fb
+period: all
+display: "Debug gateway"
+account: alice
+project: telegram
+external_id: s_cli_001
+item_count: 4
+source_fingerprint: dea036dbe79278c05b0bd3e5619e0f6f7e16614718fc6405b29d9e7c35a2fa3e
+---
+
+<h1 class="page-title" data-page-title-uuid="de1981f0-5f22-5a75-8662-fa2625d450fb">Debug gateway (all)</h1>
+
+<div id="m-55d9aea5-1b06-5bc6-9fb6-6ccc7d826e61" data-section-uuid="55d9aea5-1b06-5bc6-9fb6-6ccc7d826e61" class="msg msg--hermes">
+
+## 2026-09-21 14:15:01 UTC — User
+
+Why did the gateway fail?
+
+</div>
+
+<div id="m-f5dd3bc1-1ee7-593a-858a-d4686fd14b10" data-section-uuid="f5dd3bc1-1ee7-593a-858a-d4686fd14b10" class="msg msg--hermes">
+
+## 2026-09-21 14:15:02 UTC — openai/gpt-5.5
+
+Let me check the logs.
+
+> The gateway likely crashed; inspect the most recent log lines before answering.
+
+**Tool calls:**
+
+```json
+[
+  {
+    "arguments": {
+      "cmd": "tail -n 5 gateway.log"
+    },
+    "id": "call_1",
+    "name": "terminal"
+  }
+]
+```
+
+</div>
+
+<div id="m-8f682639-7a99-5f29-9999-fa1f1a2b666f" data-section-uuid="8f682639-7a99-5f29-9999-fa1f1a2b666f" class="msg msg--hermes">
+
+## 2026-09-21 14:15:03 UTC — terminal
+
+ERROR: bind: address already in use
+
+</div>
+
+<div id="m-58f713c1-9325-5e2b-825f-db912c626c55" data-section-uuid="58f713c1-9325-5e2b-825f-db912c626c55" class="msg msg--hermes">
+
+## 2026-09-21 14:15:05 UTC — openai/gpt-5.5
+
+The gateway port is already in use. Stop the other process and restart it.
+
+</div>

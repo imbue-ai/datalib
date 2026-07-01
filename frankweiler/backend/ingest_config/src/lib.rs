@@ -31,6 +31,7 @@ use frankweiler_etl_fsindex_config::FsindexConfig;
 use frankweiler_etl_github_config::GithubConfig;
 use frankweiler_etl_gitlab_config::GitlabConfig;
 use frankweiler_etl_google_takeout_config::GoogleTakeoutConfig;
+use frankweiler_etl_hermes_config::HermesConfig;
 use frankweiler_etl_linkedin_config::LinkedinConfig;
 use frankweiler_etl_notion_config::NotionConfig;
 use frankweiler_etl_perseus_config::PerseusConfig;
@@ -139,6 +140,10 @@ pub enum SourceConfig {
     Carddav(CarddavConfig),
     Linkedin(LinkedinConfig),
     GoogleTakeout(GoogleTakeoutConfig),
+    /// Local-agent transcript import from Hermes Agent (and OpenClaw-compatible
+    /// runtimes that emit the same session/message shape). File-backed and
+    /// translate-only — reads an export directory at `input_path`.
+    Hermes(HermesConfig),
     Perseus(PerseusConfig),
     Yolink(YolinkConfig),
     SignalBackup(SignalConfig),
@@ -171,6 +176,7 @@ macro_rules! over_payload {
             SourceConfig::Carddav($c) => $e,
             SourceConfig::Linkedin($c) => $e,
             SourceConfig::GoogleTakeout($c) => $e,
+            SourceConfig::Hermes($c) => $e,
             SourceConfig::Perseus($c) => $e,
             SourceConfig::Yolink($c) => $e,
             SourceConfig::SignalBackup($c) => $e,
@@ -212,6 +218,7 @@ impl SourceConfig {
             SourceConfig::Carddav(_) => "carddav",
             SourceConfig::Linkedin(_) => "linkedin",
             SourceConfig::GoogleTakeout(_) => "google_takeout",
+            SourceConfig::Hermes(_) => "hermes",
             SourceConfig::Perseus(_) => "perseus",
             SourceConfig::Yolink(_) => "yolink",
             SourceConfig::SignalBackup(_) => "signal_backup",
@@ -242,6 +249,8 @@ impl SourceConfig {
             // File-backed only: managed iff an `input_path:` export is set.
             SourceConfig::Linkedin(c) => c.common.input_path.is_some(),
             SourceConfig::GoogleTakeout(c) => c.common.input_path.is_some(),
+            // File-backed only: managed iff an `input_path:` export is set.
+            SourceConfig::Hermes(c) => c.common.input_path.is_some(),
             SourceConfig::Perseus(c) => c.sync.is_some(),
             SourceConfig::Yolink(c) => c.sync.is_some(),
             SourceConfig::SignalBackup(c) => c.sync.is_some(),

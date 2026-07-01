@@ -1,0 +1,16 @@
+{
+  "id": "s_tg_001",
+  "source": "telegram",
+  "title": "Debug gateway",
+  "model": "openai/gpt-5.5",
+  "user_id": "alice",
+  "parent_session_id": "s_cli_001",
+  "started_at": 1790000100.0,
+  "messages": [
+    {"role": "user", "content": "Why did the gateway fail?", "timestamp": 1790000101.0},
+    {"role": "assistant", "content": "Let me check the logs.", "reasoning": "The gateway likely crashed; inspect the most recent log lines before answering.", "tool_calls": "[{\"id\":\"call_1\",\"name\":\"terminal\",\"arguments\":{\"cmd\":\"tail -n 5 gateway.log\"}}]", "timestamp": 1790000102.0},
+    {"role": "tool", "tool_name": "terminal", "tool_call_id": "call_1", "content": "ERROR: bind: address already in use", "timestamp": 1790000103.0},
+    {"role": "assistant", "content": "This answer was rewound and should not appear.", "active": 0, "timestamp": 1790000104.0},
+    {"role": "assistant", "content": "The gateway port is already in use. Stop the other process and restart it.", "timestamp": 1790000105.0}
+  ]
+}
