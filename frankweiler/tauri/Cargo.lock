@@ -1201,7 +1201,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1220,15 +1220,17 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-http"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-qmd-indexer",
  "frankweiler-schema",
  "frankweiler-time",
+ "futures",
  "mime_guess",
  "rust-embed",
  "serde",
@@ -1243,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-obs"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1251,6 +1253,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "tokio",
  "tracing",
  "tracing-indicatif",
  "tracing-opentelemetry",
@@ -1258,8 +1261,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-qmd-indexer"
+version = "0.12.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-obs",
+]
+
+[[package]]
 name = "frankweiler-schema"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1284,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",
@@ -1292,12 +1303,27 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-time"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "futures"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b147ee9d1f6d097cef9ce628cd2ee62288d963e16fb287bd9286455b241382d"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-task",
+ "futures-util",
 ]
 
 [[package]]
@@ -1373,6 +1399,7 @@ version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
 dependencies = [
+ "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",

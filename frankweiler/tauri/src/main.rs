@@ -49,7 +49,18 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![version])
         .setup(|app| {
-            prompt_for_data_root(app.handle().clone());
+            let handle = app.handle().clone();
+            // A data root supplied non-interactively (positional arg or
+            // `$FRANKWEILER_DATA_ROOT`) skips the picker and boots
+            // straight into it — mirrors `frankweiler_http_bin <root>`
+            // and makes the app scriptable/testable. Otherwise fall back
+            // to the native folder picker.
+            match explicit_data_root() {
+                Some(root) => {
+                    tauri::async_runtime::spawn(boot(handle, root));
+                }
+                None => prompt_for_data_root(handle),
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -79,6 +90,27 @@ fn inherit_shell_path() {
             std::env::set_var("PATH", path);
         }
     }
+}
+
+/// A data root supplied without the picker: first positional CLI arg,
+/// else `$FRANKWEILER_DATA_ROOT`. A leading `~` is expanded against
+/// `$HOME` (same convention as `dev.sh`), since `open --env` and shell
+/// exports don't do tilde expansion. Returns `None` when neither is set,
+/// leaving the interactive picker as the default.
+fn explicit_data_root() -> Option<PathBuf> {
+    let raw = std::env::args()
+        .nth(1)
+        .filter(|a| !a.is_empty())
+        .or_else(|| std::env::var("FRANKWEILER_DATA_ROOT").ok())
+        .filter(|a| !a.is_empty())?;
+    let expanded = match raw.strip_prefix('~') {
+        Some("") => std::env::var("HOME").unwrap_or(raw.clone()),
+        Some(rest) if rest.starts_with('/') => {
+            format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest)
+        }
+        _ => raw,
+    };
+    Some(PathBuf::from(expanded))
 }
 
 /// Show the folder picker. Picking a folder boots the backend and opens
@@ -151,18 +183,48 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)
     let repo = DoltRepo::open(&db_path, root.clone())
         .await
         .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
+    // Coerce to the shared trait-object handle up front so the sync
+    // worker and the router can each hold a clone.
+    let repo: frankweiler_core::repo::DynRepo = Arc::new(repo);
 
     let (qmd_daemon, qmd_warning) = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
         Ok(daemon) => (Some(Arc::new(daemon)), None),
         Err(e) => (None, Some(format!("{e:#}"))),
     };
 
+    // Self-contained config lives at `<root>/config.yaml` — same
+    // convention as the standalone `frankweiler-http` binary, so the
+    // Setup tab and the sync worker read/write the same file.
+    let config_path = Arc::new(frankweiler_core::config::root_config_path(&root));
+
+    // Live sync-job progress fan-out: the worker + enqueue/cancel
+    // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
+    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
+
+    // Background sync worker: drains the `sync_jobs` queue the UI fills.
+    // In a Bazel dev run `$FRANKWEILER_SYNC_BIN` points at the runfiles
+    // binary; in a packaged app it's a sibling of this executable. When
+    // neither is found the worker still runs — UI-triggered syncs fail
+    // fast with a clear message instead of hanging (search is unaffected).
+    let worker_cfg = frankweiler_http::worker::WorkerConfig {
+        root: root.clone(),
+        config_path: (*config_path).clone(),
+        sync_bin: frankweiler_http::worker::resolve_sync_bin(),
+        progress_tx: progress_tx.clone(),
+    };
+    let worker_repo = repo.clone();
+    tauri::async_runtime::spawn(async move {
+        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
+    });
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
     let state = AppState {
         root,
-        repo: Arc::new(repo),
+        config_path,
+        repo,
         qmd_daemon,
+        progress_tx,
     };
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, frankweiler_http::router(state)).await {
