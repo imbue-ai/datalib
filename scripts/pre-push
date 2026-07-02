@@ -1,0 +1,88 @@
+#!/bin/bash
+# Pre-push hook for datalib
+# Runs the expensive lint / type-check / build gates before a push.
+#
+# These used to live in scripts/pre-commit, but they are slow (pyright,
+# vue-tsc, and the bazel clippy build dominate) and paying that cost on
+# *every* commit is wasteful. A push is a much better gate: it runs once
+# per batch of commits and only when you're about to share them.
+#
+# Unlike the pre-commit hook, this one never mutates the working tree
+# (no auto-format, no `git add`) — there are no staged files to re-stage
+# at push time, so formatting is verified with `--check` and left to the
+# pre-commit hook (or the developer) to fix.
+#
+# To install: ./scripts/setup-hooks.sh
+
+set -e
+
+# git invokes pre-push as `pre-push <remote-name> <remote-url>` and feeds
+# the pushed refs on stdin. We don't inspect individual refs, but we must
+# drain stdin so git doesn't see a broken pipe. A push that only deletes
+# refs (all-zero local oids) has nothing to check, so bail out early.
+has_updates=0
+while read -r _local_ref local_oid _remote_ref _remote_oid; do
+    if [ "$local_oid" != "0000000000000000000000000000000000000000" ]; then
+        has_updates=1
+    fi
+done
+if [ "$has_updates" -eq 0 ]; then
+    exit 0
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "Running pre-push checks..."
+
+# --- Python (ruff + pyright via uv) ---
+echo "[python] ruff check"
+uv run ruff check .
+
+echo "[python] ruff format --check"
+uv run ruff format --check .
+
+echo "[python] pyright"
+uv run pyright
+
+# --- TypeScript (frankweiler/ui) ---
+if [ -d frankweiler/ui ]; then
+    echo "[ui] vue-tsc"
+    # pnpm pinned via frankweiler/ui/package.json's `packageManager`;
+    # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
+    # shellcheck source=ensure_pnpm.sh
+    source "$REPO_ROOT/scripts/ensure_pnpm.sh"
+    (
+        cd frankweiler/ui
+        if [ ! -d node_modules ]; then
+            echo "  installing pnpm deps..."
+            pnpm install --frozen-lockfile
+        fi
+        npx vue-tsc --noEmit
+    )
+fi
+
+# --- Rust (frankweiler/backend) ---
+if [ -d frankweiler/backend ]; then
+    echo "[rust] cargo fmt --check"
+    (cd frankweiler/backend && cargo fmt --all -- --check)
+
+    echo "[rust] bazelisk build --config=clippy //..."
+    # rules_rust clippy aspect. Replaces `cargo clippy --all-targets
+    # --all-features -- -W clippy::disallowed_macros -D warnings`,
+    # which was eating 60–120s because its incremental cache is
+    # separate from bazel's. Warm-cache runs of the aspect are
+    # sub-second; see .bazelrc's `--config=clippy` block for the
+    # rationale and the flag wiring (clippy.toml + -D warnings + the
+    # `disallowed_macros` enable).
+    bazelisk build --config=clippy //...
+
+    # Guard: every rust_library must have a rust_test(crate=...) target,
+    # else its inline #[cfg(test)] tests silently never run under
+    # `bazel test //...`. Catches the gap that left fsindex's stamp.rs /
+    # hash.rs tests dormant.
+    echo "[rust] unit-test target coverage"
+    "$REPO_ROOT/tools/check_rust_unit_tests.sh"
+fi
+
+echo "All pre-push checks passed."
