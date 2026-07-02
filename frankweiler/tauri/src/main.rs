@@ -117,30 +117,18 @@ fn explicit_data_root() -> Option<PathBuf> {
 /// the main window; canceling exits the app (there is nothing to show
 /// without a data root).
 fn prompt_for_data_root(app: AppHandle) {
-    let mut picker = app
-        .dialog()
+    app.dialog()
         .file()
-        .set_title("Select your Frankweiler data root");
-    if let Some(dir) = default_picker_dir() {
-        picker = picker.set_directory(dir);
-    }
-    picker.pick_folder(move |choice| match choice {
-        Some(file_path) => match file_path.into_path() {
-            Ok(root) => {
-                tauri::async_runtime::spawn(boot(app, root));
-            }
-            Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
-        },
-        None => app.exit(0),
-    });
-}
-
-/// Seed the picker with the data root named in
-/// `~/.config/frankweiler/config.yaml` when that file exists and the
-/// root is on disk; otherwise let the OS pick its default location.
-fn default_picker_dir() -> Option<PathBuf> {
-    let cfg = frankweiler_core::config::load_config(None).ok()?;
-    cfg.data_root.is_dir().then_some(cfg.data_root)
+        .set_title("Select your Frankweiler data root")
+        .pick_folder(move |choice| match choice {
+            Some(file_path) => match file_path.into_path() {
+                Ok(root) => {
+                    tauri::async_runtime::spawn(boot(app, root));
+                }
+                Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
+            },
+            None => app.exit(0),
+        });
 }
 
 async fn boot(app: AppHandle, root: PathBuf) {
