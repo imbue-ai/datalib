@@ -11,6 +11,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use frankweiler_core::dolt_repo::DoltRepo;
+use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_http::{router, AppState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ async fn card_round_trip_and_error_paths() {
         root: root.clone(),
         config_path: Arc::new(root.join("config.yaml")),
         repo: Arc::new(dolt),
-        qmd_daemon: None,
+        qmd_daemon: Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))),
         progress_tx: tokio::sync::broadcast::channel(16).0,
     };
     let app = router(app_state.clone());

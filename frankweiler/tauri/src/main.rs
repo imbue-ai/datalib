@@ -10,10 +10,10 @@
 //! `frankweiler/ui/src/api.ts`).
 //!
 //! Divergences from the standalone `frankweiler-http` binary:
-//! - qmd setup failure is a warning dialog + degraded search
-//!   (`qmd_daemon: None` falls back to the per-call shell-out path),
-//!   not a hard startup failure — a desktop app that refuses to open
-//!   is worse than one with slower search.
+//! - No qmd validation at startup: the daemon resolves its index lazily
+//!   per search, so an empty root (no index yet) or a mid-session
+//!   rebuild is handled transparently — search falls back until the
+//!   index exists, then upgrades to qmd with no restart and no dialog.
 //! - No `qmd pull` at startup: a multi-hundred-MB model download with
 //!   no progress UI reads as a hung app. Models are pulled lazily by
 //!   qmd itself on the first search that needs them.
@@ -132,8 +132,8 @@ fn prompt_for_data_root(app: AppHandle) {
 }
 
 async fn boot(app: AppHandle, root: PathBuf) {
-    let (url, qmd_warning) = match start_backend(root).await {
-        Ok(started) => started,
+    let url = match start_backend(root).await {
+        Ok(url) => url,
         Err(e) => return fatal(&app, format!("could not start the backend: {e:#}")),
     };
     let Ok(url) = url.parse() else {
@@ -146,22 +146,11 @@ async fn boot(app: AppHandle, root: PathBuf) {
     if let Err(e) = window {
         return fatal(&app, format!("could not open the main window: {e}"));
     }
-    if let Some(warning) = qmd_warning {
-        app.dialog()
-            .message(format!(
-                "qmd could not be started — search falls back to a slower, \
-                 less relevant path.\n\n{warning}"
-            ))
-            .title("Frankweiler: degraded search")
-            .kind(MessageDialogKind::Warning)
-            .show(|_| {});
-    }
 }
 
 /// Open the data root and serve the embedded UI + `/api/*` on an
-/// ephemeral localhost port. Returns the base URL and, when qmd could
-/// not be started, the warning to surface to the user.
-async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)> {
+/// ephemeral localhost port. Returns the base URL.
+async fn start_backend(root: PathBuf) -> anyhow::Result<String> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
@@ -175,10 +164,12 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)
     // worker and the router can each hold a clone.
     let repo: frankweiler_core::repo::DynRepo = Arc::new(repo);
 
-    let (qmd_daemon, qmd_warning) = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
-        Ok(daemon) => (Some(Arc::new(daemon)), None),
-        Err(e) => (None, Some(format!("{e:#}"))),
-    };
+    // The daemon is always present now: it resolves the index lazily on
+    // each search, so a root whose qmd index is missing (empty root, sync
+    // not run yet) or rebuilt mid-session is handled transparently —
+    // search falls back until the index exists, then upgrades to qmd with
+    // no restart. No index download here either (see the module header).
+    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
 
     // Self-contained config lives at `<root>/config.yaml` — same
     // convention as the standalone `frankweiler-http` binary, so the
@@ -219,7 +210,7 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)
             eprintln!("embedded backend exited: {e}");
         }
     });
-    Ok((url, qmd_warning))
+    Ok(url)
 }
 
 /// Surface a startup-fatal error in a dialog, then exit. `eprintln!` is
