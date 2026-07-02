@@ -63,8 +63,11 @@ rust_test(
     deps = [
         ":frankweiler_etl_hermes",
         "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/hermes_config:frankweiler_etl_hermes_config",
         "@frankweiler_crates//:insta",
+        "@frankweiler_crates//:sqlx",
         "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
     ],
 )
 

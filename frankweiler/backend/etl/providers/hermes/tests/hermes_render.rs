@@ -8,8 +8,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
+use frankweiler_etl_hermes::local::import_local;
 use frankweiler_etl_hermes::render_and_index_md::parse::parse_export_dir;
 use frankweiler_etl_hermes::render_and_index_md::render::render_all;
+use frankweiler_etl_hermes_config::HermesSync;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("HERMES_FIXTURE_DIR") {
@@ -40,6 +43,41 @@ fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String>
     }
     walk(root, root, ext, &mut out);
     out
+}
+
+async fn write_synthetic_state_db(root: &std::path::Path) {
+    fs::create_dir_all(root).expect("mkdir hermes root");
+    let db_path = root.join("state.db");
+    let opts = SqliteConnectOptions::new()
+        .filename(&db_path)
+        .create_if_missing(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .expect("open synthetic state.db");
+    for stmt in [
+        "CREATE TABLE sessions (
+            id TEXT PRIMARY KEY, source TEXT, user_id TEXT, model TEXT,
+            parent_session_id TEXT, started_at REAL, title TEXT)",
+        "CREATE TABLE messages (
+            id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_name TEXT,
+            tool_calls TEXT, reasoning TEXT, reasoning_content TEXT,
+            model TEXT, timestamp REAL, active INTEGER)",
+        "INSERT INTO sessions VALUES
+            ('sync-session','telegram','local-user','gpt-local',NULL,1790000000.0,'Local sync demo')",
+        "INSERT INTO messages VALUES
+            (1,'sync-session','user','hello from local sync',NULL,NULL,NULL,NULL,NULL,1790000001.0,1)",
+        "INSERT INTO messages VALUES
+            (2,'sync-session','assistant','the local answer',NULL,NULL,'reasoned locally',NULL,'gpt-local',1790000002.0,1)",
+        "INSERT INTO messages VALUES
+            (3,'sync-session','tool','stdout from local tool','shell','[{\"name\":\"shell\",\"arguments\":{\"command\":\"pwd\"}}]',NULL,NULL,NULL,1790000003.0,1)",
+        "INSERT INTO messages VALUES
+            (4,'sync-session','assistant','rewound and should not render',NULL,NULL,NULL,NULL,NULL,1790000004.0,0)",
+    ] {
+        sqlx::query(stmt).execute(&pool).await.expect("sqlite stmt");
+    }
+    pool.close().await;
 }
 
 #[test]
@@ -81,4 +119,65 @@ fn renders_hermes_fixture() {
         sbundle.push('\n');
     }
     insta::assert_snapshot!("hermes_sidecar_tree", sbundle);
+}
+
+#[tokio::test]
+async fn managed_local_sync_renders_synthetic_state_db() {
+    let source = tempfile::tempdir().expect("source tempdir");
+    let hermes_root = source.path().join(".hermes");
+    write_synthetic_state_db(&hermes_root).await;
+
+    let sync = HermesSync {
+        roots: vec![hermes_root],
+        ..Default::default()
+    };
+    let (parsed, stats) = import_local(&sync).await.expect("local import");
+    assert_eq!(stats.roots, 1);
+    assert_eq!(stats.dbs, 1);
+    assert_eq!(stats.sessions, 1);
+
+    let out = tempfile::tempdir().expect("output tempdir");
+    let priors = std::collections::HashMap::new();
+    render_all(
+        &parsed,
+        out.path(),
+        "hermes-local",
+        &frankweiler_etl::progress::Progress::noop(),
+        &priors,
+        &mut |_doc| Ok(()),
+    )
+    .expect("render local sync");
+
+    let md = collect_by_ext(out.path(), ".md");
+    assert_eq!(md.len(), 1, "one rendered conversation");
+    let body = md.values().next().expect("markdown body");
+    assert!(body.contains("Local sync demo"), "body: {body}");
+    assert!(body.contains("hello from local sync"), "body: {body}");
+    assert!(body.contains("the local answer"), "body: {body}");
+    assert!(body.contains("> reasoned locally"), "body: {body}");
+    assert!(body.contains("stdout from local tool"), "body: {body}");
+    assert!(
+        !body.contains("rewound and should not render"),
+        "body: {body}"
+    );
+
+    let sidecars = collect_by_ext(out.path(), ".grid_rows.json");
+    assert_eq!(sidecars.len(), 1, "one grid sidecar");
+    let sidecar = sidecars.values().next().expect("sidecar body");
+    assert!(
+        sidecar.contains(r#"provider": "hermes"#),
+        "sidecar: {sidecar}"
+    );
+    assert!(
+        sidecar.contains(r#"project": "telegram"#),
+        "sidecar: {sidecar}"
+    );
+    assert!(
+        sidecar.contains(r#"account": "local-user"#),
+        "sidecar: {sidecar}"
+    );
+    assert!(
+        sidecar.contains(r#"kind": "Tool Call"#),
+        "sidecar: {sidecar}"
+    );
 }
