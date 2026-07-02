@@ -29,7 +29,7 @@ use std::sync::Arc;
 use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_http::AppState;
-use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// Same filename convention as `frankweiler-http`'s main.rs and
@@ -131,8 +131,24 @@ fn prompt_for_data_root(app: AppHandle) {
         });
 }
 
+/// Locate the `frankweiler-sync` binary the in-process worker shells out
+/// to. In a packaged `.app` it's bundled under `Contents/Resources/`
+/// (see `tauri.conf.json` `bundle.resources`); `resource_dir()` resolves
+/// that regardless of where the bundle lives. Returns `None` in a dev
+/// `cargo run` (no bundle), where `resolve_sync_bin`'s
+/// `$FRANKWEILER_SYNC_BIN` path takes over instead.
+fn bundled_sync_bin(app: &AppHandle) -> Option<PathBuf> {
+    let p = app.path().resource_dir().ok()?.join("binaries/frankweiler-sync");
+    p.is_file().then_some(p)
+}
+
 async fn boot(app: AppHandle, root: PathBuf) {
-    let url = match start_backend(root).await {
+    // Dev override ($FRANKWEILER_SYNC_BIN / a sibling binary) wins so a
+    // fresh Bazel build can be pointed at without rebundling; otherwise
+    // fall back to the copy bundled inside the .app.
+    let sync_bin =
+        frankweiler_http::worker::resolve_sync_bin().or_else(|| bundled_sync_bin(&app));
+    let url = match start_backend(root, sync_bin).await {
         Ok(url) => url,
         Err(e) => return fatal(&app, format!("could not start the backend: {e:#}")),
     };
@@ -149,8 +165,11 @@ async fn boot(app: AppHandle, root: PathBuf) {
 }
 
 /// Open the data root and serve the embedded UI + `/api/*` on an
-/// ephemeral localhost port. Returns the base URL.
-async fn start_backend(root: PathBuf) -> anyhow::Result<String> {
+/// ephemeral localhost port. Returns the base URL. `sync_bin` is the
+/// `frankweiler-sync` path the sync worker shells out to (see
+/// [`bundled_sync_bin`]); `None` leaves UI-triggered syncs to fail with
+/// a clear message while search still works.
+async fn start_backend(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<String> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
@@ -188,7 +207,7 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<String> {
     let worker_cfg = frankweiler_http::worker::WorkerConfig {
         root: root.clone(),
         config_path: (*config_path).clone(),
-        sync_bin: frankweiler_http::worker::resolve_sync_bin(),
+        sync_bin,
         progress_tx: progress_tx.clone(),
     };
     let worker_repo = repo.clone();

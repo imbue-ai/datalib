@@ -6,7 +6,7 @@
   "build": {
     "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": "pnpm --dir ui dev",
-    "beforeBuildCommand": "bazelisk build //third-party/doltlite:sqlite3 && pnpm --dir ui install --frozen-lockfile && pnpm --dir ui build",
+    "beforeBuildCommand": "bazelisk build //third-party/doltlite:sqlite3 && pnpm --dir ui install --frozen-lockfile && pnpm --dir ui build && bazelisk build //frankweiler/backend/sync:frankweiler_sync_bin && d=\"$(bazelisk info workspace)/frankweiler/tauri/binaries\" && mkdir -p \"$d\" && cp -f \"$(bazelisk info bazel-bin)/frankweiler/backend/sync/frankweiler_sync_bin\" \"$d/frankweiler-sync\"",
     "frontendDist": "../ui/dist"
   },
   "app": {
@@ -18,6 +18,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "resources": ["binaries/frankweiler-sync"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
