@@ -340,6 +340,53 @@ sources:
         youtube_subscriptions: false   # raw store only
         gemini_apps: false             # raw store only
 
+  # --- Hermes Agent (local-agent transcripts) -------------------------------
+
+  # PRIMARY UX — managed local import. Like importing your Claude/ChatGPT
+  # history, datalib discovers the Hermes/OpenClaw agent history already on this
+  # machine; you don't export anything first. `sync: {}` scans the well-known
+  # local roots (`~/.hermes`, its `profiles/*`, and OpenClaw-compatible roots
+  # when present), reads each root's `state.db` READ-ONLY (the source DB file is
+  # never copied and never mutated), and folds in any legacy `sessions/*.json`.
+  # Translate-only: no network, no credentials. Renders one browsable Markdown
+  # conversation per session, preserving the platform surface
+  # (cli/telegram/discord/cron/…), model/provider, tool calls, and reasoning as
+  # role-distinguished rows.
+  #
+  # Configure EXACTLY ONE mode: either `sync` (below) or `common.input_path`
+  # (the export fallback further down) — setting both is rejected at load.
+  - name: hermes
+    source:
+      type: hermes
+      sync: {}
+      # Optional knobs (all default to sensible values):
+      #   sync:
+      #     roots: [~/.hermes, ~/.openclaw]   # override discovery entirely
+      #     include_profiles: true            # descend into <root>/profiles/*
+      #     include_legacy_json_sessions: true
+
+  # ADVANCED / MANUAL FALLBACK — explicit export directory. Use when the history
+  # lives somewhere non-standard or was copied off another machine: point
+  # `common.input_path` at a directory of exported session files. Accepts three
+  # on-disk shapes in the same directory:
+  #   * `*.jsonl` — one message/event object per line, grouped by `session_id`
+  #   * `*.json`  — a session snapshot object with a `messages: [...]` array
+  #   * OpenClaw-compatible records using the generic aliases
+  #     `conversation_id`/`thread_id`, `author.role`, `text`, `created_at`
+  #
+  # - name: hermes-export
+  #   source:
+  #     type: hermes
+  #     common:
+  #       input_path: ~/backups/hermes-export
+  #
+  # PRIVACY: agent history (system prompts, memory, tool output) can contain
+  # secrets. The source `state.db`/export files are read read-only and are never
+  # copied or mutated — but their transcript CONTENTS are mirrored into datalib's
+  # data_root as Markdown + index rows, so that rendered output is just as
+  # sensitive as the source. Treat the local roots, any export directory, AND the
+  # datalib data_root as sensitive.
+
   # --- SMS Backup & Restore (Android export) --------------------------------
 
   # File-backed: point `common.input_path` at the directory holding the Android

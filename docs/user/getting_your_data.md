@@ -87,6 +87,41 @@ services info chatgpt` reports `invalid` or requests come back `HTTP
 Claude, the Chrome-impersonating shim clears Cloudflare, so no
 `cf_clearance` cookie is needed.
 
+## Hermes Agent / OpenClaw local agent history
+
+No account export or credentials are required when the history is already on
+this machine. Add a `hermes` source with managed local sync:
+
+```yaml
+sources:
+  - name: hermes
+    source:
+      type: hermes
+      sync: {}
+```
+
+With the empty `sync` block, datalib discovers local agent roots such as
+`~/.hermes`, `~/.hermes/profiles/*`, and OpenClaw-compatible roots when they
+exist. It reads each `state.db` read-only and folds in legacy session JSON;
+the source database files are not copied or mutated.
+
+The rendered datalib output is still sensitive: it mirrors transcript contents
+(system prompts, memory, reasoning, tool calls, and tool output) into your
+`data_root` as Markdown and index rows. Treat both the local agent roots and
+the datalib `data_root` as private data.
+
+If the history lives somewhere non-standard or was copied from another machine,
+use the explicit export-directory fallback instead:
+
+```yaml
+sources:
+  - name: hermes-export
+    source:
+      type: hermes
+      common:
+        input_path: ~/backups/hermes-export
+```
+
 ## Fastmail
 
 `fastmail` isn't a built-in latchkey service, so it needs a one-time
