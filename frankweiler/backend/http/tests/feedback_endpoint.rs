@@ -7,6 +7,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use frankweiler_core::dolt_repo::DoltRepo;
+use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_http::{router, AppState};
 use sqlx::Row;
 use std::path::PathBuf;
@@ -29,11 +30,12 @@ async fn post_feedback_inserts_row() {
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let pool = dolt.pool().clone();
     let config_path = Arc::new(root.join("config.yaml"));
+    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
     let app_state = AppState {
         root,
         config_path,
         repo: Arc::new(dolt),
-        qmd_daemon: None,
+        qmd_daemon,
         progress_tx: tokio::sync::broadcast::channel(16).0,
     };
     let app = router(app_state.clone());

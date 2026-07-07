@@ -224,8 +224,8 @@ export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config", signal);
 }
 
-// Server-generated starter config with `data_root` pre-filled. Used when
-// the root has no config yet.
+// Server-generated minimal starter config. Used when the root has no
+// config yet; the user fills in sources via the Setup tab's buttons.
 export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
 }

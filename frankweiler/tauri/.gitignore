@@ -1,0 +1,4 @@
+# `frankweiler-sync` staged here by tauri.conf.json's beforeBuildCommand
+# (copied from Bazel output) so it's bundled under the .app's Resources.
+# Build artifact — not checked in.
+/binaries/

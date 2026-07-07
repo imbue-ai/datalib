@@ -61,11 +61,12 @@ pub struct AppState {
     /// [`frankweiler_core::dolt_repo::DoltRepo`] against a single
     /// doltlite file is the only impl today.
     pub repo: DynRepo,
-    /// Long-lived `qmd mcp` child for sub-second searches. `None` when
-    /// no qmd index is materialized at startup (or its spawn check
-    /// failed) — `run_qmd_search` then falls back to the per-call
-    /// `npx … query` shell-out path so search still works.
-    pub qmd_daemon: Option<Arc<QmdDaemon>>,
+    /// Long-lived `qmd mcp` child for sub-second searches. Always present:
+    /// it resolves its index lazily per query, so a missing index (no
+    /// sync yet) or a mid-run rebuild is handled inside `search`. On any
+    /// daemon error `run_qmd_search` still falls back to the per-call
+    /// `npx … query` shell-out path so search keeps working.
+    pub qmd_daemon: Arc<QmdDaemon>,
     /// Fan-out channel for live sync-job progress. The worker (and the
     /// enqueue/cancel handlers) publish [`worker::ProgressEvent`]s here;
     /// `GET /api/sync/stream` subscribes and pushes them to the UI over
@@ -249,7 +250,7 @@ async fn search_handler(
             }
         }
     } else {
-        match run_qmd_search(&s.root, &s.repo, s.qmd_daemon.as_ref(), &parsed, limit).await {
+        match run_qmd_search(&s.root, &s.repo, &s.qmd_daemon, &parsed, limit).await {
             Ok(rows) => rows,
             Err(e) => {
                 qmd_error = Some(format!("{e:#}"));
@@ -293,13 +294,13 @@ async fn search_handler(
 async fn run_qmd_search(
     root: &std::sync::Arc<PathBuf>,
     repo: &DynRepo,
-    daemon: Option<&Arc<QmdDaemon>>,
+    daemon: &Arc<QmdDaemon>,
     parsed: &ParsedQuery,
     limit: usize,
 ) -> anyhow::Result<Vec<SearchRow>> {
     let root_owned = root.as_ref().clone();
     let parsed_for_qmd = parsed.clone();
-    let daemon = daemon.cloned();
+    let daemon = daemon.clone();
     // Ask qmd for a generous hit count: a single qmd hit (e.g. a
     // conversation-level snippet) can resolve to many grid rows. We then
     // truncate to `limit` after row expansion.
@@ -309,15 +310,14 @@ async fn run_qmd_search(
             FreeTextMode::Hybrid => QueryMode::Hybrid,
             FreeTextMode::Vsearch => QueryMode::Vsearch,
         };
-        // Prefer the long-lived MCP daemon (sub-second). On any I/O
-        // error we drop down to a fresh `npx … query` shell-out so a
-        // misbehaving daemon doesn't kill search entirely.
-        if let Some(d) = daemon.as_ref() {
-            match d.search(mode, &parsed_for_qmd.free_text, qmd_limit) {
-                Ok(hits) => return Ok(hits),
-                Err(e) => {
-                    eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
-                }
+        // Prefer the long-lived MCP daemon (sub-second). On any error —
+        // including a not-yet-built index — we drop down to a fresh
+        // `npx … query` shell-out so a missing or misbehaving daemon
+        // doesn't kill search entirely.
+        match daemon.search(mode, &parsed_for_qmd.free_text, qmd_limit) {
+            Ok(hits) => return Ok(hits),
+            Err(e) => {
+                eprintln!("qmd daemon search failed, falling back to CLI: {e:#}");
             }
         }
         let cfg = QmdRunnerConfig::new(root_owned);
@@ -931,13 +931,11 @@ async fn put_config(
     }
 }
 
-/// `GET /api/config/scaffold` — a starter `config.yaml` for this data
-/// root: `data_root` is pre-filled with the real path and a couple of
-/// commented example sources show the shape. The UI drops this into the
-/// editor when the root has no config yet.
+/// `GET /api/config/scaffold` — a minimal starter `config.yaml` for this
+/// data root. The UI drops it into the editor when the root has no config
+/// yet; the user then fills in sources via the Setup tab's buttons.
 async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
-    let root = s.root.display().to_string();
-    let yaml = scaffold_yaml(&root);
+    let yaml = scaffold_yaml();
     Json(ConfigResponse {
         path: s.config_path.display().to_string(),
         exists: s.config_path.exists(),
@@ -949,58 +947,23 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 }
 
 /// Minimal-but-valid starter config. `sources: []` is accepted by the
-/// loader, so the scaffold parses as-is; the commented blocks are ready
-/// to uncomment. Credentials never live here — downloaders pull them
-/// from `latchkey` at runtime.
-fn scaffold_yaml(data_root: &str) -> String {
-    format!(
-        r#"# Frankweiler config for this data root. Edit here, Save, then use
+/// loader, so the scaffold parses as-is. `data_root` is omitted on
+/// purpose: it defaults to this file's own directory (see
+/// [`frankweiler_ingest_config::Config`]), keeping the root self-contained.
+/// Sources are added via the Setup tab's "Add a source" buttons rather
+/// than commented examples here. Credentials never live in this file —
+/// downloaders pull them from `latchkey` at runtime.
+fn scaffold_yaml() -> String {
+    r#"# Frankweiler config for this data root. Edit here, Save, then use
 # the Sync tab to pull your data in. Credentials are NOT stored in this
 # file — each downloader reads them from `latchkey` at runtime, so run
 # `latchkey auth set <provider>` first for any managed source.
-
-data_root: {data_root}
+#
+# Use the "Add a source" buttons above to append the sources you want.
 
 sources: []
-
-# Uncomment and adapt the sources you want. Each needs a unique `name`; the
-# provider config lives under `source:` (the `type:` plus its keys).
-#
-#  - name: claude
-#    source:
-#      type: claude_api
-#      sync: {{}}            # incremental pull of your Claude conversations
-#
-#  - name: chatgpt
-#    source:
-#      type: chatgpt_api
-#      sync: {{}}
-#
-#  - name: slack
-#    source:
-#      type: slack_api
-#      sync:
-#        media: true
-#        channels: ["general"]   # omit / use all_channels: true for everything
-#
-#  - name: github
-#    source:
-#      type: github_api
-#      sync: {{}}
-#
-#  - name: fastmail
-#    source:
-#      type: email
-#      sync:
-#        hostname: api.fastmail.com
-#
-#  - name: contacts          # translate-only: no `sync:` block
-#    source:
-#      type: carddav
-#      common:
-#        input_path: ~/Downloads/contacts.vcf
 "#
-    )
+    .to_string()
 }
 
 /// Surface the typed `Config.sources` list to the UI as

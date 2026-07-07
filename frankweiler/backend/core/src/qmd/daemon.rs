@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
+use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
 pub struct QmdDaemonConfig {
@@ -54,29 +55,32 @@ struct DaemonState {
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
     next_id: u64,
+    /// mtime of the index the live child was spawned against. When the
+    /// index on disk is newer (a sync rebuilt it), the child holds a
+    /// stale view and must be respawned. `None` when no child is live.
+    index_mtime: Option<SystemTime>,
 }
 
 impl QmdDaemon {
-    /// Build a daemon handle. The child isn't spawned yet — that
-    /// happens on the first query so we don't pay startup cost when
-    /// nobody is searching.
-    pub fn new(cfg: QmdDaemonConfig) -> Result<Self> {
-        let idx = qmd_index_path(&cfg.qmd_root);
-        if !idx.exists() {
-            return Err(anyhow!(
-                "qmd index not found at {} — run the indexer first",
-                idx.display()
-            ));
-        }
-        Ok(Self {
+    /// Build a daemon handle. Neither the child nor the index is touched
+    /// here: the index may not exist yet (empty data root, first sync
+    /// still pending) and may be rebuilt while the app runs. Both are
+    /// resolved lazily per [`search`] — a daemon built against a missing
+    /// index starts serving the moment a sync creates it, and picks up a
+    /// rebuilt index on the next query (see [`ensure_started`]). So the
+    /// child isn't spawned until the first search either, keeping startup
+    /// cheap when nobody is searching.
+    pub fn new(cfg: QmdDaemonConfig) -> Self {
+        Self {
             cfg,
             state: Mutex::new(DaemonState {
                 child: None,
                 stdin: None,
                 stdout: None,
                 next_id: 0,
+                index_mtime: None,
             }),
-        })
+        }
     }
 
     pub fn config(&self) -> &QmdDaemonConfig {
@@ -107,7 +111,20 @@ impl QmdDaemon {
             .lock()
             .map_err(|_| anyhow!("daemon mutex poisoned"))?;
         let res = (|| -> Result<Vec<QmdHit>> {
-            ensure_started(&mut guard, &self.cfg)?;
+            // The index may be absent (no sync yet) or freshly rebuilt.
+            // Its mtime both gates the search and tells `ensure_started`
+            // whether the live child is stale. A missing index is a
+            // normal fallback signal, not a daemon failure.
+            let idx = qmd_index_path(&self.cfg.qmd_root);
+            let index_mtime = std::fs::metadata(&idx)
+                .and_then(|m| m.modified())
+                .map_err(|_| {
+                    anyhow!(
+                        "qmd index not found at {} — sync to build it",
+                        idx.display()
+                    )
+                })?;
+            ensure_started(&mut guard, &self.cfg, index_mtime)?;
             guard.next_id = guard.next_id.wrapping_add(1);
             let id = guard.next_id;
             let req = serde_json::json!({
@@ -160,8 +177,19 @@ fn build_daemon_searches(mode: QueryMode, q: &str) -> serde_json::Value {
     }
 }
 
-fn ensure_started(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> {
-    // If we have a child, make sure it's still alive — `try_wait`
+fn ensure_started(
+    state: &mut DaemonState,
+    cfg: &QmdDaemonConfig,
+    index_mtime: SystemTime,
+) -> Result<()> {
+    // A rebuilt index (mtime moved) means the resident child opened a
+    // now-stale copy — tear it down so we respawn against the fresh
+    // file. `teardown` clears `index_mtime`, so the checks below fall
+    // through to a clean spawn.
+    if state.index_mtime != Some(index_mtime) {
+        teardown(state);
+    }
+    // If we still have a child, make sure it's alive — `try_wait`
     // returns `Some(_)` if the process exited.
     if let Some(child) = state.child.as_mut() {
         match child.try_wait() {
@@ -170,10 +198,10 @@ fn ensure_started(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> 
             Err(_) => teardown(state),
         }
     }
-    spawn(state, cfg)
+    spawn(state, cfg, index_mtime)
 }
 
-fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> {
+fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig, index_mtime: SystemTime) -> Result<()> {
     let pkg = format!("@tobilu/qmd@{}", cfg.qmd_version);
     let mut cmd = Command::new("npx");
     cmd.arg("-y")
@@ -219,6 +247,7 @@ fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig) -> Result<()> {
     state.stdin = Some(stdin);
     state.stdout = Some(BufReader::new(stdout));
     state.next_id = 0;
+    state.index_mtime = Some(index_mtime);
     handshake(state).context("qmd mcp handshake failed")?;
     Ok(())
 }
@@ -356,6 +385,7 @@ fn parse_query_response(resp: &serde_json::Value, collection: &str) -> Result<Ve
 fn teardown(state: &mut DaemonState) {
     state.stdin = None;
     state.stdout = None;
+    state.index_mtime = None;
     if let Some(mut child) = state.child.take() {
         let _ = child.kill();
         let _ = child.wait();

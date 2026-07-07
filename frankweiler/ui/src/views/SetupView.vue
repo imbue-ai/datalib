@@ -74,6 +74,14 @@ const SNIPPETS: { label: string; body: string }[] = [
     type: carddav
     input_path: ~/Downloads/contacts.vcf`,
   },
+  {
+    // Sample public source — no latchkey needed. Bare `sync: {}` pulls
+    // the default Thucydides Histories (Greek + English) from PerseusDL.
+    label: "Perseus (sample)",
+    body: `  - name: perseus
+    type: perseus
+    sync: {}`,
+  },
 ];
 
 function onEdit() {
@@ -110,7 +118,7 @@ async function load() {
       };
     } else {
       // Fresh root — drop the scaffold into the editor so the user has a
-      // valid starting point with `data_root` already filled in.
+      // valid starting point to add sources to.
       const scaffold = await fetchConfigScaffold();
       yaml.value = scaffold.yaml;
       configPath.value = scaffold.path;
