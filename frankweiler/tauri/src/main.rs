@@ -193,7 +193,7 @@ async fn start_backend(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Resu
     // Self-contained config lives at `<root>/config.yaml` — same
     // convention as the standalone `frankweiler-http` binary, so the
     // Setup tab and the sync worker read/write the same file.
-    let config_path = Arc::new(frankweiler_core::config::root_config_path(&root));
+    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
 
     // Live sync-job progress fan-out: the worker + enqueue/cancel
     // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
