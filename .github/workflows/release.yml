@@ -1,5 +1,7 @@
 # Builds the `//frankweiler/backend:dist` bins on every supported
 # host platform and attaches a per-triple tarball to a GitHub Release.
+# The `macos-app` job additionally builds, signs, and notarizes the
+# Frankweiler desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
 # origin v0.1.0`). Each tarball is published with a stable,
 # un-versioned filename so the install script's
@@ -312,6 +314,163 @@ jobs:
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha256 }}
           fail_on_unmatched_files: true
+
+  # Build, sign, and notarize the Frankweiler desktop app (Tauri) and
+  # attach the dmg to the GitHub Release. Deliberately NOT gated on the
+  # `build` matrix job: the tauri crate is a standalone cargo workspace
+  # (not owned by bazel — see frankweiler/tauri/README.md), so a dist
+  # failure shouldn't block shipping the app, and vice versa.
+  #
+  # The signing certs + notarization key live under
+  # restricted/datalib-release/* in Vault, read via the
+  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
+  # The role binds on this repository plus a glob on the OIDC ref claim
+  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
+  # PR workflows are denied, and no GitHub Environment setup is needed.
+  # The gate is therefore "who can push a v* tag"; see the vault repo's
+  # module comment for the residual exposure and how to tighten further.
+  #
+  # All signing/notarization mechanics live in
+  # frankweiler/tauri/build-signed-app.sh, which is the same script you
+  # run locally — CI only differs in where the secrets come from.
+  #
+  # SUPPLY CHAIN: this job holds the org's Developer ID signing key, and
+  # use-vault-secrets exports it via $GITHUB_ENV — meaning every later
+  # step can read it. So the job uses no individually-owned third-party
+  # actions (only GitHub/pnpm/bazel-contrib org actions + our own), and
+  # every step after the secrets export is plain `run:` shell — no
+  # third-party action code executes with the certs in scope. Keep it
+  # that way: rustup replaces dtolnay/rust-toolchain, `gh release`
+  # replaces softprops/action-gh-release, and there's deliberately no
+  # cargo cache (Swatinem/rust-cache) — a cold compile only costs a few
+  # minutes on a rare tag build and doesn't eat the 10 GB cache quota.
+  macos-app:
+    name: macos-app (signed + notarized)
+    runs-on: macos-14  # Apple Silicon
+    timeout-minutes: 90
+    permissions:
+      id-token: write  # OIDC token for Vault (signing certs + notary key)
+      contents: write  # attach the dmg to the GitHub Release
+    env:
+      VAULT_AUTH_ROLE: datalib_release_gh
+    steps:
+      - uses: actions/checkout@v6
+
+      # The tauri beforeBuildCommand runs `bazelisk build
+      # //third-party/doltlite:sqlite3`; same cache layering rationale as
+      # the build job above (BuildBuddy serves actions, repository-cache
+      # keeps the crate_universe / rules tarballs).
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: true
+          external-cache: false
+
+      # See the build job's identically-named step for the full story.
+      - name: Configure BuildBuddy remote cache
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+              cat > .bazelrc.user <<EOF
+          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
+          build --config=buildbuddy
+          EOF
+              echo "BuildBuddy remote cache enabled for this job."
+          else
+              echo "BUILD_BUDDY_API_KEY not available — running without remote cache."
+          fi
+
+      # .bazelrc's --sandbox_add_mount_pair needs the host path to exist;
+      # see the build job's identically-named step.
+      - name: Ensure ~/.cache/qmd/models exists
+        run: mkdir -p "$HOME/.cache/qmd/models"
+
+      # The tauri crate is built by cargo (not bazel's hermetic rust
+      # toolchain), so make sure a current stable toolchain is default
+      # instead of trusting whatever the runner image ships (Cargo.toml
+      # says rust-version = "1.83"). Plain rustup, no third-party action;
+      # the runner image carries rustup, with the official installer as
+      # fallback in case a future image drops it.
+      - name: Install Rust (stable)
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                  | sh -s -- -y --profile minimal --default-toolchain none
+              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+              export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+
+      # scripts/ensure_pnpm.sh bootstraps pnpm via corepack, but corepack
+      # is being removed from newer Node distributions — install the
+      # pinned pnpm (packageManager in frankweiler/ui/package.json)
+      # directly so the runner image's Node choices can't break us.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frankweiler/ui/package.json
+
+      - name: Export signing credentials
+        # CERTS_TAR_GZ is the base64 certs tarball; APPLE_API_KEY_ID /
+        # APPLE_API_ISSUER identify the notarization key inside it. The
+        # action leaves all three in $GITHUB_ENV for the build step,
+        # where build-signed-app.sh picks them up.
+        uses: imbue-ai/use-vault-secrets@main
+        with:
+          role: ${{ env.VAULT_AUTH_ROLE }}
+          secrets: |
+            restricted/datalib-release/CERTS_TAR_GZ
+            restricted/datalib-release/APPLE_API_KEY_ID
+            restricted/datalib-release/APPLE_API_ISSUER
+
+      - name: Build, sign, notarize
+        # FRANKWEILER_APP_VERSION stamps the tag's version into the
+        # bundle (tauri.conf.json's checked-in version is not kept in
+        # sync with the backend workspace version the tag asserts on).
+        # The tag goes through env, never ${{ }}-interpolated into run:
+        # (see verify-version in sculptor's build-desktop.yml for why).
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export FRANKWEILER_APP_VERSION="${REF_NAME#v}"
+          ./frankweiler/tauri/build-signed-app.sh
+
+      - name: Stage dmg
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        # Same stable, un-versioned filename convention as the tarballs
+        # so `releases/latest/download/<name>` URLs stay valid.
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          dmg="frankweiler/tauri/target/release/bundle/dmg/Frankweiler_${version}_aarch64.dmg"
+          out="Frankweiler-aarch64-apple-darwin.dmg"
+          cp "$dmg" "$out"
+          shasum -a 256 "$out" > "$out.sha256"
+
+      # Plain `gh` instead of softprops/action-gh-release: no third-party
+      # action code runs after the signing secrets land in $GITHUB_ENV
+      # (see the SUPPLY CHAIN note in the job comment). Create-if-missing
+      # tolerates the race with the build matrix's publish step — if the
+      # create loses the race, the upload still targets the same release.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
+              gh release create "$REF_NAME" --verify-tag --notes "" || true
+          fi
+          gh release upload "$REF_NAME" --clobber \
+              Frankweiler-aarch64-apple-darwin.dmg \
+              Frankweiler-aarch64-apple-darwin.dmg.sha256
 
   # Build and push the multi-arch runtime image to ghcr.io. Runs after
   # the matrix `build` job has uploaded both Linux tarballs to the

@@ -24,6 +24,13 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # Release bundle → target/release/bundle/macos/Frankweiler.app.
 pnpm dlx @tauri-apps/cli@^2 build
 
+# Signed + notarized release build (.app + .dmg) — the same script the
+# release workflow's macos-app job runs in CI. Signing secrets come from
+# Vault (restricted/datalib-release/*); they're under restricted/, so log
+# in with the all-secrets role first:
+#   vault login -method oidc role=employee_all_secrets
+./build-signed-app.sh
+
 # Compile-only inner loop (no bundling), for a fast type/borrow check.
 # Requires ../ui/dist to exist (`pnpm --dir ../ui build`) because
 # tauri::generate_context! embeds it. Note: on macOS this bare binary
