@@ -307,13 +307,25 @@ jobs:
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
+      # Plain `gh` instead of softprops/action-gh-release (an
+      # individually-owned action; see the macos-app job's SUPPLY CHAIN
+      # note). The matrix legs — and the macos-app job — race to create
+      # the tag's release; create-if-missing with `|| true` lets the
+      # losers fall through to the upload, which targets the same
+      # release either way. `gh release upload` fails on a missing file,
+      # preserving the old fail_on_unmatched_files behavior.
       - name: Publish release
-        uses: softprops/action-gh-release@v3
-        with:
-          files: |
-            ${{ steps.stage.outputs.tarball }}
-            ${{ steps.stage.outputs.sha256 }}
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF_NAME: ${{ github.ref_name }}
+          TARBALL: ${{ steps.stage.outputs.tarball }}
+          SHA256: ${{ steps.stage.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
+              gh release create "$REF_NAME" --verify-tag --notes "" || true
+          fi
+          gh release upload "$REF_NAME" --clobber "$TARBALL" "$SHA256"
 
   # Build, sign, and notarize the Frankweiler desktop app (Tauri) and
   # attach the dmg to the GitHub Release. Deliberately NOT gated on the
@@ -494,23 +506,33 @@ jobs:
       # fit a buildx run of our ~2.7 GB image × two architectures plus
       # the `type=gha,mode=max` cache export. v0.5.0 / v0.5.1 both
       # filled the runner's disk before docker-publish could finish.
-      # `jlumbroso/free-disk-space@main` reclaims ~30 GB by deleting
-      # preinstalled Android SDK, .NET runtimes, Haskell GHC, large
-      # apt packages we don't use, and swap. Brings the runner from
-      # ~14 GB to ~44 GB free — comfortable headroom for the build.
+      # Deleting the preinstalled Android SDK, .NET runtimes, Haskell
+      # GHC, large apt packages we don't use, and swap reclaims ~30 GB —
+      # from ~14 GB to ~44 GB free, comfortable headroom for the build.
+      # PATH-installed tools (gh, docker, node, etc.) that the rest of
+      # this job uses are left alone.
       #
-      # `tool-cache: false` keeps the PATH-installed tools (gh, docker,
-      # node, etc.) that the rest of this job uses. Everything else is
-      # opt-in junk we'll never miss.
+      # Inlined shell doing what jlumbroso/free-disk-space@main used to
+      # do here (an individually-owned action pinned to a mutable
+      # branch; see the macos-app job's SUPPLY CHAIN note). Best-effort
+      # `|| true` throughout: runner images shed packages over time, and
+      # a missing one shouldn't fail a release — the docker build's own
+      # disk usage is the real check.
       - name: Free up runner disk
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
+        run: |
+          set -euo pipefail
+          echo "Free disk before:" && df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+              /opt/ghc /usr/local/.ghcup || true
+          sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
+              '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
+              google-chrome-stable firefox powershell mono-devel \
+              libgl1-mesa-dri >/dev/null || true
+          sudo apt-get autoremove -y >/dev/null || true
+          sudo apt-get clean || true
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile || true
+          echo "Free disk after:" && df -h /
 
       # Pull the just-published tarballs from the GitHub Release into
       # the build context at the layout frankweiler/docker/Dockerfile
@@ -657,18 +679,25 @@ jobs:
           # the build job above.
           fetch-depth: 0
 
-      # Same disk-pressure reasoning as docker-publish: multi-arch
-      # buildx + `type=gha,mode=max` cache export needs more than the
-      # ~14 GB free that ubuntu-latest ships with.
+      # Same disk-pressure reasoning and same inlined cleanup as
+      # docker-publish above: multi-arch buildx + `type=gha,mode=max`
+      # cache export needs more than the ~14 GB free that ubuntu-latest
+      # ships with.
       - name: Free up runner disk
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          swap-storage: true
+        run: |
+          set -euo pipefail
+          echo "Free disk before:" && df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+              /opt/ghc /usr/local/.ghcup || true
+          sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
+              '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
+              google-chrome-stable firefox powershell mono-devel \
+              libgl1-mesa-dri >/dev/null || true
+          sudo apt-get autoremove -y >/dev/null || true
+          sudo apt-get clean || true
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile || true
+          echo "Free disk after:" && df -h /
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
