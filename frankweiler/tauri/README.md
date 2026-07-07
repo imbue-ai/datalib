@@ -19,7 +19,7 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # (pnpm) via the config's beforeBuildCommand, compiles, bundles the
 # .app, and launches it. Optional data-root arg skips the folder picker.
 ./run.sh
-./run.sh ~/Documents/mixed-up-files
+./run.sh ~/Documents/datalib
 
 # Release bundle → target/release/bundle/macos/Frankweiler.app.
 pnpm dlx @tauri-apps/cli@^2 build
