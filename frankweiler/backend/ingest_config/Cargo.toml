@@ -1,0 +1,33 @@
+[package]
+name = "frankweiler-ingest-config"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+frankweiler-core = { path = "../core" }
+frankweiler-etl-anthropic-config = { path = "../etl/providers/anthropic_config" }
+frankweiler-etl-beeper-config = { path = "../etl/providers/beeper_config" }
+frankweiler-etl-carddav-config = { path = "../etl/providers/carddav_config" }
+frankweiler-etl-chatgpt-config = { path = "../etl/providers/chatgpt_config" }
+frankweiler-etl-email-config = { path = "../etl/providers/email_config" }
+frankweiler-etl-fsindex-config = { path = "../etl/providers/fsindex_config" }
+frankweiler-etl-github-config = { path = "../etl/providers/github_config" }
+frankweiler-etl-gitlab-config = { path = "../etl/providers/gitlab_config" }
+frankweiler-etl-google-takeout-config = { path = "../etl/providers/google_takeout_config" }
+frankweiler-etl-linkedin-config = { path = "../etl/providers/linkedin_config" }
+frankweiler-etl-notion-config = { path = "../etl/providers/notion_config" }
+frankweiler-etl-perseus-config = { path = "../etl/providers/perseus_config" }
+frankweiler-etl-signal-config = { path = "../etl/providers/signal_config" }
+frankweiler-etl-slack-config = { path = "../etl/providers/slack_config" }
+frankweiler-etl-sms-backup-restore-config = { path = "../etl/providers/sms_backup_restore_config" }
+frankweiler-etl-whatsapp-config = { path = "../etl/providers/whatsapp_config" }
+frankweiler-etl-yolink-config = { path = "../etl/providers/yolink_config" }
+frankweiler-source-common = { path = "../source_common" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }

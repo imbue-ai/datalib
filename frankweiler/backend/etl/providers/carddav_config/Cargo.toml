@@ -1,0 +1,13 @@
+[package]
+name = "frankweiler-etl-carddav-config"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+frankweiler-source-common = { path = "../../../source_common" }
+serde = { workspace = true }

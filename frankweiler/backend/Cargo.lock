@@ -1388,6 +1388,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-anthropic-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-beeper"
 version = "0.14.0"
 dependencies = [
@@ -1409,6 +1418,24 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-beeper-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
+name = "frankweiler-etl-carddav-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1452,6 +1479,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-chatgpt-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1519,6 +1555,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-email-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-fsindex"
 version = "0.14.0"
 dependencies = [
@@ -1540,6 +1585,15 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "frankweiler-etl-fsindex-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1570,6 +1624,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-github-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-gitlab"
 version = "0.14.0"
 dependencies = [
@@ -1597,6 +1660,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-gitlab-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-google-takeout"
 version = "0.14.0"
 dependencies = [
@@ -1621,6 +1693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-google-takeout-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-linkedin"
 version = "0.14.0"
 dependencies = [
@@ -1638,6 +1719,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-linkedin-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1677,6 +1767,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-notion-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-perseus"
 version = "0.14.0"
 dependencies = [
@@ -1698,6 +1797,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-perseus-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1723,6 +1831,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-signal-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1754,6 +1871,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-slack-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-sms-backup-restore"
 version = "0.14.0"
 dependencies = [
@@ -1773,6 +1899,15 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "frankweiler-etl-sms-backup-restore-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
 ]
 
 [[package]]
@@ -1799,6 +1934,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-whatsapp-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-etl-yolink"
 version = "0.14.0"
 dependencies = [
@@ -1822,6 +1966,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-etl-yolink-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-source-common",
+ "serde",
+]
+
+[[package]]
 name = "frankweiler-http"
 version = "0.14.0"
 dependencies = [
@@ -1831,6 +1984,7 @@ dependencies = [
  "chrono",
  "clap",
  "frankweiler-core",
+ "frankweiler-ingest-config",
  "frankweiler-qmd-indexer",
  "frankweiler-time",
  "futures",
@@ -1861,6 +2015,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-ingest-config"
+version = "0.14.0"
+dependencies = [
+ "anyhow",
+ "frankweiler-core",
+ "frankweiler-etl-anthropic-config",
+ "frankweiler-etl-beeper-config",
+ "frankweiler-etl-carddav-config",
+ "frankweiler-etl-chatgpt-config",
+ "frankweiler-etl-email-config",
+ "frankweiler-etl-fsindex-config",
+ "frankweiler-etl-github-config",
+ "frankweiler-etl-gitlab-config",
+ "frankweiler-etl-google-takeout-config",
+ "frankweiler-etl-linkedin-config",
+ "frankweiler-etl-notion-config",
+ "frankweiler-etl-perseus-config",
+ "frankweiler-etl-signal-config",
+ "frankweiler-etl-slack-config",
+ "frankweiler-etl-sms-backup-restore-config",
+ "frankweiler-etl-whatsapp-config",
+ "frankweiler-etl-yolink-config",
+ "frankweiler-source-common",
+ "serde",
+ "serde_yaml",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "frankweiler-obs"
 version = "0.14.0"
 dependencies = [
@@ -1882,6 +2065,7 @@ name = "frankweiler-qmd-indexer"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "frankweiler-core",
  "frankweiler-obs",
 ]
 
@@ -1918,6 +2102,13 @@ dependencies = [
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "frankweiler-source-common"
+version = "0.14.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

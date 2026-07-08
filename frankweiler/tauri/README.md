@@ -15,12 +15,15 @@ which ingests `frankweiler/backend`'s workspace via `crate.from_cargo`,
 never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 ```sh
-# Dev: starts Vite (port 5173) and opens the shell against it.
-pnpm dlx @tauri-apps/cli@^2 dev
+# Dev run (debug build + window). Wraps `tauri dev` with the
+# prerequisites: Bazel-built doltlite, ui deps, and a real ui/dist
+# (the window serves the rust-embed'd dist, not Vite — see the
+# script's header comment).
+./dev.sh
 
 # Bundle: builds frankweiler/ui (vue-tsc + vite) into dist/, compiles in
 # release mode, and emits target/release/bundle/macos/Frankweiler.app.
-pnpm dlx @tauri-apps/cli@^2 build
+./bundle.sh          # wraps: pnpm dlx @tauri-apps/cli@^2 build
 
 # Compile-only inner loop (no bundling). Requires ../ui/dist to exist
 # (`pnpm --dir ../ui build`) because tauri::generate_context! embeds it.

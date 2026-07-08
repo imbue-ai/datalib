@@ -32,10 +32,6 @@ use frankweiler_http::AppState;
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-/// Same filename convention as `frankweiler-http`'s main.rs and
-/// `frankweiler-sync` — the doltlite store inside the data root.
-const DOLT_DB_FILENAME: &str = "backend_index.doltlite_db";
-
 #[tauri::command]
 fn version() -> &'static str {
     frankweiler_tauri_backend::version()
@@ -107,7 +103,7 @@ fn prompt_for_data_root(app: AppHandle) {
 /// `~/.config/frankweiler/config.yaml` when that file exists and the
 /// root is on disk; otherwise let the OS pick its default location.
 fn default_picker_dir() -> Option<PathBuf> {
-    let cfg = frankweiler_core::config::load_config(None).ok()?;
+    let cfg = frankweiler_ingest_config::load_config(None).ok()?;
     cfg.data_root.is_dir().then_some(cfg.data_root)
 }
 
@@ -147,22 +143,44 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
     }
     let root = Arc::new(root);
-    let db_path = root.join(DOLT_DB_FILENAME);
-    let repo = DoltRepo::open(&db_path, root.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
+    let db_path = frankweiler_core::layout::backend_index_db(&root);
+    let repo: frankweiler_core::repo::DynRepo = Arc::new(
+        DoltRepo::open(&db_path, root.clone())
+            .await
+            .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?,
+    );
 
     let (qmd_daemon, qmd_warning) = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
         Ok(daemon) => (Some(Arc::new(daemon)), None),
         Err(e) => (None, Some(format!("{e:#}"))),
     };
 
+    // Self-contained config + sync plumbing, mirroring the standalone
+    // `frankweiler-http` binary: the Setup tab reads/writes
+    // `<root>/config.yaml`, the worker drains the `sync_jobs` queue by
+    // driving `frankweiler-sync` against it, and progress fans out to
+    // `GET /api/sync/stream` subscribers.
+    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
+    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
+    let worker_cfg = frankweiler_http::worker::WorkerConfig {
+        root: root.clone(),
+        config_path: (*config_path).clone(),
+        sync_bin: frankweiler_http::worker::resolve_sync_bin(),
+        progress_tx: progress_tx.clone(),
+    };
+    let worker_repo = repo.clone();
+    tauri::async_runtime::spawn(async move {
+        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
+    });
+
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
     let state = AppState {
         root,
-        repo: Arc::new(repo),
+        config_path,
+        repo,
         qmd_daemon,
+        progress_tx,
     };
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, frankweiler_http::router(state)).await {
