@@ -248,6 +248,22 @@ toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolc
 toolchains_musl.config(
     extra_target_compatible_with = ["@//platforms:musl"],
 )
+use_repo(toolchains_musl, "musl_toolchains_hub")
+
+# Register the musl cc toolchains from the ROOT module, not just via
+# toolchains_musl's own MODULE.bazel. Root-module registrations take
+# precedence in toolchain resolution; relying on the dependency
+# module's registration let Bazel's auto-configured host cc toolchain
+# (registered by an earlier module in the graph, and constraint-wise a
+# match for any `linux + <cpu>` platform — it carries no linker
+# constraint) win the musl platforms on Linux hosts. Symptom: the
+# release leg linked `latchkey_curl_shim` with `/usr/bin/gcc` against
+# glibc-compiled BoringSSL objects and died on `__memcpy_chk` /
+# `fopen64`. Harmless for every other build: these toolchains require
+# `//platforms:musl`, which only the musl platforms carry. (macOS
+# hosts never hit the ambiguity — a darwin host cc toolchain can't
+# target linux at all.)
+register_toolchains("@musl_toolchains_hub//:all")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
