@@ -111,3 +111,39 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
 }
+
+/// Before the first sync the doltlite file exists (created for
+/// `feedback`/`sync_jobs`) but carries none of the ingest-produced tables
+/// (`grid_rows`, `markdowns`, `edges`). Every read path must report that
+/// state as an empty dataset, not an internal error — otherwise the UI
+/// greets a fresh install with "no such table: grid_rows" popups.
+#[tokio::test]
+async fn dolt_repo_reads_are_empty_before_first_sync() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(&db_path, root.clone())
+        .await
+        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+
+    let rows = repo.search(&parse_query(""), 100).await.unwrap();
+    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    let rows = repo
+        .search(&parse_query("source:Slack type:all"), 100)
+        .await
+        .unwrap();
+    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+
+    let by_uuids = repo
+        .search_by_uuids(&parse_query(""), &["c-1".to_string()], 100)
+        .await
+        .unwrap();
+    assert!(by_uuids.is_empty());
+
+    assert!(repo.grid_row_refs().await.unwrap().is_empty());
+    assert!(repo.chat_meta("c-1").await.unwrap().is_none());
+    assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
+    assert!(repo.outgoing_edges("c-1").await.unwrap().is_empty());
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}

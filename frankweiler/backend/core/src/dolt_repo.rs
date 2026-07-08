@@ -141,6 +141,24 @@ impl DoltRepo {
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
     }
+
+    /// Ingest creates `grid_rows` / `markdowns` / `edges` on the first
+    /// sync; before that the doltlite file (which [`Self::open`] creates
+    /// eagerly for `feedback` / `sync_jobs`) has none of them, and every
+    /// read against them fails with "no such table". When a read errors,
+    /// this decides whether the failure just means "no data yet": we
+    /// re-check that the table is actually absent instead of
+    /// string-matching the error, so every other failure (corruption,
+    /// bad SQL, connection loss) still surfaces to the caller.
+    async fn table_missing(&self, table: &str) -> bool {
+        let res = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .bind(table)
+        .fetch_one(&self.pool)
+        .await;
+        matches!(res, Ok(0))
+    }
 }
 
 #[async_trait]
@@ -164,10 +182,18 @@ impl MirrorRepo for DoltRepo {
         }
         query = query.bind(limit as i64);
 
-        let rows = query
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let rows = match query.fetch_all(&self.pool).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                // No grid_rows table yet (fresh data root, nothing
+                // ingested): zero rows is the truthful answer, not an
+                // internal error.
+                if self.table_missing("grid_rows").await {
+                    return Ok(Vec::new());
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
+        };
 
         let mut out: Vec<SearchRow> = Vec::with_capacity(rows.len());
         for r in rows {
@@ -250,11 +276,19 @@ impl MirrorRepo for DoltRepo {
                    WHERE markdown_uuid = ? \
                    ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
                    LIMIT 1";
-        let row = sqlx::query(sql)
+        let row = match sqlx::query(sql)
             .bind(markdown_uuid)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        {
+            Ok(row) => row,
+            Err(e) => {
+                if self.table_missing("grid_rows").await {
+                    return Ok(None);
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
+        };
         let Some(r) = row else { return Ok(None) };
         Ok(Some(ChatMeta {
             name: r.try_get("conversation_name").ok(),
@@ -300,12 +334,20 @@ impl MirrorRepo for DoltRepo {
     }
 
     async fn grid_row_refs(&self) -> Result<Vec<GridRowRef>, RepoError> {
-        let rows = sqlx::query(
+        let rows = match sqlx::query(
             "SELECT uuid, kind, COALESCE(qmd_path, '') AS qmd_path, provider FROM grid_rows",
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                if self.table_missing("grid_rows").await {
+                    return Ok(Vec::new());
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
+        };
         let mut out: Vec<GridRowRef> = Vec::with_capacity(rows.len());
         for r in rows {
             out.push(GridRowRef {
@@ -349,10 +391,15 @@ impl MirrorRepo for DoltRepo {
         for p in &params {
             query = query.bind(p);
         }
-        let rows = query
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))?;
+        let rows = match query.fetch_all(&self.pool).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                if self.table_missing("grid_rows").await {
+                    return Ok(Vec::new());
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
+        };
         let mut by_uuid: std::collections::HashMap<String, SearchRow> =
             std::collections::HashMap::new();
         for r in rows {
@@ -665,9 +712,9 @@ impl MirrorRepo for DoltRepo {
         // LEFT JOIN so that an edge with a dangling FK (destination no
         // longer in `markdowns`) still surfaces — the UI can show the
         // raw uuid and the user at least learns the link exists.
-        // The edges table may not exist on older data roots; treat any
-        // SQL error as "no edges" so the chat endpoint doesn't blow up
-        // mid-render.
+        // The edges/markdowns tables may not exist on older or
+        // not-yet-synced data roots; only that specific absence maps to
+        // "no edges" — any other SQL failure still surfaces.
         let sql = "SELECT e.edge_uuid, e.src_markdown_uuid, e.src_anchor_uuid, \
                           e.dst_markdown_uuid, e.dst_anchor_uuid, e.label, \
                           m.title AS dst_title \
@@ -680,7 +727,12 @@ impl MirrorRepo for DoltRepo {
             .await
         {
             Ok(rs) => rs,
-            Err(_) => return Ok(Vec::new()),
+            Err(e) => {
+                if self.table_missing("edges").await || self.table_missing("markdowns").await {
+                    return Ok(Vec::new());
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
         };
         let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
         for r in rows {
@@ -717,13 +769,21 @@ impl MirrorRepo for DoltRepo {
         &self,
         markdown_uuid: &str,
     ) -> Result<Option<PathBuf>, RepoError> {
-        let row = sqlx::query(
+        let row = match sqlx::query(
             "SELECT md_path FROM markdowns WHERE markdown_uuid = ? AND md_path IS NOT NULL LIMIT 1",
         )
         .bind(markdown_uuid)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| RepoError::Internal(e.to_string()))?;
+        {
+            Ok(row) => row,
+            Err(e) => {
+                if self.table_missing("markdowns").await {
+                    return Ok(None);
+                }
+                return Err(RepoError::Internal(e.to_string()));
+            }
+        };
         let Some(r) = row else { return Ok(None) };
         let rel: Option<String> = r.try_get("md_path").ok();
         Ok(rel.map(|p| self.root.as_ref().join(p)))
