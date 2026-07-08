@@ -1,5 +1,7 @@
 # Builds the `//frankweiler/backend:dist` bins on every supported
-# host platform and attaches a per-triple tarball to a GitHub Release.
+# host platform — plus fully-static `*-unknown-linux-musl` variants
+# cross-libc-compiled on the same gnu runners — and attaches a
+# per-triple tarball to a GitHub Release.
 # The `macos-app` job additionally builds, signs, and notarizes the
 # Frankweiler desktop app and attaches its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
@@ -40,13 +42,36 @@ jobs:
       # investigate the broken one.
       fail-fast: false
       matrix:
+        # `bazel-config`: extra config appended to the dist build only.
+        # The musl legs run on the same gnu runners as their gnu
+        # siblings (same arch, cross-libc): `--config=musl-*` selects
+        # the `//platforms:linux_*_musl` target platform, under which
+        # the hermetic musl toolchains (see MODULE.bazel) produce
+        # fully-static binaries that run on any Linux regardless of
+        # libc. Build scripts / proc macros / bindgen still run under
+        # the host gnu toolchain, so the apt + LIBCLANG_PATH setup
+        # below is identical for gnu and musl legs. The
+        # version-consistency bazel test keeps running in the host
+        # config on every leg (it's a shell test; no point
+        # cross-compiling it) — on musl legs that costs one extra
+        # ~30s analysis pass versus the gnu legs' shared-config
+        # optimization described above the build steps.
         include:
           - triple: aarch64-apple-darwin
             runs-on: macos-14  # Apple Silicon
+            bazel-config: ""
           - triple: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
+            bazel-config: ""
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm  # GitHub-hosted native ARM Linux
+            bazel-config: ""
+          - triple: x86_64-unknown-linux-musl
+            runs-on: ubuntu-latest
+            bazel-config: "--config=musl-x86_64"
+          - triple: aarch64-unknown-linux-musl
+            runs-on: ubuntu-24.04-arm
+            bazel-config: "--config=musl-aarch64"
 
     steps:
       - uses: actions/checkout@v6
@@ -240,7 +265,37 @@ jobs:
       # below catches any future regression where stamping gets
       # silently disabled.
       - name: Build dist bins
-        run: bazel build //frankweiler/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }}
+        run: bazel build //frankweiler/backend:dist -c opt --config=release --build_metadata=ROLE=CI ${{ steps.bazelargs.outputs.extra }} ${{ matrix.bazel-config }}
+
+      # musl legs only: refuse to publish anything that isn't fully
+      # static. A regression here (say, a new crate sneaking in a
+      # dynamic system-library link) would otherwise ship a "musl"
+      # tarball that still needs host libraries — exactly what these
+      # builds exist to avoid. Fully static means no PT_INTERP program
+      # header (nothing asks for a dynamic loader) and no DT_NEEDED
+      # entries (no shared-library dependencies); a static-pie binary
+      # keeps a DYNAMIC section for self-relocation, so `readelf -d`
+      # being non-empty is fine — only NEEDED lines are disqualifying.
+      - name: Assert musl binaries are fully static
+        if: contains(matrix.triple, 'musl')
+        run: |
+          set -euo pipefail
+          for bin in \
+              bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin \
+              bazel-bin/frankweiler/backend/http/frankweiler_http_bin \
+              bazel-bin/frankweiler/backend/etl/latchkey_curl_shim; do
+              echo "--- ${bin}"
+              file -L "${bin}"
+              if readelf -l "${bin}" | grep -q 'INTERP'; then
+                  echo "ERROR: ${bin} requests a dynamic loader (PT_INTERP) — not fully static." >&2
+                  exit 1
+              fi
+              if readelf -d "${bin}" 2>/dev/null | grep -q 'NEEDED'; then
+                  echo "ERROR: ${bin} has DT_NEEDED shared-library deps — not fully static." >&2
+                  readelf -d "${bin}" | grep 'NEEDED' >&2
+                  exit 1
+              fi
+          done
 
       # Defense against the v0.7.0 / v0.8.0 incident where the dist
       # build went out unstamped and `frankweiler-sync --version`

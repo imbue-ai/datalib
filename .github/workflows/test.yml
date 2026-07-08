@@ -219,3 +219,41 @@ jobs:
             --sandbox_add_mount_pair=/root/.cache/qmd/models \
             --action_env=CLAUDE_MIRROR_HOST_HOME=/root \
             -- //... -//frankweiler/ui:e2e_test
+
+      # PR-time gate for the fully-static musl release leg. The musl
+      # dist build only otherwise runs at tag time (release.yml), and
+      # this repo has been burned before by release-only build paths
+      # rotting between tags (see the incident notes in release.yml).
+      # Building `:dist` under `--config=musl-x86_64` here catches
+      # musl-only breakage — a new crate that links a system library,
+      # a native build script that mishandles the musl toolchain — on
+      # every PR instead of at the next release. It also warms
+      # BuildBuddy with the exact opt-mode musl actions the tag-time
+      # release build will replay. The static-ness assertion mirrors
+      # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the
+      # x86_64 runner only; the aarch64-musl leg differs by
+      # arch, not by build logic, and stays tag-time-only.)
+      - name: bazel build //frankweiler/backend:dist (musl static)
+        run: |
+          libdir="$(llvm-config --libdir)"
+          bazel build -c opt --config=release --config=musl-x86_64 \
+            --build_metadata=ROLE=CI \
+            --action_env=LIBCLANG_PATH="${libdir}" \
+            --host_action_env=LIBCLANG_PATH="${libdir}" \
+            //frankweiler/backend:dist
+          for bin in \
+              bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin \
+              bazel-bin/frankweiler/backend/http/frankweiler_http_bin \
+              bazel-bin/frankweiler/backend/etl/latchkey_curl_shim; do
+              echo "--- ${bin}"
+              if readelf -l "${bin}" | grep -q 'INTERP'; then
+                  echo "ERROR: ${bin} requests a dynamic loader (PT_INTERP) — not fully static." >&2
+                  exit 1
+              fi
+              if readelf -d "${bin}" 2>/dev/null | grep -q 'NEEDED'; then
+                  echo "ERROR: ${bin} has DT_NEEDED shared-library deps — not fully static." >&2
+                  readelf -d "${bin}" | grep 'NEEDED' >&2
+                  exit 1
+              fi
+              echo "fully static: OK"
+          done
