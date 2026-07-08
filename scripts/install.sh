@@ -10,11 +10,15 @@
 # Env vars:
 #   FRANKWEILER_INSTALL_DIR   target dir for the binaries (default ~/.local/bin)
 #   FRANKWEILER_VERSION       release tag to install (default: latest)
+#   FRANKWEILER_LIBC          Linux only: 'gnu' or 'musl' (default:
+#                             auto-detected; see libc detection below)
 #
 # Supported platforms (one published release tarball each):
-#   macOS arm64     -> aarch64-apple-darwin
-#   Linux x86_64    -> x86_64-unknown-linux-gnu
-#   Linux arm64     -> aarch64-unknown-linux-gnu
+#   macOS arm64          -> aarch64-apple-darwin
+#   Linux x86_64 (glibc) -> x86_64-unknown-linux-gnu
+#   Linux arm64 (glibc)  -> aarch64-unknown-linux-gnu
+#   Linux x86_64 (musl)  -> x86_64-unknown-linux-musl   (fully static)
+#   Linux arm64 (musl)   -> aarch64-unknown-linux-musl  (fully static)
 
 set -eu
 
@@ -27,14 +31,41 @@ err() { printf 'frankweiler-install: error: %s\n' "$1" >&2; exit 1; }
 
 # --- platform check ---
 # Map uname's kernel/arch to the Rust target triple in the published
-# tarball names. These three triples are exactly what the release
-# workflow builds (see .github/workflows/release.yml's matrix).
+# tarball names. These triples are exactly what the release workflow
+# builds (see .github/workflows/release.yml's matrix).
+#
+# Linux libc detection: musl-based distros (Alpine, postmarketOS, ...)
+# can't run the gnu builds, so pick the fully-static musl tarball
+# there. Every musl system ships its dynamic loader at
+# /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
+# glibc hosts default to the gnu build (the long-standing default);
+# set FRANKWEILER_LIBC=musl to force the static build anywhere — it
+# runs on any Linux of the right arch regardless of libc.
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
-    Darwin/arm64)               TRIPLE="aarch64-apple-darwin" ;;
-    Linux/x86_64)               TRIPLE="x86_64-unknown-linux-gnu" ;;
-    Linux/aarch64 | Linux/arm64) TRIPLE="aarch64-unknown-linux-gnu" ;;
+    Darwin/arm64) TRIPLE="aarch64-apple-darwin" ;;
+    Linux/x86_64 | Linux/aarch64 | Linux/arm64)
+        case "${arch}" in
+            x86_64) cpu="x86_64" ;;
+            *)      cpu="aarch64" ;;
+        esac
+        libc="${FRANKWEILER_LIBC:-}"
+        if [ -z "${libc}" ]; then
+            libc="gnu"
+            for loader in /lib/ld-musl-*.so.1; do
+                if [ -e "${loader}" ]; then
+                    libc="musl"
+                    break
+                fi
+            done
+        fi
+        case "${libc}" in
+            gnu | musl) ;;
+            *) err "invalid FRANKWEILER_LIBC='${libc}' (expected 'gnu' or 'musl')" ;;
+        esac
+        TRIPLE="${cpu}-unknown-linux-${libc}"
+        ;;
     *) err "unsupported platform ${os}/${arch}; supported: macOS arm64, Linux x86_64, Linux arm64" ;;
 esac
 TARBALL="frankweiler-${TRIPLE}.tar.gz"

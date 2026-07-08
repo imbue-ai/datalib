@@ -59,17 +59,22 @@ This downloads the latest release tarball, verifies its checksum, and drops
 prints the exact line to add to your `~/.zshrc` — add it and restart your
 shell so the `frankweiler-*` commands resolve.
 
-Two optional knobs:
+Three optional knobs:
 
 - `FRANKWEILER_INSTALL_DIR` — install somewhere else, e.g.
   `FRANKWEILER_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`.
 - `FRANKWEILER_VERSION` — pin a release tag instead of `latest`, e.g.
   `FRANKWEILER_VERSION=v0.13.0 curl -LsSf …/install.sh | sh`.
+- `FRANKWEILER_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
+  distros like Alpine get the fully-static musl build); set
+  `FRANKWEILER_LIBC=musl` to force the static build on a glibc distro —
+  it runs on any Linux of the right architecture.
 
 > The install script supports macOS arm64 (Apple Silicon) and Linux
-> (x86_64 / arm64); it auto-detects your platform and pulls the matching
-> release tarball. The rest of this guide is written macOS-first (Homebrew,
-> `pbpaste`) — on Linux, substitute your package manager and clipboard tool.
+> (x86_64 / arm64, glibc or musl); it auto-detects your platform and pulls
+> the matching release tarball. The rest of this guide is written
+> macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
+> manager and clipboard tool.
 
 Next, make the data_root playground — this is where the tools will download
 your data — and work from there:

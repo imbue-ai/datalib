@@ -135,6 +135,53 @@ build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_timeout=600
 build:buildbuddy --remote_upload_local_results=true
 
+# Fully-static musl release builds. Selects the musl platform for the
+# TARGET configuration only: build scripts, proc macros, and genrule
+# tools keep running under the host (gnu/darwin) toolchains, so these
+# configs are safe to combine with any build. Used by release.yml's
+# `*-unknown-linux-musl` matrix legs:
+#
+#     bazelisk build //frankweiler/backend:dist -c opt --config=musl-x86_64
+#
+# MODULE.bazel registers the same musl target toolchains for Apple
+# Silicon hosts, so much of the release path can be debugged locally
+# (e.g. `frankweiler_http_bin` cross-builds to a fully-static ELF from
+# a mac). Two dist binaries can only be musl-built with a Linux exec
+# platform (the CI runners, the devcontainer):
+#   * `frankweiler_sync_bin` — its perseus dep needs vendored-OpenSSL,
+#     and rules_rust compiles cargo build-script BINARIES against the
+#     EXEC platform's feature resolution, so on a darwin host
+#     openssl-sys's build script loses its linux-only `vendored`
+#     feature and dies looking for a system OpenSSL. See the
+#     openssl-sys note in frankweiler/backend/etl/providers/perseus/Cargo.toml.
+#   * `latchkey_curl_shim` — boring-sys2's build script runs bindgen
+#     against the musl target triple, which needs linux libc headers
+#     on the include path; a linux host supplies them via
+#     /usr/include, a mac has none for a linux triple and bindgen
+#     dies on `stddef.h`.
+# The `bazel build ... (musl static)` step in test.yml gates the full
+# musl dist on every PR, so darwin's partial coverage is fine.
+#
+# The resulting binaries are statically linked against musl libc (no
+# DT_NEEDED entries at all — verify with `file`, which should say
+# "statically linked" / "static-pie linked"), so they run on any Linux
+# of the right arch regardless of libc.
+# FIXME(toolchains_musl-bazel9): the autoload line below is a
+# TEMPORARY bridge — DROP it once toolchains_musl publishes a release
+# containing bazel-contrib/musl-toolchain#67 (merged 2026-05-03,
+# unreleased as of 0.1.27) and we bump to it. The v0.1.27 toolchain
+# tarballs still use three natives that Bazel 9 removed from the
+# builtins (`CcToolchainConfigInfo`, `cc_toolchain`,
+# `cc_common.create_cc_toolchain_config_info`); `+symbol` re-injects
+# just those three from rules_cc at loading time. Scoped to the musl
+# configs (via the shared `musl` base config) so every non-musl build
+# keeps stock Bazel 9 symbol resolution.
+build:musl --incompatible_autoload_externally=+CcToolchainConfigInfo,+cc_toolchain,+cc_common
+build:musl-x86_64 --config=musl
+build:musl-x86_64 --platforms=//platforms:linux_x86_64_musl
+build:musl-aarch64 --config=musl
+build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
+
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
 # BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an
 # `import %workspace%/.bazelrc` line followed by `build --config=buildbuddy`

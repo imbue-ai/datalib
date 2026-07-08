@@ -118,14 +118,136 @@ register_toolchains(
     "//tools/prost_toolchain",
 )
 
+RUST_EDITION = "2021"
+
+RUST_VERSION = "1.95.0"
+
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
-    edition = "2021",
-    versions = ["1.95.0"],
+    edition = RUST_EDITION,
+    versions = [RUST_VERSION],
+)
+
+# --- musl cross-compilation toolchains -------------------------------
+#
+# The release workflow ships fully-static `*-unknown-linux-musl` builds
+# alongside the gnu ones (build with `--config=musl-x86_64` /
+# `--config=musl-aarch64`; see .bazelrc). rules_rust maps a musl triple
+# to the same `@platforms//` constraints as its gnu sibling — there is
+# no libc constraint in `@platforms` — so without help a gnu and a musl
+# rust toolchain both match a `linux + <cpu>` platform and resolution
+# falls back to registration order. The `//platforms:linker` constraint
+# breaks the tie (see platforms/BUILD.bazel).
+#
+# Mechanics (mirrors rules_rust's `examples/cross_compile_musl`): each
+# `rust.repository_set` below OVERRIDES the default repository set of
+# the same name that `rust.toolchain` would otherwise create, so the
+# first call for each name must re-declare the host's native target —
+# dropping it would leave that host without a native Rust toolchain.
+# The native gnu targets gain the `//platforms:unknown` constraint
+# (the constraint_setting's default) so they can never match a musl
+# platform; ordinary host platforms carry `:unknown` implicitly and
+# resolve exactly as before.
+#
+# Exec hosts covered: the two Linux release runners (each cross-libc
+# but same-arch → its own musl triple) and Apple Silicon macs (both
+# musl triples, so most of the release path can be debugged locally;
+# `frankweiler_sync_bin` is the exception — see the musl config notes
+# in .bazelrc). Intel macs keep their default set untouched.
+rust.repository_set(
+    name = "rust_linux_x86_64",
+    edition = RUST_EDITION,
+    exec_triple = "x86_64-unknown-linux-gnu",
+    target_compatible_with = [
+        "@//platforms:unknown",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "x86_64-unknown-linux-gnu",
+    versions = [RUST_VERSION],
+)
+rust.repository_set(
+    name = "rust_linux_x86_64",
+    target_compatible_with = [
+        "@//platforms:musl",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "x86_64-unknown-linux-musl",
+)
+rust.repository_set(
+    name = "rust_linux_aarch64",
+    edition = RUST_EDITION,
+    exec_triple = "aarch64-unknown-linux-gnu",
+    target_compatible_with = [
+        "@//platforms:unknown",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "aarch64-unknown-linux-gnu",
+    versions = [RUST_VERSION],
+)
+rust.repository_set(
+    name = "rust_linux_aarch64",
+    target_compatible_with = [
+        "@//platforms:musl",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "aarch64-unknown-linux-musl",
+)
+rust.repository_set(
+    name = "rust_macos_aarch64",
+    edition = RUST_EDITION,
+    exec_triple = "aarch64-apple-darwin",
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:osx",
+    ],
+    target_triple = "aarch64-apple-darwin",
+    versions = [RUST_VERSION],
+)
+rust.repository_set(
+    name = "rust_macos_aarch64",
+    target_compatible_with = [
+        "@//platforms:musl",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "x86_64-unknown-linux-musl",
+)
+rust.repository_set(
+    name = "rust_macos_aarch64",
+    target_compatible_with = [
+        "@//platforms:musl",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+    target_triple = "aarch64-unknown-linux-musl",
 )
 use_repo(rust, "rust_toolchains")
 
 register_toolchains("@rust_toolchains//:all")
+
+# Hermetic musl-libc GCC cross toolchains (bazel-contrib/musl-toolchain)
+# for the C/C++ half of the musl builds: the doltlite amalgamation,
+# and every cargo build script that compiles native code (boring-sys2's
+# cmake-driven BoringSSL, openssl-src, zstd-sys, onig_sys, ...) picks
+# its CC/CXX up from the resolved cc toolchain. The toolchain enables
+# `fully_static_link`, which is what makes the shipped binaries run on
+# any Linux, glibc or musl, with no runtime deps. Exec platforms
+# covered upstream: linux + macOS, x86_64 + arm64.
+#
+# `extra_target_compatible_with` stamps the same `//platforms:musl`
+# constraint the rust musl toolchains use onto the cc toolchains, so
+# only an explicit `--config=musl-*` build resolves them; host builds
+# keep the autodetected host cc toolchain.
+bazel_dep(name = "toolchains_musl", version = "0.1.27")
+
+toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
+toolchains_musl.config(
+    extra_target_compatible_with = ["@//platforms:musl"],
+)
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 

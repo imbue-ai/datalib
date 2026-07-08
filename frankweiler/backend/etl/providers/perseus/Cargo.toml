@@ -40,5 +40,31 @@ candle-transformers = "0.10"
 hf-hub = { version = "0.3", default-features = false, features = ["online", "tokio"] }
 tokenizers = { version = "0.20", default-features = false, features = ["onig", "http"] }
 
+# On Linux, hf-hub's HTTP stack (native-tls → openssl) would otherwise
+# link the distro's libssl.so at build time — which breaks the
+# fully-static `*-unknown-linux-musl` release builds outright (no
+# system libssl to link against) and made the gnu release binaries
+# depend on the host having a compatible libssl/libcrypto installed.
+# The `vendored` feature switches openssl-sys to compiling OpenSSL
+# from source (openssl-src) and linking it statically on ALL Linux
+# release flavors, gnu included.
+#
+# Gated on `target_os = "linux"` rather than `target_env = "musl"`
+# because crate_universe resolves musl platforms through the gnu
+# triples (rules_rust maps both to the same `@platforms//` constraint
+# set), so a musl-only cfg would never activate under Bazel. macOS is
+# unaffected: native-tls uses Security.framework there and openssl-sys
+# never enters that target's graph.
+#
+# Known limitation: rules_rust compiles cargo build-script BINARIES
+# against the EXEC platform's feature resolution, so cross-compiling
+# a linux target FROM macOS strips the linux-only `vendored` feature
+# out of openssl-sys's build script and it fails looking for a system
+# OpenSSL. Both CI paths (release runners, devcontainer) have linux
+# exec platforms and are unaffected; it only limits local
+# `--config=musl-*` builds of perseus-dependent targets on macs.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl-sys = { version = "0.9", features = ["vendored"] }
+
 [dev-dependencies]
 tempfile = "3"

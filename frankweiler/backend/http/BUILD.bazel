@@ -1,6 +1,22 @@
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 exports_files(["Cargo.toml"])
+
+# The embedded UI bundle, pinned to the HOST platform. The Vite build
+# always executes on the build host, but as `compile_data` it sits in
+# the TARGET configuration — so under `--config=musl-*` (or any other
+# cross-compile) rules_js would select() rollup's native binding for
+# the *target* platform (e.g. `@rollup/rollup-linux-*-musl`) while the
+# Vite action still executes on the host, dying with MODULE_NOT_FOUND.
+# The bundle is platform-independent bytes, so transitioning it back
+# to the host platform is safe, and is the standard rules_js
+# cross-compilation fix.
+platform_transition_filegroup(
+    name = "ui_dist_host",
+    srcs = ["//frankweiler/ui:dist"],
+    target_platform = "@platforms//host",
+)
 
 rust_library(
     name = "frankweiler_http",
@@ -13,17 +29,18 @@ rust_library(
     edition = "2021",
     # The rust-embed proc macro reads `$FRANKWEILER_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
-    # point it at the hermetic Bazel-built dist; the `compile_data`
+    # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
+    # the host-platform-pinned wrapper above); the `compile_data`
     # entry makes those files visible to the rustc invocation.
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
     # `agent_guide.md` is `include_str!`'d by the `/agent.md` handler.
     compile_data = [
-        "//frankweiler/ui:dist",
+        ":ui_dist_host",
         "src/agent_guide.md",
     ],
     rustc_env = {
-        "FRANKWEILER_UI_DIST": "$(execpath //frankweiler/ui:dist)",
+        "FRANKWEILER_UI_DIST": "$(execpath :ui_dist_host)",
     },
     visibility = ["//frankweiler:__subpackages__"],
     deps = [
