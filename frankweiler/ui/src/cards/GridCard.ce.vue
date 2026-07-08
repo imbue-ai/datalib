@@ -678,9 +678,21 @@ const defaultColDef: ColDef = {
   enableRowGroup: true,
 };
 
+// Empty result sets are reported once, by the grid's own no-rows overlay,
+// in our wording (default is "No Rows To Show"). Blanked while an error
+// banner is showing — "error: …" plus "no matches." would be contradictory.
+// Bound reactively on <AgGridVue> together with `loading`, which suppresses
+// the no-rows overlay during in-flight searches (our spinner covers those).
+const noRowsTemplate = computed(() =>
+  error.value ? "<span></span>" : "no matches.",
+);
+
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
+  // The grid's own loading overlay stays blank — the `.grid-spinner`
+  // element over the grid is the loading indicator.
+  overlayLoadingTemplate: "<span></span>",
   // Enterprise: drag-to-group panel above the grid + columns tool panel on
   // the right. Both are pure UI affordances over existing column state, so
   // they cost nothing when unused. Object form (not the "columns"
@@ -958,16 +970,14 @@ const gridOptions: GridOptions<SearchRow> = {
         :columnDefs="columnDefs"
         :defaultColDef="defaultColDef"
         :gridOptions="gridOptions"
+        :loading="loading"
+        :overlayNoRowsTemplate="noRowsTemplate"
       />
       <div v-if="loading" class="grid-spinner" aria-label="searching">
         <div class="grid-spinner__ring" />
         <div class="grid-spinner__label">searching…</div>
       </div>
     </div>
-    <p v-if="!loading && rows.length === 0 && !error" class="empty">
-      no matches.
-    </p>
-
     <FeedbackModal
       :open="feedbackOpen"
       :surface-label="feedbackSurfaceLabel"
@@ -1025,10 +1035,6 @@ const gridOptions: GridOptions<SearchRow> = {
 }
 .status {
   font-size: 0.85rem;
-  color: var(--fw-muted);
-}
-.empty,
-.error {
   color: var(--fw-muted);
 }
 .error {
