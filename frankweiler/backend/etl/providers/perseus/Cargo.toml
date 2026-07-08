@@ -37,34 +37,26 @@ tracing = "0.1"
 candle-core = "0.10"
 candle-nn = "0.10"
 candle-transformers = "0.10"
-hf-hub = { version = "0.3", default-features = false, features = ["online", "tokio"] }
-tokenizers = { version = "0.20", default-features = false, features = ["onig", "http"] }
-
-# On Linux, hf-hub's HTTP stack (native-tls → openssl) would otherwise
-# link the distro's libssl.so at build time — which breaks the
-# fully-static `*-unknown-linux-musl` release builds outright (no
-# system libssl to link against) and made the gnu release binaries
-# depend on the host having a compatible libssl/libcrypto installed.
-# The `vendored` feature switches openssl-sys to compiling OpenSSL
-# from source (openssl-src) and linking it statically on ALL Linux
-# release flavors, gnu included.
+# TLS backend: rustls (via `rustls-tls`), NOT the native-tls default.
+# native-tls means openssl on Linux, and openssl — whether the
+# distro's libssl.so or the `vendored` build — is what stood between
+# us and fully-static `*-unknown-linux-musl` release binaries: a
+# dynamic libssl can't be statically linked, and openssl-src's
+# build script reads the OpenSSL C tree out of a SIBLING crate's
+# directory via a compile-time-baked CARGO_MANIFEST_DIR path that
+# doesn't survive Bazel's action sandboxing (rules_rust#1519).
+# rustls' ring backend keeps its C sources inside its own crate,
+# which crate_universe's build-script globs already handle — same
+# pattern as zstd-sys / onig_sys. Certificate roots come bundled
+# (webpki-roots), so the binaries don't even need /etc/ssl at
+# runtime; this stack only ever talks to huggingface.co.
 #
-# Gated on `target_os = "linux"` rather than `target_env = "musl"`
-# because crate_universe resolves musl platforms through the gnu
-# triples (rules_rust maps both to the same `@platforms//` constraint
-# set), so a musl-only cfg would never activate under Bazel. macOS is
-# unaffected: native-tls uses Security.framework there and openssl-sys
-# never enters that target's graph.
-#
-# Known limitation: rules_rust compiles cargo build-script BINARIES
-# against the EXEC platform's feature resolution, so cross-compiling
-# a linux target FROM macOS strips the linux-only `vendored` feature
-# out of openssl-sys's build script and it fails looking for a system
-# OpenSSL. Both CI paths (release runners, devcontainer) have linux
-# exec platforms and are unaffected; it only limits local
-# `--config=musl-*` builds of perseus-dependent targets on macs.
-[target.'cfg(target_os = "linux")'.dependencies]
-openssl-sys = { version = "0.9", features = ["vendored"] }
+# hf-hub 0.4 is the first release with the `rustls-tls` feature;
+# tokenizers 0.21 is the first that depends on hf-hub 0.4 (with
+# default-features = false, so it no longer drags native-tls back in
+# the way 0.20's `http` feature did).
+hf-hub = { version = "0.4.3", default-features = false, features = ["tokio", "rustls-tls"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig", "http", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

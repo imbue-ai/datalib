@@ -303,20 +303,6 @@ crate.annotation(
     gen_binaries = ["protoc-gen-prost"],
 )
 
-# openssl-src (pulled in by perseus's linux-only `openssl-sys/vendored`
-# dep — see the comment in etl/providers/perseus/Cargo.toml) vendors
-# the full OpenSSL C source tree in its `openssl/` subdirectory and
-# builds it from openssl-sys's build script at action time. The
-# default crate_universe globs only materialize the crate's `.rs`
-# files into the sandbox, so without this annotation the build script
-# dies with "<repo>/openssl: No such file or directory". `data_glob`
-# threads the C sources through the openssl-src library's runfiles
-# into the build-script action.
-crate.annotation(
-    crate = "openssl-src",
-    data_glob = ["openssl/**"],
-)
-
 crate.annotation(
     crate = "libsqlite3-sys",
     # Patch build.rs to absolutize workspace-relative `bazel-out/...`
