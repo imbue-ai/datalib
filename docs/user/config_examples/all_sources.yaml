@@ -104,6 +104,7 @@ sources:
         channels:
           - project-data-liberation
           - general
+        since: 2024-01-01      # backfill floor (YYYY-MM-DD or RFC 3339); omit for the built-in default
         # refresh_window_days: 30
 
   # --- GitHub ---------------------------------------------------------------

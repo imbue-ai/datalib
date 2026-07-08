@@ -28,51 +28,69 @@ const dirty = ref(false);
 // Quick-add source stanzas. Each is a self-contained YAML list item the
 // user can drop into `sources:`. Credentials are never here — they come
 // from latchkey at runtime.
+
+// YYYY-MM-DD for `days` days before now. Used to seed backfill floors
+// (Slack `since:`) so a first sync doesn't crawl years of history.
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 const SNIPPETS: { label: string; body: string }[] = [
   {
     label: "Claude",
     body: `  - name: claude
-    type: claude_api
-    sync: {}`,
+    source:
+      type: claude_api
+      sync: {}`,
   },
   {
     label: "ChatGPT",
     body: `  - name: chatgpt
-    type: chatgpt_api
-    sync: {}`,
+    source:
+      type: chatgpt_api
+      sync: {}`,
   },
   {
     label: "Slack",
     body: `  - name: slack
-    type: slack_api
-    sync:
-      media: true
-      channels: ["general"]`,
+    source:
+      type: slack_api
+      sync:
+        media: true
+        channels: ["general"]
+        since: ${isoDaysAgo(30)}`,
   },
   {
     label: "GitHub",
     body: `  - name: github
-    type: github_api
-    sync: {}`,
+    source:
+      type: github_api
+      sync: {}`,
   },
   {
     label: "GitLab",
     body: `  - name: gitlab
-    type: gitlab_api
-    sync: {}`,
+    source:
+      type: gitlab_api
+      sync: {}`,
   },
   {
     label: "Email (JMAP)",
     body: `  - name: fastmail
-    type: email
-    sync:
-      hostname: api.fastmail.com`,
+    source:
+      type: email
+      sync:
+        hostname: api.fastmail.com`,
   },
   {
     label: "Contacts (vCard)",
     body: `  - name: contacts
-    type: carddav
-    input_path: ~/Downloads/contacts.vcf`,
+    source:
+      type: carddav
+      common:
+        input_path: ~/Downloads/contacts.vcf`,
   },
 ];
 
