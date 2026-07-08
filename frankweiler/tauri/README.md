@@ -15,17 +15,36 @@ which ingests `frankweiler/backend`'s workspace via `crate.from_cargo`,
 never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 
 ```sh
-# Dev: starts Vite (port 5173) and opens the shell against it.
-pnpm dlx @tauri-apps/cli@^2 dev
+# Run it — one command. Builds the doltlite archive (bazel) + UI bundle
+# (pnpm) via the config's beforeBuildCommand, compiles, bundles the
+# .app, and launches it. Optional data-root arg skips the folder picker.
+./run.sh
+./run.sh ~/Documents/datalib
 
-# Bundle: builds frankweiler/ui (vue-tsc + vite) into dist/, compiles in
-# release mode, and emits target/release/bundle/macos/Frankweiler.app.
+# Release bundle → target/release/bundle/macos/Frankweiler.app.
 pnpm dlx @tauri-apps/cli@^2 build
 
-# Compile-only inner loop (no bundling). Requires ../ui/dist to exist
-# (`pnpm --dir ../ui build`) because tauri::generate_context! embeds it.
+# Signed + notarized release build (.app + .dmg) — the same script the
+# release workflow's macos-app job runs in CI. Signing secrets come from
+# Vault (restricted/datalib-release/*); they're under restricted/, so log
+# in with the all-secrets role first:
+#   vault login -method oidc role=employee_all_secrets
+./build-signed-app.sh
+
+# Compile-only inner loop (no bundling), for a fast type/borrow check.
+# Requires ../ui/dist to exist (`pnpm --dir ../ui build`) because
+# tauri::generate_context! embeds it. Note: on macOS this bare binary
+# has no app context, so `cargo run` can't present the native folder
+# picker (it spins) — launch the bundled .app instead, or pass a data
+# root so boot skips the picker: `cargo run -- ~/root`.
 cargo build
 ```
+
+The window always points at the in-process backend serving the embedded
+UI, so Tauri's own dev-server (`devUrl` / `beforeDevCommand`) is unused —
+there is no `tauri dev` Vite workflow here. Boot takes a data root from
+the first positional arg or `$FRANKWEILER_DATA_ROOT`; with neither set it
+falls back to the native folder picker.
 
 `icons/` is generated from `app-icon.png` (placeholder) via
 `pnpm dlx @tauri-apps/cli icon app-icon.png -o icons`.

@@ -84,20 +84,17 @@ async fn main() -> anyhow::Result<()> {
     let root = Arc::new(root);
     let repo = build_repo(root.clone()).await?;
 
-    // Search runs on the qmd index. On a brand-new / empty data root the
-    // index doesn't exist yet — that's the self-contained bootstrap case
-    // (the whole point of "start from an empty root and sync from the
-    // UI"), not an error. So we start *without* the daemon and let search
-    // fall back (LIKE / per-call CLI) until the first sync builds the
-    // index. A non-empty root with a genuinely *broken* qmd is still a
-    // hard fail: a silent fallback there masks a bad install behind a
-    // dramatically worse search the user may not notice.
+    // Search runs on the qmd index. The daemon resolves that index
+    // lazily on each search, so it's always present — a brand-new/empty
+    // root (no index yet) or a mid-run rebuild is handled transparently:
+    // search falls back (LIKE / per-call CLI) until the index exists,
+    // then upgrades to qmd with no restart. We only prime the model
+    // cache (symlink + pull) when an index already exists, since an
+    // empty root has nothing to search yet and shouldn't pay a ~2 GB
+    // download to open.
     let index_path = frankweiler_core::qmd::qmd_index_path(&root);
-    let qmd_daemon = if index_path.exists() {
-        let daemon = QmdDaemon::new(QmdDaemonConfig::new((*root).clone()))
-            .map_err(|e| anyhow::anyhow!("qmd daemon: cannot start ({e:#})"))?;
-        let daemon = Arc::new(daemon);
-
+    let daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
+    if index_path.exists() {
         // Models live once in a shared cache (`~/.cache/qmd/models`);
         // each data root reaches them through a `<root>/qmd/models`
         // symlink, so qmd — run with `XDG_CACHE_HOME=<root>` — resolves
@@ -138,16 +135,14 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
             }
         }
-        Some(daemon)
     } else {
         eprintln!(
-            "qmd: no index at {} yet — starting in search-fallback mode. \
-             Set up a config + run a sync from the UI; restart for full \
-             vector/hybrid search once the index is built.",
+            "qmd: no index at {} yet — search falls back until the first \
+             sync builds it, then upgrades to qmd with no restart.",
             index_path.display()
         );
-        None
-    };
+    }
+    let qmd_daemon = daemon;
 
     // Self-contained config: the app reads/writes `<root>/config.yaml`,
     // so a fresh data root needs no external `~/.config` file. The Setup

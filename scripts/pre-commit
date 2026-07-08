@@ -1,6 +1,12 @@
 #!/bin/bash
 # Pre-commit hook for datalib
-# Runs linting and type checking before commits.
+# Runs fast, auto-fixing lint/format on staged files before commits.
+#
+# The expensive gates (pyright, vue-tsc, cargo fmt, bazel clippy, rust
+# unit-test coverage) used to live here too, but paying that cost on
+# every commit was wasteful — they now run in scripts/pre-push instead.
+# This hook keeps only the cheap ruff pass, whose auto-format + re-stage
+# only makes sense at commit time anyway.
 #
 # To install: ./scripts/setup-hooks.sh
 
@@ -41,48 +47,5 @@ uv run ruff format .
 # ruff format mutates files in place. Re-stage only the files that were
 # already part of this commit; never fold in unstaged dirt.
 restage_if_staged
-
-echo "[python] pyright"
-uv run pyright
-
-# --- TypeScript (frankweiler/ui) ---
-if [ -d frankweiler/ui ]; then
-    echo "[ui] vue-tsc"
-    # pnpm pinned via frankweiler/ui/package.json's `packageManager`;
-    # provisioned on demand via corepack. See scripts/ensure_pnpm.sh.
-    # shellcheck source=ensure_pnpm.sh
-    source "$REPO_ROOT/scripts/ensure_pnpm.sh"
-    (
-        cd frankweiler/ui
-        if [ ! -d node_modules ]; then
-            echo "  installing pnpm deps..."
-            pnpm install --frozen-lockfile
-        fi
-        npx vue-tsc --noEmit
-    )
-fi
-
-# --- Rust (frankweiler/backend) ---
-if [ -d frankweiler/backend ]; then
-    echo "[rust] cargo fmt --check"
-    (cd frankweiler/backend && cargo fmt --all -- --check)
-
-    echo "[rust] bazelisk build --config=clippy //..."
-    # rules_rust clippy aspect. Replaces `cargo clippy --all-targets
-    # --all-features -- -W clippy::disallowed_macros -D warnings`,
-    # which was eating 60–120s per commit because its incremental
-    # cache is separate from bazel's. Warm-cache runs of the aspect
-    # are sub-second; see .bazelrc's `--config=clippy` block for the
-    # rationale and the flag wiring (clippy.toml + -D warnings + the
-    # `disallowed_macros` enable).
-    bazelisk build --config=clippy //...
-
-    # Guard: every rust_library must have a rust_test(crate=...) target,
-    # else its inline #[cfg(test)] tests silently never run under
-    # `bazel test //...`. Catches the gap that left fsindex's stamp.rs /
-    # hash.rs tests dormant.
-    echo "[rust] unit-test target coverage"
-    "$REPO_ROOT/tools/check_rust_unit_tests.sh"
-fi
 
 echo "All pre-commit checks passed."

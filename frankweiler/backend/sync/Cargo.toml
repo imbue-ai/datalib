@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 frankweiler-core = { path = "../core" }
+frankweiler-ingest-config = { path = "../ingest_config" }
 frankweiler-etl = { path = "../etl" }
 frankweiler-obs = { path = "../obs" }
 frankweiler-time = { path = "../time" }

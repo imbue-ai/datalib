@@ -1,0 +1,13 @@
+# Cargo manifest for the bazel-first config crate (see BUILD.bazel, which
+# remains the source of truth for tests). Exists so the cargo-built tauri
+# shell can link frankweiler-http -> frankweiler-ingest-config -> here.
+[package]
+name = "frankweiler-etl-signal-config"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+frankweiler-source-common = { path = "../../../source_common" }
+anyhow = { workspace = true }
+serde = { workspace = true }

@@ -10,10 +10,10 @@
 //! `frankweiler/ui/src/api.ts`).
 //!
 //! Divergences from the standalone `frankweiler-http` binary:
-//! - qmd setup failure is a warning dialog + degraded search
-//!   (`qmd_daemon: None` falls back to the per-call shell-out path),
-//!   not a hard startup failure — a desktop app that refuses to open
-//!   is worse than one with slower search.
+//! - No qmd validation at startup: the daemon resolves its index lazily
+//!   per search, so an empty root (no index yet) or a mid-session
+//!   rebuild is handled transparently — search falls back until the
+//!   index exists, then upgrades to qmd with no restart and no dialog.
 //! - No `qmd pull` at startup: a multi-hundred-MB model download with
 //!   no progress UI reads as a hung app. Models are pulled lazily by
 //!   qmd itself on the first search that needs them.
@@ -29,7 +29,7 @@ use std::sync::Arc;
 use frankweiler_core::dolt_repo::DoltRepo;
 use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
 use frankweiler_http::AppState;
-use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 /// Same filename convention as `frankweiler-http`'s main.rs and
@@ -49,7 +49,18 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![version])
         .setup(|app| {
-            prompt_for_data_root(app.handle().clone());
+            let handle = app.handle().clone();
+            // A data root supplied non-interactively (positional arg or
+            // `$FRANKWEILER_DATA_ROOT`) skips the picker and boots
+            // straight into it — mirrors `frankweiler_http_bin <root>`
+            // and makes the app scriptable/testable. Otherwise fall back
+            // to the native folder picker.
+            match explicit_data_root() {
+                Some(root) => {
+                    tauri::async_runtime::spawn(boot(handle, root));
+                }
+                None => prompt_for_data_root(handle),
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -81,39 +92,64 @@ fn inherit_shell_path() {
     }
 }
 
+/// A data root supplied without the picker: first positional CLI arg,
+/// else `$FRANKWEILER_DATA_ROOT`. A leading `~` is expanded against
+/// `$HOME` (same convention as `dev.sh`), since `open --env` and shell
+/// exports don't do tilde expansion. Returns `None` when neither is set,
+/// leaving the interactive picker as the default.
+fn explicit_data_root() -> Option<PathBuf> {
+    let raw = std::env::args()
+        .nth(1)
+        .filter(|a| !a.is_empty())
+        .or_else(|| std::env::var("FRANKWEILER_DATA_ROOT").ok())
+        .filter(|a| !a.is_empty())?;
+    let expanded = match raw.strip_prefix('~') {
+        Some("") => std::env::var("HOME").unwrap_or(raw.clone()),
+        Some(rest) if rest.starts_with('/') => {
+            format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest)
+        }
+        _ => raw,
+    };
+    Some(PathBuf::from(expanded))
+}
+
 /// Show the folder picker. Picking a folder boots the backend and opens
 /// the main window; canceling exits the app (there is nothing to show
 /// without a data root).
 fn prompt_for_data_root(app: AppHandle) {
-    let mut picker = app
-        .dialog()
+    app.dialog()
         .file()
-        .set_title("Select your Frankweiler data root");
-    if let Some(dir) = default_picker_dir() {
-        picker = picker.set_directory(dir);
-    }
-    picker.pick_folder(move |choice| match choice {
-        Some(file_path) => match file_path.into_path() {
-            Ok(root) => {
-                tauri::async_runtime::spawn(boot(app, root));
-            }
-            Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
-        },
-        None => app.exit(0),
-    });
+        .set_title("Select your Frankweiler data root")
+        .pick_folder(move |choice| match choice {
+            Some(file_path) => match file_path.into_path() {
+                Ok(root) => {
+                    tauri::async_runtime::spawn(boot(app, root));
+                }
+                Err(e) => fatal(&app, format!("unusable folder selection: {e}")),
+            },
+            None => app.exit(0),
+        });
 }
 
-/// Seed the picker with the data root named in
-/// `~/.config/frankweiler/config.yaml` when that file exists and the
-/// root is on disk; otherwise let the OS pick its default location.
-fn default_picker_dir() -> Option<PathBuf> {
-    let cfg = frankweiler_core::config::load_config(None).ok()?;
-    cfg.data_root.is_dir().then_some(cfg.data_root)
+/// Locate the `frankweiler-sync` binary the in-process worker shells out
+/// to. In a packaged `.app` it's bundled under `Contents/Resources/`
+/// (see `tauri.conf.json` `bundle.resources`); `resource_dir()` resolves
+/// that regardless of where the bundle lives. Returns `None` in a dev
+/// `cargo run` (no bundle), where `resolve_sync_bin`'s
+/// `$FRANKWEILER_SYNC_BIN` path takes over instead.
+fn bundled_sync_bin(app: &AppHandle) -> Option<PathBuf> {
+    let p = app.path().resource_dir().ok()?.join("binaries/frankweiler-sync");
+    p.is_file().then_some(p)
 }
 
 async fn boot(app: AppHandle, root: PathBuf) {
-    let (url, qmd_warning) = match start_backend(root).await {
-        Ok(started) => started,
+    // Dev override ($FRANKWEILER_SYNC_BIN / a sibling binary) wins so a
+    // fresh Bazel build can be pointed at without rebundling; otherwise
+    // fall back to the copy bundled inside the .app.
+    let sync_bin =
+        frankweiler_http::worker::resolve_sync_bin().or_else(|| bundled_sync_bin(&app));
+    let url = match start_backend(root, sync_bin).await {
+        Ok(url) => url,
         Err(e) => return fatal(&app, format!("could not start the backend: {e:#}")),
     };
     let Ok(url) = url.parse() else {
@@ -126,22 +162,14 @@ async fn boot(app: AppHandle, root: PathBuf) {
     if let Err(e) = window {
         return fatal(&app, format!("could not open the main window: {e}"));
     }
-    if let Some(warning) = qmd_warning {
-        app.dialog()
-            .message(format!(
-                "qmd could not be started — search falls back to a slower, \
-                 less relevant path.\n\n{warning}"
-            ))
-            .title("Frankweiler: degraded search")
-            .kind(MessageDialogKind::Warning)
-            .show(|_| {});
-    }
 }
 
 /// Open the data root and serve the embedded UI + `/api/*` on an
-/// ephemeral localhost port. Returns the base URL and, when qmd could
-/// not be started, the warning to surface to the user.
-async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)> {
+/// ephemeral localhost port. Returns the base URL. `sync_bin` is the
+/// `frankweiler-sync` path the sync worker shells out to (see
+/// [`bundled_sync_bin`]); `None` leaves UI-triggered syncs to fail with
+/// a clear message while search still works.
+async fn start_backend(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<String> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
@@ -151,25 +179,57 @@ async fn start_backend(root: PathBuf) -> anyhow::Result<(String, Option<String>)
     let repo = DoltRepo::open(&db_path, root.clone())
         .await
         .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
+    // Coerce to the shared trait-object handle up front so the sync
+    // worker and the router can each hold a clone.
+    let repo: frankweiler_core::repo::DynRepo = Arc::new(repo);
 
-    let (qmd_daemon, qmd_warning) = match QmdDaemon::new(QmdDaemonConfig::new((*root).clone())) {
-        Ok(daemon) => (Some(Arc::new(daemon)), None),
-        Err(e) => (None, Some(format!("{e:#}"))),
+    // The daemon is always present now: it resolves the index lazily on
+    // each search, so a root whose qmd index is missing (empty root, sync
+    // not run yet) or rebuilt mid-session is handled transparently —
+    // search falls back until the index exists, then upgrades to qmd with
+    // no restart. No index download here either (see the module header).
+    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
+
+    // Self-contained config lives at `<root>/config.yaml` — same
+    // convention as the standalone `frankweiler-http` binary, so the
+    // Setup tab and the sync worker read/write the same file.
+    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
+
+    // Live sync-job progress fan-out: the worker + enqueue/cancel
+    // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
+    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
+
+    // Background sync worker: drains the `sync_jobs` queue the UI fills.
+    // In a Bazel dev run `$FRANKWEILER_SYNC_BIN` points at the runfiles
+    // binary; in a packaged app it's a sibling of this executable. When
+    // neither is found the worker still runs — UI-triggered syncs fail
+    // fast with a clear message instead of hanging (search is unaffected).
+    let worker_cfg = frankweiler_http::worker::WorkerConfig {
+        root: root.clone(),
+        config_path: (*config_path).clone(),
+        sync_bin,
+        progress_tx: progress_tx.clone(),
     };
+    let worker_repo = repo.clone();
+    tauri::async_runtime::spawn(async move {
+        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
+    });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
     let state = AppState {
         root,
-        repo: Arc::new(repo),
+        config_path,
+        repo,
         qmd_daemon,
+        progress_tx,
     };
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, frankweiler_http::router(state)).await {
             eprintln!("embedded backend exited: {e}");
         }
     });
-    Ok((url, qmd_warning))
+    Ok(url)
 }
 
 /// Surface a startup-fatal error in a dialog, then exit. `eprintln!` is

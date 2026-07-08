@@ -42,6 +42,13 @@ use frankweiler_etl_yolink_config::YolinkConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Root directory for all on-disk state (`raw/`, `rendered_md/`,
+    /// `dolt_db/`, `qmd/`, …). Optional in YAML: when omitted, it
+    /// defaults to the directory the config file itself lives in, so a
+    /// data root containing its own `config.yaml` is fully
+    /// self-contained. Resolved to an absolute path by [`load_config`]
+    /// (the in-memory value is never the empty-path sentinel).
+    #[serde(default)]
     pub data_root: PathBuf,
     #[serde(default)]
     pub qmd: QmdConfig,
@@ -484,7 +491,19 @@ pub fn load_config(path: Option<&Path>) -> Result<Config, ConfigError> {
     }
     let raw = std::fs::read_to_string(p)?;
     let mut cfg: Config = serde_yaml::from_str(&raw)?;
-    cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
+    if cfg.data_root.as_os_str().is_empty() {
+        // No explicit `data_root:` — default to the directory the config
+        // file itself lives in. Canonicalize first so the parent is
+        // absolute even when `p` was given as a bare `config.yaml`.
+        let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        cfg.data_root = abs
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    } else {
+        cfg.data_root = expand_tilde(&cfg.data_root.display().to_string());
+    }
     cfg.normalize();
     cfg.validate()?;
     Ok(cfg)
@@ -517,6 +536,25 @@ mod tests {
         let cfg = load_config(Some(&cfg_path)).unwrap();
         assert_eq!(cfg.data_root, root);
         assert_eq!(cfg.backend.bind, "127.0.0.1:8731");
+    }
+
+    #[test]
+    fn data_root_defaults_to_config_dir() {
+        let tmp = tempdir();
+        let cfg_path = tmp.join("config.yaml");
+        // No `data_root:` key at all.
+        std::fs::write(&cfg_path, "sources: []\n").unwrap();
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        // Canonicalize the expected dir too: on macOS the temp dir is
+        // under a `/var -> /private/var` symlink, which canonicalize
+        // resolves.
+        let want = std::fs::canonicalize(&tmp).unwrap();
+        assert_eq!(cfg.data_root, want);
+        // Derived paths hang off the resolved root.
+        assert_eq!(
+            cfg.dolt_db_path(),
+            want.join("system/backend_index/db.doltlite_db")
+        );
     }
 
     #[test]

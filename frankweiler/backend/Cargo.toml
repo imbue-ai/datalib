@@ -34,10 +34,35 @@ members = [
     "etl/providers/whatsapp",
     "etl/chat-common",
     "etl/contact-common",
+    # Program A's schema-only config crates started bazel-only; they are
+    # cargo members too so the cargo-built tauri shell can link
+    # frankweiler-http (whose config endpoints consume
+    # frankweiler-ingest-config). BUILD.bazel stays the test authority —
+    # ingest_config's `config_examples` test only runs under bazel
+    # (runfiles fixture resolution).
+    "source_common",
+    "ingest_config",
+    "etl/providers/anthropic_config",
+    "etl/providers/beeper_config",
+    "etl/providers/carddav_config",
+    "etl/providers/chatgpt_config",
+    "etl/providers/email_config",
+    "etl/providers/fsindex_config",
+    "etl/providers/github_config",
+    "etl/providers/gitlab_config",
+    "etl/providers/google_takeout_config",
+    "etl/providers/linkedin_config",
+    "etl/providers/notion_config",
+    "etl/providers/perseus_config",
+    "etl/providers/signal_config",
+    "etl/providers/slack_config",
+    "etl/providers/sms_backup_restore_config",
+    "etl/providers/whatsapp_config",
+    "etl/providers/yolink_config",
 ]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.15.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
