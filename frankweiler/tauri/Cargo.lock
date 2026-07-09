@@ -105,7 +105,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "app-schema"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "frankweiler-etl-macros",
  "serde",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-core"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-anthropic-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1239,7 +1239,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-beeper-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1248,7 +1248,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-carddav-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-chatgpt-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1266,7 +1266,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-email-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1275,7 +1275,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-fsindex-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1284,7 +1284,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-github-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1293,7 +1293,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-gitlab-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-google-takeout-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1311,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-linkedin-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-macros"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1329,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-notion-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-perseus-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1347,7 +1347,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-signal-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1356,7 +1356,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-slack-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-sms-backup-restore-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1374,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-whatsapp-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-etl-yolink-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-source-common",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-http"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "app-schema",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-ingest-config"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-core",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-obs"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-qmd-indexer"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "frankweiler-core",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-schema"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "frankweiler-etl-macros",
  "frankweiler-time",
@@ -1483,7 +1483,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-source-common"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "serde",
 ]
@@ -1508,7 +1508,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-tauri-backend"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "frankweiler-core",
  "frankweiler-schema",
@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "frankweiler-time"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "chrono",
