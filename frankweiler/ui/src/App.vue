@@ -12,7 +12,6 @@ import ToastStack from "@/components/ToastStack.vue";
         <RouterLink class="fw-tab" to="/">Explore</RouterLink>
         <RouterLink class="fw-tab" to="/setup">Setup</RouterLink>
         <RouterLink class="fw-tab" to="/sync">Sync</RouterLink>
-        <RouterLink class="fw-tab" to="/prefs">Preferences</RouterLink>
       </nav>
       <div class="fw-spacer" />
     </header>
@@ -72,7 +71,7 @@ a {
   /* Viewport-pinned flex column: the header takes its natural height
      and the routed view flexes into the rest, so full-height views
      (MillerView) reach the bottom without guessing the chrome height.
-     min-height (not height) so taller views (sync, prefs) still
+     min-height (not height) so taller views (sync) still
      scroll the page normally. */
   display: flex;
   flex-direction: column;

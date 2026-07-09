@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   fetchConfig,
@@ -25,62 +25,85 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 
+// YYYY-MM-DD for `n` days before today (UTC).
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
 // Quick-add source stanzas. Each is a self-contained YAML list item the
-// user can drop into `sources:`. Credentials are never here — they come
-// from latchkey at runtime.
-const SNIPPETS: { label: string; body: string }[] = [
+// user can drop into `sources:`. The orchestrator owns only `name`/
+// `enabled`; everything provider-owned (including `type:`) nests under
+// `source:` — see `frankweiler/backend/ingest_config`. Credentials are
+// never here — they come from latchkey at runtime. Bodies are functions
+// so date-dependent snippets (Slack's `since:`) are computed at click
+// time.
+const SNIPPETS: { label: string; body: () => string }[] = [
   {
     label: "Claude",
-    body: `  - name: claude
-    type: claude_api
-    sync: {}`,
+    body: () => `  - name: claude
+    source:
+      type: claude_api
+      sync: {}`,
   },
   {
     label: "ChatGPT",
-    body: `  - name: chatgpt
-    type: chatgpt_api
-    sync: {}`,
+    body: () => `  - name: chatgpt
+    source:
+      type: chatgpt_api
+      sync: {}`,
   },
   {
+    // `since:` starts the backfill 30 days back so the first sync stays
+    // small; users widen it once they've seen a sync succeed.
     label: "Slack",
-    body: `  - name: slack
-    type: slack_api
-    sync:
-      media: true
-      channels: ["general"]`,
+    body: () => `  - name: slack
+    source:
+      type: slack_api
+      sync:
+        media: true
+        channels: ["general"]
+        since: "${isoDaysAgo(30)}"`,
   },
   {
     label: "GitHub",
-    body: `  - name: github
-    type: github_api
-    sync: {}`,
+    body: () => `  - name: github
+    source:
+      type: github_api
+      sync: {}`,
   },
   {
     label: "GitLab",
-    body: `  - name: gitlab
-    type: gitlab_api
-    sync: {}`,
+    body: () => `  - name: gitlab
+    source:
+      type: gitlab_api
+      sync: {}`,
   },
   {
     label: "Email (JMAP)",
-    body: `  - name: fastmail
-    type: email
-    sync:
-      hostname: api.fastmail.com`,
+    body: () => `  - name: fastmail
+    source:
+      type: email
+      sync:
+        hostname: api.fastmail.com`,
   },
   {
+    // `input_path` is part of the shared per-source envelope, so it
+    // lives under `common:`, not at the top of `source:`.
     label: "Contacts (vCard)",
-    body: `  - name: contacts
-    type: carddav
-    input_path: ~/Downloads/contacts.vcf`,
+    body: () => `  - name: contacts
+    source:
+      type: carddav
+      common:
+        input_path: ~/Downloads/contacts.vcf`,
   },
   {
     // Sample public source — no latchkey needed. Bare `sync: {}` pulls
     // the default Thucydides Histories (Greek + English) from PerseusDL.
     label: "Perseus (sample)",
-    body: `  - name: perseus
-    type: perseus
-    sync: {}`,
+    body: () => `  - name: perseus
+    source:
+      type: perseus
+      sync: {}`,
   },
 ];
 
@@ -147,32 +170,26 @@ async function onSave() {
   }
 }
 
-const canGoToSync = computed(
-  () => existed.value && !dirty.value && (diskStatus.value?.ok ?? false),
-);
+// Save (unless there's provably nothing to do — no unsaved edits and a
+// valid config already on disk) and move on to Sync. Stays put when
+// validation fails; the inline ✗ status explains why.
+async function onSaveAndGo() {
+  const savedAndValid = !dirty.value && (diskStatus.value?.ok ?? false);
+  if (!savedAndValid) {
+    await onSave();
+    if (!saveStatus.value?.ok) return;
+  }
+  router.push("/sync");
+}
 
+// The tab reloads the config every time it's switched to: the router
+// mounts a fresh SetupView per visit (no KeepAlive), so onMounted runs
+// on every switch.
 onMounted(load);
 </script>
 
 <template>
   <section class="setup-view">
-    <div class="setup-header">
-      <h2>Setup</h2>
-      <div class="actions">
-        <button class="btn" :disabled="saving" @click="load">Reload</button>
-        <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
-          {{ saving ? "Saving…" : "Save config" }}
-        </button>
-      </div>
-    </div>
-
-    <p class="intro">
-      This data root keeps its own config. Edit it here, Save, then head to
-      <RouterLink to="/sync">Sync</RouterLink> to pull your data in.
-      Credentials aren't stored here — run
-      <code>latchkey auth set &lt;provider&gt;</code> for each managed source.
-    </p>
-
     <p v-if="loadError" class="status err">Could not load config: {{ loadError }}</p>
 
     <p class="path">
@@ -188,7 +205,7 @@ onMounted(load);
         v-for="s in SNIPPETS"
         :key="s.label"
         class="btn chip"
-        @click="addSnippet(s.body)"
+        @click="addSnippet(s.body())"
       >
         + {{ s.label }}
       </button>
@@ -213,14 +230,14 @@ onMounted(load);
         </span>
         <span v-else-if="dirty" class="status muted">unsaved changes</span>
       </div>
-      <button
-        class="btn btn-primary"
-        :disabled="!canGoToSync"
-        :title="canGoToSync ? '' : 'Save a valid config first'"
-        @click="router.push('/sync')"
-      >
-        Go to Sync →
-      </button>
+      <div class="actions">
+        <button class="btn" :disabled="saving || !dirty" @click="onSave">
+          {{ saving ? "Saving…" : "Save" }}
+        </button>
+        <button class="btn btn-primary" :disabled="saving" @click="onSaveAndGo">
+          Save and go to Sync →
+        </button>
+      </div>
     </div>
   </section>
 </template>
@@ -231,26 +248,10 @@ onMounted(load);
   flex-direction: column;
   gap: 0.75rem;
   padding: 0 0.25rem;
-  max-width: 60rem;
-}
-.setup-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.setup-header h2 {
-  margin: 0;
-  font-size: 1.1rem;
 }
 .actions {
   display: flex;
   gap: 0.5rem;
-}
-.intro {
-  margin: 0;
-  color: var(--fw-muted);
-  font-size: 0.9rem;
-  line-height: 1.5;
 }
 .path {
   margin: 0;
@@ -314,6 +315,10 @@ onMounted(load);
   color: white;
 }
 .btn-primary:hover:not(:disabled) {
+  /* Re-assert the accent background: `.btn:hover:not(:disabled)` above
+     has equal specificity and would otherwise paint the generic light
+     hover background under this button's white text. */
+  background: var(--fw-accent);
   filter: brightness(1.08);
 }
 .pill {

@@ -23,6 +23,47 @@ fn unique_db_path() -> PathBuf {
         .join("backend_index.doltlite_db")
 }
 
+/// A fresh data root has no `grid_rows`/`markdowns` yet (they appear on
+/// the first sync). The read paths must report that as "no data yet" —
+/// not as an error toast — while anything other than the exact
+/// missing-table case still surfaces as an error.
+#[tokio::test]
+async fn dolt_repo_databaseless_root_reads_as_empty() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let repo = DoltRepo::open(&db_path, root.clone())
+        .await
+        .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+
+    // No GRID_DDL / MARKDOWNS_DDL: this is the pre-first-sync state.
+    let rows = repo.search(&parse_query(""), 100).await.unwrap();
+    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    let rows = repo
+        .search_by_uuids(&parse_query(""), &["c-1".into()], 100)
+        .await
+        .unwrap();
+    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    assert!(repo.grid_row_refs().await.unwrap().is_empty());
+    assert!(repo.chat_meta("c-1").await.unwrap().is_none());
+    assert!(repo.qmd_path_for_markdown("c-1").await.unwrap().is_none());
+
+    // Narrowness: a real failure (here, a schema mismatch — the table
+    // exists but lacks the queried columns) must still be an error, not
+    // read as "no data yet".
+    sqlx::query("CREATE TABLE grid_rows (only_column TEXT)")
+        .execute(repo.pool())
+        .await
+        .expect("create decoy grid_rows");
+    let err = repo.search(&parse_query(""), 100).await.unwrap_err();
+    assert!(
+        err.to_string().contains("no such column"),
+        "expected a surfaced schema error, got {err}"
+    );
+
+    drop(repo);
+    let _ = std::fs::remove_file(&db_path);
+}
+
 #[tokio::test]
 async fn dolt_repo_round_trip_search_and_chat_meta() {
     let db_path = unique_db_path();
