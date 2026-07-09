@@ -42,8 +42,11 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+pub mod boot;
 mod embed;
 pub mod worker;
+
+pub use boot::build_state;
 
 #[derive(Clone)]
 pub struct AppState {

@@ -1494,9 +1494,7 @@ version = "0.10.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
- "frankweiler-core",
  "frankweiler-http",
- "frankweiler-ingest-config",
  "frankweiler-tauri-backend",
  "serde",
  "serde_json",

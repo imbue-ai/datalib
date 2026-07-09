@@ -24,17 +24,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use frankweiler_core::dolt_repo::DoltRepo;
-use frankweiler_core::qmd::{QmdDaemon, QmdDaemonConfig};
-use frankweiler_http::AppState;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-
-/// Same filename convention as `frankweiler-http`'s main.rs and
-/// `frankweiler-sync` — the doltlite store inside the data root.
-const DOLT_DB_FILENAME: &str = "backend_index.doltlite_db";
 
 #[tauri::command]
 fn version() -> &'static str {
@@ -169,61 +161,17 @@ async fn boot(app: AppHandle, root: PathBuf) {
 /// `frankweiler-sync` path the sync worker shells out to (see
 /// [`bundled_sync_bin`]); `None` leaves UI-triggered syncs to fail with
 /// a clear message while search still works.
+///
+/// All root-derived assembly (doltlite repo, qmd daemon, config path,
+/// sync worker) lives in `frankweiler_http::boot::build_state`, shared
+/// with the standalone binary, so the two packagings serve the same
+/// backend against the same on-disk layout. This runs inside tauri's
+/// async runtime, which is the tokio runtime `build_state` spawns the
+/// worker onto.
 async fn start_backend(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<String> {
-    if !root.exists() {
-        std::fs::create_dir_all(&root)
-            .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
-    }
-    let root = Arc::new(root);
-    let db_path = root.join(DOLT_DB_FILENAME);
-    let repo = DoltRepo::open(&db_path, root.clone())
-        .await
-        .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
-    // Coerce to the shared trait-object handle up front so the sync
-    // worker and the router can each hold a clone.
-    let repo: frankweiler_core::repo::DynRepo = Arc::new(repo);
-
-    // The daemon is always present now: it resolves the index lazily on
-    // each search, so a root whose qmd index is missing (empty root, sync
-    // not run yet) or rebuilt mid-session is handled transparently —
-    // search falls back until the index exists, then upgrades to qmd with
-    // no restart. No index download here either (see the module header).
-    let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
-
-    // Self-contained config lives at `<root>/config.yaml` — same
-    // convention as the standalone `frankweiler-http` binary, so the
-    // Setup tab and the sync worker read/write the same file.
-    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
-
-    // Live sync-job progress fan-out: the worker + enqueue/cancel
-    // handlers publish here, `GET /api/sync/stream` subscribes over SSE.
-    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
-
-    // Background sync worker: drains the `sync_jobs` queue the UI fills.
-    // In a Bazel dev run `$FRANKWEILER_SYNC_BIN` points at the runfiles
-    // binary; in a packaged app it's a sibling of this executable. When
-    // neither is found the worker still runs — UI-triggered syncs fail
-    // fast with a clear message instead of hanging (search is unaffected).
-    let worker_cfg = frankweiler_http::worker::WorkerConfig {
-        root: root.clone(),
-        config_path: (*config_path).clone(),
-        sync_bin,
-        progress_tx: progress_tx.clone(),
-    };
-    let worker_repo = repo.clone();
-    tauri::async_runtime::spawn(async move {
-        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
-    });
-
+    let state = frankweiler_http::build_state(root, sync_bin).await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
-    let state = AppState {
-        root,
-        config_path,
-        repo,
-        qmd_daemon,
-        progress_tx,
-    };
     tauri::async_runtime::spawn(async move {
         if let Err(e) = axum::serve(listener, frankweiler_http::router(state)).await {
             eprintln!("embedded backend exited: {e}");
