@@ -8,9 +8,11 @@ publish.workspace = true
 name = "frankweiler-sync"
 path = "src/main.rs"
 
+# The code also consumes frankweiler-ingest-config, which is bazel-only
+# (no Cargo.toml) — this manifest feeds crate_universe's third-party
+# resolution and does not cargo-compile. BUILD.bazel is the dep truth.
 [dependencies]
 frankweiler-core = { path = "../core" }
-frankweiler-ingest-config = { path = "../ingest_config" }
 frankweiler-etl = { path = "../etl" }
 frankweiler-obs = { path = "../obs" }
 frankweiler-time = { path = "../time" }

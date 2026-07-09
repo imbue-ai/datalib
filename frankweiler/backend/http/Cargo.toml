@@ -12,10 +12,12 @@ path = "src/lib.rs"
 name = "frankweiler-http"
 path = "src/main.rs"
 
+# The code also consumes frankweiler-ingest-config, which is bazel-only
+# (no Cargo.toml) — this manifest feeds crate_universe's third-party
+# resolution and does not cargo-compile. BUILD.bazel is the dep truth.
 [dependencies]
 app-schema = { path = "../app_schema" }
 frankweiler-core = { path = "../core" }
-frankweiler-ingest-config = { path = "../ingest_config" }
 frankweiler-qmd-indexer = { path = "../qmd_indexer" }
 frankweiler-time = { path = "../time" }
 clap = { version = "4.5", features = ["derive"] }

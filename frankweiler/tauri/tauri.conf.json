@@ -4,10 +4,8 @@
   "version": "0.10.0",
   "identifier": "com.imbue.frankweiler",
   "build": {
-    "devUrl": "http://127.0.0.1:5173",
-    "beforeDevCommand": "pnpm --dir ui dev",
-    "beforeBuildCommand": "bazelisk build //third-party/doltlite:sqlite3 && pnpm --dir ui install --frozen-lockfile && pnpm --dir ui build && bazelisk build //frankweiler/backend/sync:frankweiler_sync_bin && d=\"$(bazelisk info workspace)/frankweiler/tauri/binaries\" && mkdir -p \"$d\" && cp -f \"$(bazelisk info bazel-bin)/frankweiler/backend/sync/frankweiler_sync_bin\" \"$d/frankweiler-sync\" && chmod u+w \"$d/frankweiler-sync\" && { [ -z \"${APPLE_SIGNING_IDENTITY:-}\" ] || codesign --force --options runtime --timestamp --sign \"$APPLE_SIGNING_IDENTITY\" \"$d/frankweiler-sync\"; }",
-    "frontendDist": "../ui/dist"
+    "beforeBuildCommand": "bazelisk build //frankweiler/backend/http:frankweiler_http_bin //frankweiler/backend/sync:frankweiler_sync_bin && d=\"$(bazelisk info workspace)/frankweiler/tauri/binaries\" && b=\"$(bazelisk info bazel-bin)\" && mkdir -p \"$d\" && cp -f \"$b/frankweiler/backend/http/frankweiler_http_bin\" \"$d/frankweiler-http\" && cp -f \"$b/frankweiler/backend/sync/frankweiler_sync_bin\" \"$d/frankweiler-sync\" && chmod u+w \"$d/frankweiler-http\" \"$d/frankweiler-sync\" && { [ -z \"${APPLE_SIGNING_IDENTITY:-}\" ] || codesign --force --options runtime --timestamp --sign \"$APPLE_SIGNING_IDENTITY\" \"$d/frankweiler-http\" \"$d/frankweiler-sync\"; }",
+    "frontendDist": "./dummy-dist"
   },
   "app": {
     "windows": [],
@@ -18,7 +16,7 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "resources": ["binaries/frankweiler-sync"],
+    "resources": ["binaries/frankweiler-http", "binaries/frankweiler-sync"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

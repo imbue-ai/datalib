@@ -49,6 +49,22 @@ struct Args {
     /// dev iteration where the tab is already open, CI).
     #[arg(long)]
     no_open: bool,
+
+    /// After binding, write the base URL (e.g. `http://127.0.0.1:53829`)
+    /// to this file. With `FRANKWEILER_BIND=127.0.0.1:0` this is the
+    /// race-free way for a parent process (the Tauri shell, scripts) to
+    /// learn the ephemeral port: poll for the file instead of parsing
+    /// log output or pre-allocating a port.
+    #[arg(long)]
+    url_file: Option<PathBuf>,
+
+    /// Skip the eager qmd model prefetch (`npx … pull`) that normally
+    /// runs at startup when an index exists but the model cache is
+    /// cold. qmd then pulls models lazily on the first search that
+    /// needs them. The Tauri shell passes this: a multi-hundred-MB
+    /// blocking download before the window serves reads as a hung app.
+    #[arg(long)]
+    no_qmd_pull: bool,
 }
 
 #[tokio::main]
@@ -68,6 +84,15 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let url = format!("http://{}", listener.local_addr()?);
     eprintln!("frankweiler-http listening on {url}");
+
+    // Announce the bound URL to a waiting parent process as soon as it
+    // is known — before the (potentially slow) backend assembly below,
+    // so the parent can point a webview/browser at it and let requests
+    // queue in the listen backlog until `axum::serve` starts.
+    if let Some(url_file) = &args.url_file {
+        std::fs::write(url_file, &url)
+            .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", url_file.display()))?;
+    }
 
     if !args.no_open {
         // Best-effort browser open. We don't propagate the error
@@ -125,7 +150,9 @@ async fn main() -> anyhow::Result<()> {
         // and turns a network blip into a failed boot. A warm cache
         // (the common case) skips straight to serving; qmd lazily
         // fetches any not-yet-listed model on first use.
-        if frankweiler_qmd_indexer::models_present(&qmd_dir.join("models")) {
+        if args.no_qmd_pull {
+            eprintln!("qmd: --no-qmd-pull, models fetched lazily on first search");
+        } else if frankweiler_qmd_indexer::models_present(&qmd_dir.join("models")) {
             eprintln!("qmd: models present, skipping pull");
         } else {
             eprintln!("qmd: pulling models…");

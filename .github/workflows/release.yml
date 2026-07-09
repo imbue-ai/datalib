@@ -423,10 +423,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # The tauri beforeBuildCommand runs `bazelisk build
-      # //third-party/doltlite:sqlite3`; same cache layering rationale as
-      # the build job above (BuildBuddy serves actions, repository-cache
-      # keeps the crate_universe / rules tarballs).
+      # The tauri beforeBuildCommand bazel-builds the bundled
+      # frankweiler-http / frankweiler-sync binaries; same cache layering
+      # rationale as the build job above (BuildBuddy serves actions,
+      # repository-cache keeps the crate_universe / rules tarballs).
       - uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: false

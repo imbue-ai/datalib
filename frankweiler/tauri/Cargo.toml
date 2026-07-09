@@ -10,6 +10,11 @@ publish = false
 # ingests that workspace, and the tauri dependency tree is cargo-only.
 # This crate is driven by `cargo tauri` / `pnpm dlx @tauri-apps/cli`, not
 # Bazel — see README.md.
+#
+# The crate is a thin process manager: it spawns the Bazel-built
+# `frankweiler-http` binary (bundled under Resources/binaries/) rather
+# than linking the backend in, so there are NO path deps into
+# frankweiler/backend and no sqlx/doltlite/rust-embed plumbing here.
 [workspace]
 
 # `time` is held at 0.3.47 in Cargo.lock: 0.3.48's new
@@ -25,15 +30,4 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 anyhow = "1.0"
-# The embedded backend: frankweiler-http's router serves both the
-# rust-embed'd UI bundle and /api/*. The shell binds it to an ephemeral
-# localhost port and points the window at it. axum/tokio are needed
-# directly for `axum::serve` + `TcpListener::bind`; tauri's async
-# runtime is the same tokio underneath.
-frankweiler-http = { path = "../backend/http" }
-frankweiler-tauri-backend = { path = "../backend/tauri-backend" }
-axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
