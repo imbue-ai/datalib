@@ -681,6 +681,11 @@ const defaultColDef: ColDef = {
 const gridOptions: GridOptions<SearchRow> = {
   theme: gridTheme,
   animateRows: false,
+  // Empty results are reported once, by the "no matches." line below the
+  // grid — which is gated so it stays hidden while a search is in flight
+  // or the error banner is up. AG Grid's own "No Rows To Show" overlay
+  // has no such gating, so it is suppressed rather than shown alongside.
+  suppressNoRowsOverlay: true,
   // Enterprise: drag-to-group panel above the grid + columns tool panel on
   // the right. Both are pure UI affordances over existing column state, so
   // they cost nothing when unused. Object form (not the "columns"
