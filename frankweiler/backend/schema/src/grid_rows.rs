@@ -2,7 +2,7 @@
 // Every searchable entity in the system (chat conversations, individual
 // messages, content blocks, slack messages, ...) emits one row here at
 // ingest time, keyed by a provider-namespaced UUID. The Rust grid
-// backend reads this table from <root>/backend_index.doltlite_db with a
+// backend reads this table from <root>/system/backend_index/db.doltlite_db with a
 // single query and renders rows directly. Per-provider tables
 // (anthropic_*, openai_*, slack_*) remain the authoritative store for
 // raw payloads + render input; grid_rows is the denormalized

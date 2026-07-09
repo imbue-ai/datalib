@@ -14,7 +14,8 @@ FRANKWEILER_UI_DIST = { value = "../ui/dist", relative = true }
 # `crate.annotation` on libsqlite3-sys in MODULE.bazel (libsqlite3-sys
 # gives SQLITE3_LIB_DIR precedence over bundling). Without this the
 # shell cannot open real synced data roots: `frankweiler-sync` writes
-# `backend_index.doltlite_db` in doltlite's own format ("CTLD" magic),
+# the index DB (`system/backend_index/db.doltlite_db`) in doltlite's
+# own format ("CTLD" magic),
 # which stock SQLite rejects with "file is not a database". Requires
 # `bazelisk build //third-party/doltlite:sqlite3` first (the
 # beforeBuildCommand in tauri.conf.json runs it; for plain `cargo
