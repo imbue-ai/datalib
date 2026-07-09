@@ -1,7 +1,10 @@
 load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
+exports_files([
+    "BUILD.bazel",  # read by //frankweiler/backend:version_consistency_test
+    "Cargo.toml",
+])
 
 # The embedded UI bundle, pinned to the HOST platform. The Vite build
 # always executes on the build host, but as `compile_data` it sits in
@@ -28,6 +31,13 @@ rust_library(
     ],
     crate_name = "frankweiler_http",
     edition = "2021",
+    # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
+    # Cargo.toml) — /api/health and the feedback cards report it, and
+    # since the Tauri shell ships this bazel-built binary, it's also the
+    # desktop app's version. Must match [workspace.package].version in
+    # frankweiler/backend/Cargo.toml; the
+    # //frankweiler/backend:version_consistency_test asserts that.
+    version = "0.16.0",
     # The rust-embed proc macro reads `$FRANKWEILER_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
