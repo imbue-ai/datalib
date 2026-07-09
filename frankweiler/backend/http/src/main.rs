@@ -5,9 +5,10 @@
 
 //! `frankweiler-http` — single-binary search backend.
 //!
-//! Usage: `frankweiler-http <data_root> [--no-open]`. The data root is
-//! the directory that `frankweiler-sync` writes into: it contains one
-//! directory per source stanza plus `system/` holding the SQL store
+//! Usage: `frankweiler-http <data_root> [--no-open] [--no-qmd-pull]
+//! [--url-file <path>]`. The data root is the directory that
+//! `frankweiler-sync` writes into: it contains one directory per source
+//! stanza plus `system/` holding the SQL store
 //! (`system/backend_index/db.doltlite_db`), the `system/media/` symlinked
 //! attachments, and the qmd index. The directory is created on demand
 //! — first-run users get an empty index that fills in once they run a
@@ -15,7 +16,10 @@
 //!
 //! On startup we open the default browser at the listening URL so the
 //! user doesn't need to copy-paste it; `--no-open` skips that, useful
-//! for headless runs (CI, e2e tests, debugging).
+//! for headless runs (CI, e2e tests, debugging) and for the Tauri
+//! shell, which runs this binary as a child process (with
+//! `--no-qmd-pull --url-file <path>`; see the Args docs) and points its
+//! window at the announced URL.
 //!
 //! Bind address: `$FRANKWEILER_BIND` if set, else `127.0.0.1:8731`. The
 //! env override exists for the playwright e2e suite which needs an

@@ -17,13 +17,6 @@ publish = false
 # frankweiler/backend and no sqlx/doltlite/rust-embed plumbing here.
 [workspace]
 
-# `time` is held at 0.3.47 in Cargo.lock: 0.3.48's new
-# `format_item::ModifierValue` blanket impl breaks coherence (E0119) for
-# the `impl<T: Into<..>> From<T>` impls in tauri-utils 2.9 and cookie
-# 0.18. If `cargo update` drags `time` forward and the build breaks,
-# re-pin with `cargo update -p time --precise 0.3.47` (or whatever
-# release restores coherence).
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
