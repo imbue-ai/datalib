@@ -21,6 +21,7 @@ platform_transition_filegroup(
 rust_library(
     name = "frankweiler_http",
     srcs = [
+        "src/boot.rs",
         "src/embed.rs",
         "src/lib.rs",
         "src/worker.rs",
@@ -69,7 +70,10 @@ rust_test(
     size = "small",
     crate = ":frankweiler_http",
     edition = "2021",
-    deps = ["@frankweiler_crates//:tokio"],
+    deps = [
+        "@frankweiler_crates//:tempfile",
+        "@frankweiler_crates//:tokio",
+    ],
 )
 
 # End-to-end test for POST /api/feedback against a doltlite file in a

@@ -27,12 +27,9 @@
 //! No subprocess, no TCP port to MySQL.
 
 use clap::Parser;
-use frankweiler_core::dolt_repo::DoltRepo;
-use frankweiler_core::qmd::{qmd_cache_home, QmdDaemon, QmdDaemonConfig};
-use frankweiler_core::repo::DynRepo;
-use frankweiler_http::{router, AppState};
+use frankweiler_core::qmd::{qmd_cache_home, QmdDaemonConfig};
+use frankweiler_http::router;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
 
@@ -60,12 +57,12 @@ async fn main() -> anyhow::Result<()> {
     let root = args.data_root;
     let bind = std::env::var("FRANKWEILER_BIND").unwrap_or_else(|_| DEFAULT_BIND.into());
 
-    if !root.exists() {
-        std::fs::create_dir_all(&root)
-            .map_err(|e| anyhow::anyhow!("create data_root {}: {e}", root.display()))?;
-        eprintln!("data root: {} (created)", root.display());
-    } else {
+    // `build_state` creates the root when absent; the log line here just
+    // makes the first-run case visible.
+    if root.exists() {
         eprintln!("data root: {}", root.display());
+    } else {
+        eprintln!("data root: {} (created)", root.display());
     }
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -81,8 +78,12 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let root = Arc::new(root);
-    let repo = build_repo(root.clone()).await?;
+    // Everything root-derived (doltlite repo, qmd daemon, config path,
+    // sync worker) is assembled by the bootstrap shared with the Tauri
+    // shell — see `frankweiler_http::boot`.
+    let state =
+        frankweiler_http::build_state(root, frankweiler_http::worker::resolve_sync_bin()).await?;
+    let root = state.root.clone();
 
     // Search runs on the qmd index. The daemon resolves that index
     // lazily on each search, so it's always present — a brand-new/empty
@@ -93,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
     // empty root has nothing to search yet and shouldn't pay a ~2 GB
     // download to open.
     let index_path = frankweiler_core::qmd::qmd_index_path(&root);
-    let daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
+    let daemon = state.qmd_daemon.clone();
     if index_path.exists() {
         // Models live once in a shared cache (`~/.cache/qmd/models`);
         // each data root reaches them through a `<root>/qmd/models`
@@ -142,41 +143,8 @@ async fn main() -> anyhow::Result<()> {
             index_path.display()
         );
     }
-    let qmd_daemon = daemon;
+    eprintln!("config: {}", state.config_path.display());
 
-    // Self-contained config: the app reads/writes `<root>/config.yaml`,
-    // so a fresh data root needs no external `~/.config` file. The Setup
-    // tab creates it; the worker drives `frankweiler-sync` against it.
-    let config_path = Arc::new(frankweiler_ingest_config::root_config_path(&root));
-    eprintln!("config: {}", config_path.display());
-
-    // Live progress fan-out: the worker + enqueue/cancel handlers publish
-    // here, `GET /api/sync/stream` subscribes. Buffer a few hundred events
-    // so a briefly-stalled client lags rather than blocks the worker.
-    let (progress_tx, _) = tokio::sync::broadcast::channel(512);
-
-    // Background sync worker: drains the `sync_jobs` queue the UI fills.
-    // Resolve the `frankweiler-sync` binary up front so the startup log
-    // makes it obvious whether UI-triggered syncs will actually run.
-    let sync_bin = frankweiler_http::worker::resolve_sync_bin();
-    let worker_cfg = frankweiler_http::worker::WorkerConfig {
-        root: root.clone(),
-        config_path: (*config_path).clone(),
-        sync_bin,
-        progress_tx: progress_tx.clone(),
-    };
-    let worker_repo = repo.clone();
-    tokio::spawn(async move {
-        frankweiler_http::worker::run(worker_repo, worker_cfg).await;
-    });
-
-    let state = AppState {
-        root,
-        config_path,
-        repo,
-        qmd_daemon,
-        progress_tx,
-    };
     axum::serve(listener, router(state)).await?;
     Ok(())
 }
@@ -197,13 +165,4 @@ fn run_qmd_pull(cfg: &QmdDaemonConfig) -> anyhow::Result<()> {
         anyhow::bail!("qmd pull exited with {status}");
     }
     Ok(())
-}
-
-async fn build_repo(root: Arc<PathBuf>) -> anyhow::Result<DynRepo> {
-    let db_path = frankweiler_core::layout::backend_index_db(&root);
-    eprintln!("dolt db: {}", db_path.display());
-    let repo = DoltRepo::open(&db_path, root)
-        .await
-        .map_err(|e| anyhow::anyhow!("open doltlite at {}: {e}", db_path.display()))?;
-    Ok(Arc::new(repo))
 }

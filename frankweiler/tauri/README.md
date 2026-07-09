@@ -56,7 +56,7 @@ falls back to the native folder picker.
 - The Bazel-built **doltlite** archive is statically linked (via the
   `SQLITE3_LIB_DIR` override in `.cargo/config.toml` — same mechanism
   as MODULE.bazel's libsqlite3-sys annotation), so the shell can open
-  real synced data roots (`backend_index.doltlite_db` is doltlite's
+  real synced data roots (`system/backend_index/db.doltlite_db` is doltlite's
   own on-disk format, which stock SQLite rejects) and feedback
   `dolt_commit`s work. Plain `cargo build` therefore needs
   `bazelisk build //third-party/doltlite:sqlite3` to have run first;

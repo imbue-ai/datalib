@@ -33,9 +33,7 @@ anyhow = "1.0"
 # localhost port and points the window at it. axum/tokio are needed
 # directly for `axum::serve` + `TcpListener::bind`; tauri's async
 # runtime is the same tokio underneath.
-frankweiler-core = { path = "../backend/core" }
 frankweiler-http = { path = "../backend/http" }
-frankweiler-ingest-config = { path = "../backend/ingest_config" }
 frankweiler-tauri-backend = { path = "../backend/tauri-backend" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
