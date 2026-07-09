@@ -25,62 +25,85 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 
+// YYYY-MM-DD for `n` days before today (UTC).
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
 // Quick-add source stanzas. Each is a self-contained YAML list item the
-// user can drop into `sources:`. Credentials are never here — they come
-// from latchkey at runtime.
-const SNIPPETS: { label: string; body: string }[] = [
+// user can drop into `sources:`. The orchestrator owns only `name`/
+// `enabled`; everything provider-owned (including `type:`) nests under
+// `source:` — see `frankweiler/backend/ingest_config`. Credentials are
+// never here — they come from latchkey at runtime. Bodies are functions
+// so date-dependent snippets (Slack's `since:`) are computed at click
+// time.
+const SNIPPETS: { label: string; body: () => string }[] = [
   {
     label: "Claude",
-    body: `  - name: claude
-    type: claude_api
-    sync: {}`,
+    body: () => `  - name: claude
+    source:
+      type: claude_api
+      sync: {}`,
   },
   {
     label: "ChatGPT",
-    body: `  - name: chatgpt
-    type: chatgpt_api
-    sync: {}`,
+    body: () => `  - name: chatgpt
+    source:
+      type: chatgpt_api
+      sync: {}`,
   },
   {
+    // `since:` starts the backfill 30 days back so the first sync stays
+    // small; users widen it once they've seen a sync succeed.
     label: "Slack",
-    body: `  - name: slack
-    type: slack_api
-    sync:
-      media: true
-      channels: ["general"]`,
+    body: () => `  - name: slack
+    source:
+      type: slack_api
+      sync:
+        media: true
+        channels: ["general"]
+        since: "${isoDaysAgo(30)}"`,
   },
   {
     label: "GitHub",
-    body: `  - name: github
-    type: github_api
-    sync: {}`,
+    body: () => `  - name: github
+    source:
+      type: github_api
+      sync: {}`,
   },
   {
     label: "GitLab",
-    body: `  - name: gitlab
-    type: gitlab_api
-    sync: {}`,
+    body: () => `  - name: gitlab
+    source:
+      type: gitlab_api
+      sync: {}`,
   },
   {
     label: "Email (JMAP)",
-    body: `  - name: fastmail
-    type: email
-    sync:
-      hostname: api.fastmail.com`,
+    body: () => `  - name: fastmail
+    source:
+      type: email
+      sync:
+        hostname: api.fastmail.com`,
   },
   {
+    // `input_path` is part of the shared per-source envelope, so it
+    // lives under `common:`, not at the top of `source:`.
     label: "Contacts (vCard)",
-    body: `  - name: contacts
-    type: carddav
-    input_path: ~/Downloads/contacts.vcf`,
+    body: () => `  - name: contacts
+    source:
+      type: carddav
+      common:
+        input_path: ~/Downloads/contacts.vcf`,
   },
   {
     // Sample public source — no latchkey needed. Bare `sync: {}` pulls
     // the default Thucydides Histories (Greek + English) from PerseusDL.
     label: "Perseus (sample)",
-    body: `  - name: perseus
-    type: perseus
-    sync: {}`,
+    body: () => `  - name: perseus
+    source:
+      type: perseus
+      sync: {}`,
   },
 ];
 
@@ -188,7 +211,7 @@ onMounted(load);
         v-for="s in SNIPPETS"
         :key="s.label"
         class="btn chip"
-        @click="addSnippet(s.body)"
+        @click="addSnippet(s.body())"
       >
         + {{ s.label }}
       </button>
