@@ -80,6 +80,7 @@ use crate::summary::{ErrorKind, PhaseOutcome, Status, SyncSummary};
 // Use `frankweiler_obs::status_line!` for status lines that fire while
 // progress bars are on screen — it routes through the shared
 // `MultiProgress::println` to suspend bar draws across the write.
+use frankweiler_core::sync_phase::SyncPhase;
 use frankweiler_obs::status_line;
 
 // `FRANKWEILER_VERSION` is the output of `git describe --tags --always
@@ -647,6 +648,10 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             });
         }
     } else {
+        // Machine-readable phase marker: the http worker keys its
+        // progress display off these lines (see
+        // `frankweiler_core::sync_phase`), not off log-text guessing.
+        status_line!("{}", SyncPhase::Download.marker());
         let pb = if let Some(playback_root) = args.playback_root.as_ref() {
             let pb = playback_root
                 .canonicalize()
@@ -675,8 +680,18 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             );
         }
         let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control, ctrlc).await;
+        // The run keeps going past a failed source (the others still
+        // sync), so pin the blame now — by exit time the phase markers
+        // will have advanced well past the download.
+        if outcomes.iter().any(|o| o.status == Status::Error) {
+            status_line!("{}", SyncPhase::Download.marker_failed());
+        }
         summary.lock().unwrap().extract.extend(outcomes);
     }
+
+    // Ingest = everything between extract and the qmd stages: index-pool
+    // prep, render-and-index-md, and the load/commit that closes it out.
+    status_line!("{}", SyncPhase::Ingest.marker());
 
     // ── Open index pool + load prior fingerprints ─────────────────
     // The pool is opened *before* translate now: render's commit
@@ -887,6 +902,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         .iter()
         .any(|o| o.status == Status::Error);
     if any_render_and_index_md_error {
+        status_line!("{}", SyncPhase::Ingest.marker_failed());
         status_line!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
         if let Err(e) = write_lock.rollback_transaction().await {
             status_line!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");

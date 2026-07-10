@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, Context, Result};
+use frankweiler_core::sync_phase::SyncPhase;
 use frankweiler_obs::status_line;
 
 pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
@@ -153,6 +154,10 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         if first_run { "create" } else { "incremental" }
     );
 
+    // Phase markers for the http worker's progress display (see
+    // `frankweiler_core::sync_phase`): collection add/update is the
+    // Index stage, the embed subcommand is the Embed stage.
+    status_line!("{}", SyncPhase::Index.marker());
     if first_run {
         ensure_collection(
             &cache_home,
@@ -170,6 +175,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     }
     run_qmd(&cache_home, &qmd_pkg, &["update"])?;
     if opts.embed {
+        status_line!("{}", SyncPhase::Embed.marker());
         run_qmd(&cache_home, &qmd_pkg, &["embed"])?;
     }
 
