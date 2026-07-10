@@ -1,15 +1,12 @@
-//! Shared backend assembly for the two front doors.
-//!
-//! The standalone `frankweiler-http` binary and the Tauri shell both
-//! serve [`crate::router`] against a data root. Everything derived from
-//! that root — which doltlite file to open, where the config lives, the
-//! qmd daemon, the sync worker — is assembled here so the two
-//! packagings cannot drift apart. (The Tauri shell used to duplicate
-//! this setup and kept the pre-`system/` DB path when the layout moved,
-//! silently serving an empty grid from a fresh, dataless DB.)
-//! Divergences between the packagings should stay presentation-level:
-//! how fatal errors surface (dialog vs stderr), qmd model prefetch,
-//! opening a browser.
+//! Backend assembly: everything derived from a data root — which
+//! doltlite file to open, where the config lives, the qmd daemon, the
+//! sync worker — in one place, so every packaging boots identically.
+//! The `frankweiler-http` binary calls this directly; the Tauri shell
+//! runs that same binary as a child process, so this is the single
+//! boot path for both front doors. (History: the Tauri shell used to
+//! link the backend in-process and duplicate this setup, kept the
+//! pre-`system/` DB path when the layout moved, and silently served an
+//! empty grid from a fresh, dataless DB.)
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,15 +17,16 @@ use frankweiler_core::repo::DynRepo;
 
 use crate::{worker, AppState};
 
-/// Open the data root (creating it if absent) and assemble the
-/// [`AppState`] both packagings serve: the doltlite repo at
+/// Open the data root (creating it if absent) and assemble the served
+/// [`AppState`]: the doltlite repo at
 /// [`frankweiler_core::layout::backend_index_db`], the lazy qmd daemon,
 /// `<root>/config.yaml`, the sync-progress channel, and the background
 /// sync worker. The worker is spawned onto the ambient tokio runtime,
-/// so this must be called from within one (both callers are). `sync_bin`
-/// is the `frankweiler-sync` binary the worker shells out to; `None`
-/// makes UI-triggered syncs fail fast with a clear message while reads
-/// and search still work.
+/// so this must be called from within one. `sync_bin` is the
+/// `frankweiler-sync` binary the worker shells out to; `None` makes
+/// UI-triggered syncs fail fast with a clear message while reads and
+/// search still work. Presentation concerns (browser opening, the
+/// `--url-file` handshake) live in the binary's main, not here.
 pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<AppState> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
@@ -46,9 +44,9 @@ pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Re
     // The daemon resolves its index lazily per search, so an empty root
     // (no sync yet) or a mid-session rebuild is handled transparently —
     // search falls back until the index exists, then upgrades to qmd
-    // with no restart. Model prefetch is a packaging concern (the
-    // standalone binary primes eagerly, the Tauri shell stays lazy) and
-    // lives in the callers.
+    // with no restart. Models are lazy too: the indexer warms the
+    // shared cache during sync, and a cold cache pays a one-time
+    // download on the first semantic search instead of blocking boot.
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
 
     // Self-contained config: the app reads/writes `<root>/config.yaml`,

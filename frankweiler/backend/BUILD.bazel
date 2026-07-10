@@ -19,6 +19,7 @@ sh_test(
     srcs = ["//tools:check_version_consistency.sh"],
     data = [
         "Cargo.toml",
+        "//frankweiler/backend/http:BUILD.bazel",
         "//frankweiler/backend/sync:BUILD.bazel",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],

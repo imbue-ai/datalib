@@ -5,17 +5,20 @@
 
 //! `frankweiler-http` — single-binary search backend.
 //!
-//! Usage: `frankweiler-http <data_root> [--no-open]`. The data root is
-//! the directory that `frankweiler-sync` writes into: it contains one
-//! directory per source stanza plus `system/` holding the SQL store
-//! (`system/backend_index/db.doltlite_db`), the `system/media/` symlinked
-//! attachments, and the qmd index. The directory is created on demand
-//! — first-run users get an empty index that fills in once they run a
-//! sync.
+//! Usage: `frankweiler-http <data_root> [--no-open] [--url-file <path>]`.
+//! The data root is the directory that `frankweiler-sync` writes into:
+//! it contains one directory per source stanza plus `system/` holding
+//! the SQL store (`system/backend_index/db.doltlite_db`), the
+//! `system/media/` symlinked attachments, and the qmd index. The
+//! directory is created on demand — first-run users get an empty index
+//! that fills in once they run a sync.
 //!
 //! On startup we open the default browser at the listening URL so the
 //! user doesn't need to copy-paste it; `--no-open` skips that, useful
-//! for headless runs (CI, e2e tests, debugging).
+//! for headless runs (CI, e2e tests, debugging) and for the Tauri
+//! shell, which runs this binary as a child process (with
+//! `--url-file <path>`; see the Args docs) and points its window at the
+//! announced URL.
 //!
 //! Bind address: `$FRANKWEILER_BIND` if set, else `127.0.0.1:8731`. The
 //! env override exists for the playwright e2e suite which needs an
@@ -27,7 +30,6 @@
 //! No subprocess, no TCP port to MySQL.
 
 use clap::Parser;
-use frankweiler_core::qmd::{qmd_cache_home, QmdDaemonConfig};
 use frankweiler_http::router;
 use std::path::PathBuf;
 
@@ -49,6 +51,14 @@ struct Args {
     /// dev iteration where the tab is already open, CI).
     #[arg(long)]
     no_open: bool,
+
+    /// After binding, write the base URL (e.g. `http://127.0.0.1:53829`)
+    /// to this file. With `FRANKWEILER_BIND=127.0.0.1:0` this is the
+    /// race-free way for a parent process (the Tauri shell, scripts) to
+    /// learn the ephemeral port: poll for the file instead of parsing
+    /// log output or pre-allocating a port.
+    #[arg(long)]
+    url_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -68,6 +78,15 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     let url = format!("http://{}", listener.local_addr()?);
     eprintln!("frankweiler-http listening on {url}");
+
+    // Announce the bound URL to a waiting parent process as soon as it
+    // is known — before the (potentially slow) backend assembly below,
+    // so the parent can point a webview/browser at it and let requests
+    // queue in the listen backlog until `axum::serve` starts.
+    if let Some(url_file) = &args.url_file {
+        std::fs::write(url_file, &url)
+            .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", url_file.display()))?;
+    }
 
     if !args.no_open {
         // Best-effort browser open. We don't propagate the error
@@ -89,12 +108,17 @@ async fn main() -> anyhow::Result<()> {
     // lazily on each search, so it's always present — a brand-new/empty
     // root (no index yet) or a mid-run rebuild is handled transparently:
     // search falls back (LIKE / per-call CLI) until the index exists,
-    // then upgrades to qmd with no restart. We only prime the model
-    // cache (symlink + pull) when an index already exists, since an
-    // empty root has nothing to search yet and shouldn't pay a ~2 GB
-    // download to open.
+    // then upgrades to qmd with no restart.
+    //
+    // Models are lazy too — no `qmd pull` at boot. The indexer warms
+    // the shared cache during every sync (embed pulls the embedding
+    // model; its best-effort `qmd pull` grabs the rest), so any machine
+    // that built its own index already has them. The remaining case —
+    // index copied from elsewhere / wiped `~/.cache/qmd/models` — pays
+    // a one-time download on the first semantic search instead of
+    // blocking boot behind a multi-hundred-MB pull and turning a
+    // network blip into a failed start.
     let index_path = frankweiler_core::qmd::qmd_index_path(&root);
-    let daemon = state.qmd_daemon.clone();
     if index_path.exists() {
         // Models live once in a shared cache (`~/.cache/qmd/models`);
         // each data root reaches them through a `<root>/qmd/models`
@@ -118,23 +142,11 @@ async fn main() -> anyhow::Result<()> {
                 qmd_dir.display()
             );
         }
-
-        // Only `qmd pull` when the cache is actually cold. Pulling on
-        // every boot spawns `npx` and revalidates each model's
-        // HuggingFace etag over the network — that both slows startup
-        // and turns a network blip into a failed boot. A warm cache
-        // (the common case) skips straight to serving; qmd lazily
-        // fetches any not-yet-listed model on first use.
-        if frankweiler_qmd_indexer::models_present(&qmd_dir.join("models")) {
-            eprintln!("qmd: models present, skipping pull");
-        } else {
-            eprintln!("qmd: pulling models…");
-            let pull_cfg = daemon.config().clone();
-            match tokio::task::spawn_blocking(move || run_qmd_pull(&pull_cfg)).await {
-                Ok(Ok(())) => eprintln!("qmd: models ready"),
-                Ok(Err(e)) => return Err(anyhow::anyhow!("qmd: pull failed ({e:#})")),
-                Err(e) => return Err(anyhow::anyhow!("qmd: pull task panicked ({e})")),
-            }
+        if !frankweiler_qmd_indexer::models_present(&qmd_dir.join("models")) {
+            eprintln!(
+                "qmd: model cache cold — the first semantic search will \
+                 download models (one-time, shared across data roots)"
+            );
         }
     } else {
         eprintln!(
@@ -146,23 +158,5 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("config: {}", state.config_path.display());
 
     axum::serve(listener, router(state)).await?;
-    Ok(())
-}
-
-/// Shell out to `npx -y @tobilu/qmd@<ver> pull` with the daemon's
-/// cache-home env, so any models qmd needs land in the same XDG cache
-/// the daemon itself spawns against later.
-fn run_qmd_pull(cfg: &QmdDaemonConfig) -> anyhow::Result<()> {
-    let pkg = format!("@tobilu/qmd@{}", cfg.qmd_version);
-    let status = std::process::Command::new("npx")
-        .arg("-y")
-        .arg(&pkg)
-        .arg("pull")
-        .env("XDG_CACHE_HOME", qmd_cache_home(&cfg.qmd_root))
-        .status()
-        .map_err(|e| anyhow::anyhow!("spawn npx (is Node.js installed?): {e}"))?;
-    if !status.success() {
-        anyhow::bail!("qmd pull exited with {status}");
-    }
     Ok(())
 }

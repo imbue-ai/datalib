@@ -77,8 +77,8 @@ pub fn default_models_dir() -> PathBuf {
 
 /// The GGUF model files `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION> pull`
 /// lands in the cache dir, by their on-disk filenames (qmd derives these
-/// from the HF URIs). Used by [`models_present`] to decide whether the
-/// boot-time pull can be skipped.
+/// from the HF URIs). Used by [`models_present`] to detect a cold cache
+/// (the backend logs a first-search-will-download heads-up).
 ///
 /// These mirror `tests/fixtures/materialize_tng_root.sh`'s
 /// `REQUIRED_MODELS` — keep the two lists in sync when bumping
