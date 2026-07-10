@@ -412,6 +412,9 @@ fn looks_like_auth_failure(s: &str) -> bool {
         || s.contains("Unauthorized")
         || s.contains("Forbidden")
         || s.contains("cf-mitigated=Some(")
+        // latchkey's error for a service that was never registered —
+        // credentials aren't just expired, they were never set up.
+        || s.contains("No service matches URL")
 }
 
 fn extract_provider_type(s: &str) -> Option<&'static str> {
@@ -477,11 +480,14 @@ See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
         "claude_api" => "\
 anthropic sessionKey expired or missing.
 
-  1. Open https://claude.ai logged in. In DevTools → Application →
+  1. One-time: make sure the claude-ai service is registered
+     (`latchkey services info claude-ai` errors if it isn't):
+       latchkey services register claude-ai --base-api-url=\"https://claude.ai/\"
+  2. Open https://claude.ai logged in. In DevTools → Application →
      Cookies → claude.ai, copy the `sessionKey` value to the clipboard.
-  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+  3. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
        latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"
-  3. Smoke-test:
+  4. Smoke-test:
        latchkey curl -s https://claude.ai/api/organizations | head -c 200
 
 See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
