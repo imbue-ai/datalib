@@ -80,6 +80,7 @@ use crate::summary::{ErrorKind, PhaseOutcome, Status, SyncSummary};
 // Use `frankweiler_obs::status_line!` for status lines that fire while
 // progress bars are on screen — it routes through the shared
 // `MultiProgress::println` to suspend bar draws across the write.
+use frankweiler_core::sync_phase::SyncPhase;
 use frankweiler_obs::status_line;
 
 // `FRANKWEILER_VERSION` is the output of `git describe --tags --always
@@ -411,6 +412,9 @@ fn looks_like_auth_failure(s: &str) -> bool {
         || s.contains("Unauthorized")
         || s.contains("Forbidden")
         || s.contains("cf-mitigated=Some(")
+        // latchkey's error for a service that was never registered —
+        // credentials aren't just expired, they were never set up.
+        || s.contains("No service matches URL")
 }
 
 fn extract_provider_type(s: &str) -> Option<&'static str> {
@@ -476,11 +480,14 @@ See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
         "claude_api" => "\
 anthropic sessionKey expired or missing.
 
-  1. Open https://claude.ai logged in. In DevTools → Application →
+  1. One-time: make sure the claude-ai service is registered
+     (`latchkey services info claude-ai` errors if it isn't):
+       latchkey services register claude-ai --base-api-url=\"https://claude.ai/\"
+  2. Open https://claude.ai logged in. In DevTools → Application →
      Cookies → claude.ai, copy the `sessionKey` value to the clipboard.
-  2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
+  3. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
        latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"
-  3. Smoke-test:
+  4. Smoke-test:
        latchkey curl -s https://claude.ai/api/organizations | head -c 200
 
 See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
@@ -647,6 +654,10 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             });
         }
     } else {
+        // Machine-readable phase marker: the http worker keys its
+        // progress display off these lines (see
+        // `frankweiler_core::sync_phase`), not off log-text guessing.
+        status_line!("{}", SyncPhase::Download.marker());
         let pb = if let Some(playback_root) = args.playback_root.as_ref() {
             let pb = playback_root
                 .canonicalize()
@@ -675,8 +686,18 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
             );
         }
         let outcomes = run_extract_phase(&cfg, pb.as_deref(), &now, &control, ctrlc).await;
+        // The run keeps going past a failed source (the others still
+        // sync), so pin the blame now — by exit time the phase markers
+        // will have advanced well past the download.
+        if outcomes.iter().any(|o| o.status == Status::Error) {
+            status_line!("{}", SyncPhase::Download.marker_failed());
+        }
         summary.lock().unwrap().extract.extend(outcomes);
     }
+
+    // Ingest = everything between extract and the qmd stages: index-pool
+    // prep, render-and-index-md, and the load/commit that closes it out.
+    status_line!("{}", SyncPhase::Ingest.marker());
 
     // ── Open index pool + load prior fingerprints ─────────────────
     // The pool is opened *before* translate now: render's commit
@@ -887,6 +908,7 @@ async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) 
         .iter()
         .any(|o| o.status == Status::Error);
     if any_render_and_index_md_error {
+        status_line!("{}", SyncPhase::Ingest.marker_failed());
         status_line!("[frankweiler-sync] translate had errors; rolling back the index-DB batch");
         if let Err(e) = write_lock.rollback_transaction().await {
             status_line!("[frankweiler-sync] WriteLock::rollback_transaction failed: {e:#}");

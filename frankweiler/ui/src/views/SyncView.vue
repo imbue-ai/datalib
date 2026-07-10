@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchSyncSources,
   fetchAllJobs,
@@ -27,6 +27,25 @@ const expandedId = ref<string | null>(null);
 const logText = ref("");
 const logError = ref<string | null>(null);
 const logLoading = ref(false);
+
+// Log lines with a severity class for the structured-JSON ones (the
+// tracing subscriber emits NDJSON with a top-level `level`); qmd's and
+// other plain-text lines pass through unhighlighted.
+const logLines = computed(() =>
+  logText.value.split("\n").map((text) => {
+    let cls = "";
+    if (text.startsWith("{")) {
+      try {
+        const level = JSON.parse(text)?.level;
+        if (level === "ERROR") cls = "log-line-error";
+        else if (level === "WARN") cls = "log-line-warn";
+      } catch {
+        // Not valid JSON after all — leave unhighlighted.
+      }
+    }
+    return { text, cls };
+  }),
+);
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let stream: EventSource | null = null;
@@ -283,7 +302,10 @@ onUnmounted(() => {
                 </button>
               </div>
               <p v-if="logError" class="log-empty">{{ logError }}</p>
-              <pre v-else-if="logText" class="log-body">{{ logText }}</pre>
+              <pre
+                v-else-if="logText"
+                class="log-body"
+              ><span v-for="(l, i) in logLines" :key="i" :class="l.cls">{{ l.text + "\n" }}</span></pre>
               <p v-else class="log-empty">(empty)</p>
             </td>
           </tr>
@@ -422,6 +444,12 @@ h3 {
   border: 1px solid var(--fw-border);
   border-radius: 4px;
   padding: 0.5rem 0.6rem;
+}
+.log-line-error {
+  color: var(--fw-log-error);
+}
+.log-line-warn {
+  color: var(--fw-log-warn);
 }
 .log-empty {
   margin: 0;

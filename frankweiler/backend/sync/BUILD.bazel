@@ -37,6 +37,7 @@ rust_binary(
         "@frankweiler_crates//:async-trait",
     ],
     deps = [
+        "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/ingest_config:frankweiler_ingest_config",
         "//frankweiler/backend/etl:frankweiler_etl",
         "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",

@@ -20,13 +20,14 @@
 
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use app_schema::sync_jobs::SyncJobRow;
 use frankweiler_core::repo::DynRepo;
+use frankweiler_core::sync_phase::SyncPhase;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -50,23 +51,23 @@ pub struct ProgressEvent {
 /// subscribers is a no-op (returns `Err`), which we ignore.
 pub type ProgressTx = broadcast::Sender<ProgressEvent>;
 
-/// Ordered, coarse pipeline stages we can recognize from sync's output.
-/// We only ever know *which* stage is running (not a true fraction
-/// within it), so progress is reported as a discrete "step x/n" rather
-/// than a faked continuous percentage. Index into this with
-/// [`LiveProgress::stage`].
-const STAGES: &[&str] = &["Download", "Ingest", "Index", "Embed"];
-
 /// Latest progress scraped from the child's output, shared between the
 /// reader threads (writers) and the async job loop (reader). `stage` is
-/// the furthest-along [`STAGES`] index seen so far (monotonic, so it
-/// never regresses across interleaved per-source phase lines); `detail`
-/// is optional *real* sub-progress for the current stage (e.g. qmd's
-/// `59%` embed figure) — never invented.
+/// the furthest-along [`SyncPhase`] index announced so far (monotonic,
+/// so a late-flushed line from an earlier phase never regresses it);
+/// `detail` is optional *real* sub-progress for the current stage (e.g.
+/// qmd's `59%` embed figure) — never invented. We only ever know
+/// *which* stage is running (not a true fraction within it), so
+/// progress is reported as a discrete "step x/n" rather than a faked
+/// continuous percentage.
 #[derive(Default)]
 struct LiveProgress {
     stage: Option<usize>,
     detail: Option<String>,
+    /// Earliest phase a `phase-failed` marker blamed. The pipeline
+    /// keeps running past a failed phase, so on a non-zero exit this —
+    /// not the furthest `stage` reached — is where the failure lives.
+    failed: Option<usize>,
 }
 
 impl LiveProgress {
@@ -80,11 +81,12 @@ impl LiveProgress {
         match self.stage {
             None => (None, None),
             Some(s) => {
-                let n = STAGES.len();
+                let n = SyncPhase::ALL.len();
                 let pct = (s + 1) as f64 / n as f64;
+                let title = SyncPhase::ALL[s].title();
                 let msg = match &self.detail {
-                    Some(d) => format!("step {}/{}: {} ({d})", s + 1, n, STAGES[s]),
-                    None => format!("step {}/{}: {}", s + 1, n, STAGES[s]),
+                    Some(d) => format!("step {}/{}: {title} ({d})", s + 1, n),
+                    None => format!("step {}/{}: {title}", s + 1, n),
                 };
                 (Some(pct), Some(msg))
             }
@@ -333,12 +335,35 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
         repo.finish_job(&job.id, "done", None).await?;
         emit(&cfg.progress_tx, &job, "done", Some(1.0), Some("done"));
     } else {
-        let tail = tail_of(&log_path, 600);
-        let summary = if tail.is_empty() {
-            format!("frankweiler-sync exited with {status}")
-        } else {
-            format!("frankweiler-sync exited with {status}: …{tail}")
+        // Blame the phase a `phase-failed` marker named; fall back to
+        // the furthest phase reached. No log excerpt here — it only
+        // ever showed whatever ran *last*, not what failed; the full
+        // log is one click away.
+        let failed_stage = {
+            let p = progress.lock().unwrap_or_else(|e| e.into_inner());
+            p.failed.or(p.stage)
         };
+        let summary = match failed_stage {
+            Some(s) => format!(
+                "frankweiler-sync exited with {status} (failed during {})",
+                SyncPhase::ALL[s].title()
+            ),
+            None => format!("frankweiler-sync exited with {status}"),
+        };
+        // Re-point the segmented bar at the failed phase, so the red
+        // segment lands where the error happened rather than on
+        // whatever phase happened to run last.
+        if let Some(s) = failed_stage {
+            let lp = LiveProgress {
+                stage: Some(s),
+                detail: None,
+                failed: None,
+            };
+            let (pct, msg) = lp.render();
+            repo.update_job_progress(&job.id, pct, msg.as_deref())
+                .await
+                .ok();
+        }
         repo.finish_job(&job.id, "failed", Some(&summary)).await?;
         emit(&cfg.progress_tx, &job, "failed", None, Some(&summary));
     }
@@ -380,12 +405,18 @@ fn flush_segment(seg: &[u8], log: &Mutex<File>, progress: &Mutex<LiveProgress>) 
         let _ = writeln!(f, "{text}");
     }
     // Advance the stage (monotonic) and/or refresh the current stage's
-    // real sub-detail. Both are derived purely from recognizable
-    // keywords; an unrecognized line leaves the state untouched.
+    // real sub-detail. The stage comes only from explicit phase-marker
+    // lines, the detail only from qmd's embed bar; any other line
+    // leaves the state untouched.
     let stage = stage_of(&text);
+    let failed = SyncPhase::from_failed_marker_line(&text).map(SyncPhase::index);
     let detail = embed_detail(&text);
-    if stage.is_some() || detail.is_some() {
+    if stage.is_some() || failed.is_some() || detail.is_some() {
         let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(idx) = failed {
+            // Earliest failure wins: it's what took the run down.
+            p.failed = Some(p.failed.map_or(idx, |cur| cur.min(idx)));
+        }
         if let Some(idx) = stage {
             let advanced = p.stage.is_none_or(|cur| idx > cur);
             p.stage = Some(p.stage.map_or(idx, |cur| cur.max(idx)));
@@ -400,31 +431,16 @@ fn flush_segment(seg: &[u8], log: &Mutex<File>, progress: &Mutex<LiveProgress>) 
     }
 }
 
-/// Classify one line of `frankweiler-sync` output into a [`STAGES`] index,
-/// or `None` if it doesn't name a recognizable stage. Checked
-/// most-advanced-first. Note the `embedd` (double-d) test: it matches
-/// qmd's "Embedding/Embedded" activity lines but NOT the literal `qmd
-/// embed` advice qmd prints during the *index* stage.
+/// Recognize an explicit phase-marker line and return its
+/// [`SyncPhase`] index, or `None` for every other line. The sync
+/// binary (and `frankweiler_qmd_indexer` inside it) announces each
+/// transition with `SyncPhase::marker()`; ordinary log text — however
+/// suggestive its wording — never moves the stage. (A prior version
+/// keyword-matched every line and misfired: an extract-time event
+/// named `anthropic_users_synthesized` matched "synth" and jumped the
+/// bar to Ingest while the download was still running.)
 fn stage_of(line: &str) -> Option<usize> {
-    let s = line.to_ascii_lowercase();
-    if s.contains("embedd") || s.contains("kb/s") || s.contains("eta ") {
-        Some(3) // Embed
-    } else if s.contains("index") || s.contains("qmd") || s.contains("collection") {
-        Some(2) // Index
-    } else if s.contains("translate")
-        || s.contains("alignment")
-        || s.contains("render")
-        // NB: guard against "down*load*" — a Download line must not be
-        // swallowed by the Ingest "load" token (this branch runs first).
-        || (s.contains("load") && !s.contains("download"))
-        || s.contains("synth")
-    {
-        Some(1) // Ingest
-    } else if s.contains("extract") || s.contains("download") {
-        Some(0) // Download
-    } else {
-        None
-    }
+    SyncPhase::from_marker_line(line).map(SyncPhase::index)
 }
 
 /// Pull qmd's *real* embed percentage out of its progress bar, e.g.
@@ -448,41 +464,41 @@ fn embed_detail(s: &str) -> Option<String> {
     Some(format!("{}%", &s[start..pct_pos]))
 }
 
-/// Last `max` bytes of a log file, flattened to one line, for the
-/// `error` summary column. The full log stays on disk for the UI.
-fn tail_of(path: &Path, max: usize) -> String {
-    let Ok(s) = std::fs::read_to_string(path) else {
-        return String::new();
-    };
-    let s = s.trim_end();
-    let mut start = s.len().saturating_sub(max);
-    while start < s.len() && !s.is_char_boundary(start) {
-        start += 1;
-    }
-    s[start..].replace('\n', " ⏎ ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn stage_classification() {
-        // Download/extract is stage 0 — and must not be swallowed by the
-        // Ingest "load" token (down*load*).
-        assert_eq!(stage_of("extract: starting slack"), Some(0));
-        assert_eq!(stage_of("Downloading channel history"), Some(0));
-        assert_eq!(stage_of("download: 14/200"), Some(0));
-        // Ingest family.
-        assert_eq!(stage_of("translate: rendering docs"), Some(1));
-        assert_eq!(stage_of("perseus alignment: 0 sections"), Some(1));
-        assert_eq!(stage_of("loading into doltlite"), Some(1));
-        // Index then embed (most-advanced-first).
-        assert_eq!(stage_of("qmd: updating collection"), Some(2));
-        assert_eq!(stage_of("Embedded 10 chunks"), Some(3));
-        assert_eq!(stage_of("59% 4540/4587 14.9 KB/s ETA 4m"), Some(3));
-        // Unrecognized.
+        // Only the explicit marker lines advance the stage…
+        for phase in SyncPhase::ALL {
+            assert_eq!(stage_of(&phase.marker()), Some(phase.index()));
+        }
+        // …ordinary log text does not, no matter how suggestive. These
+        // all fooled the old keyword matcher.
+        assert_eq!(stage_of("extract: starting slack"), None);
+        assert_eq!(stage_of("Downloading channel history"), None);
+        assert_eq!(
+            stage_of(r#"{"fields":{"event":"anthropic_users_synthesized"}}"#),
+            None
+        );
+        assert_eq!(stage_of("translate: rendering docs"), None);
+        assert_eq!(stage_of("qmd: updating collection"), None);
+        assert_eq!(stage_of("Embedded 10 chunks"), None);
+        assert_eq!(stage_of("59% 4540/4587 14.9 KB/s ETA 4m"), None);
         assert_eq!(stage_of("hello world"), None);
+    }
+
+    #[test]
+    fn failed_marker_is_not_a_stage_advance() {
+        // A phase-failed line must not parse as a plain phase marker
+        // (it would advance the bar); it parses as blame instead.
+        let line = SyncPhase::Download.marker_failed();
+        assert_eq!(stage_of(&line), None);
+        assert_eq!(
+            SyncPhase::from_failed_marker_line(&line).map(SyncPhase::index),
+            Some(0)
+        );
     }
 
     #[test]
@@ -504,6 +520,7 @@ mod tests {
         let p = LiveProgress {
             stage: Some(1),
             detail: None,
+            failed: None,
         };
         let (pct, msg) = p.render();
         assert_eq!(pct, Some(0.5));
@@ -512,6 +529,7 @@ mod tests {
         let p = LiveProgress {
             stage: Some(3),
             detail: Some("59%".into()),
+            failed: None,
         };
         let (pct, msg) = p.render();
         assert_eq!(pct, Some(1.0));

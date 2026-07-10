@@ -126,6 +126,18 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let mut blake3_by_file = db.load_attachment_blake3s().await?;
 
     let work = async {
+        // The org listing goes first on purpose: it doubles as an
+        // explicit credential preflight, so a missing latchkey service
+        // registration or a dead sessionKey fails the run right here
+        // with setup instructions — instead of first emitting a
+        // misleading account-fetch warning and then dying on a cryptic
+        // curl error.
+        let orgs = client.list_orgs().await.map_err(credential_hint)?;
+        info!(event = "anthropic_orgs", count = orgs.len());
+        if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
+            warn!(event = "anthropic_orgs_upsert_failed", error = %e);
+        }
+
         // users.json from the bulk export carries the account.uuid we
         // need on every conversation. If the DB doesn't have any user
         // yet, try to pull it from the export dir before falling back
@@ -155,15 +167,6 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     note = "users will be empty"
                 ),
             }
-        }
-
-        let orgs = client
-            .list_orgs()
-            .await
-            .map_err(|e| anyhow::anyhow!("list orgs: {e}"))?;
-        info!(event = "anthropic_orgs", count = orgs.len());
-        if let Err(e) = upsert_orgs(&db, &orgs, &now).await {
-            warn!(event = "anthropic_orgs_upsert_failed", error = %e);
         }
 
         if !opts.conv_uuids.is_empty() {
@@ -369,6 +372,35 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     run.finish(&result, &summary).await;
     result?;
     Ok(summary)
+}
+
+/// Wrap the preflight's failure in setup instructions when it looks
+/// like latchkey can't authenticate to claude.ai at all: the service
+/// was never registered ("No service matches URL"), or the sessionKey
+/// cookie is missing/expired (401/403). Anything else (network,
+/// claude.ai outage) passes through unembellished.
+fn credential_hint(e: ClaudeError) -> anyhow::Error {
+    let s = e.to_string();
+    let setup_problem = s.contains("No service matches URL")
+        || s.to_ascii_lowercase().contains("no credentials")
+        || s.contains("HTTP 401")
+        || s.contains("HTTP 403");
+    if !setup_problem {
+        return anyhow::anyhow!("list orgs: {s}");
+    }
+    anyhow::anyhow!(
+        "claude.ai credentials are not set up: {s}\n\
+         One-time latchkey setup:\n\
+         1. Register the service:\n\
+              npx -y latchkey services register claude-ai --base-api-url=\"https://claude.ai/\"\n\
+         2. Open https://claude.ai logged in; in DevTools → Application → Cookies →\n\
+            claude.ai, copy the `sessionKey` value to the clipboard.\n\
+         3. Store it (`$(pbpaste)` keeps the secret out of shell history):\n\
+              npx -y latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"\n\
+         4. Smoke-test:\n\
+              npx -y latchkey curl -s https://claude.ai/api/organizations | head -c 200\n\
+         See docs/user/getting_your_data.md for the full walkthrough."
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

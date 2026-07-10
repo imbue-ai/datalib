@@ -40,7 +40,12 @@ function isoDaysAgo(days: number): string {
 const SNIPPETS: { label: string; body: () => string }[] = [
   {
     label: "Claude",
-    body: () => `  - name: claude
+    body: () => `  # Prerequisite (one-time): register claude.ai with latchkey and
+  # supply your sessionKey cookie (DevTools → Application → Cookies):
+  #   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
+  #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+  # See docs/user/getting_your_data.md for the full walkthrough.
+  - name: claude
     source:
       type: claude_api
       sync: {}`,
