@@ -12,10 +12,8 @@
 //! The backend is deliberately NOT linked in-process: one binary, one
 //! behavior. Everything backend-side (DB layout, config, qmd, sync
 //! worker) is whatever `frankweiler-http` does — the shell only decides
-//! *which* binary to run and passes two presentation flags
-//! (`--no-open`: the window replaces the browser tab; `--no-qmd-pull`:
-//! a multi-hundred-MB blocking model download with no progress UI reads
-//! as a hung app, so models are pulled lazily by qmd on first search).
+//! *which* binary to run and passes one presentation flag (`--no-open`:
+//! the window replaces the browser tab).
 //!
 //! Port handshake: the child gets `FRANKWEILER_BIND=127.0.0.1:0` and
 //! `--url-file <tmp>`; it writes its bound URL there as soon as the
@@ -229,7 +227,6 @@ fn start_backend(app: &AppHandle, root: PathBuf) -> anyhow::Result<String> {
     let mut child = Command::new(&http_bin)
         .arg(&root)
         .arg("--no-open")
-        .arg("--no-qmd-pull")
         .arg("--url-file")
         .arg(&url_file)
         .env("FRANKWEILER_BIND", "127.0.0.1:0")

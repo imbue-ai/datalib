@@ -25,8 +25,8 @@ use crate::{worker, AppState};
 /// so this must be called from within one. `sync_bin` is the
 /// `frankweiler-sync` binary the worker shells out to; `None` makes
 /// UI-triggered syncs fail fast with a clear message while reads and
-/// search still work. Startup-policy switches (eager qmd model
-/// prefetch, browser opening) live in the binary's flags, not here.
+/// search still work. Presentation concerns (browser opening, the
+/// `--url-file` handshake) live in the binary's main, not here.
 pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<AppState> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
@@ -44,9 +44,9 @@ pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Re
     // The daemon resolves its index lazily per search, so an empty root
     // (no sync yet) or a mid-session rebuild is handled transparently —
     // search falls back until the index exists, then upgrades to qmd
-    // with no restart. Model prefetch is a packaging concern (the
-    // standalone binary primes eagerly, the Tauri shell stays lazy) and
-    // lives in the callers.
+    // with no restart. Models are lazy too: the indexer warms the
+    // shared cache during sync, and a cold cache pays a one-time
+    // download on the first semantic search instead of blocking boot.
     let qmd_daemon = Arc::new(QmdDaemon::new(QmdDaemonConfig::new((*root).clone())));
 
     // Self-contained config: the app reads/writes `<root>/config.yaml`,

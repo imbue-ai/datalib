@@ -75,11 +75,11 @@ startup failures quote the log tail in the error dialog.
 
 - Full backend available: grid, search, chat preview, sync API all work
   against the picked data root. Canceling the picker exits the app.
-- The backend child is spawned with `--no-qmd-pull`: no blocking model
-  download at startup (a multi-hundred-MB pull with no progress UI reads
-  as a hung app); qmd fetches models lazily on the first search that
-  needs them. This is the only behavioral flag the shell passes besides
-  `--no-open`.
+- No blocking model download at startup: the backend pulls qmd models
+  lazily (the sync path warms the shared cache; a cold cache pays a
+  one-time download on the first semantic search). Same behavior as the
+  web packaging — the shell passes nothing besides `--no-open` and the
+  `--url-file` handshake.
 - Deep-link handler (`frankweiler://` via `tauri-plugin-deep-link`)
   is not wired yet; it will forward to
   `frankweiler/ui/src/router/deeplink.ts`.
