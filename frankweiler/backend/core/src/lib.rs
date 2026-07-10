@@ -11,6 +11,7 @@ pub mod qmd;
 pub mod query;
 pub mod repo;
 pub mod search;
+pub mod sync_phase;
 pub mod version;
 
 #[cfg(test)]
