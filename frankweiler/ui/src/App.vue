@@ -34,6 +34,9 @@ import ToastStack from "@/components/ToastStack.vue";
   --fw-hover: #f0f0f0;
   --fw-accent: #2563eb;
   --fw-card-bg: #fafafa;
+  /* Log severity highlights: dark shades on the light background… */
+  --fw-log-error: #991b1b;
+  --fw-log-warn: #854d0e;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -47,6 +50,9 @@ import ToastStack from "@/components/ToastStack.vue";
     --fw-hover: #2a2b2f;
     --fw-accent: #6ea8fe;
     --fw-card-bg: #232428;
+    /* …and light shades on the dark background. */
+    --fw-log-error: #f87171;
+    --fw-log-warn: #facc15;
   }
 }
 
