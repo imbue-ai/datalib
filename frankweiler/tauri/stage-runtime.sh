@@ -20,10 +20,9 @@
 # the Rust sources that spawn the tools (single source of truth, can't
 # drift):
 #   * latchkey  — LATCHKEY_VERSION in backend/etl/src/latchkey.rs
-#   * qmd       — DEFAULT_QMD_VERSION in backend/qmd_indexer/src/lib.rs
-#                 and backend/core/src/qmd/runner.rs (currently two
-#                 distinct pins → two staged trees; they collapse to one
-#                 automatically if the pins converge)
+#   * qmd       — DEFAULT_QMD_VERSION in backend/core/src/qmd/mod.rs
+#                 (the ONE canonical qmd pin; indexer re-exports it,
+#                 //tools:qmd_version_pins_test guards the rest)
 #
 # Build-host requirements: curl, tar, and (for qmd's native deps —
 # better-sqlite3, tree-sitter grammars) a C/C++ toolchain + python3.
@@ -71,13 +70,10 @@ extract_pin() { # file, pattern of the const line
 
 latchkey_version="$(extract_pin "$backend_dir/etl/src/latchkey.rs" \
     '^pub const LATCHKEY_VERSION:')"
-qmd_versions="$( {
-    extract_pin "$backend_dir/qmd_indexer/src/lib.rs" '^pub const DEFAULT_QMD_VERSION:'
-    echo
-    extract_pin "$backend_dir/core/src/qmd/runner.rs" '^pub const DEFAULT_QMD_VERSION:'
-} | sort -u)"
+qmd_version="$(extract_pin "$backend_dir/core/src/qmd/mod.rs" \
+    '^pub const DEFAULT_QMD_VERSION:')"
 
-log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=[$(echo "$qmd_versions" | tr '\n' ' ' | sed 's/ $//')]"
+log "pins: node=$NODE_VERSION latchkey=$latchkey_version qmd=$qmd_version"
 
 # ---------------------------------------------------------------------------
 # Platform → Node dist name.
@@ -187,10 +183,23 @@ fi
 # qmd: install scripts must run — better-sqlite3 fetches its prebuilt
 # binding and the tree-sitter grammars compile via node-gyp.
 # node-llama-cpp's platform binary arrives as a prebuilt optional dep.
-while IFS= read -r v; do
-    [[ -n "$v" ]] || continue
-    stage_tree qmd "$v" "@tobilu/qmd@$v" "node_modules/@tobilu/qmd/dist/cli/qmd.js"
-done <<<"$qmd_versions"
+stage_tree qmd "$qmd_version" "@tobilu/qmd@$qmd_version" \
+    "node_modules/@tobilu/qmd/dist/cli/qmd.js"
+
+# Drop trees whose version is no longer pinned (left behind by a bump),
+# so incremental build machines don't ship dead weight.
+prune_stale() { # kind, live version
+    local dir
+    for dir in "$runtime_dir/$1"/*/; do
+        [[ -d "$dir" ]] || continue
+        if [[ "$(basename "$dir")" != "$2" ]]; then
+            log "pruning stale $1 tree $(basename "$dir")"
+            rm -rf "$dir"
+        fi
+    done
+}
+prune_stale latchkey "$latchkey_version"
+prune_stale qmd "$qmd_version"
 
 # ---------------------------------------------------------------------------
 # Codesigning (macOS release builds only).

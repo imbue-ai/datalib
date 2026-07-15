@@ -21,7 +21,8 @@ use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_QMD_VERSION: &str = "2.1.0";
+pub use crate::qmd::DEFAULT_QMD_VERSION;
+
 pub const DEFAULT_COLLECTION: &str = "mirror";
 
 #[derive(Debug, Clone)]

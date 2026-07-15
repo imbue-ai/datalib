@@ -1,7 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
-exports_files(["Cargo.toml"])
+exports_files([
+    "Cargo.toml",
+    "src/qmd/mod.rs",  # canonical DEFAULT_QMD_VERSION, read by //tools:qmd_version_pins_test
+])
 
 rust_library(
     name = "frankweiler_core",

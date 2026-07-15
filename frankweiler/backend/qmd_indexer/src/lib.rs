@@ -30,7 +30,11 @@ use anyhow::{bail, Context, Result};
 use frankweiler_core::sync_phase::SyncPhase;
 use frankweiler_obs::status_line;
 
-pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
+/// Re-export of the ONE canonical qmd pin (`frankweiler_core::qmd`) —
+/// a re-export rather than a literal so this crate *cannot* drift from
+/// the search runner/daemon the way two same-named constants once did.
+pub use frankweiler_core::qmd::DEFAULT_QMD_VERSION;
+
 pub const DEFAULT_COLLECTION_NAME: &str = "mirror";
 /// Only index per-stanza rendered markdown — `<root>/<stanza>/rendered_md/**`.
 /// The leading `*/` is exactly one stanza segment, so this never descends into

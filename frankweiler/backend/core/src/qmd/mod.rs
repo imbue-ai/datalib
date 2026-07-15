@@ -21,7 +21,19 @@ pub mod runner;
 
 pub use daemon::{QmdDaemon, QmdDaemonConfig};
 pub use mapping::{GridIndex, GridRowRef, QmdHit, QueryMode};
-pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION, DEFAULT_QMD_VERSION};
+pub use runner::{QmdRunner, QmdRunnerConfig, DEFAULT_COLLECTION};
+
+/// The ONE canonical qmd version pin. Every spawn site — the indexer
+/// (which re-exports this), the search runner, and the daemon — runs
+/// exactly this version, and `//tools:qmd_version_pins_test` asserts
+/// the fixture/Docker pins agree. `frankweiler/tauri/stage-runtime.sh`
+/// greps this constant to decide which qmd tree to bundle — keep the
+/// `DEFAULT_QMD_VERSION` name and string-literal shape.
+///
+/// History note: the runner used to carry its own same-named constant,
+/// which a version bump missed (2.1.0 vs 2.5.3 for six weeks) — hence
+/// one shared constant here rather than a per-module default.
+pub const DEFAULT_QMD_VERSION: &str = "2.5.3";
 
 use std::path::{Path, PathBuf};
 
