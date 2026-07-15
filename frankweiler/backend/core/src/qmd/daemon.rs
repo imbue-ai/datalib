@@ -23,7 +23,7 @@ use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::SystemTime;
@@ -202,18 +202,18 @@ fn ensure_started(
 }
 
 fn spawn(state: &mut DaemonState, cfg: &QmdDaemonConfig, index_mtime: SystemTime) -> Result<()> {
-    let pkg = format!("@tobilu/qmd@{}", cfg.qmd_version);
-    let mut cmd = Command::new("npx");
-    cmd.arg("-y")
-        .arg(&pkg)
-        .arg("mcp")
+    let mut cmd = crate::qmd::qmd_command(&cfg.qmd_version);
+    cmd.arg("mcp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("XDG_CACHE_HOME", qmd_cache_home(&cfg.qmd_root));
-    let mut child = cmd
-        .spawn()
-        .with_context(|| "failed to spawn `npx … qmd mcp` (is Node.js installed?)")?;
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "failed to spawn `{}` (is Node.js installed?)",
+            crate::node_runtime::display_command(&cmd)
+        )
+    })?;
     let stdin = child
         .stdin
         .take()

@@ -2,3 +2,7 @@
 # (copied from Bazel output) so it's bundled under the .app's Resources.
 # Build artifact — not checked in.
 /binaries/
+# Node runtime + latchkey/qmd package trees staged by stage-runtime.sh
+# (bundled under the .app's Resources/runtime). Build artifacts.
+/runtime/
+/.runtime-cache/

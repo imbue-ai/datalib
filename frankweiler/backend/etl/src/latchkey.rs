@@ -186,32 +186,47 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
     None
 }
 
+/// Pinned latchkey version, used both for the `npx` fallback spec and
+/// as the key into the app-bundled runtime tree
+/// (`runtime/latchkey/<version>/…`). `frankweiler/tauri/stage-runtime.sh`
+/// greps this constant to decide what to stage — keep the
+/// `LATCHKEY_VERSION` name and string-literal shape.
+pub const LATCHKEY_VERSION: &str = "2.16.0";
+
+/// Entry script of the `latchkey` npm package inside a staged runtime
+/// tree (its package.json `bin` target), equivalent to what
+/// `npx latchkey` execs.
+const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
+
 /// `std::process::Command` for `latchkey`. Sets `LATCHKEY_CURL` to the
 /// shim on first call. If the shim can't be found, logs a warning and
 /// returns the `Command` anyway — callers may still succeed against
 /// non-CF endpoints.
 ///
-/// We invoke latchkey via `npx -y latchkey` (same pattern as qmd in
+/// Resolution: the app-bundled Node runtime + latchkey tree when staged
+/// (Tauri bundles ship one — see `frankweiler_core::node_runtime`),
+/// else `npx -y latchkey@<pin>` (same pattern as qmd in
 /// `frankweiler_qmd_indexer::run_qmd`) so callers don't need a global
-/// install. Runtime override: `$NPX_BIN` lets a developer pin a
-/// specific npx when running outside bazel. Bazel actions don't get
-/// this var forwarded (it would bust the action cache key per shell);
-/// they rely on the pinned `PATH` from `.bazelrc` instead.
+/// install. Runtime overrides: `$FRANKWEILER_RUNTIME_DIR` points at a
+/// staged runtime tree; `$NPX_BIN` lets a developer pin a specific npx
+/// when running outside bazel. Bazel actions don't get these vars
+/// forwarded (it would bust the action cache key per shell); they rely
+/// on the pinned `PATH` from `.bazelrc` instead.
 pub fn latchkey_command() -> std::process::Command {
     warn_if_missing();
-    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
-    let mut cmd = std::process::Command::new(npx);
-    cmd.arg("-y").arg("latchkey@2.16.0");
-    cmd
+    frankweiler_core::node_runtime::bundled_command(
+        "latchkey",
+        LATCHKEY_VERSION,
+        LATCHKEY_ENTRY_REL,
+    )
+    .unwrap_or_else(|| {
+        frankweiler_core::node_runtime::npx_command(&format!("latchkey@{LATCHKEY_VERSION}"))
+    })
 }
 
-/// Tokio variant.
+/// Tokio variant. Same resolution as [`latchkey_command`].
 pub fn latchkey_tokio_command() -> tokio::process::Command {
-    warn_if_missing();
-    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
-    let mut cmd = tokio::process::Command::new(npx);
-    cmd.arg("-y").arg("latchkey@2.16.0");
-    cmd
+    tokio::process::Command::from(latchkey_command())
 }
 
 fn warn_if_missing() {

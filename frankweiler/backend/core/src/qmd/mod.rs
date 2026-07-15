@@ -1,7 +1,8 @@
 //! Bridge to the `qmd` search CLI.
 //!
-//! `runner` shells out to the `qmd` CLI via `npx -y @tobilu/qmd@<version>`
-//! and parses its JSON output into `QmdHit`s. `mapping` resolves those hits
+//! `runner` shells out to the `qmd` CLI via [`qmd_command`] (the
+//! app-bundled Node runtime when staged, else `npx -y
+//! @tobilu/qmd@<version>`) and parses its JSON output into `QmdHit`s. `mapping` resolves those hits
 //! to `grid_rows` UUIDs: it locates the hit's document by `qmd_path` (after
 //! qmd's lowercase + `[_-]+ → -` normalization), then reads the rendered
 //! markdown and maps the hit's matched line to the enclosing
@@ -38,4 +39,20 @@ pub fn qmd_index_path(root: &Path) -> PathBuf {
 /// `<root>/system`, so qmd writes its `qmd/index.sqlite` under `system/`.
 pub fn qmd_cache_home(root: &Path) -> PathBuf {
     crate::layout::system_dir(root)
+}
+
+/// Entry script of the `@tobilu/qmd` package inside a staged runtime
+/// tree — what the package's `bin/qmd` launcher execs (see
+/// `third-party/qmd/bin/qmd`), so running it via node directly is
+/// equivalent to `npx -y @tobilu/qmd@<v>`.
+const QMD_ENTRY_REL: &str = "node_modules/@tobilu/qmd/dist/cli/qmd.js";
+
+/// `Command` invoking the qmd CLI at exactly `version`: the app-bundled
+/// Node runtime when that version is staged (see
+/// [`crate::node_runtime`]), else `npx -y @tobilu/qmd@<version>`. Every
+/// qmd shell-out (indexer, runner, daemon) must go through this so the
+/// bundled/npx choice stays in one place.
+pub fn qmd_command(version: &str) -> std::process::Command {
+    crate::node_runtime::bundled_command("qmd", version, QMD_ENTRY_REL)
+        .unwrap_or_else(|| crate::node_runtime::npx_command(&format!("@tobilu/qmd@{version}")))
 }

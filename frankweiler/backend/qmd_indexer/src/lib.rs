@@ -2,7 +2,9 @@
 //! rendered conversation markdown tree at a given root.
 //!
 //! QMD (https://github.com/tobi/qmd) is an npm package. We invoke it via
-//! `npx -y @tobilu/qmd@<version>` so callers don't need a global install.
+//! [`frankweiler_core::qmd::qmd_command`] — the app-bundled Node runtime
+//! when staged, else `npx -y @tobilu/qmd@<version>` — so callers don't
+//! need a global install.
 //!
 //! QMD stores its index under `$XDG_CACHE_HOME/qmd/index.sqlite`. We pin
 //! it inside the data root by setting `XDG_CACHE_HOME=<root>/system`, so
@@ -23,7 +25,6 @@
 //! the symlink transparently and models stay outside the data root.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use frankweiler_core::sync_phase::SyncPhase;
@@ -137,7 +138,6 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         .with_context(|| format!("failed to create models dir {}", opts.models_dir.display()))?;
     ensure_models_symlink(&qmd_dir, &opts.models_dir)?;
 
-    let qmd_pkg = format!("@tobilu/qmd@{}", opts.qmd_version);
     let index_path = qmd_dir.join("index.sqlite");
     let first_run = !index_path.exists();
 
@@ -147,7 +147,17 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
         "[qmd-indexer] models dir  = {} (symlinked)",
         opts.models_dir.display()
     );
-    status_line!("[qmd-indexer] qmd package = {qmd_pkg}");
+    status_line!(
+        "[qmd-indexer] qmd package = @tobilu/qmd@{} ({})",
+        opts.qmd_version,
+        if frankweiler_core::node_runtime::is_bundled(&frankweiler_core::qmd::qmd_command(
+            &opts.qmd_version
+        )) {
+            "bundled runtime"
+        } else {
+            "via npx"
+        }
+    );
     status_line!("[qmd-indexer] embed       = {}", opts.embed);
     status_line!(
         "[qmd-indexer] mode        = {}",
@@ -161,7 +171,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     if first_run {
         ensure_collection(
             &cache_home,
-            &qmd_pkg,
+            &opts.qmd_version,
             &[
                 "collection",
                 "add",
@@ -173,10 +183,10 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
             ],
         )?;
     }
-    run_qmd(&cache_home, &qmd_pkg, &["update"])?;
+    run_qmd(&cache_home, &opts.qmd_version, &["update"])?;
     if opts.embed {
         status_line!("{}", SyncPhase::Embed.marker());
-        run_qmd(&cache_home, &qmd_pkg, &["embed"])?;
+        run_qmd(&cache_home, &opts.qmd_version, &["embed"])?;
     }
 
     // Eagerly pull the query-expansion and reranker models so the first
@@ -190,7 +200,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // paying the download cost. Most likely failure mode is a network
     // hiccup pulling from huggingface; we don't want that to mark an
     // otherwise-fine sync as errored.
-    if let Err(e) = run_qmd(&cache_home, &qmd_pkg, &["pull"]) {
+    if let Err(e) = run_qmd(&cache_home, &opts.qmd_version, &["pull"]) {
         status_line!("[qmd-indexer] qmd pull failed (non-fatal): {e:#}");
     }
 
@@ -205,7 +215,7 @@ pub fn run_index(opts: &IndexOptions) -> Result<IndexOutcome> {
     // Capture `qmd status` for the run summary. Best-effort: a failure
     // here doesn't fail the index build — the index is already on disk
     // and usable.
-    let status_output = match capture_qmd_status(&cache_home, &qmd_pkg) {
+    let status_output = match capture_qmd_status(&cache_home, &opts.qmd_version) {
         Ok(s) => Some(s),
         Err(e) => {
             status_line!("[qmd-indexer] qmd status capture failed (non-fatal): {e:#}");
@@ -246,20 +256,22 @@ pub fn ensure_models_symlink(qmd_dir: &Path, models_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn capture_qmd_status(cache_home: &Path, qmd_pkg: &str) -> Result<String> {
-    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
-    let mut cmd = Command::new(&npx);
-    cmd.arg("-y").arg(qmd_pkg).arg("status");
+fn capture_qmd_status(cache_home: &Path, qmd_version: &str) -> Result<String> {
+    let mut cmd = frankweiler_core::qmd::qmd_command(qmd_version);
+    cmd.arg("status");
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     // Make sure ANSI color codes stay out of the captured text — qmd
     // disables color when stdout isn't a TTY (which it isn't here), but
     // belt-and-braces.
     cmd.env("NO_COLOR", "1");
-    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} status");
+    status_line!(
+        "[qmd-indexer] $ {}",
+        frankweiler_core::node_runtime::display_command(&cmd)
+    );
     let out = cmd
         .output()
-        .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+        .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
     if !out.status.success() {
         bail!(
             "qmd status failed: {}: stderr: {}",
@@ -283,19 +295,21 @@ fn capture_qmd_status(cache_home: &Path, qmd_pkg: &str) -> Result<String> {
 /// leaves the collection registered with no index file. Every later run
 /// then sees `first_run == true`, re-runs `collection add`, and aborts.
 /// Swallowing "already exists" makes the step re-entrant.
-fn ensure_collection(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
-    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
-    let mut cmd = Command::new(&npx);
-    cmd.arg("-y").arg(qmd_pkg).args(args);
+fn ensure_collection(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
+    let mut cmd = frankweiler_core::qmd::qmd_command(qmd_version);
+    cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
     cmd.env("NO_COLOR", "1");
-    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
+    status_line!(
+        "[qmd-indexer] $ {}",
+        frankweiler_core::node_runtime::display_command(&cmd)
+    );
     // Capture output so we can inspect it for the benign "already exists"
     // case; on the happy path qmd is quiet here anyway.
     let out = cmd
         .output()
-        .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+        .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
     if out.status.success() {
         return Ok(());
     }
@@ -311,17 +325,19 @@ fn ensure_collection(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<
     bail!("qmd {:?} failed: {}: {}", args, out.status, combined.trim());
 }
 
-fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
-    // Runtime override only: `$NPX_BIN` pins the binary when running
-    // outside bazel. Bazel actions don't get it forwarded (would bust
-    // action cache keys) and instead rely on `PATH` (pinned in
-    // `.bazelrc`).
-    let npx = std::env::var_os("NPX_BIN").unwrap_or_else(|| "npx".into());
-    let mut cmd = Command::new(&npx);
-    cmd.arg("-y").arg(qmd_pkg).args(args);
+fn run_qmd(cache_home: &Path, qmd_version: &str, args: &[&str]) -> Result<()> {
+    // Resolution (bundled runtime vs npx, `$NPX_BIN` override) lives in
+    // `frankweiler_core::qmd::qmd_command`. Bazel actions don't get
+    // `$NPX_BIN` forwarded (would bust action cache keys) and instead
+    // rely on `PATH` (pinned in `.bazelrc`).
+    let mut cmd = frankweiler_core::qmd::qmd_command(qmd_version);
+    cmd.args(args);
     cmd.env("XDG_CACHE_HOME", cache_home);
     cmd.env("XDG_CONFIG_HOME", cache_home);
-    status_line!("[qmd-indexer] $ npx -y {qmd_pkg} {}", args.join(" "));
+    status_line!(
+        "[qmd-indexer] $ {}",
+        frankweiler_core::node_runtime::display_command(&cmd)
+    );
     // `.status()` lets the child inherit our stdout/stderr, so qmd's own
     // output lands on the same terminal as the orchestrator's live
     // progress bars. Suspend the shared `MultiProgress` across the run
@@ -333,7 +349,7 @@ fn run_qmd(cache_home: &Path, qmd_pkg: &str, args: &[&str]) -> Result<()> {
         Some(mp) => mp.suspend(run),
         None => run(),
     }
-    .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+    .with_context(|| "failed to spawn qmd; is Node.js installed?")?;
     if !status.success() {
         bail!("qmd {:?} failed: {status}", args);
     }

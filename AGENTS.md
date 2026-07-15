@@ -29,8 +29,12 @@ third-party/   vendored upstream code (see below).
 It exists as a **reference for the qmd format** — we don't build or ship
 from it; treat it as read-only documentation in code form. Our runtime
 still consumes `@tobilu/qmd` via the registry pin in
-`frankweiler/backend/qmd_indexer/` (which shells out to `npx -y
-@tobilu/qmd@<version>`).
+`frankweiler/backend/qmd_indexer/`: the Tauri app bundles a pinned Node
+runtime plus registry-installed `latchkey`/`qmd` trees (staged by
+`frankweiler/tauri/stage-runtime.sh`, resolved by
+`frankweiler_core::node_runtime`), and every other environment — and
+the app, when a pinned version isn't staged — falls back to
+`npx -y @tobilu/qmd@<version>`.
 
 ### Why we don't run from the vendored tree
 
