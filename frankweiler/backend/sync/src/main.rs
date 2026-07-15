@@ -389,13 +389,9 @@ fn render_error(e: &anyhow::Error) {
         .collect::<Vec<_>>()
         .join("\n");
     if looks_like_auth_failure(&chain_text) {
-        if let Some(provider) = extract_provider_type(&chain_text) {
-            status_line!("\n--- auth hint ---");
-            status_line!("{}", auth_hint_for(provider));
-        } else {
-            status_line!("\n--- auth hint ---");
-            status_line!("{GENERIC_AUTH_HINT}");
-        }
+        let provider = extract_provider_type(&chain_text).unwrap_or("");
+        status_line!("\n--- auth hint ---");
+        status_line!("{}", auth_hint_for(provider));
     }
 }
 
@@ -442,16 +438,23 @@ This usually means latchkey credentials are missing or expired. \
 See <provider>/EXTRACT.md for setup. Confirm the in-tree curl shim is \
 built (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`), or \
 set $FRANKWEILER_CURL_SHIM / $LATCHKEY_CURL explicitly, and that \
-`latchkey auth list` shows entries.";
+`{LK} auth list` shows entries.";
 
+/// Per-provider fix-it text for auth failures. Every runnable latchkey
+/// command is written with a `{LK}` placeholder (plain `.replace`, not
+/// `format!` — several blocks contain literal braces) that resolves to
+/// the app-bundled `latchkey` launcher when running from the packaged
+/// app, else `npx -y latchkey@<pin>`, so the printed commands are
+/// copy-pasteable as-is in both worlds.
 fn auth_hint_for(provider: &str) -> String {
-    match provider {
+    let template: &str = match provider {
         // All hints route the secret through the macOS clipboard so it
         // never lands in shell history: a one-liner copies the token to
-        // the pasteboard, then the printed `latchkey auth set …` command
+        // the pasteboard, then the printed `… auth set …` command
         // expands `$(pbpaste)` at exec time. zsh/bash record the literal
         // `$(pbpaste)`, not the resolved value.
-        "chatgpt_api" => "\
+        "chatgpt_api" => {
+            "\
 chatgpt access token expired or missing.
 
   1. Open https://chatgpt.com in a logged-in browser, then in DevTools
@@ -461,7 +464,7 @@ chatgpt access token expired or missing.
        const j = await r.json();
        addEventListener('click', async () => {
          await navigator.clipboard.writeText(j.accessToken);
-         console.log('  latchkey auth set chatgpt -H \"Authorization: Bearer $(pbpaste)\"');
+         console.log('  {LK} auth set chatgpt -H \"Authorization: Bearer $(pbpaste)\"');
        }, { once: true });
      Then click anywhere on the chatgpt page; the console prints the
      command to run.
@@ -469,99 +472,106 @@ chatgpt access token expired or missing.
      run it. zsh/bash record the literal `$(pbpaste)`, not the resolved
      token, so the secret never lands in shell history.
   3. Smoke-test:
-       latchkey curl -s https://chatgpt.com/backend-api/me | head -c 200
+       {LK} curl -s https://chatgpt.com/backend-api/me | head -c 200
      Expect a JSON object with your account id. If you still see a
      Cloudflare challenge, copy `cf_clearance` from DevTools → Application
      → Cookies → chatgpt.com and add a second `-H \"Cookie: cf_clearance=$(pbpaste)\"`
      to the `latchkey auth set chatgpt` call.
 
 See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
-            .into(),
-        "claude_api" => "\
+        }
+        "claude_api" => {
+            "\
 anthropic sessionKey expired or missing.
 
   1. One-time: make sure the claude-ai service is registered
-     (`latchkey services info claude-ai` errors if it isn't):
-       latchkey services register claude-ai --base-api-url=\"https://claude.ai/\"
+     (`{LK} services info claude-ai` errors if it isn't):
+       {LK} services register claude-ai --base-api-url=\"https://claude.ai/\"
   2. Open https://claude.ai logged in. In DevTools → Application →
      Cookies → claude.ai, copy the `sessionKey` value to the clipboard.
   3. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"
+       {LK} auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"
   4. Smoke-test:
-       latchkey curl -s https://claude.ai/api/organizations | head -c 200
+       {LK} curl -s https://claude.ai/api/organizations | head -c 200
 
 See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
-            .into(),
-        "slack_api" => "\
+        }
+        "slack_api" => {
+            "\
 slack token expired or missing.
 
   1. Grab a user-scope OAuth token (xoxc/xoxp/xoxd) and copy it to the
      clipboard.
   2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set slack -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set slack -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
-       latchkey curl -s https://slack.com/api/auth.test | head -c 200
+       {LK} curl -s https://slack.com/api/auth.test | head -c 200
 
 See frankweiler/backend/etl/providers/slack/EXTRACT.md for details."
-            .into(),
-        "github_api" => "\
+        }
+        "github_api" => {
+            "\
 github PAT expired or missing.
 
   1. Create a fine-grained PAT at https://github.com/settings/tokens
      with `repo` + `read:user` scopes; copy it to the clipboard.
   2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set github -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set github -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
-       latchkey curl -s https://api.github.com/user | head -c 200
+       {LK} curl -s https://api.github.com/user | head -c 200
 
 See frankweiler/backend/etl/providers/github/EXTRACT.md for details."
-            .into(),
-        "gitlab_api" => "\
+        }
+        "gitlab_api" => {
+            "\
 gitlab token expired or missing.
 
   1. Create a personal token at https://gitlab.com/-/profile/personal_access_tokens
      with `read_api` scope; copy it to the clipboard.
   2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set gitlab -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set gitlab -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
-       latchkey curl -s https://gitlab.com/api/v4/user | head -c 200
+       {LK} curl -s https://gitlab.com/api/v4/user | head -c 200
 
 See frankweiler/backend/etl/providers/gitlab/EXTRACT.md for details."
-            .into(),
-        "notion_api" => "\
+        }
+        "notion_api" => {
+            "\
 notion integration token expired or missing.
 
   1. Create an internal integration at https://www.notion.so/profile/integrations
      and copy the secret to the clipboard.
   2. Run (uses `$(pbpaste)` so the token isn't recorded in shell history):
-       latchkey auth set notion -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set notion -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
-       latchkey curl -s -X POST https://api.notion.com/v1/search \\
+       {LK} curl -s -X POST https://api.notion.com/v1/search \\
          -H 'Notion-Version: 2022-06-28' -H 'Content-Type: application/json' \\
          -d '{}' | head -c 200
 
 See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
-            .into(),
-        "email" => "\
+        }
+        "email" => {
+            "\
 Email source: JMAP (Fastmail / generic) auth missing or expired.
 
   1. Create an API token at https://app.fastmail.com/settings/security/tokens
      with the 'Read-only access to mail' scope; copy it to the clipboard.
   2. Register the two host services and attach the token to both
      (Fastmail serves blob bytes from a separate host):
-       latchkey services register fastmail \\
+       {LK} services register fastmail \\
            --base-api-url=\"https://api.fastmail.com/\"
-       latchkey services register fastmail-content \\
+       {LK} services register fastmail-content \\
            --base-api-url=\"https://www.fastmailusercontent.com/\"
-       latchkey auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
-       latchkey auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set fastmail         -H \"Authorization: Bearer $(pbpaste)\"
+       {LK} auth set fastmail-content -H \"Authorization: Bearer $(pbpaste)\"
   3. Smoke-test:
-       latchkey curl -sSL https://api.fastmail.com/.well-known/jmap \\
+       {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
            | jq .primaryAccounts
 
 See frankweiler/backend/etl/providers/jmap/EXTRACT.md for details."
-            .into(),
-        "beeper" => "\
+        }
+        "beeper" => {
+            "\
 beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
 
   1. Make sure Beeper Texts is installed and has run at least once
@@ -575,9 +585,10 @@ beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
            \"SELECT COUNT(*) FROM threads;\"
 
 See frankweiler/backend/etl/providers/beeper/EXTRACT.md for details."
-            .into(),
-        _ => GENERIC_AUTH_HINT.into(),
-    }
+        }
+        _ => GENERIC_AUTH_HINT,
+    };
+    template.replace("{LK}", &frankweiler_core::node_runtime::latchkey_cli_hint())
 }
 
 async fn run(summary: &Arc<Mutex<SyncSummary>>, ctrlc: &Arc<Mutex<CtrlcState>>) -> Result<()> {

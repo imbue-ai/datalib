@@ -851,6 +851,12 @@ pub struct ConfigResponse {
     pub error: Option<String>,
     /// Number of configured sources (0 when invalid/missing).
     pub source_count: usize,
+    /// How the user should invoke the latchkey CLI on this install:
+    /// the app-bundled launcher's absolute path (shell-quoted if
+    /// needed) when running from the packaged app, else
+    /// `npx -y latchkey@<pin>`. The Setup UI splices this into its
+    /// copy-pasteable credential-setup snippets.
+    pub latchkey_cli: String,
 }
 
 /// `GET /api/config` — current `<root>/config.yaml` plus a parse check.
@@ -870,6 +876,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         parsed_ok,
         error,
         source_count,
+        latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
     })
 }
 
@@ -946,6 +953,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         parsed_ok: true,
         error: None,
         source_count: 0,
+        latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
     })
 }
 
@@ -957,16 +965,18 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 /// than commented examples here. Credentials never live in this file —
 /// downloaders pull them from `latchkey` at runtime.
 fn scaffold_yaml() -> String {
-    r#"# Frankweiler config for this data root. Edit here, Save, then use
+    let lk = frankweiler_core::node_runtime::latchkey_cli_hint();
+    format!(
+        r#"# Frankweiler config for this data root. Edit here, Save, then use
 # the Sync tab to pull your data in. Credentials are NOT stored in this
 # file — each downloader reads them from `latchkey` at runtime, so run
-# `latchkey auth set <provider>` first for any managed source.
+# `{lk} auth set <provider>` first for any managed source.
 #
 # Use the "Add a source" buttons above to append the sources you want.
 
 sources: []
 "#
-    .to_string()
+    )
 }
 
 /// Surface the typed `Config.sources` list to the UI as

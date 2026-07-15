@@ -21,7 +21,8 @@
 # Package versions are NOT pinned in this file: they're grepped out of
 # the Rust sources that spawn the tools (single source of truth, can't
 # drift):
-#   * latchkey  — LATCHKEY_VERSION in backend/etl/src/latchkey.rs
+#   * latchkey  — LATCHKEY_VERSION in backend/core/src/node_runtime.rs
+#                 (the ONE canonical latchkey pin; etl re-exports it)
 #   * qmd       — DEFAULT_QMD_VERSION in backend/core/src/qmd/mod.rs
 #                 (the ONE canonical qmd pin; indexer re-exports it,
 #                 //tools:qmd_version_pins_test guards the rest)
@@ -70,7 +71,7 @@ extract_pin() { # file, pattern of the const line
     printf '%s' "$v"
 }
 
-latchkey_version="$(extract_pin "$backend_dir/etl/src/latchkey.rs" \
+latchkey_version="$(extract_pin "$backend_dir/core/src/node_runtime.rs" \
     '^pub const LATCHKEY_VERSION:')"
 qmd_version="$(extract_pin "$backend_dir/core/src/qmd/mod.rs" \
     '^pub const DEFAULT_QMD_VERSION:')"

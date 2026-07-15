@@ -36,6 +36,45 @@ use std::process::Command;
 /// Relative path of the Node executable inside `runtime/`.
 const NODE_REL: &str = "node/bin/node";
 
+/// The ONE canonical latchkey version pin (see the qmd twin in
+/// [`crate::qmd::DEFAULT_QMD_VERSION`]): used for the `npx` fallback
+/// spec, as the key into the staged `runtime/latchkey/<version>/` tree,
+/// and re-exported by `frankweiler_etl::latchkey`.
+/// `frankweiler/tauri/stage-runtime.sh` greps this constant to decide
+/// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
+/// shape.
+pub const LATCHKEY_VERSION: &str = "2.16.0";
+
+/// The latchkey invocation to show in user-facing instructions and
+/// error messages: the app-bundled launcher when present (the
+/// `latchkey` wrapper staged next to our binaries — see
+/// `frankweiler/tauri/latchkey-wrapper.sh`), else the `npx` form.
+/// Returns a shell-ready command prefix, quoted if the path needs it,
+/// so callers can render e.g. `{hint} auth set slack …` and the user
+/// can paste it verbatim.
+pub fn latchkey_cli_hint() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        let exe = std::fs::canonicalize(&exe).unwrap_or(exe);
+        if let Some(dir) = exe.parent() {
+            let wrapper = dir.join("latchkey");
+            if wrapper.is_file() {
+                return shell_quote(&wrapper.to_string_lossy());
+            }
+        }
+    }
+    format!("npx -y latchkey@{LATCHKEY_VERSION}")
+}
+
+/// Single-quote `s` for POSIX shells unless it's plainly safe. Good
+/// enough for rendering paths inside copy-pasteable instructions.
+fn shell_quote(s: &str) -> String {
+    let safe = |c: char| c.is_ascii_alphanumeric() || "/._+-@%".contains(c);
+    if !s.is_empty() && s.chars().all(safe) {
+        return s.to_string();
+    }
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Resolve the staged `runtime/` root, or `None` when not bundled.
 pub fn runtime_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("FRANKWEILER_RUNTIME_DIR") {
@@ -146,6 +185,19 @@ mod tests {
         // SAFETY: single-threaded test, no concurrent env access.
         unsafe { std::env::remove_var("FRANKWEILER_RUNTIME_DIR") };
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn shell_quote_paths() {
+        assert_eq!(
+            shell_quote("/Applications/F.app/binaries/latchkey"),
+            "/Applications/F.app/binaries/latchkey"
+        );
+        assert_eq!(
+            shell_quote("/Users/a b/Frankweiler.app/latchkey"),
+            "'/Users/a b/Frankweiler.app/latchkey'"
+        );
+        assert_eq!(shell_quote("a'b"), r"'a'\''b'");
     }
 
     #[test]

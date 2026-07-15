@@ -186,12 +186,12 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
     None
 }
 
-/// Pinned latchkey version, used both for the `npx` fallback spec and
-/// as the key into the app-bundled runtime tree
-/// (`runtime/latchkey/<version>/…`). `frankweiler/tauri/stage-runtime.sh`
-/// greps this constant to decide what to stage — keep the
-/// `LATCHKEY_VERSION` name and string-literal shape.
-pub const LATCHKEY_VERSION: &str = "2.16.0";
+/// Re-exports of the ONE canonical latchkey pin and the user-facing
+/// invocation hint (`frankweiler_core::node_runtime`) — re-exports
+/// rather than literals so this crate and the provider crates cannot
+/// drift from the hint text / staged tree (same discipline as the qmd
+/// pin).
+pub use frankweiler_core::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
 /// Entry script of the `latchkey` npm package inside a staged runtime
 /// tree (its package.json `bin` target), equivalent to what
