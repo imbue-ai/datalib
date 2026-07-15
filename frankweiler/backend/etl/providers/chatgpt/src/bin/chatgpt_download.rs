@@ -37,6 +37,13 @@ struct Args {
     #[arg(long, default_value_t = SLEEP_BETWEEN.as_secs_f64())]
     sleep_between: f64,
 
+    /// Only sync conversations whose `update_time` is at or after this
+    /// instant (RFC 3339 or YYYY-MM-DD, assumed UTC). Older
+    /// conversations are never detail-fetched, and the listing walk
+    /// stops early once it pages past the cutoff.
+    #[arg(long)]
+    since: Option<String>,
+
     /// Fetch only these conversation ids, skipping the listing walk.
     /// Pass `--conv-uuid` once per target; each result lands at
     /// `<out>/conversations/<id>.json`.
@@ -57,6 +64,7 @@ async fn main() -> Result<()> {
         max_pages: args.max_pages,
         limit: args.limit,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        since: args.since.clone(),
         conv_uuids: args.conv_uuids.clone(),
         ..Default::default()
     };
@@ -68,6 +76,7 @@ async fn main() -> Result<()> {
         listing = summary.listing,
         fetched = summary.fetched,
         skipped = summary.skipped,
+        out_of_scope = summary.out_of_scope,
         errors = summary.errors,
         requests = summary.requests,
         network_seconds = summary.network_seconds,

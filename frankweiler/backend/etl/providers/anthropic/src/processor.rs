@@ -63,16 +63,18 @@ impl DataProcessor for AnthropicExtract {
                 .map(|v| v as usize)
                 .unwrap_or(0),
             sleep_between: Duration::ZERO,
+            since: self.sync.since.clone(),
             conv_uuids: self.sync.conv_uuids.clone(),
             progress: ctx.progress.clone(),
             control: ctx.control.clone(),
         })
         .await?;
         let summary = format!(
-            "fetched={} skipped={} errors={} forbidden_orgs={} total={} requests={} \
-             forbidden_retry_attempts={} forbidden_retry_recoveries={}",
+            "fetched={} skipped={} out_of_scope={} errors={} forbidden_orgs={} total={} \
+             requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
             s.fetched,
             s.skipped,
+            s.out_of_scope,
             s.errors,
             s.forbidden_orgs,
             s.total,

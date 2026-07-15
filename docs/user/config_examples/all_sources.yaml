@@ -50,14 +50,15 @@ sources:
 
   # Claude.ai conversation mirror over the web API. Credentials come from
   # latchkey at runtime (see first_time_user.md). Bare `sync: {}` fetches
-  # every conversation across every org; the knobs bound incremental work.
+  # every conversation across every org; the knobs bound the work.
   - name: claude-api
     source:
       type: claude_api
       # common:
       #   raw_path: /mnt/big/datalib-raw/claude-api  # optional: store our raw copy elsewhere
       sync:
-        refresh_window_days: 7              # treat anything older than this as cold
+        since: "2025-01-01"                 # only sync conversations updated at/after this
+                                            # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
         refresh_most_recent_n_chat_count: 3 # force-refetch top-N by updated_at
         # conv_uuids:                       # or: fetch only these (UUIDs or paste-able URLs)
         #   - https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000
@@ -77,9 +78,10 @@ sources:
     source:
       type: chatgpt_api
       sync:
-        refresh_window_days: 7
+        since: "2025-01-01"  # only sync conversations updated at/after this
+                             # (RFC 3339 or YYYY-MM-DD; move it back to backfill)
         max_pages: 20        # pagination cap on listing
-        limit: 100           # records per page
+        limit: 100           # cap on detail fetches per run
         sleep_between: 0.5   # seconds between requests (be polite)
         # conv_uuids:
         #   - https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789

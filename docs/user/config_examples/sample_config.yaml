@@ -47,4 +47,4 @@ sources:
       type: claude_api
       sync: {}
         # refresh_most_recent_n_chat_count: 3   # force-refetch top-N by updated_at
-        # refresh_window_days: 7   # treat anything older than this as cold
+        # since: "2025-01-01"      # only sync conversations updated at/after this

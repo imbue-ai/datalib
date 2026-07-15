@@ -59,6 +59,13 @@ pub struct FetchOptions {
     pub max_pages: Option<usize>,
     pub limit: Option<usize>,
     pub sleep_between: Duration,
+    /// Only sync conversations whose `update_time` is at or after this
+    /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
+    /// conversations are never detail-fetched, and the listing walk
+    /// stops early once a page ends past the cutoff (the listing is
+    /// `order=updated`, newest first). `None` → sync everything.
+    /// Ignored in `conv_uuids` mode.
+    pub since: Option<String>,
     /// When non-empty, fetch only these conversation ids. Skips the
     /// paginated listing walk; `/me` is still fetched (cheap, captures
     /// account id).
@@ -77,6 +84,11 @@ pub struct FetchOptions {
 pub struct FetchSummary {
     pub fetched: usize,
     pub skipped: usize,
+    /// Listed items ignored because their `update_time` predates the
+    /// configured `since`. Items behind an early-stopped listing walk
+    /// are never listed at all and are not counted here. Not counted
+    /// in `skipped` (which means "in scope and already up to date").
+    pub out_of_scope: usize,
     pub errors: usize,
     pub listing: usize,
     pub new_blobs: usize,
@@ -108,9 +120,19 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .context("clear chatgpt_attachments.blake3 before refetch")?;
     }
 
+    // Canonicalized to whole-second epoch, the same grain the
+    // skip-check compares `update_time`s at (see `update_time_secs`).
+    let since_secs = opts
+        .since
+        .as_deref()
+        .map(parse_since_secs)
+        .transpose()
+        .with_context(|| format!("sync.since {:?}", opts.since))?;
+
     let run_config = json!({
         "max_pages": opts.max_pages,
         "limit": opts.limit,
+        "since": opts.since,
         "conv_uuids": opts.conv_uuids,
     });
     let run = ExtractRun::start(db.pool(), &run_config).await?;
@@ -192,9 +214,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
 
         opts.progress.set_message("listing conversations");
-        let listing = list_all_conversations(&mut client, opts.max_pages, &opts.progress)
-            .instrument(info_span!("chatgpt_list"))
-            .await?;
+        let listing =
+            list_all_conversations(&mut client, opts.max_pages, since_secs, &opts.progress)
+                .instrument(info_span!("chatgpt_list"))
+                .await?;
         info!(event = "chatgpt_listing", convs = listing.len());
         summary.listing = listing.len();
 
@@ -224,6 +247,21 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             let Some(cid) = item.get("id").and_then(|v| v.as_str()) else {
                 continue;
             };
+            // `since` scope filter: out-of-scope items are never
+            // detail-fetched. Items with an unparseable `update_time`
+            // fall through in scope (fetch rather than silently drop).
+            // The filter only gates fetching — already-stored rows are
+            // untouched — so moving `since` further back later
+            // backfills the newly-in-scope conversations as missing.
+            if let (Some(cutoff), Some(api_secs)) = (
+                since_secs,
+                item.get("update_time").and_then(update_time_secs),
+            ) {
+                if api_secs < cutoff {
+                    summary.out_of_scope += 1;
+                    continue;
+                }
+            }
             match existing.get(cid) {
                 None => missing.push(item),
                 // Canonicalize both sides to a whole-second epoch before
@@ -249,6 +287,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             missing = missing.len(),
             stale = stale.len(),
             up_to_date = up_to_date,
+            out_of_scope = summary.out_of_scope,
         );
         summary.skipped += up_to_date;
 
@@ -657,6 +696,7 @@ async fn download_one_file(
 async fn list_all_conversations(
     client: &mut ChatGPTClient,
     max_pages: Option<usize>,
+    since_secs: Option<i64>,
     progress: &frankweiler_etl::progress::Progress,
 ) -> Result<Vec<Value>> {
     let mut items: Vec<Value> = Vec::new();
@@ -682,10 +722,26 @@ async fn list_all_conversations(
         );
         let got = page_items.len();
         items.extend(page_items);
+        // The listing is `order=updated` (newest first), so once a
+        // page *ends* older than the `since` cutoff every later page
+        // is older still — stop walking. The page's own items are kept
+        // (any below the cutoff classify as out-of-scope); an
+        // unparseable `update_time` never stops the walk.
+        let page_ends_before_since = match (since_secs, items.last()) {
+            (Some(cutoff), Some(last)) => last
+                .get("update_time")
+                .and_then(update_time_secs)
+                .is_some_and(|secs| secs < cutoff),
+            _ => false,
+        };
         offset += got;
         pages += 1;
         progress.set_message(&format!("listing page {pages}, {} convs", items.len()));
         if got == 0 {
+            break;
+        }
+        if page_ends_before_since {
+            info!(event = "chatgpt_listing_since_stop", pages = pages);
             break;
         }
         if let Some(t) = total {
@@ -702,6 +758,17 @@ async fn list_all_conversations(
         sleep(SLEEP_BETWEEN).await;
     }
     Ok(items)
+}
+
+/// Parse a `since` config value — full RFC 3339 or bare `YYYY-MM-DD`
+/// (assumed UTC midnight) — down to the whole-second Unix epoch the
+/// skip-check compares at. Same accepted forms as slack's `since` and
+/// anthropic's.
+fn parse_since_secs(s: &str) -> Result<i64> {
+    let t = frankweiler_time::parse_strict(s)
+        .or_else(|_| frankweiler_time::parse_yyyy_mm_dd_assumed_utc(s))
+        .with_context(|| format!("expected RFC 3339 or YYYY-MM-DD, got {s:?}"))?;
+    Ok(t.inner().timestamp())
 }
 
 #[cfg(test)]
@@ -753,5 +820,33 @@ mod tests {
         // Unparseable text is `None` → caller treats the row as stale.
         assert_eq!(stored_update_time_secs("garbage"), None);
         assert_eq!(update_time_secs(&Value::Null), None);
+    }
+
+    #[test]
+    fn parse_since_secs_accepts_date_and_rfc3339() {
+        // 2024-03-20T00:00:00Z
+        assert_eq!(parse_since_secs("2024-03-20").unwrap(), 1_710_892_800);
+        assert_eq!(
+            parse_since_secs("2024-03-20T18:28:51Z").unwrap(),
+            1_710_959_331
+        );
+        // Offsets are honored: 18:28:51+02:00 is 16:28:51Z.
+        assert_eq!(
+            parse_since_secs("2024-03-20T18:28:51+02:00").unwrap(),
+            1_710_952_131
+        );
+        assert!(parse_since_secs("not-a-date").is_err());
+    }
+
+    #[test]
+    fn since_cutoff_compares_at_seconds_grain_with_listing_shape() {
+        // The scope filter compares `update_time_secs(listing item)`
+        // against the parsed cutoff — same grain as the skip-check, so
+        // a listing ISO string on the cutoff second is in scope.
+        let cutoff = parse_since_secs("2024-03-20T18:28:51Z").unwrap();
+        let on_boundary = json!(iso_for_epoch(1_710_959_331.9));
+        let just_before = json!(iso_for_epoch(1_710_959_330.1));
+        assert!(update_time_secs(&on_boundary).unwrap() >= cutoff);
+        assert!(update_time_secs(&just_before).unwrap() < cutoff);
     }
 }

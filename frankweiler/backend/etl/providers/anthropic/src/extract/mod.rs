@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use frankweiler_etl::bulk::bulk_upsert_in_tx;
 use frankweiler_etl::doltlite_raw::WirePayload;
 use frankweiler_etl::extract_run::ExtractRun;
@@ -57,6 +58,12 @@ pub struct FetchOptions {
     pub export_dir: Option<PathBuf>,
     pub overlap: usize,
     pub sleep_between: Duration,
+    /// Only sync conversations whose listing `updated_at` is at or
+    /// after this instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC).
+    /// Older conversations are never detail-fetched — the listing walk
+    /// itself is one request per org and stays unbounded. `None` →
+    /// sync everything. Ignored in `conv_uuids` mode.
+    pub since: Option<String>,
     /// When non-empty, fetch only these conversation UUIDs. The
     /// listing walk is skipped entirely.
     pub conv_uuids: Vec<String>,
@@ -69,6 +76,10 @@ pub struct FetchOptions {
 pub struct FetchSummary {
     pub fetched: usize,
     pub skipped: usize,
+    /// Listing items ignored because their `updated_at` predates the
+    /// configured `since`. Not counted in `skipped` (which means
+    /// "in scope and already up to date") or `total`.
+    pub out_of_scope: usize,
     pub forbidden_orgs: usize,
     pub errors: usize,
     pub total: usize,
@@ -108,8 +119,16 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
             .context("clear anthropic_attachments.blake3 before refetch")?;
     }
 
+    let since = opts
+        .since
+        .as_deref()
+        .map(parse_iso_or_utc_date)
+        .transpose()
+        .with_context(|| format!("sync.since {:?}", opts.since))?;
+
     let run_config = json!({
         "overlap": opts.overlap,
+        "since": opts.since,
         "conv_uuids": opts.conv_uuids,
     });
     let run = ExtractRun::start(db.pool(), &run_config).await?;
@@ -243,11 +262,29 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
         }
 
         for (org_uuid, org_name, listing) in &listings_by_org {
+            // `since` scope filter comes first: out-of-scope items are
+            // invisible to overlap selection and classification alike,
+            // so they are never detail-fetched. The filter only gates
+            // fetching — rows already in the DB are left untouched —
+            // and moving `since` further back later backfills the
+            // newly-in-scope conversations as `missing` on that run.
+            let mut in_scope: Vec<&Value> = Vec::new();
+            let mut out_of_scope: usize = 0;
+            for c in listing {
+                if updated_at_in_scope(c.get("updated_at").and_then(|v| v.as_str()), since.as_ref())
+                {
+                    in_scope.push(c);
+                } else {
+                    out_of_scope += 1;
+                }
+            }
+            summary.out_of_scope += out_of_scope;
+
             let mut missing: Vec<&Value> = Vec::new();
             let mut stale: Vec<&Value> = Vec::new();
             let mut overlap_force: HashSet<String> = HashSet::new();
             {
-                let mut sorted: Vec<&Value> = listing.iter().collect();
+                let mut sorted: Vec<&Value> = in_scope.clone();
                 sorted.sort_by(|a, b| {
                     let ka = a.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
                     let kb = b.get("updated_at").and_then(|v| v.as_str()).unwrap_or("");
@@ -259,13 +296,13 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                     }
                 }
             }
-            let listed_ids: Vec<&str> = listing
+            let listed_ids: Vec<&str> = in_scope
                 .iter()
                 .filter_map(|c| c.get("uuid").and_then(|v| v.as_str()))
                 .collect();
             let existing = db.existing_updated_at(&listed_ids).await?;
             let mut up_to_date: usize = 0;
-            for item in listing {
+            for &item in &in_scope {
                 let Some(uuid) = item.get("uuid").and_then(|v| v.as_str()) else {
                     continue;
                 };
@@ -291,6 +328,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
                 missing = missing.len(),
                 stale = stale.len(),
                 up_to_date = up_to_date,
+                out_of_scope = out_of_scope,
             );
             summary.skipped += up_to_date;
 
@@ -798,5 +836,80 @@ async fn download_one_file(file_obj: &Value) -> Result<Option<(Vec<u8>, Option<S
             );
             Ok(None)
         }
+    }
+}
+
+/// Parse a `since` config value: full RFC 3339 or bare `YYYY-MM-DD`
+/// (assumed UTC midnight). Same accepted forms as slack's `since`.
+fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
+    let t = frankweiler_time::parse_strict(s)
+        .or_else(|_| frankweiler_time::parse_yyyy_mm_dd_assumed_utc(s))
+        .with_context(|| format!("expected RFC 3339 or YYYY-MM-DD, got {s:?}"))?;
+    Ok(t.inner().with_timezone(&Utc))
+}
+
+/// `since` scope check on a listing item's `updated_at`. An item with
+/// a missing or unparseable timestamp is conservatively in scope —
+/// better to fetch it than to silently drop it.
+fn updated_at_in_scope(updated_at: Option<&str>, since: Option<&DateTime<Utc>>) -> bool {
+    let Some(since) = since else {
+        return true;
+    };
+    let Some(s) = updated_at else {
+        return true;
+    };
+    match frankweiler_time::parse_strict(s) {
+        Ok(t) => t.inner().with_timezone(&Utc) >= *since,
+        Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn since_parses_date_and_rfc3339() {
+        let d = parse_iso_or_utc_date("2026-01-15").unwrap();
+        assert_eq!(d.to_rfc3339(), "2026-01-15T00:00:00+00:00");
+        let t = parse_iso_or_utc_date("2026-01-15T12:30:00Z").unwrap();
+        assert_eq!(t.to_rfc3339(), "2026-01-15T12:30:00+00:00");
+        assert!(parse_iso_or_utc_date("not-a-date").is_err());
+    }
+
+    #[test]
+    fn no_since_means_everything_in_scope() {
+        assert!(updated_at_in_scope(Some("2001-01-01T00:00:00Z"), None));
+        assert!(updated_at_in_scope(None, None));
+    }
+
+    #[test]
+    fn since_boundary_is_inclusive() {
+        let since = parse_iso_or_utc_date("2026-01-15").unwrap();
+        assert!(updated_at_in_scope(
+            Some("2026-01-15T00:00:00Z"),
+            Some(&since)
+        ));
+        assert!(updated_at_in_scope(
+            Some("2026-02-01T09:00:00+00:00"),
+            Some(&since)
+        ));
+        assert!(!updated_at_in_scope(
+            Some("2026-01-14T23:59:59Z"),
+            Some(&since)
+        ));
+    }
+
+    #[test]
+    fn since_respects_offsets_and_tolerates_garbage() {
+        let since = parse_iso_or_utc_date("2026-01-15").unwrap();
+        // 2026-01-15T01:00:00+02:00 is 2026-01-14T23:00:00Z — out.
+        assert!(!updated_at_in_scope(
+            Some("2026-01-15T01:00:00+02:00"),
+            Some(&since)
+        ));
+        // Missing/garbage updated_at stays in scope (fetch, don't drop).
+        assert!(updated_at_in_scope(None, Some(&since)));
+        assert!(updated_at_in_scope(Some("garbage"), Some(&since)));
     }
 }

@@ -130,6 +130,16 @@ The fetch loop reorders the listing so genuinely-missing conversations
 come first — if a 429 cuts the run short, the budget went to forward
 progress rather than revalidating cache hits.
 
+An optional `since` (config `sync.since:` / CLI `--since`; RFC 3339 or
+`YYYY-MM-DD`, assumed UTC) bounds the work: conversations whose
+`update_time` predates it are never detail-fetched, and because the
+listing is `order=updated` (newest first) the pagination walk stops
+early once a page ends past the cutoff. The filter only gates
+fetching — already-stored rows are untouched — so moving `since`
+further back later backfills the newly-in-scope conversations on that
+run. Comparison happens at whole-second grain, the same
+canonicalization the skip-check uses.
+
 ## Rate limits
 
 ChatGPT returns `429` with a `Retry-After` header during enforced

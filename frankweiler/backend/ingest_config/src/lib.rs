@@ -613,7 +613,7 @@ sources:
   - name: claude-api
     source:
       type: claude_api
-      sync: {refresh_window_days: 14, refresh_most_recent_n_chat_count: 2}
+      sync: {since: '2026-01-01', refresh_most_recent_n_chat_count: 2}
   - name: chatgpt
     source:
       type: chatgpt_api
