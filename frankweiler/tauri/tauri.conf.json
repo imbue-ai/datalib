@@ -20,6 +20,7 @@
       "binaries/frankweiler-http",
       "binaries/frankweiler-sync",
       "binaries/latchkey-curl-shim",
+      "binaries/latchkey",
       "runtime"
     ],
     "icon": [

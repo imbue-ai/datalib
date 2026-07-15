@@ -1,12 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-/// Everything `bundle.resources` expects under `binaries/`, staged by
-/// the config's beforeBuildCommand at `tauri build` time.
+/// Everything `bundle.resources` expects under `binaries/`, staged at
+/// `tauri build` time: the first three by the config's
+/// beforeBuildCommand (copied from Bazel output), the `latchkey`
+/// wrapper by stage-runtime.sh (installed from latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
     "binaries/frankweiler-http",
     "binaries/frankweiler-sync",
     "binaries/latchkey-curl-shim",
+    "binaries/latchkey",
 ];
 
 fn main() {

@@ -15,6 +15,8 @@
 #     latchkey/<v>/node_modules/latchkey/dist/src/cli.js
 #     qmd/<v>/node_modules/@tobilu/qmd/dist/cli/qmd.js   (one tree per
 #                                                         distinct pin)
+#   binaries/latchkey      user-facing launcher (latchkey-wrapper.sh):
+#                          bundled node + tree + LATCHKEY_CURL shim
 #
 # Package versions are NOT pinned in this file: they're grepped out of
 # the Rust sources that spawn the tools (single source of truth, can't
@@ -200,6 +202,14 @@ prune_stale() { # kind, live version
 }
 prune_stale latchkey "$latchkey_version"
 prune_stale qmd "$qmd_version"
+
+# User-facing `latchkey` launcher: bundled node + staged tree +
+# LATCHKEY_CURL pointed at the bundled shim. Lands next to the sidecar
+# binaries (same dir the shim is staged into by beforeBuildCommand) so
+# `.../Resources/binaries/latchkey services register …` just works.
+mkdir -p "$script_dir/binaries"
+install -m 0755 "$script_dir/latchkey-wrapper.sh" "$script_dir/binaries/latchkey"
+log "installed latchkey wrapper at binaries/latchkey"
 
 # ---------------------------------------------------------------------------
 # Codesigning (macOS release builds only).
