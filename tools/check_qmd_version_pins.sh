@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Asserts that every qmd version pin in the workspace agrees with the
-# canonical pin in `frankweiler/backend/qmd_indexer/src/lib.rs`'s
+# canonical pin in `frankweiler/backend/core/src/qmd/mod.rs`'s
 # `DEFAULT_QMD_VERSION` constant.
 #
 # Why this exists: qmd is installed/invoked from several places that all
@@ -11,8 +11,14 @@
 # bump qmd, update `DEFAULT_QMD_VERSION` first and chase the other
 # pins until this test passes.
 #
+# The Rust side needs no checking beyond the one constant: the search
+# runner/daemon read it directly and the indexer re-exports it. (It
+# used to be two same-named per-crate constants; a bump updated one and
+# missed the other, so search ran qmd 2.1.0 against a 2.5.3-built index
+# for six weeks. Don't reintroduce a second constant.)
+#
 # Pins checked:
-#   * frankweiler/backend/qmd_indexer/src/lib.rs   DEFAULT_QMD_VERSION  (canonical)
+#   * frankweiler/backend/core/src/qmd/mod.rs      DEFAULT_QMD_VERSION  (canonical)
 #   * tests/fixtures/BUILD.bazel                   QMD_VERSION
 #   * frankweiler/docker/Dockerfile                ARG QMD_VERSION
 #
@@ -36,18 +42,18 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
   { echo>&2 "ERROR: cannot find $f"; exit 1; }; f=; set -e
 # --- end runfiles.bash initialization v3 ---
 
-indexer_lib="$(rlocation _main/frankweiler/backend/qmd_indexer/src/lib.rs)"
+core_qmd_mod="$(rlocation _main/frankweiler/backend/core/src/qmd/mod.rs)"
 fixtures_build="$(rlocation _main/tests/fixtures/BUILD.bazel)"
 prod_dockerfile="$(rlocation _main/frankweiler/docker/Dockerfile)"
 
-for f in "$indexer_lib" "$fixtures_build" "$prod_dockerfile"; do
+for f in "$core_qmd_mod" "$fixtures_build" "$prod_dockerfile"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
 done
 
 # Each extractor pulls the version literal from the matching file's
 # pin. Designed to fail loudly (empty result → "" mismatch → reported
 # below) rather than silently treat a missing pin as match.
-extract_from_indexer() {
+extract_from_core() {
     grep -E '^pub const DEFAULT_QMD_VERSION:' "$1" \
         | sed -E 's/.*"([^"]+)".*/\1/'
 }
@@ -64,12 +70,12 @@ extract_from_dockerfile_arg() {
         | head -n1
 }
 
-canonical="$(extract_from_indexer "$indexer_lib")"
+canonical="$(extract_from_core "$core_qmd_mod")"
 fixtures_v="$(extract_from_fixtures_build "$fixtures_build")"
 prod_v="$(extract_from_dockerfile_arg "$prod_dockerfile")"
 
 if [[ -z "$canonical" ]]; then
-    echo "ERROR: failed to extract DEFAULT_QMD_VERSION from $indexer_lib" >&2
+    echo "ERROR: failed to extract DEFAULT_QMD_VERSION from $core_qmd_mod" >&2
     exit 1
 fi
 
@@ -87,7 +93,7 @@ report() {
 }
 
 echo "qmd version pins (canonical: ${canonical}):"
-report "frankweiler/backend/qmd_indexer/.../lib.rs"  "$canonical"
+report "frankweiler/backend/core/src/qmd/mod.rs"     "$canonical"
 report "tests/fixtures/BUILD.bazel"                  "$fixtures_v"
 report "frankweiler/docker/Dockerfile"               "$prod_v"
 
@@ -96,7 +102,7 @@ if [[ "$fails" != "0" ]]; then
 
 ${fails} qmd version pin(s) disagree with the canonical
 DEFAULT_QMD_VERSION (${canonical}) declared in
-frankweiler/backend/qmd_indexer/src/lib.rs.
+frankweiler/backend/core/src/qmd/mod.rs.
 
 Update the diverging files above to match, or — if upstream qmd has
 a new release worth tracking — bump DEFAULT_QMD_VERSION (and the

@@ -1,12 +1,15 @@
 use std::fs;
 use std::path::Path;
 
-/// Everything `bundle.resources` expects under `binaries/`, staged by
-/// the config's beforeBuildCommand at `tauri build` time.
+/// Everything `bundle.resources` expects under `binaries/`, staged at
+/// `tauri build` time: the first three by the config's
+/// beforeBuildCommand (copied from Bazel output), the `latchkey`
+/// wrapper by stage-runtime.sh (installed from latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
     "binaries/frankweiler-http",
     "binaries/frankweiler-sync",
     "binaries/latchkey-curl-shim",
+    "binaries/latchkey",
 ];
 
 fn main() {
@@ -48,6 +51,14 @@ fn main() {
             }
         }
     }
+
+    // `bundle.resources` also lists `runtime/` — the Node runtime +
+    // latchkey/qmd package trees staged by stage-runtime.sh, which (like
+    // the binaries above) only runs under `tauri build`. Tauri validates
+    // the path at compile time, so make sure the directory exists for
+    // bare `cargo check`/`cargo build`. No read-only dance needed: the
+    // staged tree comes from curl/npm, not Bazel's read-only outputs.
+    let _ = fs::create_dir_all("runtime");
 
     tauri_build::build()
 }

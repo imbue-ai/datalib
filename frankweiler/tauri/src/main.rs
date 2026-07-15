@@ -90,10 +90,13 @@ fn main() {
 
 /// Apps launched from Finder/Dock inherit launchd's minimal PATH
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which lacks the Homebrew / nvm
-/// directories where node and npx live — and the backend's qmd search
-/// shells out to `npx`. Capture the user's login-shell PATH instead
-/// (the spawned `frankweiler-http` child inherits it), the same trick
-/// as the `fix-path-env` crate, without the extra dependency.
+/// directories where node and npx live. The backend normally runs
+/// latchkey/qmd via the bundled runtime under `Resources/runtime/`
+/// (see `frankweiler_core::node_runtime`) and doesn't need host node —
+/// but its `npx` fallback (unstaged version pins, dev-ish setups) still
+/// does. Capture the user's login-shell PATH so that fallback keeps
+/// working (the spawned `frankweiler-http` child inherits it), the same
+/// trick as the `fix-path-env` crate, without the extra dependency.
 #[cfg(target_os = "macos")]
 fn inherit_shell_path() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());

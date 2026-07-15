@@ -212,6 +212,11 @@ export type ConfigResponse = {
   // Loader error when parsed_ok is false.
   error: string | null;
   source_count: number;
+  // How to invoke the latchkey CLI on this install: the app-bundled
+  // launcher's absolute path when running from the packaged app, else
+  // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
+  // copy-pasteable credential snippets.
+  latchkey_cli: string;
 };
 
 export type SaveConfigResponse = {

@@ -21,7 +21,7 @@ sh_test(
     srcs = ["check_qmd_model_cache_path.sh"],
     data = [
         "//:.bazelrc",
-        "//frankweiler/backend/qmd_indexer:src/lib.rs",
+        "//frankweiler/backend/core:src/qmd/mod.rs",
         "//third-party/qmd:package.json",
         "//third-party/qmd:src/llm.ts",
     ],
@@ -29,16 +29,17 @@ sh_test(
 )
 
 # Asserts that every qmd version pin in the workspace agrees with
-# `DEFAULT_QMD_VERSION` in qmd_indexer/src/lib.rs. Catches the case
-# where the Dockerfile bakes one qmd version into the image but
-# frankweiler-sync runtime fetches a different one via
+# `DEFAULT_QMD_VERSION` in core/src/qmd/mod.rs (the ONE Rust constant;
+# runner/daemon read it directly and qmd_indexer re-exports it).
+# Catches the case where the Dockerfile bakes one qmd version into the
+# image but frankweiler-sync runtime fetches a different one via
 # `npx -y @tobilu/qmd@<v>` — leaving the baked model layer unused.
 sh_test(
     name = "qmd_version_pins_test",
     size = "small",
     srcs = ["check_qmd_version_pins.sh"],
     data = [
-        "//frankweiler/backend/qmd_indexer:src/lib.rs",
+        "//frankweiler/backend/core:src/qmd/mod.rs",
         "//frankweiler/docker:Dockerfile",
         "//tests/fixtures:BUILD.bazel",
     ],

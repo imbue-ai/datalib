@@ -6,7 +6,7 @@
 # `frankweiler_qmd_indexer::default_models_dir()` returns.
 #
 # Why this exists: qmd is fetched at build time via `npx -y
-# @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see qmd_indexer/src/lib.rs). The
+# @tobilu/qmd@<DEFAULT_QMD_VERSION>` (see core/src/qmd/mod.rs). The
 # vendored `third-party/qmd/` snapshot is kept in sync with that
 # version (parity checked below) so this test catches the case where
 # upstream qmd changes its cache-path constant — we'd otherwise notice
@@ -33,10 +33,10 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null || \
 
 llm_ts="$(rlocation _main/third-party/qmd/src/llm.ts)"
 pkg_json="$(rlocation _main/third-party/qmd/package.json)"
-indexer_lib="$(rlocation _main/frankweiler/backend/qmd_indexer/src/lib.rs)"
+core_qmd_mod="$(rlocation _main/frankweiler/backend/core/src/qmd/mod.rs)"
 bazelrc="$(rlocation _main/.bazelrc)"
 
-for f in "$llm_ts" "$pkg_json" "$indexer_lib" "$bazelrc"; do
+for f in "$llm_ts" "$pkg_json" "$core_qmd_mod" "$bazelrc"; do
     [[ -f "$f" ]] || { echo "ERROR: required input not found at $f" >&2; exit 1; }
 done
 
@@ -77,21 +77,21 @@ fi
 # Without this, the grep above tests a snapshot that isn't what
 # `npx -y @tobilu/qmd@<DEFAULT_QMD_VERSION>` actually fetches.
 pkg_version="$(grep -E '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$pkg_json" | head -n1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
-indexer_version="$(grep -E '^pub const DEFAULT_QMD_VERSION:' "$indexer_lib" | sed -E 's/.*"([^"]+)".*/\1/')"
+pinned_version="$(grep -E '^pub const DEFAULT_QMD_VERSION:' "$core_qmd_mod" | sed -E 's/.*"([^"]+)".*/\1/')"
 
-if [[ -z "$pkg_version" || -z "$indexer_version" ]]; then
-    echo "ERROR: failed to extract qmd version (pkg=$pkg_version, indexer=$indexer_version)" >&2
+if [[ -z "$pkg_version" || -z "$pinned_version" ]]; then
+    echo "ERROR: failed to extract qmd version (pkg=$pkg_version, pinned=$pinned_version)" >&2
     exit 1
 fi
-if [[ "$pkg_version" != "$indexer_version" ]]; then
+if [[ "$pkg_version" != "$pinned_version" ]]; then
     cat >&2 <<EOF
 Vendored qmd snapshot is out of sync with DEFAULT_QMD_VERSION.
 
   third-party/qmd/package.json               version = "$pkg_version"
-  qmd_indexer/src/lib.rs   DEFAULT_QMD_VERSION = "$indexer_version"
+  core/src/qmd/mod.rs    DEFAULT_QMD_VERSION = "$pinned_version"
 
 Either update DEFAULT_QMD_VERSION to "$pkg_version" or re-vendor
-third-party/qmd/ at $indexer_version, then re-run this test. The
+third-party/qmd/ at $pinned_version, then re-run this test. The
 upstream cache-path check above is only meaningful when these match.
 EOF
     exit 1

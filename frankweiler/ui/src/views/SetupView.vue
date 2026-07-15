@@ -37,13 +37,20 @@ function isoDaysAgo(days: number): string {
 // never here — they come from latchkey at runtime. Bodies are functions
 // so date-dependent snippets (Slack's `since:`) are computed at click
 // time.
+// How to invoke the latchkey CLI in the snippets below. The backend
+// reports the right form for this install (the app-bundled launcher's
+// path, or an npx fallback) on ConfigResponse; until the first config
+// fetch resolves we show the npx form, which works everywhere Node
+// does.
+const latchkeyCli = ref("npx -y latchkey");
+
 const SNIPPETS: { label: string; body: () => string }[] = [
   {
     label: "Claude",
     body: () => `  # Prerequisite (one-time): register claude.ai with latchkey and
   # supply your sessionKey cookie (DevTools → Application → Cookies):
-  #   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
-  #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+  #   ${latchkeyCli.value} services register claude-ai --base-api-url="https://claude.ai/"
+  #   ${latchkeyCli.value} auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
   # See docs/user/getting_your_data.md for the full walkthrough.
   - name: claude
     source:
@@ -137,6 +144,7 @@ async function load() {
     const cfg: ConfigResponse = await fetchConfig();
     configPath.value = cfg.path;
     existed.value = cfg.exists;
+    if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
     if (cfg.exists) {
       yaml.value = cfg.yaml;
       diskStatus.value = {

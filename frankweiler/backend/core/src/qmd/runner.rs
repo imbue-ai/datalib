@@ -1,7 +1,9 @@
 //! Thin wrapper around the `qmd` CLI.
 //!
-//! Shells out via `npx -y @tobilu/qmd@<version>` — same incantation as
-//! `frankweiler_qmd_indexer`. The runner does NOT build the index; it
+//! Shells out via [`crate::qmd::qmd_command`] (the app-bundled Node
+//! runtime when staged, else `npx -y @tobilu/qmd@<version>`) — same
+//! incantation as `frankweiler_qmd_indexer`. The runner does NOT build
+//! the index; it
 //! expects one already present at `<root>/.frankweiler/qmd/index.sqlite`.
 //!
 //! Search modes:
@@ -18,9 +20,9 @@ use crate::qmd::mapping::{QmdHit, QueryMode};
 use crate::qmd::{qmd_cache_home, qmd_index_path};
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-pub const DEFAULT_QMD_VERSION: &str = "2.1.0";
+pub use crate::qmd::DEFAULT_QMD_VERSION;
+
 pub const DEFAULT_COLLECTION: &str = "mirror";
 
 #[derive(Debug, Clone)]
@@ -91,11 +93,8 @@ impl QmdRunner {
     }
 
     fn run(&self, mode: &str, q: &str, limit: usize, extra: &[&str]) -> Result<Vec<QmdHit>> {
-        let pkg = format!("@tobilu/qmd@{}", self.cfg.qmd_version);
-        let mut cmd = Command::new("npx");
-        cmd.arg("-y")
-            .arg(&pkg)
-            .arg(mode)
+        let mut cmd = crate::qmd::qmd_command(&self.cfg.qmd_version);
+        cmd.arg(mode)
             .arg(q)
             .arg("-n")
             .arg(limit.to_string())
@@ -104,9 +103,12 @@ impl QmdRunner {
             cmd.arg(a);
         }
         cmd.env("XDG_CACHE_HOME", self.cfg.cache_home());
-        let out = cmd
-            .output()
-            .with_context(|| "failed to spawn npx; is Node.js installed?")?;
+        let out = cmd.output().with_context(|| {
+            format!(
+                "failed to spawn `{}`; is Node.js installed?",
+                crate::node_runtime::display_command(&cmd)
+            )
+        })?;
         if !out.status.success() {
             bail!(
                 "qmd {} failed (rc={}): {}",

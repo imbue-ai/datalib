@@ -426,17 +426,18 @@ fn credential_hint(e: ClaudeError) -> anyhow::Error {
     if !setup_problem {
         return anyhow::anyhow!("list orgs: {s}");
     }
+    let lk = frankweiler_etl::latchkey::latchkey_cli_hint();
     anyhow::anyhow!(
         "claude.ai credentials are not set up: {s}\n\
          One-time latchkey setup:\n\
          1. Register the service:\n\
-              npx -y latchkey services register claude-ai --base-api-url=\"https://claude.ai/\"\n\
+              {lk} services register claude-ai --base-api-url=\"https://claude.ai/\"\n\
          2. Open https://claude.ai logged in; in DevTools → Application → Cookies →\n\
             claude.ai, copy the `sessionKey` value to the clipboard.\n\
          3. Store it (`$(pbpaste)` keeps the secret out of shell history):\n\
-              npx -y latchkey auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"\n\
+              {lk} auth set claude-ai -H \"Cookie: sessionKey=$(pbpaste)\"\n\
          4. Smoke-test:\n\
-              npx -y latchkey curl -s https://claude.ai/api/organizations | head -c 200\n\
+              {lk} curl -s https://claude.ai/api/organizations | head -c 200\n\
          See docs/user/getting_your_data.md for the full walkthrough."
     )
 }
