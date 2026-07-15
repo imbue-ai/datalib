@@ -231,8 +231,9 @@ if [[ "$node_platform" == darwin-* && -n "${APPLE_SIGNING_IDENTITY:-}" ]]; then
             --sign "$APPLE_SIGNING_IDENTITY" "$runtime_dir/node/bin/node"
     fi
     # Every native library in the trees must be signed for notarization.
+    # *.so: node-llama-cpp names its Mach-O dylibs libggml-*.so.
     find "$runtime_dir/latchkey" "$runtime_dir/qmd" \
-        \( -name '*.node' -o -name '*.dylib' \) -type f -print0 |
+        \( -name '*.node' -o -name '*.dylib' -o -name '*.so' \) -type f -print0 |
         while IFS= read -r -d '' lib; do
             codesign --force --options runtime --timestamp \
                 --sign "$APPLE_SIGNING_IDENTITY" "$lib"
