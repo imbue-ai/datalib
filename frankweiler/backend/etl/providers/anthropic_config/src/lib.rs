@@ -28,8 +28,13 @@ impl AnthropicConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeApiSync {
+    /// Only sync conversations whose `updated_at` is at or after this
+    /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
+    /// conversations are never detail-fetched; moving the date further
+    /// back later backfills them on the next run. Unset → sync
+    /// everything.
     #[serde(default)]
-    pub refresh_window_days: Option<i64>,
+    pub since: Option<String>,
     /// Force-refetch the N most-recently-updated conversations each run.
     #[serde(default)]
     pub refresh_most_recent_n_chat_count: Option<i64>,

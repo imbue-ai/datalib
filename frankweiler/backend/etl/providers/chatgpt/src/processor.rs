@@ -53,6 +53,7 @@ impl DataProcessor for ChatgptExtract {
             max_pages: self.sync.max_pages.map(|v| v as usize),
             limit: self.sync.limit.map(|v| v as usize),
             sleep_between: Duration::ZERO,
+            since: self.sync.since.clone(),
             conv_uuids: self.sync.conv_uuids.clone(),
             fetched_at: Some(ctx.now.to_string()),
             progress: ctx.progress.clone(),
@@ -60,8 +61,8 @@ impl DataProcessor for ChatgptExtract {
         })
         .await?;
         let summary = format!(
-            "fetched={} skipped={} errors={} listing={} requests={}",
-            s.fetched, s.skipped, s.errors, s.listing, s.requests,
+            "fetched={} skipped={} out_of_scope={} errors={} listing={} requests={}",
+            s.fetched, s.skipped, s.out_of_scope, s.errors, s.listing, s.requests,
         );
         Ok(session.finish(ctx, summary).await)
     }

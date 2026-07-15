@@ -23,8 +23,14 @@ impl ChatgptConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatgptApiSync {
+    /// Only sync conversations whose `update_time` is at or after this
+    /// instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC). Older
+    /// conversations are never detail-fetched, and the listing walk
+    /// stops early once it pages past the cutoff (the listing is
+    /// newest-updated-first). Moving the date further back later
+    /// backfills on the next run. Unset → sync everything.
     #[serde(default)]
-    pub refresh_window_days: Option<i64>,
+    pub since: Option<String>,
     #[serde(default)]
     pub max_pages: Option<i64>,
     #[serde(default)]

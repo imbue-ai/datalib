@@ -98,4 +98,38 @@ async fn anthropic_synth_playback_extract_roundtrip() {
         let w = by_uuid_want.get(uuid).expect("uuid missing from input");
         assert_eq!(got, *w, "{uuid} mismatch");
     }
+
+    // `since` scoping against a fresh db: c2 (updated 2025-01-01)
+    // predates the cutoff, so only c1 is fetched.
+    let since_db = d.path().join("out_since.doltlite_db");
+    let summary = fetch(FetchOptions {
+        db_path: since_db.clone(),
+        export_dir: Some(api.clone()),
+        since: Some("2025-01-02".to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.fetched, 1);
+    assert_eq!(summary.out_of_scope, 1);
+    assert_eq!(summary.total, 1);
+    let raw = block_on_load_all(&db_path_for(&since_db)).expect("load since db");
+    assert_eq!(raw.conversations.len(), 1);
+    assert_eq!(raw.conversations[0].id, "c1");
+
+    // Moving `since` further back backfills the newly-in-scope c2 as
+    // missing while the already-fetched c1 classifies up to date.
+    let summary = fetch(FetchOptions {
+        db_path: since_db.clone(),
+        export_dir: Some(api.clone()),
+        since: Some("2024-12-01".to_string()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.fetched, 1);
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(summary.out_of_scope, 0);
+    let raw = block_on_load_all(&db_path_for(&since_db)).expect("load since db");
+    assert_eq!(raw.conversations.len(), 2);
 }

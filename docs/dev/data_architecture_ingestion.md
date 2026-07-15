@@ -329,7 +329,8 @@ Sidecar `source_fingerprint` and the load-step compare stay — they still gate 
 ## Cursor / resume strategy
 Cursor / resume is the **extract-side specialization** of the [Incremental update](#efficiently-incremental) pattern: "what was the last upstream identifier we successfully recorded?" answers "what's the inputs hash for the next walk?" Two patterns in the tree, picked by upstream API shape:
 
-- **Forward-walk + refresh window** (slack, anthropic, chatgpt, github, gitlab): resume from `max(ts)` of previously-recorded items; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
+- **Forward-walk + refresh window** (slack, github, gitlab): resume from `max(ts)` of previously-recorded items; also re-query the trailing `refresh_window_days` to catch edits / late-arriving items. Dedup collapses the overlap to zero writes.
+- **Listing diff** (anthropic, chatgpt): re-list everything each run and compare each item's listing `updated_at`/`update_time` against the stored copy; only new/changed items get a detail fetch. An optional `sync.since:` bounds the diff — items updated before it are never detail-fetched, and chatgpt's newest-first paginated listing additionally stops walking once it pages past the cutoff.
 - **Time-windowed sampling** (yolink): walk `[start, now]` in fixed-stride windows. Windows align across runs and devices. Per-window UPSERT dedups re-fetched samples.
 
 No checkpoint files. The dedup index is the resume cursor.

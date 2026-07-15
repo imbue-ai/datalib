@@ -42,6 +42,12 @@ struct Args {
     #[arg(long, default_value_t = SLEEP_BETWEEN.as_secs_f64())]
     sleep_between: f64,
 
+    /// Only sync conversations whose `updated_at` is at or after this
+    /// instant (RFC 3339 or YYYY-MM-DD, assumed UTC). Older
+    /// conversations are never detail-fetched.
+    #[arg(long)]
+    since: Option<String>,
+
     /// Fetch only these conversation UUIDs instead of walking the full
     /// listing. Pass `--conv-uuid` once per target. Tries each org until
     /// one returns 200; 403/404 are treated as "wrong org, continue".
@@ -64,6 +70,7 @@ async fn main() -> Result<()> {
         export_dir: args.export_dir.clone(),
         overlap: args.overlap,
         sleep_between: Duration::from_secs_f64(args.sleep_between.max(0.0)),
+        since: args.since.clone(),
         conv_uuids: args.conv_uuids.clone(),
         ..Default::default()
     };
@@ -75,6 +82,7 @@ async fn main() -> Result<()> {
         total = summary.total,
         fetched = summary.fetched,
         skipped = summary.skipped,
+        out_of_scope = summary.out_of_scope,
         forbidden_orgs = summary.forbidden_orgs,
         errors = summary.errors,
         requests = summary.requests,

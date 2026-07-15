@@ -113,7 +113,13 @@ semantics for zero benefit.
 ## Resume + prioritization
 
 There is no checkpoint file. On each run the downloader classifies
-every listing item into one of:
+every listing item. Items whose listing `updated_at` predates the
+configured `since` (config `sync.since:` / CLI `--since`; RFC 3339 or
+`YYYY-MM-DD`, assumed UTC) are out of scope: they are never
+detail-fetched and are invisible to overlap selection. The filter only
+gates fetching — already-stored rows are untouched — so moving `since`
+further back later backfills the newly-in-scope conversations as
+"new" on that run. Everything in scope is classified into one of:
 
   1. **new** — not in either the API cache or the export seed.
   2. **overlap** — one of the N most-recently-updated export
