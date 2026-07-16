@@ -1,19 +1,13 @@
 <script setup lang="ts">
-// The merged Setup + Sync tab: one list of data sources that you can
-// edit, add to, and sync, plus the recent-jobs table. The sources
-// panel has two modes, like a markdown editor's WYSIWYG/source
-// toggle:
-//   * Table — one row per source with Edit/Remove/Sync, "add a source"
-//     chips, and an "additional config options" box for the non-source
-//     stanzas (data_root, defaults, qmd, …).
-//   * Raw file — the whole `config.yaml` in a textarea.
-// Both modes edit the same state; `configSplit.ts` bridges the two
-// representations (comment-preserving). Per-source edits persist on
-// Apply (and Remove); the Save button covers the free-text surfaces —
-// the "additional config options" box in table mode, the whole file in
-// raw mode. Every persist path PUTs to the backend, which validates
-// with the real config loader before writing.
-import { computed, ref, onMounted, onUnmounted } from "vue";
+// The merged Setup + Sync tab: the sources table and the raw
+// config.yaml editor sit side by side (stacking when the window is
+// narrow) — not two tabs but two views of the same text. The editor is
+// the single source of truth; the table re-derives from it on every
+// keystroke. A row's Edit button selects that source's stanza in the
+// editor; the chips append a template stanza and select it. Save PUTs
+// the text to the backend, which validates with the real config loader
+// before writing. Below all that, the recent-jobs table.
+import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchConfig,
   fetchConfigScaffold,
@@ -29,28 +23,18 @@ import {
   type JobProgressEvent,
 } from "@/api";
 import StepProgress from "@/components/StepProgress.vue";
-import {
-  splitConfig,
-  joinConfig,
-  fragmentError,
-  summarizeFragment,
-} from "@/config/configSplit";
+import { listSources, type SourceRow } from "@/config/configSources";
 import { SNIPPETS } from "@/config/snippets";
 
 // --- Config state ----------------------------------------------------------
 
-const mode = ref<"table" | "raw">("table");
-// Raw-mode truth: the whole config.yaml text.
-const rawYaml = ref("");
-// Table-mode truth: one YAML fragment per source + everything else.
-const fragments = ref<string[]>([]);
-const rest = ref("");
+// The whole config.yaml text — the single source of truth.
+const yamlText = ref("");
+const editorEl = ref<HTMLTextAreaElement | null>(null);
 
 const configPath = ref("");
 const existed = ref(false);
 const loadError = ref<string | null>(null);
-// Shown when switching raw → table fails because the text doesn't parse.
-const modeError = ref<string | null>(null);
 // Result of the last Save attempt (null = unsaved edits or never saved).
 const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | null>(
   null,
@@ -59,52 +43,38 @@ const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("npx -y latchkey");
 
-// Per-source inline editor. `editingIdx` indexes into `fragments`;
-// `editingIsNew` marks a just-added row so Cancel removes it again.
-const editingIdx = ref<number | null>(null);
-const editDraft = ref("");
-const editError = ref<string | null>(null);
-const editingIsNew = ref(false);
-// True while Apply is persisting (Apply saves immediately).
-const applying = ref(false);
+// Table view of the text: re-derived on every edit. While the text
+// doesn't parse the last good rows stay up (grayed) with the parse
+// error shown, so a half-typed edit doesn't blank the table.
+const rows = ref<SourceRow[]>([]);
+const parseError = ref<string | null>(null);
+
+function reparse() {
+  try {
+    rows.value = listSources(yamlText.value);
+    parseError.value = null;
+  } catch (e) {
+    parseError.value = (e as Error).message;
+  }
+}
+
+function onEdit() {
+  dirty.value = true;
+  saveStatus.value = null;
+  reparse();
+}
 
 // Saved-config source list from the backend — the sync-relevant view
 // (`managed` is derived by the Rust loader, not the YAML). Keyed by
-// name to decorate the table rows.
+// name to decorate the table rows and gate the Sync buttons: sync runs
+// against the file on disk, so a row is syncable only once the backend
+// has seen it.
 const serverSources = ref<SyncSource[]>([]);
 const serverByName = computed(() => {
   const m = new Map<string, SyncSource>();
   for (const s of serverSources.value) m.set(s.name, s);
   return m;
 });
-
-type Row = {
-  idx: number;
-  name: string;
-  type: string;
-  enabled: boolean;
-  valid: boolean;
-  managed: boolean | null; // null = not in the saved config (or invalid)
-};
-
-const rows = computed<Row[]>(() =>
-  fragments.value.map((frag, idx) => {
-    const sum = summarizeFragment(frag);
-    return {
-      idx,
-      name: sum?.name ?? "(invalid)",
-      type: sum?.type ?? "",
-      enabled: sum?.enabled ?? true,
-      valid: sum !== null,
-      managed: sum ? (serverByName.value.get(sum.name)?.managed ?? null) : null,
-    };
-  }),
-);
-
-function markDirty() {
-  dirty.value = true;
-  saveStatus.value = null;
-}
 
 async function loadConfig() {
   loadError.value = null;
@@ -119,187 +89,60 @@ async function loadConfig() {
     }
     configPath.value = cfg.path;
     if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
-    rawYaml.value = cfg.yaml;
-    try {
-      const s = splitConfig(cfg.yaml);
-      fragments.value = s.sources;
-      rest.value = s.rest;
-      mode.value = "table";
-    } catch (e) {
-      // Unparseable file on disk: open in raw mode so it can be fixed.
-      mode.value = "raw";
-      modeError.value = (e as Error).message;
-    }
+    yamlText.value = cfg.yaml;
+    reparse();
   } catch (e) {
     loadError.value = (e as Error).message;
   }
 }
 
-// The current full-file text for whichever mode holds the truth.
-// Throws when table-mode state doesn't reassemble (bad "additional
-// config options" YAML).
-function currentYaml(): string {
-  return mode.value === "raw" ? rawYaml.value : joinConfig(rest.value, fragments.value);
+// Select [start, end) in the editor and scroll it into view. Textareas
+// don't scroll to their selection on their own; estimate the target
+// line's offset from the line count and the computed line height.
+function selectRange(start: number, end: number) {
+  nextTick(() => {
+    const el = editorEl.value;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(start, end);
+    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 16;
+    const line = yamlText.value.slice(0, start).split("\n").length - 1;
+    el.scrollTop = Math.max(0, line * lineHeight - el.clientHeight / 3);
+  });
 }
 
-function setMode(m: "table" | "raw") {
-  if (m === mode.value) return;
-  modeError.value = null;
-  if (m === "raw") {
-    // Drop any open (uncommitted) source editor first, so a
-    // never-Applied template doesn't get serialized into the raw text.
-    cancelEdit();
-    try {
-      rawYaml.value = currentYaml();
-    } catch (e) {
-      modeError.value = (e as Error).message;
-      return;
-    }
-    mode.value = "raw";
-  } else {
-    try {
-      const s = splitConfig(rawYaml.value);
-      fragments.value = s.sources;
-      rest.value = s.rest;
-      mode.value = "table";
-    } catch (e) {
-      modeError.value = `fix the YAML before switching to the table: ${(e as Error).message}`;
-    }
-  }
+// Edit = jump to the stanza: select the row's slice of the text.
+function selectSource(idx: number) {
+  const r = rows.value[idx];
+  if (!r) return;
+  selectRange(r.start, r.end);
 }
 
-function startEdit(idx: number) {
-  // Close any other open editor first; if it was an uncommitted
-  // template row it gets removed, shifting later indices down by one.
-  if (editingIdx.value !== null && editingIdx.value !== idx) {
-    const removedBefore = editingIsNew.value && editingIdx.value < idx;
-    cancelEdit();
-    if (removedBefore) idx -= 1;
-  }
-  editingIdx.value = idx;
-  editDraft.value = fragments.value[idx];
-  editError.value = null;
-  editingIsNew.value = false;
-}
-
-function cancelEdit() {
-  if (editingIsNew.value && editingIdx.value !== null) {
-    fragments.value.splice(editingIdx.value, 1);
-  }
-  editingIdx.value = null;
-  editDraft.value = "";
-  editError.value = null;
-  editingIsNew.value = false;
-}
-
-// Reassemble + PUT. Returns null on success, else the error message.
-// On success the whole table state is on disk, so any pending
-// "additional config options" edits are persisted along the way (their
-// text is part of the joined document) and `dirty` clears.
-async function persist(frags: string[]): Promise<string | null> {
-  let yaml: string;
-  try {
-    yaml = joinConfig(rest.value, frags);
-  } catch (e) {
-    return (e as Error).message;
-  }
-  try {
-    const res = await saveConfig(yaml);
-    if (!res.ok) return res.error ?? "invalid config";
-    saveStatus.value = { ok: true, error: null, count: res.source_count };
-    dirty.value = false;
-    existed.value = true;
-    rawYaml.value = yaml;
-    await loadSources();
-    return null;
-  } catch (e) {
-    return (e as Error).message;
-  }
-}
-
-// Apply persists immediately — a source edit is saved the moment it's
-// committed. Validation failures (client fragment parse or the
-// backend's config loader) keep the editor open with the error inline.
-async function applyEdit() {
-  if (editingIdx.value === null) return;
-  const err = fragmentError(editDraft.value);
-  if (err) {
-    editError.value = err;
-    return;
-  }
-  const next = fragments.value.slice();
-  next[editingIdx.value] = editDraft.value;
-  applying.value = true;
-  try {
-    const saveErr = await persist(next);
-    if (saveErr) {
-      editError.value = saveErr;
-      return;
-    }
-    fragments.value = next;
-    editingIdx.value = null;
-    editDraft.value = "";
-    editError.value = null;
-    editingIsNew.value = false;
-  } finally {
-    applying.value = false;
-  }
-}
-
-async function removeSource(idx: number) {
-  // Removing the row that's open in the editor: if it's an uncommitted
-  // template, cancelEdit() already removes it and the config on disk
-  // never changed.
-  const wasNew = editingIsNew.value && editingIdx.value === idx;
-  cancelEdit();
-  if (wasNew) return;
-  const next = fragments.value.slice();
-  next.splice(idx, 1);
-  const err = await persist(next);
-  if (err) {
-    saveStatus.value = { ok: false, error: err, count: 0 };
-    return;
-  }
-  fragments.value = next;
-}
-
-// Chip click: append a template row and open it in the editor. Nothing
-// is committed until Apply, so Cancel leaves the config untouched.
+// Append a source stanza to the text and select it. If the YAML still
+// has the scaffold's empty `sources: []`, flip it to a `sources:` block
+// first so the appended item is valid.
 function addSnippet(body: string) {
-  cancelEdit();
-  fragments.value.push(body);
-  editingIdx.value = fragments.value.length - 1;
-  editDraft.value = body;
-  editError.value = null;
-  editingIsNew.value = true;
+  let text = yamlText.value;
+  if (/^sources:\s*\[\s*\]\s*$/m.test(text)) {
+    text = text.replace(/^sources:\s*\[\s*\]\s*$/m, "sources:");
+  } else if (!/^sources:/m.test(text)) {
+    text = text.replace(/\s*$/, "") + "\n\nsources:";
+  }
+  const before = text.replace(/\s*$/, "") + "\n";
+  yamlText.value = before + body + "\n";
+  onEdit();
+  selectRange(before.length, yamlText.value.length - 1);
 }
 
-// Save covers the free-text surfaces: the "additional config options"
-// box (table mode) or the whole file (raw mode — saved byte-exact, no
-// re-serialization).
 async function onSave() {
   saving.value = true;
   saveStatus.value = null;
   try {
-    if (mode.value === "table") {
-      const err = await persist(fragments.value);
-      if (err) saveStatus.value = { ok: false, error: err, count: 0 };
-      return;
-    }
-    const res = await saveConfig(rawYaml.value);
+    const res = await saveConfig(yamlText.value);
     saveStatus.value = { ok: res.ok, error: res.error, count: res.source_count };
     if (res.ok) {
       dirty.value = false;
       existed.value = true;
-      // Keep the table-mode state in step with what was just saved.
-      try {
-        const s = splitConfig(rawYaml.value);
-        fragments.value = s.sources;
-        rest.value = s.rest;
-      } catch {
-        // Shouldn't happen (the backend just validated it), but the
-        // next raw → table switch re-splits and reports anyway.
-      }
       await loadSources();
     }
   } catch (e) {
@@ -405,11 +248,6 @@ async function slowReload() {
   await loadJobs();
 }
 
-// Sync enqueues against the *saved* config. Since Apply persists
-// immediately, every applied row is on disk; only rows the backend
-// hasn't confirmed (an unapplied template, an invalid name) stay
-// unsyncable.
-
 async function syncOne(name: string) {
   busySource.value[name] = true;
   error.value = null;
@@ -503,45 +341,22 @@ onUnmounted(() => {
 
 <template>
   <section class="sources-view">
+    <h2>Configure data sources</h2>
+
     <p v-if="error" class="error">error: {{ error }}</p>
     <p v-if="loadError" class="error">Could not load config: {{ loadError }}</p>
-
-    <h2>Configure data sources</h2>
 
     <p class="path">
       <span class="label">File:</span> <code>{{ configPath }}</code>
       <span v-if="!existed" class="pill new">not created yet</span>
     </p>
 
-    <!-- One visual unit for everything the Table / Raw-file switch
-         controls; the switch rides on the group's top border. -->
-    <div class="config-group">
-      <div class="mode-toggle" role="tablist" aria-label="Config editing mode">
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'table' }"
-          role="tab"
-          :aria-selected="mode === 'table'"
-          @click="setMode('table')"
-        >
-          Table
-        </button>
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'raw' }"
-          role="tab"
-          :aria-selected="mode === 'raw'"
-          @click="setMode('raw')"
-        >
-          Raw file
-        </button>
-      </div>
-
-      <p v-if="modeError" class="status err">✗ {{ modeError }}</p>
-
-      <!-- Table mode -->
-      <template v-if="mode === 'table'">
-        <table class="sync-table sources-table">
+    <!-- Table and raw config side by side — two views of the same text.
+         The columns wrap into a vertical stack when the window is too
+         narrow for both. -->
+    <div class="config-columns">
+      <div class="table-col">
+        <table class="sync-table sources-table" :class="{ stale: parseError }">
           <colgroup>
             <col class="col-name" />
             <col class="col-type" />
@@ -568,57 +383,37 @@ onUnmounted(() => {
             </tr>
           </thead>
           <tbody>
-            <template v-for="r in rows" :key="r.idx">
-              <tr :class="{ 'row-disabled': !r.enabled }">
-                <td>{{ r.name }}</td>
-                <td>{{ r.type }}</td>
-                <td>{{ r.enabled ? "yes" : "no" }}</td>
-                <td>{{ r.managed === null ? "—" : r.managed ? "yes" : "no" }}</td>
-                <td class="actions-cell src-actions">
-                  <button class="btn" @click="startEdit(r.idx)">
-                    {{ editingIdx === r.idx ? "Editing…" : "Edit" }}
-                  </button>
-                  <button
-                    class="btn btn-sync"
-                    :disabled="busySource[r.name] || !serverByName.get(r.name)"
-                    :title="!serverByName.get(r.name) ? 'Not in the saved config yet' : ''"
-                    @click="syncOne(r.name)"
-                  >
-                    {{ busySource[r.name] ? "Queuing…" : "Sync" }}
-                  </button>
-                </td>
-              </tr>
-              <tr v-if="editingIdx === r.idx" class="detail-row">
-                <td colspan="5">
-                  <div class="edit-panel">
-                    <textarea
-                      v-model="editDraft"
-                      class="editor editor-fragment"
-                      spellcheck="false"
-                      autocomplete="off"
-                      autocapitalize="off"
-                    />
-                    <p v-if="editError" class="status err">✗ {{ editError }}</p>
-                    <div class="edit-actions">
-                      <button class="btn btn-primary" :disabled="applying" @click="applyEdit">
-                        {{ applying ? "Saving…" : "Apply" }}
-                      </button>
-                      <button class="btn" :disabled="applying" @click="cancelEdit">
-                        Cancel
-                      </button>
-                      <span class="spacer" />
-                      <button
-                        class="btn btn-danger"
-                        :disabled="applying"
-                        @click="removeSource(r.idx)"
-                      >
-                        Remove source
-                      </button>
-                    </div>
-                  </div>
-                </td>
-              </tr>
-            </template>
+            <tr
+              v-for="(r, idx) in rows"
+              :key="idx"
+              :class="{ 'row-disabled': !r.enabled }"
+            >
+              <td>{{ r.name || "(unnamed)" }}</td>
+              <td>{{ r.type }}</td>
+              <td>{{ r.enabled ? "yes" : "no" }}</td>
+              <td>
+                {{
+                  serverByName.get(r.name)
+                    ? serverByName.get(r.name)!.managed
+                      ? "yes"
+                      : "no"
+                    : "—"
+                }}
+              </td>
+              <td class="actions-cell src-actions">
+                <button class="btn" title="Select this source in the config file" @click="selectSource(idx)">
+                  Edit
+                </button>
+                <button
+                  class="btn btn-sync"
+                  :disabled="busySource[r.name] || !serverByName.get(r.name)"
+                  :title="!serverByName.get(r.name) ? 'Not in the saved config yet' : ''"
+                  @click="syncOne(r.name)"
+                >
+                  {{ busySource[r.name] ? "Queuing…" : "Sync" }}
+                </button>
+              </td>
+            </tr>
             <tr v-if="rows.length === 0 && !loading">
               <td colspan="5" class="empty">
                 no sources configured yet — add one with the buttons below.
@@ -626,6 +421,10 @@ onUnmounted(() => {
             </tr>
           </tbody>
         </table>
+
+        <p v-if="parseError" class="status err">
+          ✗ config has a YAML error (table may be stale): {{ parseError }}
+        </p>
 
         <div class="snippets">
           <span class="label">Add a source:</span>
@@ -638,51 +437,32 @@ onUnmounted(() => {
             + {{ sn.label }}
           </button>
         </div>
+      </div>
 
-        <div class="extra-config">
-          <p class="extra-config-head">
-            Additional config options
-            <span class="label">— every stanza other than <code>sources:</code>
-              (<code>data_root</code>, <code>defaults</code>, <code>qmd</code>, …)</span>
-          </p>
-          <textarea
-            v-model="rest"
-            class="editor editor-rest"
-            spellcheck="false"
-            autocomplete="off"
-            autocapitalize="off"
-            placeholder="# YAML stanzas other than sources:, e.g.
-# defaults:
-#   blob_size_limit_bytes: 5000000"
-            @input="markDirty"
-          />
+      <div class="editor-col">
+        <textarea
+          ref="editorEl"
+          v-model="yamlText"
+          class="editor"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          @input="onEdit"
+        />
+        <div class="footer">
+          <div class="save-status">
+            <span v-if="saveStatus && saveStatus.ok" class="status ok">
+              ✓ Saved — {{ saveStatus.count }} source(s) configured.
+            </span>
+            <span v-else-if="saveStatus && !saveStatus.ok" class="status err">
+              ✗ Not saved: {{ saveStatus.error }}
+            </span>
+            <span v-else-if="dirty" class="status muted">unsaved changes</span>
+          </div>
+          <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
+            {{ saving ? "Saving…" : "Save" }}
+          </button>
         </div>
-      </template>
-
-      <!-- Raw mode -->
-      <textarea
-        v-else
-        v-model="rawYaml"
-        class="editor editor-raw"
-        spellcheck="false"
-        autocomplete="off"
-        autocapitalize="off"
-        @input="markDirty"
-      />
-
-      <div class="footer">
-        <div class="save-status">
-          <span v-if="saveStatus && saveStatus.ok" class="status ok">
-            ✓ Saved — {{ saveStatus.count }} source(s) configured.
-          </span>
-          <span v-else-if="saveStatus && !saveStatus.ok" class="status err">
-            ✗ Not saved: {{ saveStatus.error }}
-          </span>
-          <span v-else-if="dirty" class="status muted">unsaved changes</span>
-        </div>
-        <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
-          {{ saving ? "Saving…" : "Save" }}
-        </button>
       </div>
     </div>
 
@@ -780,45 +560,27 @@ h3 {
   color: var(--fw-muted);
   margin-right: 0.4rem;
 }
-/* Grouping furniture: everything the Table / Raw-file switch controls
-   sits inside one bordered panel, and the switch rides on the panel's
-   top border (nudged up half its own height, with the page background
-   behind it to break the border line). */
-.config-group {
-  position: relative;
+/* Side-by-side columns that wrap into a vertical stack when the window
+   can't fit both at a usable width. */
+.config-columns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.table-col {
+  flex: 3 1 26rem;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  border: 1px solid var(--fw-border);
-  border-radius: 6px;
-  padding: 1.1rem 0.75rem 0.75rem;
-  margin-top: 0.9rem;
 }
-.mode-toggle {
-  position: absolute;
-  top: 0;
-  left: 1rem;
-  transform: translateY(-50%);
+.editor-col {
+  flex: 2 1 22rem;
+  min-width: 0;
   display: flex;
-  border: 1px solid var(--fw-border);
-  border-radius: 4px;
-  overflow: hidden;
-  background: var(--fw-bg);
-}
-.mode-btn {
-  background: var(--fw-input-bg);
-  color: var(--fw-muted);
-  border: none;
-  padding: 0.25rem 0.7rem;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-.mode-btn + .mode-btn {
-  border-left: 1px solid var(--fw-border);
-}
-.mode-btn.active {
-  background: var(--fw-accent);
-  color: white;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 .snippets {
   display: flex;
@@ -835,22 +597,24 @@ h3 {
   border-radius: 4px;
   overflow: hidden;
 }
-/* Fixed layout so opening a row's edit panel (a full-width colspan
-   cell) can't reflow the column widths. */
+/* Fixed layout: column widths don't reflow with content. */
 .sources-table {
   table-layout: fixed;
 }
+.sources-table.stale tbody {
+  opacity: 0.6;
+}
 .sources-table .col-name {
-  width: 20%;
+  width: 22%;
 }
 .sources-table .col-type {
-  width: 18%;
+  width: 20%;
 }
 .sources-table .col-flag {
-  width: 12%;
+  width: 13%;
 }
 .sources-table .col-actions {
-  width: 38%;
+  width: 32%;
 }
 /* "Sync everything" lives in the header row, right-aligned so it lines
    up with the rows' Sync buttons. Undo the th's uppercase styling for
@@ -866,9 +630,8 @@ h3 {
 .src-actions {
   justify-content: flex-end;
 }
-/* A little footprint stability for the "Sync" ↔ "Queuing…" and
-   "Edit" ↔ "Editing…" label swaps, without making the buttons look
-   padded out. */
+/* A little footprint stability for the "Sync" ↔ "Queuing…" label swap,
+   without making the buttons look padded out. */
 .src-actions .btn {
   min-width: 3.6rem;
 }
@@ -924,16 +687,13 @@ h3 {
   background: var(--fw-accent);
   filter: brightness(1.08);
 }
-.btn-danger {
+.btn-cancel {
   color: #c0392b;
 }
 /* Accent-outlined sync actions ("Sync" and "Sync everything" match). */
 .btn-sync {
   color: var(--fw-accent);
   border-color: var(--fw-accent);
-}
-.btn-cancel {
-  color: #c0392b;
 }
 .btn-log {
   font-size: 0.78rem;
@@ -956,20 +716,9 @@ h3 {
 .detail-row td {
   background: var(--fw-code-bg);
 }
-.edit-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-.edit-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-.edit-actions .spacer {
-  flex: 1;
-}
 .editor {
   width: 100%;
+  min-height: 24rem;
   box-sizing: border-box;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
@@ -981,20 +730,6 @@ h3 {
   background: var(--fw-code-bg);
   color: var(--fw-fg);
   resize: vertical;
-}
-.editor-fragment {
-  min-height: 10rem;
-  background: var(--fw-bg);
-}
-.editor-rest {
-  min-height: 7rem;
-}
-.editor-raw {
-  min-height: 24rem;
-}
-.extra-config-head {
-  margin: 0 0 0.35rem;
-  font-size: 0.9rem;
 }
 .footer {
   display: flex;
