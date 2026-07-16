@@ -532,6 +532,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         >
           <div
             class="tree-node-chrome"
+            :class="{ 'tree-node-chrome--title': !devMode }"
             @pointerdown="(e) => onChromeDown(node, e)"
           >
             <textarea
@@ -679,6 +680,13 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
 }
 .tree-node-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
+}
+/* Non-dev: a solid accent title bar (see MillerView for the pairing
+   rationale); the grab-to-move cursor and behavior are unchanged. */
+.tree-node-chrome--title {
+  background: var(--fw-accent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 75%, black);
+  color: var(--fw-bg);
 }
 .tree-node-source {
   flex: 1 1 auto;

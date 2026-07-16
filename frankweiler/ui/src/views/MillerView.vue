@@ -293,7 +293,10 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
         class="miller-col"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
-        <div class="miller-col-chrome">
+        <div
+          class="miller-col-chrome"
+          :class="{ 'miller-col-chrome--title': !devMode }"
+        >
           <textarea
             v-if="devMode"
             v-auto-grow
@@ -382,6 +385,14 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
    a tinted box inside the gray bar looks patchy. */
 .miller-col-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
+}
+/* Non-dev: a solid accent title bar. Text and controls take --fw-bg
+   for contrast on the accent — the same pairing as the layout
+   toggle's active state, and it holds in both themes. */
+.miller-col-chrome--title {
+  background: var(--fw-accent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 75%, black);
+  color: var(--fw-bg);
 }
 .miller-col-source {
   flex: 1 1 auto;

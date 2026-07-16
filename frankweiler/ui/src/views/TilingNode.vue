@@ -54,7 +54,7 @@ const tabLabel = (child: TileNode) =>
       title="drag to move this card"
       @pointerdown="(e) => api.startDrag(node.id, e)"
     />
-    <div class="tiling-chrome">
+    <div class="tiling-chrome" :class="{ 'tiling-chrome--title': !devMode }">
       <textarea
         v-if="devMode"
         v-auto-grow
@@ -475,6 +475,13 @@ const tabLabel = (child: TileNode) =>
 }
 .tiling-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
+}
+/* Non-dev: a solid accent title bar (see MillerView for the pairing
+   rationale). */
+.tiling-chrome--title {
+  background: var(--fw-accent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 75%, black);
+  color: var(--fw-bg);
 }
 .tiling-source {
   flex: 1 1 auto;
