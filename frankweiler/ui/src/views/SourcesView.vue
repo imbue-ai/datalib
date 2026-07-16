@@ -473,14 +473,18 @@ onUnmounted(() => {
 
         <div class="snippets">
           <span class="label">Add:</span>
-          <button
-            v-for="sn in SNIPPETS"
-            :key="sn.label"
-            class="btn chip"
-            @click="addSnippet(sn.body(latchkeyCli))"
-          >
-            {{ sn.label }}
-          </button>
+          <!-- Buttons wrap inside their own flex box, so a second line
+               starts under the first button, not under the label. -->
+          <div class="chips">
+            <button
+              v-for="sn in SNIPPETS"
+              :key="sn.label"
+              class="btn chip"
+              @click="addSnippet(sn.body(latchkeyCli))"
+            >
+              {{ sn.label }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -604,8 +608,12 @@ h3 {
 }
 .snippets {
   display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.snippets .chips {
+  display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 0.4rem;
 }
 .sync-table {
