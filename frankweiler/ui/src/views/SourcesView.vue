@@ -370,32 +370,24 @@ onUnmounted(() => {
         <div class="footer">
           <div class="save-status">
             <!-- A failed Save outranks the live parse error (it already
-                 carries the loader's message); otherwise the parse
-                 error outranks the plain unsaved-changes note. -->
+                 carries the loader's message). Otherwise the parse
+                 error and the unsaved-changes note are independent —
+                 show both when both apply. -->
             <span v-if="saveStatus && !saveStatus.ok" class="status err">
               ✗ Not saved: {{ saveStatus.error }}
             </span>
-            <span v-else-if="parseError" class="status err">
-              ✗ YAML error (table may be stale): {{ parseError }}
-            </span>
-            <span v-else-if="saveStatus && saveStatus.ok" class="status ok">
-              ✓ Saved — {{ saveStatus.count }} source(s) configured.
-            </span>
-            <span v-else-if="dirty" class="status muted">unsaved changes</span>
+            <template v-else>
+              <span v-if="parseError" class="status err">
+                ✗ YAML error (table may be stale): {{ parseError }}
+              </span>
+              <span v-if="saveStatus && saveStatus.ok" class="status ok">
+                ✓ Saved — {{ saveStatus.count }} source(s) configured.
+              </span>
+              <span v-else-if="dirty" class="status muted">unsaved changes</span>
+            </template>
           </div>
           <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
             {{ saving ? "Saving…" : "Save" }}
-          </button>
-        </div>
-        <div class="snippets">
-          <span class="label">Add:</span>
-          <button
-            v-for="sn in SNIPPETS"
-            :key="sn.label"
-            class="btn chip"
-            @click="addSnippet(sn.body(latchkeyCli))"
-          >
-            {{ sn.label }}
           </button>
         </div>
       </div>
@@ -473,11 +465,23 @@ onUnmounted(() => {
             </tr>
             <tr v-if="rows.length === 0 && !loading">
               <td colspan="5" class="empty">
-                no sources configured yet — add one with the buttons under the editor.
+                no sources configured yet — add one with the buttons below.
               </td>
             </tr>
           </tbody>
         </table>
+
+        <div class="snippets">
+          <span class="label">Add:</span>
+          <button
+            v-for="sn in SNIPPETS"
+            :key="sn.label"
+            class="btn chip"
+            @click="addSnippet(sn.body(latchkeyCli))"
+          >
+            {{ sn.label }}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -755,6 +759,9 @@ h3 {
 }
 .save-status {
   flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 0.75rem;
 }
 .pill {
   display: inline-block;

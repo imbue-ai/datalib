@@ -93,7 +93,10 @@ test("a YAML error marks the table stale instead of blanking it", async ({ page 
   const original = await editor.inputValue();
 
   await editor.fill(original + "\nbroken: [unclosed\n");
+  // The parse error and the unsaved-changes note are independent — both
+  // show at once.
   await expect(page.getByText(/YAML error \(table may be stale\)/)).toBeVisible();
+  await expect(page.getByText("unsaved changes")).toBeVisible();
   // Save is still possible but the backend rejects it.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();
