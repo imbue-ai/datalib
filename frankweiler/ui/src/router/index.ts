@@ -7,8 +7,8 @@ import { createRouter, createWebHistory } from "vue-router";
 // component is `CardsView`, which hosts MillerView plus the
 // URL-independent tree layout behind a toggle.
 //
-// The catchall MUST come after the explicit routes (`/setup`,
-// `/sync`); Vue Router does prefer specific over param routes by
+// The catchall MUST come after the explicit routes (`/sources` and the
+// legacy redirects); Vue Router does prefer specific over param routes by
 // path-rank, but order is the simpler invariant.
 //
 // History mode also requires the backend to fall back to `index.html`
@@ -19,15 +19,14 @@ const router = createRouter({
   history: createWebHistory(),
   routes: [
     {
-      path: "/setup",
-      name: "setup",
-      component: () => import("@/views/SetupView.vue"),
+      path: "/sources",
+      name: "sources",
+      component: () => import("@/views/SourcesView.vue"),
     },
-    {
-      path: "/sync",
-      name: "sync",
-      component: () => import("@/views/SyncView.vue"),
-    },
+    // The old Setup and Sync tabs merged into Sources; keep the paths
+    // working for muscle memory and stale links.
+    { path: "/setup", redirect: "/sources" },
+    { path: "/sync", redirect: "/sources" },
     {
       path: "/:stack(.*)*",
       name: "cards",

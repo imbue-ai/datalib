@@ -10,8 +10,7 @@ import ToastStack from "@/components/ToastStack.vue";
       <h1>Frankweiler</h1>
       <nav class="fw-tabs" aria-label="Navigation">
         <RouterLink class="fw-tab" to="/">Explore</RouterLink>
-        <RouterLink class="fw-tab" to="/setup">Setup</RouterLink>
-        <RouterLink class="fw-tab" to="/sync">Sync</RouterLink>
+        <RouterLink class="fw-tab" to="/sources">Sources</RouterLink>
       </nav>
       <div class="fw-spacer" />
     </header>
