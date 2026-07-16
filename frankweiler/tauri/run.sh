@@ -40,11 +40,16 @@ pnpm dlx @tauri-apps/cli@2 build --debug
 # (frankweiler-http-<pid>.log — see `start_backend` in src/main.rs).
 # For inline shell logs while debugging, run the binary directly with
 # a data root instead: `cargo run -- ~/root`.
-app_bundle="$here/target/debug/bundle/macos/Frankweiler.app"
+# The target dir may be redirected (e.g. a shared CARGO_TARGET_DIR or a
+# `build.target-dir` config so worktrees reuse one cache) — ask cargo
+# where it actually built instead of assuming ./target.
+target_dir="$(cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+app_bundle="$target_dir/debug/bundle/macos/Frankweiler.app"
 if [[ -d "$app_bundle" ]]; then
   exec open -n "$app_bundle" --args "$@"
 fi
 
 # Non-macOS: `tauri build` emits a plain binary and there is no
 # bundle-registration problem, so run it directly.
-exec "$here/target/debug/frankweiler-tauri" "$@"
+exec "$target_dir/debug/frankweiler-tauri" "$@"
