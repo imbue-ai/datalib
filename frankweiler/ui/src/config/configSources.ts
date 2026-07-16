@@ -1,6 +1,6 @@
 // Read-only view of the `sources:` list in a config.yaml text, for the
 // Sources table that sits next to the raw editor. Each entry carries
-// its character range in the text so the table's Edit button can select
+// its character range in the text so the table's "Locate config" button can select
 // the stanza in the editor. The text itself is the single source of
 // truth — there is no fragment editing or reassembly.
 

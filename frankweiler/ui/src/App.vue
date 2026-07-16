@@ -7,7 +7,7 @@ import ToastStack from "@/components/ToastStack.vue";
 <template>
   <main class="frankweiler-shell" data-feedback-root>
     <header class="fw-header">
-      <h1>Frankweiler</h1>
+      <h1>data liberation</h1>
       <nav class="fw-tabs" aria-label="Navigation">
         <RouterLink class="fw-tab" to="/">Explore</RouterLink>
         <RouterLink class="fw-tab" to="/sources">Sources</RouterLink>

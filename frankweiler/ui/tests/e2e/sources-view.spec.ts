@@ -1,7 +1,7 @@
 // The merged Sources tab: the sources table and the raw config.yaml
 // editor sit side by side as two views of the same text. The editor is
 // the single source of truth; the table re-derives from it on every
-// keystroke. A row's Edit button selects that source's stanza in the
+// keystroke. A row's "Locate config" button selects that stanza in the
 // editor; the chips append a template stanza. Save PUTs the text to
 // /api/config, which validates with the real config loader before
 // persisting.
@@ -29,7 +29,7 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   // The chip appends a stanza to the text; the table row appears
   // immediately (derived from the text), but stays unsyncable until
   // the config is saved.
-  await page.getByRole("button", { name: "+ Perseus (sample)" }).click();
+  await page.getByRole("button", { name: "Perseus (sample)" }).click();
   await expect(editor).toHaveValue(/type: perseus/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
@@ -44,7 +44,13 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
 
   // Any unsaved edit re-blocks sync (even for saved rows): sync runs
   // against the file on disk, which no longer matches the editor.
-  await editor.press("End");
+  // Collapse the caret to the end first — the chip left its stanza
+  // selected, and typing over the selection would replace it.
+  await editor.evaluate((el) => {
+    const t = el as HTMLTextAreaElement;
+    t.focus();
+    t.setSelectionRange(t.value.length, t.value.length);
+  });
   await editor.pressSequentially(" ");
   await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeDisabled();
 
@@ -55,17 +61,17 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   await expect(page.getByText("no sources configured yet")).toBeVisible();
 });
 
-test("Edit selects the source's stanza in the editor", async ({ page }) => {
+test("Locate config selects the source's stanza in the editor", async ({ page }) => {
   await openSources(page);
 
   const editor = page.locator(".editor");
-  await page.getByRole("button", { name: "+ Perseus (sample)" }).click();
-  await page.getByRole("button", { name: "+ ChatGPT" }).click();
+  await page.getByRole("button", { name: "Perseus (sample)" }).click();
+  await page.getByRole("button", { name: "ChatGPT" }).click();
 
   // Select the first source; the selection must cover exactly its stanza.
   await page
     .locator(".sources-table tbody tr", { hasText: "perseus" })
-    .getByRole("button", { name: "Edit" })
+    .getByRole("button", { name: "Locate config" })
     .click();
   const selected = await editor.evaluate((el) => {
     const t = el as HTMLTextAreaElement;
@@ -87,14 +93,14 @@ test("a YAML error marks the table stale instead of blanking it", async ({ page 
   const original = await editor.inputValue();
 
   await editor.fill(original + "\nbroken: [unclosed\n");
-  await expect(page.getByText(/config has a YAML error/)).toBeVisible();
+  await expect(page.getByText(/YAML error \(table may be stale\)/)).toBeVisible();
   // Save is still possible but the backend rejects it.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/✗ Not saved:/)).toBeVisible();
 
   // Fixing the text clears the error.
   await editor.fill(original);
-  await expect(page.getByText(/config has a YAML error/)).not.toBeVisible();
+  await expect(page.getByText(/YAML error \(table may be stale\)/)).not.toBeVisible();
 });
 
 test("invalid config is rejected by Save and not persisted", async ({ page }) => {

@@ -3,7 +3,7 @@
 // config.yaml editor sit side by side (stacking when the window is
 // narrow) — not two tabs but two views of the same text. The editor is
 // the single source of truth; the table re-derives from it on every
-// keystroke. A row's Edit button selects that source's stanza in the
+// keystroke. A row's "Locate config" button selects that stanza in the
 // editor; the chips append a template stanza and select it. Save PUTs
 // the text to the backend, which validates with the real config loader
 // before writing. Below all that, the recent-jobs table.
@@ -112,7 +112,7 @@ function selectRange(start: number, end: number) {
   });
 }
 
-// Edit = jump to the stanza: select the row's slice of the text.
+// "Locate config" = jump to the stanza: select the row's slice of the text.
 function selectSource(idx: number) {
   const r = rows.value[idx];
   if (!r) return;
@@ -352,10 +352,54 @@ onUnmounted(() => {
       <span v-if="!existed" class="pill new">not created yet</span>
     </p>
 
-    <!-- Table and raw config side by side — two views of the same text.
-         The columns wrap into a vertical stack when the window is too
-         narrow for both. -->
+    <!-- Raw config (left) and table side by side — two views of the
+         same text. The table keeps a relatively narrow width; the
+         editor takes the remainder. The columns wrap into a vertical
+         stack when the window is too narrow for both. -->
     <div class="config-columns">
+      <div class="editor-col">
+        <textarea
+          ref="editorEl"
+          v-model="yamlText"
+          class="editor"
+          spellcheck="false"
+          autocomplete="off"
+          autocapitalize="off"
+          @input="onEdit"
+        />
+        <div class="footer">
+          <div class="save-status">
+            <!-- A failed Save outranks the live parse error (it already
+                 carries the loader's message); otherwise the parse
+                 error outranks the plain unsaved-changes note. -->
+            <span v-if="saveStatus && !saveStatus.ok" class="status err">
+              ✗ Not saved: {{ saveStatus.error }}
+            </span>
+            <span v-else-if="parseError" class="status err">
+              ✗ YAML error (table may be stale): {{ parseError }}
+            </span>
+            <span v-else-if="saveStatus && saveStatus.ok" class="status ok">
+              ✓ Saved — {{ saveStatus.count }} source(s) configured.
+            </span>
+            <span v-else-if="dirty" class="status muted">unsaved changes</span>
+          </div>
+          <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
+            {{ saving ? "Saving…" : "Save" }}
+          </button>
+        </div>
+        <div class="snippets">
+          <span class="label">Add:</span>
+          <button
+            v-for="sn in SNIPPETS"
+            :key="sn.label"
+            class="btn chip"
+            @click="addSnippet(sn.body(latchkeyCli))"
+          >
+            {{ sn.label }}
+          </button>
+        </div>
+      </div>
+
       <div class="table-col">
         <table class="sync-table sources-table" :class="{ stale: parseError }">
           <colgroup>
@@ -384,7 +428,7 @@ onUnmounted(() => {
                   "
                   @click="syncEverything"
                 >
-                  {{ busyGlobal ? "Queuing…" : "Sync everything" }}
+                  {{ busyGlobal ? "Queuing…" : "Sync all" }}
                 </button>
               </th>
             </tr>
@@ -409,7 +453,7 @@ onUnmounted(() => {
               </td>
               <td class="actions-cell src-actions">
                 <button class="btn" title="Select this source in the config file" @click="selectSource(idx)">
-                  Edit
+                  Locate config
                 </button>
                 <button
                   class="btn btn-sync"
@@ -429,53 +473,11 @@ onUnmounted(() => {
             </tr>
             <tr v-if="rows.length === 0 && !loading">
               <td colspan="5" class="empty">
-                no sources configured yet — add one with the buttons below.
+                no sources configured yet — add one with the buttons under the editor.
               </td>
             </tr>
           </tbody>
         </table>
-
-        <p v-if="parseError" class="status err">
-          ✗ config has a YAML error (table may be stale): {{ parseError }}
-        </p>
-
-        <div class="snippets">
-          <span class="label">Add a source:</span>
-          <button
-            v-for="sn in SNIPPETS"
-            :key="sn.label"
-            class="btn chip"
-            @click="addSnippet(sn.body(latchkeyCli))"
-          >
-            + {{ sn.label }}
-          </button>
-        </div>
-      </div>
-
-      <div class="editor-col">
-        <textarea
-          ref="editorEl"
-          v-model="yamlText"
-          class="editor"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-          @input="onEdit"
-        />
-        <div class="footer">
-          <div class="save-status">
-            <span v-if="saveStatus && saveStatus.ok" class="status ok">
-              ✓ Saved — {{ saveStatus.count }} source(s) configured.
-            </span>
-            <span v-else-if="saveStatus && !saveStatus.ok" class="status err">
-              ✗ Not saved: {{ saveStatus.error }}
-            </span>
-            <span v-else-if="dirty" class="status muted">unsaved changes</span>
-          </div>
-          <button class="btn btn-primary" :disabled="saving || !dirty" @click="onSave">
-            {{ saving ? "Saving…" : "Save" }}
-          </button>
-        </div>
       </div>
     </div>
 
@@ -574,7 +576,8 @@ h3 {
   margin-right: 0.4rem;
 }
 /* Side-by-side columns that wrap into a vertical stack when the window
-   can't fit both at a usable width. */
+   can't fit both at a usable width. The table keeps a relatively
+   narrow width (no grow); the editor takes the remainder. */
 .config-columns {
   display: flex;
   flex-wrap: wrap;
@@ -582,14 +585,14 @@ h3 {
   align-items: flex-start;
 }
 .table-col {
-  flex: 3 1 26rem;
+  flex: 0 1 34rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 .editor-col {
-  flex: 2 1 22rem;
+  flex: 1 1 24rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -618,18 +621,18 @@ h3 {
   opacity: 0.6;
 }
 .sources-table .col-name {
-  width: 22%;
+  width: 18%;
 }
 .sources-table .col-type {
-  width: 20%;
+  width: 17%;
 }
 .sources-table .col-flag {
-  width: 13%;
+  width: 14%;
 }
 .sources-table .col-actions {
-  width: 32%;
+  width: 37%;
 }
-/* "Sync everything" lives in the header row, right-aligned so it lines
+/* "Sync all" lives in the header row, right-aligned so it lines
    up with the rows' Sync buttons. Undo the th's uppercase styling for
    the button label. */
 .sources-table .th-actions {
@@ -703,7 +706,7 @@ h3 {
 .btn-cancel {
   color: #c0392b;
 }
-/* Accent-outlined sync actions ("Sync" and "Sync everything" match). */
+/* Accent-outlined sync actions ("Sync" and "Sync all" match). */
 .btn-sync {
   color: var(--fw-accent);
   border-color: var(--fw-accent);
