@@ -21,7 +21,7 @@
 // place the user types new card source. As soon as it gains code a
 // fresh blank appears after it; a run of several trailing blanks
 // collapses to one. Blank columns are not part of the URL.
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
@@ -87,6 +87,15 @@ function withTrailingBlank(list: Slot[]): Slot[] {
 }
 
 const slots = ref<Slot[]>([]);
+
+// What actually renders. Creating a card means typing source — a dev
+// gesture — so outside dev mode the trailing blank column (the place
+// you type new source) is hidden. It stays in `slots`, so the
+// trailing-blank invariant holds across the toggle (uncommitted text
+// in the box is dropped with the textarea, like any unsaved edit).
+const visibleSlots = computed(() =>
+  devMode.value ? slots.value : slots.value.filter((s) => !isBlankSource(s.source)),
+);
 
 // One CardCtx per slot (declared before the initial setSlots call,
 // which prunes it). See ctxFor below.
@@ -279,7 +288,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   <div class="miller-root">
     <div class="miller-columns">
       <section
-        v-for="slot in slots"
+        v-for="slot in visibleSlots"
         :key="slot.id"
         class="miller-col"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
@@ -395,13 +404,15 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   outline: none;
 }
 /* Non-dev chrome: the card's human-readable title where the source
-   box would be. Same metrics as the source box so toggling dev mode
-   doesn't reflow the chrome bar. */
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
 .miller-col-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
   padding: 0.2rem 0.4rem;
   overflow: hidden;
   text-overflow: ellipsis;

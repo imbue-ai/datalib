@@ -89,6 +89,12 @@ localStorage):
   described below (Enter re-runs the card), plus the 🤖 agent hand-off
   button (which rewrites the source, so it's hidden with it).
 
+Creating a *blank* card is also a dev-mode gesture — a blank card is
+only usable by typing source into it — so outside dev mode the miller
+layout hides its trailing blank column and the tree/tiling layouts
+hide their add-a-card buttons. Cards opened by other cards
+(`host.openCards`) work the same in both modes.
+
 A card declares its title by wrapping its render in `titled()`
 (`frankweiler/ui/src/cards/title.ts`):
 

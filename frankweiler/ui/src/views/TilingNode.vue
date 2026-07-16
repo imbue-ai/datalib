@@ -135,7 +135,11 @@ const tabLabel = (child: TileNode) =>
         :aria-selected="i === (node.active ?? 0)"
         @click="api.setActive(asSplit(node), i)"
       >
-        <span class="tiling-tab-label">{{ tabLabel(child) }}</span>
+        <span
+          class="tiling-tab-label"
+          :class="{ 'tiling-tab-label--title': !devMode }"
+          >{{ tabLabel(child) }}</span
+        >
         <button
           class="tiling-tab-close"
           title="close tab"
@@ -144,7 +148,10 @@ const tabLabel = (child: TileNode) =>
           ✕
         </button>
       </div>
+      <!-- Blank cards are only usable through the source box, so the
+           add buttons (here and below) are dev-mode furniture. -->
       <div
+        v-if="devMode"
         class="tiling-add tiling-add--tab"
         :class="{ 'is-drop': api.isAddDrop(node.id) }"
         :data-tiling-add="node.id"
@@ -172,7 +179,7 @@ const tabLabel = (child: TileNode) =>
         />
       </template>
       <div
-        v-if="node.dir !== 'tab'"
+        v-if="node.dir !== 'tab' && devMode"
         class="tiling-add"
         :class="[
           node.dir === 'h' ? 'tiling-add--h' : 'tiling-add--v',
@@ -394,6 +401,14 @@ const tabLabel = (child: TileNode) =>
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Non-dev tabs carry titles, not source — drop the tab bar's
+   monospace for them. */
+.tiling-tab-label--title {
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
 .tiling-tab-close {
   flex: 0 0 auto;
   border: none;
@@ -481,13 +496,15 @@ const tabLabel = (child: TileNode) =>
   outline: none;
 }
 /* Non-dev chrome: the card's human-readable title where the source
-   box would be. Same metrics as the source box so toggling dev mode
-   doesn't reflow the chrome bar. */
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
 .tiling-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
   padding: 0.2rem 0.4rem;
   overflow: hidden;
   text-overflow: ellipsis;

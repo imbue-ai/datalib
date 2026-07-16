@@ -577,8 +577,12 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         </button>
         <button title="zoom in" @click="zoomStep(1.2)">+</button>
         <button title="zoom to fit" @click="zoomToFit">⛶</button>
-        <span class="tree-controls-sep" />
-        <button title="add a blank card" @click="addRootCard">+ card</button>
+        <!-- A blank card is edited via its source box — a dev-mode
+             gesture, so the button hides with it. -->
+        <template v-if="devMode">
+          <span class="tree-controls-sep" />
+          <button title="add a blank card" @click="addRootCard">+ card</button>
+        </template>
       </div>
     </div>
   </div>
@@ -697,14 +701,17 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
   outline: none;
 }
 /* Non-dev chrome: the card's human-readable title where the source
-   box would be — same metrics so toggling dev mode doesn't reflow.
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar.
    Not an interactive element, so the chrome's grab-to-move drag
    (onChromeDown) works across it. */
 .tree-node-title {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
   padding: 0.2rem 0.4rem;
   overflow: hidden;
   text-overflow: ellipsis;
