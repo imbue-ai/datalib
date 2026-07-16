@@ -1,8 +1,10 @@
 // The merged Sources tab (Setup + Sync): table mode edits sources as
-// rows (add / edit / apply / save) with an "additional config options"
-// box for the non-source stanzas; raw mode edits the whole config.yaml
-// text. Both modes are views of the same state (src/config/configSplit
-// bridges them) and Save PUTs the reassembled YAML to /api/config.
+// rows — Apply persists a source edit immediately — with an
+// "additional config options" box for the non-source stanzas whose
+// edits the Save button covers; raw mode edits (and saves) the whole
+// config.yaml text. Both modes are views of the same state
+// (src/config/configSplit bridges them); every persist path PUTs to
+// /api/config.
 //
 // The fixture root's config.yaml starts as a single `data_root:` line
 // with no sources. This spec adds a source, saves, round-trips through
@@ -13,10 +15,10 @@ import { test, expect, type Page } from "@playwright/test";
 
 async function openSources(page: Page) {
   await page.goto("/sources");
-  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Table" })).toBeVisible();
 }
 
-test("table mode: add a source, save, round-trip raw mode, restore", async ({
+test("table mode: add a source (Apply persists), round-trip raw mode, restore", async ({
   page,
 }) => {
   await openSources(page);
@@ -39,17 +41,22 @@ test("table mode: add a source, save, round-trip raw mode, restore", async ({
   await expect(fragment).toHaveValue(/type: perseus/);
   await page.getByRole("button", { name: "Apply" }).click();
 
-  // The row appears; sync is blocked until the config is saved.
+  // Apply persists immediately: the backend validates with the real
+  // config loader, the saved status shows, and the new row's Sync
+  // button lights up without a separate Save.
   const row = page.locator(".sync-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
-  await expect(page.getByText("unsaved changes")).toBeVisible();
-  await expect(row.getByRole("button", { name: "Sync now" })).toBeDisabled();
-
-  // Save: the backend validates with the real config loader and
-  // persists; the row's Sync button lights up.
-  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("✓ Saved — 1 source(s) configured.")).toBeVisible();
-  await expect(row.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeEnabled();
+
+  // A loader-rejected edit keeps the editor open with the error inline
+  // and does not persist.
+  await row.getByRole("button", { name: "Edit" }).click();
+  await fragment.fill("name: perseus\nsource:\n  type: not_a_provider\n");
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page.locator(".edit-panel .status.err")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(row).toContainText("perseus");
 
   // Raw mode shows the reassembled file: data_root stanza + the source.
   await page.getByRole("tab", { name: "Raw file" }).click();
@@ -123,7 +130,7 @@ test("invalid config is rejected by Save and not persisted", async ({ page }) =>
 
   // The file on disk is unchanged.
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Data sources" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Table" })).toBeVisible();
   await page.getByRole("tab", { name: "Raw file" }).click();
   await expect(page.locator(".editor-raw")).toHaveValue(original);
 });
