@@ -42,6 +42,12 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   await expect(page.getByText("✓ Saved — 1 source(s) configured.")).toBeVisible();
   await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeEnabled();
 
+  // Any unsaved edit re-blocks sync (even for saved rows): sync runs
+  // against the file on disk, which no longer matches the editor.
+  await editor.press("End");
+  await editor.pressSequentially(" ");
+  await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeDisabled();
+
   // Restore the original config so later specs see the fixture unchanged.
   await editor.fill(original);
   await page.getByRole("button", { name: "Save", exact: true }).click();

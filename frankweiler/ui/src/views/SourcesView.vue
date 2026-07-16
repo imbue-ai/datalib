@@ -68,7 +68,8 @@ function onEdit() {
 // (`managed` is derived by the Rust loader, not the YAML). Keyed by
 // name to decorate the table rows and gate the Sync buttons: sync runs
 // against the file on disk, so a row is syncable only once the backend
-// has seen it.
+// has seen it — and not at all while the editor has unsaved changes
+// (syncing would silently use the stale on-disk version).
 const serverSources = ref<SyncSource[]>([]);
 const serverByName = computed(() => {
   const m = new Map<string, SyncSource>();
@@ -373,8 +374,14 @@ onUnmounted(() => {
               <th class="th-actions">
                 <button
                   class="btn btn-sync"
-                  :disabled="busyGlobal || serverSources.length === 0"
-                  :title="serverSources.length === 0 ? 'Add a source first' : ''"
+                  :disabled="busyGlobal || dirty || serverSources.length === 0"
+                  :title="
+                    dirty
+                      ? 'Save your changes first — sync runs against the saved file'
+                      : serverSources.length === 0
+                        ? 'Add a source first'
+                        : ''
+                  "
                   @click="syncEverything"
                 >
                   {{ busyGlobal ? "Queuing…" : "Sync everything" }}
@@ -406,8 +413,14 @@ onUnmounted(() => {
                 </button>
                 <button
                   class="btn btn-sync"
-                  :disabled="busySource[r.name] || !serverByName.get(r.name)"
-                  :title="!serverByName.get(r.name) ? 'Not in the saved config yet' : ''"
+                  :disabled="busySource[r.name] || dirty || !serverByName.get(r.name)"
+                  :title="
+                    dirty
+                      ? 'Save your changes first — sync runs against the saved file'
+                      : !serverByName.get(r.name)
+                        ? 'Not in the saved config yet'
+                        : ''
+                  "
                   @click="syncOne(r.name)"
                 >
                   {{ busySource[r.name] ? "Queuing…" : "Sync" }}
