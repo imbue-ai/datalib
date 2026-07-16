@@ -13,9 +13,11 @@ import ToastStack from "@/components/ToastStack.vue";
         <RouterLink class="fw-tab" to="/sources">Sources</RouterLink>
       </nav>
       <div class="fw-spacer" />
+      <!-- Lightweight sync indicator in the header's flexible space —
+           appearing/disappearing never shifts the page layout. -->
+      <SyncProgressChrome />
     </header>
 
-    <SyncProgressChrome />
     <RouterView />
     <ToastStack />
   </main>

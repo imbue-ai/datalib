@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+// Lightweight sync indicator for the app header: a pulsing dot +
+// "syncing" while any job is active, sitting in the header's flexible
+// space so it never shifts the page layout. Per-job progress lives in
+// the Sources tab; this only answers "is something running?". Click
+// navigates there; the tooltip lists the active jobs.
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import {
   fetchActiveJobs,
@@ -7,7 +12,6 @@ import {
   type SyncJob,
   type JobProgressEvent,
 } from "@/api";
-import StepProgress from "@/components/StepProgress.vue";
 
 const router = useRouter();
 // Active jobs, keyed by id for O(1) patching from the SSE stream.
@@ -15,9 +19,12 @@ const active = ref<Map<string, SyncJob>>(new Map());
 let stream: EventSource | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-function activeList(): SyncJob[] {
-  return [...active.value.values()];
-}
+const count = computed(() => active.value.size);
+const tooltip = computed(() =>
+  [...active.value.values()]
+    .map((j) => `${j.source_name || "all"} (${j.kind})`)
+    .join(", "),
+);
 
 // Seed from the API (covers jobs already running when this mounts), then
 // keep current via SSE push.
@@ -54,13 +61,8 @@ function onProgress(ev: JobProgressEvent) {
   active.value = new Map(m);
 }
 
-function label(j: SyncJob): string {
-  const src = j.source_name || "all";
-  return `${src} (${j.kind})`;
-}
-
-function goSync() {
-  router.push({ name: "sync" });
+function goSources() {
+  router.push({ name: "sources" });
 }
 
 onMounted(() => {
@@ -77,56 +79,49 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-if="activeList().length > 0" class="sync-chrome" @click="goSync">
-    <span
-      v-for="j in activeList()"
-      :key="j.id"
-      class="sync-pill"
-      :title="j.progress_msg || ''"
-    >
-      <span class="pill-label">{{ label(j) }}</span>
-      <span class="pill-bar">
-        <StepProgress :msg="j.progress_msg" :state="j.state" />
-      </span>
-    </span>
-  </div>
+  <button
+    v-if="count > 0"
+    class="sync-indicator"
+    :title="tooltip"
+    @click="goSources"
+  >
+    <span class="dot" />
+    syncing{{ count > 1 ? ` (${count})` : "" }}
+  </button>
 </template>
 
 <style scoped>
-.sync-chrome {
-  display: flex;
-  gap: 0.4rem;
-  align-items: center;
-  flex-wrap: wrap;
-  padding: 0.25rem 0.5rem;
-  background: var(--fw-card-bg);
-  border: 1px solid var(--fw-border);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.8rem;
-  margin-bottom: 0.5rem;
-}
-.sync-chrome:hover {
-  background: var(--fw-hover);
-}
-.sync-pill {
+.sync-indicator {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.1rem 0.55rem;
-  border-radius: 9999px;
-  background: var(--fw-input-bg);
+  padding: 0.15rem 0.6rem;
+  margin-bottom: 0.45rem;
   border: 1px solid var(--fw-accent);
+  border-radius: 9999px;
+  background: transparent;
   color: var(--fw-accent);
   font-size: 0.78rem;
+  cursor: pointer;
   white-space: nowrap;
 }
-.pill-label {
-  font-weight: 600;
+.sync-indicator:hover {
+  background: var(--fw-hover);
 }
-/* Constrain the embedded StepProgress so the pill stays compact. */
-.pill-bar {
-  display: inline-block;
-  width: 11rem;
+.dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--fw-accent);
+  animation: sync-pulse 1.2s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
 }
 </style>
