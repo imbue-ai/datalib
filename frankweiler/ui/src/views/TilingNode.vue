@@ -14,6 +14,7 @@
 import { inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
+import { devMode } from "@/devMode";
 import { TILING_API } from "./tilingApi";
 import type { TileNode, TileSplit } from "./tilingTree";
 
@@ -25,10 +26,15 @@ const api = inject(TILING_API)!;
 // back for the resize / tab / arrangement handlers.
 const asSplit = (n: TileNode) => n as TileSplit;
 
-// Tab-bar label for a child: the card's source for a tile, or a
-// generic marker for a nested group.
+// Tab-bar label for a child: the card's source (dev mode) or its
+// human-readable title for a tile, or a generic marker for a nested
+// group.
 const tabLabel = (child: TileNode) =>
-  child.kind === "leaf" ? child.source.trim() || "blank" : "group";
+  child.kind === "leaf"
+    ? devMode.value
+      ? child.source.trim() || "blank"
+      : api.titleFor(child)
+    : "group";
 </script>
 
 <template>
@@ -48,8 +54,9 @@ const tabLabel = (child: TileNode) =>
       title="drag to move this card"
       @pointerdown="(e) => api.startDrag(node.id, e)"
     />
-    <div class="tiling-chrome">
+    <div class="tiling-chrome" :class="{ 'tiling-chrome--title': !devMode }">
       <textarea
+        v-if="devMode"
         v-auto-grow
         class="tiling-source"
         rows="1"
@@ -59,6 +66,7 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
+      <div v-else class="tiling-title">{{ api.titleFor(node) }}</div>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
@@ -127,7 +135,11 @@ const tabLabel = (child: TileNode) =>
         :aria-selected="i === (node.active ?? 0)"
         @click="api.setActive(asSplit(node), i)"
       >
-        <span class="tiling-tab-label">{{ tabLabel(child) }}</span>
+        <span
+          class="tiling-tab-label"
+          :class="{ 'tiling-tab-label--title': !devMode }"
+          >{{ tabLabel(child) }}</span
+        >
         <button
           class="tiling-tab-close"
           title="close tab"
@@ -136,7 +148,10 @@ const tabLabel = (child: TileNode) =>
           ✕
         </button>
       </div>
+      <!-- Blank cards are only usable through the source box, so the
+           add buttons (here and below) are dev-mode furniture. -->
       <div
+        v-if="devMode"
         class="tiling-add tiling-add--tab"
         :class="{ 'is-drop': api.isAddDrop(node.id) }"
         :data-tiling-add="node.id"
@@ -164,7 +179,7 @@ const tabLabel = (child: TileNode) =>
         />
       </template>
       <div
-        v-if="node.dir !== 'tab'"
+        v-if="node.dir !== 'tab' && devMode"
         class="tiling-add"
         :class="[
           node.dir === 'h' ? 'tiling-add--h' : 'tiling-add--v',
@@ -386,6 +401,14 @@ const tabLabel = (child: TileNode) =>
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Non-dev tabs carry titles, not source — drop the tab bar's
+   monospace for them. */
+.tiling-tab-label--title {
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
 .tiling-tab-close {
   flex: 0 0 auto;
   border: none;
@@ -453,6 +476,13 @@ const tabLabel = (child: TileNode) =>
 .tiling-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
+/* Non-dev: accent-washed title bar, title inked in the accent (see
+   MillerView for the mixing rationale). */
+.tiling-chrome--title {
+  background: color-mix(in srgb, var(--fw-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--fw-accent) 70%, var(--fw-fg));
+}
 .tiling-source {
   flex: 1 1 auto;
   font: 12px/1.5 ui-monospace, Menlo, monospace;
@@ -471,6 +501,21 @@ const tabLabel = (child: TileNode) =>
 }
 .tiling-source:focus {
   outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
+.tiling-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Slot the host teleports the card into; a flex container so the
    mounted card fills it. */

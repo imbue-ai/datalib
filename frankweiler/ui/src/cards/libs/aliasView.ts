@@ -8,10 +8,11 @@
 // component as long as we dispose it in the teardown.
 import { watch } from "vue";
 import type { CardRender } from "../types";
+import { titled } from "../title";
 import { aliasManifest, ensureManifest } from "../aliasRegistry";
 
 export function aliasView(): CardRender {
-  return (root, ctx) => {
+  return titled("Component library", (root, ctx) => {
     const style = document.createElement("style");
     style.textContent = `
       .av { font: 13px/1.5 ui-monospace, Menlo, monospace; color: var(--fw-fg, inherit); }
@@ -66,5 +67,5 @@ export function aliasView(): CardRender {
     void ensureManifest();
     const stop = watch(aliasManifest, paint, { immediate: true });
     return () => stop();
-  };
+  });
 }

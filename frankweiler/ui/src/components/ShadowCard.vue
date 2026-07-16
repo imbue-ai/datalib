@@ -20,6 +20,12 @@ const props = defineProps<{
   ctx: CardCtx;
 }>();
 
+// The compiled card's declared human-readable title (CardRender's
+// `cardTitle`, see cards/title.ts), or null when the card doesn't
+// declare one / hasn't compiled / failed. Layouts show it in the
+// chrome bar when dev mode is off.
+const emit = defineEmits<{ title: [title: string | null] }>();
+
 const hostEl = useTemplateRef<HTMLDivElement>("hostEl");
 const shadow = shallowRef<ShadowRoot | null>(null);
 const teardown = shallowRef<Teardown | null>(null);
@@ -88,6 +94,7 @@ async function runCard() {
       div.appendChild(code);
     }
     root.appendChild(div);
+    emit("title", null);
     return;
   }
   try {
@@ -104,8 +111,10 @@ async function runCard() {
       }
     }
     teardown.value = render(root, props.ctx);
+    emit("title", render.cardTitle ?? null);
   } catch (e) {
     if (token !== runToken || shadow.value !== root) return;
+    emit("title", null);
     const div = document.createElement("div");
     div.style.cssText =
       "color:#e35d6a;padding:8px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap";

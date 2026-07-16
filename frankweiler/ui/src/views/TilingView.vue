@@ -35,6 +35,7 @@
 import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
+import { displayTitle } from "@/cards/title";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -94,7 +95,18 @@ watch(root, (tree) => {
   for (const id of [...slots.keys()]) {
     if (!live.has(id)) slots.delete(id);
   }
+  for (const id of [...titles.keys()]) {
+    if (!live.has(id)) titles.delete(id);
+  }
 });
+
+// Declared human-readable titles by tile id, reported by each pooled
+// ShadowCard after compile (see cards/title.ts); null when the card
+// declares none. Shown via titleFor when dev mode is off.
+const titles = reactive(new Map<string, string | null>());
+function titleFor(leaf: TileLeaf): string {
+  return displayTitle(leaf.source, titles.get(leaf.id));
+}
 
 // ---- host commands ----
 
@@ -320,6 +332,7 @@ function startDrag(id: string, ev: PointerEvent) {
 const api: TilingApi = {
   ctxFor,
   commitSource,
+  titleFor,
   closeNode,
   startResize,
   setActive,
@@ -355,6 +368,7 @@ provide(TILING_API, api);
           class="tiling-mounted-card"
           :source="leaf.source"
           :ctx="ctxFor(leaf)"
+          @title="(t) => titles.set(leaf.id, t)"
         />
       </Teleport>
     </div>

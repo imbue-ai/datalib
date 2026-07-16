@@ -30,6 +30,8 @@ import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { layoutTree, type Rect } from "./treeLayout";
+import { displayTitle } from "@/cards/title";
+import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const bus = createBus();
@@ -47,6 +49,10 @@ type TreeNode = {
   // position. Descendants inherit ancestor offsets (see rects).
   dx: number;
   dy: number;
+  // Human-readable title the compiled card declared (ShadowCard's
+  // `title` event), shown instead of the source box when dev mode is
+  // off; null until compiled or when the card declares none.
+  title: string | null;
 };
 
 const NODE_WIDTH = 640;
@@ -69,6 +75,7 @@ function newNode(source: string, parentId: string | null): TreeNode {
     height: NODE_HEIGHT,
     dx: 0,
     dy: 0,
+    title: null,
   };
 }
 
@@ -525,9 +532,11 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         >
           <div
             class="tree-node-chrome"
+            :class="{ 'tree-node-chrome--title': !devMode }"
             @pointerdown="(e) => onChromeDown(node, e)"
           >
             <textarea
+              v-if="devMode"
               v-auto-grow
               class="tree-node-source"
               rows="1"
@@ -537,12 +546,16 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
               @input="growSourceBox($event.target as HTMLTextAreaElement)"
               @keydown.enter.exact.prevent="commitSource(node, $event)"
             />
+            <div v-else class="tree-node-title">
+              {{ displayTitle(node.source, node.title) }}
+            </div>
             <CardControls :source="node.source" :ctx="ctxFor(node)" />
           </div>
           <ShadowCard
             class="tree-node-card"
             :source="node.source"
             :ctx="ctxFor(node)"
+            @title="(t) => (node.title = t)"
           />
           <div
             v-for="corner in CORNERS"
@@ -565,8 +578,12 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         </button>
         <button title="zoom in" @click="zoomStep(1.2)">+</button>
         <button title="zoom to fit" @click="zoomToFit">⛶</button>
-        <span class="tree-controls-sep" />
-        <button title="add a blank card" @click="addRootCard">+ card</button>
+        <!-- A blank card is edited via its source box — a dev-mode
+             gesture, so the button hides with it. -->
+        <template v-if="devMode">
+          <span class="tree-controls-sep" />
+          <button title="add a blank card" @click="addRootCard">+ card</button>
+        </template>
       </div>
     </div>
   </div>
@@ -664,6 +681,14 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
 .tree-node-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
+/* Non-dev: accent-washed title bar, title inked in the accent (see
+   MillerView for the mixing rationale); the grab-to-move cursor and
+   behavior are unchanged. */
+.tree-node-chrome--title {
+  background: color-mix(in srgb, var(--fw-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--fw-accent) 70%, var(--fw-fg));
+}
 .tree-node-source {
   flex: 1 1 auto;
   cursor: text;
@@ -683,6 +708,23 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
 }
 .tree-node-source:focus {
   outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar.
+   Not an interactive element, so the chrome's grab-to-move drag
+   (onChromeDown) works across it. */
+.tree-node-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tree-node-card {
   flex: 1 1 auto;

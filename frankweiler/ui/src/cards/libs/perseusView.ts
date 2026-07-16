@@ -28,6 +28,7 @@
 // ctx.setState); expansion is transient in-memory UI only.
 import { fetchSearch } from "@/api";
 import type { CardRender } from "../types";
+import { titled } from "../title";
 
 // A "version" is one published edition/translation, keyed by its
 // edition id (e.g. "perseus-grc2", "1st1K-eng1"). The id is parsed out
@@ -106,7 +107,7 @@ function docSource(md: string, anchor: string | null): string {
 }
 
 export function perseusView(): CardRender {
-  return (root, ctx) => {
+  return titled("Perseus reader", (root, ctx) => {
     const style = document.createElement("style");
     style.textContent = `
       .sv { font: 13px/1.5 ui-monospace, Menlo, monospace; color: var(--fw-fg, inherit); height: 100%; overflow: auto; }
@@ -438,5 +439,5 @@ export function perseusView(): CardRender {
       });
 
     return () => ac.abort();
-  };
+  });
 }

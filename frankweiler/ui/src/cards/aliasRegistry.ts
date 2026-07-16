@@ -20,7 +20,7 @@
 
 import { ref, type Ref } from "vue";
 import { listLib, fetchLib } from "@/api";
-import { viewLibs } from "./libs";
+import { scopeHelpers, viewLibs } from "./libs";
 
 // name → sha256 of its current source. Reactive: cards watch this.
 export const aliasManifest: Ref<Map<string, string>> = ref(new Map());
@@ -162,7 +162,10 @@ async function resolveAlias(
   }
   resolving.add(name);
   const source = await getSource(name, hash);
-  const scope = new Map<string, unknown>(Object.entries(viewLibs));
+  const scope = new Map<string, unknown>([
+    ...Object.entries(viewLibs),
+    ...Object.entries(scopeHelpers),
+  ]);
   // Sequential (not parallel) so `resolving` is exactly the ancestor
   // path: correct cycle detection over a tiny graph.
   for (const dep of directAliasDeps(source, name)) {
@@ -186,7 +189,10 @@ export type ResolvedScope = {
 // returns the transitive closure so the host knows what to watch.
 export async function resolveScopeFor(source: string): Promise<ResolvedScope> {
   await ensureManifest();
-  const scope = new Map<string, unknown>(Object.entries(viewLibs));
+  const scope = new Map<string, unknown>([
+    ...Object.entries(viewLibs),
+    ...Object.entries(scopeHelpers),
+  ]);
   const closure = new Set<string>();
   const resolving = new Set<string>();
   for (const dep of directAliasDeps(source)) {

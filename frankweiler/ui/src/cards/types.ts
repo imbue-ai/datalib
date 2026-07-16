@@ -70,7 +70,13 @@ export type CardCtx = {
   host: HostCommands;
 };
 
-export type CardRender = (root: ShadowRoot, ctx: CardCtx) => Teardown;
+// The optional `cardTitle` is the card's human-readable name, shown in
+// the chrome bar instead of the source when dev mode is off (see
+// devMode.ts). Factories attach it via `titled()` (cards/title.ts);
+// cards without one fall back to a name derived from the source.
+export type CardRender = ((root: ShadowRoot, ctx: CardCtx) => Teardown) & {
+  cardTitle?: string;
+};
 
 // Bus topic: the destination of the edge currently under the cursor.
 // Published by the document view when the pointer enters an

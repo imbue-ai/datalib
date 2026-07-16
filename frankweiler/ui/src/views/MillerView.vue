@@ -21,13 +21,15 @@
 // place the user types new card source. As soon as it gains code a
 // fresh blank appears after it; a run of several trailing blanks
 // collapses to one. Blank columns are not part of the URL.
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
+import { displayTitle } from "@/cards/title";
+import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
@@ -43,6 +45,10 @@ type Slot = {
   // drags the column's right edge. Persisted in the URL as a ratio of
   // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
   width: number | null;
+  // Human-readable title the compiled card declared (ShadowCard's
+  // `title` event), shown instead of the source box when dev mode is
+  // off; null until compiled or when the card declares none.
+  title: string | null;
 };
 
 const DEFAULT_WIDTH = 640;
@@ -59,7 +65,7 @@ function freshId(): string {
 }
 
 function newSlot(source: string, state = "", width: number | null = null): Slot {
-  return { id: freshId(), source, state, width };
+  return { id: freshId(), source, state, width, title: null };
 }
 
 function isBlankSource(source: string): boolean {
@@ -81,6 +87,15 @@ function withTrailingBlank(list: Slot[]): Slot[] {
 }
 
 const slots = ref<Slot[]>([]);
+
+// What actually renders. Creating a card means typing source — a dev
+// gesture — so outside dev mode the trailing blank column (the place
+// you type new source) is hidden. It stays in `slots`, so the
+// trailing-blank invariant holds across the toggle (uncommitted text
+// in the box is dropped with the textarea, like any unsaved edit).
+const visibleSlots = computed(() =>
+  devMode.value ? slots.value : slots.value.filter((s) => !isBlankSource(s.source)),
+);
 
 // One CardCtx per slot (declared before the initial setSlots call,
 // which prunes it). See ctxFor below.
@@ -273,13 +288,17 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   <div class="miller-root">
     <div class="miller-columns">
       <section
-        v-for="slot in slots"
+        v-for="slot in visibleSlots"
         :key="slot.id"
         class="miller-col"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
       >
-        <div class="miller-col-chrome">
+        <div
+          class="miller-col-chrome"
+          :class="{ 'miller-col-chrome--title': !devMode }"
+        >
           <textarea
+            v-if="devMode"
             v-auto-grow
             class="miller-col-source"
             rows="1"
@@ -288,12 +307,16 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
+          <div v-else class="miller-col-title">
+            {{ displayTitle(slot.source, slot.title) }}
+          </div>
           <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
         </div>
         <ShadowCard
           class="miller-col-card"
           :source="slot.source"
           :ctx="ctxFor(slot)"
+          @title="(t) => (slot.title = t)"
         />
         <div
           class="miller-col-resize"
@@ -363,6 +386,15 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
+/* Non-dev: an accent-washed title bar with the title and controls
+   inked in the accent itself. Mixing the accent toward --fw-fg keeps
+   the ink readable in both themes: it darkens on the light ground and
+   lightens on the dark one. */
+.miller-col-chrome--title {
+  background: color-mix(in srgb, var(--fw-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--fw-accent) 70%, var(--fw-fg));
+}
 .miller-col-source {
   flex: 1 1 auto;
   font: 12px/1.5 ui-monospace, Menlo, monospace;
@@ -382,6 +414,21 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 }
 .miller-col-source:focus {
   outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Styled as a heading (proportional, semibold) so it
+   reads as a title, not code; the 18px line box matches the source
+   box's 12px × 1.5 so toggling dev mode doesn't reflow the bar. */
+.miller-col-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .miller-col-card {
   flex: 1 1 auto;
