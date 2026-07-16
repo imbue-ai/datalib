@@ -26,7 +26,7 @@ test("table mode: add a source (Apply persists), round-trip raw mode, restore", 
   // Fixture config has no sources — the table shows the empty row and
   // the non-source stanza (data_root) sits in "additional config".
   await expect(page.getByText("no sources configured yet")).toBeVisible();
-  // The "additional config options" box opens by itself when there are
+  // The "additional config options" box (always visible) carries the
   // non-source stanzas.
   const extra = page.locator(".editor-rest");
   await expect(extra).toBeVisible();

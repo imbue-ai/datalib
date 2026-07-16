@@ -506,6 +506,8 @@ onUnmounted(() => {
     <p v-if="error" class="error">error: {{ error }}</p>
     <p v-if="loadError" class="error">Could not load config: {{ loadError }}</p>
 
+    <h2>Configure data sources</h2>
+
     <p class="path">
       <span class="label">File:</span> <code>{{ configPath }}</code>
       <span v-if="!existed" class="pill new">not created yet</span>
@@ -555,7 +557,7 @@ onUnmounted(() => {
               <th>Managed</th>
               <th class="th-actions">
                 <button
-                  class="btn"
+                  class="btn btn-sync"
                   :disabled="busyGlobal || serverSources.length === 0"
                   :title="serverSources.length === 0 ? 'Add a source first' : ''"
                   @click="syncEverything"
@@ -577,7 +579,7 @@ onUnmounted(() => {
                     {{ editingIdx === r.idx ? "Editing…" : "Edit" }}
                   </button>
                   <button
-                    class="btn"
+                    class="btn btn-sync"
                     :disabled="busySource[r.name] || !serverByName.get(r.name)"
                     :title="!serverByName.get(r.name) ? 'Not in the saved config yet' : ''"
                     @click="syncOne(r.name)"
@@ -637,12 +639,12 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <details class="extra-config" :open="rest.trim() !== ''">
-          <summary>
+        <div class="extra-config">
+          <p class="extra-config-head">
             Additional config options
             <span class="label">— every stanza other than <code>sources:</code>
               (<code>data_root</code>, <code>defaults</code>, <code>qmd</code>, …)</span>
-          </summary>
+          </p>
           <textarea
             v-model="rest"
             class="editor editor-rest"
@@ -654,7 +656,7 @@ onUnmounted(() => {
 #   blob_size_limit_bytes: 5000000"
             @input="markDirty"
           />
-        </details>
+        </div>
       </template>
 
       <!-- Raw mode -->
@@ -760,6 +762,10 @@ onUnmounted(() => {
   gap: 0.75rem;
   padding: 0 0.25rem;
 }
+h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
 h3 {
   margin: 0.75rem 0 0.25rem;
   font-size: 0.95rem;
@@ -791,7 +797,7 @@ h3 {
 .mode-toggle {
   position: absolute;
   top: 0;
-  right: 1rem;
+  left: 1rem;
   transform: translateY(-50%);
   display: flex;
   border: 1px solid var(--fw-border);
@@ -860,10 +866,11 @@ h3 {
 .src-actions {
   justify-content: flex-end;
 }
-/* Stable button footprint: "Edit" ↔ "Editing…" and "Sync" ↔ "Queuing…"
-   swap without nudging their neighbors. */
+/* A little footprint stability for the "Sync" ↔ "Queuing…" and
+   "Edit" ↔ "Editing…" label swaps, without making the buttons look
+   padded out. */
 .src-actions .btn {
-  min-width: 5.2rem;
+  min-width: 3.6rem;
 }
 .sync-table th,
 .sync-table td {
@@ -919,6 +926,11 @@ h3 {
 }
 .btn-danger {
   color: #c0392b;
+}
+/* Accent-outlined sync actions ("Sync" and "Sync everything" match). */
+.btn-sync {
+  color: var(--fw-accent);
+  border-color: var(--fw-accent);
 }
 .btn-cancel {
   color: #c0392b;
@@ -980,10 +992,9 @@ h3 {
 .editor-raw {
   min-height: 24rem;
 }
-.extra-config summary {
-  cursor: pointer;
+.extra-config-head {
+  margin: 0 0 0.35rem;
   font-size: 0.9rem;
-  margin-bottom: 0.35rem;
 }
 .footer {
   display: flex;
