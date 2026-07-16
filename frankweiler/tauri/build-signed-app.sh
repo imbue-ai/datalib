@@ -182,8 +182,13 @@ until pnpm dlx @tauri-apps/cli@2 "${build_args[@]}"; do
 done
 
 # ---- Verify what we're about to ship -------------------------------------
-app_bundle="$here/target/release/bundle/macos/Frankweiler.app"
-dmg="$(ls -t "$here"/target/release/bundle/dmg/Frankweiler_*.dmg | head -n 1)"
+# The target dir may be redirected (e.g. a shared CARGO_TARGET_DIR or a
+# `build.target-dir` config so worktrees reuse one cache) — ask cargo
+# where it actually built instead of assuming ./target.
+target_dir="$(cargo metadata --no-deps --format-version 1 \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+app_bundle="$target_dir/release/bundle/macos/Frankweiler.app"
+dmg="$(ls -t "$target_dir"/release/bundle/dmg/Frankweiler_*.dmg | head -n 1)"
 
 codesign --verify --deep --strict "$app_bundle"
 xcrun stapler validate "$app_bundle"
