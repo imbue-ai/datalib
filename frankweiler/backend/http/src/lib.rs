@@ -961,22 +961,11 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 /// loader, so the scaffold parses as-is. `data_root` is omitted on
 /// purpose: it defaults to this file's own directory (see
 /// [`frankweiler_ingest_config::Config`]), keeping the root self-contained.
-/// Sources are added via the Setup tab's "Add a source" buttons rather
-/// than commented examples here. Credentials never live in this file —
-/// downloaders pull them from `latchkey` at runtime.
+/// No header comment: the UI shows this next to the sources table and
+/// its "Add a source" buttons, which explain themselves; per-source
+/// guidance (latchkey setup etc.) arrives with each added stanza.
 fn scaffold_yaml() -> String {
-    let lk = frankweiler_core::node_runtime::latchkey_cli_hint();
-    format!(
-        r#"# Frankweiler config for this data root. Edit here, Save, then use
-# the Sync tab to pull your data in. Credentials are NOT stored in this
-# file — each downloader reads them from `latchkey` at runtime, so run
-# `{lk} auth set <provider>` first for any managed source.
-#
-# Use the "Add a source" buttons above to append the sources you want.
-
-sources: []
-"#
-    )
+    "sources: []\n".to_string()
 }
 
 /// Surface the typed `Config.sources` list to the UI as
