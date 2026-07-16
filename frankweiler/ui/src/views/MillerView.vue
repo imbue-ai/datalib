@@ -386,13 +386,14 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
-/* Non-dev: a solid accent title bar. Text and controls take --fw-bg
-   for contrast on the accent — the same pairing as the layout
-   toggle's active state, and it holds in both themes. */
+/* Non-dev: an accent-washed title bar with the title and controls
+   inked in the accent itself. Mixing the accent toward --fw-fg keeps
+   the ink readable in both themes: it darkens on the light ground and
+   lightens on the dark one. */
 .miller-col-chrome--title {
-  background: var(--fw-accent);
-  border-bottom-color: color-mix(in srgb, var(--fw-accent) 75%, black);
-  color: var(--fw-bg);
+  background: color-mix(in srgb, var(--fw-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--fw-accent) 70%, var(--fw-fg));
 }
 .miller-col-source {
   flex: 1 1 auto;

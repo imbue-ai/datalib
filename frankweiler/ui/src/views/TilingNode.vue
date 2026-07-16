@@ -476,12 +476,12 @@ const tabLabel = (child: TileNode) =>
 .tiling-chrome:focus-within {
   background: rgba(99, 102, 241, 0.18);
 }
-/* Non-dev: a solid accent title bar (see MillerView for the pairing
-   rationale). */
+/* Non-dev: accent-washed title bar, title inked in the accent (see
+   MillerView for the mixing rationale). */
 .tiling-chrome--title {
-  background: var(--fw-accent);
-  border-bottom-color: color-mix(in srgb, var(--fw-accent) 75%, black);
-  color: var(--fw-bg);
+  background: color-mix(in srgb, var(--fw-accent) 16%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--fw-accent) 55%, transparent);
+  color: color-mix(in srgb, var(--fw-accent) 70%, var(--fw-fg));
 }
 .tiling-source {
   flex: 1 1 auto;
