@@ -28,6 +28,8 @@ import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
 import { createBus } from "@/cards/bus";
 import { decodeColumns, encodeColumns, type ColumnSpec } from "@/router/columns";
+import { displayTitle } from "@/cards/title";
+import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 
 const route = useRoute();
@@ -43,6 +45,10 @@ type Slot = {
   // drags the column's right edge. Persisted in the URL as a ratio of
   // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
   width: number | null;
+  // Human-readable title the compiled card declared (ShadowCard's
+  // `title` event), shown instead of the source box when dev mode is
+  // off; null until compiled or when the card declares none.
+  title: string | null;
 };
 
 const DEFAULT_WIDTH = 640;
@@ -59,7 +65,7 @@ function freshId(): string {
 }
 
 function newSlot(source: string, state = "", width: number | null = null): Slot {
-  return { id: freshId(), source, state, width };
+  return { id: freshId(), source, state, width, title: null };
 }
 
 function isBlankSource(source: string): boolean {
@@ -280,6 +286,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
       >
         <div class="miller-col-chrome">
           <textarea
+            v-if="devMode"
             v-auto-grow
             class="miller-col-source"
             rows="1"
@@ -288,12 +295,16 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
             @input="growSourceBox($event.target as HTMLTextAreaElement)"
             @keydown.enter.exact.prevent="commitSource(slot, $event)"
           />
+          <div v-else class="miller-col-title">
+            {{ displayTitle(slot.source, slot.title) }}
+          </div>
           <CardControls :source="slot.source" :ctx="ctxFor(slot)" />
         </div>
         <ShadowCard
           class="miller-col-card"
           :source="slot.source"
           :ctx="ctxFor(slot)"
+          @title="(t) => (slot.title = t)"
         />
         <div
           class="miller-col-resize"
@@ -382,6 +393,19 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 }
 .miller-col-source:focus {
   outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Same metrics as the source box so toggling dev mode
+   doesn't reflow the chrome bar. */
+.miller-col-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .miller-col-card {
   flex: 1 1 auto;

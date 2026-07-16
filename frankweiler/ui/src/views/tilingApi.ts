@@ -9,6 +9,11 @@ import type { Dir, TileLeaf, TileSplit } from "./tilingTree";
 export type TilingApi = {
   ctxFor(leaf: TileLeaf): CardCtx;
   commitSource(leaf: TileLeaf, e: Event): void;
+  // The card's human-readable title (declared via cards/title.ts, with
+  // a source-derived fallback) — what the chrome and tab bar show when
+  // dev mode is off. Lives on the host because the ShadowCards (which
+  // report the declared titles) live in the host's persistent pool.
+  titleFor(leaf: TileLeaf): string;
   // Remove a node by id — a tile (a card's close, via ctx.host.close) or
   // a whole grouped child (a tab's ✕).
   closeNode(id: string): void;

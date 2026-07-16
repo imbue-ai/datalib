@@ -14,6 +14,7 @@
 import { inject } from "vue";
 import CardControls from "@/components/CardControls.vue";
 import { growSourceBox, vAutoGrow } from "@/components/autoGrow";
+import { devMode } from "@/devMode";
 import { TILING_API } from "./tilingApi";
 import type { TileNode, TileSplit } from "./tilingTree";
 
@@ -25,10 +26,15 @@ const api = inject(TILING_API)!;
 // back for the resize / tab / arrangement handlers.
 const asSplit = (n: TileNode) => n as TileSplit;
 
-// Tab-bar label for a child: the card's source for a tile, or a
-// generic marker for a nested group.
+// Tab-bar label for a child: the card's source (dev mode) or its
+// human-readable title for a tile, or a generic marker for a nested
+// group.
 const tabLabel = (child: TileNode) =>
-  child.kind === "leaf" ? child.source.trim() || "blank" : "group";
+  child.kind === "leaf"
+    ? devMode.value
+      ? child.source.trim() || "blank"
+      : api.titleFor(child)
+    : "group";
 </script>
 
 <template>
@@ -50,6 +56,7 @@ const tabLabel = (child: TileNode) =>
     />
     <div class="tiling-chrome">
       <textarea
+        v-if="devMode"
         v-auto-grow
         class="tiling-source"
         rows="1"
@@ -59,6 +66,7 @@ const tabLabel = (child: TileNode) =>
         @input="growSourceBox($event.target as HTMLTextAreaElement)"
         @keydown.enter.exact.prevent="api.commitSource(node, $event)"
       />
+      <div v-else class="tiling-title">{{ api.titleFor(node) }}</div>
       <CardControls :source="node.source" :ctx="api.ctxFor(node)" />
     </div>
     <!-- Empty slot: the host teleports this leaf's persistent card here
@@ -471,6 +479,19 @@ const tabLabel = (child: TileNode) =>
 }
 .tiling-source:focus {
   outline: none;
+}
+/* Non-dev chrome: the card's human-readable title where the source
+   box would be. Same metrics as the source box so toggling dev mode
+   doesn't reflow the chrome bar. */
+.tiling-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 0.2rem 0.4rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Slot the host teleports the card into; a flex container so the
    mounted card fills it. */

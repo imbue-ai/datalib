@@ -2,8 +2,10 @@
 // grid card (see cards/GridCard.ce.vue).
 import GridCard from "../GridCard.ce.vue";
 import { vueCard } from "../vueCard";
+import { titled } from "../title";
 import type { CardRender } from "../types";
 
 export function gridView(opts?: { q?: string }): CardRender {
-  return vueCard(GridCard, { q: opts?.q ?? "" });
+  const q = opts?.q ?? "";
+  return titled(q ? `Search: ${q}` : "Search", vueCard(GridCard, { q }));
 }

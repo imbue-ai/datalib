@@ -30,7 +30,9 @@ documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 the expression in `new Function(...viewLibNames, "return (<source>)")`
 and calls it with the view factories as arguments — so the only names
 in scope are the factories in `ViewLibs`
-(`frankweiler/ui/src/cards/libs/index.ts`), plus JS globals. The
+(`frankweiler/ui/src/cards/libs/index.ts`), the helpers in
+`scopeHelpers` (today just `titled`, see "Titles and dev mode"), plus
+JS globals. The
 expression must evaluate to a `CardRender`; anything else (or a parse
 error) renders as an error message in place of the card.
 
@@ -74,6 +76,37 @@ instead of injecting them into the document head. Child components of
 a card must also be `.ce.vue` and listed in the adapter's
 `styleSources` so their CSS lands in the root too (see
 `frankweiler/ui/src/cards/libs/documentView.ts` for the pattern).
+
+## Titles and dev mode
+
+The chrome bar around each card has two faces, switched by the **dev**
+toggle in the status bar (`frankweiler/ui/src/devMode.ts`, persisted in
+localStorage):
+
+- **Dev mode off** (the default): the bar shows the card's
+  human-readable **title** — read-only, no code visible.
+- **Dev mode on**: the bar shows the card's source in the editable box
+  described below (Enter re-runs the card), plus the 🤖 agent hand-off
+  button (which rewrites the source, so it's hidden with it).
+
+A card declares its title by wrapping its render in `titled()`
+(`frankweiler/ui/src/cards/title.ts`):
+
+```ts
+export function gridView(opts?: { q?: string }): CardRender {
+  const q = opts?.q ?? "";
+  return titled(q ? `Search: ${q}` : "Search", vueCard(GridCard, { q }));
+}
+```
+
+`titled` just sets the render's optional `cardTitle` property, so it
+works the same for builtin factories and user-defined aliases — the
+title is computed at factory-call time and can reflect the arguments.
+After compiling a source, `ShadowCard` reports the declared title up to
+the layout, which shows it in the chrome. A card without one gets a
+best-effort fallback (`displayTitle`): the bare factory/alias name for
+`name(...)`-shaped source, `new card` for a blank card, or a generic
+label for anything else.
 
 ## CardCtx: what a card receives
 

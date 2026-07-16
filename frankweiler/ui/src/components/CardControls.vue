@@ -9,6 +9,7 @@
 import { computed } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { handOffToAgent } from "@/cards/handoff";
+import { devMode } from "@/devMode";
 import type { CardCtx } from "@/cards/types";
 
 const props = defineProps<{
@@ -33,7 +34,10 @@ const aloneHref = computed(() =>
     title="open this card alone"
     >↗</a
   >
+  <!-- The agent hand-off rewrites the card's source — a dev-mode
+       affordance, hidden alongside the source box. -->
   <button
+    v-if="devMode"
     class="card-control card-control--agent"
     title="let a coding agent work on this card"
     @click="handOffToAgent(ctx.host)"

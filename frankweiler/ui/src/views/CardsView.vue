@@ -14,6 +14,7 @@ import MillerView from "@/views/MillerView.vue";
 import TreeView from "@/views/TreeView.vue";
 import TilingView from "@/views/TilingView.vue";
 import { fetchHealth, fetchSearch, type Health } from "@/api";
+import { devMode } from "@/devMode";
 
 type Layout = "columns" | "tree" | "tiling";
 const layout = ref<Layout>("columns");
@@ -63,6 +64,15 @@ onMounted(async () => {
           (root does not exist)</span
         >
       </span>
+      <button
+        class="cards-dev-toggle"
+        :class="{ 'is-active': devMode }"
+        :aria-pressed="devMode"
+        title="dev mode: show and edit each card's source"
+        @click="devMode = !devMode"
+      >
+        dev
+      </button>
       <div class="cards-layout-toggle" role="group" aria-label="card layout">
         <button
           :class="{ 'is-active': layout === 'columns' }"
@@ -138,11 +148,30 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cards-layout-toggle {
-  /* Always claim full intrinsic width (never shrink), and sit flush
-     right — the message before it absorbs any slack via min-width:0. */
+/* The dev + layout toggles sit flush right as a cluster — the dev
+   button carries the auto margin, the message before them absorbs any
+   slack via min-width:0. */
+.cards-dev-toggle {
   flex: 0 0 auto;
   margin-left: auto;
+  border: 1px solid var(--fw-border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+}
+.cards-dev-toggle:hover {
+  background: var(--fw-hover);
+}
+.cards-dev-toggle.is-active {
+  background: var(--fw-accent);
+  color: var(--fw-bg);
+}
+.cards-layout-toggle {
+  /* Always claim full intrinsic width (never shrink). */
+  flex: 0 0 auto;
   display: flex;
   border: 1px solid var(--fw-border);
   border-radius: 4px;
