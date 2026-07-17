@@ -182,6 +182,15 @@ enum Decision {
 
 impl Runner {
     pub async fn run(&self, graph: &Graph) -> Result<RunReport> {
+        // Announce the full plan first, so consumers can draw every
+        // task (pending included) before anything runs.
+        self.sink.emit(&Event::RunPlan {
+            steps: graph
+                .topo
+                .iter()
+                .map(|&i| graph.steps[i].id.clone())
+                .collect(),
+        });
         let mut state = DagState::load(&self.data_root).context("load dag state")?;
 
         let n = graph.steps.len();

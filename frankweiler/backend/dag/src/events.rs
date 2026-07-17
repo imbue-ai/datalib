@@ -18,6 +18,12 @@ use crate::step::StepId;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    /// First event of a run: every step id, in topological order. Lets
+    /// a consumer render the full task board (with pending cells)
+    /// before anything has started.
+    RunPlan {
+        steps: Vec<StepId>,
+    },
     /// The scheduler decided to run this step.
     StepStart {
         step: StepId,

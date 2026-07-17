@@ -116,11 +116,13 @@ impl Graph {
                 }
                 if !matched {
                     if !pat.is_concrete() {
-                        bail!(
-                            "step {:?}: wildcard input {pat} matches no step's output; \
-                             external inputs must be concrete paths",
-                            b.id
-                        );
+                        // A wildcard that matches nothing resolves to
+                        // the empty set (no edge, no external). This
+                        // is deliberate: a starter config carries the
+                        // shared fan-in steps (`index`, `qmd` over
+                        // `**/rendered_md`) before any source exists,
+                        // and must still load and run.
+                        continue;
                     }
                     resolved_inputs[bi].insert(pat.as_str().to_string(), pat.clone());
                     external_inputs[bi].push(pat.clone());
@@ -237,11 +239,13 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_unmatched_input_is_an_error() {
-        let err = Graph::build(vec![spec("index", &["**/rendered_md"], &["system/x"])])
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("matches no step's output"), "{err}");
+    fn wildcard_unmatched_input_resolves_empty() {
+        // A starter config declares the fan-in steps before any source
+        // exists; the wildcard just resolves to nothing.
+        let g = Graph::build(vec![spec("index", &["**/rendered_md"], &["system/x"])]).unwrap();
+        assert!(g.deps[0].is_empty());
+        assert!(g.resolved_inputs[0].is_empty());
+        assert!(g.external_inputs[0].is_empty());
     }
 
     #[test]

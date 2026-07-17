@@ -207,9 +207,8 @@ fn retag(ev: Event, id: &str) -> Event {
             msg,
         },
         Event::Hint { msg, .. } => Event::Hint { step: id, msg },
-        // A child has no business emitting a run summary; pass it
         // through unmodified rather than inventing a policy.
-        ev @ Event::RunSummary { .. } => ev,
+        ev @ (Event::RunSummary { .. } | Event::RunPlan { .. }) => ev,
     }
 }
 
