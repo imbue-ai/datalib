@@ -822,18 +822,67 @@ pub struct JobsAllParams {
 // with no config; the UI's Setup tab scaffolds one, lets the user edit
 // it, and saves it back here, after which `/api/sync/*` lights up.
 
-/// Load the effective config for read purposes: prefer the data root's
-/// own `config.yaml`; fall back to the legacy global path only when the
-/// root has none yet (eases migration for existing installs).
-fn load_effective_config(
-    s: &AppState,
-) -> Result<frankweiler_ingest_config::Config, frankweiler_ingest_config::ConfigError> {
-    use frankweiler_ingest_config::{default_config_path, load_config};
-    if s.config_path.exists() {
-        load_config(Some(s.config_path.as_path()))
-    } else {
-        load_config(Some(&default_config_path()))
+/// One source derived from the DAG config's steps: the step-level view
+/// grouped back into per-source rows for the UI table. A source is any
+/// `<name>` appearing in a `<type>.download` / `<type>.render` step's
+/// params; `managed` iff it has a download step.
+struct DagSource {
+    name: String,
+    type_str: String,
+    managed: bool,
+}
+
+/// Parse + validate the DAG config at `path` the same way the runner
+/// does (`config::load` → `to_specs` → `Graph::build`, so cycle /
+/// ownership / unknown-phase errors are caught, not just YAML syntax),
+/// and derive the per-source rows.
+fn load_dag_config(
+    path: &std::path::Path,
+) -> anyhow::Result<(frankweiler_dag::config::DagConfig, Vec<DagSource>)> {
+    use frankweiler_dag::config::{self, StepTypeOpts};
+    let (cfg, _root) = config::load(path)?;
+    // Validation only — the placeholder step-bin path never runs.
+    let specs = config::to_specs(
+        &cfg,
+        std::path::Path::new(config::STEP_BIN_NAME),
+        &StepTypeOpts::default(),
+    )?;
+    frankweiler_dag::Graph::build(specs)?;
+
+    let mut order: Vec<String> = Vec::new();
+    let mut by_name: std::collections::HashMap<String, DagSource> = Default::default();
+    for e in &cfg.steps {
+        let Some(step) = &e.step else { continue };
+        let Some((source_type, phase)) = step.rsplit_once('.') else {
+            continue;
+        };
+        let name = e
+            .params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let entry = by_name.entry(name.clone()).or_insert_with(|| {
+            order.push(name.clone());
+            DagSource {
+                name,
+                type_str: source_type.to_string(),
+                managed: false,
+            }
+        });
+        if phase == "download" {
+            entry.managed = true;
+        }
     }
+    let sources = order
+        .into_iter()
+        .filter_map(|n| by_name.remove(&n))
+        .collect();
+    Ok((cfg, sources))
 }
 
 #[derive(Debug, Serialize)]
@@ -864,10 +913,9 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path.as_ref().clone();
     let exists = path.exists();
     let yaml = std::fs::read_to_string(&path).unwrap_or_default();
-    let (parsed_ok, error, source_count) = match frankweiler_ingest_config::load_config(Some(&path))
-    {
-        Ok(c) => (true, None, c.sources.len()),
-        Err(e) => (false, Some(format!("{e}")), 0),
+    let (parsed_ok, error, source_count) = match load_dag_config(&path) {
+        Ok((_cfg, sources)) => (true, None, sources.len()),
+        Err(e) => (false, Some(format!("{e:#}")), 0),
     };
     Json(ConfigResponse {
         path: path.display().to_string(),
@@ -916,9 +964,9 @@ async fn put_config(
         eprintln!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    match frankweiler_ingest_config::load_config(Some(&tmp)) {
-        Ok(cfg) => {
-            let n = cfg.sources.len();
+    match load_dag_config(&tmp) {
+        Ok((_cfg, sources)) => {
+            let n = sources.len();
             if let Err(e) = std::fs::rename(&tmp, &path) {
                 let _ = std::fs::remove_file(&tmp);
                 eprintln!("put_config: rename {}: {e}", path.display());
@@ -934,7 +982,7 @@ async fn put_config(
             let _ = std::fs::remove_file(&tmp);
             Ok(Json(PutConfigResponse {
                 ok: false,
-                error: Some(format!("{e}")),
+                error: Some(format!("{e:#}")),
                 source_count: 0,
             }))
         }
@@ -957,38 +1005,49 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
     })
 }
 
-/// Minimal-but-valid starter config. `sources: []` is accepted by the
-/// loader, so the scaffold parses as-is. `data_root` is omitted on
-/// purpose: it defaults to this file's own directory (see
-/// [`frankweiler_ingest_config::Config`]), keeping the root self-contained.
-/// No header comment: the UI shows this next to the sources table and
-/// its "Add a source" buttons, which explain themselves; per-source
-/// guidance (latchkey setup etc.) arrives with each added stanza.
+/// Starter DAG config: the shared fan-in steps that every source's
+/// rendered markdown feeds. Non-empty on purpose — `index`/`qmd` are
+/// source-independent and belong in every pipeline; their wildcard
+/// input matches nothing until the first source's steps are added
+/// (which the UI's "Add a source" buttons append as a
+/// `<name>.download` + `<name>.render` pair). `data_root` is omitted:
+/// it defaults to this file's own directory, keeping the root
+/// self-contained.
 fn scaffold_yaml() -> String {
-    "sources: []\n".to_string()
+    "\
+# Shared fan-in steps: every source's rendered markdown feeds these.
+steps:
+  - id: index
+    inputs: [\"**/rendered_md\"]
+    outputs: [system/backend_index]
+    step: index
+
+  - id: qmd
+    inputs: [\"**/rendered_md\"]
+    outputs: [system/qmd]
+    step: qmd
+"
+    .to_string()
 }
 
-/// Surface the typed `Config.sources` list to the UI as
-/// `{name, type, managed}` entries. We re-load the config on every call
-/// so a user editing the YAML doesn't have to restart the backend.
-/// Returns an empty list (rather than 500) when the file is missing or
-/// fails to parse, mirroring the previous behavior.
+/// Surface the DAG config's per-source view to the UI as
+/// `{name, type, managed}` entries — sources are derived by grouping
+/// `<type>.download` / `<type>.render` steps by their params `name`.
+/// Re-loaded on every call so a config edit in the Setup tab shows up
+/// without a backend restart. Returns an empty list (rather than 500)
+/// when the file is missing or fails to parse, mirroring the previous
+/// behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
-    // Read the data root's own `config.yaml` (self-contained), falling
-    // back to the legacy `~/.config/frankweiler/config.yaml` only when
-    // the root has no config yet. Re-loaded per call so a config edit in
-    // the Setup tab shows up without a backend restart.
-    let cfg = match load_effective_config(&s) {
-        Ok(c) => c,
+    let sources = match load_dag_config(&s.config_path) {
+        Ok((_cfg, sources)) => sources,
         Err(_) => return Json(Vec::new()),
     };
-    let out: Vec<SourceInfo> = cfg
-        .sources
-        .iter()
+    let out: Vec<SourceInfo> = sources
+        .into_iter()
         .map(|src| SourceInfo {
-            name: src.name().to_string(),
-            type_: src.type_str().to_string(),
-            managed: src.is_managed(),
+            name: src.name,
+            type_: src.type_str,
+            managed: src.managed,
         })
         .collect();
     Json(out)
@@ -1049,6 +1108,7 @@ async fn sync_enqueue(
         state: row.state.clone(),
         progress_pct: row.progress_pct,
         progress_msg: row.progress_msg.clone(),
+        tasks: None,
     });
     Ok(Json(row))
 }
@@ -1095,6 +1155,7 @@ async fn sync_job_cancel(
         state: "canceled".to_string(),
         progress_pct: None,
         progress_msg: None,
+        tasks: None,
     });
     Ok(StatusCode::NO_CONTENT)
 }

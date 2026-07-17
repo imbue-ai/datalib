@@ -22,12 +22,17 @@ use crate::{worker, AppState};
 /// [`frankweiler_core::layout::backend_index_db`], the lazy qmd daemon,
 /// `<root>/config.yaml`, the sync-progress channel, and the background
 /// sync worker. The worker is spawned onto the ambient tokio runtime,
-/// so this must be called from within one. `sync_bin` is the
-/// `frankweiler-sync` binary the worker shells out to; `None` makes
+/// so this must be called from within one. `dag_bin` is the
+/// `datalib-dag` runner the worker shells out to (with `step_bin`
+/// passed through as `--step-bin` when resolved); `None` makes
 /// UI-triggered syncs fail fast with a clear message while reads and
 /// search still work. Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
-pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Result<AppState> {
+pub async fn build_state(
+    root: PathBuf,
+    dag_bin: Option<PathBuf>,
+    step_bin: Option<PathBuf>,
+) -> anyhow::Result<AppState> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
             .map_err(|e| anyhow::anyhow!("create data root {}: {e}", root.display()))?;
@@ -65,7 +70,8 @@ pub async fn build_state(root: PathBuf, sync_bin: Option<PathBuf>) -> anyhow::Re
     let worker_cfg = worker::WorkerConfig {
         root: root.clone(),
         config_path: (*config_path).clone(),
-        sync_bin,
+        dag_bin,
+        step_bin,
         progress_tx: progress_tx.clone(),
     };
     let worker_repo = repo.clone();
@@ -93,7 +99,9 @@ mod tests {
     #[tokio::test]
     async fn build_state_opens_the_layout_db_path() {
         let root = tempfile::tempdir().unwrap();
-        let state = build_state(root.path().to_path_buf(), None).await.unwrap();
+        let state = build_state(root.path().to_path_buf(), None, None)
+            .await
+            .unwrap();
         let db_path = frankweiler_core::layout::backend_index_db(root.path());
         assert!(
             db_path.is_file(),
