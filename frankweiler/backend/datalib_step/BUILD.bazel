@@ -1,0 +1,79 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+
+# `datalib-step` — the step-type host binary for the DAG runner
+# (//frankweiler/backend/dag:datalib_dag). One subcommand per step
+# type: download / render / index / qmd, each honoring the DAG step
+# contract (NDJSON events on stdout, final outcome line).
+#
+# Bazel-only (like sync): it links frankweiler_ingest_config and the
+# provider crates, which have no cargo counterpart.
+rust_binary(
+    name = "datalib_step",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_step",
+    crate_root = "src/main.rs",
+    edition = "2021",
+    visibility = ["//frankweiler:__subpackages__"],
+    deps = [
+        "//frankweiler/backend/core:frankweiler_core",
+        "//frankweiler/backend/dag:frankweiler_dag",
+        "//frankweiler/backend/etl:frankweiler_etl",
+        "//frankweiler/backend/etl/providers/anthropic:frankweiler_etl_anthropic",
+        "//frankweiler/backend/etl/providers/anthropic_config:frankweiler_etl_anthropic_config",
+        "//frankweiler/backend/etl/providers/beeper:frankweiler_etl_beeper",
+        "//frankweiler/backend/etl/providers/beeper_config:frankweiler_etl_beeper_config",
+        "//frankweiler/backend/etl/providers/carddav_config:frankweiler_etl_carddav_config",
+        "//frankweiler/backend/etl/providers/chatgpt:frankweiler_etl_chatgpt",
+        "//frankweiler/backend/etl/providers/chatgpt_config:frankweiler_etl_chatgpt_config",
+        "//frankweiler/backend/etl/providers/contacts:frankweiler_etl_contacts",
+        "//frankweiler/backend/etl/providers/email:frankweiler_etl_email",
+        "//frankweiler/backend/etl/providers/email_config:frankweiler_etl_email_config",
+        "//frankweiler/backend/etl/providers/fsindex:frankweiler_etl_fsindex",
+        "//frankweiler/backend/etl/providers/fsindex_config:frankweiler_etl_fsindex_config",
+        "//frankweiler/backend/etl/providers/github:frankweiler_etl_github",
+        "//frankweiler/backend/etl/providers/github_config:frankweiler_etl_github_config",
+        "//frankweiler/backend/etl/providers/gitlab:frankweiler_etl_gitlab",
+        "//frankweiler/backend/etl/providers/gitlab_config:frankweiler_etl_gitlab_config",
+        "//frankweiler/backend/etl/providers/google_takeout:frankweiler_etl_google_takeout",
+        "//frankweiler/backend/etl/providers/google_takeout_config:frankweiler_etl_google_takeout_config",
+        "//frankweiler/backend/etl/providers/linkedin:frankweiler_etl_linkedin",
+        "//frankweiler/backend/etl/providers/linkedin_config:frankweiler_etl_linkedin_config",
+        "//frankweiler/backend/etl/providers/notion:frankweiler_etl_notion",
+        "//frankweiler/backend/etl/providers/notion_config:frankweiler_etl_notion_config",
+        "//frankweiler/backend/etl/providers/perseus:frankweiler_etl_perseus",
+        "//frankweiler/backend/etl/providers/perseus_config:frankweiler_etl_perseus_config",
+        "//frankweiler/backend/etl/providers/signal:frankweiler_etl_signal",
+        "//frankweiler/backend/etl/providers/signal_config:frankweiler_etl_signal_config",
+        "//frankweiler/backend/etl/providers/slack:frankweiler_etl_slack",
+        "//frankweiler/backend/etl/providers/slack_config:frankweiler_etl_slack_config",
+        "//frankweiler/backend/etl/providers/sms_backup_restore:frankweiler_etl_sms_backup_restore",
+        "//frankweiler/backend/etl/providers/sms_backup_restore_config:frankweiler_etl_sms_backup_restore_config",
+        "//frankweiler/backend/etl/providers/whatsapp:frankweiler_etl_whatsapp",
+        "//frankweiler/backend/etl/providers/whatsapp_config:frankweiler_etl_whatsapp_config",
+        "//frankweiler/backend/etl/providers/yolink:frankweiler_etl_yolink",
+        "//frankweiler/backend/etl/providers/yolink_config:frankweiler_etl_yolink_config",
+        "//frankweiler/backend/obs:frankweiler_obs",
+        "//frankweiler/backend/qmd_indexer:frankweiler_qmd_indexer",
+        "//frankweiler/backend/source_common:frankweiler_source_common",
+        "//frankweiler/backend/time:frankweiler_time",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:clap",
+        "@frankweiler_crates//:futures",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:sqlx",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:tracing",
+        "@frankweiler_crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "datalib_step_unittests",
+    size = "small",
+    crate = ":datalib_step",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
