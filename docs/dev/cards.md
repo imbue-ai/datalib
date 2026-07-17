@@ -89,12 +89,12 @@ localStorage):
   described below (Enter re-runs the card), plus the 🤖 agent hand-off
   button (which rewrites the source, so it's hidden with it).
 
-Card creation also differs by mode. In dev mode, creating a card means
-typing source into a *blank* card (the miller layout's trailing blank
-column, the tree/tiling layouts' add buttons). Outside dev mode the
-blank column is hidden and the add affordances (the miller layout's
-trailing "+" strip, the same tree/tiling buttons) instead create a
-`galleryView()` card — the **new-card gallery**
+Card creation is the same gesture in both modes: every layout has an
+"add card" affordance (the miller layout's "+" strip after the last
+column, the tree layout's "+ card" button, the tiling layout's ＋ add
+areas). The **only** difference is what the new card's source is. In
+dev mode it's a *blank* card, to type source into. Outside dev mode
+it's a `galleryView()` card — the **new-card gallery**
 (`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of every
 parameter-less component with a short description, builtins first
 (gridView leading), then any user-defined alias whose `/api/lib` entry
@@ -207,7 +207,10 @@ never reaches for the layout directly. The division of labour:
 - **The layout** owns placement and chrome. Around each card it draws
   a header with the source box (Enter re-runs the card, Shift+Enter
   inserts a newline; committing new source clears the old state
-  string), an ↗ "open this card alone" link, and a ✕ close button.
+  string), ‹ › back/forward buttons over the card's own source
+  history (each `setSource` — a gallery pick, an agent hand-off, a
+  source edit — is a step; navigating replays the source with fresh
+  state), an ↗ "open this card alone" link, and a ✕ close button.
   Anything past that — resize handles, drag grips, add buttons,
   dividers, tab bars — is layout-specific furniture, invisible to the
   card. The layout also decides what `openCard` placement means, what

@@ -135,8 +135,13 @@ function openCardsFrom(fromId: string, sources: string[]): string[] {
 }
 
 function closeNode(id: string) {
-  // A new blank tile keeps the tree non-empty when the last card goes.
-  root.value = deleteNode(root.value, id, () => makeTile(freshId(), ""));
+  // A replacement tile keeps the tree non-empty when the last card
+  // goes — same source rule as addCard (blank in dev mode, gallery
+  // otherwise), so non-dev users aren't stranded on an uneditable
+  // blank card.
+  root.value = deleteNode(root.value, id, () =>
+    makeTile(freshId(), devMode.value ? "" : "galleryView()"),
+  );
 }
 
 function setTileState(id: string, state: string) {

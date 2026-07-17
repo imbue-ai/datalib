@@ -83,22 +83,22 @@ test.describe("URL reflects app state", () => {
   test("editing a column's source via the header re-runs the card", async ({
     page,
   }) => {
-    // The editable source box (and the trailing blank column it lives
-    // in) only exists in dev mode; default chrome shows titles.
+    // The editable source box only exists in dev mode; default chrome
+    // shows titles.
     await page.addInitScript(() => localStorage.setItem("fw-dev-mode", "1"));
     await page.goto("/");
     await pinFirstRowId(page);
-    // The trailing blank column's source box accepts new card source;
-    // committing it materializes the card and a fresh blank column
-    // appears after it.
+    // "+" appends a blank column in dev mode; its source box accepts
+    // new card source, and committing it materializes the card.
+    await page.locator(".miller-add").click();
     const boxes = page.locator(".miller-col-source");
+    await expect(boxes).toHaveCount(2); // grid + new blank
     const blank = boxes.last();
     await blank.fill("documentView()");
     await blank.press("Enter");
     await expect(page.locator(".chat-preview")).toBeVisible({
       timeout: 10_000,
     });
-    await expect(boxes).toHaveCount(3); // grid, doc, fresh blank
     expect(
       decodeURIComponent(await page.evaluate(() => location.pathname)),
     ).toContain("documentView()");

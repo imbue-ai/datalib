@@ -41,6 +41,16 @@ test.describe("new-card gallery (non-dev mode)", () => {
     expect(decodeURIComponent(await page.evaluate(() => location.pathname))).toContain(
       'documentView("',
     );
+
+    // ‹ › walk the card's own source history: back to the picker,
+    // back to the gallery, forward to the picker again.
+    const newCol = page.locator(".miller-col").last();
+    await newCol.locator(".card-control--back").click();
+    await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
+    await newCol.locator(".card-control--back").click();
+    await expect(page.locator(".gv-row").first()).toBeVisible({ timeout: 10_000 });
+    await newCol.locator(".card-control--forward").click();
+    await expect(docRows.first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("gallery's Search entry becomes a second grid", async ({ page }) => {

@@ -582,12 +582,7 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         <button title="zoom in" @click="zoomStep(1.2)">+</button>
         <button title="zoom to fit" @click="zoomToFit">⛶</button>
         <span class="tree-controls-sep" />
-        <button
-          :title="devMode ? 'add a blank card' : 'add a card from the gallery'"
-          @click="addRootCard"
-        >
-          + card
-        </button>
+        <button title="add card" @click="addRootCard">+ card</button>
       </div>
     </div>
   </div>
