@@ -14,10 +14,20 @@ function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// The standard download+render step pair for one source. `sourceYaml`
-// is the `source:` subtree body, indented 8 spaces per line already.
-function stepPair(name: string, type: string, sourceYaml: string): string {
-  return `  - id: ${name}.download
+// The standard download+render step pair for one source, preceded by a
+// light divider so sources stay visually separated in the raw file.
+// `sourceYaml` is the `source:` subtree body, indented 8 spaces per
+// line already; `preamble` (optional) is comment lines placed between
+// the divider and the steps.
+function stepPair(
+  name: string,
+  type: string,
+  sourceYaml: string,
+  preamble = "",
+): string {
+  const divider = `  # \u2500\u2500 ${name} ${"\u2500".repeat(Math.max(4, 66 - name.length))}`;
+  return `${divider}
+${preamble}  - id: ${name}.download
     outputs: [${name}/raw]
     step: ${type}.download
     params: &${name}
@@ -36,12 +46,18 @@ export type Snippet = { label: string; body: (latchkeyCli: string) => string };
 export const SNIPPETS: Snippet[] = [
   {
     label: "Claude",
-    body: (lk) => `  # Prerequisite (one-time): register claude.ai with latchkey and
+    body: (lk) =>
+      stepPair(
+        "claude",
+        "claude_api",
+        "        sync: {}",
+        `  # Prerequisite (one-time): register claude.ai with latchkey and
   # supply your sessionKey cookie (DevTools → Application → Cookies):
   #   ${lk} services register claude-ai --base-api-url="https://claude.ai/"
   #   ${lk} auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
   # See docs/user/getting_your_data.md for the full walkthrough.
-${stepPair("claude", "claude_api", "        sync: {}")}`,
+`,
+      ),
   },
   {
     label: "ChatGPT",

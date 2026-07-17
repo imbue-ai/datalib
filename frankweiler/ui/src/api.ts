@@ -217,6 +217,18 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
+  // True when the file is an old-style `sources:` config for the
+  // retired sync binary; the UI offers a one-click migration.
+  legacy: boolean;
+};
+
+// Response for GET /api/config/migrate: the legacy config converted to
+// the DAG step format. Nothing is written server-side — the UI drops
+// the YAML into the editor for review.
+export type MigrateResponse = {
+  ok: boolean;
+  yaml: string | null;
+  error: string | null;
 };
 
 export type SaveConfigResponse = {
@@ -233,6 +245,10 @@ export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
 // config yet; the user fills in sources via the Setup tab's buttons.
 export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
+}
+
+export function fetchMigratedConfig(signal?: AbortSignal): Promise<MigrateResponse> {
+  return getJson<MigrateResponse>("/api/config/migrate", signal);
 }
 
 // PUT the edited YAML. The backend validates before persisting; a
