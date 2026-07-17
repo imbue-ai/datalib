@@ -36,6 +36,7 @@ import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { displayTitle } from "@/cards/title";
+import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -100,9 +101,9 @@ watch(root, (tree) => {
   }
 });
 
-// Declared human-readable titles by tile id, reported by each pooled
-// ShadowCard after compile (see cards/title.ts); null when the card
-// declares none. Shown via titleFor when dev mode is off.
+// Human-readable titles by tile id, set by each card via ctx.setTitle;
+// null when the card never set one. Shown via titleFor when dev mode
+// is off.
 const titles = reactive(new Map<string, string | null>());
 function titleFor(leaf: TileLeaf): string {
   return displayTitle(leaf.source, titles.get(leaf.id));
@@ -134,8 +135,13 @@ function openCardsFrom(fromId: string, sources: string[]): string[] {
 }
 
 function closeNode(id: string) {
-  // A new blank tile keeps the tree non-empty when the last card goes.
-  root.value = deleteNode(root.value, id, () => makeTile(freshId(), ""));
+  // A replacement tile keeps the tree non-empty when the last card
+  // goes — same source rule as addCard (blank in dev mode, gallery
+  // otherwise), so non-dev users aren't stranded on an uneditable
+  // blank card.
+  root.value = deleteNode(root.value, id, () =>
+    makeTile(freshId(), devMode.value ? "" : "galleryView()"),
+  );
 }
 
 function setTileState(id: string, state: string) {
@@ -160,6 +166,9 @@ function ctxFor(leaf: TileLeaf): CardCtx {
       cardId,
       get initialState() {
         return findTile(root.value, cardId)?.state ?? "";
+      },
+      setTitle: (title) => {
+        titles.set(cardId, title);
       },
       bus,
       host,
@@ -253,8 +262,12 @@ function isRoot(id: string): boolean {
   return root.value.id === id;
 }
 
+// ＋ add area: in dev mode a blank card (type source into it); outside
+// dev mode a gallery card, which the user resolves by picking a
+// component (it replaces itself via host.setSource).
 function addCard(containerId: string) {
-  root.value = appendChild(root.value, containerId, makeTile(freshId(), ""));
+  const source = devMode.value ? "" : "galleryView()";
+  root.value = appendChild(root.value, containerId, makeTile(freshId(), source));
 }
 
 // What's being dragged, and where the pointer currently hovers — a
@@ -368,7 +381,6 @@ provide(TILING_API, api);
           class="tiling-mounted-card"
           :source="leaf.source"
           :ctx="ctxFor(leaf)"
-          @title="(t) => titles.set(leaf.id, t)"
         />
       </Teleport>
     </div>

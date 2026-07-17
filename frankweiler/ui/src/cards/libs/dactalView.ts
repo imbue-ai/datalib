@@ -12,8 +12,7 @@
 // an iframe: each card gets its own window/engine/storage and full
 // isolation from the Vue app. The page lives in public/dactal/ and calls
 // the same /api/search the grid uses.
-import type { CardRender } from "../types";
-import { titled } from "../title";
+import type { CardCtx, CardRender } from "../types";
 
 // Served verbatim from ui/public/dactal/ in dev (vite) and prod (vite
 // build copies public/ into the dist root).
@@ -26,8 +25,8 @@ import { titled } from "../title";
 const DACTAL_PAGE = "/dactal/index.html";
 
 export function dactalView(opts?: { load?: string; q?: string }): CardRender {
-  const title = opts?.q ? `DACTAL: ${opts.q}` : "DACTAL explorer";
-  return titled(title, (root: ShadowRoot): (() => void) => {
+  return (root: ShadowRoot, ctx: CardCtx): (() => void) => {
+    ctx.setTitle(opts?.q ? `DACTAL: ${opts.q}` : "DACTAL explorer");
     const params = new URLSearchParams();
     if (opts?.load) params.set("fw", opts.load); // Frankweiler search → working set
     if (opts?.q) params.set("dq", opts.q); // initial DACTAL query
@@ -44,5 +43,5 @@ export function dactalView(opts?: { load?: string; q?: string }): CardRender {
     // state can seed the working set. Omitted to keep the view self-
     // contained.
     return () => frame.remove();
-  });
+  };
 }

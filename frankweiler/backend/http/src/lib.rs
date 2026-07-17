@@ -32,7 +32,7 @@ use axum::{
 };
 use frankweiler_core::qmd::{GridIndex, QmdDaemon, QmdRunner, QmdRunnerConfig, QueryMode};
 use frankweiler_core::query::{parse_query, FreeTextMode, ParsedQuery};
-use frankweiler_core::repo::{DynRepo, EdgeRowOut, RepoError};
+use frankweiler_core::repo::{DocRow, DynRepo, EdgeRowOut, RepoError};
 use frankweiler_core::search::SearchRow;
 use frankweiler_core::version::git_hash;
 use serde::{Deserialize, Serialize};
@@ -177,6 +177,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/columns", get(columns))
         .route("/api/accounts", get(accounts))
         .route("/api/chat/{markdown_uuid}", get(chat))
+        .route("/api/docs", get(list_docs))
         .route("/api/asset/{markdown_uuid}/{*rel}", get(asset))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/card", post(create_card))
@@ -366,6 +367,19 @@ async fn run_qmd_search(
 
 async fn columns() -> Json<Vec<ColumnSpec>> {
     Json(default_columns())
+}
+
+/// List rendered documents for the document-picker card, newest first.
+/// The row shape is [`DocRow`] straight from the repo; 500 is plenty
+/// for a pick-from-a-list UI without paging machinery.
+async fn list_docs(State(s): State<AppState>) -> Result<Json<Vec<DocRow>>, StatusCode> {
+    match s.repo.list_docs(500).await {
+        Ok(rows) => Ok(Json(rows)),
+        Err(e) => {
+            eprintln!("list_docs: {e}");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }
 
 async fn chat(
@@ -602,6 +616,13 @@ async fn get_card(
 #[derive(Debug, Deserialize)]
 pub struct PutLibRequest {
     pub source: String,
+    /// Optional gallery metadata: a short human-readable description of
+    /// what the component shows. A component with a description appears
+    /// in the new-card gallery (it must therefore work with no
+    /// arguments). Omitted = keep the stored description (so a plain
+    /// source re-PUT doesn't wipe it); empty string = clear it.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -610,6 +631,32 @@ pub struct LibEntry {
     /// sha256 of the source — the UI watches this to decide when a card
     /// that depends on this alias needs re-rendering.
     pub hash: String,
+    /// Gallery description (see [`PutLibRequest::description`]); `None`
+    /// for components that don't advertise themselves in the gallery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Sidecar shape stored at `<root>/.frankweiler/lib/<name>.meta.json`,
+/// holding the mutable non-source fields of a lib entry. A separate
+/// file (rather than frontmatter in the `.js`) keeps the stored source
+/// byte-identical to what evaluates, so hashes stay pure content
+/// hashes.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct LibMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+}
+
+fn lib_meta_path(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{name}.meta.json"))
+}
+
+fn read_lib_meta(dir: &std::path::Path, name: &str) -> LibMeta {
+    std::fs::read_to_string(lib_meta_path(dir, name))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// A lib name is injected into card scope as a bare identifier and
@@ -659,6 +706,7 @@ async fn list_lib(State(s): State<AppState>) -> Result<Json<Vec<LibEntry>>, Stat
                     out.push(LibEntry {
                         name: stem.to_string(),
                         hash: sha256_hex(src.as_bytes()),
+                        description: read_lib_meta(&dir, stem).description,
                     });
                 }
             }
@@ -724,9 +772,34 @@ async fn put_lib(
         eprintln!("put_lib: write {}: {e}", path.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
+    // Description semantics: absent = keep what's stored, "" = clear.
+    let description = match req.description {
+        None => read_lib_meta(&dir, &name).description,
+        Some(d) if d.trim().is_empty() => None,
+        Some(d) => Some(d),
+    };
+    let meta_path = lib_meta_path(&dir, &name);
+    let write_res = match &description {
+        Some(_) => {
+            let meta = LibMeta {
+                description: description.clone(),
+            };
+            std::fs::write(&meta_path, serde_json::to_string(&meta).unwrap())
+        }
+        // No description → no sidecar; ignore "already absent".
+        None => match std::fs::remove_file(&meta_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        },
+    };
+    if let Err(e) = write_res {
+        eprintln!("put_lib: meta {}: {e}", meta_path.display());
+        return Err(StatusCode::INTERNAL_SERVER_ERROR);
+    }
     Ok(Json(LibEntry {
         name,
         hash: sha256_hex(req.source.as_bytes()),
+        description,
     }))
 }
 

@@ -26,7 +26,7 @@ use sqlx::Row;
 use crate::db::{build_where, snippet, ChatMeta};
 use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
-use crate::repo::{EdgeRowOut, MirrorRepo, RepoError};
+use crate::repo::{DocRow, EdgeRowOut, MirrorRepo, RepoError};
 use crate::search::SearchRow;
 use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::sync_jobs::{SyncJobRow, DDL as SYNC_JOBS_DDL};
@@ -284,6 +284,36 @@ impl MirrorRepo for DoltRepo {
             source_label: r.try_get("source_label").ok(),
             source_url: r.try_get("source_url_or_link").ok(),
         }))
+    }
+
+    async fn list_docs(&self, limit: usize) -> Result<Vec<DocRow>, RepoError> {
+        // Newest first, undated rows last — the picker leads with what
+        // the user most recently ingested. `created_at` is a text
+        // column of ISO-ish timestamps, so lexicographic DESC is
+        // chronological enough.
+        let sql = "SELECT markdown_uuid, title, kind, provider, created_at \
+                   FROM markdowns \
+                   ORDER BY created_at IS NULL, created_at DESC \
+                   LIMIT ?";
+        let rows = match sqlx::query(sql)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) if is_missing_table(&e, "markdowns") => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(e.to_string())),
+        };
+        Ok(rows
+            .into_iter()
+            .map(|r| DocRow {
+                markdown_uuid: r.try_get("markdown_uuid").unwrap_or_default(),
+                title: r.try_get("title").ok().flatten(),
+                kind: r.try_get("kind").unwrap_or_default(),
+                provider: r.try_get("provider").unwrap_or_default(),
+                created_at: r.try_get("created_at").ok().flatten(),
+            })
+            .collect())
     }
 
     async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {

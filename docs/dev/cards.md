@@ -30,9 +30,7 @@ documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 the expression in `new Function(...viewLibNames, "return (<source>)")`
 and calls it with the view factories as arguments — so the only names
 in scope are the factories in `ViewLibs`
-(`frankweiler/ui/src/cards/libs/index.ts`), the helpers in
-`scopeHelpers` (today just `titled`, see "Titles and dev mode"), plus
-JS globals. The
+(`frankweiler/ui/src/cards/libs/index.ts`) plus JS globals. The
 expression must evaluate to a `CardRender`; anything else (or a parse
 error) renders as an error message in place of the card.
 
@@ -89,28 +87,43 @@ localStorage):
   described below (Enter re-runs the card), plus the 🤖 agent hand-off
   button (which rewrites the source, so it's hidden with it).
 
-Creating a *blank* card is also a dev-mode gesture — a blank card is
-only usable by typing source into it — so outside dev mode the miller
-layout hides its trailing blank column and the tree/tiling layouts
-hide their add-a-card buttons. Cards opened by other cards
+Card creation is the same gesture in both modes: every layout has an
+"add card" affordance (the miller layout's "+" strip after the last
+column, the tree layout's "+ card" button, the tiling layout's ＋ add
+areas). The **only** difference is what the new card's source is. In
+dev mode it's a *blank* card, to type source into. Outside dev mode
+it's a `galleryView()` card — the **new-card gallery**
+(`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of every
+parameter-less component with a short description, builtins first
+(gridView leading), then any user-defined alias whose `/api/lib` entry
+carries a `description`. Picking an entry replaces the gallery card
+with the chosen component via `host.setSource`. Components that need
+arguments register a parameter-less picker instead — `documentView`'s
+gallery stand-in is `documentPickerView()`, which lists every rendered
+document (`/api/docs`) and replaces itself with
+`documentView("<uuid>")` on pick. Cards opened by other cards
 (`host.openCards`) work the same in both modes.
 
-A card declares its title by wrapping its render in `titled()`
-(`frankweiler/ui/src/cards/title.ts`):
+A card sets its title with `ctx.setTitle`, usually first thing in its
+render — and again whenever a better title emerges, so titles are
+live, not fixed at factory-call time:
 
 ```ts
-export function gridView(opts?: { q?: string }): CardRender {
-  const q = opts?.q ?? "";
-  return titled(q ? `Search: ${q}` : "Search", vueCard(GridCard, { q }));
+export function galleryView(): CardRender {
+  return (root, ctx) => {
+    ctx.setTitle("New card");
+    // …
+  };
 }
 ```
 
-`titled` just sets the render's optional `cardTitle` property, so it
-works the same for builtin factories and user-defined aliases — the
-title is computed at factory-call time and can reflect the arguments.
-After compiling a source, `ShadowCard` reports the declared title up to
-the layout, which shows it in the chrome. A card without one gets a
-best-effort fallback (`displayTitle`): the bare factory/alias name for
+The grid card retitles itself (`Search: <q>`) as the user searches;
+the document card starts as "Document" and switches to the document's
+actual name once its fetch lands. This works the same for builtin
+factories and user-defined aliases. The host resets the title on every
+(re)compile, so a card that never calls `setTitle` — and the blank /
+error states — gets a best-effort fallback (`displayTitle`,
+`frankweiler/ui/src/cards/title.ts`): the bare factory/alias name for
 `name(...)`-shaped source, `new card` for a blank card, or a generic
 label for anything else.
 
@@ -120,6 +133,7 @@ label for anything else.
 type CardCtx = {
   cardId: string;        // host-assigned, stable for the card's lifetime
   initialState: string;  // persisted state from the host ("" when absent)
+  setTitle(title: string | null): void;  // chrome-bar title (see above)
   bus: Bus;              // ambient cross-card events
   host: HostCommands;    // structural + persistence commands
 };
@@ -196,7 +210,10 @@ never reaches for the layout directly. The division of labour:
 - **The layout** owns placement and chrome. Around each card it draws
   a header with the source box (Enter re-runs the card, Shift+Enter
   inserts a newline; committing new source clears the old state
-  string), an ↗ "open this card alone" link, and a ✕ close button.
+  string), ← → back/forward buttons over the card's own source
+  history (each `setSource` — a gallery pick, an agent hand-off, a
+  source edit — is a step; navigating replays the source with fresh
+  state), an ↗ "open this card alone" link, and a ✕ close button.
   Anything past that — resize handles, drag grips, add buttons,
   dividers, tab bars — is layout-specific furniture, invisible to the
   card. The layout also decides what `openCard` placement means, what
@@ -224,6 +241,11 @@ programs against:
   doc-level outgoing edges and decorates span-level edge sources
   (see `docs/dev/edges.md`); clicking either opens the destination via
   `host.openCard`.
+- `documentPickerView()` — parameter-less gallery stand-in for
+  `documentView`: lists every rendered document (`/api/docs`) and
+  replaces itself with `documentView("<uuid>")` on pick.
+- `galleryView()` — the new-card gallery (see "Titles and dev mode"
+  above); replaces itself with whatever the user picks.
 
 Adding a view = adding a factory to `ViewLibs` in
 `frankweiler/ui/src/cards/libs/index.ts` (and its name to the

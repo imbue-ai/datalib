@@ -8,6 +8,7 @@
 // we call the teardown returned by the render.
 import { onMounted, onBeforeUnmount, shallowRef, useTemplateRef, watch } from "vue";
 import { compileCardSource } from "@/cards/cardSource";
+import { devMode } from "@/devMode";
 import {
   aliasManifest,
   ensureManifest,
@@ -19,12 +20,6 @@ const props = defineProps<{
   source: string;
   ctx: CardCtx;
 }>();
-
-// The compiled card's declared human-readable title (CardRender's
-// `cardTitle`, see cards/title.ts), or null when the card doesn't
-// declare one / hasn't compiled / failed. Layouts show it in the
-// chrome bar when dev mode is off.
-const emit = defineEmits<{ title: [title: string | null] }>();
 
 const hostEl = useTemplateRef<HTMLDivElement>("hostEl");
 const shadow = shallowRef<ShadowRoot | null>(null);
@@ -68,33 +63,51 @@ async function runCard() {
   const token = ++runToken;
   tearDownCard();
   root.replaceChildren();
+  // Reset the title to the source-derived fallback; the card's render
+  // (below) declares its own via ctx.setTitle, typically first thing.
+  // Doing this on every run means a re-run never shows the previous
+  // card's stale title, and blank/error runs need nothing special.
+  props.ctx.setTitle(null);
   snapshotWatched(props.source);
   if (props.source.trim() === "") {
     // Sole onboarding text for an empty card — the source textarea
     // above stays blank (no placeholder), so the how-to lives here.
+    // Blank cards are created in dev mode, but one can outlive a
+    // toggle to non-dev (where the source box is gone) — track the
+    // flag so the text never points at a textarea that isn't there.
     const div = document.createElement("div");
     div.style.cssText =
       "opacity:.45;padding:12px;font:12px ui-monospace,monospace;" +
       "display:flex;flex-direction:column;gap:6px";
-    const intro = document.createElement("div");
-    intro.textContent =
-      "empty card — type source above and press Enter, e.g.:";
-    div.appendChild(intro);
-    const examples = [
-      "gridView()",
-      'documentView("uuid")',
-      "aliasView()",
-      "dactalView()",
-      '(root) => { root.textContent = "hello, world" }',
-    ];
-    for (const ex of examples) {
-      const code = document.createElement("code");
-      code.style.cssText = "margin-left:1em";
-      code.textContent = ex;
-      div.appendChild(code);
-    }
     root.appendChild(div);
-    emit("title", null);
+    const paintBlank = (dev: boolean) => {
+      div.replaceChildren();
+      const intro = document.createElement("div");
+      div.appendChild(intro);
+      if (!dev) {
+        intro.textContent =
+          "empty card — turn on dev mode to type source, or close it";
+        return;
+      }
+      intro.textContent =
+        "empty card — type source above and press Enter, e.g.:";
+      const examples = [
+        "gridView()",
+        'documentView("uuid")',
+        "galleryView()",
+        "aliasView()",
+        "dactalView()",
+        '(root) => { root.textContent = "hello, world" }',
+      ];
+      for (const ex of examples) {
+        const code = document.createElement("code");
+        code.style.cssText = "margin-left:1em";
+        code.textContent = ex;
+        div.appendChild(code);
+      }
+    };
+    const stop = watch(devMode, paintBlank, { immediate: true });
+    teardown.value = () => stop();
     return;
   }
   try {
@@ -111,10 +124,8 @@ async function runCard() {
       }
     }
     teardown.value = render(root, props.ctx);
-    emit("title", render.cardTitle ?? null);
   } catch (e) {
     if (token !== runToken || shadow.value !== root) return;
-    emit("title", null);
     const div = document.createElement("div");
     div.style.cssText =
       "color:#e35d6a;padding:8px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap";

@@ -10,24 +10,21 @@ import FeedbackButton from "@/components/FeedbackButton.ce.vue";
 // the shadow boundary. `?inline` asks Vite for the stylesheet text.
 import hljsCss from "highlight.js/styles/github-dark.css?inline";
 import { vueCard } from "../vueCard";
-import { titled } from "../title";
 import type { CardRender } from "../types";
 
 export function documentView(
   markdownUuid?: string | null,
   sectionUuid?: string | null,
 ): CardRender {
-  // The uuid means nothing to a human, so the title stays generic; the
-  // document's own heading is right below in the card body anyway.
-  return titled(
-    "Document",
-    vueCard(
-      DocCard,
-      {
-        markdownUuid: markdownUuid ?? null,
-        sectionUuid: sectionUuid ?? null,
-      },
-      { styleSources: [ChatBody, FeedbackButton, hljsCss] },
-    ),
+  // The card titles itself in DocCard via ctx.setTitle: "Document"
+  // while loading (the uuid means nothing to a human), then the
+  // document's actual name once the fetch lands.
+  return vueCard(
+    DocCard,
+    {
+      markdownUuid: markdownUuid ?? null,
+      sectionUuid: sectionUuid ?? null,
+    },
+    { styleSources: [ChatBody, FeedbackButton, hljsCss] },
   );
 }

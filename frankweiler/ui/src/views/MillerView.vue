@@ -17,11 +17,12 @@
 // `openCards(a, b, …)` to open a run of columns at once. The bus
 // carries ambient cross-card events only (e.g. edge hover).
 //
-// Invariant: the stack always ends in exactly one blank column — the
-// place the user types new card source. As soon as it gains code a
-// fresh blank appears after it; a run of several trailing blanks
-// collapses to one. Blank columns are not part of the URL.
-import { computed, ref, watch } from "vue";
+// New cards come from the "+" strip after the last column (both
+// modes): in dev mode it appends a blank column whose source box the
+// user types into; outside dev mode it appends a `galleryView()`
+// column the user resolves by picking a component. Blank columns are
+// not part of the URL, so they don't survive a reload.
+import { ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import ShadowCard from "@/components/ShadowCard.vue";
 import CardControls from "@/components/CardControls.vue";
@@ -45,9 +46,9 @@ type Slot = {
   // drags the column's right edge. Persisted in the URL as a ratio of
   // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
   width: number | null;
-  // Human-readable title the compiled card declared (ShadowCard's
-  // `title` event), shown instead of the source box when dev mode is
-  // off; null until compiled or when the card declares none.
+  // Human-readable title the card set via ctx.setTitle, shown instead
+  // of the source box when dev mode is off; null until compiled or
+  // when the card never set one.
   title: string | null;
 };
 
@@ -72,42 +73,18 @@ function isBlankSource(source: string): boolean {
   return source.trim() === "";
 }
 
-// Re-establish the trailing-blank invariant: drop all but the first
-// blank in the trailing blank run (the first is the one the user may
-// be mid-edit in), or append a fresh blank when the last column has
-// code.
-function withTrailingBlank(list: Slot[]): Slot[] {
-  let firstBlank = list.length;
-  while (firstBlank > 0 && isBlankSource(list[firstBlank - 1].source)) {
-    firstBlank--;
-  }
-  const next = list.slice(0, firstBlank);
-  next.push(firstBlank < list.length ? list[firstBlank] : newSlot(""));
-  return next;
-}
-
 const slots = ref<Slot[]>([]);
-
-// What actually renders. Creating a card means typing source — a dev
-// gesture — so outside dev mode the trailing blank column (the place
-// you type new source) is hidden. It stays in `slots`, so the
-// trailing-blank invariant holds across the toggle (uncommitted text
-// in the box is dropped with the textarea, like any unsaved edit).
-const visibleSlots = computed(() =>
-  devMode.value ? slots.value : slots.value.filter((s) => !isBlankSource(s.source)),
-);
 
 // One CardCtx per slot (declared before the initial setSlots call,
 // which prunes it). See ctxFor below.
 const ctxCache = new Map<string, CardCtx>();
 
 function setSlots(list: Slot[]) {
-  const next = withTrailingBlank(list);
-  const keep = new Set(next.map((s) => s.id));
+  const keep = new Set(list.map((s) => s.id));
   for (const id of [...ctxCache.keys()]) {
     if (!keep.has(id)) ctxCache.delete(id);
   }
-  slots.value = next;
+  slots.value = list;
 }
 
 // ---- URL sync ----
@@ -227,6 +204,9 @@ function ctxFor(slot: Slot): CardCtx {
       get initialState() {
         return slot.state;
       },
+      setTitle: (title) => {
+        slot.title = title;
+      },
       bus,
       host,
     };
@@ -242,7 +222,6 @@ function commitSource(slot: Slot, e: Event) {
     // New code means the old card's state no longer applies.
     slot.state = "";
   }
-  setSlots(slots.value);
   syncUrl();
 }
 
@@ -253,7 +232,14 @@ function setColumnSource(id: string, source: string) {
   if (!slot) return;
   slot.source = source;
   slot.state = "";
-  setSlots(slots.value);
+  syncUrl();
+}
+
+// The "+" strip after the last column appends a new card. Dev mode:
+// a blank column, to type source into. Non-dev: a gallery column, to
+// pick a component from (it replaces itself via host.setSource).
+function addCard() {
+  setSlots([...slots.value, newSlot(devMode.value ? "" : "galleryView()")]);
   syncUrl();
 }
 
@@ -288,7 +274,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
   <div class="miller-root">
     <div class="miller-columns">
       <section
-        v-for="slot in visibleSlots"
+        v-for="slot in slots"
         :key="slot.id"
         class="miller-col"
         :style="{ width: (slot.width ?? DEFAULT_WIDTH) + 'px' }"
@@ -316,7 +302,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
           class="miller-col-card"
           :source="slot.source"
           :ctx="ctxFor(slot)"
-          @title="(t) => (slot.title = t)"
         />
         <div
           class="miller-col-resize"
@@ -325,6 +310,7 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
           @pointerdown="(e) => onResizeStart(slot, e)"
         />
       </section>
+      <button class="miller-add" title="add card" @click="addCard">＋</button>
     </div>
   </div>
 </template>
@@ -433,5 +419,24 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col-card {
   flex: 1 1 auto;
   min-height: 0;
+}
+/* "New card" strip after the last column — same dashed-affordance
+   family as the tiling layout's add areas. */
+.miller-add {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 28px;
+  margin: 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--fw-fg) 45%, transparent);
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--fw-fg) 22%, transparent);
+  border-radius: 4px;
+}
+.miller-add:hover {
+  color: var(--fw-fg);
+  background: var(--fw-hover);
 }
 </style>
