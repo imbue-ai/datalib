@@ -35,12 +35,16 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-# Sync worker child binary (see serve_dev.sh for the rationale).
-if [[ -z "${FRANKWEILER_SYNC_BIN:-}" ]]; then
-  SYNC_BIN="$(rlocation _main/frankweiler/backend/sync/frankweiler_sync_bin || true)"
-  [[ -x "$SYNC_BIN" ]] && export FRANKWEILER_SYNC_BIN="$SYNC_BIN"
+# Sync worker child binaries (see serve_dev.sh for the rationale).
+if [[ -z "${FRANKWEILER_DAG_BIN:-}" ]]; then
+  DAG_BIN="$(rlocation _main/frankweiler/backend/dag/datalib_dag || true)"
+  [[ -x "$DAG_BIN" ]] && export FRANKWEILER_DAG_BIN="$DAG_BIN"
 fi
-[[ -n "${FRANKWEILER_SYNC_BIN:-}" ]] && echo "sync bin: $FRANKWEILER_SYNC_BIN"
+if [[ -z "${FRANKWEILER_STEP_BIN:-}" ]]; then
+  STEP_BIN="$(rlocation _main/frankweiler/backend/datalib_step/datalib_step || true)"
+  [[ -x "$STEP_BIN" ]] && export FRANKWEILER_STEP_BIN="$STEP_BIN"
+fi
+[[ -n "${FRANKWEILER_DAG_BIN:-}" ]] && echo "dag bin: $FRANKWEILER_DAG_BIN"
 
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 if [[ -z "$WORKSPACE" ]]; then

@@ -413,7 +413,7 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     // `--skip-extract` shortcut; the DAG runner has no equivalent —
     // downloads re-poll and everything unchanged skips, which is the
     // same outcome a little slower.)
-    if let Some(src) = job.source_name.as_deref() {
+    if let Some(src) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
         command.arg("--sync").arg(format!("{src}.download"));
     }
     // Pipe stdout+stderr so reader threads can both tee them to the log
