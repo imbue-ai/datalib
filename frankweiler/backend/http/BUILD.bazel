@@ -37,7 +37,7 @@ rust_library(
     # desktop app's version. Must match [workspace.package].version in
     # frankweiler/backend/Cargo.toml; the
     # //frankweiler/backend:version_consistency_test asserts that.
-    version = "0.18.1",
+    version = "0.19.0",
     # The rust-embed proc macro reads `$FRANKWEILER_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
