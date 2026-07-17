@@ -10,18 +10,41 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_perseus_config::PerseusConfig;
 
 use crate::extract;
 
-pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
-    // Perseus is genuinely file-tree-backed — it reads TEI `.xml` directly,
-    // with no doltlite store, so `raw_path` (our store dir) has no meaning
-    // here. Both waves key off the input path (the TEI tree): extract fetches
-    // into it, translate reads from it. For a managed source `input_path:` is
-    // unset and `input_or_raw_path()` falls back to `<data_root>/raw/perseus`;
-    // for a translate-only source it's the pre-staged tree named by `input_path:`.
+// Perseus is genuinely file-tree-backed — it reads TEI `.xml` directly,
+// with no doltlite store, so `raw_path` (our store dir) has no meaning
+// here. Both waves key off the input path (the TEI tree): extract fetches
+// into it, translate reads from it. For a managed source `input_path:` is
+// unset and `input_or_raw_path()` falls back to `<data_root>/raw/perseus`;
+// for a translate-only source it's the pre-staged tree named by `input_path:`.
+
+/// Download wave: present iff `sync:` — fetch the TEI files; otherwise
+/// the source is translate-only over files already on disk.
+pub fn plan_download(
+    ctx: PlanContext,
+    config: PerseusConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let input_path = config.common.input_or_raw_path().to_path_buf();
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
+    if let Some(sync) = config.sync {
+        procs.push(Box::new(PerseusExtract {
+            id: format!("perseus/{name}/extract"),
+            input_path,
+            files: sync.files,
+        }));
+    }
+    Ok(procs)
+}
+
+/// Render wave. NOTE: reads `sync.alignment_pairs` — a render-relevant
+/// knob that historically lives in the `sync:` block; it moves out in
+/// the config-format split.
+pub fn plan_render(ctx: PlanContext, config: PerseusConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let pairs: Vec<(String, String)> = config
@@ -34,23 +57,12 @@ pub fn plan(ctx: PlanContext, config: PerseusConfig) -> Result<SourcePlan> {
                 .collect()
         })
         .unwrap_or_default();
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(PerseusRender {
+    Ok(vec![Box::new(PerseusRender {
         id: format!("perseus/{name}/translate"),
-        input_path: input_path.clone(),
-        name: name.clone(),
+        input_path,
+        name,
         pairs,
-    }));
-    // Managed (has a `sync:` block) → fetch the TEI files; otherwise the source
-    // is translate-only over files already on disk.
-    if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(PerseusExtract {
-            id: format!("perseus/{name}/extract"),
-            input_path,
-            files: sync.files,
-        }));
-    }
-    Ok(plan)
+    })])
 }
 
 struct PerseusExtract {

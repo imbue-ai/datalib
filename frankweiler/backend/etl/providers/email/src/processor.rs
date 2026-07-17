@@ -2,8 +2,9 @@
 //!
 //! Email contributes an **extract** processor ([`EmailExtract`] — JMAP live
 //! sync or file-backed mbox, chosen by config) and a **translate** processor
-//! ([`EmailRender`]). [`plan`] builds the [`SourcePlan`] the orchestrator
-//! drives, owning every email-specific decision (which extract mode, whether
+//! ([`EmailRender`]). [`plan_download`] / [`plan_render`] build the per-wave
+//! processors the orchestrator drives, owning every email-specific decision
+//! (which extract mode, whether
 //! an mbox is present, the outlink flavor) so the orchestrator destructures
 //! nothing.
 //!
@@ -18,39 +19,21 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
 use crate::extract;
 use crate::render_and_index_md::render::OutlinkFormat;
 
-/// Build email's [`SourcePlan`]: always a translate processor, plus an extract
-/// processor when the source is managed (a `sync:` block, or an `.mbox` at
-/// `input_path`). The provider owns every email-specific decision; the
-/// orchestrator passes only the envelope-level [`PlanContext`].
-pub fn plan(ctx: PlanContext, config: EmailConfig) -> Result<SourcePlan> {
+/// Download wave: present iff managed — `sync:` → JMAP; else an
+/// `.mbox` under input_path → mbox mode.
+pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let blob_size_limit_bytes = config.common.blob_size_limit_bytes;
 
-    let outlink = config.outlink_format.map(outlink_format);
-    let only_extract_labels = config.only_extract_labels.clone();
-    let only_render_labels = config.only_render_labels.clone();
-
-    let mut plan = SourcePlan::new();
-
-    // Translate is always present (renders whatever is in the raw store).
-    plan.translate.push(Box::new(EmailRender {
-        id: format!("email/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-        outlink,
-        only_render_labels,
-    }));
-
-    // Extract present iff managed: `sync:` → JMAP; else an `.mbox` → mbox mode.
     let mode = match &config.sync {
         Some(sync) => Some(ExtractMode::Jmap(sync.clone())),
         None => {
@@ -74,17 +57,31 @@ pub fn plan(ctx: PlanContext, config: EmailConfig) -> Result<SourcePlan> {
         }
     };
 
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(mode) = mode {
-        plan.extract.push(Box::new(EmailExtract {
+        procs.push(Box::new(EmailExtract {
             id: format!("email/{name}/extract"),
             raw_path,
             mode,
             blob_size_limit_bytes,
-            only_extract_labels,
+            only_extract_labels: config.only_extract_labels.clone(),
         }));
     }
+    Ok(procs)
+}
 
-    Ok(plan)
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let outlink = config.outlink_format.map(outlink_format);
+    Ok(vec![Box::new(EmailRender {
+        id: format!("email/{name}/translate"),
+        raw_path,
+        name,
+        outlink,
+        only_render_labels: config.only_render_labels.clone(),
+    })])
 }
 
 fn outlink_format(f: EmailOutlink) -> OutlinkFormat {

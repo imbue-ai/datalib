@@ -2,8 +2,8 @@
 //! contributes an **extract** processor ([`WhatsappExtract`] — decrypts the
 //! on-disk `msgstore.db.crypt15`, mirrors the curated `wa_*` tables into its
 //! raw doltlite store) when `sync:` is present, plus an always-present
-//! **translate** processor ([`WhatsappRender`]). [`plan`] builds the
-//! [`SourcePlan`] the orchestrator drives.
+//! **translate** processor ([`WhatsappRender`]). [`plan_download`] /
+//! [`plan_render`] build the per-wave processors the orchestrator drives.
 //!
 //! Storage ownership lives here, not in the orchestrator: [`WhatsappExtract`]
 //! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
@@ -16,40 +16,41 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::extract;
 
-/// Build whatsapp's [`SourcePlan`]: always a translate processor (which bakes
-/// in the raw path + name), plus an extract processor when `sync:` is present
-/// (managed). `backup_dir` is required inside `sync:`, so a `sync:` block is
-/// the only thing that distinguishes a managed extract source — there is no
-/// translate-only `whatsapp_backup`; an absent `sync:` is an error.
-pub fn plan(ctx: PlanContext, config: WhatsappConfig) -> Result<SourcePlan> {
+/// Download wave. Extract requires `sync:` (which carries the required
+/// `backup_dir`); error exactly as the old orchestrator did.
+pub fn plan_download(
+    ctx: PlanContext,
+    config: WhatsappConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(WhatsappRender {
-        id: format!("whatsapp/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
-
-    // Extract requires `sync:` (which carries the required `backup_dir`). The
-    // orchestrator's old `for_source` errored the same way when `sync` was
-    // absent for a managed whatsapp source.
     let sync = config
         .sync
         .ok_or_else(|| anyhow!("whatsapp_backup source {name} missing sync.backup_dir"))?;
-    plan.extract.push(Box::new(WhatsappExtract {
+    Ok(vec![Box::new(WhatsappExtract {
         id: format!("whatsapp/{name}/extract"),
         raw_path,
         sync,
-    }));
+    })])
+}
 
-    Ok(plan)
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: WhatsappConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(WhatsappRender {
+        id: format!("whatsapp/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 /// WhatsApp's extract processor. Owns its raw doltlite store end to end.

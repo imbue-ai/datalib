@@ -9,31 +9,42 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
 
 use crate::extract;
 
-/// Build the SourcePlan: always a translate processor; an extract processor
-/// when `sync:` is present (managed). `claude_export` has no `sync:`, so it
-/// yields translate only.
-pub fn plan(ctx: PlanContext, config: AnthropicConfig) -> Result<SourcePlan> {
+/// Download wave: empty unless a `sync:` block makes the source managed
+/// (claude_export stays render-only).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: AnthropicConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(AnthropicRender {
-        id: format!("anthropic/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(AnthropicExtract {
+        procs.push(Box::new(AnthropicExtract {
             id: format!("anthropic/{name}/extract"),
             raw_path,
             sync,
         }));
     }
-    Ok(plan)
+    Ok(procs)
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: AnthropicConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(AnthropicRender {
+        id: format!("anthropic/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 struct AnthropicExtract {

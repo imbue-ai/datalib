@@ -14,32 +14,40 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
 use crate::extract;
 
-/// Build the SourcePlan: always a translate processor (renders the chat
-/// feeds), always an extract processor (file-backed; gated upstream by the
-/// orchestrator's extract decision). The extract bakes the input/raw paths and
-/// the SyncFlags built from `config.sync`.
-pub fn plan(ctx: PlanContext, config: GoogleTakeoutConfig) -> Result<SourcePlan> {
+/// Download wave: mirror the export tree at input_path into the raw
+/// store, gated by the per-part `sync:` flags.
+pub fn plan_download(
+    ctx: PlanContext,
+    config: GoogleTakeoutConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(GoogleTakeoutRender {
-        id: format!("google_takeout/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
-    plan.extract.push(Box::new(GoogleTakeoutExtract {
+    Ok(vec![Box::new(GoogleTakeoutExtract {
         id: format!("google_takeout/{name}/extract"),
         raw_path,
         input_path,
         sync: sync_flags(config.sync.unwrap_or_default()),
-    }));
-    Ok(plan)
+    })])
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: GoogleTakeoutConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(GoogleTakeoutRender {
+        id: format!("google_takeout/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 /// Map the provider-owned config `GoogleTakeoutSync` onto the extract crate's

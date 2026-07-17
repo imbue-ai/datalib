@@ -1322,38 +1322,42 @@ fn build_source_plan(
     // straight off its (already-normalized) `config.common`; the orchestrator
     // only supplies the genuinely-runtime bits — the source's identity and the
     // playback root. The typed config IS the enum payload (no YAML round-trip),
-    // so we hand each subtree straight to the provider's `plan()`.
+    // so we hand each subtree straight to the provider's per-wave entry
+    // points (`plan_download` / `plan_render`) and assemble the SourcePlan
+    // here — sync runs both waves, so it wants both lists.
     let ctx = frankweiler_etl::processor::PlanContext {
         name: entry.name.clone(),
         playback_root: playback_root.map(|p| p.to_path_buf()),
     };
-    match &entry.source {
-        SourceConfig::Email(c) => frankweiler_etl_email::processor::plan(ctx, c.clone()),
-        SourceConfig::ClaudeApi(c) | SourceConfig::ClaudeExport(c) => {
-            frankweiler_etl_anthropic::processor::plan(ctx, c.clone())
-        }
-        SourceConfig::ChatgptApi(c) => frankweiler_etl_chatgpt::processor::plan(ctx, c.clone()),
-        SourceConfig::GithubApi(c) => frankweiler_etl_github::processor::plan(ctx, c.clone()),
-        SourceConfig::GitlabApi(c) => frankweiler_etl_gitlab::processor::plan(ctx, c.clone()),
-        SourceConfig::SmsBackupRestore(c) => {
-            frankweiler_etl_sms_backup_restore::processor::plan(ctx, c.clone())
-        }
-        SourceConfig::Fsindex(c) => frankweiler_etl_fsindex::processor::plan(ctx, c.clone()),
-        SourceConfig::GoogleTakeout(c) => {
-            frankweiler_etl_google_takeout::processor::plan(ctx, c.clone())
-        }
-        SourceConfig::Carddav(c) => frankweiler_etl_contacts::processor::plan(ctx, c.clone()),
-        SourceConfig::Beeper(c) => frankweiler_etl_beeper::processor::plan(ctx, c.clone()),
-        SourceConfig::SignalBackup(c) => frankweiler_etl_signal::processor::plan(ctx, c.clone()),
-        SourceConfig::Yolink(c) => frankweiler_etl_yolink::processor::plan(ctx, c.clone()),
-        SourceConfig::SlackApi(c) => frankweiler_etl_slack::processor::plan(ctx, c.clone()),
-        SourceConfig::Perseus(c) => frankweiler_etl_perseus::processor::plan(ctx, c.clone()),
-        SourceConfig::Linkedin(c) => frankweiler_etl_linkedin::processor::plan(ctx, c.clone()),
-        SourceConfig::WhatsAppBackup(c) => {
-            frankweiler_etl_whatsapp::processor::plan(ctx, c.clone())
-        }
-        SourceConfig::NotionApi(c) => frankweiler_etl_notion::processor::plan(ctx, c.clone()),
+    macro_rules! waves {
+        ($provider:ident, $c:expr) => {
+            frankweiler_etl::processor::SourcePlan {
+                extract: $provider::processor::plan_download(ctx.clone(), $c.clone())?,
+                translate: $provider::processor::plan_render(ctx, $c.clone())?,
+            }
+        };
     }
+    Ok(match &entry.source {
+        SourceConfig::Email(c) => waves!(frankweiler_etl_email, c),
+        SourceConfig::ClaudeApi(c) | SourceConfig::ClaudeExport(c) => {
+            waves!(frankweiler_etl_anthropic, c)
+        }
+        SourceConfig::ChatgptApi(c) => waves!(frankweiler_etl_chatgpt, c),
+        SourceConfig::GithubApi(c) => waves!(frankweiler_etl_github, c),
+        SourceConfig::GitlabApi(c) => waves!(frankweiler_etl_gitlab, c),
+        SourceConfig::SmsBackupRestore(c) => waves!(frankweiler_etl_sms_backup_restore, c),
+        SourceConfig::Fsindex(c) => waves!(frankweiler_etl_fsindex, c),
+        SourceConfig::GoogleTakeout(c) => waves!(frankweiler_etl_google_takeout, c),
+        SourceConfig::Carddav(c) => waves!(frankweiler_etl_contacts, c),
+        SourceConfig::Beeper(c) => waves!(frankweiler_etl_beeper, c),
+        SourceConfig::SignalBackup(c) => waves!(frankweiler_etl_signal, c),
+        SourceConfig::Yolink(c) => waves!(frankweiler_etl_yolink, c),
+        SourceConfig::SlackApi(c) => waves!(frankweiler_etl_slack, c),
+        SourceConfig::Perseus(c) => waves!(frankweiler_etl_perseus, c),
+        SourceConfig::Linkedin(c) => waves!(frankweiler_etl_linkedin, c),
+        SourceConfig::WhatsAppBackup(c) => waves!(frankweiler_etl_whatsapp, c),
+        SourceConfig::NotionApi(c) => waves!(frankweiler_etl_notion, c),
+    })
 }
 
 /// Wrap a source's extract processors in an [`ExtractPlan`] carrying the common

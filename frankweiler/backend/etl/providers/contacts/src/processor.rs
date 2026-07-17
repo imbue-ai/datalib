@@ -1,8 +1,8 @@
 //! Program-A `DataProcessor`s for the carddav source. Carddav contributes
 //! an **extract** processor ([`CarddavExtract`] — live CardDAV server sync
 //! or file-backed `.vcf` ingest, chosen by config) and a **translate**
-//! processor ([`CarddavRender`]). [`plan`] builds the [`SourcePlan`] the
-//! orchestrator drives, owning every carddav-specific decision (which
+//! processor ([`CarddavRender`]). [`plan_download`] / [`plan_render`] build the
+//! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
 //! extract mode) so the orchestrator destructures nothing.
 //!
 //! Storage ownership lives here, not in the orchestrator: [`CarddavExtract`]
@@ -15,33 +15,22 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use frankweiler_etl_carddav_config::{CarddavConfig, CarddavSync};
 
 use crate::extract;
 
-/// Build carddav's [`SourcePlan`]: always a translate processor, plus an
-/// extract processor (server mode when `sync:` is present, else file mode
-/// ingesting `.vcf` exports under `input_path`). The provider owns every
-/// carddav-specific decision; the orchestrator passes only the
-/// envelope-level [`PlanContext`].
-pub fn plan(ctx: PlanContext, config: CarddavConfig) -> Result<SourcePlan> {
+/// Download wave: always present. `sync:` present → live CardDAV
+/// server; absent → file mode (`.vcf` tree under input_path, no
+/// account override).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: CarddavConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-
-    let mut plan = SourcePlan::new();
-
-    // Translate is always present (renders whatever is in the raw store).
-    plan.translate.push(Box::new(CarddavRender {
-        id: format!("carddav/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
-
-    // Extract mode: `sync:` present → live CardDAV server; absent →
-    // file mode (`.vcf` tree under input_path, no account override).
     let mode = match config.sync {
         Some(sync) => ExtractMode::Server(sync),
         None => ExtractMode::File {
@@ -49,14 +38,22 @@ pub fn plan(ctx: PlanContext, config: CarddavConfig) -> Result<SourcePlan> {
             account_id_override: None,
         },
     };
-
-    plan.extract.push(Box::new(CarddavExtract {
+    Ok(vec![Box::new(CarddavExtract {
         id: format!("carddav/{name}/extract"),
         raw_path,
         mode,
-    }));
+    })])
+}
 
-    Ok(plan)
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(ctx: PlanContext, config: CarddavConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(CarddavRender {
+        id: format!("carddav/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 /// Which extract path carddav takes for this source.
