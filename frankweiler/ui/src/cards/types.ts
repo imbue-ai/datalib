@@ -129,4 +129,6 @@ export type ViewLibs = {
   // locator tree. Clicking a locator opens one reader panel per enabled
   // version via host.openCards. See cards/libs/perseusView.ts.
   perseusView: () => CardRender;
+  // Visualize the sync pipeline's step DAG, with live run states.
+  sourceDagView: () => CardRender;
 };

@@ -267,6 +267,27 @@ export function fetchMigratedConfig(signal?: AbortSignal): Promise<MigrateRespon
   return getJson<MigrateResponse>("/api/config/migrate", signal);
 }
 
+// One step of the config's derived DAG (GET /api/dag), in topological
+// order. `deps` are the actual edges the runner derives from artifact
+// overlap.
+export type DagStep = {
+  id: string;
+  step: string | null;
+  inputs: string[];
+  outputs: string[];
+  deps: string[];
+};
+
+export type DagResponse = {
+  ok: boolean;
+  error: string | null;
+  steps: DagStep[];
+};
+
+export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {
+  return getJson<DagResponse>("/api/dag", signal);
+}
+
 // PUT the edited YAML. The backend validates before persisting; a
 // validation failure comes back as `{ok:false, error}` (HTTP 200), not a
 // thrown error, so the caller can show it inline.

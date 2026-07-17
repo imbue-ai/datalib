@@ -185,6 +185,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/migrate", get(config_migrate))
+        .route("/api/dag", get(get_dag))
         .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/agent.md", get(agent_guide))
@@ -1097,6 +1098,80 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
         legacy: false,
     })
+}
+
+/// One step in `GET /api/dag`, in topological order.
+#[derive(Debug, Serialize)]
+pub struct DagStepInfo {
+    pub id: String,
+    /// The `step:` type (`slack_api.download`, `index`, …); `None` for
+    /// raw `run:` argv entries.
+    pub step: Option<String>,
+    /// Declared input artifact patterns (may contain wildcards).
+    pub inputs: Vec<String>,
+    /// Declared output artifact paths.
+    pub outputs: Vec<String>,
+    /// Ids of the steps this one depends on (derived from artifact
+    /// overlap — the actual DAG edges).
+    pub deps: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DagResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub steps: Vec<DagStepInfo>,
+}
+
+/// `GET /api/dag` — the step DAG derived from the data root's config,
+/// exactly as the runner would build it (same load → to_specs →
+/// Graph::build chain), so the visualization can never drift from
+/// execution. Steps come back in topological order.
+async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
+    use frankweiler_dag::config::{self, StepTypeOpts};
+    let build = || -> anyhow::Result<Vec<DagStepInfo>> {
+        let (cfg, _root) = config::load(&s.config_path)?;
+        let step_types: std::collections::HashMap<String, String> = cfg
+            .steps
+            .iter()
+            .filter_map(|e| e.step.clone().map(|st| (e.id.clone(), st)))
+            .collect();
+        let specs = config::to_specs(
+            &cfg,
+            std::path::Path::new(config::STEP_BIN_NAME),
+            &StepTypeOpts::default(),
+        )?;
+        let graph = frankweiler_dag::Graph::build(specs)?;
+        Ok(graph
+            .topo
+            .iter()
+            .map(|&i| {
+                let sp = &graph.steps[i];
+                DagStepInfo {
+                    id: sp.id.clone(),
+                    step: step_types.get(&sp.id).cloned(),
+                    inputs: sp.inputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    outputs: sp.outputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    deps: graph.deps[i]
+                        .iter()
+                        .map(|&d| graph.steps[d].id.clone())
+                        .collect(),
+                }
+            })
+            .collect())
+    };
+    match build() {
+        Ok(steps) => Json(DagResponse {
+            ok: true,
+            error: None,
+            steps,
+        }),
+        Err(e) => Json(DagResponse {
+            ok: false,
+            error: Some(format!("{e:#}")),
+            steps: Vec::new(),
+        }),
+    }
 }
 
 /// Response for `GET /api/config/migrate`: the current legacy config

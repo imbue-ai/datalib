@@ -44,6 +44,12 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
     description: "Browse the Perseus editions by book, chapter, and section.",
   },
   {
+    source: "sourceDagView()",
+    title: "Pipeline DAG",
+    description:
+      "See your sources' step graph and watch syncs flow through it live.",
+  },
+  {
     source: "aliasView()",
     title: "Component library",
     description: "List the custom components stored on this instance.",
