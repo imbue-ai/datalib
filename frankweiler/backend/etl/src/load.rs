@@ -495,15 +495,22 @@ pub async fn load_all(
     // data_root holds one dir per stanza (each with a `rendered_md/` tree)
     // plus the reserved `system/` dir. Walk each stanza's rendered_md; skip
     // `system/` (the aggregate indices live there, no sidecars).
-    let mut sidecars: Vec<PathBuf> = Vec::new();
+    // (stanza name, sidecar path): the stanza directory name IS the
+    // config-level source name — `<data_root>/<name>/rendered_md/…` —
+    // so `documents.source_name` keeps the user-facing name exactly as
+    // the fused loader did.
+    let mut sidecars: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
         for entry in entries.flatten() {
             if entry.file_name() == frankweiler_core::layout::SYSTEM_DIR {
                 continue;
             }
+            let stanza = entry.file_name().to_string_lossy().into_owned();
             let rendered_root = entry.path().join("rendered_md");
             if rendered_root.is_dir() {
-                collect_sidecars(&rendered_root, &mut sidecars);
+                let mut paths = Vec::new();
+                collect_sidecars(&rendered_root, &mut paths);
+                sidecars.extend(paths.into_iter().map(|p| (stanza.clone(), p)));
             }
         }
     }
@@ -557,12 +564,12 @@ async fn load_all_batch(
     write_lock: &WriteLock,
     prior_fingerprints: &HashMap<String, String>,
     out_dir: &Path,
-    sidecars: &[PathBuf],
+    sidecars: &[(String, PathBuf)],
     progress: &impl Fn(&str),
     now_override: Option<&str>,
     summary: &mut LoadSummary,
 ) -> Result<()> {
-    for sidecar_path in sidecars {
+    for (stanza, sidecar_path) in sidecars {
         let raw = fs::read_to_string(sidecar_path)
             .with_context(|| format!("read {}", sidecar_path.display()))?;
         let sidecar: Sidecar = serde_json::from_str(&raw)
@@ -579,14 +586,18 @@ async fn load_all_batch(
             continue;
         }
 
-        // load_all has no access to the config-level source name, so we
-        // fall back to the canonical row's provider (same default as the
-        // pre-callback code path).
-        let source_name = sidecar
-            .rows
-            .first()
-            .map(|r| r.provider.clone())
-            .unwrap_or_default();
+        // The stanza dir name is the config-level source name; fall
+        // back to the canonical row's provider only if it were somehow
+        // empty.
+        let source_name = if stanza.is_empty() {
+            sidecar
+                .rows
+                .first()
+                .map(|r| r.provider.clone())
+                .unwrap_or_default()
+        } else {
+            stanza.clone()
+        };
         let md = RenderedMarkdown {
             markdown_uuid,
             source_name,

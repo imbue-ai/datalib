@@ -51,6 +51,7 @@ export function listSources(text: string): SourceRow[] {
     let type = "";
     if (isMap(item)) {
       const js = item.toJSON() as {
+        id?: unknown;
         step?: unknown;
         params?: { name?: unknown };
       };
@@ -59,6 +60,13 @@ export function listSources(text: string): SourceRow[] {
         if (dot > 0) type = js.step.slice(0, dot);
       }
       if (typeof js.params?.name === "string") name = js.params.name;
+      // A step whose params reference a YAML anchor (`params: *slack`)
+      // doesn't resolve through node-level toJSON — fall back to the
+      // `<name>.<phase>` id convention the templates emit.
+      if (!name && type && typeof js.id === "string") {
+        const dot = js.id.lastIndexOf(".");
+        if (dot > 0) name = js.id.slice(0, dot);
+      }
     }
     const range = (item as { range?: [number, number, number] }).range;
     const valueStart = range?.[0] ?? 0;

@@ -56,6 +56,9 @@ pub struct DagConfig {
     /// [`resolve_step_bin`] for the fallback chain.
     #[serde(default)]
     pub step_bin: Option<PathBuf>,
+    /// Defaults to empty: a config with no steps yet (a bare
+    /// `data_root:` file) is valid — it just runs nothing.
+    #[serde(default)]
     pub steps: Vec<StepEntry>,
 }
 

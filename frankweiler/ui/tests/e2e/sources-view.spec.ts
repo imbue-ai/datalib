@@ -26,33 +26,38 @@ test("add a source via chip, save, sync lights up, restore", async ({ page }) =>
   await expect(editor).toHaveValue(/data_root:/);
   const original = await editor.inputValue();
 
-  // The chip appends a stanza to the text; the table row appears
-  // immediately (derived from the text), but stays unsyncable until
-  // the config is saved.
+  // The chip appends the source's step pair to the text; the table
+  // row appears immediately (derived from the text), but stays
+  // unsyncable — checkbox disabled — until the config is saved.
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
-  await expect(editor).toHaveValue(/type: perseus/);
+  await expect(editor).toHaveValue(/step: perseus\.download/);
   const row = page.locator(".sources-table tbody tr", { hasText: "perseus" }).first();
   await expect(row).toContainText("perseus");
   await expect(page.getByText("unsaved changes")).toBeVisible();
-  await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeDisabled();
+  const checkbox = row.locator("input[type=checkbox]");
+  await expect(checkbox).toBeDisabled();
 
-  // Save: the backend validates with the real config loader and
-  // persists; the row's Sync button lights up.
+  // Save: the backend validates with the runner's real config chain
+  // and persists; the row becomes selectable and "Sync selected"
+  // lights up once it's checked.
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("✓ Saved — 1 source(s) configured.")).toBeVisible();
-  await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeEnabled();
+  await expect(checkbox).toBeEnabled();
+  await checkbox.check();
+  const syncSelected = page.getByRole("button", { name: /Sync selected \(1\)/ });
+  await expect(syncSelected).toBeEnabled();
 
   // Any unsaved edit re-blocks sync (even for saved rows): sync runs
   // against the file on disk, which no longer matches the editor.
-  // Collapse the caret to the end first — the chip left its stanza
-  // selected, and typing over the selection would replace it.
+  // Collapse the caret to the end first — the chip left its steps
+  // selected, and typing over the selection would replace them.
   await editor.evaluate((el) => {
     const t = el as HTMLTextAreaElement;
     t.focus();
     t.setSelectionRange(t.value.length, t.value.length);
   });
   await editor.pressSequentially(" ");
-  await expect(row.getByRole("button", { name: "Sync", exact: true })).toBeDisabled();
+  await expect(syncSelected).toBeDisabled();
 
   // Restore the original config so later specs see the fixture unchanged.
   await editor.fill(original);
@@ -68,7 +73,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
   await page.getByRole("button", { name: "Perseus (sample)" }).click();
   await page.getByRole("button", { name: "ChatGPT" }).click();
 
-  // Select the first source; the selection must cover exactly its stanza.
+  // Select the first source; the selection must cover exactly its
+  // download+render step pair.
   await page
     .locator(".sources-table tbody tr", { hasText: "perseus" })
     .getByRole("button", { name: "Locate config" })
@@ -77,8 +83,8 @@ test("Locate config selects the source's stanza in the editor", async ({ page })
     const t = el as HTMLTextAreaElement;
     return t.value.slice(t.selectionStart, t.selectionEnd);
   });
-  expect(selected).toContain("- name: perseus");
-  expect(selected).toContain("type: perseus");
+  expect(selected).toContain("id: perseus.download");
+  expect(selected).toContain("id: perseus.render");
   expect(selected).not.toContain("chatgpt");
 
   // Unsaved edits never reached the server; a reload restores the file.
