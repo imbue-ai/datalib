@@ -1,5 +1,13 @@
 # Pipeline architecture: toward an arbitrary processing DAG
 
+> **Status (2026-07):** implemented. The scheduler and step contract live in
+> `frankweiler/backend/dag` (the `datalib-dag` runner binary), the step-type
+> host in `frankweiler/backend/datalib_step` (`datalib-step`), and the http
+> worker/UI drive syncs through them. Review notes from the original
+> addendum are folded in below as **Addendum** blocks, each with what the
+> prototype chose.
+
+
 ## Motivation
 
 The system we want to grow into is one that can define an arbitrary DAG of data-processing pipelines, where each node represents ones of:
@@ -52,15 +60,22 @@ The mechanics of a property are private to the node. The guarantee is a contract
 
 The orchestrator must never need to understand that "the dedup index is the resume cursor" or how \<table\>\_bookkeeping tracks retries. **A node achieves incrementality however it likes.** But several properties only pay off if the outer system *knows the guarantee holds and acts on it*. Monitoring is one such; the full set the scheduler genuinely needs:
 
-1. Change-detection signal (the load-bearing one). The scheduler must ask each node "did your output actually change?" to decide whether to re-run *dependents*. Incrementality inside a node is wasted if the outer system can't see its result. Today this leaks: the orchestrator reaches *into* doltlite (markdowns.source\_fingerprint, dolt\_diff\_\<table\>, scope-state snapshots) to derive it. The fix is to make it a thin declared output: a content version the node exposes, mechanics hidden (see [Output version](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/docs/dev/pipeline_dag_architecture.md#output-version-a-content-hash)).  
-2. Retry-safety as an advertised guarantee. The orchestrator's failure handler is "re-invoke the node." That is only safe if the node *promises* idempotency/resumability. The orchestrator does not implement it — it relies on it (see [Failure & retry](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/docs/dev/pipeline_dag_architecture.md#failure-and-retry)).  
-3. Output completeness / atomicity. Before a dependent consumes an artifact, the scheduler needs to know "is this a committed checkpoint or a partial write?" Today's whole-run commit answers this for the *whole run*, not per node (see [Per-node commit](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/docs/dev/pipeline_dag_architecture.md#per-node-commit)).  
-4. Failure classification → retry policy. A rate-limit error → back off and retry; an auth error → fail fast; a parse error → fail this node, not the graph. The node must surface *which* (see [Failure & retry](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/docs/dev/pipeline_dag_architecture.md#failure-and-retry)).  
-5. Progress / monitoring — the one named in the motivation. Generalize the current Progress plumbing to a uniform per-node event stream (see [Progress](https://github.com/imbue-ai/mixed_up_files/blob/19f09d64fa1994317fc06f3e2d8bd4d29dfae9b7/docs/dev/pipeline_dag_architecture.md#progress-reporting)).
+1. Change-detection signal (the load-bearing one). The scheduler must ask each node "did your output actually change?" to decide whether to re-run *dependents*. Incrementality inside a node is wasted if the outer system can't see its result. Today this leaks: the orchestrator reaches *into* doltlite (markdowns.source\_fingerprint, dolt\_diff\_\<table\>, scope-state snapshots) to derive it. The fix is to make it a thin declared output: a content version the node exposes, mechanics hidden (see [Output version](#node-output-in-addition-to-materializingupdating-data)).  
+2. Retry-safety as an advertised guarantee. The orchestrator's failure handler is "re-invoke the node." That is only safe if the node *promises* idempotency/resumability. The orchestrator does not implement it — it relies on it (see [Failure & retry](#failure-and-retry)).  
+3. Output completeness / atomicity. Before a dependent consumes an artifact, the scheduler needs to know "is this a committed checkpoint or a partial write?" Today's whole-run commit answers this for the *whole run*, not per node (see [Per-node commit](#per-node-commit)).  
+4. Failure classification → retry policy. A rate-limit error → back off and retry; an auth error → fail fast; a parse error → fail this node, not the graph. The node must surface *which* (see [Failure & retry](#failure-and-retry)).  
+5. Progress / monitoring — the one named in the motivation. Generalize the current Progress plumbing to a uniform per-node event stream (see [Progress](#progress-reporting-and-logging-info-warn-errors)).
 
 So the boundary the orchestrator cares about is a thin contract: {output-version, completion-status, failure-kind+retry, progress}. Today that contract exists only implicitly, expressed as the orchestrator reaching directly into ingestion's doltlite tables. Formalizing that leaky reach into a declared node interface is the central refactor — and it generalizes, because translate, load, and every future node want to expose the same four things.
 
 ## The node contract
+
+> **Addendum — terminology.** "Node" reads as data, but this is an action;
+> other DAG runners say *task* (Airflow/Luigi/Prefect), *op* (Dagster),
+> *action/rule* (Make/Bazel), *transform* (Beam). The prototype adopted
+> **step** ("task" collides with `tokio::task` throughout the workspace),
+> with **artifact** for the data side.
+
 
 A node is the unit the scheduler schedules. It declares what it reads, what it writes, and how to run it; everything else is private.
 
@@ -142,6 +157,24 @@ A side goal here is to report enough information to get a sense of USE metrics: 
 
 ## User YAML configuration vs. “under-the-hood” DAG representation
 
+> **Addendum — config format.** After generalizing into the DAG runner the
+> config format changes completely: the current "data sources" survive,
+> but only their download step is a distinct step type; subsequent
+> processing steps are instances of shared step types (a few sources with
+> unique post-processing keep their own types). The shared post-download
+> steps take "the output of all download steps" as input, so the format
+> needs a wildcard input as long as it fits the design.
+>
+> *What the prototype chose:* the macro layer was dropped entirely — the
+> config declares steps directly (`<source_type>.download` /
+> `<source_type>.render` per source, plus shared `index`/`qmd` fan-ins).
+> Wildcard inputs (`*`/`**`) exist and match against declared output
+> *roots* only — true tree-intersection semantics would make `**/x`
+> depend on every step. In practice render turned out to be as
+> provider-specific as download (each provider renders its own raw
+> schema); the genuinely shared step types are `index` and `qmd`.
+
+
 The user should not typically be bothered to configure the detailed dependency graph.  Instead, they’re likely to configure “macro-like” functions that in turn create sections of the dependency graph, very similar to how Flume / Apache Beam code run functions that assemble sections of the dependency graph.
 
 For example, we might want a single YAML stanza that assembles a “pipeline subsection” including:
@@ -155,6 +188,12 @@ Rather than declare a sequence of 3 DAG steps explicitly, the user should be abl
 Similarly, a YAML stanza for processing a Google Takeout ingestion might, under the hood, be represented as several different DAG steps that could all run in parallel (a 1-2-3 chained sequence of extract-render-index on all of Google Chat, Google Voice, and Maps Reviews, with each 1-2-3 chain runnable in parallel).
 
 ## Storage layout
+
+> **Addendum — storage layout.** Not settled; do whatever results in the
+> least change for now. The prototype kept the existing by-source layout
+> (`<stanza>/raw`, `<stanza>/rendered_md`, `system/…`), which already
+> groups data by source as sketched above.
+
 
 We currently have a global (per YAML config file) “data\_root”, in which all named “steps” write their data into known locations.
 
