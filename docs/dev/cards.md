@@ -207,7 +207,7 @@ never reaches for the layout directly. The division of labour:
 - **The layout** owns placement and chrome. Around each card it draws
   a header with the source box (Enter re-runs the card, Shift+Enter
   inserts a newline; committing new source clears the old state
-  string), ‹ › back/forward buttons over the card's own source
+  string), ← → back/forward buttons over the card's own source
   history (each `setSource` — a gallery pick, an agent hand-off, a
   source edit — is a step; navigating replays the source with fresh
   state), an ↗ "open this card alone" link, and a ✕ close button.

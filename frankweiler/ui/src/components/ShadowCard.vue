@@ -95,6 +95,7 @@ async function runCard() {
       const examples = [
         "gridView()",
         'documentView("uuid")',
+        "galleryView()",
         "aliasView()",
         "dactalView()",
         '(root) => { root.textContent = "hello, world" }',

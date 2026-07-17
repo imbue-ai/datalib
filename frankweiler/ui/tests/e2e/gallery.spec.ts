@@ -42,7 +42,7 @@ test.describe("new-card gallery (non-dev mode)", () => {
       'documentView("',
     );
 
-    // ‹ › walk the card's own source history: back to the picker,
+    // ← → walk the card's own source history: back to the picker,
     // back to the gallery, forward to the picker again.
     const newCol = page.locator(".miller-col").last();
     await newCol.locator(".card-control--back").click();

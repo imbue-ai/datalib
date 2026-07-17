@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The common controls every card carries in its chrome bar, regardless
 // of layout: the agent hand-off button (🤖, dev mode only), back /
-// forward over the card's own source history (‹ ›), a link to open the
+// forward over the card's own source history (← →), a link to open the
 // card alone (↗), and the close button (✕). All are pure functions of
 // the card's source and its CardCtx, so the layouts (miller, tiling,
 // tree) all render this same component instead of duplicating the
@@ -83,7 +83,7 @@ function goForward() {
     title="back"
     @click="goBack"
   >
-    ‹
+    ←
   </button>
   <button
     class="card-control card-control--forward"
@@ -91,7 +91,7 @@ function goForward() {
     title="forward"
     @click="goForward"
   >
-    ›
+    →
   </button>
   <a
     v-if="source.trim() !== ''"
@@ -135,5 +135,13 @@ function goForward() {
 .card-control:disabled {
   opacity: 0.2;
   cursor: default;
+}
+/* The arrow glyphs render smaller than the other icons at the shared
+   size — bump the font, and pin the line box to the shared 1.2rem
+   (0.8rem × 1.5) so the bar height doesn't change. */
+.card-control--back,
+.card-control--forward {
+  font-size: 0.95rem;
+  line-height: 1.2rem;
 }
 </style>
