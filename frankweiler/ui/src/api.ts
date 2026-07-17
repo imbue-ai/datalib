@@ -325,11 +325,15 @@ export type SyncSource = {
 };
 
 export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";
-export type SyncJobKind = "download" | "ingest" | "render" | "all";
+// The only kind enqueued today: one DAG run over the whole config
+// (`source_name` optionally narrows it to selected sources).
+export type SyncJobKind = "all";
 
 export type SyncJob = {
   id: string;
-  kind: SyncJobKind;
+  // Free-form, not SyncJobKind: historical rows may carry retired
+  // kinds ("download" / "ingest" / "render").
+  kind: string;
   source_name: string | null;
   state: SyncJobState;
   progress_pct: number | null;

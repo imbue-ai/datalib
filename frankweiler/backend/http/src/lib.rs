@@ -1416,10 +1416,14 @@ async fn sync_enqueue(
     State(s): State<AppState>,
     Json(req): Json<EnqueueJobRequest>,
 ) -> Result<Json<SyncJobRow>, StatusCode> {
-    // Validate the discriminator client-side; the DB column is a
+    // Validate the discriminator server-side; the DB column is a
     // VARCHAR with no enum constraint so we'd otherwise accept anything.
+    // `all` (one DAG run, `source_name` optionally selecting a subset)
+    // is the only live kind — the legacy `download`/`ingest`/`render`
+    // kinds died with the fixed-phase orchestrator and are rejected;
+    // historical rows keep whatever kind they were written with.
     match req.kind.as_str() {
-        "download" | "ingest" | "render" | "all" => {}
+        "all" => {}
         _ => return Err(StatusCode::BAD_REQUEST),
     }
     let row = s
