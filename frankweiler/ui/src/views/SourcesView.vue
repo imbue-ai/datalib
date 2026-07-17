@@ -119,15 +119,17 @@ function selectSource(idx: number) {
   selectRange(r.start, r.end);
 }
 
-// Append a source stanza to the text and select it. If the YAML still
-// has the scaffold's empty `sources: []`, flip it to a `sources:` block
-// first so the appended item is valid.
+// Append a source's step pair (download + render) to the text and
+// select it. The scaffold already carries a `steps:` block (with the
+// shared index/qmd fan-in steps); create one only when the user
+// started from a blank file. Steps are appended at the end — the DAG
+// derives execution order from artifact paths, not file order.
 function addSnippet(body: string) {
   let text = yamlText.value;
-  if (/^sources:\s*\[\s*\]\s*$/m.test(text)) {
-    text = text.replace(/^sources:\s*\[\s*\]\s*$/m, "sources:");
-  } else if (!/^sources:/m.test(text)) {
-    text = text.replace(/\s*$/, "") + "\n\nsources:";
+  if (/^steps:\s*\[\s*\]\s*$/m.test(text)) {
+    text = text.replace(/^steps:\s*\[\s*\]\s*$/m, "steps:");
+  } else if (!/^steps:/m.test(text)) {
+    text = text.replace(/\s*$/, "") + "\n\nsteps:";
   }
   const before = text.replace(/\s*$/, "") + "\n";
   yamlText.value = before + body + "\n";
