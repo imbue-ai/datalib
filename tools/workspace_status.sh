@@ -25,7 +25,7 @@ fi
 #                            unambiguous via --always)
 #   - any of the above + "-dirty" when the working tree has uncommitted
 #                                 changes
-# Consumed by frankweiler-sync's --version stamp. Falls back to
+# Consumed by datalib-dag's --version stamp. Falls back to
 # "unknown" outside a git checkout for parity with STABLE_GIT_HASH.
 if describe=$(git describe --tags --always --dirty 2>/dev/null); then
     echo "STABLE_GIT_DESCRIBE ${describe}"

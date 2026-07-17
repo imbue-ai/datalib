@@ -242,7 +242,8 @@ jobs:
             --host_action_env=LIBCLANG_PATH="${libdir}" \
             //frankweiler/backend:dist
           for bin in \
-              bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin \
+              bazel-bin/frankweiler/backend/dag/datalib_dag \
+              bazel-bin/frankweiler/backend/datalib_step/datalib_step \
               bazel-bin/frankweiler/backend/http/frankweiler_http_bin \
               bazel-bin/frankweiler/backend/etl/latchkey_curl_shim; do
               echo "--- ${bin}"

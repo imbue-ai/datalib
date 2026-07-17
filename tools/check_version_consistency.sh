@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Asserts that the version declared in frankweiler/backend/Cargo.toml's
 # [workspace.package] section matches the `version = "..."` attribute in
-# each BUILD.bazel that stamps one (sync's rust_binary, http's
-# rust_library — the latter feeds /api/health and, via the bundled
-# binary, the desktop app).
+# each BUILD.bazel that stamps one (dag's datalib_dag rust_binary,
+# http's rust_library — the latter feeds /api/health and, via the
+# bundled binary, the desktop app).
 #
 # Why this exists: Cargo.toml is the canonical source of truth for the
 # project version (all member crates use `version.workspace = true`).
@@ -39,7 +39,7 @@ if [[ -z "$cargo_version" ]]; then
 fi
 
 status=0
-for pkg in sync http; do
+for pkg in dag http; do
     build_file="$(rlocation "_main/frankweiler/backend/$pkg/BUILD.bazel")"
     [[ -f "$build_file" ]] || { echo "ERROR: $pkg/BUILD.bazel not found at $build_file" >&2; exit 1; }
 
@@ -63,6 +63,6 @@ EOF
         status=1
     fi
 done
-exit_msg="OK: Cargo.toml, sync/BUILD.bazel, and http/BUILD.bazel all declare version $cargo_version"
+exit_msg="OK: Cargo.toml, dag/BUILD.bazel, and http/BUILD.bazel all declare version $cargo_version"
 [[ "$status" -eq 0 ]] && echo "$exit_msg"
 exit "$status"

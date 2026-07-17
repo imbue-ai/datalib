@@ -35,6 +35,22 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use frankweiler_dag::scheduler::StepStatus;
+
+// `FRANKWEILER_VERSION` is `git describe` at build time under Bazel
+// release stamping (see BUILD.bazel `rustc_env_files`); dev builds and
+// cargo builds see the unsubstituted placeholder / nothing, rendered
+// as "dev".
+const VERSION_RESOLVED: &str = {
+    let raw = match option_env!("FRANKWEILER_VERSION") {
+        Some(r) => r,
+        None => "",
+    };
+    if raw.is_empty() || raw.as_bytes()[0] == b'{' {
+        "dev"
+    } else {
+        raw
+    }
+};
 use frankweiler_dag::step::FailureKind;
 use frankweiler_dag::{config, subprocess, Graph, NdjsonSink, Runner};
 
@@ -73,6 +89,13 @@ async fn main() -> Result<()> {
             }
             "--reset-and-redownload" => reset_and_redownload = true,
             "--refetch-blobs" => refetch_blobs = true,
+            "--version" | "-V" => {
+                #[allow(clippy::disallowed_macros)]
+                {
+                    println!("datalib-dag {VERSION_RESOLVED}");
+                }
+                return Ok(());
+            }
             "-h" | "--help" => {
                 // stdout is this tool's interface; no bars in play.
                 #[allow(clippy::disallowed_macros)]

@@ -29,7 +29,6 @@ members = [
     "etl/providers/yolink",
     "qmd_indexer",
     "signal-backup",
-    "sync",
     "tauri-backend",
     "whatsapp-backup",
     "etl/providers/whatsapp",
@@ -38,7 +37,7 @@ members = [
     # NOTE: frankweiler_ingest_config, source_common, and the provider
     # *_config crates are bazel-only (no Cargo.toml). This workspace
     # exists for crate_universe's third-party resolution and is not
-    # cargo-compilable end to end: http/sync consume ingest_config in
+    # cargo-compilable end to end: http and datalib_step consume ingest_config in
     # code via BUILD.bazel deps that have no cargo counterpart. The
     # tauri shell no longer links the backend (it spawns the bazel-built
     # frankweiler-http binary), so nothing cargo-builds these crates.

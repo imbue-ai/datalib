@@ -1,6 +1,9 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-exports_files(["Cargo.toml"])
+exports_files([
+    "BUILD.bazel",  # read by //frankweiler/backend:version_consistency_test
+    "Cargo.toml",
+])
 
 # Prototype DAG runner (see /dag-runner.md): step contract, edge
 # derivation from artifact-path overlap, incremental scheduler with
@@ -47,6 +50,16 @@ rust_binary(
     srcs = ["src/bin/datalib_dag.rs"],
     crate_name = "datalib_dag",
     edition = "2021",
+    # Must match [workspace.package].version in frankweiler/backend/Cargo.toml;
+    # //frankweiler/backend:version_consistency_test asserts that.
+    version = "0.19.0",
+    # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
+    # smoke-tests that the published tarball reports the tag). `stamp = -1`
+    # defers to the --stamp flag (on under --config=release); day-to-day
+    # dev builds keep the literal placeholder, which main.rs renders as
+    # "dev".
+    rustc_env_files = ["rustc_env.txt"],
+    stamp = -1,
     visibility = ["//visibility:public"],
     deps = [
         ":frankweiler_dag",

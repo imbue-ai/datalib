@@ -1899,47 +1899,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "frankweiler-sync"
-version = "0.19.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "frankweiler-core",
- "frankweiler-etl",
- "frankweiler-etl-anthropic",
- "frankweiler-etl-beeper",
- "frankweiler-etl-chatgpt",
- "frankweiler-etl-contacts",
- "frankweiler-etl-email",
- "frankweiler-etl-github",
- "frankweiler-etl-gitlab",
- "frankweiler-etl-google-takeout",
- "frankweiler-etl-linkedin",
- "frankweiler-etl-notion",
- "frankweiler-etl-perseus",
- "frankweiler-etl-signal",
- "frankweiler-etl-slack",
- "frankweiler-etl-sms-backup-restore",
- "frankweiler-etl-whatsapp",
- "frankweiler-etl-yolink",
- "frankweiler-obs",
- "frankweiler-qmd-indexer",
- "frankweiler-time",
- "frankweiler-whatsapp-backup",
- "indicatif 0.18.4",
- "insta",
- "serde",
- "serde_json",
- "serde_yaml",
- "sqlx",
- "tempfile",
- "tokio",
- "tracing",
- "walkdir",
-]
-
-[[package]]
 name = "frankweiler-tauri-backend"
 version = "0.19.0"
 dependencies = [

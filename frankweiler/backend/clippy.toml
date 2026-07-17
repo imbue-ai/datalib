@@ -25,7 +25,7 @@ disallowed-methods = [
 # corrupt the progress display whenever they fire during a phase that
 # has live bars. Two safe alternatives, depending on intent:
 #
-#   1. Status banners (`[frankweiler-sync] ...`, `[qmd-indexer] ...`,
+#   1. Status banners (`[qmd-indexer] ...`,
 #      `[translate] ...`, error summaries, SIGINT-handler messages):
 #      use the `frankweiler_obs::status_line!` macro. It routes
 #      through the shared `MultiProgress::println`, which suspends bar

@@ -56,7 +56,7 @@ pub struct AppState {
     pub root: Arc<PathBuf>,
     /// Self-contained config path for this data root (`<root>/config.yaml`).
     /// The config + setup endpoints read and write it, and the sync
-    /// worker drives `frankweiler-sync --config <this>`. Keeping the
+    /// worker drives `datalib-dag <this>`. Keeping the
     /// config inside the root is what lets the app bootstrap from an
     /// empty directory with no external `~/.config` file.
     pub config_path: Arc<PathBuf>,

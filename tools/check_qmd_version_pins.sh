@@ -6,7 +6,7 @@
 # Why this exists: qmd is installed/invoked from several places that all
 # have to agree, or first-run behavior silently diverges between dev and
 # prod (the Dockerfiles bake one version into the image, but
-# `frankweiler-sync` runtime invokes a different version via `npx -y
+# the qmd step's runtime invokes a different version via `npx -y
 # @tobilu/qmd@<v>` — leaving the baked model layer unused). When you
 # bump qmd, update `DEFAULT_QMD_VERSION` first and chase the other
 # pins until this test passes.
