@@ -9,6 +9,7 @@
 import { watch } from "vue";
 import type { CardRender } from "../types";
 import { aliasManifest, ensureManifest } from "../aliasRegistry";
+import { devMode } from "@/devMode";
 
 export function aliasView(): CardRender {
   return (root, ctx) => {
@@ -29,7 +30,7 @@ export function aliasView(): CardRender {
     wrap.className = "av";
     root.appendChild(wrap);
 
-    function paint(m: Map<string, string>) {
+    function paint([m, dev]: [Map<string, string>, boolean]) {
       wrap.replaceChildren();
       const head = document.createElement("div");
       head.className = "av-head";
@@ -39,8 +40,11 @@ export function aliasView(): CardRender {
       if (m.size === 0) {
         const empty = document.createElement("div");
         empty.className = "av-empty";
-        empty.textContent =
-          "no components yet — use the 🤖 button on a card to create one";
+        // The 🤖 hand-off button only exists in dev mode; point
+        // non-dev users at the toggle first.
+        empty.textContent = dev
+          ? "no components yet — use the 🤖 button on a card to create one"
+          : "no components yet — turn on dev mode, then use the 🤖 button on a card to create one";
         wrap.appendChild(empty);
         return;
       }
@@ -65,7 +69,7 @@ export function aliasView(): CardRender {
     }
 
     void ensureManifest();
-    const stop = watch(aliasManifest, paint, { immediate: true });
+    const stop = watch([aliasManifest, devMode], paint, { immediate: true });
     return () => stop();
   };
 }
