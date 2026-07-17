@@ -11,32 +11,22 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_linkedin_config::LinkedinConfig;
 
 use crate::extract;
 
-/// Build linkedin's [`SourcePlan`]: always a render (translate) processor and
-/// an extract processor. The provider owns every linkedin-specific decision;
-/// the orchestrator passes only the envelope-level [`PlanContext`] plus the
-/// typed [`LinkedinConfig`].
-pub fn plan(ctx: PlanContext, config: LinkedinConfig) -> Result<SourcePlan> {
+/// Download wave: always present — ingest the export CSVs (and
+/// optionally photos).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: LinkedinConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let max_sequential_failures = config.common.extract_params.max_sequential_failures();
-
-    let mut plan = SourcePlan::new();
-
-    // Translate is always present (renders whatever is in the raw store).
-    plan.translate.push(Box::new(LinkedinRender {
-        id: format!("linkedin/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
-
-    // Extract is always present: ingest the export CSVs (and optionally photos).
-    plan.extract.push(Box::new(LinkedinExtract {
+    Ok(vec![Box::new(LinkedinExtract {
         id: format!("linkedin/{name}/extract"),
         raw_path,
         input_path,
@@ -44,9 +34,21 @@ pub fn plan(ctx: PlanContext, config: LinkedinConfig) -> Result<SourcePlan> {
         // The shared give-up knob, baked in at plan time: stop the photo
         // sweep after this many consecutive failures.
         photo_max_consecutive_failures: max_sequential_failures,
-    }));
+    })])
+}
 
-    Ok(plan)
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: LinkedinConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(LinkedinRender {
+        id: format!("linkedin/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 /// LinkedIn's extract processor. Owns its raw doltlite store end to end.

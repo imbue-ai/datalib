@@ -1,0 +1,70 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files([
+    "BUILD.bazel",  # read by //frankweiler/backend:version_consistency_test
+    "Cargo.toml",
+])
+
+# Prototype DAG runner (see /dag-runner.md): step contract, edge
+# derivation from artifact-path overlap, incremental scheduler with
+# per-failure-kind retry + subtree poisoning, NDJSON progress events,
+# and subprocess step execution. Deliberately standalone — no dep on
+# etl/core — so the contract stays thin while it's being evaluated.
+rust_library(
+    name = "frankweiler_dag",
+    srcs = glob(
+        ["src/**/*.rs"],
+        exclude = ["src/bin/**"],
+    ),
+    crate_name = "frankweiler_dag",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:blake3",
+        "@frankweiler_crates//:libc",
+        "@frankweiler_crates//:serde",
+        "@frankweiler_crates//:serde_json",
+        "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:thiserror",
+        "@frankweiler_crates//:tokio",
+        "@frankweiler_crates//:walkdir",
+    ],
+)
+
+rust_test(
+    name = "dag_unittests",
+    size = "small",
+    crate = ":frankweiler_dag",
+    edition = "2021",
+    deps = [
+        "@frankweiler_crates//:tempfile",
+    ],
+)
+
+# The DAG runner: loads a new-format DAG config file and executes it,
+# with `step:`-typed entries dispatched to the sibling `datalib-step`
+# binary (//frankweiler/backend/datalib_step).
+rust_binary(
+    name = "datalib_dag",
+    srcs = ["src/bin/datalib_dag.rs"],
+    crate_name = "datalib_dag",
+    edition = "2021",
+    # Must match [workspace.package].version in frankweiler/backend/Cargo.toml;
+    # //frankweiler/backend:version_consistency_test asserts that.
+    version = "0.19.0",
+    # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
+    # smoke-tests that the published tarball reports the tag). `stamp = -1`
+    # defers to the --stamp flag (on under --config=release); day-to-day
+    # dev builds keep the literal placeholder, which main.rs renders as
+    # "dev".
+    rustc_env_files = ["rustc_env.txt"],
+    stamp = -1,
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frankweiler_dag",
+        "//frankweiler/backend/time:frankweiler_time",
+        "@frankweiler_crates//:anyhow",
+        "@frankweiler_crates//:tokio",
+    ],
+)

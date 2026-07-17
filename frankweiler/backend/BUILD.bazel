@@ -19,8 +19,8 @@ sh_test(
     srcs = ["//tools:check_version_consistency.sh"],
     data = [
         "Cargo.toml",
+        "//frankweiler/backend/dag:BUILD.bazel",
         "//frankweiler/backend/http:BUILD.bazel",
-        "//frankweiler/backend/sync:BUILD.bazel",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -52,19 +52,22 @@ filegroup(
     srcs = [
         # The curl shim is bundled because every CF-fronted provider
         # (claude.ai, chatgpt.com, files.slack.com) 403s on vanilla
-        # curl's TLS fingerprint. `frankweiler-sync` resolves it from
+        # curl's TLS fingerprint. `datalib-step` resolves it from
         # `LATCHKEY_CURL`, `FRANKWEILER_CURL_SHIM`, or a sibling-of-self
         # lookup against `frankweiler-latchkey-curl-shim` — see
         # `frankweiler_etl::latchkey::ensure_curl_shim`. Keep the public
-        # `frankweiler-` prefix mapping in release.yml's stage step in
-        # sync with the sibling-name list in latchkey.rs.
+        # name mapping in release.yml's stage step in sync with the
+        # sibling-name list in latchkey.rs.
         "//frankweiler/backend/etl:latchkey_curl_shim",
         # HTTP backend with the Vite-built UI embedded via rust-embed
         # (see frankweiler/backend/http/src/embed.rs). Single binary
         # serves the full search experience given a data root path —
         # `frankweiler-http <data_root>` is the user-facing invocation.
         "//frankweiler/backend/http:frankweiler_http_bin",
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        # The DAG runner + step host, spawned by http's sync worker (and
+        # invocable standalone against a data root's config.yaml).
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
     ],
     visibility = ["//visibility:public"],
 )

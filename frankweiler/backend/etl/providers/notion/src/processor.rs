@@ -12,32 +12,40 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::http::HttpResponse;
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_notion_config::{NotionApiSync, NotionConfig};
 
 use crate::extract;
 
-/// Build the SourcePlan: always a translate processor; an extract processor
-/// when `sync:` is present (managed mirror). Translate-only `notion_api`
-/// sources (no `sync:`) yield translate only.
-pub fn plan(ctx: PlanContext, config: NotionConfig) -> Result<SourcePlan> {
+/// Download wave: present iff `sync:` (managed). Consumes the
+/// playback root (BFS seeds in synth/playback mode).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: NotionConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let playback_root = ctx.playback_root;
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(NotionRender {
-        id: format!("notion/{name}/translate"),
-        raw_path: raw_path.clone(),
-    }));
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(NotionExtract {
+        procs.push(Box::new(NotionExtract {
             id: format!("notion/{name}/extract"),
             raw_path,
             sync,
             playback_root,
         }));
     }
-    Ok(plan)
+    Ok(procs)
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(NotionRender {
+        id: format!("notion/{name}/translate"),
+        raw_path,
+    })])
 }
 
 struct NotionExtract {

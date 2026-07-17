@@ -56,7 +56,7 @@ pub struct AppState {
     pub root: Arc<PathBuf>,
     /// Self-contained config path for this data root (`<root>/config.yaml`).
     /// The config + setup endpoints read and write it, and the sync
-    /// worker drives `frankweiler-sync --config <this>`. Keeping the
+    /// worker drives `datalib-dag <this>`. Keeping the
     /// config inside the root is what lets the app bootstrap from an
     /// empty directory with no external `~/.config` file.
     pub config_path: Arc<PathBuf>,
@@ -184,6 +184,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/card/{hash}", get(get_card))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
+        .route("/api/config/migrate", get(config_migrate))
+        .route("/api/dag", get(get_dag))
         .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/agent.md", get(agent_guide))
@@ -895,18 +897,67 @@ pub struct JobsAllParams {
 // with no config; the UI's Setup tab scaffolds one, lets the user edit
 // it, and saves it back here, after which `/api/sync/*` lights up.
 
-/// Load the effective config for read purposes: prefer the data root's
-/// own `config.yaml`; fall back to the legacy global path only when the
-/// root has none yet (eases migration for existing installs).
-fn load_effective_config(
-    s: &AppState,
-) -> Result<frankweiler_ingest_config::Config, frankweiler_ingest_config::ConfigError> {
-    use frankweiler_ingest_config::{default_config_path, load_config};
-    if s.config_path.exists() {
-        load_config(Some(s.config_path.as_path()))
-    } else {
-        load_config(Some(&default_config_path()))
+/// One source derived from the DAG config's steps: the step-level view
+/// grouped back into per-source rows for the UI table. A source is any
+/// `<name>` appearing in a `<type>.download` / `<type>.render` step's
+/// params; `managed` iff it has a download step.
+struct DagSource {
+    name: String,
+    type_str: String,
+    managed: bool,
+}
+
+/// Parse + validate the DAG config at `path` the same way the runner
+/// does (`config::load` → `to_specs` → `Graph::build`, so cycle /
+/// ownership / unknown-phase errors are caught, not just YAML syntax),
+/// and derive the per-source rows.
+fn load_dag_config(
+    path: &std::path::Path,
+) -> anyhow::Result<(frankweiler_dag::config::DagConfig, Vec<DagSource>)> {
+    use frankweiler_dag::config::{self, StepTypeOpts};
+    let (cfg, _root) = config::load(path)?;
+    // Validation only — the placeholder step-bin path never runs.
+    let specs = config::to_specs(
+        &cfg,
+        std::path::Path::new(config::STEP_BIN_NAME),
+        &StepTypeOpts::default(),
+    )?;
+    frankweiler_dag::Graph::build(specs)?;
+
+    let mut order: Vec<String> = Vec::new();
+    let mut by_name: std::collections::HashMap<String, DagSource> = Default::default();
+    for e in &cfg.steps {
+        let Some(step) = &e.step else { continue };
+        let Some((source_type, phase)) = step.rsplit_once('.') else {
+            continue;
+        };
+        let name = e
+            .params
+            .as_ref()
+            .and_then(|p| p.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let entry = by_name.entry(name.clone()).or_insert_with(|| {
+            order.push(name.clone());
+            DagSource {
+                name,
+                type_str: source_type.to_string(),
+                managed: false,
+            }
+        });
+        if phase == "download" {
+            entry.managed = true;
+        }
     }
+    let sources = order
+        .into_iter()
+        .filter_map(|n| by_name.remove(&n))
+        .collect();
+    Ok((cfg, sources))
 }
 
 #[derive(Debug, Serialize)]
@@ -930,6 +981,23 @@ pub struct ConfigResponse {
     /// `npx -y latchkey@<pin>`. The Setup UI splices this into its
     /// copy-pasteable credential-setup snippets.
     pub latchkey_cli: String,
+    /// True when the file looks like an old-style `sources:` config for
+    /// the retired sync binary (top-level `sources:` and no `steps:`).
+    /// The UI offers a one-click migration to the DAG format.
+    pub legacy: bool,
+}
+
+/// Cheap probe: is this text an old-style `sources:` config? Top-level
+/// `sources:` with no `steps:` — the two formats are disjoint on those
+/// keys.
+fn looks_legacy(yaml: &str) -> bool {
+    let Ok(v) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return false;
+    };
+    let Some(m) = v.as_mapping() else {
+        return false;
+    };
+    m.contains_key("sources") && !m.contains_key("steps")
 }
 
 /// `GET /api/config` — current `<root>/config.yaml` plus a parse check.
@@ -937,11 +1005,11 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
     let path = s.config_path.as_ref().clone();
     let exists = path.exists();
     let yaml = std::fs::read_to_string(&path).unwrap_or_default();
-    let (parsed_ok, error, source_count) = match frankweiler_ingest_config::load_config(Some(&path))
-    {
-        Ok(c) => (true, None, c.sources.len()),
-        Err(e) => (false, Some(format!("{e}")), 0),
+    let (parsed_ok, error, source_count) = match load_dag_config(&path) {
+        Ok((_cfg, sources)) => (true, None, sources.len()),
+        Err(e) => (false, Some(format!("{e:#}")), 0),
     };
+    let legacy = exists && looks_legacy(&yaml);
     Json(ConfigResponse {
         path: path.display().to_string(),
         exists,
@@ -950,6 +1018,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         error,
         source_count,
         latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
+        legacy,
     })
 }
 
@@ -989,9 +1058,9 @@ async fn put_config(
         eprintln!("put_config: write {}: {e}", tmp.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
     }
-    match frankweiler_ingest_config::load_config(Some(&tmp)) {
-        Ok(cfg) => {
-            let n = cfg.sources.len();
+    match load_dag_config(&tmp) {
+        Ok((_cfg, sources)) => {
+            let n = sources.len();
             if let Err(e) = std::fs::rename(&tmp, &path) {
                 let _ = std::fs::remove_file(&tmp);
                 eprintln!("put_config: rename {}: {e}", path.display());
@@ -1007,7 +1076,7 @@ async fn put_config(
             let _ = std::fs::remove_file(&tmp);
             Ok(Json(PutConfigResponse {
                 ok: false,
-                error: Some(format!("{e}")),
+                error: Some(format!("{e:#}")),
                 source_count: 0,
             }))
         }
@@ -1027,41 +1096,280 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         error: None,
         source_count: 0,
         latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
+        legacy: false,
     })
 }
 
-/// Minimal-but-valid starter config. `sources: []` is accepted by the
-/// loader, so the scaffold parses as-is. `data_root` is omitted on
-/// purpose: it defaults to this file's own directory (see
-/// [`frankweiler_ingest_config::Config`]), keeping the root self-contained.
-/// No header comment: the UI shows this next to the sources table and
-/// its "Add a source" buttons, which explain themselves; per-source
-/// guidance (latchkey setup etc.) arrives with each added stanza.
-fn scaffold_yaml() -> String {
-    "sources: []\n".to_string()
+/// One step in `GET /api/dag`, in topological order.
+#[derive(Debug, Serialize)]
+pub struct DagStepInfo {
+    pub id: String,
+    /// The `step:` type (`slack_api.download`, `index`, …); `None` for
+    /// raw `run:` argv entries.
+    pub step: Option<String>,
+    /// Declared input artifact patterns (may contain wildcards).
+    pub inputs: Vec<String>,
+    /// Declared output artifact paths.
+    pub outputs: Vec<String>,
+    /// Ids of the steps this one depends on (derived from artifact
+    /// overlap — the actual DAG edges).
+    pub deps: Vec<String>,
 }
 
-/// Surface the typed `Config.sources` list to the UI as
-/// `{name, type, managed}` entries. We re-load the config on every call
-/// so a user editing the YAML doesn't have to restart the backend.
-/// Returns an empty list (rather than 500) when the file is missing or
-/// fails to parse, mirroring the previous behavior.
+#[derive(Debug, Serialize)]
+pub struct DagResponse {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub steps: Vec<DagStepInfo>,
+}
+
+/// `GET /api/dag` — the step DAG derived from the data root's config,
+/// exactly as the runner would build it (same load → to_specs →
+/// Graph::build chain), so the visualization can never drift from
+/// execution. Steps come back in topological order.
+async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
+    use frankweiler_dag::config::{self, StepTypeOpts};
+    let build = || -> anyhow::Result<Vec<DagStepInfo>> {
+        let (cfg, _root) = config::load(&s.config_path)?;
+        let step_types: std::collections::HashMap<String, String> = cfg
+            .steps
+            .iter()
+            .filter_map(|e| e.step.clone().map(|st| (e.id.clone(), st)))
+            .collect();
+        let specs = config::to_specs(
+            &cfg,
+            std::path::Path::new(config::STEP_BIN_NAME),
+            &StepTypeOpts::default(),
+        )?;
+        let graph = frankweiler_dag::Graph::build(specs)?;
+        Ok(graph
+            .topo
+            .iter()
+            .map(|&i| {
+                let sp = &graph.steps[i];
+                DagStepInfo {
+                    id: sp.id.clone(),
+                    step: step_types.get(&sp.id).cloned(),
+                    inputs: sp.inputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    outputs: sp.outputs.iter().map(|a| a.as_str().to_string()).collect(),
+                    deps: graph.deps[i]
+                        .iter()
+                        .map(|&d| graph.steps[d].id.clone())
+                        .collect(),
+                }
+            })
+            .collect())
+    };
+    match build() {
+        Ok(steps) => Json(DagResponse {
+            ok: true,
+            error: None,
+            steps,
+        }),
+        Err(e) => Json(DagResponse {
+            ok: false,
+            error: Some(format!("{e:#}")),
+            steps: Vec::new(),
+        }),
+    }
+}
+
+/// Response for `GET /api/config/migrate`: the current legacy config
+/// converted to the DAG format. Nothing is written — the UI drops the
+/// YAML into the editor for review; the user saves explicitly.
+#[derive(Debug, Serialize)]
+pub struct MigrateResponse {
+    pub ok: bool,
+    pub yaml: Option<String>,
+    pub error: Option<String>,
+}
+
+/// `GET /api/config/migrate` — convert the on-disk old-style
+/// `sources:` config into the DAG step format.
+async fn config_migrate(State(s): State<AppState>) -> Json<MigrateResponse> {
+    let text = match std::fs::read_to_string(s.config_path.as_ref()) {
+        Ok(t) => t,
+        Err(e) => {
+            return Json(MigrateResponse {
+                ok: false,
+                yaml: None,
+                error: Some(format!("read {}: {e}", s.config_path.display())),
+            })
+        }
+    };
+    match migrate_legacy_config(&text) {
+        Ok(yaml) => Json(MigrateResponse {
+            ok: true,
+            yaml: Some(yaml),
+            error: None,
+        }),
+        Err(e) => Json(MigrateResponse {
+            ok: false,
+            yaml: None,
+            error: Some(format!("{e:#}")),
+        }),
+    }
+}
+
+/// Convert an old-style `sources:` config to the DAG step format:
+/// each source becomes a `<name>.download` + `<name>.render` step pair
+/// (render-only for unmanaged sources like `claude_export`), preceded
+/// by the shared `index`/`qmd` fan-in steps. Comments from the old
+/// file are not carried over; the output is a reviewable draft, not a
+/// byte-faithful rewrite. Global `defaults:` are folded into each
+/// source's `common:` (value-level only — no path resolution), so the
+/// per-step params are self-contained.
+fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    // Raw (un-normalized) parse: we want the fields as written, not
+    // resolved absolute paths.
+    let mut cfg: frankweiler_ingest_config::Config =
+        serde_yaml::from_str(text).map_err(|e| anyhow::anyhow!("parse legacy config: {e}"))?;
+    let defaults = cfg.defaults.clone();
+
+    let mut out = String::new();
+    out.push_str("# Migrated from the old sources: format — review before saving.\n");
+    if !cfg.data_root.as_os_str().is_empty() {
+        let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
+    }
+    out.push_str(
+        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: grid_index\n    step: grid_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
+    );
+    if !cfg.qmd.skip {
+        out.push_str(
+            "\n  - id: qmd_index\n    step: qmd_index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
+        );
+    }
+
+    for entry in &mut cfg.sources {
+        entry.source.common_mut().fold_defaults(&defaults);
+        let name = entry.name.clone();
+        let ty = entry.source.type_str();
+        let managed = entry.source.is_managed();
+
+        // The provider subtree, minus the `type:` tag (the step type
+        // carries it now) and any nulls serde emitted for unset fields.
+        let mut val = serde_yaml::to_value(&entry.source)
+            .map_err(|e| anyhow::anyhow!("serialize source {name:?}: {e}"))?;
+        if let Some(m) = val.as_mapping_mut() {
+            m.remove("type");
+        }
+        strip_nulls(&mut val);
+        let source_block = if val.as_mapping().is_none_or(|m| m.is_empty()) {
+            "      source: {}\n".to_string()
+        } else {
+            let dumped =
+                serde_yaml::to_string(&val).map_err(|e| anyhow::anyhow!("dump {name:?}: {e}"))?;
+            let mut b = String::from("      source:\n");
+            for line in dumped.lines() {
+                let _ = writeln!(b, "        {line}");
+            }
+            b
+        };
+
+        let divider_pad = "\u{2500}".repeat(66usize.saturating_sub(name.chars().count()));
+        let mut block = format!("\n  # \u{2500}\u{2500} {name} {divider_pad}\n");
+        if managed {
+            let _ = write!(
+                block,
+                "  - id: {name}.download\n    step: {ty}.download\n    outputs: [{name}/raw]\n    params: &{name}\n      name: {name}\n{source_block}\
+                 \n  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params: *{name}\n",
+            );
+        } else {
+            let _ = write!(
+                block,
+                "  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params:\n      name: {name}\n{source_block}",
+            );
+        }
+        if entry.enabled {
+            out.push_str(&block);
+        } else {
+            // Disabled sources come over commented out — the new
+            // format has no per-source enable flag.
+            out.push_str("\n  # (was `enabled: false` — uncomment to activate)\n");
+            for line in block.trim_start_matches('\n').lines() {
+                if line.is_empty() {
+                    out.push_str("  #\n");
+                } else {
+                    // Strip the base list indent once (not repeatedly —
+                    // nested indentation must survive the round-trip).
+                    let _ = writeln!(out, "  # {}", line.strip_prefix("  ").unwrap_or(line));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Drop `key: null` entries and (bottom-up) mappings that emptied out —
+/// serde emits both for unset optional/default fields, and they'd read
+/// as clutter in the migrated draft. `sync:` is kept even when empty:
+/// its *presence* is what makes a source managed.
+fn strip_nulls(v: &mut serde_yaml::Value) {
+    if let Some(m) = v.as_mapping_mut() {
+        for (_, val) in m.iter_mut() {
+            strip_nulls(val);
+        }
+        let keys: Vec<serde_yaml::Value> = m
+            .iter()
+            .filter(|(k, val)| {
+                val.is_null()
+                    || (val.as_mapping().is_some_and(|mm| mm.is_empty())
+                        && k.as_str() != Some("sync"))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in keys {
+            m.remove(&k);
+        }
+    }
+}
+
+/// Starter DAG config: the shared fan-in steps that every source's
+/// rendered markdown feeds. Non-empty on purpose — `index`/`qmd` are
+/// source-independent and belong in every pipeline; their wildcard
+/// input matches nothing until the first source's steps are added
+/// (which the UI's "Add a source" buttons append as a
+/// `<name>.download` + `<name>.render` pair). `data_root` is omitted:
+/// it defaults to this file's own directory, keeping the root
+/// self-contained.
+fn scaffold_yaml() -> String {
+    "\
+steps:
+  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+  # Every source's rendered markdown feeds these.
+  - id: grid_index
+    step: grid_index
+    inputs: [\"**/rendered_md\"]
+    outputs: [system/backend_index]
+
+  - id: qmd_index
+    step: qmd_index
+    inputs: [\"**/rendered_md\"]
+    outputs: [system/qmd]
+  # \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+"
+    .to_string()
+}
+
+/// Surface the DAG config's per-source view to the UI as
+/// `{name, type, managed}` entries — sources are derived by grouping
+/// `<type>.download` / `<type>.render` steps by their params `name`.
+/// Re-loaded on every call so a config edit in the Setup tab shows up
+/// without a backend restart. Returns an empty list (rather than 500)
+/// when the file is missing or fails to parse, mirroring the previous
+/// behavior.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
-    // Read the data root's own `config.yaml` (self-contained), falling
-    // back to the legacy `~/.config/frankweiler/config.yaml` only when
-    // the root has no config yet. Re-loaded per call so a config edit in
-    // the Setup tab shows up without a backend restart.
-    let cfg = match load_effective_config(&s) {
-        Ok(c) => c,
+    let sources = match load_dag_config(&s.config_path) {
+        Ok((_cfg, sources)) => sources,
         Err(_) => return Json(Vec::new()),
     };
-    let out: Vec<SourceInfo> = cfg
-        .sources
-        .iter()
+    let out: Vec<SourceInfo> = sources
+        .into_iter()
         .map(|src| SourceInfo {
-            name: src.name().to_string(),
-            type_: src.type_str().to_string(),
-            managed: src.is_managed(),
+            name: src.name,
+            type_: src.type_str,
+            managed: src.managed,
         })
         .collect();
     Json(out)
@@ -1122,6 +1430,7 @@ async fn sync_enqueue(
         state: row.state.clone(),
         progress_pct: row.progress_pct,
         progress_msg: row.progress_msg.clone(),
+        tasks: None,
     });
     Ok(Json(row))
 }
@@ -1168,6 +1477,7 @@ async fn sync_job_cancel(
         state: "canceled".to_string(),
         progress_pct: None,
         progress_msg: None,
+        tasks: None,
     });
     Ok(StatusCode::NO_CONTENT)
 }

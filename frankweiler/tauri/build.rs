@@ -7,7 +7,8 @@ use std::path::Path;
 /// wrapper by stage-runtime.sh (installed from latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
     "binaries/frankweiler-http",
-    "binaries/frankweiler-sync",
+    "binaries/datalib-dag",
+    "binaries/datalib-step",
     "binaries/latchkey-curl-shim",
     "binaries/latchkey",
 ];

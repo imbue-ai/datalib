@@ -100,8 +100,12 @@ async fn main() -> anyhow::Result<()> {
     // Everything root-derived (doltlite repo, qmd daemon, config path,
     // sync worker) is assembled by the bootstrap shared with the Tauri
     // shell — see `frankweiler_http::boot`.
-    let state =
-        frankweiler_http::build_state(root, frankweiler_http::worker::resolve_sync_bin()).await?;
+    let state = frankweiler_http::build_state(
+        root,
+        frankweiler_http::worker::resolve_dag_bin(),
+        frankweiler_http::worker::resolve_step_bin(),
+    )
+    .await?;
     let root = state.root.clone();
 
     // Search runs on the qmd index. The daemon resolves that index

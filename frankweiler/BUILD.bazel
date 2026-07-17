@@ -6,9 +6,11 @@ sh_binary(
     srcs = ["serve_dev.sh"],
     data = [
         "//frankweiler/backend/http:frankweiler_http_bin",
-        # The HTTP backend's sync worker shells out to this; serve_dev.sh
-        # exports its runfiles path as $FRANKWEILER_SYNC_BIN.
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        # The HTTP backend's sync worker shells out to these; serve_dev.sh
+        # exports their runfiles paths as $FRANKWEILER_DAG_BIN /
+        # $FRANKWEILER_STEP_BIN.
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -23,9 +25,11 @@ sh_binary(
     srcs = ["dev.sh"],
     data = [
         "//frankweiler/backend/http:frankweiler_http_bin",
-        # Sync worker child; dev.sh exports its runfiles path as
-        # $FRANKWEILER_SYNC_BIN so UI-triggered syncs run end-to-end.
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        # Sync worker children; dev.sh exports their runfiles paths as
+        # $FRANKWEILER_DAG_BIN / $FRANKWEILER_STEP_BIN so UI-triggered
+        # syncs run end-to-end.
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],
 )
@@ -60,7 +64,8 @@ sh_binary(
     srcs = ["dev_perseus.sh"],
     data = [
         ":serve",
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
         "//frankweiler/backend/etl/providers/perseus:tiny_fixture",
     ],
     deps = ["@bazel_tools//tools/bash/runfiles"],

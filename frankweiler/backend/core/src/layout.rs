@@ -84,11 +84,11 @@ pub fn state_dir(data_root: &Path) -> PathBuf {
 /// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
 /// The rest is a human hint. Only the per-stanza `raw/` stores are precious —
 /// everything tagged here is 100% derived and rebuilt from raw by
-/// `frankweiler-sync --skip-extract`.
+/// re-running the pipeline (`datalib-dag`).
 pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
     # This directory holds derived, rebuildable data (not a backup source).\n\
-    # frankweiler regenerates it from the sibling/per-stanza raw/ stores via\n\
-    # `frankweiler-sync --skip-extract`. Safe for backups to skip.\n\
+    # frankweiler regenerates it from the sibling/per-stanza raw/ stores by\n\
+    # re-running the pipeline (datalib-dag). Safe for backups to skip.\n\
     # See https://bford.info/cachedir/\n";
 
 /// Drop a `CACHEDIR.TAG` into `dir` (if `dir` exists and the tag is absent),

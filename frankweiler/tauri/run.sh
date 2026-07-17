@@ -5,8 +5,8 @@
 #   ./run.sh ~/my-root      # skip the picker, boot straight into a root
 #
 # `tauri build --debug` runs the config's beforeBuildCommand (bazel
-# builds `frankweiler-http` — UI embedded — and `frankweiler-sync`,
-# then stages both into binaries/ so they're bundled under the .app's
+# builds `frankweiler-http` — UI embedded — plus the `datalib-dag`
+# runner and `datalib-step`, then stages them into binaries/ so they're bundled under the .app's
 # Resources) and produces the .app, so there are no prerequisite steps
 # to remember. The shell spawns the bundled `frankweiler-http` at
 # runtime (see `resolve_http_bin` in src/main.rs). We then launch it

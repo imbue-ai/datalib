@@ -281,7 +281,8 @@ jobs:
         run: |
           set -euo pipefail
           for bin in \
-              bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin \
+              bazel-bin/frankweiler/backend/dag/datalib_dag \
+              bazel-bin/frankweiler/backend/datalib_step/datalib_step \
               bazel-bin/frankweiler/backend/http/frankweiler_http_bin \
               bazel-bin/frankweiler/backend/etl/latchkey_curl_shim; do
               echo "--- ${bin}"
@@ -298,8 +299,8 @@ jobs:
           done
 
       # Defense against the v0.7.0 / v0.8.0 incident where the dist
-      # build went out unstamped and `frankweiler-sync --version`
-      # printed `frankweiler-sync dev` in the published tarball. Run
+      # build went out unstamped and the version smoke test
+      # printed `dev` in the published tarball. Run
       # the freshly-built binary on the host (matrix runner is the
       # same triple as the artifact) and require it to report exactly
       # the tag name. Anything else — `dev`, `unknown`, a `-dirty`
@@ -310,9 +311,9 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          actual="$(./bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin --version)"
-          echo "frankweiler-sync --version => ${actual}"
-          expected="frankweiler-sync ${REF_NAME}"
+          actual="$(./bazel-bin/frankweiler/backend/dag/datalib_dag --version)"
+          echo "datalib-dag --version => ${actual}"
+          expected="datalib-dag ${REF_NAME}"
           if [[ "${actual}" != "${expected}" ]]; then
               echo "ERROR: release binary version mismatch." >&2
               echo "  expected: ${expected}" >&2
@@ -338,13 +339,16 @@ jobs:
           stage="frankweiler-${version}-${TRIPLE}"
           mkdir -p "${stage}"
 
-          # Map bazel output paths -> public `frankweiler-<name>` names.
-          # Add a line here when you add a binary to //frankweiler/backend:dist.
-          # NOTE: keep the shim's installed name in sync with
-          # `SIBLING_NAMES` in frankweiler/backend/etl/src/latchkey.rs —
-          # `frankweiler-sync` resolves the shim via a sibling lookup
-          # against this exact filename at runtime.
-          cp bazel-bin/frankweiler/backend/sync/frankweiler_sync_bin "${stage}/frankweiler-sync"
+          # Map bazel output paths -> public installed names. Add a line
+          # here when you add a binary to //frankweiler/backend:dist.
+          # NOTE: `datalib-dag`/`datalib-step` keep those exact names —
+          # frankweiler-http resolves them via sibling lookup (see
+          # http/src/worker.rs resolve_bin) — and the shim's installed
+          # name must stay in sync with `SIBLING_NAMES` in
+          # frankweiler/backend/etl/src/latchkey.rs (datalib-step
+          # resolves it via a sibling lookup at runtime).
+          cp bazel-bin/frankweiler/backend/dag/datalib_dag "${stage}/datalib-dag"
+          cp bazel-bin/frankweiler/backend/datalib_step/datalib_step "${stage}/datalib-step"
           cp bazel-bin/frankweiler/backend/http/frankweiler_http_bin "${stage}/frankweiler-http"
           cp bazel-bin/frankweiler/backend/etl/latchkey_curl_shim "${stage}/frankweiler-latchkey-curl-shim"
           chmod +x "${stage}"/*
@@ -424,7 +428,7 @@ jobs:
       - uses: actions/checkout@v6
 
       # The tauri beforeBuildCommand bazel-builds the bundled
-      # frankweiler-http / frankweiler-sync binaries; same cache layering
+      # frankweiler-http / datalib-dag / datalib-step binaries; same cache layering
       # rationale as the build job above (BuildBuddy serves actions,
       # repository-cache keeps the crate_universe / rules tarballs).
       - uses: bazel-contrib/setup-bazel@0.19.0
@@ -648,7 +652,7 @@ jobs:
       # GHA but still re-exporting layers) and the only thing it
       # uniquely caught was a regression in the entrypoint's
       # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
-      # (`frankweiler-sync --version`, `frankweiler-http --help`)
+      # (`datalib-dag --version`, `frankweiler-http --help`)
       # duplicate `qmd --version` + binary-presence checks the
       # Dockerfile already runs inline. If the latchkey bootstrap ever
       # regresses, ghcr.io will briefly have a broken `:latest` until

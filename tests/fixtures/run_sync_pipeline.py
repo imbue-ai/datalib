@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Driver for the `:ingested_tng` genrule.
 
-Generates the two YAML configs `frankweiler-sync` needs (one for the
-synth phase, one for the extract+translate phase), runs both phases, and
-leaves the staged outputs where `tar_qmd.py` can pick them up.
+Generates the DAG config `datalib-dag` needs, runs the synth phase
+(per-source `datalib-step synthesize`) and then the pipeline
+(download → render → index) hermetically against playback fixtures,
+and leaves the staged outputs where `tar_qmd.py` can pick them up.
 
 Splitting the genrule into a python driver keeps the Bazel `cmd =` block
 readable and concentrates the file-layout logic in one place — the
@@ -11,55 +12,54 @@ fixture trees live under different parent directories so a single
 `--synth-input-root` flag wouldn't have worked.
 
 Args (positional):
-    1:  path to `frankweiler-sync` binary
-    2:  path to `signal-make-fixture` binary (used to expand the signal
+    1:  path to `datalib-dag` binary (the DAG runner)
+    2:  path to `datalib-step` binary (the step-type host)
+    3:  path to `signal-make-fixture` binary (used to expand the signal
         TNG JSON spec into an encrypted snapshot dir on the fly)
-    3:  path to `whatsapp-make-fixture` binary (same idea for the
+    4:  path to `whatsapp-make-fixture` binary (same idea for the
         WhatsApp TNG spec — produces a `WhatsApp/` backup dir with
         `Databases/msgstore.db.crypt15` + `Media/`)
-    4:  --now stamp (ISO-8601)
-    5:  data_root for the sync pipeline (rendered_md/, dolt_db/, raw/ land
-        directly underneath; YAMLs + playback also stashed here)
-    6:  anthropic_api fixture dir (input)
-    7:  chatgpt_api   fixture dir
-    8:  slack_api     fixture dir
-    9:  github_api    fixture dir
-    10: gitlab_api    fixture dir
-    11: notion_web    fixture dir
-    12: beeper_tng    fixture dir (SQL files + media; we materialize a
+    5:  --now stamp (ISO-8601)
+    6:  data_root for the pipeline (rendered_md/, system/, raw/ land
+        directly underneath; the DAG config + playback also stashed here)
+    7:  anthropic_api fixture dir (input)
+    8:  chatgpt_api   fixture dir
+    9:  slack_api     fixture dir
+    10: github_api    fixture dir
+    11: gitlab_api    fixture dir
+    12: notion_web    fixture dir
+    13: beeper_tng    fixture dir (SQL files + media; we materialize a
                                    BeeperTexts-shaped dir from it)
-    13: carddav_tng   fixture dir (vCard files; translate-only —
-                                    config carries no `sync:` block so
-                                    extract is skipped and translate
-                                    reads `.vcf` files straight from
-                                    `input_path`)
-    14: signal_tng    JSON spec for the TNG signal backup; the path is
+    14: carddav_tng   fixture dir (vCard files; file mode — extract
+                                   walks `.vcf` files straight from
+                                   `input_path`)
+    15: signal_tng    JSON spec for the TNG signal backup; the path is
                       to the .json file itself. We run
                       `signal-make-fixture` against it to materialize
                       an encrypted snapshot dir for extract to walk.
                       AEP is the public 64-zero fixture passphrase
                       (`SIGNAL_BACKUP_PASSPHRASE` env var set below).
-    15: whatsapp_tng  JSON spec for the TNG WhatsApp backup. Same
+    16: whatsapp_tng  JSON spec for the TNG WhatsApp backup. Same
                       idea: we expand to a `WhatsApp/` backup dir
                       under the workspace, with root key = 64 zeros
                       (`WHATSAPP_BACKUP_DECRYPTION_KEY` env var
                       set below).
-    16: email_mbox    Path to a Google-Takeout-shaped `.mbox` file
+    17: email_mbox    Path to a Google-Takeout-shaped `.mbox` file
                       (e.g. `star_trek.mbox`). The email extractor
                       walks it directly — no synth phase. Account
                       metadata (display name, address, is_personal)
-                      is supplied via the source's `mbox:` block in
-                      the extract YAML below.
-    17: gtk_fx        Google Takeout root dir.
-    18: linkedin_fx   LinkedIn data-export dir (CSVs + Articles HTML).
+                      is supplied via the source's `mbox:` block.
+    18: gtk_fx        Google Takeout root dir.
+    19: linkedin_fx   LinkedIn data-export dir (CSVs + Articles HTML).
                       File-backed; extract walks `input_path` directly.
-    19: sms_fx        "SMS Backup & Restore" export dir (sms-*.xml /
+    20: sms_fx        "SMS Backup & Restore" export dir (sms-*.xml /
                       calls-*.xml with inline base64 attachments).
                       File-backed; extract walks `input_path` directly.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -81,11 +81,12 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 
 
 def main() -> int:
-    sync_bin = Path(sys.argv[1]).resolve()
-    signal_make_fixture_bin = Path(sys.argv[2]).resolve()
-    whatsapp_make_fixture_bin = Path(sys.argv[3]).resolve()
-    now = sys.argv[4]
-    data_root = Path(sys.argv[5]).resolve()
+    dag_bin = Path(sys.argv[1]).resolve()
+    step_bin = Path(sys.argv[2]).resolve()
+    signal_make_fixture_bin = Path(sys.argv[3]).resolve()
+    whatsapp_make_fixture_bin = Path(sys.argv[4]).resolve()
+    now = sys.argv[5]
+    data_root = Path(sys.argv[6]).resolve()
     (
         anth_fx,
         cgpt_fx,
@@ -101,14 +102,15 @@ def main() -> int:
         gtk_fx,
         linkedin_fx,
         sms_fx,
-    ) = (Path(p).resolve() for p in sys.argv[6:20])
+    ) = (Path(p).resolve() for p in sys.argv[7:21])
 
     data_root.mkdir(parents=True, exist_ok=True)
-    # YAML configs + playback fixtures + per-source raw dirs all stashed
-    # under the data_root. The sync binary lays out its own `rendered_md/`
-    # and `backend_index.doltlite_db` directly under data_root. The enclosing genrule is
-    # sandboxed (no `no-sandbox` tag; see scripts/lint_no_sandbox.py),
-    # so this dir is fresh per action — no need to clean it ourselves.
+    # The DAG config + playback fixtures + per-source input dirs all
+    # stashed under the data_root. The pipeline lays out its own
+    # `<name>/raw`, `<name>/rendered_md`, and `system/` directly under
+    # data_root. The enclosing genrule is sandboxed (no `no-sandbox`
+    # tag; see scripts/lint_no_sandbox.py), so this dir is fresh per
+    # action — no need to clean it ourselves.
     workspace = data_root
     raw_root = data_root / "raw"
     raw_root.mkdir(exist_ok=True)
@@ -117,8 +119,7 @@ def main() -> int:
     # Materialize a BeeperTexts-shaped directory from the SQL +
     # media fixtures. Beeper doesn't go through the synth/playback
     # flow — its extractor reads on-disk SQLite directly — so we
-    # build the dbs here once and point `beeper_data_dir` at them
-    # in the extract YAML.
+    # build the dbs here once and point `beeper_data_dir` at them.
     beeper_data_dir = _materialize_beeper_fixture(beeper_fx, workspace / "beeper_data")
 
     # Signal: expand the JSON spec into an encrypted snapshot dir. The
@@ -151,127 +152,96 @@ def main() -> int:
     _run([str(whatsapp_make_fixture_bin), str(whatsapp_spec), str(whatsapp_root)])
     whatsapp_dir = whatsapp_root / "WhatsApp"
 
-    # Synth YAML: each source's input_path points at the checked-in
-    # fixture tree. The synth phase reads from those and writes HTTP
-    # playback responses into `playback/`.
-    #
-    # Beeper has no HTTP synthesizer (its `Synthesizer` impl is a
-    # no-op), but we include it in the YAML anyway so the sync
-    # orchestrator's `enabled_sources()` set is consistent across
-    # phases. The synth pass for beeper writes zero fixtures.
-    synth_yaml = workspace / "synth.yaml"
-    synth_yaml.write_text(
-        _yaml(
-            workspace,
-            {
-                "anthropic-api": ("claude_api", anth_fx),
-                "chatgpt-api": ("chatgpt_api", cgpt_fx),
-                "slack": ("slack_api", slack_fx),
-                "github": ("github_api", gh_fx),
-                "gitlab": ("gitlab_api", gl_fx),
-                "notion": ("notion_api", notion_fx),
-                "beeper": ("beeper", beeper_data_dir),
-                # Contacts (carddav) in file mode: no HTTP synth
-                # fixture, but extract DOES walk `input_path` for
-                # `.vcf` files (just like the email mbox path). The
-                # synth pass is a no-op; listed for symmetry.
-                "tng_contacts": ("carddav", carddav_fx),
-                # Signal also has no HTTP synthesizer (its extract
-                # reads a local file tree). Listing it for symmetry —
-                # the synth pass writes zero playback fixtures.
-                "signal": ("signal_backup", signal_snapshot_root),
-                # WhatsApp same pattern: no synthesizer; included so
-                # `enabled_sources()` is consistent across phases.
-                "whatsapp": ("whatsapp_backup", whatsapp_dir),
-                # Email mbox: translate-only-shaped (no `sync:`
-                # block → is_managed() false for synth) but the
-                # extract phase below DOES walk the mbox into the
-                # raw doltlite store. Listed here for symmetry with
-                # the other no-synth providers.
-                "tng_email": ("email", email_mbox),
-                # Google Takeout: file-backed, no HTTP synthesizer;
-                # listed for symmetry. Extract walks `input_path` (the
-                # Takeout root) in the extract phase below.
-                "google-takeout": ("google_takeout", gtk_fx),
-                # LinkedIn: file-backed CSV walk. Its ONE HTTP path is the
-                # connection-photo fetch (fetch_photos: true below); the
-                # synth pass runs LinkedinSynth over the export's
-                # Connections.csv to write profile-page + image fixtures.
-                "linkedin": ("linkedin", linkedin_fx),
-                # SMS Backup & Restore: file-backed, no HTTP synthesizer.
-                # Extract walks `input_path` (the export dir) below.
-                "sms-backup-restore": ("sms_backup_restore", sms_fx),
-            },
-            signal_snapshot_root=signal_snapshot_root,
-            whatsapp_dir=whatsapp_dir,
-        )
-    )
+    # Every source: name → (source type, synth input fixture dir,
+    # extract-phase input_path). The synth input is the checked-in
+    # fixture tree the synthesizer reads; the extract input_path is
+    # what the provider walks at pipeline time (per-source raw subdirs
+    # for the HTTP providers, the fixture/export trees for the
+    # file-backed ones). Raw doltlite stores always land at the
+    # canonical `<data_root>/<name>/raw` regardless.
+    sources: dict[str, tuple[str, Path, Path]] = {
+        "anthropic-api": ("claude_api", anth_fx, raw_root / "anthropic-api"),
+        "chatgpt-api": ("chatgpt_api", cgpt_fx, raw_root / "chatgpt-api"),
+        "slack": ("slack_api", slack_fx, raw_root / "slack"),
+        "github": ("github_api", gh_fx, raw_root / "github"),
+        "gitlab": ("gitlab_api", gl_fx, raw_root / "gitlab"),
+        "notion": ("notion_api", notion_fx, raw_root / "notion"),
+        "beeper": ("beeper", beeper_data_dir, raw_root / "beeper"),
+        "tng_contacts": ("carddav", carddav_fx, carddav_fx),
+        "signal": ("signal_backup", signal_snapshot_root, raw_root / "signal"),
+        "whatsapp": ("whatsapp_backup", whatsapp_dir, raw_root / "whatsapp"),
+        "tng_email": ("email", email_mbox, email_mbox),
+        "google-takeout": ("google_takeout", gtk_fx, gtk_fx),
+        "linkedin": ("linkedin", linkedin_fx, linkedin_fx),
+        "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
+    }
 
-    # Extract YAML: each source's input_path points at a fresh per-source
-    # subdir of the workspace. Extract writes there; translate reads from
-    # the same place. We hand notion a seed page id from the fixture
-    # tree so the (still-validated) `sync:` block is non-empty; the
-    # extract phase additionally derives BFS seeds from the playback
-    # responses, so this seed needn't be reachable on its own.
-    notion_seed = _first_notion_page_id(notion_fx)
-    extract_yaml = workspace / "extract.yaml"
-    extract_yaml.write_text(
-        _yaml(
-            workspace,
-            {
-                "anthropic-api": ("claude_api", raw_root / "anthropic-api"),
-                "chatgpt-api": ("chatgpt_api", raw_root / "chatgpt-api"),
-                "slack": ("slack_api", raw_root / "slack"),
-                "github": ("github_api", raw_root / "github"),
-                "gitlab": ("gitlab_api", raw_root / "gitlab"),
-                "notion": ("notion_api", raw_root / "notion"),
-                # Beeper extract writes its raw doltlite into
-                # `<input_path>.doltlite_db`. The on-disk source
-                # (BeeperTexts-shaped dir) is configured via the
-                # sync block's `beeper_data_dir:` field; see
-                # `_yaml` below.
-                "beeper": ("beeper", raw_root / "beeper"),
-                # Carddav file mode: extract walks `input_path` for
-                # `.vcf` files and lands them in the raw doltlite
-                # store using the same row shape CardDAV produces.
-                # Translate reads from the raw store — no more
-                # divergent "read from disk" path.
-                "tng_contacts": ("carddav", carddav_fx),
-                # Signal extract walks `snapshot_dir` (set in
-                # `_yaml` below), not `input_path`; we still set
-                # input_path to the per-source raw subdir so the
-                # extractor's doltlite raw store lands there.
-                "signal": ("signal_backup", raw_root / "signal"),
-                # WhatsApp extract reads `backup_dir` (set in `_yaml`
-                # below); input_path is where the `wa_*` mirror lands.
-                "whatsapp": ("whatsapp_backup", raw_root / "whatsapp"),
-                # Email mbox: extract walks `input_path` directly
-                # (the `.mbox` file) and lands a raw doltlite store
-                # at `<data_root>/raw/<name>`. `_yaml` omits the
-                # `sync:` block for type `email` so is_managed()
-                # picks the mbox path, then attaches an `mbox:`
-                # block (account_id, display_name, …) so the
-                # synthesized `accounts` row matches what JMAP
-                # would produce for the same user.
-                "tng_email": ("email", email_mbox),
-                # Google Takeout: extract walks `input_path` (the Takeout
-                # root); the Google Chat feed renders.
-                "google-takeout": ("google_takeout", gtk_fx),
-                # LinkedIn: extract walks the export dir directly (same
-                # file-backed shape as carddav); the message feeds +
-                # connections render, and connection photos are fetched
-                # via the playback fixtures synthesized above.
-                "linkedin": ("linkedin", linkedin_fx),
-                # SMS Backup & Restore: extract walks `input_path` (the
-                # export dir of sms-*.xml / calls-*.xml).
-                "sms-backup-restore": ("sms_backup_restore", sms_fx),
-            },
-            notion_seed=notion_seed,
-            beeper_data_dir=beeper_data_dir,
-            signal_snapshot_root=signal_snapshot_root,
-            whatsapp_dir=whatsapp_dir,
+    # ── Synth: build HTTP playback fixtures per source. ─────────────
+    # `datalib-step synthesize` reads each source's fixture tree
+    # (`common.input_path`) and writes replay tapes into `playback/`.
+    # Sources without an HTTP synthesizer (beeper, signal, …) log a
+    # skip and write nothing — invoked anyway for symmetry, exactly
+    # like the old whole-config synth pass.
+    print(f"[run_sync_pipeline] synth → {playback}", flush=True)
+    step_env = {**os.environ, "FRANKWEILER_DAG_DATA_ROOT": str(workspace)}
+    for name, (type_str, synth_input, _extract_input) in sources.items():
+        source: dict = {"common": {"input_path": str(synth_input)}}
+        if type_str == "linkedin":
+            # The photo fetch is linkedin's one HTTP path; the synth
+            # gate checks this flag.
+            source["fetch_photos"] = True
+        _run(
+            [
+                str(step_bin),
+                "synthesize",
+                "--type",
+                type_str,
+                "--params-json",
+                json.dumps({"name": name, "source": source}),
+                "--out",
+                str(playback),
+            ],
+            env=step_env,
         )
+
+    # ── DAG config: a download+render pair per source, plus the index
+    # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
+    # `:ingested_tng_qmd` builds the search index separately.
+    notion_seed = _first_notion_page_id(notion_fx)
+    steps: list[str] = []
+    for name, (type_str, _synth_input, extract_input) in sources.items():
+        params = json.dumps(
+            {
+                "name": name,
+                "source": _source_config(
+                    type_str,
+                    extract_input,
+                    notion_seed=notion_seed,
+                    beeper_data_dir=beeper_data_dir,
+                    signal_snapshot_root=signal_snapshot_root,
+                    whatsapp_dir=whatsapp_dir,
+                ),
+            }
+        )
+        steps.append(
+            f"""  - id: {name}.download
+    step: {type_str}.download
+    outputs: [{name}/raw]
+    params: {params}
+  - id: {name}.render
+    step: {type_str}.render
+    inputs: [{name}/raw]
+    outputs: [{name}/rendered_md]
+    params: {params}"""
+        )
+    steps.append(
+        """  - id: grid_index
+    step: grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]"""
     )
+    dag_yaml = workspace / "dag.yaml"
+    dag_yaml.write_text(f"data_root: {workspace}\nsteps:\n" + "\n".join(steps) + "\n")
 
     # Anthropic extract reads users.json from `export_dir` (== input_path
     # in our wiring) — that file is a bulk-export artifact, not an HTTP
@@ -282,161 +252,127 @@ def main() -> int:
     if users_src.exists():
         shutil.copy(users_src, anth_raw / "users.json")
 
-    print(f"[run_sync_pipeline] synth → {playback}", flush=True)
-    _run(
-        [
-            str(sync_bin),
-            "--config",
-            str(synth_yaml),
-            "--now",
-            now,
-            "--synthesize-playback-root",
-            str(playback),
-        ]
-    )
-
-    print(f"[run_sync_pipeline] extract+translate → {data_root}", flush=True)
-    # Inject the public fixture AEP so the signal extractor can decrypt
-    # the snapshot we generated above. Everything else inherits the
-    # genrule's env.
-    extract_env = {
+    print(f"[run_sync_pipeline] pipeline → {data_root}", flush=True)
+    # `FRANKWEILER_HTTP_PLAYBACK` redirects every provider transport to
+    # the playback tree (steps inherit the runner's env); the fixture
+    # AEP/root key let the signal/whatsapp extractors decrypt the
+    # snapshots generated above.
+    pipeline_env = {
         **os.environ,
+        "FRANKWEILER_HTTP_PLAYBACK": str(playback),
         "SIGNAL_BACKUP_PASSPHRASE": FIXTURE_SIGNAL_AEP,
         "WHATSAPP_BACKUP_DECRYPTION_KEY": FIXTURE_WHATSAPP_KEY,
     }
-    extract_argv = [
-        str(sync_bin),
-        "--config",
-        str(extract_yaml),
+    pipeline_argv = [
+        str(dag_bin),
+        str(dag_yaml),
+        "--step-bin",
+        str(step_bin),
         "--now",
         now,
-        "--playback-root",
-        str(playback),
     ]
     # `INGESTED_TNG_RESET=1` is the env-var pass-through used by
     # ingested_tng_test's multi-run case to exercise the
     # --reset-and-redownload code path without changing the positional
     # arg signature.
     if os.environ.get("INGESTED_TNG_RESET") == "1":
-        extract_argv.append("--reset-and-redownload")
-    _run(extract_argv, env=extract_env)
+        pipeline_argv.append("--reset-and-redownload")
+    _run(pipeline_argv, env=pipeline_env)
     return 0
 
 
-def _yaml(
-    data_root: Path,
-    sources: dict[str, tuple[str, Path]],
+def _source_config(
+    type_str: str,
+    input_path: Path,
     notion_seed: str | None = None,
     beeper_data_dir: Path | None = None,
     signal_snapshot_root: Path | None = None,
     whatsapp_dir: Path | None = None,
-) -> str:
-    """Render a minimal YAML covering every fixture source.
+) -> dict:
+    """The provider config subtree (`source:`) for one fixture source.
 
-    `sources` maps name → (type_str, input_path). Notion needs a non-empty
-    sync block to pass validation — pass `notion_seed` to use a real page
-    id as a `subtrees.pages` entry. When `notion_seed` is None (the synth
-    phase, which doesn't actually fetch) we fall back to `inbox.enabled`.
-    Beeper's `sync:` block needs both a non-empty `sources:` list and
-    a path to a BeeperTexts-shaped dir.
+    Mirrors the knobs the old sync YAML carried, minus the `type:` tag
+    (the step type names the provider now). Notion needs a non-empty
+    sync block to pass validation — `notion_seed` anchors a
+    `subtrees.pages` entry (extract additionally derives BFS seeds
+    from the playback responses, so the seed needn't be reachable on
+    its own).
     """
-    lines = [
-        f"data_root: {data_root}",
-        "qmd:",
-        "  skip: true",
-        "sources:",
-    ]
-    for name, (type_str, path) in sources.items():
-        # New (#41) shape: orchestrator-owned `name` at the entry level; the
-        # provider config nested under `source:` (type + the shared `common:`
-        # envelope + provider-specific keys).
-        lines.append(f"  - name: {name}")
-        lines.append("    source:")
-        lines.append(f"      type: {type_str}")
-        lines.append("      common:")
-        lines.append(f"        input_path: {path}")
-        if type_str == "notion_api":
-            lines.append("      sync:")
-            if notion_seed:
-                lines.append(f"        subtrees: {{pages: ['{notion_seed}']}}")
-            else:
-                lines.append("        inbox: {enabled: true}")
-        elif type_str == "slack_api":
-            # Disable media so extract doesn't fall back to the direct
-            # `latchkey curl -v` path for file downloads (not on PATH in
-            # the bazel sandbox, and the fixtures don't exercise media).
-            lines.append("      sync: {media: false}")
-        elif type_str == "beeper":
-            # `sources` here is the canonical-network list that
-            # filters which rooms get ingested. `beeper_data_dir`
-            # points at the materialized BeeperTexts fixture.
-            lines.append("      sync:")
-            lines.append("        sources: ['signal', 'googlechat']")
-            if beeper_data_dir is not None:
-                lines.append(f"        beeper_data_dir: {beeper_data_dir}")
-        elif type_str == "carddav":
-            # File-tree mode: no `sync:` block (otherwise we'd be in
-            # CardDAV-server mode). The extract phase walks
-            # `input_path` for `.vcf` files; translate reads the
-            # raw doltlite store.
-            pass
-        elif type_str == "signal_backup":
-            # The signal extractor needs `snapshot_dir` (where the
-            # `signal-backup-*` subdirs live) in addition to the raw
-            # store under `input_path`. AEP comes from the
-            # SIGNAL_BACKUP_PASSPHRASE env var injected by main().
-            if signal_snapshot_root is not None:
-                lines.append("      sync:")
-                lines.append(f"        snapshot_dir: {signal_snapshot_root}")
-            else:
-                lines.append("      sync: {}")
-        elif type_str == "email":
-            # Mbox mode: no `sync:` block (would otherwise trigger
-            # the JMAP path). Account metadata is supplied via the
-            # `mbox:` block so the synthesized `accounts` row carries
-            # display name + canonical address — same shape JMAP would
-            # produce.
-            lines.append("      mbox:")
-            lines.append("        account_id: picard@enterprise.starfleet")
-            lines.append("        display_name: Jean-Luc Picard")
-            lines.append("        email_address: picard@enterprise.starfleet")
-            lines.append("        is_personal: true")
-            # Google-Takeout-shaped .mbox → Gmail webmail outlinks.
-            lines.append("      outlink_format: gmail")
-        elif type_str == "whatsapp_backup":
-            # WhatsApp extractor needs `backup_dir` (the dir containing
-            # `Databases/msgstore.db.crypt15` + `Media/`). Root key
-            # comes from the WHATSAPP_BACKUP_DECRYPTION_KEY env var
-            # injected by main().
-            if whatsapp_dir is not None:
-                lines.append("      sync:")
-                lines.append(f"        backup_dir: {whatsapp_dir}")
-            else:
-                lines.append("      sync: {}")
-        elif type_str == "linkedin":
-            # File-backed CSV walk (no `sync:` block). Turn on the
-            # connection-photo fetch so the pipeline exercises the
-            # og:image → CAS path — hermetically, against the playback
-            # fixtures LinkedinSynth wrote in the synth phase.
-            lines.append("      fetch_photos: true")
-        elif type_str == "google_takeout":
-            # Opt into the rendering feeds: Google Chat and Google Voice
-            # (incl. its Spam folder, to exercise that path). The other
-            # feeds stay off for the central pipeline (their extract is
-            # covered by the provider's own fixture_walk test).
-            lines.append(
-                "      sync: {google_chat: true, google_voice: true, "
-                "google_voice_include_spam: true}"
-            )
-        elif type_str == "sms_backup_restore":
-            # File-backed, no `sync:` block (the variant has no sync
-            # field — deny_unknown_fields would reject `sync: {}`). The
-            # extract phase walks `input_path` for `sms-*.xml` /
-            # `calls-*.xml`; translate renders one chat per number.
-            pass
-        elif type_str != "claude_export":
-            lines.append("      sync: {}")
-    return "\n".join(lines) + "\n"
+    source: dict = {"common": {"input_path": str(input_path)}}
+    if type_str == "notion_api":
+        if notion_seed:
+            source["sync"] = {"subtrees": {"pages": [notion_seed]}}
+        else:
+            source["sync"] = {"inbox": {"enabled": True}}
+    elif type_str == "slack_api":
+        # Disable media so extract doesn't fall back to the direct
+        # `latchkey curl -v` path for file downloads (not on PATH in
+        # the bazel sandbox, and the fixtures don't exercise media).
+        source["sync"] = {"media": False}
+    elif type_str == "beeper":
+        # `sources` here is the canonical-network list that filters
+        # which rooms get ingested. `beeper_data_dir` points at the
+        # materialized BeeperTexts fixture.
+        source["sync"] = {"sources": ["signal", "googlechat"]}
+        if beeper_data_dir is not None:
+            source["sync"]["beeper_data_dir"] = str(beeper_data_dir)
+    elif type_str == "carddav":
+        # File-tree mode: no `sync:` block (otherwise we'd be in
+        # CardDAV-server mode). Extract walks `input_path` for `.vcf`
+        # files; translate reads the raw doltlite store.
+        pass
+    elif type_str == "signal_backup":
+        # The signal extractor needs `snapshot_dir` (where the
+        # `signal-backup-*` subdirs live) in addition to the raw store.
+        # AEP comes from the SIGNAL_BACKUP_PASSPHRASE env var.
+        source["sync"] = (
+            {"snapshot_dir": str(signal_snapshot_root)}
+            if signal_snapshot_root is not None
+            else {}
+        )
+    elif type_str == "email":
+        # Mbox mode: no `sync:` block (would otherwise trigger the
+        # JMAP path). Account metadata is supplied via the `mbox:`
+        # block so the synthesized `accounts` row carries display name
+        # + canonical address — same shape JMAP would produce.
+        source["mbox"] = {
+            "account_id": "picard@enterprise.starfleet",
+            "display_name": "Jean-Luc Picard",
+            "email_address": "picard@enterprise.starfleet",
+            "is_personal": True,
+        }
+        # Google-Takeout-shaped .mbox → Gmail webmail outlinks.
+        source["outlink_format"] = "gmail"
+    elif type_str == "whatsapp_backup":
+        # WhatsApp extractor needs `backup_dir` (the dir containing
+        # `Databases/msgstore.db.crypt15` + `Media/`). Root key comes
+        # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var.
+        source["sync"] = (
+            {"backup_dir": str(whatsapp_dir)} if whatsapp_dir is not None else {}
+        )
+    elif type_str == "linkedin":
+        # File-backed CSV walk (no `sync:` block). Turn on the
+        # connection-photo fetch so the pipeline exercises the
+        # og:image → CAS path — hermetically, against the playback
+        # fixtures LinkedinSynth wrote in the synth phase.
+        source["fetch_photos"] = True
+    elif type_str == "google_takeout":
+        # Opt into the rendering feeds: Google Chat and Google Voice
+        # (incl. its Spam folder, to exercise that path). The other
+        # feeds stay off for the central pipeline (their extract is
+        # covered by the provider's own fixture_walk test).
+        source["sync"] = {
+            "google_chat": True,
+            "google_voice": True,
+            "google_voice_include_spam": True,
+        }
+    elif type_str == "sms_backup_restore":
+        # File-backed, no `sync:` field at all (deny_unknown_fields
+        # would reject `sync: {}`). Extract walks `input_path`.
+        pass
+    else:
+        source["sync"] = {}
+    return source
 
 
 def _materialize_beeper_fixture(fx_dir: Path, target: Path) -> Path:
@@ -490,8 +426,6 @@ def _first_notion_page_id(notion_fx: Path) -> str | None:
     config's required `subtrees.pages` entry. BFS in extract derives
     the actual fetched set from playback fixtures, so this seed only
     needs to satisfy validation."""
-    import json
-
     candidate = notion_fx / "notion_official_page" / "created" / "events.jsonl"
     if not candidate.exists():
         return None

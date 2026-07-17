@@ -57,13 +57,15 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# Cacheable, deterministic ingest of the TNG fixtures via
-# //frankweiler/backend/sync:frankweiler_sync_bin. The orchestrator
-# walks every provider's Translate step over the checked-in fixtures
-# and loads the resulting sidecars into `backend_index.doltlite_db`
-# (the doltlite chunk store is linked statically into the sync binary
-# via `//third-party/doltlite:sqlite3`, so no host `dolt` install is
-# required). This rule then tars the rendered_md tree into qmd.tar.
+# Cacheable, deterministic ingest of the TNG fixtures via the DAG
+# runner (//frankweiler/backend/dag:datalib_dag driving
+# //frankweiler/backend/datalib_step:datalib_step). The pipeline runs
+# every source's download+render step pair over the checked-in
+# fixtures and the index fan-in loads the resulting sidecars into
+# `backend_index.doltlite_db` (the doltlite chunk store is linked
+# statically via `//third-party/doltlite:sqlite3`, so no host `dolt`
+# install is required). This rule then tars the rendered_md tree into
+# qmd.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
 # at the layer of DB + qmd files.
 genrule(
@@ -74,7 +76,8 @@ genrule(
         "ingested/qmd.tar",
     ],
     tools = [
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
         # CLI that converts the signal TNG JSON spec into an encrypted
         # snapshot dir on the fly. Lives in the signal-backup library
         # crate; see that crate's BUILD.bazel.
@@ -89,7 +92,8 @@ genrule(
     cmd = " && ".join([
         " ".join([
             "python3 $(execpath run_sync_pipeline.py)",
-            "$(execpath //frankweiler/backend/sync:frankweiler_sync_bin)",
+            "$(execpath //frankweiler/backend/dag:datalib_dag)",
+            "$(execpath //frankweiler/backend/datalib_step:datalib_step)",
             "$(execpath //frankweiler/backend/signal-backup:signal_make_fixture)",
             "$(execpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
             "'2369-04-15T00:00:00+00:00'",
@@ -150,8 +154,9 @@ genrule(
 #
 #   1. Plain `bazelisk test //...` exercises the end-to-end pipeline
 #      (the genrule isn't a test, so it didn't before).
-#   2. `bazelisk coverage` collects coverage on `frankweiler_sync_bin`
-#      and `signal_make_fixture` through this test's `data` deps —
+#   2. `bazelisk coverage` collects coverage on `datalib_dag` /
+#      `datalib_step` and `signal_make_fixture` through this test's
+#      `data` deps —
 #      rules_rust's coverage transition propagates through `data`,
 #      not just `deps`. See //docs/dev/coverage.md for the full workflow.
 #   3. The test runs the pipeline THREE times against one data root
@@ -163,7 +168,8 @@ py_test(
     srcs = ["ingested_tng_test.py"],
     args = [
         "$(rootpath run_sync_pipeline.py)",
-        "$(rootpath //frankweiler/backend/sync:frankweiler_sync_bin)",
+        "$(rootpath //frankweiler/backend/dag:datalib_dag)",
+        "$(rootpath //frankweiler/backend/datalib_step:datalib_step)",
         "$(rootpath //frankweiler/backend/signal-backup:signal_make_fixture)",
         "$(rootpath //frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
         "2369-04-15T00:00:00+00:00",
@@ -187,7 +193,8 @@ py_test(
     data = [
         "run_sync_pipeline.py",
         ":source_json",
-        "//frankweiler/backend/sync:frankweiler_sync_bin",
+        "//frankweiler/backend/dag:datalib_dag",
+        "//frankweiler/backend/datalib_step:datalib_step",
         "//frankweiler/backend/signal-backup:signal_make_fixture",
         "//frankweiler/backend/etl/providers/whatsapp:whatsapp_make_fixture",
     ],

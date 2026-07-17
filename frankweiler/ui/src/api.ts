@@ -233,6 +233,18 @@ export type ConfigResponse = {
   // an `npx -y latchkey@<pin>` fallback. Spliced into the Setup tab's
   // copy-pasteable credential snippets.
   latchkey_cli: string;
+  // True when the file is an old-style `sources:` config for the
+  // retired sync binary; the UI offers a one-click migration.
+  legacy: boolean;
+};
+
+// Response for GET /api/config/migrate: the legacy config converted to
+// the DAG step format. Nothing is written server-side — the UI drops
+// the YAML into the editor for review.
+export type MigrateResponse = {
+  ok: boolean;
+  yaml: string | null;
+  error: string | null;
 };
 
 export type SaveConfigResponse = {
@@ -249,6 +261,31 @@ export function fetchConfig(signal?: AbortSignal): Promise<ConfigResponse> {
 // config yet; the user fills in sources via the Setup tab's buttons.
 export function fetchConfigScaffold(signal?: AbortSignal): Promise<ConfigResponse> {
   return getJson<ConfigResponse>("/api/config/scaffold", signal);
+}
+
+export function fetchMigratedConfig(signal?: AbortSignal): Promise<MigrateResponse> {
+  return getJson<MigrateResponse>("/api/config/migrate", signal);
+}
+
+// One step of the config's derived DAG (GET /api/dag), in topological
+// order. `deps` are the actual edges the runner derives from artifact
+// overlap.
+export type DagStep = {
+  id: string;
+  step: string | null;
+  inputs: string[];
+  outputs: string[];
+  deps: string[];
+};
+
+export type DagResponse = {
+  ok: boolean;
+  error: string | null;
+  steps: DagStep[];
+};
+
+export function fetchDag(signal?: AbortSignal): Promise<DagResponse> {
+  return getJson<DagResponse>("/api/dag", signal);
 }
 
 // PUT the edited YAML. The backend validates before persisting; a
@@ -309,9 +346,19 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }
 
+// One DAG task's state on a job's task board. `state` is one of
+// todo / running / done / skipped / failed / blocked.
+export type SyncTask = {
+  id: string;
+  state: string;
+  detail?: string | null;
+};
+
 // One push update for a job, streamed from `GET /api/sync/stream` over
 // SSE. The worker + enqueue/cancel handlers emit these the instant they
-// write a job's state, so the UI updates without polling.
+// write a job's state, so the UI updates without polling. `tasks` is
+// the per-task board (also recoverable from `progress_msg`, which
+// carries it as JSON — see src/sync/progress.ts).
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -319,6 +366,7 @@ export type JobProgressEvent = {
   state: SyncJobState;
   progress_pct: number | null;
   progress_msg: string | null;
+  tasks?: SyncTask[] | null;
 };
 
 // Open the live job-progress SSE stream. Returns the EventSource so the

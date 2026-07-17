@@ -6,6 +6,7 @@ import { galleryView } from "./galleryView";
 import { aliasView } from "./aliasView";
 import { dactalView } from "./dactalView";
 import { perseusView } from "./perseusView";
+import { sourceDagView } from "./sourceDagView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -16,6 +17,7 @@ export const viewLibs: ViewLibs = {
   aliasView,
   dactalView,
   perseusView,
+  sourceDagView,
 };
 
 export {
@@ -26,4 +28,5 @@ export {
   aliasView,
   dactalView,
   perseusView,
+  sourceDagView,
 };

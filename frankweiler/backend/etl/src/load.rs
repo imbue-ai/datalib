@@ -484,23 +484,33 @@ pub async fn load_all(
 ) -> Result<LoadSummary> {
     // load_all is single-threaded — there are no parallel workers
     // contending here. A fresh write lock owns the pool clone so
-    // `apply_one` has somewhere to acquire connections. We could
-    // wrap the whole loop in begin/commit_transaction to batch
-    // writes, but load_all is a disaster-recovery tool, not on the
-    // hot path; per-call auto-commit is fine.
+    // `apply_one` has somewhere to acquire connections. The whole
+    // loop runs inside one begin/commit_transaction batch: doltlite
+    // charges ~50ms per auto-committed statement bundle (prolly-tree
+    // manifest mutation), which is ruinous on a full-root rebuild —
+    // this is the DAG index step's hot path now, not just a
+    // disaster-recovery tool. An error rolls the batch back, leaving
+    // the index exactly as it was.
     let write_lock = WriteLock::new(pool.clone());
     // data_root holds one dir per stanza (each with a `rendered_md/` tree)
     // plus the reserved `system/` dir. Walk each stanza's rendered_md; skip
     // `system/` (the aggregate indices live there, no sidecars).
-    let mut sidecars: Vec<PathBuf> = Vec::new();
+    // (stanza name, sidecar path): the stanza directory name IS the
+    // config-level source name — `<data_root>/<name>/rendered_md/…` —
+    // so `documents.source_name` keeps the user-facing name exactly as
+    // the fused loader did.
+    let mut sidecars: Vec<(String, PathBuf)> = Vec::new();
     if let Ok(entries) = fs::read_dir(out_dir) {
         for entry in entries.flatten() {
             if entry.file_name() == frankweiler_core::layout::SYSTEM_DIR {
                 continue;
             }
+            let stanza = entry.file_name().to_string_lossy().into_owned();
             let rendered_root = entry.path().join("rendered_md");
             if rendered_root.is_dir() {
-                collect_sidecars(&rendered_root, &mut sidecars);
+                let mut paths = Vec::new();
+                collect_sidecars(&rendered_root, &mut paths);
+                sidecars.extend(paths.into_iter().map(|p| (stanza.clone(), p)));
             }
         }
     }
@@ -511,7 +521,55 @@ pub async fn load_all(
         ..Default::default()
     };
 
-    for sidecar_path in &sidecars {
+    // Fingerprints are bulk-loaded BEFORE the write transaction: the
+    // index pool is one connection wide (doltlite's HEAD is
+    // per-connection), so a per-doc read against the pool while the
+    // transaction holds that connection would deadlock.
+    let prior_fingerprints = load_fingerprints(pool).await?;
+
+    write_lock
+        .begin_transaction()
+        .await
+        .context("WriteLock::begin_transaction for load_all")?;
+    let res = load_all_batch(
+        &write_lock,
+        &prior_fingerprints,
+        out_dir,
+        &sidecars,
+        &progress,
+        now_override,
+        &mut summary,
+    )
+    .await;
+    match res {
+        Ok(()) => {
+            write_lock
+                .commit_transaction()
+                .await
+                .context("WriteLock::commit_transaction for load_all")?;
+            Ok(summary)
+        }
+        Err(e) => {
+            // Best effort — the held connection rolls back on drop
+            // anyway.
+            let _ = write_lock.rollback_transaction().await;
+            Err(e)
+        }
+    }
+}
+
+/// The per-sidecar loop of [`load_all`], separated so the caller can
+/// wrap it in one begin/rollback-or-commit transaction.
+async fn load_all_batch(
+    write_lock: &WriteLock,
+    prior_fingerprints: &HashMap<String, String>,
+    out_dir: &Path,
+    sidecars: &[(String, PathBuf)],
+    progress: &impl Fn(&str),
+    now_override: Option<&str>,
+    summary: &mut LoadSummary,
+) -> Result<()> {
+    for (stanza, sidecar_path) in sidecars {
         let raw = fs::read_to_string(sidecar_path)
             .with_context(|| format!("read {}", sidecar_path.display()))?;
         let sidecar: Sidecar = serde_json::from_str(&raw)
@@ -523,19 +581,23 @@ pub async fn load_all(
         let markdown_uuid = sidecar.header.markdown_uuid.clone();
         let fingerprint = sidecar.header.source_fingerprint.clone();
 
-        if existing_fingerprint(pool, &markdown_uuid).await? == Some(fingerprint.clone()) {
+        if prior_fingerprints.get(&markdown_uuid) == Some(&fingerprint) {
             summary.markdowns_skipped += 1;
             continue;
         }
 
-        // load_all has no access to the config-level source name, so we
-        // fall back to the canonical row's provider (same default as the
-        // pre-callback code path).
-        let source_name = sidecar
-            .rows
-            .first()
-            .map(|r| r.provider.clone())
-            .unwrap_or_default();
+        // The stanza dir name is the config-level source name; fall
+        // back to the canonical row's provider only if it were somehow
+        // empty.
+        let source_name = if stanza.is_empty() {
+            sidecar
+                .rows
+                .first()
+                .map(|r| r.provider.clone())
+                .unwrap_or_default()
+        } else {
+            stanza.clone()
+        };
         let md = RenderedMarkdown {
             markdown_uuid,
             source_name,
@@ -551,7 +613,7 @@ pub async fn load_all(
             rows: sidecar.rows,
             edges: sidecar.edges,
         };
-        let inserted = apply_one(&write_lock, out_dir, &md, now_override)
+        let inserted = apply_one(write_lock, out_dir, &md, now_override)
             .await
             .with_context(|| format!("load {}", sidecar_path.display()))?;
         summary.rows_inserted += inserted;
@@ -562,7 +624,7 @@ pub async fn load_all(
             summary.markdowns_total
         ));
     }
-    Ok(summary)
+    Ok(())
 }
 
 fn collect_sidecars(dir: &Path, out: &mut Vec<PathBuf>) {

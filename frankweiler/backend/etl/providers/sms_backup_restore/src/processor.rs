@@ -13,31 +13,38 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 
 use crate::extract;
 
-/// Build the SourcePlan: always an extract (file-backed ingest of the export at
-/// `input_path`) plus a translate. The orchestrator only calls `plan().extract`
-/// when the source is managed; the config carries no knobs (sms has none).
-pub fn plan(ctx: PlanContext, config: SmsBackupRestoreConfig) -> Result<SourcePlan> {
+/// Download wave: walk the export dir at input_path into the raw store.
+pub fn plan_download(
+    ctx: PlanContext,
+    config: SmsBackupRestoreConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-
-    let mut plan = SourcePlan::new();
-    plan.extract.push(Box::new(SmsExtract {
+    Ok(vec![Box::new(SmsExtract {
         id: format!("sms_backup_restore/{name}/extract"),
-        raw_path: raw_path.clone(),
+        raw_path,
         input_path,
-    }));
-    plan.translate.push(Box::new(SmsRender {
+    })])
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: SmsBackupRestoreConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(SmsRender {
         id: format!("sms_backup_restore/{name}/translate"),
         raw_path,
         name,
-    }));
-    Ok(plan)
+    })])
 }
 
 /// sms_backup_restore's extract processor. Owns its raw doltlite store end to

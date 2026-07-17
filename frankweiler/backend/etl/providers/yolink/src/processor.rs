@@ -9,25 +9,34 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_yolink_config::{YolinkConfig, YolinkSync};
 
 use crate::extract;
 
-/// Build the SourcePlan: an extract processor when `sync:` is present;
-/// `translate` is always empty (yolink has no render path).
-pub fn plan(ctx: PlanContext, config: YolinkConfig) -> Result<SourcePlan> {
+/// Download wave: present iff `sync:` (managed).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: YolinkConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let mut plan = SourcePlan::new();
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(YolinkExtract {
+        procs.push(Box::new(YolinkExtract {
             id: format!("yolink/{name}/extract"),
             raw_path,
             sync,
         }));
     }
-    Ok(plan)
+    Ok(procs)
+}
+
+/// Render wave: yolink is extract-only today (device history lands in
+/// the raw store; no markdown render yet), so this is always empty.
+pub fn plan_render(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let _ = (ctx, config);
+    Ok(Vec::new())
 }
 
 struct YolinkExtract {

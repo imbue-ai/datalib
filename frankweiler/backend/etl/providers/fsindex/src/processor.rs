@@ -2,7 +2,7 @@
 //!
 //! fsindex is **extract-only** — it indexes a directory tree into a doltlite
 //! raw store and has no translate/render side (filesystem entries aren't
-//! chat-shaped; see the crate-level docs). So [`plan`] contributes a single
+//! chat-shaped; see the crate-level docs). So [`plan_download`] contributes a single
 //! extract processor and leaves `translate` empty — "extract-only" is
 //! structural (a missing processor), not a flag.
 //!
@@ -20,28 +20,34 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl::raw_layout;
 use frankweiler_etl_fsindex_config::FsindexConfig;
 
 use crate::extract;
 
-/// Build the SourcePlan: a single extract processor (file-backed scan of the
-/// tree at `input_path`). No translate — fsindex renders nothing.
-pub fn plan(ctx: PlanContext, config: FsindexConfig) -> Result<SourcePlan> {
+/// Download wave: the directory scan into the raw store.
+pub fn plan_download(
+    ctx: PlanContext,
+    config: FsindexConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let root = config.common.input_or_raw_path().to_path_buf();
-
-    let mut plan = SourcePlan::new();
-    plan.extract.push(Box::new(FsindexExtract {
+    Ok(vec![Box::new(FsindexExtract {
         id: format!("fsindex/{name}/extract"),
         raw_path,
         root,
         source_name: name,
         stamp: config.stamp,
-    }));
-    Ok(plan)
+    })])
+}
+
+/// Render wave: fsindex is extract-only (it indexes the tree, renders
+/// nothing), so this is always empty.
+pub fn plan_render(ctx: PlanContext, config: FsindexConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let _ = (ctx, config);
+    Ok(Vec::new())
 }
 
 /// fsindex's extract processor. Owns its raw doltlite store end to end (open,

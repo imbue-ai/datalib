@@ -9,29 +9,37 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
 
 use crate::extract;
 
-/// Build the SourcePlan: always a translate processor; an extract processor
-/// when `sync:` is present (managed).
-pub fn plan(ctx: PlanContext, config: GitlabConfig) -> Result<SourcePlan> {
+/// Download wave: present iff `sync:` (managed).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: GitlabConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(GitlabRender {
-        id: format!("gitlab/{name}/translate"),
-        raw_path: raw_path.clone(),
-    }));
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(GitlabExtract {
+        procs.push(Box::new(GitlabExtract {
             id: format!("gitlab/{name}/extract"),
             raw_path,
             sync,
         }));
     }
-    Ok(plan)
+    Ok(procs)
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(ctx: PlanContext, config: GitlabConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(GitlabRender {
+        id: format!("gitlab/{name}/translate"),
+        raw_path,
+    })])
 }
 
 struct GitlabExtract {

@@ -1,6 +1,6 @@
 # Frankweiler — production runtime image.
 #
-# Ships the three release binaries (`frankweiler-sync`, `frankweiler-http`,
+# Ships the release binaries (`datalib-dag`, `datalib-step`, `frankweiler-http`,
 # `frankweiler-latchkey-curl-shim`) plus Node + `latchkey` so users can
 # register services and run syncs from a single container.
 #
@@ -17,13 +17,13 @@
 # Bind mounts at runtime (see docs/docker.md):
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
-#                                  may be RO for `frankweiler-sync`).
+#                                  may be RO for `datalib-dag`).
 #   /data                          data root: config.yaml, the doltlite
 #                                  DB, raw_api/ trees, rendered QMDs,
 #                                  the qmd index.
 #   /root/.cache/qmd/models        (optional) embedding-model cache; avoids
 #                                  re-downloading ~300 MB on every fresh
-#                                  `frankweiler-sync` run.
+#                                  `datalib-dag` run.
 #
 # Devcontainer: `.devcontainer/Dockerfile` inherits from a published
 # version of THIS image via `FROM ghcr.io/imbue-ai/datalib:<tag>`,
@@ -47,7 +47,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                    rather than this, but having curl present is useful
 #                    for `docker exec` poking
 #   tini             PID 1 that reaps zombies and forwards signals; the
-#                    Rust binaries don't fork, but `frankweiler-sync`
+#                    Rust binaries don't fork, but the pipeline
 #                    spawns `npx`/`node` subprocesses for the qmd indexer
 #                    and we want SIGTERM to flow through cleanly
 #   gnupg            required by the NodeSource setup script below
@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Node 22 LTS via NodeSource. Two consumers in this image:
 #   1. `latchkey` (installed below) is an npm package.
-#   2. `frankweiler-sync` shells out to `npx -y @tobilu/qmd@<version>`
+#   2. the qmd step shells out to `npx -y @tobilu/qmd@<version>`
 #      to (re)build the qmd search index at sync time. The qmd version
 #      is chosen by the binary, not pinned here.
 # Keep `NODE_MAJOR` in sync with .devcontainer/Dockerfile.
@@ -135,7 +135,7 @@ RUN arch="$(dpkg --print-architecture)" \
 # have to track qmd's model-URI / cache-naming conventions — qmd bumps
 # a default model, we just rebuild and the right files land.
 #
-# Pinned to the qmd version that `frankweiler-sync` invokes via
+# Pinned to the qmd version that the qmd step invokes via
 # `npx -y @tobilu/qmd@<v>` at runtime — see DEFAULT_QMD_VERSION in
 # frankweiler/backend/core/src/qmd/mod.rs. The
 # //tools:qmd_version_pins_test asserts the values agree.
@@ -185,14 +185,16 @@ RUN set -eux; \
     # The tarball's top dir is `frankweiler-<version>-<triple>/`.
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'frankweiler-*-linux-gnu' | head -n1)"; \
     test -n "$staged"; \
-    install -m 0755 "$staged/frankweiler-sync"                  /usr/local/bin/frankweiler-sync; \
+    install -m 0755 "$staged/datalib-dag"                       /usr/local/bin/datalib-dag; \
+    install -m 0755 "$staged/datalib-step"                      /usr/local/bin/datalib-step; \
     install -m 0755 "$staged/frankweiler-http"                  /usr/local/bin/frankweiler-http; \
     install -m 0755 "$staged/frankweiler-latchkey-curl-shim"    /usr/local/bin/frankweiler-latchkey-curl-shim; \
     rm -rf /tmp/release; \
     # Smoke: --version on the one binary that supports it. frankweiler-http
     # takes a positional DATA_ROOT and clap rejects --version before parsing
     # anything else, so we can't use it the same way here.
-    frankweiler-sync --version; \
+    datalib-dag --version; \
+    test -x /usr/local/bin/datalib-step; \
     test -x /usr/local/bin/frankweiler-http; \
     test -x /usr/local/bin/frankweiler-latchkey-curl-shim
 
@@ -206,7 +208,7 @@ RUN chmod 0755 /usr/local/bin/frankweiler-entrypoint.sh
 # Defaults wired for the documented bind-mount layout:
 #   FRANKWEILER_ROOT     resolves the data root without a positional arg
 #   LATCHKEY_CURL        points latchkey at the Chrome-impersonating shim
-#                        (frankweiler-sync also sets this internally via
+#                        (datalib-step also sets this internally via
 #                        sibling resolution, but exporting it means a
 #                        user running `latchkey curl ...` directly inside
 #                        the container gets CF impersonation too)
@@ -222,7 +224,7 @@ EXPOSE 8731
 # "No encryption key available." if `LATCHKEY_ENCRYPTION_KEY` isn't
 # set. That includes:
 #   * `latchkey services register` / `auth set` / `auth list` directly;
-#   * `frankweiler-sync`, which shells out to `latchkey curl` per source;
+#   * `datalib-dag` (whose download steps shell out to `latchkey curl`);
 #   * `frankweiler-http`, ditto for any authenticated upstream fetch.
 # The entrypoint reads the per-bind-mount key file (or provisions one
 # on first run — see the script header) so users don't have to remember
@@ -232,7 +234,7 @@ EXPOSE 8731
 # `npx`/`node`) and forwards SIGTERM cleanly to the long-lived
 # `frankweiler-http` case. Cheap enough to keep for short-lived runs too.
 #
-# No default CMD: this image is multi-entrypoint (`frankweiler-sync`,
+# No default CMD: this image is multi-entrypoint (`datalib-dag`,
 # `frankweiler-http`, `latchkey`), and forcing one would just make
 # `docker run <img> latchkey ...` more awkward.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/frankweiler-entrypoint.sh"]

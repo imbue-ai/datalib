@@ -11,6 +11,7 @@ import { computed, nextTick, ref, onMounted, onUnmounted } from "vue";
 import {
   fetchConfig,
   fetchConfigScaffold,
+  fetchMigratedConfig,
   saveConfig,
   fetchSyncSources,
   fetchAllJobs,
@@ -23,6 +24,7 @@ import {
   type JobProgressEvent,
 } from "@/api";
 import StepProgress from "@/components/StepProgress.vue";
+import DagPanel from "@/components/DagPanel.vue";
 import { listSources, type SourceRow } from "@/config/configSources";
 import { SNIPPETS } from "@/config/snippets";
 
@@ -42,6 +44,11 @@ const saveStatus = ref<{ ok: boolean; error: string | null; count: number } | nu
 const saving = ref(false);
 const dirty = ref(false);
 const latchkeyCli = ref("npx -y latchkey");
+// True when the on-disk file is an old-style `sources:` config for the
+// retired sync binary; shows the migrate banner.
+const legacy = ref(false);
+const migrating = ref(false);
+const migrateError = ref<string | null>(null);
 
 // Table view of the text: re-derived on every edit. While the text
 // doesn't parse the last good rows stay up (grayed) with the parse
@@ -90,6 +97,7 @@ async function loadConfig() {
     }
     configPath.value = cfg.path;
     if (cfg.latchkey_cli) latchkeyCli.value = cfg.latchkey_cli;
+    legacy.value = cfg.legacy;
     yamlText.value = cfg.yaml;
     reparse();
   } catch (e) {
@@ -119,17 +127,20 @@ function selectSource(idx: number) {
   selectRange(r.start, r.end);
 }
 
-// Append a source stanza to the text and select it. If the YAML still
-// has the scaffold's empty `sources: []`, flip it to a `sources:` block
-// first so the appended item is valid.
+// Append a source's step pair (download + render) to the text and
+// select it. The scaffold already carries a `steps:` block (with the
+// shared index/qmd fan-in steps); create one only when the user
+// started from a blank file. Steps are appended at the end — the DAG
+// derives execution order from artifact paths, not file order.
 function addSnippet(body: string) {
   let text = yamlText.value;
-  if (/^sources:\s*\[\s*\]\s*$/m.test(text)) {
-    text = text.replace(/^sources:\s*\[\s*\]\s*$/m, "sources:");
-  } else if (!/^sources:/m.test(text)) {
-    text = text.replace(/\s*$/, "") + "\n\nsources:";
+  if (/^steps:\s*\[\s*\]\s*$/m.test(text)) {
+    text = text.replace(/^steps:\s*\[\s*\]\s*$/m, "steps:");
+  } else if (!/^steps:/m.test(text)) {
+    text = text.replace(/\s*$/, "") + "\n\nsteps:";
   }
-  const before = text.replace(/\s*$/, "") + "\n";
+  // Blank line before the pair keeps sources visually separated.
+  const before = text.replace(/\s*$/, "") + "\n\n";
   yamlText.value = before + body + "\n";
   onEdit();
   selectRange(before.length, yamlText.value.length - 1);
@@ -153,13 +164,53 @@ async function onSave() {
   }
 }
 
+// Convert the on-disk legacy config to the DAG format and drop the
+// result into the editor as an unsaved draft — the user reviews and
+// hits Save explicitly. Nothing is written server-side by this call.
+async function onMigrate() {
+  migrating.value = true;
+  migrateError.value = null;
+  try {
+    const res = await fetchMigratedConfig();
+    if (!res.ok || !res.yaml) {
+      migrateError.value = res.error || "migration failed";
+      return;
+    }
+    yamlText.value = res.yaml;
+    legacy.value = false;
+    onEdit();
+  } catch (e) {
+    migrateError.value = (e as Error).message;
+  } finally {
+    migrating.value = false;
+  }
+}
+
 // --- Sync / jobs state (same behavior as the old Sync tab) ------------------
 
 const jobs = ref<SyncJob[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
-const busySource = ref<Record<string, boolean>>({});
+// Row checkboxes for "Sync selected". Keyed by source name; pruned to
+// existing rows on reparse via the computed below.
+const selected = ref<Set<string>>(new Set());
+const busySelected = ref(false);
 const busyGlobal = ref(false);
+
+function toggleSelected(name: string) {
+  const s = new Set(selected.value);
+  if (s.has(name)) s.delete(name);
+  else s.add(name);
+  selected.value = s;
+}
+
+// Only selections that are still syncable count (present in the saved
+// config and still in the table).
+const selectedSyncable = computed(() =>
+  [...selected.value].filter(
+    (n) => serverByName.value.has(n) && rows.value.some((r) => r.name === n),
+  ),
+);
 
 // Per-job log viewer. `expandedId` is the job whose detail row is open;
 // `logText`/`logError` hold the fetched tail. The backend serves it from
@@ -249,16 +300,21 @@ async function slowReload() {
   await loadJobs();
 }
 
-async function syncOne(name: string) {
-  busySource.value[name] = true;
+// One job syncing every checked source: comma-joined names become
+// repeated --sync flags in the worker, so the whole selection runs as
+// a single DAG invocation (shared fan-in steps run once).
+async function syncSelected() {
+  const names = selectedSyncable.value;
+  if (names.length === 0) return;
+  busySelected.value = true;
   error.value = null;
   try {
-    await enqueueJob({ kind: "all", source_name: name });
+    await enqueueJob({ kind: "all", source_name: names.join(",") });
     await loadJobs();
   } catch (e) {
     error.value = (e as Error).message;
   } finally {
-    busySource.value[name] = false;
+    busySelected.value = false;
   }
 }
 
@@ -352,6 +408,19 @@ onUnmounted(() => {
       <span v-if="!existed" class="pill new">not created yet</span>
     </p>
 
+    <div v-if="legacy" class="migrate-banner">
+      <span>
+        This looks like an old-style <code>sources:</code> config for the
+        retired sync binary. Convert it to the new step-based format
+        (loads a draft into the editor for review; nothing is saved until
+        you hit Save).
+      </span>
+      <button class="btn btn-primary" :disabled="migrating" @click="onMigrate">
+        {{ migrating ? "Converting…" : "Migrate config" }}
+      </button>
+      <span v-if="migrateError" class="status err">✗ {{ migrateError }}</span>
+    </div>
+
     <!-- Raw config (left) and table side by side — two views of the
          same text. The table keeps a relatively narrow width; the
          editor takes the remainder. The columns wrap into a vertical
@@ -393,8 +462,43 @@ onUnmounted(() => {
       </div>
 
       <div class="table-col">
+        <div class="table-toolbar">
+          <button
+            class="btn btn-sync"
+            :disabled="busySelected || dirty || selectedSyncable.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : selectedSyncable.length === 0
+                  ? 'Check some sources first'
+                  : ''
+            "
+            @click="syncSelected"
+          >
+            {{
+              busySelected
+                ? "Queuing…"
+                : `Sync selected (${selectedSyncable.length})`
+            }}
+          </button>
+          <button
+            class="btn btn-sync"
+            :disabled="busyGlobal || dirty || serverSources.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : serverSources.length === 0
+                  ? 'Add a source first'
+                  : ''
+            "
+            @click="syncEverything"
+          >
+            {{ busyGlobal ? "Queuing…" : "Sync all" }}
+          </button>
+        </div>
         <table class="sync-table sources-table" :class="{ stale: parseError }">
           <colgroup>
+            <col class="col-check" />
             <col class="col-name" />
             <col class="col-type" />
             <col class="col-flag" />
@@ -403,34 +507,36 @@ onUnmounted(() => {
           </colgroup>
           <thead>
             <tr>
+              <th class="th-check"></th>
               <th>Name</th>
               <th>Type</th>
               <th>Enabled</th>
               <th>Managed</th>
-              <th class="th-actions">
-                <button
-                  class="btn btn-sync"
-                  :disabled="busyGlobal || dirty || serverSources.length === 0"
-                  :title="
-                    dirty
-                      ? 'Save your changes first — sync runs against the saved file'
-                      : serverSources.length === 0
-                        ? 'Add a source first'
-                        : ''
-                  "
-                  @click="syncEverything"
-                >
-                  {{ busyGlobal ? "Queuing…" : "Sync all" }}
-                </button>
-              </th>
+              <th class="th-actions"></th>
             </tr>
           </thead>
           <tbody>
             <tr
               v-for="(r, idx) in rows"
               :key="idx"
-              :class="{ 'row-disabled': !r.enabled }"
+              :class="{
+                'row-disabled': !r.enabled,
+                'row-selected': selected.has(r.name),
+              }"
             >
+              <td class="check-cell">
+                <input
+                  type="checkbox"
+                  :checked="selected.has(r.name)"
+                  :disabled="!serverByName.get(r.name)"
+                  :title="
+                    !serverByName.get(r.name)
+                      ? 'Not in the saved config yet'
+                      : ''
+                  "
+                  @change="toggleSelected(r.name)"
+                />
+              </td>
               <td>{{ r.name || "(unnamed)" }}</td>
               <td>{{ r.type }}</td>
               <td>{{ r.enabled ? "yes" : "no" }}</td>
@@ -447,24 +553,10 @@ onUnmounted(() => {
                 <button class="btn" title="Select this source in the config file" @click="selectSource(idx)">
                   Locate config
                 </button>
-                <button
-                  class="btn btn-sync"
-                  :disabled="busySource[r.name] || dirty || !serverByName.get(r.name)"
-                  :title="
-                    dirty
-                      ? 'Save your changes first — sync runs against the saved file'
-                      : !serverByName.get(r.name)
-                        ? 'Not in the saved config yet'
-                        : ''
-                  "
-                  @click="syncOne(r.name)"
-                >
-                  {{ busySource[r.name] ? "Queuing…" : "Sync" }}
-                </button>
               </td>
             </tr>
             <tr v-if="rows.length === 0 && !loading">
-              <td colspan="5" class="empty">
+              <td colspan="6" class="empty">
                 no sources configured yet — add one with the buttons below.
               </td>
             </tr>
@@ -490,7 +582,17 @@ onUnmounted(() => {
     </div>
 
     <h3>Recent jobs</h3>
-    <table class="sync-table">
+    <table class="sync-table jobs-table">
+      <colgroup>
+        <col style="width: 6rem" />
+        <col style="width: 5rem" />
+        <col style="width: 8rem" />
+        <col style="width: 6.5rem" />
+        <col />
+        <col style="width: 9.5rem" />
+        <col style="width: 9.5rem" />
+        <col style="width: 9rem" />
+      </colgroup>
       <thead>
         <tr>
           <th>ID</th>
@@ -555,6 +657,11 @@ onUnmounted(() => {
         </tr>
       </tbody>
     </table>
+
+    <template v-if="jobs.some(isActive)">
+      <h3>Pipeline</h3>
+      <DagPanel />
+    </template>
   </section>
 </template>
 
@@ -593,14 +700,14 @@ h3 {
   align-items: flex-start;
 }
 .table-col {
-  flex: 0 1 34rem;
+  flex: 0 1 32rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 .editor-col {
-  flex: 1 1 24rem;
+  flex: 1 1 30rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -618,12 +725,26 @@ h3 {
 }
 .sync-table {
   width: 100%;
-  border-collapse: collapse;
+  /* `separate` (with zero spacing) instead of `collapse`: collapsed
+     borders + border-radius/overflow render the per-cell bottom
+     borders as broken segments in WebKit once cell content animates
+     (the progress bar). Separate borders always join into one line. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.9rem;
   background: var(--fw-card-bg);
   border: 1px solid var(--fw-border);
   border-radius: 4px;
   overflow: hidden;
+}
+/* Fixed layout (widths from the colgroup): the live progress cell
+   re-renders constantly and must not reflow the other columns. */
+.jobs-table {
+  table-layout: fixed;
+}
+.jobs-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Fixed layout: column widths don't reflow with content. */
 .sources-table {
@@ -632,17 +753,49 @@ h3 {
 .sources-table.stale tbody {
   opacity: 0.6;
 }
+.table-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  gap: 0.5rem;
+}
+.sources-table .col-check {
+  width: 2rem;
+}
+.sources-table .check-cell {
+  text-align: center;
+}
+.sources-table .check-cell input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--fw-accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.sources-table tr.row-selected td {
+  background: var(--fw-hover);
+}
+.migrate-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.8rem;
+  border: 1px solid var(--fw-accent);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
 .sources-table .col-name {
-  width: 18%;
+  width: 20%;
 }
 .sources-table .col-type {
-  width: 17%;
+  width: 21%;
 }
 .sources-table .col-flag {
-  width: 14%;
+  width: 15%;
 }
 .sources-table .col-actions {
-  width: 37%;
+  width: 29%;
 }
 /* "Sync all" lives in the header row, right-aligned so it lines
    up with the rows' Sync buttons. Undo the th's uppercase styling for
@@ -656,7 +809,7 @@ h3 {
   font-weight: 400;
 }
 .src-actions {
-  justify-content: flex-end;
+  text-align: right;
 }
 /* A little footprint stability for the "Sync" ↔ "Queuing…" label swap,
    without making the buttons look padded out. */
@@ -735,8 +888,12 @@ h3 {
   min-width: 14rem;
 }
 .actions-cell {
-  display: flex;
-  gap: 0.4rem;
+  /* NOT display:flex — a td that leaves table-cell layout can't join
+     the row's border line (the "broken divider"). */
+  white-space: nowrap;
+}
+.actions-cell .btn + .btn {
+  margin-left: 0.4rem;
 }
 .row-failed .state-pill[data-state="failed"] {
   font-weight: 600;

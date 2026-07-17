@@ -1,8 +1,8 @@
 //! Program-A `DataProcessor`s for the beeper source. Beeper contributes an
 //! **extract** processor ([`BeeperExtract`] — reads Beeper Texts' on-disk
 //! SQLite stores) when `sync:` is present, plus an always-present
-//! **translate** processor ([`BeeperRender`]). [`plan`] builds the
-//! [`SourcePlan`] the orchestrator drives.
+//! **translate** processor ([`BeeperRender`]). [`plan_download`] /
+//! [`plan_render`] build the per-wave processors the orchestrator drives.
 //!
 //! Storage ownership lives here, not in the orchestrator: [`BeeperExtract`]
 //! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
@@ -15,41 +15,45 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_beeper_config::{BeeperConfig, BeeperSync};
 
 use crate::extract;
 
-/// Build beeper's [`SourcePlan`]: always a translate processor (which bakes in
-/// the `period` parsed from config), plus an extract processor when `sync:` is
-/// present (managed). The provider owns the period decision; the orchestrator
-/// passes only the envelope-level [`PlanContext`].
-pub fn plan(ctx: PlanContext, config: BeeperConfig) -> Result<SourcePlan> {
+/// Download wave: present iff `sync:` (managed).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: BeeperConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-
-    // The render period is parsed from config once, at plan time, and baked
-    // into the translate processor. Defaults to month when absent.
-    let period = Period::from_config(config.sync.as_ref().and_then(|s| s.period.as_deref()))
-        .context("parse beeper period")?;
-
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(BeeperRender {
-        id: format!("beeper/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-        period,
-    }));
-
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(BeeperExtract {
+        procs.push(Box::new(BeeperExtract {
             id: format!("beeper/{name}/extract"),
             raw_path,
             sync,
         }));
     }
+    Ok(procs)
+}
 
-    Ok(plan)
+/// Render wave. NOTE: reads `sync.period` — the render period is parsed
+/// from config once, at plan time, and baked into the translate
+/// processor (defaults to month when absent). `period` is a render
+/// knob that historically lives in the `sync:` block; it moves out in
+/// the config-format split.
+pub fn plan_render(ctx: PlanContext, config: BeeperConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    let period = Period::from_config(config.sync.as_ref().and_then(|s| s.period.as_deref()))
+        .context("parse beeper period")?;
+    Ok(vec![Box::new(BeeperRender {
+        id: format!("beeper/{name}/translate"),
+        raw_path,
+        name,
+        period,
+    })])
 }
 
 /// Beeper's extract processor. Owns its raw doltlite store end to end.

@@ -55,10 +55,12 @@ def _argv():
 
     [0]: test script (set by py_test)
     [1]: run_sync_pipeline.py path
-    [2]: frankweiler_sync_bin path
-    [3]: signal_make_fixture path
-    [4]: --now stamp
-    [5..]: fixture paths
+    [2]: datalib_dag path
+    [3]: datalib_step path
+    [4]: signal_make_fixture path
+    [5]: whatsapp_make_fixture path
+    [6]: --now stamp
+    [7..]: fixture paths
     """
     return sys.argv[1:]
 
@@ -68,10 +70,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         argv = _argv()
         cls.driver_script = argv[0]
-        cls.sync_bin = argv[1]
-        cls.signal_bin = argv[2]
-        cls.now = argv[3]
-        cls.fixture_paths = argv[4:]
+        cls.dag_bin = argv[1]
+        cls.step_bin = argv[2]
+        cls.signal_bin = argv[3]
+        cls.whatsapp_bin = argv[4]
+        cls.now = argv[5]
+        cls.fixture_paths = argv[6:]
 
         cls.workspace = Path(os.environ["TEST_TMPDIR"]) / "sync_workspace"
         cls.workspace.mkdir(parents=True, exist_ok=True)
@@ -91,8 +95,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         argv = [
             sys.executable,
             self.driver_script,
-            self.sync_bin,
+            self.dag_bin,
+            self.step_bin,
             self.signal_bin,
+            self.whatsapp_bin,
             self.now,
             str(self.workspace),
             *self.fixture_paths,

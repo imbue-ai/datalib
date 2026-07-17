@@ -1,0 +1,83 @@
+# New-format DAG config (run with `datalib-dag`), equivalent to the old
+# stanza config:
+#
+#   sources:
+#     - name: slack
+#       source:
+#         type: slack_api
+#         sync: {media: true, channels: ["chat-qi"], since: "2026-06-15"}
+#     - name: claude
+#       source:
+#         type: claude_api
+#         sync: {conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]}
+#
+# The user declares steps directly; edges are derived from the artifact
+# paths (never written by hand). `step:` entries invoke the sibling
+# `datalib-step` binary. Download and render are per-provider step
+# types written `<source_type>.<phase>` — the step type names the
+# provider, so params carry no `type:` tag; `params.source` is the
+# provider's own config subtree, shared between a source's two steps
+# via a YAML anchor. The `index` and `qmd` steps are
+# source-independent fan-ins over every rendered_md tree.
+#
+#   bazelisk build //frankweiler/backend/dag:datalib_dag \
+#                  //frankweiler/backend/datalib_step:datalib_step
+#   bazel-bin/frankweiler/backend/dag/datalib_dag configs/dag_example.yaml \
+#       --step-bin bazel-bin/frankweiler/backend/datalib_step/datalib_step
+#
+# data_root defaults to the directory this file lives in; set it
+# explicitly for a real run.
+data_root: ~/tmp/dr-dag
+
+steps:
+  # ── slack ──────────────────────────────────────────────────────────
+  - id: slack.download
+    step: slack_api.download
+    outputs: [slack/raw]
+    params: &slack
+      name: slack
+      source:
+        sync:
+          media: true
+          channels: ["chat-qi"]
+          since: "2026-06-15"
+
+  - id: slack.render
+    step: slack_api.render
+    inputs: [slack/raw]
+    outputs: [slack/rendered_md]
+    params: *slack
+
+  # ── claude ─────────────────────────────────────────────────────────
+  # Prerequisite (one-time): register claude.ai with latchkey and
+  # supply your sessionKey cookie (DevTools → Application → Cookies):
+  #   npx -y latchkey services register claude-ai --base-api-url="https://claude.ai/"
+  #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
+  # See docs/user/getting_your_data.md for the full walkthrough.
+  - id: claude.download
+    step: claude_api.download
+    outputs: [claude/raw]
+    params: &claude
+      name: claude
+      source:
+        sync:
+          conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
+
+  - id: claude.render
+    step: claude_api.render
+    inputs: [claude/raw]
+    outputs: [claude/rendered_md]
+    params: *claude
+
+  # ── shared fan-in steps ────────────────────────────────────────────
+  # `**/rendered_md` matches every render step's output; adding a new
+  # source above automatically feeds these.
+  - id: grid_index
+    step: grid_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/backend_index]
+
+  - id: qmd_index
+    step: qmd_index
+    inputs: ["**/rendered_md"]
+    outputs: [system/qmd]

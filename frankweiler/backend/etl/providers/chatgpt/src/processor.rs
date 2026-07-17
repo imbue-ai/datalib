@@ -7,28 +7,38 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 
-use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx, SourcePlan};
+use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
 
 use crate::extract;
 
-pub fn plan(ctx: PlanContext, config: ChatgptConfig) -> Result<SourcePlan> {
+/// Download wave: present iff `sync:` (managed).
+pub fn plan_download(
+    ctx: PlanContext,
+    config: ChatgptConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
-    let mut plan = SourcePlan::new();
-    plan.translate.push(Box::new(ChatgptRender {
-        id: format!("chatgpt/{name}/translate"),
-        raw_path: raw_path.clone(),
-        name: name.clone(),
-    }));
+    let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        plan.extract.push(Box::new(ChatgptExtract {
+        procs.push(Box::new(ChatgptExtract {
             id: format!("chatgpt/{name}/extract"),
             raw_path,
             sync,
         }));
     }
-    Ok(plan)
+    Ok(procs)
+}
+
+/// Render wave: always present (renders whatever is in the raw store).
+pub fn plan_render(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+    let name = ctx.name;
+    let raw_path = config.common.raw_path().to_path_buf();
+    Ok(vec![Box::new(ChatgptRender {
+        id: format!("chatgpt/{name}/translate"),
+        raw_path,
+        name,
+    })])
 }
 
 struct ChatgptExtract {
