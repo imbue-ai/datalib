@@ -13,7 +13,7 @@ rust_binary(
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
+    visibility = ["//visibility:public"],
     deps = [
         "//frankweiler/backend/core:frankweiler_core",
         "//frankweiler/backend/dag:frankweiler_dag",

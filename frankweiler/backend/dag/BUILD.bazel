@@ -15,7 +15,7 @@ rust_library(
     ),
     crate_name = "frankweiler_dag",
     edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
+    visibility = ["//visibility:public"],
     deps = [
         "@frankweiler_crates//:anyhow",
         "@frankweiler_crates//:blake3",
@@ -47,7 +47,7 @@ rust_binary(
     srcs = ["src/bin/datalib_dag.rs"],
     crate_name = "datalib_dag",
     edition = "2021",
-    visibility = ["//frankweiler:__subpackages__"],
+    visibility = ["//visibility:public"],
     deps = [
         ":frankweiler_dag",
         "//frankweiler/backend/time:frankweiler_time",
