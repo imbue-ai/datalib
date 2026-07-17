@@ -694,7 +694,7 @@ h3 {
   align-items: flex-start;
 }
 .table-col {
-  flex: 0 1 28rem;
+  flex: 0 1 32rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -749,7 +749,7 @@ h3 {
 }
 .table-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 0.5rem;
 }
 .sources-table .col-check {
@@ -780,16 +780,16 @@ h3 {
   font-size: 0.85rem;
 }
 .sources-table .col-name {
-  width: 18%;
+  width: 20%;
 }
 .sources-table .col-type {
-  width: 17%;
+  width: 21%;
 }
 .sources-table .col-flag {
-  width: 14%;
+  width: 15%;
 }
 .sources-table .col-actions {
-  width: 37%;
+  width: 29%;
 }
 /* "Sync all" lives in the header row, right-aligned so it lines
    up with the rows' Sync buttons. Undo the th's uppercase styling for
