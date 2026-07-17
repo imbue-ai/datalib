@@ -9,11 +9,11 @@
 // Plain-DOM (no Vue), same pattern as aliasView: paint once from a
 // fetch, nothing reactive to watch.
 import type { CardRender } from "../types";
-import { titled } from "../title";
 import { fetchDocs } from "@/api";
 
 export function documentPickerView(): CardRender {
-  return titled("Open document", (root, ctx) => {
+  return (root, ctx) => {
+    ctx.setTitle("Open document");
     const style = document.createElement("style");
     style.textContent = `
       .dp { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--fw-fg, inherit); }
@@ -86,5 +86,5 @@ export function documentPickerView(): CardRender {
       });
 
     return () => abort.abort();
-  });
+  };
 }

@@ -84,6 +84,14 @@ const props = defineProps<{
 const initialState = new URLSearchParams(props.ctx.initialState);
 
 const query = ref(initialState.get("q") ?? props.q ?? "");
+
+// The card's chrome title tracks the live query, not just the factory
+// argument — searching from inside the card retitles it.
+watch(
+  query,
+  (q) => props.ctx.setTitle(q ? `Search: ${q}` : "Search"),
+  { immediate: true },
+);
 const rows = ref<SearchRow[]>([]);
 const total = ref(0);
 const loading = ref(false);

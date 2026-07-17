@@ -49,9 +49,9 @@ type TreeNode = {
   // position. Descendants inherit ancestor offsets (see rects).
   dx: number;
   dy: number;
-  // Human-readable title the compiled card declared (ShadowCard's
-  // `title` event), shown instead of the source box when dev mode is
-  // off; null until compiled or when the card declares none.
+  // Human-readable title the card set via ctx.setTitle, shown instead
+  // of the source box when dev mode is off; null until compiled or
+  // when the card never set one.
   title: string | null;
 };
 
@@ -411,6 +411,9 @@ function ctxFor(node: TreeNode): CardCtx {
       get initialState() {
         return node.state;
       },
+      setTitle: (title) => {
+        node.title = title;
+      },
       bus,
       host,
     };
@@ -558,7 +561,6 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
             class="tree-node-card"
             :source="node.source"
             :ctx="ctxFor(node)"
-            @title="(t) => (node.title = t)"
           />
           <div
             v-for="corner in CORNERS"

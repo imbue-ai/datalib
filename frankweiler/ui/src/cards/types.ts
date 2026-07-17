@@ -66,17 +66,23 @@ export type CardCtx = {
   // (or "" when absent). Opaque to the host; same string the card
   // last passed to host.setState.
   initialState: string;
+  // Replace the card's human-readable title, shown in the chrome bar
+  // instead of the source when dev mode is off (see devMode.ts). This
+  // is the ONLY title channel: a card typically calls it first thing
+  // in its render (computing the title from its arguments — e.g.
+  // `gridView({ q: "kraken" })` titles itself "Search: kraken") and
+  // again whenever a better title emerges — the grid retitles as the
+  // user searches, the document view switches from "Document" to the
+  // document's actual name once fetched. The host resets the title on
+  // every (re)compile, so a card that never calls it gets the
+  // source-derived fallback (title.ts displayTitle). null also means
+  // "back to the fallback".
+  setTitle(title: string | null): void;
   bus: Bus;
   host: HostCommands;
 };
 
-// The optional `cardTitle` is the card's human-readable name, shown in
-// the chrome bar instead of the source when dev mode is off (see
-// devMode.ts). Factories attach it via `titled()` (cards/title.ts);
-// cards without one fall back to a name derived from the source.
-export type CardRender = ((root: ShadowRoot, ctx: CardCtx) => Teardown) & {
-  cardTitle?: string;
-};
+export type CardRender = (root: ShadowRoot, ctx: CardCtx) => Teardown;
 
 // Bus topic: the destination of the edge currently under the cursor.
 // Published by the document view when the pointer enters an

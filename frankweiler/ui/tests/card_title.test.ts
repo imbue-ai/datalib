@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayTitle, titled } from "../src/cards/title";
-import type { CardRender } from "../src/cards/types";
-
-describe("titled", () => {
-  it("attaches the title to the render function", () => {
-    const render: CardRender = () => () => {};
-    expect(titled("Search", render)).toBe(render);
-    expect(render.cardTitle).toBe("Search");
-  });
-});
+import { displayTitle } from "../src/cards/title";
 
 describe("displayTitle", () => {
   it("prefers the declared title", () => {

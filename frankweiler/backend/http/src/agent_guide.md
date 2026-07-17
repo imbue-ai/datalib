@@ -73,6 +73,10 @@ you overwrite the alias, that card re-renders automatically.
   app's `--fw-*` theme CSS custom properties *do* inherit across the
   boundary; use them to pick up theming.
 - **Return a teardown.** Remove listeners/intervals you added globally.
+- **Set a title.** Call `ctx.setTitle("…")` first thing in your render
+  (and again if a better title emerges later, e.g. after a fetch) —
+  it's what the card's chrome bar shows outside dev mode. Skipping it
+  falls back to the alias name.
 - **Other aliases are in scope** by name: if your factory references
   another alias `bar`, that's a live dependency and the card re-renders
   when `bar` changes too. The builtins `gridView` and `documentView` are

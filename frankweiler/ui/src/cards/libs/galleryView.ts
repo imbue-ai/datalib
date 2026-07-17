@@ -12,7 +12,6 @@
 // parameter-less picker instead (documentView → documentPickerView).
 import { watch } from "vue";
 import type { CardRender } from "../types";
-import { titled } from "../title";
 import { aliasDescriptions, ensureManifest } from "../aliasRegistry";
 
 type GalleryEntry = {
@@ -52,7 +51,8 @@ const BUILTIN_GALLERY: GalleryEntry[] = [
 ];
 
 export function galleryView(): CardRender {
-  return titled("New card", (root, ctx) => {
+  return (root, ctx) => {
+    ctx.setTitle("New card");
     const style = document.createElement("style");
     style.textContent = `
       .gv { font: 13px/1.5 system-ui, -apple-system, sans-serif; color: var(--fw-fg, inherit); }
@@ -104,5 +104,5 @@ export function galleryView(): CardRender {
     void ensureManifest();
     const stop = watch(aliasDescriptions, paint, { immediate: true });
     return () => stop();
-  });
+  };
 }

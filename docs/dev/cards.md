@@ -30,9 +30,7 @@ documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
 the expression in `new Function(...viewLibNames, "return (<source>)")`
 and calls it with the view factories as arguments — so the only names
 in scope are the factories in `ViewLibs`
-(`frankweiler/ui/src/cards/libs/index.ts`), the helpers in
-`scopeHelpers` (today just `titled`, see "Titles and dev mode"), plus
-JS globals. The
+(`frankweiler/ui/src/cards/libs/index.ts`) plus JS globals. The
 expression must evaluate to a `CardRender`; anything else (or a parse
 error) renders as an error message in place of the card.
 
@@ -106,22 +104,26 @@ document (`/api/docs`) and replaces itself with
 `documentView("<uuid>")` on pick. Cards opened by other cards
 (`host.openCards`) work the same in both modes.
 
-A card declares its title by wrapping its render in `titled()`
-(`frankweiler/ui/src/cards/title.ts`):
+A card sets its title with `ctx.setTitle`, usually first thing in its
+render — and again whenever a better title emerges, so titles are
+live, not fixed at factory-call time:
 
 ```ts
-export function gridView(opts?: { q?: string }): CardRender {
-  const q = opts?.q ?? "";
-  return titled(q ? `Search: ${q}` : "Search", vueCard(GridCard, { q }));
+export function galleryView(): CardRender {
+  return (root, ctx) => {
+    ctx.setTitle("New card");
+    // …
+  };
 }
 ```
 
-`titled` just sets the render's optional `cardTitle` property, so it
-works the same for builtin factories and user-defined aliases — the
-title is computed at factory-call time and can reflect the arguments.
-After compiling a source, `ShadowCard` reports the declared title up to
-the layout, which shows it in the chrome. A card without one gets a
-best-effort fallback (`displayTitle`): the bare factory/alias name for
+The grid card retitles itself (`Search: <q>`) as the user searches;
+the document card starts as "Document" and switches to the document's
+actual name once its fetch lands. This works the same for builtin
+factories and user-defined aliases. The host resets the title on every
+(re)compile, so a card that never calls `setTitle` — and the blank /
+error states — gets a best-effort fallback (`displayTitle`,
+`frankweiler/ui/src/cards/title.ts`): the bare factory/alias name for
 `name(...)`-shaped source, `new card` for a blank card, or a generic
 label for anything else.
 
@@ -131,6 +133,7 @@ label for anything else.
 type CardCtx = {
   cardId: string;        // host-assigned, stable for the card's lifetime
   initialState: string;  // persisted state from the host ("" when absent)
+  setTitle(title: string | null): void;  // chrome-bar title (see above)
   bus: Bus;              // ambient cross-card events
   host: HostCommands;    // structural + persistence commands
 };

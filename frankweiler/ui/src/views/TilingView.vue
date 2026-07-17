@@ -101,9 +101,9 @@ watch(root, (tree) => {
   }
 });
 
-// Declared human-readable titles by tile id, reported by each pooled
-// ShadowCard after compile (see cards/title.ts); null when the card
-// declares none. Shown via titleFor when dev mode is off.
+// Human-readable titles by tile id, set by each card via ctx.setTitle;
+// null when the card never set one. Shown via titleFor when dev mode
+// is off.
 const titles = reactive(new Map<string, string | null>());
 function titleFor(leaf: TileLeaf): string {
   return displayTitle(leaf.source, titles.get(leaf.id));
@@ -166,6 +166,9 @@ function ctxFor(leaf: TileLeaf): CardCtx {
       cardId,
       get initialState() {
         return findTile(root.value, cardId)?.state ?? "";
+      },
+      setTitle: (title) => {
+        titles.set(cardId, title);
       },
       bus,
       host,
@@ -378,7 +381,6 @@ provide(TILING_API, api);
           class="tiling-mounted-card"
           :source="leaf.source"
           :ctx="ctxFor(leaf)"
-          @title="(t) => titles.set(leaf.id, t)"
         />
       </Teleport>
     </div>

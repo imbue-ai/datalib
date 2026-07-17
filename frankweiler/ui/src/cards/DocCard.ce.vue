@@ -304,6 +304,14 @@ watch(
   },
   { immediate: true },
 );
+
+// Chrome title: generic while nothing is loaded (the uuid means
+// nothing to a human), the document's own name once the fetch lands.
+watch(
+  () => chat.value?.name,
+  (name) => props.ctx.setTitle(name || "Document"),
+  { immediate: true },
+);
 </script>
 
 <template>

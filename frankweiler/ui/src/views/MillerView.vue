@@ -46,9 +46,9 @@ type Slot = {
   // drags the column's right edge. Persisted in the URL as a ratio of
   // DEFAULT_WIDTH (see specsOf / slotsFromSpecs).
   width: number | null;
-  // Human-readable title the compiled card declared (ShadowCard's
-  // `title` event), shown instead of the source box when dev mode is
-  // off; null until compiled or when the card declares none.
+  // Human-readable title the card set via ctx.setTitle, shown instead
+  // of the source box when dev mode is off; null until compiled or
+  // when the card never set one.
   title: string | null;
 };
 
@@ -204,6 +204,9 @@ function ctxFor(slot: Slot): CardCtx {
       get initialState() {
         return slot.state;
       },
+      setTitle: (title) => {
+        slot.title = title;
+      },
       bus,
       host,
     };
@@ -299,7 +302,6 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
           class="miller-col-card"
           :source="slot.source"
           :ctx="ctxFor(slot)"
-          @title="(t) => (slot.title = t)"
         />
         <div
           class="miller-col-resize"
