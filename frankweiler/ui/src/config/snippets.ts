@@ -26,8 +26,13 @@ function stepPair(
   preamble = "",
 ): string {
   const divider = `  # \u2500\u2500 ${name} ${"\u2500".repeat(Math.max(4, 66 - name.length))}`;
+  // Instruction preambles get a closing divider so the guidance reads
+  // as its own block, visually separate from the steps below.
+  const preambleBlock = preamble
+    ? `${preamble}  # ${"\u2500".repeat(70)}\n`
+    : "";
   return `${divider}
-${preamble}  - id: ${name}.download
+${preambleBlock}  - id: ${name}.download
     outputs: [${name}/raw]
     step: ${type}.download
     params: &${name}
