@@ -1290,6 +1290,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "frankweiler-dag"
+version = "0.19.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "frankweiler-time",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "walkdir",
+]
+
+[[package]]
 name = "frankweiler-etl"
 version = "0.19.0"
 dependencies = [

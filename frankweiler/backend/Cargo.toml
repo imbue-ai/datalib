@@ -5,6 +5,7 @@ members = [
     "app_schema",
     "index_lib",
     "core",
+    "dag",
     "http",
     "obs",
     "time",
