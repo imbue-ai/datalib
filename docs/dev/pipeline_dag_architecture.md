@@ -242,10 +242,93 @@ So inside data\_root (or wherever), “artifacts can
 
 Steps 1–2 deliver a real, generic DAG over the existing stages without touching atomicity. Step 3 is the hard, invasive one. Steps 5–6 are independent and can be reordered.
 
+## Implementation decisions (2026-07)
+
+Decisions made while building the prototype into the real thing, in
+rough dependency order:
+
+* **Wildcard inputs match declared output *roots*, not trees.** True
+  tree-intersection makes `**/x` overlap every output (a match could
+  always exist deeper inside), i.e. every wildcard input would depend on
+  every step. A wildcard that matches nothing resolves to the empty set
+  (a starter config declares the fan-in steps before any source
+  exists); an input with no producer must be a concrete path (a
+  user-staged "external" artifact, content-hashed by the scheduler).
+* **Per-provider step types.** Download *and* render are provider-
+  specific (each render reads its own raw-store schema), so the config
+  writes them as `<source_type>.<phase>` (`slack_api.download`); the
+  genuinely shared step types are `index` and `qmd`. Params carry
+  `{name, source}` with no `type:` tag — the step type names the
+  provider, and `source:` deserializes into that provider's own config
+  struct. Provider crates expose per-wave entry points
+  (`plan_download` / `plan_render`); a later per-phase split of the
+  config *structs* is where render-relevant knobs still living in
+  `sync:` (beeper/signal `period`, perseus `alignment_pairs`) move out.
+* **Fringe steps always run.** A download step's real input is a remote
+  service the scheduler can't version, so "run iff inputs changed"
+  degenerates to "always invoke"; internal incrementality makes that
+  cheap and the step reports whether outputs actually moved.
+* **Change detection is three-tier.** A step-reported version (row-set
+  hash, dolt commit) is trusted verbatim; a step reporting "unchanged"
+  carries the prior version forward; otherwise the scheduler
+  content-hashes the output tree (blake3, content not mtime). The
+  fallback is the safety net — real steps should report logical
+  versions. The index step's version is its dolt commit hash.
+* **Scheduler state** lives at `system/state/dag_state.json`
+  (per-step input/output versions, saved after every terminal step).
+  Input versions are recorded only on *success*, so a failed step stays
+  dirty automatically — no explicit poisoned flag persists. A failed
+  incremental step's reported partial outputs are still recorded.
+* **Load is un-fused by force, not choice.** The single-writer rule
+  (no two steps' output trees may overlap) makes per-source writes into
+  the shared index impossible, so `index` is one fan-in step driving
+  `load_all` over every `.grid_rows.json` sidecar tree. Render uses its
+  own sidecar tree as the prior-fingerprint store — the artifact is the
+  resume state, no index-DB peeking.
+* **Everything goes into the NDJSON stream** (stderr of the runner):
+  `run_plan` (all step ids, topo order) opens the run, then
+  `step_start` / `progress_*` / `log` / `hint` / `step_finish`, closed
+  by one `run_summary` — the machine-readable run record replacing
+  sync's summary JSON file (callers tee the stream to persist it).
+  Subprocess steps speak the same schema on stdout with a final
+  `outcome` line; unparseable stdout lines and all child stderr are
+  wrapped as `log` events (tracing-JSON lines keep their own
+  severity). Auth failures emit the per-provider latchkey walkthrough
+  as a structured `hint` event.
+* **Failure taxonomy → policy split.** Steps only *classify*
+  (`transient` / `rate_limited` / `auth` / `data` / `cancelled`); the
+  scheduler maps kinds to retry (transient/rate-limited retry with
+  backoff, the rest fail fast) and blocks the subtree below a failure
+  while siblings continue.
+* **Cancellation is graceful end to end.** The runner forwards
+  SIGINT/SIGTERM to running steps as SIGINT; `datalib-step` fires the
+  provider checkpoint hooks (partial state gets a proper dolt commit)
+  and exits 130 with a `cancelled` outcome; `kill_on_drop` plus a
+  child-pid registry guarantee no orphaned downloads. The http worker
+  SIGTERMs on cancel and only SIGKILLs after a grace period.
+* **Subset sync** (`--sync <fringe-id>…`): selected download steps run,
+  the rest are treated as up to date, downstream follows normal change
+  propagation. The UI's per-source / multi-select "Sync now" maps onto
+  it (`<name>.download` id convention), the whole selection as one run.
+* **Run-wide `--now`** is threaded by the runner to every step (sampled
+  once when omitted) so all stamped outputs agree; reset controls
+  (`--reset-and-redownload`, `--refetch-blobs`) pass through to
+  download steps only.
+* **UI progress is the task board, not stages.** The worker consumes
+  the event stream into per-task states (todo/running/done/skipped/
+  failed/blocked) rendered as one cell per task; `GET /api/dag` serves
+  the derived graph via the runner's own load → specs → graph chain so
+  the visualization can't drift from execution.
+* **Legacy configs migrate, not break**: old `sources:` files are
+  detected and converted server-side into step pairs for review.
+* **The data-root layout is unchanged** (`<name>/raw`,
+  `<name>/rendered_md`, `system/…`), so roots move freely between the
+  old and new binaries; the only addition is `dag_state.json`.
+
 ## Unresolved questions
 
-* Edge derivation granularity. Deriving edges from path/glob overlap is simple but coarse — a node that writes rendered\_md/\<source\>/\*\* and one that reads rendered\_md/\*\* are correctly linked, but per-document parallelism within that edge is lost. Do we want sub-artifact edges, or is whole-tree granularity enough for a single-laptop workload?  
+* Edge derivation granularity. Deriving edges from path/glob overlap is simple but coarse — a node that writes rendered\_md/\<source\>/\*\* and one that reads rendered\_md/\*\* are correctly linked, but per-document parallelism within that edge is lost. Do we want sub-artifact edges, or is whole-tree granularity enough for a single-laptop workload? *(Resolved: whole-tree edges suffice — per-document incrementality stays inside the step, via fingerprints; that's the mechanics-vs-contract split doing its job.)*  
 * Where the scheduler state lives. (node\_id → output\_version, status) per run needs a home. A pipeline\_runs table alongside the existing sync\_runs is the obvious candidate; whether it lives in the index DB or a dedicated control DB is open.  
-* Cross-node content hashing for non-row outputs. row\_set\_hash covers GridRow outputs. A node whose output is, say, a blob tree or a derived index needs its own canonical content hash. Is there a single reusable hashing discipline, or is it per-output-type by necessity?  
+* Cross-node content hashing for non-row outputs. row\_set\_hash covers GridRow outputs. A node whose output is, say, a blob tree or a derived index needs its own canonical content hash. Is there a single reusable hashing discipline, or is it per-output-type by necessity? *(Resolved: per-output-type by necessity — steps report their own logical versions; a blake3 tree hash is the generic fallback.)*  
 * Dynamic graphs. This design assumes the node set is known before the run. A node that *discovers* downstream work (e.g. fan-out per conversation) currently lives inside one node. Do we ever need the scheduler itself to expand the graph mid-run?
 
