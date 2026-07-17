@@ -461,6 +461,40 @@ onUnmounted(() => {
       </div>
 
       <div class="table-col">
+        <div class="table-toolbar">
+          <button
+            class="btn btn-sync"
+            :disabled="busySelected || dirty || selectedSyncable.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : selectedSyncable.length === 0
+                  ? 'Check some sources first'
+                  : ''
+            "
+            @click="syncSelected"
+          >
+            {{
+              busySelected
+                ? "Queuing…"
+                : `Sync selected (${selectedSyncable.length})`
+            }}
+          </button>
+          <button
+            class="btn btn-sync"
+            :disabled="busyGlobal || dirty || serverSources.length === 0"
+            :title="
+              dirty
+                ? 'Save your changes first — sync runs against the saved file'
+                : serverSources.length === 0
+                  ? 'Add a source first'
+                  : ''
+            "
+            @click="syncEverything"
+          >
+            {{ busyGlobal ? "Queuing…" : "Sync all" }}
+          </button>
+        </div>
         <table class="sync-table sources-table" :class="{ stale: parseError }">
           <colgroup>
             <col class="col-check" />
@@ -477,42 +511,7 @@ onUnmounted(() => {
               <th>Type</th>
               <th>Enabled</th>
               <th>Managed</th>
-              <th class="th-actions">
-                <button
-                  class="btn btn-sync"
-                  :disabled="
-                    busySelected || dirty || selectedSyncable.length === 0
-                  "
-                  :title="
-                    dirty
-                      ? 'Save your changes first — sync runs against the saved file'
-                      : selectedSyncable.length === 0
-                        ? 'Check some sources first'
-                        : ''
-                  "
-                  @click="syncSelected"
-                >
-                  {{
-                    busySelected
-                      ? "Queuing…"
-                      : `Sync selected (${selectedSyncable.length})`
-                  }}
-                </button>
-                <button
-                  class="btn btn-sync"
-                  :disabled="busyGlobal || dirty || serverSources.length === 0"
-                  :title="
-                    dirty
-                      ? 'Save your changes first — sync runs against the saved file'
-                      : serverSources.length === 0
-                        ? 'Add a source first'
-                        : ''
-                  "
-                  @click="syncEverything"
-                >
-                  {{ busyGlobal ? "Queuing…" : "Sync all" }}
-                </button>
-              </th>
+              <th class="th-actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -682,14 +681,14 @@ h3 {
   align-items: flex-start;
 }
 .table-col {
-  flex: 0 1 34rem;
+  flex: 0 1 28rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
 }
 .editor-col {
-  flex: 1 1 24rem;
+  flex: 1 1 30rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -720,6 +719,11 @@ h3 {
 }
 .sources-table.stale tbody {
   opacity: 0.6;
+}
+.table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 .sources-table .col-check {
   width: 2rem;
