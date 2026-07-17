@@ -111,6 +111,22 @@ export type ChatResponse = {
   outgoing_edges: EdgeOut[];
 };
 
+// One rendered document (a `markdowns` row), as listed by /api/docs
+// for the document-picker card. `markdown_uuid` is the same UUID
+// `documentView(...)` / `/api/chat/{uuid}` take.
+export type DocEntry = {
+  markdown_uuid: string;
+  title: string | null;
+  kind: string;
+  provider: string;
+  created_at: string | null;
+};
+
+// Newest-first listing of rendered documents (capped server-side).
+export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
+  return getJson<DocEntry[]>("/api/docs", signal);
+}
+
 export type Health = {
   ok: boolean;
   version: string;
@@ -404,7 +420,11 @@ export async function fetchCard(hash: string, signal?: AbortSignal): Promise<str
 // `hash` is the sha256 of the source; the UI polls the manifest and
 // re-renders a card when an alias it depends on changes hash.
 
-export type LibEntry = { name: string; hash: string };
+// `description` is the component's gallery blurb: when present, the
+// component appears in the new-card gallery (galleryView), so it must
+// work when invoked with no arguments. Omitted for components that
+// don't advertise themselves there.
+export type LibEntry = { name: string; hash: string; description?: string };
 
 export async function listLib(signal?: AbortSignal): Promise<LibEntry[]> {
   const r = await fetch("/api/lib", { signal });
@@ -418,15 +438,20 @@ export async function fetchLib(name: string, signal?: AbortSignal): Promise<stri
   return await r.text();
 }
 
+// `description` semantics match the backend: undefined keeps whatever
+// description is stored, "" clears it.
 export async function putLib(
   name: string,
   source: string,
+  description?: string,
   signal?: AbortSignal,
 ): Promise<LibEntry> {
   const r = await fetch(`/api/lib/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ source }),
+    body: JSON.stringify(
+      description === undefined ? { source } : { source, description },
+    ),
     signal,
   });
   if (!r.ok) throw new Error(`PUT /api/lib/${name} → ${r.status}`);

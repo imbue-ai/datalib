@@ -148,10 +148,9 @@ const tabLabel = (child: TileNode) =>
           ✕
         </button>
       </div>
-      <!-- Blank cards are only usable through the source box, so the
-           add buttons (here and below) are dev-mode furniture. -->
+      <!-- The add buttons (here and below) create a blank card in dev
+           mode and a gallery card otherwise (see TilingView.addCard). -->
       <div
-        v-if="devMode"
         class="tiling-add tiling-add--tab"
         :class="{ 'is-drop': api.isAddDrop(node.id) }"
         :data-tiling-add="node.id"
@@ -179,7 +178,7 @@ const tabLabel = (child: TileNode) =>
         />
       </template>
       <div
-        v-if="node.dir !== 'tab' && devMode"
+        v-if="node.dir !== 'tab'"
         class="tiling-add"
         :class="[
           node.dir === 'h' ? 'tiling-add--h' : 'tiling-add--v',

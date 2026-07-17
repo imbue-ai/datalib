@@ -1,12 +1,13 @@
 <script setup lang="ts">
 // The common controls every card carries in its chrome bar, regardless
-// of layout: a link to open the card alone (↗), the agent hand-off
-// button (🤖), and the close button (✕). All three are pure functions
-// of the card's source and its CardCtx, so the layouts (miller, tiling,
+// of layout: the agent hand-off button (🤖, dev mode only), back /
+// forward over the card's own source history (← →), a link to open the
+// card alone (↗), and the close button (✕). All are pure functions of
+// the card's source and its CardCtx, so the layouts (miller, tiling,
 // tree) all render this same component instead of duplicating the
 // markup and CSS. Close goes through ctx.host.close() — the host
 // command built for exactly this — so nothing here knows the layout.
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { encodeColumns } from "@/router/columns";
 import { handOffToAgent } from "@/cards/handoff";
 import { devMode } from "@/devMode";
@@ -22,13 +23,52 @@ const props = defineProps<{
 const aloneHref = computed(() =>
   encodeColumns([{ code: props.source, state: props.ctx.initialState }]),
 );
+
+// ---- back / forward over the card's own source history ----
+//
+// A card can navigate in place — the gallery becomes a picker becomes
+// a document (host.setSource), the agent hand-off repoints it, a dev
+// edits the source box. Each is a step in this card's history, tracked
+// here as the classic stack + cursor: a new source truncates any
+// forward entries and appends; back/forward move the cursor and replay
+// the entry through host.setSource. Our own replay comes back as a
+// prop change that matches the cursor, which the watcher ignores.
+// History is per chrome-bar instance, so it lives exactly as long as
+// the card does in its layout (source only — state is cleared by
+// setSource, so navigating restores a fresh card, like a page reload).
+const history = ref<string[]>([props.source]);
+const cursor = ref(0);
+
+watch(
+  () => props.source,
+  (next) => {
+    if (next === history.value[cursor.value]) return;
+    history.value = [...history.value.slice(0, cursor.value + 1), next];
+    cursor.value = history.value.length - 1;
+  },
+);
+
+const canBack = computed(() => cursor.value > 0);
+const canForward = computed(() => cursor.value < history.value.length - 1);
+
+function goBack() {
+  if (!canBack.value) return;
+  cursor.value--;
+  props.ctx.host.setSource(history.value[cursor.value]);
+}
+
+function goForward() {
+  if (!canForward.value) return;
+  cursor.value++;
+  props.ctx.host.setSource(history.value[cursor.value]);
+}
 </script>
 
 <template>
   <!-- The agent hand-off rewrites the card's source — a dev-mode
        affordance, hidden alongside the source box. First of the
-       controls so its coming and going doesn't move ↗/✕, which stay
-       pinned to the bar's right edge. -->
+       controls so its coming and going doesn't move the rest, which
+       stay pinned to the bar's right edge. -->
   <button
     v-if="devMode"
     class="card-control card-control--agent"
@@ -36,6 +76,22 @@ const aloneHref = computed(() =>
     @click="handOffToAgent(ctx.host)"
   >
     🤖
+  </button>
+  <button
+    class="card-control card-control--back"
+    :disabled="!canBack"
+    title="back"
+    @click="goBack"
+  >
+    ←
+  </button>
+  <button
+    class="card-control card-control--forward"
+    :disabled="!canForward"
+    title="forward"
+    @click="goForward"
+  >
+    →
   </button>
   <a
     v-if="source.trim() !== ''"
@@ -73,5 +129,19 @@ const aloneHref = computed(() =>
 }
 .card-control:hover {
   opacity: 1;
+}
+/* Kept visible-but-dim (not hidden) when there's nowhere to go, so
+   the bar doesn't reflow as history accrues. */
+.card-control:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+/* The arrow glyphs render smaller than the other icons at the shared
+   size — bump the font, and pin the line box to the shared 1.2rem
+   (0.8rem × 1.5) so the bar height doesn't change. */
+.card-control--back,
+.card-control--forward {
+  font-size: 0.95rem;
+  line-height: 1.2rem;
 }
 </style>
