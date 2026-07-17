@@ -183,6 +183,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/card/{hash}", get(get_card))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/scaffold", get(config_scaffold))
+        .route("/api/config/migrate", get(config_migrate))
         .route("/api/lib", get(list_lib))
         .route("/api/lib/{name}", get(get_lib).put(put_lib))
         .route("/agent.md", get(agent_guide))
@@ -906,6 +907,23 @@ pub struct ConfigResponse {
     /// `npx -y latchkey@<pin>`. The Setup UI splices this into its
     /// copy-pasteable credential-setup snippets.
     pub latchkey_cli: String,
+    /// True when the file looks like an old-style `sources:` config for
+    /// the retired sync binary (top-level `sources:` and no `steps:`).
+    /// The UI offers a one-click migration to the DAG format.
+    pub legacy: bool,
+}
+
+/// Cheap probe: is this text an old-style `sources:` config? Top-level
+/// `sources:` with no `steps:` — the two formats are disjoint on those
+/// keys.
+fn looks_legacy(yaml: &str) -> bool {
+    let Ok(v) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return false;
+    };
+    let Some(m) = v.as_mapping() else {
+        return false;
+    };
+    m.contains_key("sources") && !m.contains_key("steps")
 }
 
 /// `GET /api/config` — current `<root>/config.yaml` plus a parse check.
@@ -917,6 +935,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         Ok((_cfg, sources)) => (true, None, sources.len()),
         Err(e) => (false, Some(format!("{e:#}")), 0),
     };
+    let legacy = exists && looks_legacy(&yaml);
     Json(ConfigResponse {
         path: path.display().to_string(),
         exists,
@@ -925,6 +944,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         error,
         source_count,
         latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
+        legacy,
     })
 }
 
@@ -1002,7 +1022,159 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         error: None,
         source_count: 0,
         latchkey_cli: frankweiler_core::node_runtime::latchkey_cli_hint(),
+        legacy: false,
     })
+}
+
+/// Response for `GET /api/config/migrate`: the current legacy config
+/// converted to the DAG format. Nothing is written — the UI drops the
+/// YAML into the editor for review; the user saves explicitly.
+#[derive(Debug, Serialize)]
+pub struct MigrateResponse {
+    pub ok: bool,
+    pub yaml: Option<String>,
+    pub error: Option<String>,
+}
+
+/// `GET /api/config/migrate` — convert the on-disk old-style
+/// `sources:` config into the DAG step format.
+async fn config_migrate(State(s): State<AppState>) -> Json<MigrateResponse> {
+    let text = match std::fs::read_to_string(s.config_path.as_ref()) {
+        Ok(t) => t,
+        Err(e) => {
+            return Json(MigrateResponse {
+                ok: false,
+                yaml: None,
+                error: Some(format!("read {}: {e}", s.config_path.display())),
+            })
+        }
+    };
+    match migrate_legacy_config(&text) {
+        Ok(yaml) => Json(MigrateResponse {
+            ok: true,
+            yaml: Some(yaml),
+            error: None,
+        }),
+        Err(e) => Json(MigrateResponse {
+            ok: false,
+            yaml: None,
+            error: Some(format!("{e:#}")),
+        }),
+    }
+}
+
+/// Convert an old-style `sources:` config to the DAG step format:
+/// each source becomes a `<name>.download` + `<name>.render` step pair
+/// (render-only for unmanaged sources like `claude_export`), preceded
+/// by the shared `index`/`qmd` fan-in steps. Comments from the old
+/// file are not carried over; the output is a reviewable draft, not a
+/// byte-faithful rewrite. Global `defaults:` are folded into each
+/// source's `common:` (value-level only — no path resolution), so the
+/// per-step params are self-contained.
+fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
+    use std::fmt::Write as _;
+    // Raw (un-normalized) parse: we want the fields as written, not
+    // resolved absolute paths.
+    let mut cfg: frankweiler_ingest_config::Config =
+        serde_yaml::from_str(text).map_err(|e| anyhow::anyhow!("parse legacy config: {e}"))?;
+    let defaults = cfg.defaults.clone();
+
+    let mut out = String::new();
+    out.push_str("# Migrated from the old sources: format — review before saving.\n");
+    if !cfg.data_root.as_os_str().is_empty() {
+        let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
+    }
+    out.push_str(
+        "# Shared fan-in steps: every source's rendered markdown feeds these.\nsteps:\n  - id: index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n    step: index\n",
+    );
+    if !cfg.qmd.skip {
+        out.push_str(
+            "\n  - id: qmd\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n    step: qmd\n",
+        );
+    }
+
+    for entry in &mut cfg.sources {
+        entry.source.common_mut().fold_defaults(&defaults);
+        let name = entry.name.clone();
+        let ty = entry.source.type_str();
+        let managed = entry.source.is_managed();
+
+        // The provider subtree, minus the `type:` tag (the step type
+        // carries it now) and any nulls serde emitted for unset fields.
+        let mut val = serde_yaml::to_value(&entry.source)
+            .map_err(|e| anyhow::anyhow!("serialize source {name:?}: {e}"))?;
+        if let Some(m) = val.as_mapping_mut() {
+            m.remove("type");
+        }
+        strip_nulls(&mut val);
+        let source_block = if val.as_mapping().is_none_or(|m| m.is_empty()) {
+            "      source: {}\n".to_string()
+        } else {
+            let dumped =
+                serde_yaml::to_string(&val).map_err(|e| anyhow::anyhow!("dump {name:?}: {e}"))?;
+            let mut b = String::from("      source:\n");
+            for line in dumped.lines() {
+                let _ = writeln!(b, "        {line}");
+            }
+            b
+        };
+
+        let divider_pad = "\u{2500}".repeat(66usize.saturating_sub(name.chars().count()));
+        let mut block = format!("\n  # \u{2500}\u{2500} {name} {divider_pad}\n");
+        if managed {
+            let _ = write!(
+                block,
+                "  - id: {name}.download\n    outputs: [{name}/raw]\n    step: {ty}.download\n    params: &{name}\n      name: {name}\n{source_block}\
+                 \n  - id: {name}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    step: {ty}.render\n    params: *{name}\n",
+            );
+        } else {
+            let _ = write!(
+                block,
+                "  - id: {name}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    step: {ty}.render\n    params:\n      name: {name}\n{source_block}",
+            );
+        }
+        if entry.enabled {
+            out.push_str(&block);
+        } else {
+            // Disabled sources come over commented out — the new
+            // format has no per-source enable flag.
+            out.push_str("\n  # (was `enabled: false` — uncomment to activate)\n");
+            for line in block.trim_start_matches('\n').lines() {
+                if line.is_empty() {
+                    out.push_str("  #\n");
+                } else {
+                    // Strip the base list indent once (not repeatedly —
+                    // nested indentation must survive the round-trip).
+                    let _ = writeln!(out, "  # {}", line.strip_prefix("  ").unwrap_or(line));
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Drop `key: null` entries and (bottom-up) mappings that emptied out —
+/// serde emits both for unset optional/default fields, and they'd read
+/// as clutter in the migrated draft. `sync:` is kept even when empty:
+/// its *presence* is what makes a source managed.
+fn strip_nulls(v: &mut serde_yaml::Value) {
+    if let Some(m) = v.as_mapping_mut() {
+        for (_, val) in m.iter_mut() {
+            strip_nulls(val);
+        }
+        let keys: Vec<serde_yaml::Value> = m
+            .iter()
+            .filter(|(k, val)| {
+                val.is_null()
+                    || (val.as_mapping().is_some_and(|mm| mm.is_empty())
+                        && k.as_str() != Some("sync"))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in keys {
+            m.remove(&k);
+        }
+    }
 }
 
 /// Starter DAG config: the shared fan-in steps that every source's

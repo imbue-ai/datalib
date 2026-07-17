@@ -406,15 +406,19 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
     if let Some(step_bin) = cfg.step_bin.as_ref() {
         command.arg("--step-bin").arg(step_bin);
     }
-    // Per-source "Sync now": subset-sync just that source's download
-    // step; everything downstream follows normal change propagation.
-    // Relies on the `<name>.download` id convention the config
-    // templates use. (The old `ingest`/`render` kinds had a
-    // `--skip-extract` shortcut; the DAG runner has no equivalent —
-    // downloads re-poll and everything unchanged skips, which is the
-    // same outcome a little slower.)
-    if let Some(src) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
-        command.arg("--sync").arg(format!("{src}.download"));
+    // Per-source "Sync now": subset-sync the selected sources'
+    // download steps; everything downstream follows normal change
+    // propagation. `source_name` may carry several comma-separated
+    // names (the UI's "Sync selected" checkboxes) — source names can't
+    // contain commas, so the separator is unambiguous. Relies on the
+    // `<name>.download` id convention the config templates use. (The
+    // old `ingest`/`render` kinds had a `--skip-extract` shortcut; the
+    // DAG runner has no equivalent — downloads re-poll and everything
+    // unchanged skips, which is the same outcome a little slower.)
+    if let Some(srcs) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
+        for src in srcs.split(',').filter(|s| !s.is_empty()) {
+            command.arg("--sync").arg(format!("{src}.download"));
+        }
     }
     // Pipe stdout+stderr so reader threads can both tee them to the log
     // file AND parse the runner's NDJSON events for live progress.
