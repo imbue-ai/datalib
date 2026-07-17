@@ -25,11 +25,18 @@ import { scopeHelpers, viewLibs } from "./libs";
 // name → sha256 of its current source. Reactive: cards watch this.
 export const aliasManifest: Ref<Map<string, string>> = ref(new Map());
 
+// name → gallery description, for the aliases that carry one. A
+// described alias advertises itself in the new-card gallery
+// (libs/galleryView.ts), which invokes it with no arguments. Kept
+// separate from aliasManifest so a description edit doesn't count as
+// a source change (no recompiles), and vice versa.
+export const aliasDescriptions: Ref<Map<string, string>> = ref(new Map());
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let firstLoad: Promise<void> | null = null;
 const POLL_MS = 1500;
 
-function sameManifest(a: Map<string, string>, b: Map<string, string>): boolean {
+function sameMap(a: Map<string, string>, b: Map<string, string>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, v] of a) if (b.get(k) !== v) return false;
   return true;
@@ -39,9 +46,19 @@ async function refreshManifest(): Promise<void> {
   try {
     const entries = await listLib();
     const next = new Map(entries.map((e) => [e.name, e.hash] as const));
+    const nextDesc = new Map(
+      entries
+        .filter((e) => (e.description ?? "").trim() !== "")
+        .map((e) => [e.name, e.description!] as const),
+    );
+    // Same replace-only-on-change discipline as the manifest, so the
+    // gallery's watcher doesn't repaint every poll tick.
+    if (!sameMap(nextDesc, aliasDescriptions.value)) {
+      aliasDescriptions.value = nextDesc;
+    }
     // Replace only on change so we don't wake every card's watcher each
     // poll tick.
-    if (!sameManifest(next, aliasManifest.value)) {
+    if (!sameMap(next, aliasManifest.value)) {
       // A resolved factory value closes over the *values* of the aliases
       // it referenced. The per-name `valueCache` is keyed by that alias'
       // own hash, which doesn't change when a transitive dependency

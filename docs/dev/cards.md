@@ -89,10 +89,21 @@ localStorage):
   described below (Enter re-runs the card), plus the 🤖 agent hand-off
   button (which rewrites the source, so it's hidden with it).
 
-Creating a *blank* card is also a dev-mode gesture — a blank card is
-only usable by typing source into it — so outside dev mode the miller
-layout hides its trailing blank column and the tree/tiling layouts
-hide their add-a-card buttons. Cards opened by other cards
+Card creation also differs by mode. In dev mode, creating a card means
+typing source into a *blank* card (the miller layout's trailing blank
+column, the tree/tiling layouts' add buttons). Outside dev mode the
+blank column is hidden and the add affordances (the miller layout's
+trailing "+" strip, the same tree/tiling buttons) instead create a
+`galleryView()` card — the **new-card gallery**
+(`frankweiler/ui/src/cards/libs/galleryView.ts`): a list of every
+parameter-less component with a short description, builtins first
+(gridView leading), then any user-defined alias whose `/api/lib` entry
+carries a `description`. Picking an entry replaces the gallery card
+with the chosen component via `host.setSource`. Components that need
+arguments register a parameter-less picker instead — `documentView`'s
+gallery stand-in is `documentPickerView()`, which lists every rendered
+document (`/api/docs`) and replaces itself with
+`documentView("<uuid>")` on pick. Cards opened by other cards
 (`host.openCards`) work the same in both modes.
 
 A card declares its title by wrapping its render in `titled()`
@@ -224,6 +235,11 @@ programs against:
   doc-level outgoing edges and decorates span-level edge sources
   (see `docs/dev/edges.md`); clicking either opens the destination via
   `host.openCard`.
+- `documentPickerView()` — parameter-less gallery stand-in for
+  `documentView`: lists every rendered document (`/api/docs`) and
+  replaces itself with `documentView("<uuid>")` on pick.
+- `galleryView()` — the new-card gallery (see "Titles and dev mode"
+  above); replaces itself with whatever the user picks.
 
 Adding a view = adding a factory to `ViewLibs` in
 `frankweiler/ui/src/cards/libs/index.ts` (and its name to the

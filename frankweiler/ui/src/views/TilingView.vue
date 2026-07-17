@@ -36,6 +36,7 @@ import { computed, provide, reactive, ref, watch } from "vue";
 import ShadowCard from "@/components/ShadowCard.vue";
 import { createBus } from "@/cards/bus";
 import { displayTitle } from "@/cards/title";
+import { devMode } from "@/devMode";
 import type { CardCtx, HostCommands } from "@/cards/types";
 import {
   addSibling,
@@ -253,8 +254,12 @@ function isRoot(id: string): boolean {
   return root.value.id === id;
 }
 
+// ＋ add area: in dev mode a blank card (type source into it); outside
+// dev mode a gallery card, which the user resolves by picking a
+// component (it replaces itself via host.setSource).
 function addCard(containerId: string) {
-  root.value = appendChild(root.value, containerId, makeTile(freshId(), ""));
+  const source = devMode.value ? "" : "galleryView()";
+  root.value = appendChild(root.value, containerId, makeTile(freshId(), source));
 }
 
 // What's being dragged, and where the pointer currently hovers — a

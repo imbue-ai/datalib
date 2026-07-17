@@ -76,6 +76,14 @@ pub trait MirrorRepo: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// List rendered documents (the `markdowns` table), newest first,
+    /// for the document-picker card. Returns an empty Vec for an empty
+    /// or missing store — like [`grid_row_refs`](Self::grid_row_refs),
+    /// a bare data root just means there's nothing to pick yet.
+    async fn list_docs(&self, _limit: usize) -> Result<Vec<DocRow>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// Append a feedback row. The default impl returns
     /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::DoltRepo`]
     /// overrides it.
@@ -186,6 +194,20 @@ pub struct EdgeRowOut {
     /// the destination is missing from `markdowns` (dangling FK — e.g.
     /// the destination was deleted but the edge wasn't pruned).
     pub dst_title: Option<String>,
+}
+
+/// One `markdowns` row projected for the document-picker card: just
+/// enough to render a pickable list (title, provenance, recency) and
+/// address the document (`markdown_uuid`, the same UUID
+/// `/api/chat/{markdown_uuid}` takes).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DocRow {
+    pub markdown_uuid: String,
+    /// Human-readable title; `None` when the renderer didn't set one.
+    pub title: Option<String>,
+    pub kind: String,
+    pub provider: String,
+    pub created_at: Option<String>,
 }
 
 /// Convenience type alias for the dyn-dispatched repo handle used by

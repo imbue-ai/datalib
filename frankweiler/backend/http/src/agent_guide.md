@@ -87,3 +87,20 @@ you overwrite the alias, that card re-renders automatically.
 // an alias that wraps the builtin grid, pre-filtered
 (q) => gridView({ q })
 ```
+
+## Publishing to the new-card gallery
+
+The UI's "new card" gallery lists parameter-less components with a
+short description. To make your component appear there, include a
+`description` in the PUT body:
+
+```sh
+curl -X PUT "<origin>/api/lib/<aliasName>" \
+  -H 'content-type: application/json' \
+  -d "$(jq -Rs '{source: ., description: "One line on what this shows."}' < factory.js)"
+```
+
+A described component **must work when invoked with no arguments** —
+the gallery creates it as `<aliasName>()`. Omitting `description` on a
+later PUT keeps the stored one; sending `""` clears it (and removes
+the component from the gallery).

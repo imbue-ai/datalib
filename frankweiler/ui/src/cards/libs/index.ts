@@ -2,6 +2,8 @@ import type { ViewLibs } from "../types";
 import { titled } from "../title";
 import { gridView } from "./gridView";
 import { documentView } from "./documentView";
+import { documentPickerView } from "./documentPickerView";
+import { galleryView } from "./galleryView";
 import { aliasView } from "./aliasView";
 import { dactalView } from "./dactalView";
 import { perseusView } from "./perseusView";
@@ -10,6 +12,8 @@ import { perseusView } from "./perseusView";
 export const viewLibs: ViewLibs = {
   gridView,
   documentView,
+  documentPickerView,
+  galleryView,
   aliasView,
   dactalView,
   perseusView,
@@ -20,4 +24,12 @@ export const viewLibs: ViewLibs = {
 // with `titled("…", render)` just like the builtins do.
 export const scopeHelpers = { titled } as const;
 
-export { gridView, documentView, aliasView, dactalView, perseusView };
+export {
+  gridView,
+  documentView,
+  documentPickerView,
+  galleryView,
+  aliasView,
+  dactalView,
+  perseusView,
+};

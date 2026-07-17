@@ -102,6 +102,15 @@ export type ViewLibs = {
     markdownUuid?: string | null,
     sectionUuid?: string | null,
   ) => CardRender;
+  // Parameter-less gallery stand-in for documentView: lists every
+  // rendered document (/api/docs) and, on pick, replaces this card
+  // with `documentView("<uuid>")` via host.setSource.
+  documentPickerView: () => CardRender;
+  // The new-card gallery: parameter-less components with short
+  // descriptions (builtins first, then described aliases); picking one
+  // replaces this card via host.setSource. This is what non-dev card
+  // creation opens (see the layout hosts).
+  galleryView: () => CardRender;
   // Live listing of the user-defined component library (/api/lib).
   aliasView: () => CardRender;
   // DACTAL explorer (https://dactal.org): query grid_rows with DACTAL's

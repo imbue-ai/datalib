@@ -88,11 +88,13 @@ function withTrailingBlank(list: Slot[]): Slot[] {
 
 const slots = ref<Slot[]>([]);
 
-// What actually renders. Creating a card means typing source — a dev
-// gesture — so outside dev mode the trailing blank column (the place
-// you type new source) is hidden. It stays in `slots`, so the
-// trailing-blank invariant holds across the toggle (uncommitted text
-// in the box is dropped with the textarea, like any unsaved edit).
+// What actually renders. A blank card is only usable by typing source
+// — a dev gesture — so outside dev mode the trailing blank column (the
+// place you type new source) is hidden and a "+" strip (see
+// addGalleryColumn) stands in for it. The blank stays in `slots`, so
+// the trailing-blank invariant holds across the toggle (uncommitted
+// text in the box is dropped with the textarea, like any unsaved
+// edit).
 const visibleSlots = computed(() =>
   devMode.value ? slots.value : slots.value.filter((s) => !isBlankSource(s.source)),
 );
@@ -257,6 +259,16 @@ function setColumnSource(id: string, source: string) {
   syncUrl();
 }
 
+// Non-dev card creation: the "+" strip after the last column turns the
+// (hidden) trailing blank slot into a gallery column — the user picks
+// what the card should be from a list instead of typing source. The
+// gallery card then replaces itself via host.setSource, and the
+// invariant machinery appends a fresh hidden blank behind it.
+function addGalleryColumn() {
+  const blank = slots.value[slots.value.length - 1];
+  setColumnSource(blank.id, "galleryView()");
+}
+
 // Drag a column's right edge to set its width. Captures the pointer
 // so the move tracks even when the cursor crosses other columns;
 // clamps to MIN_WIDTH so columns can't collapse to nothing.
@@ -325,6 +337,14 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
           @pointerdown="(e) => onResizeStart(slot, e)"
         />
       </section>
+      <button
+        v-if="!devMode"
+        class="miller-add"
+        title="new card"
+        @click="addGalleryColumn"
+      >
+        ＋
+      </button>
     </div>
   </div>
 </template>
@@ -433,5 +453,25 @@ function onResizeStart(slot: Slot, ev: PointerEvent) {
 .miller-col-card {
   flex: 1 1 auto;
   min-height: 0;
+}
+/* Non-dev "new card" strip standing in for the hidden trailing blank
+   column — same dashed-affordance family as the tiling layout's add
+   areas. */
+.miller-add {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 28px;
+  margin: 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--fw-fg) 45%, transparent);
+  background: transparent;
+  border: 1px dashed color-mix(in srgb, var(--fw-fg) 22%, transparent);
+  border-radius: 4px;
+}
+.miller-add:hover {
+  color: var(--fw-fg);
+  background: var(--fw-hover);
 }
 </style>

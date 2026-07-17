@@ -83,6 +83,9 @@ test.describe("URL reflects app state", () => {
   test("editing a column's source via the header re-runs the card", async ({
     page,
   }) => {
+    // The editable source box (and the trailing blank column it lives
+    // in) only exists in dev mode; default chrome shows titles.
+    await page.addInitScript(() => localStorage.setItem("fw-dev-mode", "1"));
     await page.goto("/");
     await pinFirstRowId(page);
     // The trailing blank column's source box accepts new card source;

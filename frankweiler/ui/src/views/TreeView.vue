@@ -354,8 +354,11 @@ function openCardsFrom(parentId: string, sources: string[]): string[] {
   return ids;
 }
 
+// "+ card": in dev mode a blank card (type source into it); outside
+// dev mode a gallery card, which the user resolves by picking a
+// component (it replaces itself via host.setSource).
 function addRootCard() {
-  const node = newNode("", null);
+  const node = newNode(devMode.value ? "" : "galleryView()", null);
   nodes.value = [...nodes.value, node];
   void nextTick(() => revealNode(node.id));
 }
@@ -578,12 +581,13 @@ function onChromeDown(node: TreeNode, ev: PointerEvent) {
         </button>
         <button title="zoom in" @click="zoomStep(1.2)">+</button>
         <button title="zoom to fit" @click="zoomToFit">⛶</button>
-        <!-- A blank card is edited via its source box — a dev-mode
-             gesture, so the button hides with it. -->
-        <template v-if="devMode">
-          <span class="tree-controls-sep" />
-          <button title="add a blank card" @click="addRootCard">+ card</button>
-        </template>
+        <span class="tree-controls-sep" />
+        <button
+          :title="devMode ? 'add a blank card' : 'add a card from the gallery'"
+          @click="addRootCard"
+        >
+          + card
+        </button>
       </div>
     </div>
   </div>
