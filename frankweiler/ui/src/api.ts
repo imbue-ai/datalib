@@ -293,9 +293,19 @@ export function fetchSyncSources(signal?: AbortSignal): Promise<SyncSource[]> {
   return getJson<SyncSource[]>("/api/sync/sources", signal);
 }
 
+// One DAG task's state on a job's task board. `state` is one of
+// todo / running / done / skipped / failed / blocked.
+export type SyncTask = {
+  id: string;
+  state: string;
+  detail?: string | null;
+};
+
 // One push update for a job, streamed from `GET /api/sync/stream` over
 // SSE. The worker + enqueue/cancel handlers emit these the instant they
-// write a job's state, so the UI updates without polling.
+// write a job's state, so the UI updates without polling. `tasks` is
+// the per-task board (also recoverable from `progress_msg`, which
+// carries it as JSON — see src/sync/progress.ts).
 export type JobProgressEvent = {
   id: string;
   kind: string;
@@ -303,6 +313,7 @@ export type JobProgressEvent = {
   state: SyncJobState;
   progress_pct: number | null;
   progress_msg: string | null;
+  tasks?: SyncTask[] | null;
 };
 
 // Open the live job-progress SSE stream. Returns the EventSource so the
