@@ -171,6 +171,12 @@ pub fn router(state: AppState) -> Router {
     // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
     // QMD-embedded `![](...)` URLs resolve.
     let media_dir = frankweiler_core::layout::media_dir(&state.root);
+    // Served attachments are re-materializable from the raw blob CAS,
+    // so mark the tree as derived cache for `--exclude-caches` backups.
+    // Nothing writes media yet (see layout.rs), so this usually no-ops;
+    // it's here (rather than in a pipeline step) because no step owns
+    // the dir and the server is its one consumer.
+    frankweiler_core::layout::mark_derived_cache(&media_dir);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))

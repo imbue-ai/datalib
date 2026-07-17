@@ -75,6 +75,10 @@ pub async fn run(
 
     let docs = docs.load(Ordering::SeqCst);
     tracing::info!(docs, "render: docs (re)rendered");
+    // The whole tree re-renders from raw/, so cache-aware backups
+    // (`restic --exclude-caches` etc.) may skip it. No-op until the
+    // first render materializes the dir.
+    frankweiler_core::layout::mark_derived_cache(&rendered_root);
     Ok(vec![OutputClaim {
         // rendered_md always lives at the canonical path (only
         // raw_path is overridable).

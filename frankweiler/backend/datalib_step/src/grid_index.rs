@@ -27,6 +27,10 @@ pub async fn run(
     let db_path = frankweiler_core::layout::backend_index_db(data_root);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
+        // The index is 100% rebuilt from the sidecar trees, so
+        // cache-aware backups (`restic --exclude-caches` etc.) may
+        // skip it.
+        frankweiler_core::layout::mark_derived_cache(parent);
     }
     // Pool size 1: doltlite's HEAD pointer + working tree are
     // per-connection (see frankweiler_etl::doltlite_raw module docs).
