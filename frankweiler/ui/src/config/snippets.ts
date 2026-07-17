@@ -33,16 +33,16 @@ function stepPair(
     : "";
   return `${divider}
 ${preambleBlock}  - id: ${name}.download
-    outputs: [${name}/raw]
     step: ${type}.download
+    outputs: [${name}/raw]
     params: &${name}
       name: ${name}
       source:
 ${sourceYaml}
   - id: ${name}.render
+    step: ${type}.render
     inputs: [${name}/raw]
     outputs: [${name}/rendered_md]
-    step: ${type}.render
     params: *${name}`;
 }
 

@@ -7,16 +7,16 @@
 //! data_root: ~/frankweiler-data     # default: the config file's dir
 //! steps:
 //!   - id: slack.download
-//!     outputs: [slack/raw]
 //!     step: slack_api.download      # <source_type>.<phase>
+//!     outputs: [slack/raw]
 //!     params:
 //!       name: slack                 # → slack/raw, slack/rendered_md
 //!       source:                     # the provider's own config subtree
 //!         sync: {channels: [chat-qi]}
 //!   - id: index
+//!     step: index                   # source-independent step types stay bare
 //!     inputs: ["**/rendered_md"]
 //!     outputs: [system/backend_index]
-//!     step: index                   # source-independent step types stay bare
 //!   - id: custom
 //!     outputs: [custom/out]
 //!     run: [sh, -c, "…"]            # or: any argv, verbatim

@@ -32,8 +32,8 @@ data_root: ~/tmp/dr-dag
 steps:
   # ── slack ──────────────────────────────────────────────────────────
   - id: slack.download
-    outputs: [slack/raw]
     step: slack_api.download
+    outputs: [slack/raw]
     params: &slack
       name: slack
       source:
@@ -43,9 +43,9 @@ steps:
           since: "2026-06-15"
 
   - id: slack.render
+    step: slack_api.render
     inputs: [slack/raw]
     outputs: [slack/rendered_md]
-    step: slack_api.render
     params: *slack
 
   # ── claude ─────────────────────────────────────────────────────────
@@ -55,8 +55,8 @@ steps:
   #   npx -y latchkey auth set claude-ai -H "Cookie: sessionKey=$(pbpaste)"
   # See docs/user/getting_your_data.md for the full walkthrough.
   - id: claude.download
-    outputs: [claude/raw]
     step: claude_api.download
+    outputs: [claude/raw]
     params: &claude
       name: claude
       source:
@@ -64,20 +64,20 @@ steps:
           conv_uuids: ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
   - id: claude.render
+    step: claude_api.render
     inputs: [claude/raw]
     outputs: [claude/rendered_md]
-    step: claude_api.render
     params: *claude
 
   # ── shared fan-in steps ────────────────────────────────────────────
   # `**/rendered_md` matches every render step's output; adding a new
   # source above automatically feeds these.
   - id: index
+    step: index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
-    step: index
 
   - id: qmd
+    step: qmd
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
-    step: qmd

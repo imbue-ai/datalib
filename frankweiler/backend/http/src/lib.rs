@@ -1233,11 +1233,11 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         let _ = writeln!(out, "data_root: {}\n", cfg.data_root.display());
     }
     out.push_str(
-        "# Shared fan-in steps: every source's rendered markdown feeds these.\nsteps:\n  - id: index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n    step: index\n",
+        "steps:\n  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n  # Every source's rendered markdown feeds these.\n  - id: index\n    step: index\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/backend_index]\n",
     );
     if !cfg.qmd.skip {
         out.push_str(
-            "\n  - id: qmd\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n    step: qmd\n",
+            "\n  - id: qmd\n    step: qmd\n    inputs: [\"**/rendered_md\"]\n    outputs: [system/qmd]\n",
         );
     }
 
@@ -1272,13 +1272,13 @@ fn migrate_legacy_config(text: &str) -> anyhow::Result<String> {
         if managed {
             let _ = write!(
                 block,
-                "  - id: {name}.download\n    outputs: [{name}/raw]\n    step: {ty}.download\n    params: &{name}\n      name: {name}\n{source_block}\
-                 \n  - id: {name}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    step: {ty}.render\n    params: *{name}\n",
+                "  - id: {name}.download\n    step: {ty}.download\n    outputs: [{name}/raw]\n    params: &{name}\n      name: {name}\n{source_block}\
+                 \n  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params: *{name}\n",
             );
         } else {
             let _ = write!(
                 block,
-                "  - id: {name}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    step: {ty}.render\n    params:\n      name: {name}\n{source_block}",
+                "  - id: {name}.render\n    step: {ty}.render\n    inputs: [{name}/raw]\n    outputs: [{name}/rendered_md]\n    params:\n      name: {name}\n{source_block}",
             );
         }
         if entry.enabled {
@@ -1335,17 +1335,19 @@ fn strip_nulls(v: &mut serde_yaml::Value) {
 /// self-contained.
 fn scaffold_yaml() -> String {
     "\
-# Shared fan-in steps: every source's rendered markdown feeds these.
 steps:
+  # \u{2500}\u{2500} shared fan-in steps \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
+  # Every source's rendered markdown feeds these.
   - id: index
+    step: index
     inputs: [\"**/rendered_md\"]
     outputs: [system/backend_index]
-    step: index
 
   - id: qmd
+    step: qmd
     inputs: [\"**/rendered_md\"]
     outputs: [system/qmd]
-    step: qmd
+  # \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
 "
     .to_string()
 }
