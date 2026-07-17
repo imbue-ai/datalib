@@ -1,10 +1,10 @@
 //! LinkedIn data-export ("takeout") provider.
 //!
 //! A LinkedIn export is a directory of CSV files (Connections,
-//! Messages, Skills, Positions, …). [`extract`] ingests *every* CSV
+//! Messages, Skills, Positions, …). [`download`] ingests *every* CSV
 //! generically — one `(id, payload)` raw table per file — with no
 //! per-file code; see its module docs for the identity / quirk-handling
-//! story. Three translate paths render selected feeds: [`render`] turns
+//! story. Three render paths render selected feeds: [`render`] turns
 //! the message-shaped tables into markdown via the shared chat renderer,
 //! [`posts`] groups your shares + the comments you left into one
 //! chat-style thread per post, and [`connections`] turns the
@@ -23,7 +23,7 @@
 //! ```
 
 pub mod connections;
-pub mod extract;
+pub mod download;
 pub mod posts;
 pub mod processor;
 pub mod render;

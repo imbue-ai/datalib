@@ -94,7 +94,7 @@ fn split_combined(tok: &str) -> Vec<String> {
 
 fn parse(argv: Vec<String>) -> Args {
     // Handle --version / -V before any other parsing so it works without
-    // a URL. Matches `frankweiler-sync --version` (clap-rendered) by
+    // a URL. Matches `datalib-dag --version` by
     // printing `<bin-name> <FRANKWEILER_VERSION>` where the version is
     // the `git describe --tags --always --dirty` slug stamped at build
     // time by cargo's build.rs. Bazel intentionally does NOT stamp this

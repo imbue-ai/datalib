@@ -1,7 +1,7 @@
 //! Provider-agnostic contact model consumed by [`crate::render`].
 
 /// One contact (a person or entity), normalized so a single renderer
-/// serves every contact-style provider. The provider's translate stage
+/// serves every contact-style provider. The provider's render stage
 /// builds these; the renderer never reaches back into provider rows.
 #[derive(Debug, Clone)]
 pub struct NormalizedContact {

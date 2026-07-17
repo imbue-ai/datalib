@@ -6,7 +6,7 @@
 //! Integration test for `--reset-and-redownload`.
 //!
 //! Verifies the PK-stability claim of the sidecar-bookkeeping
-//! design: running `extract::fetch` twice against the same playback
+//! design: running `download::fetch` twice against the same playback
 //! fixtures, with the second run setting
 //! `control.reset_and_redownload`, must produce byte-identical
 //! data-table contents — proving that every object table's PK
@@ -15,9 +15,9 @@
 //!
 //! Strategy:
 //!   1. Synthesize a playback fixture from a small Anthropic snapshot.
-//!   2. Run extract → snapshot every data-table row keyed by PK.
+//!   2. Run download → snapshot every data-table row keyed by PK.
 //!      Commit via `dolt_commit('-Am', 'first')`.
-//!   3. Run extract again with `control.reset_and_redownload = true`
+//!   3. Run download again with `control.reset_and_redownload = true`
 //!      → snapshot data-table rows again. Commit again.
 //!   4. Assert per-table row counts match and every (id → row)
 //!      mapping is byte-identical between the two runs.
@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_anthropic::extract::{db::db_path_for, fetch, FetchOptions};
+use frankweiler_etl_anthropic::download::{db::db_path_for, fetch, FetchOptions};
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
@@ -191,7 +191,7 @@ async fn reset_and_redownload_preserves_data_tables() {
         overlap: 0,
         sleep_between: Duration::ZERO,
         conv_uuids: Vec::new(),
-        control: frankweiler_etl::control::ExtractControl {
+        control: frankweiler_etl::control::DownloadControl {
             reset_and_redownload: true,
             refetch_blobs: false,
         },

@@ -1,6 +1,6 @@
-//! End-to-end mbox-mode test: run the extract::mbox extractor against
+//! End-to-end mbox-mode test: run the download::mbox extractor against
 //! the checked-in Star Trek mbox fixture, then read it back via the
-//! shared raw store and run it through `render_and_index_md::render::render_all`
+//! shared raw store and run it through `render::render::render_all`
 //! — exercises the file-based ingest path end-to-end. Same code path
 //! the sync orchestrator picks up when a `type: email` source has no
 //! `sync:` block and `input_path` points at an `.mbox` file.
@@ -8,12 +8,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{db_path_for, RawDb};
-use frankweiler_etl_email::extract::mbox;
-use frankweiler_etl_email::render_and_index_md::parse::parse;
-use frankweiler_etl_email::render_and_index_md::render::{render_all, thread_uuid, OutlinkFormat};
+use frankweiler_etl_email::download::db::{db_path_for, RawDb};
+use frankweiler_etl_email::download::mbox;
+use frankweiler_etl_email::render::parse::parse;
+use frankweiler_etl_email::render::render::{render_all, thread_uuid, OutlinkFormat};
 
 fn fixture_path() -> PathBuf {
     if let Ok(dir) = std::env::var("JMAP_FIXTURE_DIR") {
@@ -35,7 +35,7 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
         ..Default::default()
     })
     .await
-    .expect("mbox extract fetch");
+    .expect("mbox download fetch");
     // Close the writer pool so the subsequent reader-side open sees a
     // consistent doltlite working tree.
     pool.close().await;
@@ -134,7 +134,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
     assert_eq!(ids1, ids2);
 }
 
-/// Extract-time label filter: `only_labels` keeps only messages
+/// Download-time label filter: `only_labels` keeps only messages
 /// carrying a matching `X-Gmail-Labels` label. Two of the six fixture
 /// messages are filed under `Sent` (`Inbox,Sent` and `Sent,Important`),
 /// so the filter lands exactly those two — and both end up in the `Sent`
@@ -154,7 +154,7 @@ async fn mbox_only_labels_filters_extraction() {
         ..Default::default()
     })
     .await
-    .expect("mbox extract fetch with label filter");
+    .expect("mbox download fetch with label filter");
     pool.close().await;
 
     let db = RawDb::open(&db_path).await.unwrap();
@@ -183,7 +183,7 @@ async fn mbox_only_labels_filters_extraction() {
     }
 }
 
-/// Render-time label filter: extract everything, then render only the
+/// Render-time label filter: download everything, then render only the
 /// threads touching a label. Thread-level inclusion — a whole thread
 /// renders if any of its emails is filed under an allowed mailbox. The
 /// expected thread set is computed from the parsed joins so the

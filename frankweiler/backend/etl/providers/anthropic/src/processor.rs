@@ -1,6 +1,6 @@
 //! Program-A `DataProcessor`s for the anthropic (claude_api / claude_export)
-//! source. `claude_api` contributes extract + translate; `claude_export` is
-//! translate-only (no `sync:`), sharing the same renderer. The source owns its
+//! source. `claude_api` contributes download + render; `claude_export` is
+//! render-only (no `sync:`), sharing the same renderer. The source owns its
 //! raw store (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: empty unless a `sync:` block makes the source managed
 /// (claude_export stays render-only).
@@ -24,8 +24,8 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(AnthropicExtract {
-            id: format!("anthropic/{name}/extract"),
+        procs.push(Box::new(AnthropicDownload {
+            id: format!("anthropic/{name}/download"),
             raw_path,
             sync,
         }));
@@ -41,29 +41,29 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(AnthropicRender {
-        id: format!("anthropic/{name}/translate"),
+        id: format!("anthropic/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-struct AnthropicExtract {
+struct AnthropicDownload {
     id: String,
     raw_path: PathBuf,
     sync: ClaudeApiSync,
 }
 
 #[async_trait]
-impl DataProcessor for AnthropicExtract {
+impl DataProcessor for AnthropicDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             // users.json is expected alongside the raw store (playback seeds it).
@@ -110,7 +110,7 @@ impl DataProcessor for AnthropicRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse::parse, render::render_all};
+        use crate::render::{parse::parse, render::render_all};
         let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read anthropic render cursor {}", cursor_path.display()))?;

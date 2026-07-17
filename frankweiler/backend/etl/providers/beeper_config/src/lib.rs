@@ -8,7 +8,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The beeper-owned slice of a `beeper` source. `sync:` present → live
-/// Beeper Texts ingest (the extract path); absent → translate-only over an
+/// Beeper Texts ingest (the download path); absent → render-only over an
 /// already-on-disk raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BeeperConfig {

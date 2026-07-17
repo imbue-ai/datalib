@@ -6,8 +6,8 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The anthropic-owned slice of a `claude_api` (or `claude_export`) source.
-/// `sync:` present → live Claude.ai mirror (the extract path); absent →
-/// translate-only over an already-on-disk export (`claude_export`).
+/// `sync:` present → live Claude.ai mirror (the download path); absent →
+/// render-only over an already-on-disk export (`claude_export`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AnthropicConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

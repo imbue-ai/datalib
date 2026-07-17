@@ -1,10 +1,10 @@
 //! Per-source diagnostics capture: every WARN/ERROR `tracing` event a
-//! source emits during its extract is collected so the orchestrator can
+//! source emits during its download is collected so the orchestrator can
 //! fold it into the per-source block of the JSON sync summary.
 //!
-//! The mechanism mirrors `frankweiler_etl::extract_metrics`: a
+//! The mechanism mirrors `frankweiler_etl::download_metrics`: a
 //! [`tokio::task_local`] holds a [`Diagnostics`] buffer for the duration of
-//! one source's extract (installed by [`scope`]). A global
+//! one source's download (installed by [`scope`]). A global
 //! [`DiagnosticsLayer`] — added to the subscriber by [`crate::init`] —
 //! intercepts every WARN/ERROR event and appends a rendered line to the
 //! ambient buffer, if one is installed on the current task. This captures
@@ -48,7 +48,7 @@ const MAX_ENTRIES: usize = 500;
 
 /// Per-source buffer of captured WARN/ERROR events. Cheap to clone behind
 /// the `Arc` the orchestrator hands out; the same handle is installed as
-/// the ambient context ([`scope`]) and read back after the extract.
+/// the ambient context ([`scope`]) and read back after the download.
 #[derive(Default)]
 pub struct Diagnostics {
     entries: Mutex<Vec<DiagnosticEntry>>,

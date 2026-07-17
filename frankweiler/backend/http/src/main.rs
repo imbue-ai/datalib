@@ -1,4 +1,4 @@
-// Standalone HTTP server binary — runs outside `frankweiler-sync`, no
+// Standalone HTTP server binary — runs standalone, no
 // MultiProgress / no indicatif bars in this process. Exempt from the
 // workspace-wide ban defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
@@ -6,7 +6,7 @@
 //! `frankweiler-http` — single-binary search backend.
 //!
 //! Usage: `frankweiler-http <data_root> [--no-open] [--url-file <path>]`.
-//! The data root is the directory that `frankweiler-sync` writes into:
+//! The data root is the directory the pipeline (`datalib-dag`) writes into:
 //! it contains one directory per source stanza plus `system/` holding
 //! the SQL store (`system/backend_index/db.doltlite_db`), the
 //! `system/media/` symlinked attachments, and the qmd index. The
@@ -42,7 +42,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:8731";
     long_about = None,
 )]
 struct Args {
-    /// Data root directory written by `frankweiler-sync`. Created if
+    /// Data root directory written by the pipeline. Created if
     /// absent; an empty root produces an empty search index.
     data_root: PathBuf,
 

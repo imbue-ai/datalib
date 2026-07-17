@@ -75,6 +75,12 @@ So the boundary the orchestrator cares about is a thin contract: {output-version
 > *action/rule* (Make/Bazel), *transform* (Beam). The prototype adopted
 > **step** ("task" collides with `tokio::task` throughout the workspace),
 > with **artifact** for the data side.
+>
+> The step *types* are named **download**, **render**, **grid_index**, and
+> **qmd_index** throughout the codebase. The names this document's prose
+> uses below — *extract*, *translate*, *load* — are the historical
+> (pre-DAG) terms for the first three; they survive only in design docs
+> like this one.
 
 
 A node is the unit the scheduler schedules. It declares what it reads, what it writes, and how to run it; everything else is private.

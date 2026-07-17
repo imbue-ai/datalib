@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use frankweiler_etl::processor::{DataProcessor, PlanContext};
-use frankweiler_source_common::{Defaults, ExtractParams};
+use frankweiler_source_common::{Defaults, DownloadParams};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
@@ -30,7 +30,7 @@ pub struct PlannedSource {
     /// overridden via `common.raw_path`).
     pub raw_path: PathBuf,
     /// Resolved rate-limit give-up bounds for the download wave.
-    pub extract_params: ExtractParams,
+    pub download_params: DownloadParams,
     pub processors: Vec<Box<dyn DataProcessor>>,
 }
 
@@ -101,7 +101,7 @@ pub fn plan(
             cfg.validate()
                 .with_context(|| format!("source {name:?} (type={})", $tstr))?;
             let raw_path = cfg.common.raw_path().to_path_buf();
-            let extract_params = cfg.common.extract_params.clone();
+            let download_params = cfg.common.download_params.clone();
             let ctx = PlanContext {
                 name: name.to_string(),
                 // Playback redirection goes through the
@@ -117,7 +117,7 @@ pub fn plan(
                 name: name.to_string(),
                 type_str: $tstr,
                 raw_path,
-                extract_params,
+                download_params,
                 processors,
             }
         }};

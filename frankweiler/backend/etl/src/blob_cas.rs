@@ -131,7 +131,7 @@ impl BlobCas {
         .execute(&self.pool)
         .await
         .context("cas put")?;
-        crate::extract_metrics::record_upserts("cas_objects", 1);
+        crate::download_metrics::record_upserts("cas_objects", 1);
         Ok(hash)
     }
 
@@ -171,11 +171,11 @@ impl BlobCas {
                 .context("bulk insert cas_objects")?;
         }
         tx.commit().await.context("commit cas put_many tx")?;
-        // Tally CAS writes against the current source's extract metrics
-        // (no-op outside an extract scope). Counts attempts; some are
+        // Tally CAS writes against the current source's download metrics
+        // (no-op outside an download scope). Counts attempts; some are
         // INSERT-OR-IGNORE dupes, so rows_after - rows_before is the
         // real net-new figure.
-        crate::extract_metrics::record_upserts("cas_objects", items.len());
+        crate::download_metrics::record_upserts("cas_objects", items.len());
         Ok(())
     }
 
@@ -290,7 +290,7 @@ impl Blob {
     }
 }
 
-/// One fetched-but-not-yet-flushed entry on the extract side, exposed
+/// One fetched-but-not-yet-flushed entry on the download side, exposed
 /// through [`BlobBundle::fetched_refs`] so the per-provider flush code
 /// can build edge-table rows from it.
 #[derive(Debug, Clone, Copy)]
@@ -304,7 +304,7 @@ pub struct FetchedRef<'a> {
 /// Per-doc bundle of attachment data. Travels through the whole
 /// pipeline:
 ///
-/// - **Extract** builds an empty bundle, calls [`Self::add`] as bytes
+/// - **Download** builds an empty bundle, calls [`Self::add`] as bytes
 ///   come in (and [`Self::add_error`] when a fetch fails), then asks
 ///   the per-provider flush code to drain it via
 ///   [`Self::cas_inserts`] (→ [`BlobCas::put_many`]),
@@ -353,7 +353,7 @@ impl BlobBundle {
         self.by_ref.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    // ── extract side ─────────────────────────────────────────────────
+    // ── download side ─────────────────────────────────────────────────
 
     /// Record one fetched attachment. `bytes` is hashed lazily —
     /// caller does NOT need to pre-compute blake3.
@@ -742,7 +742,7 @@ pub async fn load_blake3_index(
 // ─────────────────────────────────────────────────────────────────────
 
 /// Per-bucket attachment-fetch accumulator. Every per-provider
-/// extract walks an upstream bucket (a conversation, a thread, a
+/// download walks an upstream bucket (a conversation, a thread, a
 /// channel of messages) and decides per file: did we just fetch
 /// bytes, did we discover bytes were already in the CAS, or did
 /// the fetch fail? This struct collects those outcomes, then

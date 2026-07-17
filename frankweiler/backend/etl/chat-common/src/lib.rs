@@ -1,7 +1,7 @@
 //! `frankweiler-etl-chat-common` — shared QMD-and-grid-rows rendering
 //! for chat-style providers (Signal, WhatsApp, Beeper, …).
 //!
-//! Each provider's translate stage normalizes its own row model into
+//! Each provider's render stage normalizes its own row model into
 //! the [`NormalizedChat`] / [`NormalizedDoc`] / [`NormalizedItem`]
 //! shape this crate defines and calls [`render::render_all`]. The
 //! renderer owns the cross-cutting concerns every chat-style provider

@@ -57,7 +57,7 @@ rust_test(
 
 # End-to-end against an inline TNG snapshot built via the
 # library writer. No external data deps — the test materializes
-# the encrypted snapshot itself, then drives extract + translate
+# the encrypted snapshot itself, then drives download + render
 # against it, then asserts on rendered markdown content.
 rust_test(
     name = "signal_tng_e2e",

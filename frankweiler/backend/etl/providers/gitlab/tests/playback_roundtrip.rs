@@ -1,4 +1,4 @@
-//! GitLab synth → playback → extract round-trip.
+//! GitLab synth → playback → download round-trip.
 
 use std::collections::HashMap;
 use std::fs;
@@ -7,7 +7,7 @@ use std::time::Duration;
 use frankweiler_etl::event_store::{diff_and_save, make_record};
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_gitlab::extract::{
+use frankweiler_etl_gitlab::download::{
     block_on_load_all, db_path_for, fetch, FetchOptions, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF,
 };
 use frankweiler_etl_gitlab::synthesize::GitlabSynth;

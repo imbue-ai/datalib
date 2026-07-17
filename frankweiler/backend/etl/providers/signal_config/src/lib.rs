@@ -8,8 +8,8 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The signal-owned slice of a `signal_backup` source. `sync:` present →
-/// managed (the extract path: decrypt the newest snapshot under
-/// `snapshot_dir`); absent → translate-only over an already-ingested raw
+/// managed (the download path: decrypt the newest snapshot under
+/// `snapshot_dir`); absent → render-only over an already-ingested raw
 /// store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SignalConfig {
@@ -29,7 +29,7 @@ impl SignalConfig {
 
 /// Signal-Android directory-format backup sync knobs. The extractor finds the
 /// newest `signal-backup-*` subdir under `snapshot_dir`, decrypts it using the
-/// AEP read from `$aep_env_var` at extract time, and UPSERTs frames into a
+/// AEP read from `$aep_env_var` at download time, and UPSERTs frames into a
 /// doltlite raw store. No network; no credentials in this struct — the secret
 /// lives in the user's shell (or .envrc.private).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

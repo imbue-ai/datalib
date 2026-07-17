@@ -1,4 +1,4 @@
-//! Shared HTTP transport for every provider's Extract step.
+//! Shared HTTP transport for every provider's Download step.
 //!
 //! Every provider's downloader ultimately shells out to `latchkey curl`
 //! (so auth headers and TLS impersonation are handled uniformly). This
@@ -27,7 +27,7 @@
 //! backs off exponentially); transient transport failures and 5xx are
 //! retried the same way. How long it keeps trying before giving up is
 //! governed by the per-source [`crate::retry::RetryGuard`] the orchestrator
-//! installs (resolved from each source's `extract_params`), so the give-up
+//! installs (resolved from each source's `download_params`), so the give-up
 //! policy is enforced once, centrally, rather than re-implemented in every
 //! provider. Providers whose rate-limit signal isn't visible by status code
 //! (Slack's HTTP-200 `ratelimited` body, GitHub's primary-limit 403) feed
@@ -309,18 +309,18 @@ where
     F: Fn(&HttpResponse) -> Retryability,
 {
     // Resolve the current source's give-up guard (or a default-bounded
-    // throwaway outside any extract scope). It owns both the give-up limits
+    // throwaway outside any download scope). It owns both the give-up limits
     // and the backoff schedule.
     let guard = crate::retry::current_or_default();
     let mut backoff = guard.initial_backoff();
     loop {
         // Count every outbound *attempt* against the current source's
-        // extract metrics (no-op outside an extract scope). This is the
+        // download metrics (no-op outside an download scope). This is the
         // single transport chokepoint every provider's API call funnels
         // through, so the per-source API-call total is captured here with
         // zero provider-side code. File-based ingestion never reaches this
         // path, so it correctly reports zero requests.
-        crate::extract_metrics::record_api_request();
+        crate::download_metrics::record_api_request();
         let outcome = match Mode::current() {
             Mode::Live => live::send(req).await,
             Mode::Playback(root) => playback::lookup(req, &root).await,

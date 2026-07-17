@@ -3,7 +3,7 @@
 //! Reads the snapshot layout the live downloader writes — `<api_dir>/
 //! conversations.json` (post-normalize array of full conversations) and
 //! `users.json` — and emits playback fixtures for every request
-//! [`crate::extract::api::ClaudeClient`] would issue:
+//! [`crate::download::api::ClaudeClient`] would issue:
 //!
 //! * `GET /organizations` — reconstructed from the `account.uuid` /
 //!   `org_uuid` fields embedded in the stored conversations.

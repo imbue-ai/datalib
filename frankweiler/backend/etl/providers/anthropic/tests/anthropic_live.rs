@@ -25,7 +25,7 @@
 
 use std::time::Duration;
 
-use frankweiler_etl_anthropic::extract::{
+use frankweiler_etl_anthropic::download::{
     self as anthropic, db::block_on_load_all, db::db_path_for,
 };
 use insta::assert_json_snapshot;

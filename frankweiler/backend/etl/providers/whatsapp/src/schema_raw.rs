@@ -21,7 +21,7 @@
 //!   text messages. For rich content (links, replies, media captions,
 //!   …) the body lives in `wa_message_text` / `wa_message_media` /
 //!   the add-on tables and `text_data` is null.
-//! - `wa_message_add_on.parent_chat_jid` etc. are pinned at extract
+//! - `wa_message_add_on.parent_chat_jid` etc. are pinned at download
 //!   time by joining the source's `parent_message_row_id` → `message`
 //!   → `(chat_jid, key_id, from_me)`. add-ons in WhatsApp model
 //!   reactions, polls, pinned-in-chat markers, etc.

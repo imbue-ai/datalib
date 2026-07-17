@@ -114,7 +114,7 @@ insta_update(
     test = ":extract_smoke_test",
 )
 
-# End-to-end scan of the checked-in TNG-themed tree: points extract at the
+# End-to-end scan of the checked-in TNG-themed tree: points download at the
 # fixture, asserts the landed `files` rows (entry set + `'*.tmp'` ignore +
 # `.fsindex.yaml` exclusion). The fixture is staged via `data = [":tng_fixture"]`.
 rust_test(

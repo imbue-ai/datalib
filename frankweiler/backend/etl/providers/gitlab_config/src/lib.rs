@@ -6,7 +6,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The gitlab-owned slice of a `gitlab_api` source. `sync:` present → live
-/// mirror (the extract path); absent → translate-only over an already-on-disk
+/// mirror (the download path); absent → render-only over an already-on-disk
 /// raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GitlabConfig {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use frankweiler_etl::blob_cas::BlobBundle;
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::section::msg_div_open;
 use frankweiler_etl::title::Title;
@@ -40,7 +40,7 @@ pub struct RenderProfile {
     /// Discriminator for reaction-level grid_rows. Reactions get their
     /// own rows so search can find them by emoji content.
     pub reaction_kind: String,
-    /// Each provider bumps its own render version when its translate
+    /// Each provider bumps its own render version when its render
     /// layer changes meaningfully (column changes, item-shape changes,
     /// new field on grid_rows). The chat-common renderer stamps this
     /// into the sidecar so a re-run knows to invalidate stale docs.
@@ -215,7 +215,7 @@ fn render_one(
 /// On any io error from `materialize_to_dir` we log WARN and leave
 /// `rel_path` alone — the existing renderer branch already handles
 /// the placeholder rendering, and a partial render is strictly better
-/// than a hard fail mid-translate.
+/// than a hard fail mid-render.
 fn materialize_attachment_bytes(
     doc: &NormalizedDoc,
     page_dir: &Path,

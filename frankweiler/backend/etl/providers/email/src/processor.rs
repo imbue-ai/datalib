@@ -1,16 +1,16 @@
 //! Program A `DataProcessor`s for the email source.
 //!
-//! Email contributes an **extract** processor ([`EmailExtract`] — JMAP live
-//! sync or file-backed mbox, chosen by config) and a **translate** processor
+//! Email contributes an **download** processor ([`EmailDownload`] — JMAP live
+//! sync or file-backed mbox, chosen by config) and a **render** processor
 //! ([`EmailRender`]). [`plan_download`] / [`plan_render`] build the per-wave
 //! processors the orchestrator drives, owning every email-specific decision
-//! (which extract mode, whether
+//! (which download mode, whether
 //! an mbox is present, the outlink flavor) so the orchestrator destructures
 //! nothing.
 //!
-//! Storage ownership lives here, not in the orchestrator: [`EmailExtract`]
+//! Storage ownership lives here, not in the orchestrator: [`EmailDownload`]
 //! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
-//! for interrupt-safety, and issues its own post-extract `dolt_commit`. The
+//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
 //! orchestrator never sees a pool or a commit. (The per-source *report* is
 //! still assembled orchestrator-side for now — tracked in issue #37.)
 
@@ -23,8 +23,8 @@ use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use frankweiler_etl_email_config::{EmailConfig, EmailOutlink, EmailSync, MboxSync};
 
-use crate::extract;
-use crate::render_and_index_md::render::OutlinkFormat;
+use crate::download;
+use crate::render::render::OutlinkFormat;
 
 /// Download wave: present iff managed — `sync:` → JMAP; else an
 /// `.mbox` under input_path → mbox mode.
@@ -59,8 +59,8 @@ pub fn plan_download(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dy
 
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(mode) = mode {
-        procs.push(Box::new(EmailExtract {
-            id: format!("email/{name}/extract"),
+        procs.push(Box::new(EmailDownload {
+            id: format!("email/{name}/download"),
             raw_path,
             mode,
             blob_size_limit_bytes,
@@ -76,7 +76,7 @@ pub fn plan_render(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
     let raw_path = config.common.raw_path().to_path_buf();
     let outlink = config.outlink_format.map(outlink_format);
     Ok(vec![Box::new(EmailRender {
-        id: format!("email/{name}/translate"),
+        id: format!("email/{name}/render"),
         raw_path,
         name,
         outlink,
@@ -91,7 +91,7 @@ fn outlink_format(f: EmailOutlink) -> OutlinkFormat {
     }
 }
 
-/// Which extract path email takes for this source.
+/// Which download path email takes for this source.
 enum ExtractMode {
     /// Live JMAP server sync.
     Jmap(EmailSync),
@@ -102,8 +102,8 @@ enum ExtractMode {
     },
 }
 
-/// Email's extract processor. Owns its raw doltlite store end to end.
-pub struct EmailExtract {
+/// Email's download processor. Owns its raw doltlite store end to end.
+pub struct EmailDownload {
     id: String,
     raw_path: PathBuf,
     mode: ExtractMode,
@@ -114,7 +114,7 @@ pub struct EmailExtract {
 }
 
 #[async_trait]
-impl DataProcessor for EmailExtract {
+impl DataProcessor for EmailDownload {
     fn id(&self) -> &str {
         &self.id
     }
@@ -123,13 +123,13 @@ impl DataProcessor for EmailExtract {
         // The source owns the store: open it, hand the orchestrator only an
         // opaque interrupt-commit hook, do the work, commit, close. No pool or
         // `dolt_commit` ever crosses back to the orchestrator.
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
 
         let summary = match &self.mode {
             ExtractMode::Jmap(sync) => {
-                let s = extract::fetch(extract::FetchOptions {
+                let s = download::fetch(download::FetchOptions {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     hostname: sync.hostname.clone(),
@@ -157,12 +157,12 @@ impl DataProcessor for EmailExtract {
                 input_path,
                 account_config,
             } => {
-                let s = extract::mbox::fetch(extract::mbox::FetchOptions {
+                let s = download::mbox::fetch(download::mbox::FetchOptions {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     input_path: input_path.clone(),
                     account_id_override: account_config.account_id.clone(),
-                    account_config: extract::mbox::MboxAccountConfig {
+                    account_config: download::mbox::MboxAccountConfig {
                         account_id: account_config.account_id.clone(),
                         display_name: account_config.display_name.clone(),
                         email_address: account_config.email_address.clone(),
@@ -187,13 +187,13 @@ impl DataProcessor for EmailExtract {
             }
         };
 
-        // The source's post-extract commit + pool close (uniform across
+        // The source's post-download commit + pool close (uniform across
         // providers); keeps the old `{stats} commit={h}` summary suffix.
         Ok(session.finish(ctx, summary).await)
     }
 }
 
-/// Email's translate processor — reads the raw store and emits one rendered
+/// Email's render processor — reads the raw store and emits one rendered
 /// markdown per thread through the fused-Load callback.
 pub struct EmailRender {
     id: String,
@@ -212,10 +212,10 @@ impl DataProcessor for EmailRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::parse::parse;
-        use crate::render_and_index_md::render::render_all;
+        use crate::render::parse::parse;
+        use crate::render::render::render_all;
 
-        let db = extract::db_path_for(&self.raw_path);
+        let db = download::db_path_for(&self.raw_path);
         if !db.exists() {
             tracing::info!(
                 source = %self.name,

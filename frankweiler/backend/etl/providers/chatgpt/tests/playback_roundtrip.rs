@@ -1,9 +1,9 @@
-//! End-to-end synth → playback → extract round-trip.
+//! End-to-end synth → playback → download round-trip.
 //!
 //! Builds a fake on-disk ChatGPT JSON snapshot (the format the
 //! synthesizer reads), runs the HTTP fixture synthesizer over it,
 //! points `FRANKWEILER_HTTP_PLAYBACK` at the resulting fixture tree,
-//! then drives `extract::fetch` against a fresh doltlite database.
+//! then drives `download::fetch` against a fresh doltlite database.
 //! Asserts the rehydrated DB matches the input.
 //!
 //! Lives in its own integration-test file so the process-wide
@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_chatgpt::extract::{
+use frankweiler_etl_chatgpt::download::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions,
 };
 use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;

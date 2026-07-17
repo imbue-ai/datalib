@@ -5,7 +5,7 @@
 //! `GoogleTakeoutSync` is the per-feed opt-in block; it replaces the copy
 //! that used to live in `frankweiler-core`'s `config.rs`. The provider's
 //! `plan()` maps it field-for-field onto
-//! `frankweiler_etl_google_takeout::extract::SyncFlags`, so the SyncFlags
+//! `frankweiler_etl_google_takeout::download::SyncFlags`, so the SyncFlags
 //! duplication is now provider-owned rather than orchestrator-owned.
 
 use frankweiler_source_common::SourceCommon;
@@ -31,7 +31,7 @@ impl GoogleTakeoutConfig {
 }
 
 /// Per-feed opt-in switches for a Google Takeout export. Mirrors
-/// `frankweiler_etl_google_takeout::extract::SyncFlags` (the provider's
+/// `frankweiler_etl_google_takeout::download::SyncFlags` (the provider's
 /// `plan()` maps one to the other); defaults are all `false` so a fresh user
 /// enables each feed consciously.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

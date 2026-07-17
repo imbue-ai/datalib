@@ -3,7 +3,7 @@
 //! Reads the snapshot layout the live downloader writes
 //! (`<api_dir>/me.json`, `conversations.json`,
 //! `conversations/<id>.json`) and emits playback fixtures matching
-//! every request [`crate::extract::api::ChatGPTClient`] would issue:
+//! every request [`crate::download::api::ChatGPTClient`] would issue:
 //!
 //! * `GET /backend-api/me`
 //! * `GET /backend-api/conversations?offset=N&limit=100&order=updated`
@@ -22,8 +22,8 @@ use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-/// Matches `extract::PAGE_SIZE`. Hard-coded rather than imported so the
-/// synthesizer doesn't drag in extract's tokio/tracing deps just for a
+/// Matches `download::PAGE_SIZE`. Hard-coded rather than imported so the
+/// synthesizer doesn't drag in download's tokio/tracing deps just for a
 /// constant; the test below pins them together.
 const PAGE_SIZE: usize = 100;
 
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn page_size_matches_extract() {
-        assert_eq!(PAGE_SIZE, crate::extract::PAGE_SIZE);
+        assert_eq!(PAGE_SIZE, crate::download::PAGE_SIZE);
     }
 
     fn write(path: &Path, v: &Value) {

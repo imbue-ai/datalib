@@ -3,7 +3,7 @@
 //! Regression guard for the format-mismatch bug (commit 1fc3ee8, then
 //! reintroduced in the Rust port): the `/conversations` listing reports
 //! `update_time` as an ISO-8601 string while `/conversation/{id}`
-//! reports it as a Unix-epoch float. The extract path stores the detail
+//! reports it as a Unix-epoch float. The download path stores the detail
 //! float, so a naive byte-for-byte comparison against the listing string
 //! never matches and every already-downloaded conversation gets
 //! re-fetched — defeating incremental resume.
@@ -23,7 +23,7 @@ use std::time::Duration;
 use chrono::DateTime;
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_chatgpt::extract::{fetch, FetchOptions};
+use frankweiler_etl_chatgpt::download::{fetch, FetchOptions};
 use frankweiler_etl_chatgpt::synthesize::ChatgptSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -43,14 +43,14 @@ fn iso_for_epoch(epoch: f64) -> String {
         .to_string()
 }
 
-async fn run_fetch(out_db: &std::path::Path) -> frankweiler_etl_chatgpt::extract::FetchSummary {
+async fn run_fetch(out_db: &std::path::Path) -> frankweiler_etl_chatgpt::download::FetchSummary {
     run_fetch_since(out_db, None).await
 }
 
 async fn run_fetch_since(
     out_db: &std::path::Path,
     since: Option<&str>,
-) -> frankweiler_etl_chatgpt::extract::FetchSummary {
+) -> frankweiler_etl_chatgpt::download::FetchSummary {
     fetch(FetchOptions {
         db_path: out_db.to_path_buf(),
         max_pages: None,

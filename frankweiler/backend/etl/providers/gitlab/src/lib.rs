@@ -1,4 +1,4 @@
-pub mod extract;
+pub mod download;
 pub mod processor;
-pub mod render_and_index_md;
+pub mod render;
 pub mod synthesize;

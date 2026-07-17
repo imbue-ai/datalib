@@ -1,7 +1,7 @@
 //! `whatsapp-make-fixture <spec.json> <out_dir>` — produces an encrypted
 //! WhatsApp-Android backup directory from a TNG-themed JSON spec.
 //!
-//! Output layout matches what `whatsapp::extract::ingest` expects:
+//! Output layout matches what `whatsapp::download::ingest` expects:
 //!
 //! ```text
 //! <out_dir>/<backup_dir_name>/
@@ -216,7 +216,7 @@ async fn open_writable_sqlite(path: &Path) -> Result<SqlitePool> {
         .context("open fixture sqlite pool")
 }
 
-/// Subset of the real msgstore schema covering the columns our extract
+/// Subset of the real msgstore schema covering the columns our download
 /// reads. Anything not referenced is omitted to keep this binary
 /// reasonable — the encrypt path doesn't care about column count.
 async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {

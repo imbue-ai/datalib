@@ -1,6 +1,6 @@
-//! Program-A `DataProcessor`s for the slack_api source (extract + translate).
+//! Program-A `DataProcessor`s for the slack_api source (download + render).
 //!
-//! Slack is the one provider that consumes the wire-event tape: its extract
+//! Slack is the one provider that consumes the wire-event tape: its download
 //! processor wires its own `EventTape` onto its `RawDb` (when enabled via the
 //! resolved shared config, surfaced via `config.common.event_tape_enabled()`) — so
 //! the orchestrator no longer needs the `HasEventTape` capability or the
@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_slack_config::{SlackApiSync, SlackConfig};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed).
 pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
@@ -25,8 +25,8 @@ pub fn plan_download(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dy
     let event_tape_enabled = config.common.event_tape_enabled();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(SlackExtract {
-            id: format!("slack/{name}/extract"),
+        procs.push(Box::new(SlackDownload {
+            id: format!("slack/{name}/download"),
             raw_path,
             sync,
             blob_size_limit_bytes,
@@ -41,13 +41,13 @@ pub fn plan_render(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn 
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(SlackRender {
-        id: format!("slack/{name}/translate"),
+        id: format!("slack/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-struct SlackExtract {
+struct SlackDownload {
     id: String,
     raw_path: PathBuf,
     sync: SlackApiSync,
@@ -56,14 +56,14 @@ struct SlackExtract {
 }
 
 #[async_trait]
-impl DataProcessor for SlackExtract {
+impl DataProcessor for SlackDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let mut db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let mut db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
         // resolved shared config leaves it enabled. (The orchestrator used to
@@ -79,7 +79,7 @@ impl DataProcessor for SlackExtract {
             );
             db.attach_event_tape(tape);
         }
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             channels: self.sync.channels.clone(),
@@ -87,7 +87,7 @@ impl DataProcessor for SlackExtract {
                 .sync
                 .since
                 .clone()
-                .unwrap_or_else(|| extract::DEFAULT_SINCE.into()),
+                .unwrap_or_else(|| download::DEFAULT_SINCE.into()),
             refresh_window_days: self.sync.refresh_window_days.unwrap_or(0),
             members_only: !self.sync.all_channels && self.sync.channels.is_none(),
             media: self.sync.media,
@@ -120,7 +120,7 @@ impl DataProcessor for SlackRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse::parse, render::render_all};
+        use crate::render::{parse::parse, render::render_all};
         let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read slack render cursor {}", cursor_path.display()))?;

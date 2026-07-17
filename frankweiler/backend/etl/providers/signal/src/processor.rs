@@ -1,6 +1,6 @@
 //! Program-A `DataProcessor`s for the `signal_backup` source. A managed
-//! signal source (`sync:` present) contributes extract + translate; the
-//! translate processor is always present (renders whatever is in the raw
+//! signal source (`sync:` present) contributes download + render; the
+//! render processor is always present (renders whatever is in the raw
 //! store). The source owns its raw store (open/commit/checkpoint); the
 //! orchestrator only drives `run`.
 
@@ -13,7 +13,7 @@ use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_signal_config::{SignalConfig, SignalSync};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave. Signal REQUIRES a `sync.snapshot_dir`: a managed
 /// signal source without a `sync:` block has nowhere to read snapshots
@@ -27,8 +27,8 @@ pub fn plan_download(
     let sync = config
         .sync
         .ok_or_else(|| anyhow!("signal_backup source {name} missing sync.snapshot_dir"))?;
-    Ok(vec![Box::new(SignalExtract {
-        id: format!("signal/{name}/extract"),
+    Ok(vec![Box::new(SignalDownload {
+        id: format!("signal/{name}/download"),
         raw_path,
         sync,
     })])
@@ -44,33 +44,33 @@ pub fn plan_render(ctx: PlanContext, config: SignalConfig) -> Result<Vec<Box<dyn
     let period = Period::from_config(config.sync.as_ref().and_then(|s| s.period.as_deref()))
         .context("signal period")?;
     Ok(vec![Box::new(SignalRender {
-        id: format!("signal/{name}/translate"),
+        id: format!("signal/{name}/render"),
         raw_path,
         name,
         period,
     })])
 }
 
-/// Signal's extract processor. Owns its raw doltlite store end to end: opens
+/// Signal's download processor. Owns its raw doltlite store end to end: opens
 /// it, registers an opaque interrupt-commit hook, decrypts the newest snapshot
 /// under `snapshot_dir`, commits, closes.
-struct SignalExtract {
+struct SignalDownload {
     id: String,
     raw_path: PathBuf,
     sync: SignalSync,
 }
 
 #[async_trait]
-impl DataProcessor for SignalExtract {
+impl DataProcessor for SignalDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             snapshot_root: self.sync.snapshot_dir.clone(),
@@ -91,7 +91,7 @@ impl DataProcessor for SignalExtract {
     }
 }
 
-/// Signal's translate processor — reads the raw store (driven by the render
+/// Signal's render processor — reads the raw store (driven by the render
 /// cursor's commit) and emits one rendered markdown per period-bucket through
 /// the fused-Load callback.
 struct SignalRender {
@@ -108,7 +108,7 @@ impl DataProcessor for SignalRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse, render_all};
+        use crate::render::{parse, render_all};
 
         let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)

@@ -17,7 +17,7 @@
 //! - [`snapshot`] reads every `(scope, last_seen_at)` row for diffing.
 //! - [`CursorMove`] / [`diff`] turn a before/after snapshot pair into
 //!   the per-scope advancement stamped into `sync_runs.summary.cursors`
-//!   by `ExtractRun::finish`.
+//!   by `DownloadRun::finish`.
 
 use std::collections::HashMap;
 
@@ -62,7 +62,7 @@ pub fn since_for_scope(
 }
 
 /// Snapshot every `(scope, last_seen_at)` row from `sync_scope_state`.
-/// Used by [`ExtractRun`] to capture before/after cursor positions for
+/// Used by [`DownloadRun`] to capture before/after cursor positions for
 /// diffing into `summary.cursors`.
 pub async fn snapshot(pool: &SqlitePool) -> Result<HashMap<String, String>> {
     let rows: Vec<(String, String)> =

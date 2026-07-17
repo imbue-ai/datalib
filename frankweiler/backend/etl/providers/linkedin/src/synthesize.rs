@@ -1,7 +1,7 @@
 //! HTTP playback synthesizer for the LinkedIn connection-photo fetch.
 //!
-//! LinkedIn extract is otherwise file-backed (it walks CSVs), but the
-//! optional photo fetch ([`crate::extract::photos`]) makes real web
+//! LinkedIn download is otherwise file-backed (it walks CSVs), but the
+//! optional photo fetch ([`crate::download::photos`]) makes real web
 //! requests: GET the profile page, scrape `og:image`, GET the image. To
 //! exercise that path hermetically in the TNG fixture pipeline, this
 //! synthesizer reads `Connections.csv` and writes, for each connection:
@@ -21,8 +21,8 @@ use anyhow::{Context, Result};
 use frankweiler_etl::http::HttpResponse;
 use frankweiler_etl::synthesize::{write_fixture, SynthesizeReport, Synthesizer};
 
-use crate::extract::photos::photo_request;
-use crate::extract::strip_notes_preamble;
+use crate::download::photos::photo_request;
+use crate::download::strip_notes_preamble;
 
 pub struct LinkedinSynth {
     /// The unzipped export directory (holds `Connections.csv`).

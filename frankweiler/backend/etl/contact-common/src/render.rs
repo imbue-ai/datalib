@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::title::Title;
 use frankweiler_index_lib::emit_sidecar;

@@ -20,7 +20,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use frankweiler_etl::blob_cas::BlobBundle;
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_chat_common::render::{render_all as cc_render_all, RenderProfile};
 use frankweiler_etl_chat_common::types::{
@@ -28,8 +28,8 @@ use frankweiler_etl_chat_common::types::{
 };
 use serde_json::Value;
 
-use crate::extract::schema_raw::{message_tables, ns_id as uuid5};
-use crate::extract::{db_path_for, RawDb};
+use crate::download::schema_raw::{message_tables, ns_id as uuid5};
+use crate::download::{db_path_for, RawDb};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
 const RENDER_VERSION: u32 = 1;

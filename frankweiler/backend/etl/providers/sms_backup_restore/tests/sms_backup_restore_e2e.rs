@@ -1,6 +1,6 @@
 //! End-to-end test for the "SMS Backup & Restore" provider.
 //!
-//! Points extract at the checked-in TNG export tree (sms + calls XML
+//! Points download at the checked-in TNG export tree (sms + calls XML
 //! with inline base64 image / audio attachments), asserts the landed
 //! raw tables + CAS blobs and the resume cursor, then runs render and
 //! asserts the merged per-number conversations + materialized
@@ -11,10 +11,10 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_sms_backup_restore::extract::{self, db_path_for, FetchOptions, RawDb};
-use frankweiler_etl_sms_backup_restore::render_and_index_md;
+use frankweiler_etl_sms_backup_restore::download::{self, db_path_for, FetchOptions, RawDb};
+use frankweiler_etl_sms_backup_restore::render;
 
 fn fixture_root() -> PathBuf {
     // Under Bazel the fixture is staged into runfiles and pointed at by
@@ -37,8 +37,8 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         .build()?;
 
     rt.block_on(async {
-        // ── extract ──────────────────────────────────────────────
-        let summary = extract::fetch(FetchOptions {
+        // ── download ──────────────────────────────────────────────
+        let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
             db: None,
             input_path: fixture_root(),
@@ -75,7 +75,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // ── resume cursor ────────────────────────────────────────
         // A second pass over the unchanged files is a no-op: the
         // (size, mtime) cursor skips both, and nothing re-ingests.
-        let again = extract::fetch(FetchOptions {
+        let again = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
             db: None,
             input_path: fixture_root(),
@@ -100,7 +100,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
                 docs.push(d);
                 Ok(())
             };
-            render_and_index_md::render(
+            render::render(
                 &raw_dir,
                 &out_dir,
                 "sms_backup_restore",

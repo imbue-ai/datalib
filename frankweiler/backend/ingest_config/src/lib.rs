@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub use frankweiler_source_common::{Defaults, EventTapeConfig, ExtractParams, SourceCommon};
+pub use frankweiler_source_common::{Defaults, DownloadParams, EventTapeConfig, SourceCommon};
 
 use frankweiler_etl_anthropic_config::AnthropicConfig;
 use frankweiler_etl_beeper_config::BeeperConfig;
@@ -68,11 +68,11 @@ pub struct Config {
     pub sources: Vec<SourceEntry>,
 }
 
-/// Settings for `frankweiler-sync` — the one-shot pipeline that walks every
-/// enabled source's Extract → Translate → Load chain.
+/// Settings for the retired `frankweiler-sync` legacy config format — the
+/// enabled source's download → render → grid_index chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
-    /// Run extract AND translate for all enabled sources concurrently.
+    /// Run download AND render for all enabled sources concurrently.
     #[serde(default = "default_true")]
     pub parallel: bool,
 }
@@ -156,7 +156,7 @@ pub enum SourceConfig {
     WhatsAppBackup(WhatsappConfig),
     SmsBackupRestore(SmsBackupRestoreConfig),
     /// Directory-tree scanner (Unison-style fast rescan). File-backed and
-    /// **extract-only** — it indexes the tree at `input_path` into a raw store
+    /// **download-only** — it indexes the tree at `input_path` into a raw store
     /// and renders nothing.
     Fsindex(FsindexConfig),
 }
@@ -231,7 +231,7 @@ impl SourceConfig {
     /// True when the worker is allowed to download into / build the raw store
     /// for this source — a `sync:` block, or (for file-backed sources) an
     /// `input_path:` export on disk. `claude_export` is never managed (it is a
-    /// pure translate-only view of a local export).
+    /// pure render-only view of a local export).
     pub fn is_managed(&self) -> bool {
         match self {
             SourceConfig::ClaudeExport(_) => false,
@@ -280,7 +280,7 @@ pub struct QmdConfig {
     /// qmd collection name; also forms the `qmd://<collection>/…` URIs.
     #[serde(default = "default_qmd_collection")]
     pub collection: String,
-    /// Skip building the qmd index during `frankweiler-sync`.
+    /// Skip building the qmd index (legacy flag; the migration drops the qmd_index step instead).
     #[serde(default)]
     pub skip: bool,
     /// Directory where `qmd` caches its embedding model. Defaults to
@@ -969,8 +969,8 @@ sources:
     }
 
     #[test]
-    fn extract_params_default_when_unset() {
-        let ep = ExtractParams::default();
+    fn download_params_default_when_unset() {
+        let ep = DownloadParams::default();
         assert_eq!(
             ep.max_time_without_progress(),
             std::time::Duration::from_secs(30 * 60)
@@ -979,14 +979,14 @@ sources:
     }
 
     #[test]
-    fn extract_params_source_overrides_one_field_only() {
+    fn download_params_source_overrides_one_field_only() {
         // Global sets both; the source overrides only the failure count. The
         // unset (minutes) field falls through to the global; a sibling inherits
         // both globals.
         let (cfg_path, _root) = write_cfg(
             "data_root: __ROOT__
 defaults:
-  extract_params:
+  download_params:
     maximum_time_without_progress_in_minutes: 10
     maximum_sequential_failed_requests: 5
 sources:
@@ -994,7 +994,7 @@ sources:
     source:
       type: slack_api
       common:
-        extract_params:
+        download_params:
           maximum_sequential_failed_requests: 99
       sync: {channels: ['c']}
   - name: gh
@@ -1007,17 +1007,45 @@ sources:
         let slack = cfg.sources.iter().find(|s| s.name() == "slack").unwrap();
         let gh = cfg.sources.iter().find(|s| s.name() == "gh").unwrap();
 
-        let slack_ep = &slack.source.common().extract_params;
+        let slack_ep = &slack.source.common().download_params;
         assert_eq!(slack_ep.max_sequential_failures(), 99);
         assert_eq!(
             slack_ep.max_time_without_progress(),
             std::time::Duration::from_secs(10 * 60)
         );
 
-        let gh_ep = &gh.source.common().extract_params;
+        let gh_ep = &gh.source.common().download_params;
         assert_eq!(gh_ep.max_sequential_failures(), 5);
         assert_eq!(
             gh_ep.max_time_without_progress(),
+            std::time::Duration::from_secs(10 * 60)
+        );
+    }
+
+    #[test]
+    fn download_params_parses_via_legacy_extract_params_alias() {
+        // Existing user configs still say `extract_params:` — the serde
+        // alias on SourceCommon/Defaults must keep them parsing.
+        let (cfg_path, _root) = write_cfg(
+            "data_root: __ROOT__
+defaults:
+  extract_params:
+    maximum_time_without_progress_in_minutes: 10
+sources:
+  - name: slack
+    source:
+      type: slack_api
+      common:
+        extract_params:
+          maximum_sequential_failed_requests: 99
+      sync: {channels: ['c']}
+",
+        );
+        let cfg = load_config(Some(&cfg_path)).unwrap();
+        let ep = &cfg.sources[0].source.common().download_params;
+        assert_eq!(ep.max_sequential_failures(), 99);
+        assert_eq!(
+            ep.max_time_without_progress(),
             std::time::Duration::from_secs(10 * 60)
         );
     }

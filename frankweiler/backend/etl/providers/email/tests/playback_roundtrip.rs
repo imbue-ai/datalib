@@ -1,6 +1,6 @@
 //! Placeholder. The real playback roundtrip will: synth checked-in
 //! JSON fixtures → playback dir, point `FRANKWEILER_HTTP_PLAYBACK` at
-//! it, run `extract::fetch`, then assert the resulting doltlite db
+//! it, run `download::fetch`, then assert the resulting doltlite db
 //! mirrors the fixture. Lands with the `synthesize.rs` implementation.
 
 #[test]

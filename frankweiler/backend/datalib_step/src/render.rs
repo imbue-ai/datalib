@@ -1,4 +1,4 @@
-//! The render step driver: one source's translate wave, un-fused from
+//! The render step driver: one source's render wave, un-fused from
 //! Load.
 //!
 //! The provider's translate `DataProcessor`s (planned per-provider by
@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::processor::{CheckpointSink, RunCtx};
 use serde::Deserialize;
 
@@ -43,19 +43,19 @@ pub async fn run(
     let out_rel = format!("{}/rendered_md", planned.name);
     let data_root = data_root.to_path_buf();
     let docs_in = docs.clone();
-    // Translate is synchronous render work driven by `futures`'
-    // executor (NOT tokio's — see sync's render_processor_translate
-    // for the double-runtime story); run it on a blocking thread.
+    // Render is synchronous work driven by `futures`' executor (NOT
+    // tokio's — providers block_on their own internal futures); run it
+    // on a blocking thread.
     tokio::task::spawn_blocking(move || -> Result<()> {
         let checkpoints = CheckpointSink::new();
-        let control = frankweiler_etl::control::ExtractControl::default();
+        let control = frankweiler_etl::control::DownloadControl::default();
         let now = String::new();
         let mut on_doc = |_md: RenderedMarkdown| -> Result<()> {
             docs_in.fetch_add(1, Ordering::SeqCst);
             Ok(())
         };
         for proc in &planned.processors {
-            let ctx = RunCtx::for_translate(
+            let ctx = RunCtx::for_render(
                 &planned.name,
                 &data_root,
                 &now,

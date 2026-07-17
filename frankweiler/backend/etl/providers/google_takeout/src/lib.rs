@@ -17,7 +17,7 @@
 //!
 //! ## Scope (first pass)
 //!
-//! - Raw-extract only. No translate, no `GridRow`s yet — see
+//! - Raw-download only. No render, no `GridRow`s yet — see
 //!   `docs/dev/google_takeout_ingestion.md` § "Out of scope (first
 //!   pass)".
 //! - Wire-tape JSONL is not emitted (the data didn't come off a
@@ -28,6 +28,6 @@
 //!   lives on disk at `input_path` if anyone wants the rendered
 //!   form.
 
-pub mod extract;
+pub mod download;
 pub mod processor;
-pub mod render_and_index_md;
+pub mod render;

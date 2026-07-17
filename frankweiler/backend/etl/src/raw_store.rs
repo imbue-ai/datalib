@@ -5,7 +5,7 @@
 //! Program A's rule is that the orchestrator is storage-agnostic: a source that
 //! keeps a doltlite store owns it end to end (open, schema, write, commit,
 //! before/after snapshot, "what changed" report) and exposes only opaque seams
-//! — an interrupt [`Checkpoint`] and a published [`ExtractReport`] — so the
+//! — an interrupt [`Checkpoint`] and a published [`DownloadReport`] — so the
 //! orchestrator never reads the store.
 //!
 //! [`RawStoreSession`] is that easy button: open it over a source's write pool
@@ -22,12 +22,12 @@ use async_trait::async_trait;
 use frankweiler_obs::diagnostics::Diagnostics;
 use sqlx::sqlite::SqlitePool;
 
-use crate::extract_metrics::{
-    assemble_report, snapshot_source, DbSnapshot, ExtractMetrics, ExtractReport,
+use crate::download_metrics::{
+    assemble_report, snapshot_source, DbSnapshot, DownloadMetrics, DownloadReport,
 };
 use crate::processor::{Checkpoint, RunCtx};
 
-/// A doltlite raw-store session owned by a single extract processor. Captures
+/// A doltlite raw-store session owned by a single download processor. Captures
 /// the before-snapshot at [`open`](RawStoreSession::open), commits + snapshots +
 /// reports at [`finish`](RawStoreSession::finish), and exposes an interrupt
 /// [`Checkpoint`] that does the same on Ctrl-C — all source-side.
@@ -37,7 +37,7 @@ pub struct RawStoreSession {
     before_events: DbSnapshot,
     before_blobs: DbSnapshot,
     source_name: String,
-    metrics: Arc<ExtractMetrics>,
+    metrics: Arc<DownloadMetrics>,
     diagnostics: Arc<Diagnostics>,
 }
 
@@ -74,7 +74,7 @@ impl RawStoreSession {
 
     /// Clean-completion finish: commit the source's `dolt_commit` (appending the
     /// `commit=<hash>` suffix to `summary`), snapshot-after + assemble the
-    /// [`ExtractReport`], publish it through `ctx`, and `close()` the pool so
+    /// [`DownloadReport`], publish it through `ctx`, and `close()` the pool so
     /// translate can re-open the file. Best-effort commit — a failure logs and
     /// returns the bare summary.
     pub async fn finish(self, ctx: &RunCtx<'_>, summary: String) -> String {
@@ -102,14 +102,14 @@ struct RawStoreCheckpoint {
     before_events: DbSnapshot,
     before_blobs: DbSnapshot,
     source_name: String,
-    metrics: Arc<ExtractMetrics>,
+    metrics: Arc<DownloadMetrics>,
     diagnostics: Arc<Diagnostics>,
 }
 
 #[async_trait]
 impl Checkpoint for RawStoreCheckpoint {
-    async fn checkpoint(&self) -> Result<Option<ExtractReport>> {
-        let msg = format!("extract {}: interrupted (Ctrl-C)", self.source_name);
+    async fn checkpoint(&self) -> Result<Option<DownloadReport>> {
+        let msg = format!("download {}: interrupted (Ctrl-C)", self.source_name);
         crate::doltlite_raw::commit_run(&self.pool, &msg).await?;
         let report = assemble_report(
             &self.entity_path,
@@ -123,12 +123,12 @@ impl Checkpoint for RawStoreCheckpoint {
     }
 }
 
-/// The source's post-extract commit: commit the write pool (`extract <name>:
+/// The source's post-download commit: commit the write pool (`download <name>:
 /// <summary>`) and append the resulting `commit=<hash>` to the summary, exactly
 /// as the old orchestrator did. Best-effort — a failure logs and returns the
 /// bare summary (the data is already on disk). Does NOT close the pool.
 async fn commit_with_suffix(pool: &SqlitePool, source_name: &str, summary: String) -> String {
-    let msg = format!("extract {source_name}: {summary}");
+    let msg = format!("download {source_name}: {summary}");
     match crate::doltlite_raw::commit_run(pool, &msg).await {
         Ok(Some(h)) => format!("{summary} commit={h}"),
         Ok(None) => summary,
@@ -136,7 +136,7 @@ async fn commit_with_suffix(pool: &SqlitePool, source_name: &str, summary: Strin
             tracing::error!(
                 source = %source_name,
                 error = %format!("{e:#}"),
-                "extract commit FAILED",
+                "download commit FAILED",
             );
             summary
         }

@@ -50,7 +50,7 @@ rust_test(
     ],
 )
 
-# End-to-end test: points extract at the checked-in TNG export tree,
+# End-to-end test: points download at the checked-in TNG export tree,
 # asserts the landed raw tables + CAS blobs, runs render, and asserts the
 # rendered conversations + attachments. The fixture is staged via
 # `data = [":tng_fixture"]`.

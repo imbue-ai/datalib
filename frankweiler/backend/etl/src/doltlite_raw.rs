@@ -93,7 +93,7 @@
 //! get around it by setting the pool size to 1". For our workload
 //! that's the right answer anyway: every doltlite file in this
 //! codebase has at most one writer at a time and one reader at a
-//! time, and the [`crate::load::WriteLock`] already serializes
+//! time, and the [`crate::grid_index::WriteLock`] already serializes
 //! cross-task writers at the application layer.
 //!
 //! [`open`] therefore pins `max_connections(1)`. All other code
@@ -202,13 +202,13 @@ pub fn bookkeeping_ddl_for(table: &str) -> String {
 /// SQL mismatch.
 ///
 /// Per-row content fingerprints used to live next to these as a
-/// `payload_blake3` hex hash, hand-maintained by every extract site
+/// `payload_blake3` hex hash, hand-maintained by every download site
 /// and consumed by translate to drive incremental skip. That column is
 /// gone: translate now asks doltlite directly via `dolt_diff_<table>`
 /// what changed since the last render, which is both cheaper (the
 /// prolly-tree diff is already in dolt's hot path) and the single
 /// source of truth — see [`crate::render_cursor`] and the per-provider
-/// `render_and_index_md::parse` for the new shape.
+/// `render::parse` for the new shape.
 ///
 /// Pair with [`wire_payload_table_ddl`] (the hand-written DDL helper)
 /// or — for the canonical path — the derive macro, which generates
@@ -227,7 +227,7 @@ pub struct WirePayload {
 /// Hand-implementing this trait is possible but unusual; the
 /// `#[derive(WirePayloadRow)]` macro in `frankweiler-etl-macros`
 /// generates it (and the matching `BulkUpsertable` impl) from a row
-/// struct in one shot. See `signal::extract::schema_raw` for the
+/// struct in one shot. See `signal::download::schema_raw` for the
 /// canonical applications.
 pub trait WirePayloadRow {
     /// `CREATE TABLE IF NOT EXISTS …` for this row type's table.
@@ -296,7 +296,7 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
 // the content payload reconstructs exactly what came off the wire.
 //
 // Which fields are volatile is declared per-provider next to the row's
-// table definition (see `slack::extract::schema_raw`) as a slice of
+// table definition (see `slack::download::schema_raw`) as a slice of
 // [`VolatilePath`]s.
 
 /// One volatile field path: object keys from the payload root down to
@@ -398,7 +398,7 @@ fn insert_path(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: V
 // Shared DDL
 // ─────────────────────────────────────────────────────────────────────
 
-/// Append-only log of sync invocations. One row per `extract::fetch`
+/// Append-only log of sync invocations. One row per `download::fetch`
 /// call, stamped via [`start_run`] / [`finish_run`]. A crash mid-sync
 /// still leaves a row with `status='running'`.
 pub const SYNC_RUNS_DDL: &str = "CREATE TABLE IF NOT EXISTS sync_runs (
@@ -893,17 +893,17 @@ pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
 
 /// Open (or no-op) a doltlite file on disk and stamp it with one
 /// commit. Returns the commit hash, `Ok(None)` if the file doesn't
-/// exist (e.g. extract aborted before materializing any rows) or if
+/// exist (e.g. download aborted before materializing any rows) or if
 /// the linked libsqlite3 isn't doltlite. Errors only on a real
 /// open/commit failure.
 ///
-/// Used by `frankweiler-sync` after each extract source finishes
-/// (`ExtractPlan::run`) AND from the SIGINT handler to flush
+/// Used after each source's download finishes AND from the SIGINT
+/// handler to flush
 /// in-flight stores before exit. Tests live in this module.
 ///
 /// The helper opens a brief pool with no extra DDL — the shared
 /// tables (sync_runs, blobs, …) are already in the file from the
-/// extract pool's lifetime; `open` is CREATE-IF-NOT-EXISTS so it's a
+/// download pool's lifetime; `open` is CREATE-IF-NOT-EXISTS so it's a
 /// no-op for tables that already exist.
 pub async fn commit_run_at_path(out_dir: &Path, msg: &str) -> Result<Option<String>> {
     let db_path = db_path_for(out_dir);
@@ -951,7 +951,7 @@ pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> 
 // ─────────────────────────────────────────────────────────────────────
 
 /// Truncate every per-row table in the provider's raw store, so the
-/// next `extract::fetch` re-downloads everything from upstream.
+/// next `download::fetch` re-downloads everything from upstream.
 ///
 /// Wipes, in one transaction:
 ///   - each `<table>` in `data_tables`
@@ -1223,7 +1223,7 @@ pub async fn bulk_upsert_events(
 /// All-in-one entity-bulk-write chokepoint paired with a JSONL
 /// wire-tape mirror. Use this when the caller already has a
 /// [`crate::bulk::BulkUpsertable`] row vec in hand (every ported
-/// extract path does), since [`bulk_upsert_events`] above only
+/// download path does), since [`bulk_upsert_events`] above only
 /// handles bookkeeping + tape and assumes the entity rows were
 /// written elsewhere in the tx.
 ///
@@ -1445,7 +1445,7 @@ pub async fn scan_buckets(
         Ok(r) => r,
         Err(e) => {
             // `dolt_diff_<table>` can fail to resolve on a brand-new
-            // working set (extract ran but no commit yet), or when
+            // working set (download ran but no commit yet), or when
             // doltlite extensions aren't linked. Fall back to
             // cold-start so we don't return "nothing changed" when
             // we can't tell.
@@ -1965,17 +1965,17 @@ mod tests {
         assert_eq!(logged_msg, msg, "dolt_log message mismatch");
     }
 
-    /// End-to-end test of the per-source extract commit path:
-    /// `frankweiler-sync::ExtractPlan::run` calls `commit_run_at_path`
-    /// after each provider's extract finishes, against the doltlite_db
+    /// End-to-end test of the per-source download commit path:
+    /// the download step calls `commit_run_at_path`
+    /// after each provider's download finishes, against the doltlite_db
     /// the provider wrote during the run. This test mirrors that
     /// pattern: stage a row via `open` + `start_run` + insert + drop
-    /// pool (simulating an extract closing its pool), then reopen via
+    /// pool (simulating a download closing its pool), then reopen via
     /// `commit_run_at_path` (the orchestrator's hook) and verify the
     /// commit lands in dolt_log with the expected message.
     ///
     /// Also exercises `commit_run_at_path`'s no-op behavior for a
-    /// non-existent path (extract aborted before the file was created
+    /// non-existent path (download aborted before the file was created
     /// — `interrupt_commit_all` walks every enabled-source path and
     /// some may not yet exist).
     #[tokio::test]
@@ -1983,7 +1983,7 @@ mod tests {
         let d = tempdir().unwrap();
         let db = d.path().join("source.doltlite_db");
 
-        // Phase 1: simulate an extract — open, write, close.
+        // Phase 1: simulate a download — open, write, close.
         {
             let pool = open_test(&db).await;
             if !has_dolt_extensions(&pool).await {
@@ -1998,17 +1998,17 @@ mod tests {
                 return;
             }
             // Per-session committer identity (doltlite requires this).
-            sqlx::query("SELECT dolt_config('user.name', 'frankweiler-extract-test')")
+            sqlx::query("SELECT dolt_config('user.name', 'frankweiler-download-test')")
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("SELECT dolt_config('user.email', 'extract@frankweiler.local')")
+            sqlx::query("SELECT dolt_config('user.email', 'download@frankweiler.local')")
                 .execute(&pool)
                 .await
                 .unwrap();
 
             let run_id = start_run(&pool, &json!({"source": "test"})).await.unwrap();
-            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w-extract', 'staged')")
+            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w-download', 'staged')")
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -2026,7 +2026,7 @@ mod tests {
         // crashed run produces a `rescue: ...` commit in dolt_log, and
         // the next run's trailing commit_run is allowed to find
         // nothing dirty.
-        let msg = "extract source: rows=1 commit_run_at_path test";
+        let msg = "download source: rows=1 commit_run_at_path test";
         let trailing = commit_run_at_path(&db, msg)
             .await
             .expect("commit_run_at_path ok");

@@ -4,7 +4,7 @@
 //! [`crate::http::latchkey_curl`]: it respects `Retry-After` on a 429 and
 //! otherwise backs off exponentially. This module owns the orthogonal
 //! question of *when to stop trying* — bounded by two knobs the
-//! orchestrator resolves from config (`ExtractParams`) and installs once
+//! orchestrator resolves from config (`DownloadParams`) and installs once
 //! per source:
 //!
 //!   - `maximum_sequential_failed_requests` — give up after this many
@@ -12,8 +12,8 @@
 //!   - `maximum_time_without_progress_in_minutes` — give up once this long
 //!     passes with no successful request.
 //!
-//! It works exactly like [`crate::extract_metrics`]: a [`tokio::task_local`]
-//! holds a [`RetryGuard`] for the duration of one source's extract
+//! It works exactly like [`crate::download_metrics`]: a [`tokio::task_local`]
+//! holds a [`RetryGuard`] for the duration of one source's download
 //! (installed by [`scope`]). The chokepoint resolves the ambient guard with
 //! [`current_or_default`] and reports every attempt's outcome into it
 //! ([`RetryGuard::on_progress`] / [`RetryGuard::on_failure`]). Providers
@@ -24,7 +24,7 @@
 //! flows through the *same* guard. The give-up policy thus lives in one
 //! place rather than re-implemented per provider.
 //!
-//! Outside any `scope` (tests, standalone CLIs, the translate phase)
+//! Outside any `scope` (tests, standalone CLIs, the render phase)
 //! [`current_or_default`] hands back a fresh guard seeded from the built-in
 //! defaults, so a single chokepoint call is still bounded and can never spin
 //! forever.
@@ -34,10 +34,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::extract_params::ExtractParams;
+use crate::download_params::DownloadParams;
 
 /// Per-source give-up state, accumulated at the shared HTTP chokepoint for
-/// the duration of one source's extract. Cheap to clone behind the `Arc`
+/// the duration of one source's download. Cheap to clone behind the `Arc`
 /// the orchestrator hands out.
 pub struct RetryGuard {
     /// Give up once `last_progress.elapsed()` reaches this.
@@ -91,10 +91,10 @@ impl RetryGuard {
         })
     }
 
-    /// Build a guard from a source's resolved [`ExtractParams`], applying
+    /// Build a guard from a source's resolved [`DownloadParams`], applying
     /// the built-in defaults for any unset field and the default backoff
     /// schedule.
-    pub fn from_params(p: &ExtractParams) -> Arc<Self> {
+    pub fn from_params(p: &DownloadParams) -> Arc<Self> {
         Self::new(
             p.max_time_without_progress(),
             p.max_sequential_failures(),
@@ -163,7 +163,7 @@ where
 pub fn current_or_default() -> Arc<RetryGuard> {
     GUARD
         .try_with(|g| g.clone())
-        .unwrap_or_else(|_| RetryGuard::from_params(&ExtractParams::default()))
+        .unwrap_or_else(|_| RetryGuard::from_params(&DownloadParams::default()))
 }
 
 #[cfg(test)]
@@ -208,7 +208,7 @@ mod tests {
         let g = current_or_default();
         assert_eq!(
             g.max_sequential_failures,
-            ExtractParams::DEFAULT_MAX_SEQUENTIAL_FAILURES
+            DownloadParams::DEFAULT_MAX_SEQUENTIAL_FAILURES
         );
     }
 

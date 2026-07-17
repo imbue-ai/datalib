@@ -1,9 +1,9 @@
-//! Progress reporting hook for long-running Extract / Translate work.
+//! Progress reporting hook for long-running download / render work.
 //!
-//! Each provider's `extract::fetch` (and any other unit of work that wants
+//! Each provider's `download::fetch` (and any other unit of work that wants
 //! to surface progress) accepts an optional [`Progress`] handle. When set,
 //! the work emits `inc`/`set_message`/`set_length` calls as it makes
-//! forward progress; the consumer (e.g. `frankweiler-sync`'s indicatif
+//! forward progress; the consumer (e.g. the indicatif
 //! `MultiProgress`) renders those into a live UI.
 //!
 //! `Progress` is a thin `Arc<dyn ProgressSink>` wrapper so it's cheap to

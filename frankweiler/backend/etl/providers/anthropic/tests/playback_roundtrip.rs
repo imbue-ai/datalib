@@ -1,7 +1,7 @@
-//! Anthropic synth → playback → extract round-trip.
+//! Anthropic synth → playback → download round-trip.
 //!
 //! Builds a JSON snapshot, synthesizes playback fixtures, runs
-//! `extract::fetch` against a fresh doltlite db, and asserts the
+//! `download::fetch` against a fresh doltlite db, and asserts the
 //! rehydrated conversations match the input. With the doltlite port
 //! we store the **raw** API payload in `conversations.payload`, so
 //! comparisons happen against the raw response shape rather than the
@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_anthropic::extract::{
+use frankweiler_etl_anthropic::download::{
     db::block_on_load_all, db::db_path_for, fetch, FetchOptions,
 };
 use frankweiler_etl_anthropic::synthesize::AnthropicSynth;
@@ -30,7 +30,7 @@ async fn anthropic_synth_playback_extract_roundtrip() {
 
     // Pre-normalized conversation: account set, _source set, no chat_messages
     // so normalize is a no-op. The synth serves these back directly, so
-    // when extract refetches them via playback, we get the same body.
+    // when download refetches them via playback, we get the same body.
     let convs = json!([
         {
             "uuid": "c1",

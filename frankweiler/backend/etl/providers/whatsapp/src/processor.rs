@@ -1,13 +1,13 @@
 //! Program-A `DataProcessor`s for the `whatsapp_backup` source. WhatsApp
-//! contributes an **extract** processor ([`WhatsappExtract`] — decrypts the
+//! contributes an **download** processor ([`WhatsappDownload`] — decrypts the
 //! on-disk `msgstore.db.crypt15`, mirrors the curated `wa_*` tables into its
 //! raw doltlite store) when `sync:` is present, plus an always-present
-//! **translate** processor ([`WhatsappRender`]). [`plan_download`] /
+//! **render** processor ([`WhatsappRender`]). [`plan_download`] /
 //! [`plan_render`] build the per-wave processors the orchestrator drives.
 //!
-//! Storage ownership lives here, not in the orchestrator: [`WhatsappExtract`]
+//! Storage ownership lives here, not in the orchestrator: [`WhatsappDownload`]
 //! opens its own raw doltlite store (via `RawStoreSession`), registers an opaque [`Checkpoint`]
-//! for interrupt-safety, and issues its own post-extract `dolt_commit`. The
+//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
 //! orchestrator never sees a pool or a commit.
 
 use std::path::PathBuf;
@@ -19,9 +19,9 @@ use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
-use crate::extract;
+use crate::download;
 
-/// Download wave. Extract requires `sync:` (which carries the required
+/// Download wave. Download requires `sync:` (which carries the required
 /// `backup_dir`); error exactly as the old orchestrator did.
 pub fn plan_download(
     ctx: PlanContext,
@@ -32,8 +32,8 @@ pub fn plan_download(
     let sync = config
         .sync
         .ok_or_else(|| anyhow!("whatsapp_backup source {name} missing sync.backup_dir"))?;
-    Ok(vec![Box::new(WhatsappExtract {
-        id: format!("whatsapp/{name}/extract"),
+    Ok(vec![Box::new(WhatsappDownload {
+        id: format!("whatsapp/{name}/download"),
         raw_path,
         sync,
     })])
@@ -47,28 +47,28 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(WhatsappRender {
-        id: format!("whatsapp/{name}/translate"),
+        id: format!("whatsapp/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// WhatsApp's extract processor. Owns its raw doltlite store end to end.
-struct WhatsappExtract {
+/// WhatsApp's download processor. Owns its raw doltlite store end to end.
+struct WhatsappDownload {
     id: String,
     raw_path: PathBuf,
     sync: WhatsAppSync,
 }
 
 #[async_trait]
-impl DataProcessor for WhatsappExtract {
+impl DataProcessor for WhatsappDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let db_path = frankweiler_etl::doltlite_raw::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&db_path).await?;
+        let db = download::RawDb::open(&db_path).await?;
         // Open the session (snapshot + interrupt hook) BEFORE fetch borrows
         // `&db`: it captures the write pool the commit + report run against.
         let session = ctx.open_store(db.pool().clone(), db_path).await;
@@ -84,7 +84,7 @@ impl DataProcessor for WhatsappExtract {
             .with_context(|| format!("read WhatsApp root key from env var `{env_var}`"));
         let root_key = key_hex.and_then(|h| frankweiler_whatsapp_backup::decode_hex_key(&h))?;
 
-        let s = extract::fetch(&self.sync.backup_dir, &root_key, &db).await?;
+        let s = download::fetch(&self.sync.backup_dir, &root_key, &db).await?;
         let summary = format!(
             "jids={} chats={} messages={} message_text={} message_media={} \
              reactions={} media_files={}",
@@ -100,7 +100,7 @@ impl DataProcessor for WhatsappExtract {
     }
 }
 
-/// WhatsApp's translate processor — reads the raw store and emits rendered
+/// WhatsApp's render processor — reads the raw store and emits rendered
 /// markdown through the fused-Load callback.
 struct WhatsappRender {
     id: String,
@@ -115,7 +115,7 @@ impl DataProcessor for WhatsappRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse, render_all};
+        use crate::render::{parse, render_all};
         // WhatsApp doesn't expose a `period` knob on its sync block today —
         // default to month bucketing, same as signal.
         let period = Period::from_config(None).context("default whatsapp period")?;

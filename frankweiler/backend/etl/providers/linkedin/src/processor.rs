@@ -1,8 +1,8 @@
 //! Program-A `DataProcessor`s for the `linkedin` source.
 //!
-//! LinkedIn is a file-backed export ("takeout"): [`LinkedinExtract`] ingests
+//! LinkedIn is a file-backed export ("takeout"): [`LinkedinDownload`] ingests
 //! every CSV in the export into the raw store (optionally downloading
-//! connection photos), and [`LinkedinRender`] renders the three translate
+//! connection photos), and [`LinkedinRender`] renders the three render
 //! feeds (messages, connections, posts). The source owns its raw store
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_linkedin_config::LinkedinConfig;
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: always present — ingest the export CSVs (and
 /// optionally photos).
@@ -25,9 +25,9 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-    let max_sequential_failures = config.common.extract_params.max_sequential_failures();
-    Ok(vec![Box::new(LinkedinExtract {
-        id: format!("linkedin/{name}/extract"),
+    let max_sequential_failures = config.common.download_params.max_sequential_failures();
+    Ok(vec![Box::new(LinkedinDownload {
+        id: format!("linkedin/{name}/download"),
         raw_path,
         input_path,
         fetch_photos: config.fetch_photos,
@@ -45,14 +45,14 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(LinkedinRender {
-        id: format!("linkedin/{name}/translate"),
+        id: format!("linkedin/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// LinkedIn's extract processor. Owns its raw doltlite store end to end.
-struct LinkedinExtract {
+/// LinkedIn's download processor. Owns its raw doltlite store end to end.
+struct LinkedinDownload {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
@@ -61,16 +61,16 @@ struct LinkedinExtract {
 }
 
 #[async_trait]
-impl DataProcessor for LinkedinExtract {
+impl DataProcessor for LinkedinDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             input_path: self.input_path.clone(),
@@ -90,7 +90,7 @@ impl DataProcessor for LinkedinExtract {
     }
 }
 
-/// LinkedIn's translate processor — renders the three feeds (messages,
+/// LinkedIn's render processor — renders the three feeds (messages,
 /// connections, posts) and emits each rendered markdown through the
 /// fused-Load callback.
 struct LinkedinRender {

@@ -1,11 +1,11 @@
 //! Program-A `DataProcessor`s for the `google_takeout` source. File-backed:
-//! extract walks the unzipped Takeout tree at `input_path` and lands the
-//! opted-in feeds into a provider-owned doltlite raw store; translate renders
+//! download walks the unzipped Takeout tree at `input_path` and lands the
+//! opted-in feeds into a provider-owned doltlite raw store; render renders
 //! the chat-shaped feeds (Google Chat / Google Voice). The source owns its raw
 //! store (open/commit/checkpoint); the orchestrator only drives `run`.
 //!
 //! This is where the SyncFlags duplication the refactor kills now lives: the
-//! mapping `GoogleTakeoutSync` → `extract::SyncFlags` is provider-owned here
+//! mapping `GoogleTakeoutSync` → `download::SyncFlags` is provider-owned here
 //! (it used to be hand-copied in the orchestrator's `ExtractPlan::for_source`).
 
 use std::collections::HashMap;
@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_google_takeout_config::{GoogleTakeoutConfig, GoogleTakeoutSync};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: mirror the export tree at input_path into the raw
 /// store, gated by the per-part `sync:` flags.
@@ -28,8 +28,8 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-    Ok(vec![Box::new(GoogleTakeoutExtract {
-        id: format!("google_takeout/{name}/extract"),
+    Ok(vec![Box::new(GoogleTakeoutDownload {
+        id: format!("google_takeout/{name}/download"),
         raw_path,
         input_path,
         sync: sync_flags(config.sync.unwrap_or_default()),
@@ -44,17 +44,17 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(GoogleTakeoutRender {
-        id: format!("google_takeout/{name}/translate"),
+        id: format!("google_takeout/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// Map the provider-owned config `GoogleTakeoutSync` onto the extract crate's
+/// Map the provider-owned config `GoogleTakeoutSync` onto the download crate's
 /// `SyncFlags`, field-for-field — the duplication this refactor moves out of
 /// the orchestrator and into the provider.
-fn sync_flags(s: GoogleTakeoutSync) -> extract::SyncFlags {
-    extract::SyncFlags {
+fn sync_flags(s: GoogleTakeoutSync) -> download::SyncFlags {
+    download::SyncFlags {
         maps_reviews: s.maps_reviews,
         maps_saved_places: s.maps_saved_places,
         maps_photos: s.maps_photos,
@@ -67,24 +67,24 @@ fn sync_flags(s: GoogleTakeoutSync) -> extract::SyncFlags {
     }
 }
 
-struct GoogleTakeoutExtract {
+struct GoogleTakeoutDownload {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
-    sync: extract::SyncFlags,
+    sync: download::SyncFlags,
 }
 
 #[async_trait]
-impl DataProcessor for GoogleTakeoutExtract {
+impl DataProcessor for GoogleTakeoutDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             input_path: self.input_path.clone(),
@@ -130,7 +130,7 @@ impl DataProcessor for GoogleTakeoutRender {
         // other feeds stay queryable in the raw store.
         let prior: &HashMap<String, String> = ctx.prior_fingerprints;
         let mut on_doc = |md| ctx.emit_doc(md);
-        crate::render_and_index_md::render(
+        crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,

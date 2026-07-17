@@ -1,7 +1,7 @@
-//! Slack synth → playback → extract round-trip.
+//! Slack synth → playback → download round-trip.
 //!
 //! Uses the in-tree synthesizer to turn JSONL envelope fixtures into
-//! HTTP playback bodies, then runs extract against the playback root.
+//! HTTP playback bodies, then runs download against the playback root.
 //! Asserts on the populated doltlite DB rather than on a JSONL
 //! disk tree — the doltlite store is the entire output of the
 //! download stage post-port.
@@ -11,7 +11,7 @@ use std::path::Path;
 
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_slack::extract::{block_on_load_all, db_path_for, fetch, FetchOptions};
+use frankweiler_etl_slack::download::{block_on_load_all, db_path_for, fetch, FetchOptions};
 use frankweiler_etl_slack::synthesize::SlackSynth;
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -39,7 +39,7 @@ async fn slack_synth_playback_extract_roundtrip() {
         }),
     );
 
-    // conversations.list — exact param shape extract emits.
+    // conversations.list — exact param shape download emits.
     write_envelope(
         &api.join("raw_api/conversations.list/run-1.jsonl"),
         &json!({

@@ -3,8 +3,8 @@
 //!
 //! Holds the per-source **common envelope** of shared tunables ([`SourceCommon`])
 //! that each provider config composes, the global [`Defaults`] block those
-//! tunables fall back to, and the cross-source extract knobs
-//! ([`ExtractParams`]). Depends on nothing but `serde`, so any config crate can
+//! tunables fall back to, and the cross-source download knobs
+//! ([`DownloadParams`]). Depends on nothing but `serde`, so any config crate can
 //! compose [`SourceCommon`] without pulling ETL or orchestrator code.
 //!
 //! All cross-node derivation (folding [`Defaults`] into each source, resolving
@@ -16,8 +16,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub mod extract_params;
-pub use extract_params::ExtractParams;
+pub mod download_params;
+pub use download_params::DownloadParams;
 
 /// Append a JSONL line per upsert into `<raw_path>/events/<table>.jsonl`.
 /// Write-only mirror of the raw store, never read by the pipeline. See
@@ -62,9 +62,9 @@ pub struct SourceCommon {
     /// `None` = no limit. Consumed only by providers that download attachments.
     #[serde(default)]
     pub blob_size_limit_bytes: Option<u64>,
-    /// Rate-limit give-up bounds for this source's Extract step.
-    #[serde(default)]
-    pub extract_params: ExtractParams,
+    /// Rate-limit give-up bounds for this source's download step.
+    #[serde(default, alias = "extract_params")]
+    pub download_params: DownloadParams,
     /// Wire-event tape config. `None` = enabled (the default).
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
@@ -80,8 +80,8 @@ pub struct SourceCommon {
 pub struct Defaults {
     #[serde(default)]
     pub blob_size_limit_bytes: Option<u64>,
-    #[serde(default)]
-    pub extract_params: ExtractParams,
+    #[serde(default, alias = "extract_params")]
+    pub download_params: DownloadParams,
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
 }
@@ -93,7 +93,7 @@ impl SourceCommon {
     pub fn fold_defaults(&mut self, d: &Defaults) {
         self.blob_size_limit_bytes = self.blob_size_limit_bytes.or(d.blob_size_limit_bytes);
         // `merge(base, source)` lets the source win field-by-field.
-        self.extract_params = d.extract_params.merge(&self.extract_params);
+        self.download_params = d.download_params.merge(&self.download_params);
         self.event_tape = self.event_tape.take().or_else(|| d.event_tape.clone());
     }
 
@@ -104,7 +104,7 @@ impl SourceCommon {
     /// `normalize()`.
     ///
     /// Layout: every artifact a stanza produces is grouped under
-    /// `<data_root>/<name>/` (`raw/` here, `rendered_md/` on the translate
+    /// `<data_root>/<name>/` (`raw/` here, `rendered_md/` on the render
     /// side), so a source's whole footprint is one self-contained subtree.
     pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
         let default_raw = data_root.join(name).join("raw");
@@ -160,17 +160,17 @@ mod tests {
     fn fold_defaults_source_wins_then_global_then_builtin() {
         let defaults = Defaults {
             blob_size_limit_bytes: Some(5_000_000),
-            extract_params: ExtractParams {
+            download_params: DownloadParams {
                 maximum_time_without_progress_in_minutes: Some(30),
                 maximum_sequential_failed_requests: Some(50),
             },
             event_tape: None,
         };
 
-        // Source overrides one extract knob + blob cap; the rest fall through.
+        // Source overrides one download knob + blob cap; the rest fall through.
         let mut common = SourceCommon {
             blob_size_limit_bytes: Some(1_000_000),
-            extract_params: ExtractParams {
+            download_params: DownloadParams {
                 maximum_time_without_progress_in_minutes: None,
                 maximum_sequential_failed_requests: Some(100),
             },
@@ -181,12 +181,12 @@ mod tests {
         assert_eq!(common.blob_size_limit_bytes, Some(1_000_000)); // source wins
         assert_eq!(
             common
-                .extract_params
+                .download_params
                 .maximum_time_without_progress_in_minutes,
             Some(30) // fell through to global
         );
         assert_eq!(
-            common.extract_params.maximum_sequential_failed_requests,
+            common.download_params.maximum_sequential_failed_requests,
             Some(100) // source wins
         );
         assert!(common.event_tape_enabled()); // None → enabled

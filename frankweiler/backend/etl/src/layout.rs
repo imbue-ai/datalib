@@ -3,8 +3,8 @@
 //! footprint is one self-contained subtree:
 //!
 //! ```text
-//! <data_root>/<stanza>/raw/…           (extract — see source_common)
-//! <data_root>/<stanza>/rendered_md/…   (translate — markdown + sidecars)
+//! <data_root>/<stanza>/raw/…           (download — see source_common)
+//! <data_root>/<stanza>/rendered_md/…   (render — markdown + sidecars)
 //! ```
 //!
 //! Cross-stanza aggregates (`backend_index/db.doltlite_db`, `qmd/`) live
@@ -15,11 +15,6 @@
 //! orphaning the old file at a now-stale path.
 
 use std::path::{Path, PathBuf};
-
-// Re-exported so the orchestrator (`frankweiler-sync`, which deliberately does
-// not depend on `frankweiler_core`) can mark the derived index dirs as cache
-// through the one crate it does depend on.
-pub use frankweiler_core::layout::{backend_index_dir, mark_derived_cache, media_dir, qmd_dir};
 
 /// Directory holding everything one stanza produces: `<data_root>/<stanza>`.
 pub fn stanza_dir(data_root: &Path, stanza: &str) -> PathBuf {

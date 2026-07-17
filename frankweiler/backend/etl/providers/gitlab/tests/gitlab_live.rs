@@ -3,10 +3,10 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Live GitLab single-MR download + translate test.
+//! Live GitLab single-MR download + render test.
 //!
 //! Hits real `gitlab.com/api/v4` via `latchkey curl`, downloads ONE MR
-//! into a hermetic tempdir, translates it, and insta-snapshots a
+//! into a hermetic tempdir, renders it, and insta-snapshots a
 //! stable view.
 //!
 //! Default target is generally_intelligent MR !7643. Override with
@@ -19,8 +19,8 @@
 //! cargo test -p frankweiler-etl-gitlab --test gitlab_live -- --ignored
 //! ```
 
-use frankweiler_etl_gitlab::extract::{self as gitlab, parse_mr_ref, FetchOptions};
-use frankweiler_etl_gitlab::render_and_index_md::{parse_api_dir, render_gitlab};
+use frankweiler_etl_gitlab::download::{self as gitlab, parse_mr_ref, FetchOptions};
+use frankweiler_etl_gitlab::render::{parse_api_dir, render_gitlab};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -63,7 +63,7 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let qmd_rel = frankweiler_etl_gitlab::render_and_index_md::render::mr_qmd_path_rel(
+    let qmd_rel = frankweiler_etl_gitlab::render::render::mr_qmd_path_rel(
         stanza,
         &mr.project_full_path,
         mr.mr_iid,
@@ -78,7 +78,7 @@ async fn gitlab_live_single_mr_snapshot() {
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use frankweiler_etl_gitlab::render_and_index_md::parse::NoteSection;
+    use frankweiler_etl_gitlab::render::parse::NoteSection;
     if parsed
         .notes
         .iter()

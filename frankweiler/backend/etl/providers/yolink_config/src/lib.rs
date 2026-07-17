@@ -1,17 +1,17 @@
 //! Provider-owned config schema for the `yolink` source (Program A goal #1).
 //! Schema-only (serde + anyhow), so the orchestrator can name `YolinkConfig`
 //! without linking the provider. Yolink is EXTRACT-ONLY: `sync:` present →
-//! live per-device CSV mirror; absent → nothing to do (no translate path).
+//! live per-device CSV mirror; absent → nothing to do (no render path).
 //!
 //! These types are copied from `frankweiler_core::config` so this crate stays
 //! free of a core dependency. The provider's `processor` converts these into
-//! the core `YolinkSync`/`YolinkDevice` its `extract::fetch` still expects.
+//! the core `YolinkSync`/`YolinkDevice` its `download::fetch` still expects.
 
 use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The yolink-owned slice of a `yolink` source. `sync:` drives the
-/// per-device download; absent means no extract is contributed.
+/// per-device download; absent means no download is contributed.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct YolinkConfig {
     /// Shared per-source envelope (paths + cross-source tunables), resolved by

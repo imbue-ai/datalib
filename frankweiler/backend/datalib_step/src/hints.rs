@@ -1,6 +1,6 @@
 //! Failure classification + per-provider auth remediation hints.
 //!
-//! The hint table is carried over from `frankweiler-sync`'s
+//! The hint table is carried over from the retired sync orchestrator's
 //! `auth_hint_for` (sync is a binary crate, so it isn't importable;
 //! this becomes the single copy when sync retires). On an
 //! auth-classified failure the hint is emitted as a structured
@@ -65,7 +65,7 @@ pub fn emit_auth_hint_on_failure(
 
 const GENERIC_AUTH_HINT: &str = "Provider returned an auth-failure status. \
 This usually means latchkey credentials are missing or expired. \
-See <provider>/EXTRACT.md for setup. Confirm the in-tree curl shim is \
+See <provider>/DOWNLOAD.md for setup. Confirm the in-tree curl shim is \
 built (`cargo build -p frankweiler-etl --bin latchkey-curl-shim`), or \
 set $FRANKWEILER_CURL_SHIM / $LATCHKEY_CURL explicitly, and that \
 `{LK} auth list` shows entries.";
@@ -108,7 +108,7 @@ chatgpt access token expired or missing.
      → Cookies → chatgpt.com and add a second `-H \"Cookie: cf_clearance=$(pbpaste)\"`
      to the `latchkey auth set chatgpt` call.
 
-See frankweiler/backend/etl/providers/chatgpt/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/chatgpt/DOWNLOAD.md for details."
         }
         "claude_api" => {
             "\
@@ -124,7 +124,7 @@ anthropic sessionKey expired or missing.
   4. Smoke-test:
        {LK} curl -s https://claude.ai/api/organizations | head -c 200
 
-See frankweiler/backend/etl/providers/anthropic/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/anthropic/DOWNLOAD.md for details."
         }
         "slack_api" => {
             "\
@@ -137,7 +137,7 @@ slack token expired or missing.
   3. Smoke-test:
        {LK} curl -s https://slack.com/api/auth.test | head -c 200
 
-See frankweiler/backend/etl/providers/slack/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/slack/DOWNLOAD.md for details."
         }
         "github_api" => {
             "\
@@ -150,7 +150,7 @@ github PAT expired or missing.
   3. Smoke-test:
        {LK} curl -s https://api.github.com/user | head -c 200
 
-See frankweiler/backend/etl/providers/github/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/github/DOWNLOAD.md for details."
         }
         "gitlab_api" => {
             "\
@@ -163,7 +163,7 @@ gitlab token expired or missing.
   3. Smoke-test:
        {LK} curl -s https://gitlab.com/api/v4/user | head -c 200
 
-See frankweiler/backend/etl/providers/gitlab/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/gitlab/DOWNLOAD.md for details."
         }
         "notion_api" => {
             "\
@@ -178,7 +178,7 @@ notion integration token expired or missing.
          -H 'Notion-Version: 2022-06-28' -H 'Content-Type: application/json' \\
          -d '{}' | head -c 200
 
-See frankweiler/backend/etl/providers/notion/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/notion/DOWNLOAD.md for details."
         }
         "email" => {
             "\
@@ -198,11 +198,11 @@ Email source: JMAP (Fastmail / generic) auth missing or expired.
        {LK} curl -sSL https://api.fastmail.com/.well-known/jmap \\
            | jq .primaryAccounts
 
-See frankweiler/backend/etl/providers/jmap/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/jmap/DOWNLOAD.md for details."
         }
         "beeper" => {
             "\
-beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
+beeper download reads Beeper Texts' on-disk SQLite. No auth dance.
 
   1. Make sure Beeper Texts is installed and has run at least once
      so its data dir exists. Default path:
@@ -214,7 +214,7 @@ beeper extract reads Beeper Texts' on-disk SQLite. No auth dance.
        sqlite3 ~/Library/Application\\ Support/BeeperTexts/index.db \\
            \"SELECT COUNT(*) FROM threads;\"
 
-See frankweiler/backend/etl/providers/beeper/EXTRACT.md for details."
+See frankweiler/backend/etl/providers/beeper/DOWNLOAD.md for details."
         }
         _ => GENERIC_AUTH_HINT,
     };

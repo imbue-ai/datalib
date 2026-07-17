@@ -1,9 +1,9 @@
-//! Translate-side smoke test against the checked-in TNG fixture under
+//! Render-side smoke test against the checked-in TNG fixture under
 //! `tests/fixtures/chatgpt_api`. Bazel doesn't surface fixture dirs via
 //! `CARGO_MANIFEST_DIR` in the sandbox, so this lives as an integration
 //! test tagged `manual` and is run via `cargo test`.
 
-use frankweiler_etl_chatgpt::render_and_index_md::parse::{parse_api_dir, shred};
+use frankweiler_etl_chatgpt::render::parse::{parse_api_dir, shred};
 use std::path::PathBuf;
 
 fn fixture_dir() -> PathBuf {

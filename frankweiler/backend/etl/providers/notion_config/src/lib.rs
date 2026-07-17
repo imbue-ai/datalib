@@ -6,7 +6,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The notion-owned slice of a `notion_api` source. `sync:` present → live
-/// Notion mirror (the extract path); absent → translate-only over an
+/// Notion mirror (the download path); absent → render-only over an
 /// already-on-disk API capture.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NotionConfig {
@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn translate_only_config_validates() {
-        // No `sync:` → translate-only; the inbox-or-subtree rule doesn't apply.
+        // No `sync:` → render-only; the inbox-or-subtree rule doesn't apply.
         assert!(NotionConfig::default().validate().is_ok());
     }
 

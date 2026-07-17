@@ -3,7 +3,7 @@
 //!
 //! Rebuilds/refreshes `system/backend_index/db.doltlite_db` from
 //! every stanza's `.grid_rows.json` sidecar tree via
-//! [`frankweiler_etl::load::load_all`] — which already carries the
+//! [`frankweiler_etl::grid_index::build_grid_index`] — which already carries the
 //! per-doc fingerprint skip, so an up-to-date index costs one scan.
 //! Closes with a `dolt_commit`; the resulting commit hash is the
 //! output's content version.
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
-use frankweiler_etl::load::{init_schema, load_all};
+use frankweiler_etl::grid_index::{build_grid_index, init_schema};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::events::{Emitter, OutputClaim};
@@ -44,14 +44,14 @@ pub async fn run(
     init_schema(&pool).await?;
 
     let progress = emitter.progress();
-    let summary = load_all(&pool, data_root, |m| progress.set_message(m), now)
+    let summary = build_grid_index(&pool, data_root, |m| progress.set_message(m), now)
         .await
-        .context("load_all from sidecar trees")?;
+        .context("build_grid_index from sidecar trees")?;
     tracing::info!(
         loaded = summary.markdowns_loaded,
         skipped = summary.markdowns_skipped,
         rows = summary.rows_inserted,
-        "grid_index: load_all done"
+        "grid_index: build_grid_index done"
     );
 
     let msg = format!(

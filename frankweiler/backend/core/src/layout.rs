@@ -8,8 +8,8 @@
 //! server's runtime state.
 //!
 //! ```text
-//! data_root/<stanza>/raw/…                          per-source extract
-//! data_root/<stanza>/rendered_md/…                  per-source translate
+//! data_root/<stanza>/raw/…                          per-source download
+//! data_root/<stanza>/rendered_md/…                  per-source render
 //! data_root/system/backend_index/db.doltlite_db     grid_rows + markdowns index
 //! data_root/system/qmd/index.sqlite                 qmd search index
 //! data_root/system/media/…                          served attachments

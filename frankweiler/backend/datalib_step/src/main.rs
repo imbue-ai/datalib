@@ -12,12 +12,12 @@
 //! `--type` pair):
 //!
 //! * `download --type <source_type> --params-json {name, source}` —
-//!   one source's extract wave, via the provider's own
+//!   one source's download wave, via the provider's own
 //!   `DataProcessor`s. Writes `<name>/raw`. `source` is the
 //!   provider's own config subtree (no `type:` tag — the step type
 //!   names the provider).
 //! * `render --type <source_type> --params-json {name, source}` —
-//!   the source's translate wave. Writes `<name>/rendered_md` (`.md`
+//!   the source's render wave. Writes `<name>/rendered_md` (`.md`
 //!   files plus the `.grid_rows.json` sidecars the providers already
 //!   emit). Incremental: docs whose sidecar fingerprint is unchanged
 //!   are skipped, using the sidecar tree itself as the
@@ -25,7 +25,7 @@
 //!   un-fused contract).
 //! * `grid_index` — rebuild/refresh the unified grid table
 //!   (`system/backend_index`) from every stanza's sidecar tree
-//!   (`load_all`, per-doc fingerprint skip), then `dolt_commit`. This
+//!   (`build_grid_index`, per-doc fingerprint skip), then `dolt_commit`. This
 //!   is the load step un-fused from render.
 //! * `qmd_index` — the qmd search index over every rendered_md tree,
 //!   writing `system/qmd`.
@@ -86,7 +86,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// One source's extract wave → `<name>/raw`.
+    /// One source's download wave → `<name>/raw`.
     Download {
         /// Source type (`slack_api`, `claude_api`, …) — the provider
         /// this step dispatches to.
@@ -101,7 +101,7 @@ enum Cmd {
         #[arg(long)]
         playback_root: Option<PathBuf>,
     },
-    /// One source's translate wave → `<name>/rendered_md`.
+    /// One source's render wave → `<name>/rendered_md`.
     Render {
         #[arg(long = "type")]
         source_type: String,
@@ -180,7 +180,7 @@ async fn main() {
         .now
         .clone()
         .unwrap_or_else(|| frankweiler_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-    let control = frankweiler_etl::control::ExtractControl {
+    let control = frankweiler_etl::control::DownloadControl {
         reset_and_redownload: cli.reset_and_redownload,
         refetch_blobs: cli.refetch_blobs,
     };
@@ -209,7 +209,7 @@ async fn run(
     cmd: Cmd,
     data_root: &PathBuf,
     now: &str,
-    control: &frankweiler_etl::control::ExtractControl,
+    control: &frankweiler_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<events::OutputClaim>> {
     match cmd {

@@ -1,9 +1,9 @@
 //! Program-A `DataProcessor` for the `fsindex` source.
 //!
-//! fsindex is **extract-only** — it indexes a directory tree into a doltlite
-//! raw store and has no translate/render side (filesystem entries aren't
+//! fsindex is **download-only** — it indexes a directory tree into a doltlite
+//! raw store and has no render/render side (filesystem entries aren't
 //! chat-shaped; see the crate-level docs). So [`plan_download`] contributes a single
-//! extract processor and leaves `translate` empty — "extract-only" is
+//! download processor and leaves `render` empty — "download-only" is
 //! structural (a missing processor), not a flag.
 //!
 //! The source owns its raw store end to end (open, DDL, write, commit,
@@ -24,7 +24,7 @@ use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl::raw_layout;
 use frankweiler_etl_fsindex_config::FsindexConfig;
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: the directory scan into the raw store.
 pub fn plan_download(
@@ -34,8 +34,8 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let root = config.common.input_or_raw_path().to_path_buf();
-    Ok(vec![Box::new(FsindexExtract {
-        id: format!("fsindex/{name}/extract"),
+    Ok(vec![Box::new(FsindexDownload {
+        id: format!("fsindex/{name}/download"),
         raw_path,
         root,
         source_name: name,
@@ -43,16 +43,16 @@ pub fn plan_download(
     })])
 }
 
-/// Render wave: fsindex is extract-only (it indexes the tree, renders
+/// Render wave: fsindex is download-only (it indexes the tree, renders
 /// nothing), so this is always empty.
 pub fn plan_render(ctx: PlanContext, config: FsindexConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }
 
-/// fsindex's extract processor. Owns its raw doltlite store end to end (open,
+/// fsindex's download processor. Owns its raw doltlite store end to end (open,
 /// register interrupt hook, scan the tree, commit+close).
-struct FsindexExtract {
+struct FsindexDownload {
     id: String,
     raw_path: PathBuf,
     root: PathBuf,
@@ -61,16 +61,16 @@ struct FsindexExtract {
 }
 
 #[async_trait]
-impl DataProcessor for FsindexExtract {
+impl DataProcessor for FsindexDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = raw_layout::entities_db(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             // Unused when `db` is Some (fetch reuses the open handle); kept for
             // the standalone-open path's signature.
             db_path: self.raw_path.clone(),

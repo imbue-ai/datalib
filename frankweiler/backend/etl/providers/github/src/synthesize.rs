@@ -2,16 +2,16 @@
 //!
 //! Walks the event-store layout the live downloader writes under
 //! `<api_dir>/<entity>/{created,updated}/events.jsonl` and emits playback
-//! fixtures for every request [`crate::extract`] would issue:
+//! fixtures for every request [`crate::download`] would issue:
 //!
 //! * `GET https://api.github.com/user` — viewer identity, from the latest
 //!   `self_identity` record's `raw`.
 //! * `GET /search/issues?q=is:pr {scope}&per_page=100&sort=updated&order=desc`
-//!   — one fixture per [`crate::extract::DEFAULT_SCOPES`] scope.
+//!   — one fixture per [`crate::download::DEFAULT_SCOPES`] scope.
 //!   We assume **first-run / full-sync playback**: no `updated:>=since`
 //!   clause is appended. The body is a `{"items": [...]}` envelope with
 //!   one minimal item per known PR (`repository_url` + `number` are the
-//!   only fields extract reads). No `Link: rel="next"` header → paginate
+//!   only fields download reads). No `Link: rel="next"` header → paginate
 //!   stops after one page.
 //! * `GET /repos/{repo}/pulls/{num}` — the per-PR detail, from the latest
 //!   `pull_request` record's `raw`.
@@ -31,7 +31,7 @@ use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::{json, Value};
 
-use crate::extract::{
+use crate::download::{
     BASE, DEFAULT_SCOPES, ENTITY_ISSUE_COMMENT, ENTITY_PR, ENTITY_PR_REVIEW,
     ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF, PER_PAGE,
 };
@@ -101,7 +101,7 @@ impl Synthesizer for GithubSynth {
             }
         }
 
-        // Search fixtures per default scope — minimal item shape: extract
+        // Search fixtures per default scope — minimal item shape: download
         // only reads `repository_url` (to derive repo) and `number`.
         let items: Vec<Value> = pr_by_key
             .keys()
@@ -165,7 +165,7 @@ impl Synthesizer for GithubSynth {
         let review_comments = group_by_pr(ENTITY_PR_REVIEW_COMMENT)?;
 
         // Per-PR detail + the three list endpoints (always emit, even if
-        // the list is empty, so extract's paginate gets a defined answer).
+        // the list is empty, so download's paginate gets a defined answer).
         for (key, raw) in &pr_by_key {
             let (repo, num) = key;
             write_fixture(

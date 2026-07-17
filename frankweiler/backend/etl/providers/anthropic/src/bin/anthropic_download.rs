@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl_anthropic::extract::{
+use frankweiler_etl_anthropic::download::{
     self as anthropic, FetchOptions, DEFAULT_OVERLAP, SLEEP_BETWEEN,
 };
 use frankweiler_obs::{init as init_obs, ObsArgs};

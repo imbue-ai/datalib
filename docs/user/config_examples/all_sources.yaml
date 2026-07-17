@@ -41,7 +41,7 @@ defaults:
   # knobs only decide *when to stop*. Both are optional — omit (or any field)
   # to take the built-in defaults shown here. Overridable per source (see the
   # slack stanza below).
-  extract_params:
+  download_params:
     maximum_time_without_progress_in_minutes: 30  # give up after this long with no successful request
     maximum_sequential_failed_requests: 50         # ...or this many failures in a row
 
@@ -95,10 +95,10 @@ sources:
       type: slack_api
       common:
         blob_size_limit_bytes: 1000000  # per-source override: 1 MB for Slack files
-        # Per-source override of the global extract_params: Slack rate-limits
+        # Per-source override of the global download_params: Slack rate-limits
         # aggressively, so tolerate more failures in a row before giving up.
         # Unset fields (here, the time budget) fall through to the global.
-        extract_params:
+        download_params:
           maximum_sequential_failed_requests: 100
       sync:
         media: true            # pull file attachments into blobs
@@ -301,14 +301,14 @@ sources:
   # `fetch_photos` (default false) scrapes each connection's public profile
   # `og:image` into the per-source CAS, once per connection — transient
   # bot-blocks aren't recorded, so they retry on later runs. The per-source
-  # `extract_params` override below bounds that: stop the photo sweep after
+  # `download_params` override below bounds that: stop the photo sweep after
   # 20 consecutive failures (LinkedIn rate-limits bursts).
   - name: linkedin
     source:
       type: linkedin
       common:
         input_path: ~/backups/LinkedInDataExport
-        extract_params:
+        download_params:
           maximum_sequential_failed_requests: 20
       fetch_photos: true
 

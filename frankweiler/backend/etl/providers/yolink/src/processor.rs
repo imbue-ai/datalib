@@ -1,7 +1,7 @@
 //! Program-A `DataProcessor` for the yolink source. Yolink is EXTRACT-ONLY:
 //! it pulls per-device CSVs into a doltlite raw store and is queried directly
-//! downstream, so there is NO translate path — `plan().translate` stays empty
-//! (extract-only is structural, not a flag). The source owns its raw store
+//! downstream, so there is NO render path — `plan_render` returns nothing
+//! (download-only is structural, not a flag). The source owns its raw store
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_yolink_config::{YolinkConfig, YolinkSync};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed).
 pub fn plan_download(
@@ -23,8 +23,8 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(YolinkExtract {
-            id: format!("yolink/{name}/extract"),
+        procs.push(Box::new(YolinkDownload {
+            id: format!("yolink/{name}/download"),
             raw_path,
             sync,
         }));
@@ -32,30 +32,30 @@ pub fn plan_download(
     Ok(procs)
 }
 
-/// Render wave: yolink is extract-only today (device history lands in
+/// Render wave: yolink is download-only today (device history lands in
 /// the raw store; no markdown render yet), so this is always empty.
 pub fn plan_render(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }
 
-struct YolinkExtract {
+struct YolinkDownload {
     id: String,
     raw_path: PathBuf,
     sync: YolinkSync,
 }
 
 #[async_trait]
-impl DataProcessor for YolinkExtract {
+impl DataProcessor for YolinkDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             sync: self.sync.clone(),

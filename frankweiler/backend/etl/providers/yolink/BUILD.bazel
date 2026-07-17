@@ -53,7 +53,7 @@ rust_test(
     name = "yolink_unittests",
     size = "small",
     crate = ":frankweiler_etl_yolink",
-    data = glob(["src/extract/snapshots/*.snap"]),
+    data = glob(["src/download/snapshots/*.snap"]),
     edition = "2021",
     env = {
         # Insta resolves snapshot paths via CARGO_MANIFEST_DIR by
