@@ -518,7 +518,10 @@ onUnmounted(() => {
             <tr
               v-for="(r, idx) in rows"
               :key="idx"
-              :class="{ 'row-disabled': !r.enabled }"
+              :class="{
+                'row-disabled': !r.enabled,
+                'row-selected': selected.has(r.name),
+              }"
             >
               <td class="check-cell">
                 <input
@@ -578,7 +581,17 @@ onUnmounted(() => {
     </div>
 
     <h3>Recent jobs</h3>
-    <table class="sync-table">
+    <table class="sync-table jobs-table">
+      <colgroup>
+        <col style="width: 6rem" />
+        <col style="width: 5rem" />
+        <col style="width: 8rem" />
+        <col style="width: 6.5rem" />
+        <col />
+        <col style="width: 9.5rem" />
+        <col style="width: 9.5rem" />
+        <col style="width: 9rem" />
+      </colgroup>
       <thead>
         <tr>
           <th>ID</th>
@@ -706,12 +719,26 @@ h3 {
 }
 .sync-table {
   width: 100%;
-  border-collapse: collapse;
+  /* `separate` (with zero spacing) instead of `collapse`: collapsed
+     borders + border-radius/overflow render the per-cell bottom
+     borders as broken segments in WebKit once cell content animates
+     (the progress bar). Separate borders always join into one line. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.9rem;
   background: var(--fw-card-bg);
   border: 1px solid var(--fw-border);
   border-radius: 4px;
   overflow: hidden;
+}
+/* Fixed layout (widths from the colgroup): the live progress cell
+   re-renders constantly and must not reflow the other columns. */
+.jobs-table {
+  table-layout: fixed;
+}
+.jobs-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* Fixed layout: column widths don't reflow with content. */
 .sources-table {
@@ -730,6 +757,16 @@ h3 {
 }
 .sources-table .check-cell {
   text-align: center;
+}
+.sources-table .check-cell input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--fw-accent);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.sources-table tr.row-selected td {
+  background: var(--fw-hover);
 }
 .migrate-banner {
   display: flex;

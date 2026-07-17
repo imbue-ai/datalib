@@ -110,13 +110,20 @@ const labelText = computed(() => {
 }
 .cells {
   display: flex;
-  gap: 2px;
-  height: 6px;
+  gap: 1px;
+  height: 9px;
 }
 .cell {
   flex: 1;
-  border-radius: 2px;
+  /* Square inner edges — only the bar's outer ends are rounded. */
+  border-radius: 0;
   background: var(--fw-border);
+}
+.cell:first-child {
+  border-radius: 4px 0 0 4px;
+}
+.cell:last-child {
+  border-radius: 0 4px 4px 0;
 }
 .cell.ok {
   background: #2e8b57;
