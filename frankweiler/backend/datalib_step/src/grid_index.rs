@@ -1,5 +1,5 @@
-//! The `index` step type: Load, un-fused into a first-class fan-in
-//! step.
+//! The `grid_index` step type: Load, un-fused into a first-class
+//! fan-in step — everything lands in the unified grid table.
 //!
 //! Rebuilds/refreshes `system/backend_index/db.doltlite_db` from
 //! every stanza's `.grid_rows.json` sidecar tree via
@@ -47,18 +47,18 @@ pub async fn run(
         loaded = summary.markdowns_loaded,
         skipped = summary.markdowns_skipped,
         rows = summary.rows_inserted,
-        "index: load_all done"
+        "grid_index: load_all done"
     );
 
     let msg = format!(
-        "datalib-step index: markdowns_loaded={} markdowns_skipped={} rows_inserted={}",
+        "datalib-step grid_index: markdowns_loaded={} markdowns_skipped={} rows_inserted={}",
         summary.markdowns_loaded, summary.markdowns_skipped, summary.rows_inserted,
     );
     let commit = frankweiler_etl::doltlite_raw::commit_run(&pool, &msg)
         .await
-        .context("index commit")?;
+        .context("grid_index commit")?;
     if let Some(h) = commit.as_deref() {
-        tracing::info!(commit = h, "index: committed");
+        tracing::info!(commit = h, "grid_index: committed");
     }
     pool.close().await;
 

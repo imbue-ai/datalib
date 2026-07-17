@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 
 # `datalib-step` — the step-type host binary for the DAG runner
 # (//frankweiler/backend/dag:datalib_dag). One subcommand per step
-# type: download / render / index / qmd, each honoring the DAG step
+# type: download / render / grid_index / qmd_index, each honoring the DAG step
 # contract (NDJSON events on stdout, final outcome line).
 #
 # Bazel-only (like sync): it links frankweiler_ingest_config and the

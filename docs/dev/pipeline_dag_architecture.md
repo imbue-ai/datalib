@@ -167,12 +167,13 @@ A side goal here is to report enough information to get a sense of USE metrics: 
 >
 > *What the prototype chose:* the macro layer was dropped entirely — the
 > config declares steps directly (`<source_type>.download` /
-> `<source_type>.render` per source, plus shared `index`/`qmd` fan-ins).
+> `<source_type>.render` per source, plus shared `grid_index`/`qmd_index`
+> fan-ins).
 > Wildcard inputs (`*`/`**`) exist and match against declared output
 > *roots* only — true tree-intersection semantics would make `**/x`
 > depend on every step. In practice render turned out to be as
 > provider-specific as download (each provider renders its own raw
-> schema); the genuinely shared step types are `index` and `qmd`.
+> schema); the genuinely shared step types are `grid_index` and `qmd_index`.
 
 
 The user should not typically be bothered to configure the detailed dependency graph.  Instead, they’re likely to configure “macro-like” functions that in turn create sections of the dependency graph, very similar to how Flume / Apache Beam code run functions that assemble sections of the dependency graph.
@@ -257,7 +258,7 @@ rough dependency order:
 * **Per-provider step types.** Download *and* render are provider-
   specific (each render reads its own raw-store schema), so the config
   writes them as `<source_type>.<phase>` (`slack_api.download`); the
-  genuinely shared step types are `index` and `qmd`. Params carry
+  genuinely shared step types are `grid_index` and `qmd_index`. Params carry
   `{name, source}` with no `type:` tag — the step type names the
   provider, and `source:` deserializes into that provider's own config
   struct. Provider crates expose per-wave entry points
@@ -273,7 +274,7 @@ rough dependency order:
   carries the prior version forward; otherwise the scheduler
   content-hashes the output tree (blake3, content not mtime). The
   fallback is the safety net — real steps should report logical
-  versions. The index step's version is its dolt commit hash.
+  versions. The grid_index step's version is its dolt commit hash.
 * **Scheduler state** lives at `system/state/dag_state.json`
   (per-step input/output versions, saved after every terminal step).
   Input versions are recorded only on *success*, so a failed step stays
@@ -281,7 +282,7 @@ rough dependency order:
   incremental step's reported partial outputs are still recorded.
 * **Load is un-fused by force, not choice.** The single-writer rule
   (no two steps' output trees may overlap) makes per-source writes into
-  the shared index impossible, so `index` is one fan-in step driving
+  the shared index impossible, so `grid_index` is one fan-in step driving
   `load_all` over every `.grid_rows.json` sidecar tree. Render uses its
   own sidecar tree as the prior-fingerprint store — the artifact is the
   resume state, no index-DB peeking.

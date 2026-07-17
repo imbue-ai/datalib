@@ -23,10 +23,11 @@
 //!   are skipped, using the sidecar tree itself as the
 //!   prior-fingerprint store (no index-DB peeking — that's the
 //!   un-fused contract).
-//! * `index` — rebuild/refresh `system/backend_index` from every
-//!   stanza's sidecar tree (`load_all`, per-doc fingerprint skip),
-//!   then `dolt_commit`. This is the load step un-fused from render.
-//! * `qmd` — the qmd search index over every rendered_md tree,
+//! * `grid_index` — rebuild/refresh the unified grid table
+//!   (`system/backend_index`) from every stanza's sidecar tree
+//!   (`load_all`, per-doc fingerprint skip), then `dolt_commit`. This
+//!   is the load step un-fused from render.
+//! * `qmd_index` — the qmd search index over every rendered_md tree,
 //!   writing `system/qmd`.
 //! * `synthesize` — dev utility, not a pipeline step: build HTTP
 //!   playback fixtures for one source from its `input_path` raw
@@ -41,9 +42,9 @@
 mod dispatch;
 mod download;
 mod events;
+mod grid_index;
 mod hints;
-mod index_step;
-mod qmd_step;
+mod qmd_index;
 mod render;
 mod source;
 mod synth;
@@ -107,10 +108,13 @@ enum Cmd {
         #[arg(long)]
         params_json: String,
     },
-    /// Rebuild `system/backend_index` from every sidecar tree.
-    Index,
+    /// Rebuild the unified grid table (`system/backend_index`) from
+    /// every sidecar tree.
+    #[command(name = "grid_index")]
+    GridIndex,
     /// Build the qmd search index → `system/qmd`.
-    Qmd {
+    #[command(name = "qmd_index")]
+    QmdIndex {
         /// Directory where qmd caches its embedding model.
         #[arg(long)]
         models_dir: Option<PathBuf>,
@@ -247,8 +251,8 @@ async fn run(
             hints::emit_auth_hint_on_failure(emitter, type_str, &res);
             res
         }
-        Cmd::Index => index_step::run(data_root, Some(now), emitter).await,
-        Cmd::Qmd { models_dir } => qmd_step::run(data_root, models_dir, emitter).await,
+        Cmd::GridIndex => grid_index::run(data_root, Some(now), emitter).await,
+        Cmd::QmdIndex { models_dir } => qmd_index::run(data_root, models_dir, emitter).await,
         Cmd::Synthesize {
             source_type,
             params_json,

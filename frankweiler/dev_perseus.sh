@@ -57,13 +57,13 @@ steps:
         common:
           input_path: $PERSEUS_FIXTURE_DIR
 
-  - id: index
-    step: index
+  - id: grid_index
+    step: grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
-  - id: qmd
-    step: qmd
+  - id: qmd_index
+    step: qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 EOF

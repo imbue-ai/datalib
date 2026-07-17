@@ -13,8 +13,8 @@
 //!       name: slack                 # → slack/raw, slack/rendered_md
 //!       source:                     # the provider's own config subtree
 //!         sync: {channels: [chat-qi]}
-//!   - id: index
-//!     step: index                   # source-independent step types stay bare
+//!   - id: grid_index
+//!     step: grid_index              # source-independent step types stay bare
 //!     inputs: ["**/rendered_md"]
 //!     outputs: [system/backend_index]
 //!   - id: custom
@@ -79,8 +79,8 @@ pub struct StepEntry {
     pub run: Option<Vec<String>>,
     /// A `datalib-step` step type: `<source_type>.download` /
     /// `<source_type>.render` (e.g. `slack_api.download`), or a bare
-    /// source-independent type (`index`, `qmd`). Mutually exclusive
-    /// with `run`.
+    /// source-independent type (`grid_index`, `qmd_index`). Mutually
+    /// exclusive with `run`.
     #[serde(default)]
     pub step: Option<String>,
     /// Parameters for `step:`, forwarded as JSON via `--params-json`.
@@ -147,8 +147,9 @@ pub fn to_specs(cfg: &DagConfig, step_bin: &Path, opts: &StepTypeOpts) -> Result
             (None, Some(step_type)) => {
                 // `<source_type>.<phase>` (e.g. `slack_api.download`)
                 // maps to `datalib-step <phase> --type <source_type>`;
-                // a bare token (`index`, `qmd`) is a source-independent
-                // step type invoked as a plain subcommand.
+                // a bare token (`grid_index`, `qmd_index`) is a
+                // source-independent step type invoked as a plain
+                // subcommand.
                 let mut argv = vec![step_bin.to_string_lossy().into_owned()];
                 let phase = match step_type.rsplit_once('.') {
                     Some((source_type, phase @ ("download" | "render"))) => {
@@ -285,10 +286,10 @@ mod tests {
                 outputs: [slack/rendered_md]
                 step: slack_api.render
                 params: *slack
-              - id: index
+              - id: grid_index
                 inputs: ["**/rendered_md"]
                 outputs: [system/backend_index]
-                step: index
+                step: grid_index
             "#,
         )
         .unwrap();
@@ -322,11 +323,11 @@ mod tests {
         assert_eq!(rn[5], dl[5]);
 
         // Param-less source-independent step type stays bare.
-        assert_eq!(argv(2), vec!["/opt/bin/datalib-step", "index"]);
+        assert_eq!(argv(2), vec!["/opt/bin/datalib-step", "grid_index"]);
 
         // The graph derives as expected from the declared artifacts.
         let g = crate::Graph::build(specs).unwrap();
-        assert_eq!(g.deps[g.by_id["index"]].len(), 1);
+        assert_eq!(g.deps[g.by_id["grid_index"]].len(), 1);
     }
 
     #[test]
@@ -338,10 +339,10 @@ mod tests {
                 outputs: [slack/raw]
                 step: slack_api.download
                 params: {name: slack, source: {sync: {}}}
-              - id: index
+              - id: grid_index
                 inputs: [slack/raw]
                 outputs: [system/backend_index]
-                step: index
+                step: grid_index
               - id: custom
                 outputs: [custom/out]
                 run: [echo, hi]

@@ -235,8 +235,8 @@ def main() -> int:
     params: {params}"""
         )
     steps.append(
-        """  - id: index
-    step: index
+        """  - id: grid_index
+    step: grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]"""
     )

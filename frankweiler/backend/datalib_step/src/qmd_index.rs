@@ -1,5 +1,5 @@
-//! The `qmd` step type: the qmd search index over every rendered_md
-//! tree, writing `system/qmd`.
+//! The `qmd_index` step type: the qmd search index over every
+//! rendered_md tree, writing `system/qmd`.
 
 use std::path::{Path, PathBuf};
 

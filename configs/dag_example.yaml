@@ -72,12 +72,12 @@ steps:
   # ── shared fan-in steps ────────────────────────────────────────────
   # `**/rendered_md` matches every render step's output; adding a new
   # source above automatically feeds these.
-  - id: index
-    step: index
+  - id: grid_index
+    step: grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
-  - id: qmd
-    step: qmd
+  - id: qmd_index
+    step: qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
