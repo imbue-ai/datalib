@@ -24,6 +24,7 @@ import {
   type JobProgressEvent,
 } from "@/api";
 import StepProgress from "@/components/StepProgress.vue";
+import DagPanel from "@/components/DagPanel.vue";
 import { listSources, type SourceRow } from "@/config/configSources";
 import { SNIPPETS } from "@/config/snippets";
 
@@ -656,6 +657,11 @@ onUnmounted(() => {
         </tr>
       </tbody>
     </table>
+
+    <template v-if="jobs.some(isActive)">
+      <h3>Pipeline</h3>
+      <DagPanel />
+    </template>
   </section>
 </template>
 
@@ -803,7 +809,7 @@ h3 {
   font-weight: 400;
 }
 .src-actions {
-  justify-content: flex-end;
+  text-align: right;
 }
 /* A little footprint stability for the "Sync" ↔ "Queuing…" label swap,
    without making the buttons look padded out. */
@@ -882,8 +888,12 @@ h3 {
   min-width: 14rem;
 }
 .actions-cell {
-  display: flex;
-  gap: 0.4rem;
+  /* NOT display:flex — a td that leaves table-cell layout can't join
+     the row's border line (the "broken divider"). */
+  white-space: nowrap;
+}
+.actions-cell .btn + .btn {
+  margin-left: 0.4rem;
 }
 .row-failed .state-pill[data-state="failed"] {
   font-weight: 600;
