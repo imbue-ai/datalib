@@ -7,8 +7,8 @@ sh_binary(
     data = [
         "//frankweiler/backend/http:frankweiler_http_bin",
         # The HTTP backend's sync worker shells out to these; serve_dev.sh
-        # exports their runfiles paths as $FRANKWEILER_DAG_BIN /
-        # $FRANKWEILER_STEP_BIN.
+        # exports the runner's runfiles path as $FRANKWEILER_DAG_BIN and a
+        # staged dash-named symlink dir as $FRANKWEILER_BINARY_DIR.
         "//frankweiler/backend/dag:datalib_dag",
         "//frankweiler/backend/datalib_step:datalib_step",
     ],
@@ -25,9 +25,9 @@ sh_binary(
     srcs = ["dev.sh"],
     data = [
         "//frankweiler/backend/http:frankweiler_http_bin",
-        # Sync worker children; dev.sh exports their runfiles paths as
-        # $FRANKWEILER_DAG_BIN / $FRANKWEILER_STEP_BIN so UI-triggered
-        # syncs run end-to-end.
+        # Sync worker children; dev.sh exports $FRANKWEILER_DAG_BIN and a
+        # staged $FRANKWEILER_BINARY_DIR so UI-triggered syncs run
+        # end-to-end.
         "//frankweiler/backend/dag:datalib_dag",
         "//frankweiler/backend/datalib_step:datalib_step",
     ],

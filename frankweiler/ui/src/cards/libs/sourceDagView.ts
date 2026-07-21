@@ -192,7 +192,7 @@ export function sourceDagView(): CardRender {
         const title = svgEl("title", {});
         title.textContent = [
           p.step.id,
-          p.step.step ? `type: ${p.step.step}` : "type: raw argv",
+          `runs: ${p.step.command}`,
           p.step.inputs.length ? `reads: ${p.step.inputs.join(", ")}` : "reads: (nothing — download step)",
           `writes: ${p.step.outputs.join(", ")}`,
           state !== "todo" ? `state: ${state}` : "",

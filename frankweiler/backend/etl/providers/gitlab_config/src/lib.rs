@@ -38,3 +38,7 @@ pub struct GitlabApiSync {
     #[serde(default)]
     pub merge_requests: Vec<String>,
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type GitlabRenderConfig = frankweiler_source_common::BareRenderConfig;

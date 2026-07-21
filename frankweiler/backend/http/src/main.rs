@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let state = frankweiler_http::build_state(
         root,
         frankweiler_http::worker::resolve_dag_bin(),
-        frankweiler_http::worker::resolve_step_bin(),
+        frankweiler_http::worker::resolve_binary_dir(),
     )
     .await?;
     let root = state.root.clone();

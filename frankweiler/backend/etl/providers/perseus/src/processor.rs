@@ -12,6 +12,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_perseus_config::PerseusConfig;
+use frankweiler_etl_perseus_config::PerseusRenderConfig;
 
 use crate::download;
 
@@ -32,6 +33,12 @@ pub fn plan_download(
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
+        if !sync.alignment_pairs.is_empty() {
+            anyhow::bail!(
+                "perseus `sync.alignment_pairs` is a render knob — put \
+                 `alignment_pairs` in the render step's params instead"
+            );
+        }
         procs.push(Box::new(PerseusDownload {
             id: format!("perseus/{name}/download"),
             input_path,
@@ -41,22 +48,19 @@ pub fn plan_download(
     Ok(procs)
 }
 
-/// Render wave. NOTE: reads `sync.alignment_pairs` — a render-relevant
-/// knob that historically lives in the `sync:` block; it moves out in
-/// the config-format split.
-pub fn plan_render(ctx: PlanContext, config: PerseusConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+/// Render wave. Alignment pairs come from the render step's own
+/// params (empty = no alignment).
+pub fn plan_render(
+    ctx: PlanContext,
+    config: PerseusRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let pairs: Vec<(String, String)> = config
-        .sync
-        .as_ref()
-        .map(|s| {
-            s.alignment_pairs
-                .iter()
-                .map(|[a, b]| (a.clone(), b.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
+        .alignment_pairs
+        .iter()
+        .map(|[a, b]| (a.clone(), b.clone()))
+        .collect();
     Ok(vec![Box::new(PerseusRender {
         id: format!("perseus/{name}/render"),
         input_path,

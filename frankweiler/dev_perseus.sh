@@ -49,24 +49,28 @@ cat > "$ROOT/config.yaml" <<EOF
 data_root: $ROOT
 steps:
   - id: perseus.render
-    step: perseus.render
+    command: datalib-step render perseus
     outputs: [perseus/rendered_md]
     params:
-      name: perseus
-      source:
-        common:
-          input_path: $PERSEUS_FIXTURE_DIR
+      common:
+        input_path: $PERSEUS_FIXTURE_DIR
 
   - id: grid_index
-    step: grid_index
+    command: datalib-step grid_index
     inputs: ["**/rendered_md"]
     outputs: [system/backend_index]
 
   - id: qmd_index
-    step: qmd_index
+    command: datalib-step qmd_index
     inputs: ["**/rendered_md"]
     outputs: [system/qmd]
 EOF
+
+# Step commands find `datalib-step` via PATH; bazel names the binary
+# `datalib_step`, so stage a dash-named symlink dir for --binary-dir.
+BINDIR="$ROOT/.bindir"
+mkdir -p "$BINDIR"
+ln -s "$STEP_BIN" "$BINDIR/datalib-step"
 
 # Mirror the model-cache symlink that materialize_tng_root.sh sets up,
 # so qmd-indexer can find the GGUF weights without re-downloading them
@@ -83,6 +87,6 @@ fi
 # launches. Value matches `:dev_tng`'s style — far-future date so
 # it sorts last in any timestamp comparison.
 echo "[dev_perseus] running render+index against $PERSEUS_FIXTURE_DIR" >&2
-"$DAG_BIN" "$ROOT/config.yaml" --step-bin "$STEP_BIN" --now '2369-04-15T00:00:00+00:00'
+"$DAG_BIN" "$ROOT/config.yaml" --binary-dir "$BINDIR" --now '2369-04-15T00:00:00+00:00'
 
 exec "$SERVE_SH" "$ROOT"

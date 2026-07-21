@@ -272,7 +272,7 @@ export function fetchMigratedConfig(signal?: AbortSignal): Promise<MigrateRespon
 // overlap.
 export type DagStep = {
   id: string;
-  step: string | null;
+  command: string;
   inputs: string[];
   outputs: string[];
   deps: string[];
@@ -315,13 +315,10 @@ export async function saveConfig(
 
 // --- Sync API --------------------------------------------------------------
 
+// A source is any config step with no declared inputs (a fringe
+// step — what a sync can target), identified by its step id.
 export type SyncSource = {
-  name: string;
-  // Discriminator from the config (e.g. `claude_api`, `notion_api`,
-  // `claude_export`). Encodes both provider and provenance.
-  type: string;
-  // True iff the source has a `sync:` block.
-  managed: boolean;
+  id: string;
 };
 
 export type SyncJobState = "pending" | "running" | "done" | "failed" | "canceled";

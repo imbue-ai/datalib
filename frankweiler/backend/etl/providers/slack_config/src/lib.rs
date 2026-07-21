@@ -50,3 +50,7 @@ impl Default for SlackApiSync {
         }
     }
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type SlackRenderConfig = frankweiler_source_common::BareRenderConfig;

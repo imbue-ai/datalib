@@ -49,3 +49,7 @@ pub struct GoogleTakeoutSync {
     /// When `google_voice` is on, also process `Voice/Spam/`.
     pub google_voice_include_spam: bool,
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type GoogleTakeoutRenderConfig = frankweiler_source_common::BareRenderConfig;

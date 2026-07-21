@@ -10,6 +10,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_yolink_config::YolinkRenderConfig;
 use frankweiler_etl_yolink_config::{YolinkConfig, YolinkSync};
 
 use crate::download;
@@ -34,7 +35,10 @@ pub fn plan_download(
 
 /// Render wave: yolink is download-only today (device history lands in
 /// the raw store; no markdown render yet), so this is always empty.
-pub fn plan_render(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_render(
+    ctx: PlanContext,
+    config: YolinkRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }

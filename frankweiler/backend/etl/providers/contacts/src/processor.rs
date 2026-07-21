@@ -17,6 +17,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
+use frankweiler_etl_carddav_config::CarddavRenderConfig;
 use frankweiler_etl_carddav_config::{CarddavConfig, CarddavSync};
 
 use crate::download;
@@ -46,7 +47,10 @@ pub fn plan_download(
 }
 
 /// Render wave: always present (renders whatever is in the raw store).
-pub fn plan_render(ctx: PlanContext, config: CarddavConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_render(
+    ctx: PlanContext,
+    config: CarddavRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(CarddavRender {

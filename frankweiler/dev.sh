@@ -35,14 +35,22 @@ set -u
 BIN="$(rlocation _main/frankweiler/backend/http/frankweiler_http_bin)"
 [[ -x "$BIN" ]] || { echo "ERROR: backend binary not found at $BIN" >&2; exit 1; }
 
-# Sync worker child binaries (see serve_dev.sh for the rationale).
+# Sync worker child binaries (see serve_dev.sh for the rationale;
+# short version: bazel names the step binary `datalib_step`, but step
+# commands look up `datalib-step` on PATH, so we stage a dash-named
+# symlink dir and hand it over as the binary dir).
 if [[ -z "${FRANKWEILER_DAG_BIN:-}" ]]; then
   DAG_BIN="$(rlocation _main/frankweiler/backend/dag/datalib_dag || true)"
   [[ -x "$DAG_BIN" ]] && export FRANKWEILER_DAG_BIN="$DAG_BIN"
 fi
-if [[ -z "${FRANKWEILER_STEP_BIN:-}" ]]; then
+BINDIR=""
+if [[ -z "${FRANKWEILER_BINARY_DIR:-}" ]]; then
   STEP_BIN="$(rlocation _main/frankweiler/backend/datalib_step/datalib_step || true)"
-  [[ -x "$STEP_BIN" ]] && export FRANKWEILER_STEP_BIN="$STEP_BIN"
+  if [[ -x "$STEP_BIN" ]]; then
+    BINDIR="$(mktemp -d -t frankweiler-bindir.XXXXXX)"
+    ln -s "$STEP_BIN" "$BINDIR/datalib-step"
+    export FRANKWEILER_BINARY_DIR="$BINDIR"
+  fi
 fi
 [[ -n "${FRANKWEILER_DAG_BIN:-}" ]] && echo "dag bin: $FRANKWEILER_DAG_BIN"
 
@@ -127,6 +135,7 @@ VITE_PID=$!
 cleanup() {
   kill "$VITE_PID" 2>/dev/null || true
   kill "$BACKEND_PID" 2>/dev/null || true
+  [[ -n "$BINDIR" ]] && rm -rf "$BINDIR"
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

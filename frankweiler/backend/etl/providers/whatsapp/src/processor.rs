@@ -17,6 +17,7 @@ use async_trait::async_trait;
 
 use frankweiler_etl::periodize::Period;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_whatsapp_config::WhatsappRenderConfig;
 use frankweiler_etl_whatsapp_config::{WhatsAppSync, WhatsappConfig};
 
 use crate::download;
@@ -42,7 +43,7 @@ pub fn plan_download(
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
-    config: WhatsappConfig,
+    config: WhatsappRenderConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();

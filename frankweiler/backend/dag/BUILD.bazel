@@ -26,6 +26,7 @@ rust_library(
         "@frankweiler_crates//:serde",
         "@frankweiler_crates//:serde_json",
         "@frankweiler_crates//:serde_yaml",
+        "@frankweiler_crates//:shlex",
         "@frankweiler_crates//:thiserror",
         "@frankweiler_crates//:tokio",
         "@frankweiler_crates//:walkdir",
@@ -42,9 +43,10 @@ rust_test(
     ],
 )
 
-# The DAG runner: loads a new-format DAG config file and executes it,
-# with `step:`-typed entries dispatched to the sibling `datalib-step`
-# binary (//frankweiler/backend/datalib_step).
+# The DAG runner: loads a new-format DAG config file and executes each
+# step's `command:` as a subprocess, with `--binary-dir` (default: the
+# runner's own directory) prepended to the children's PATH so commands
+# can say `datalib-step` bare (//frankweiler/backend/datalib_step).
 rust_binary(
     name = "datalib_dag",
     srcs = ["src/bin/datalib_dag.rs"],

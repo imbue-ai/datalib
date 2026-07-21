@@ -14,7 +14,7 @@
 //! `ingest-config` oneof lands (Program A step 3), [`EmailConfig`] becomes the
 //! variant payload directly — same type, no reparse.
 
-use frankweiler_source_common::SourceCommon;
+use frankweiler_source_common::{RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
 
 /// The full config for a `type: email` source: the shared `common:` envelope
@@ -38,21 +38,44 @@ pub struct EmailConfig {
     /// info itself).
     #[serde(default)]
     pub mbox: Option<MboxSync>,
-    /// Webmail to build each email's `↗` outlink for. `gmail` for a Google
-    /// Takeout `.mbox`, `fastmail` for a Fastmail JMAP account. Omit for any
-    /// other server (no outlink).
+    /// Legacy location of the outlink format — the knob now lives on
+    /// the render step's params ([`EmailRenderConfig::outlink_format`]).
+    /// Still parsed here so old-format configs migrate losslessly; the
+    /// download planner rejects it with a pointer to the new home.
     #[serde(default)]
     pub outlink_format: Option<EmailOutlink>,
     /// Limit **extraction** to mailboxes whose full label path (POSIX-like,
     /// e.g. `Work/Projects`) exactly matches one of these — nested labels must
     /// be listed explicitly. Empty = download everything. Applies to both the
-    /// JMAP and `.mbox` paths. Independent of `only_render_labels`.
+    /// JMAP and `.mbox` paths. Independent of the render step's
+    /// `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
+    /// Legacy location of the render-label filter — now on the render
+    /// step's params ([`EmailRenderConfig::only_render_labels`]). Parsed
+    /// for migration; rejected by the download planner.
+    #[serde(default)]
+    pub only_render_labels: Vec<String>,
+}
+
+/// Params for the email **render** step. Split from [`EmailConfig`]
+/// (the download-step params) so each step's params carry only what
+/// that wave reads.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmailRenderConfig {
+    #[serde(default)]
+    pub common: RenderCommon,
+    /// Webmail to build each email's `↗` outlink for. `gmail` for a Google
+    /// Takeout `.mbox`, `fastmail` for a Fastmail JMAP account. Omit for any
+    /// other server (no outlink).
+    #[serde(default)]
+    pub outlink_format: Option<EmailOutlink>,
     /// Limit **rendering** to threads with at least one email under one of
-    /// these mailbox label paths (same exact-match semantics). Empty = render
-    /// everything extracted. Separate list, so a giant inbox can be extracted
-    /// in full but rendered down to a subset.
+    /// these mailbox label paths (POSIX-like, exact match). Empty = render
+    /// everything extracted. Separate from the download step's
+    /// `only_extract_labels`, so a giant inbox can be extracted in full but
+    /// rendered down to a subset.
     #[serde(default)]
     pub only_render_labels: Vec<String>,
 }

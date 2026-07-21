@@ -71,18 +71,14 @@ function onEdit() {
   reparse();
 }
 
-// Saved-config source list from the backend — the sync-relevant view
-// (`managed` is derived by the Rust loader, not the YAML). Keyed by
-// name to decorate the table rows and gate the Sync buttons: sync runs
-// against the file on disk, so a row is syncable only once the backend
-// has seen it — and not at all while the editor has unsaved changes
-// (syncing would silently use the stale on-disk version).
+// Saved-config source list from the backend (fringe step ids, derived
+// by the Rust loader from the file on disk). Gates the Sync buttons:
+// sync runs against the saved file, so a row is syncable only once
+// the backend has seen it — and not at all while the editor has
+// unsaved changes (syncing would silently use the stale on-disk
+// version).
 const serverSources = ref<SyncSource[]>([]);
-const serverByName = computed(() => {
-  const m = new Map<string, SyncSource>();
-  for (const s of serverSources.value) m.set(s.name, s);
-  return m;
-});
+const serverIds = computed(() => new Set(serverSources.value.map((s) => s.id)));
 
 async function loadConfig() {
   loadError.value = null;
@@ -191,16 +187,16 @@ async function onMigrate() {
 const jobs = ref<SyncJob[]>([]);
 const error = ref<string | null>(null);
 const loading = ref(false);
-// Row checkboxes for "Sync selected". Keyed by source name; pruned to
+// Row checkboxes for "Sync selected". Keyed by step id; pruned to
 // existing rows on reparse via the computed below.
 const selected = ref<Set<string>>(new Set());
 const busySelected = ref(false);
 const busyGlobal = ref(false);
 
-function toggleSelected(name: string) {
+function toggleSelected(id: string) {
   const s = new Set(selected.value);
-  if (s.has(name)) s.delete(name);
-  else s.add(name);
+  if (s.has(id)) s.delete(id);
+  else s.add(id);
   selected.value = s;
 }
 
@@ -208,7 +204,7 @@ function toggleSelected(name: string) {
 // config and still in the table).
 const selectedSyncable = computed(() =>
   [...selected.value].filter(
-    (n) => serverByName.value.has(n) && rows.value.some((r) => r.name === n),
+    (n) => serverIds.value.has(n) && rows.value.some((r) => r.id === n),
   ),
 );
 
@@ -300,7 +296,7 @@ async function slowReload() {
   await loadJobs();
 }
 
-// One job syncing every checked source: comma-joined names become
+// One job syncing every checked source: comma-joined step ids become
 // repeated --sync flags in the worker, so the whole selection runs as
 // a single DAG invocation (shared fan-in steps run once).
 async function syncSelected() {
@@ -500,18 +496,12 @@ onUnmounted(() => {
           <colgroup>
             <col class="col-check" />
             <col class="col-name" />
-            <col class="col-type" />
-            <col class="col-flag" />
-            <col class="col-flag" />
             <col class="col-actions" />
           </colgroup>
           <thead>
             <tr>
               <th class="th-check"></th>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Enabled</th>
-              <th>Managed</th>
+              <th>Source step</th>
               <th class="th-actions"></th>
             </tr>
           </thead>
@@ -519,44 +509,28 @@ onUnmounted(() => {
             <tr
               v-for="(r, idx) in rows"
               :key="idx"
-              :class="{
-                'row-disabled': !r.enabled,
-                'row-selected': selected.has(r.name),
-              }"
+              :class="{ 'row-selected': selected.has(r.id) }"
             >
               <td class="check-cell">
                 <input
                   type="checkbox"
-                  :checked="selected.has(r.name)"
-                  :disabled="!serverByName.get(r.name)"
+                  :checked="selected.has(r.id)"
+                  :disabled="!serverIds.has(r.id)"
                   :title="
-                    !serverByName.get(r.name)
-                      ? 'Not in the saved config yet'
-                      : ''
+                    !serverIds.has(r.id) ? 'Not in the saved config yet' : ''
                   "
-                  @change="toggleSelected(r.name)"
+                  @change="toggleSelected(r.id)"
                 />
               </td>
-              <td>{{ r.name || "(unnamed)" }}</td>
-              <td>{{ r.type }}</td>
-              <td>{{ r.enabled ? "yes" : "no" }}</td>
-              <td>
-                {{
-                  serverByName.get(r.name)
-                    ? serverByName.get(r.name)!.managed
-                      ? "yes"
-                      : "no"
-                    : "—"
-                }}
-              </td>
+              <td>{{ r.id || "(unnamed)" }}</td>
               <td class="actions-cell src-actions">
-                <button class="btn" title="Select this source in the config file" @click="selectSource(idx)">
+                <button class="btn" title="Select this step in the config file" @click="selectSource(idx)">
                   Locate config
                 </button>
               </td>
             </tr>
             <tr v-if="rows.length === 0 && !loading">
-              <td colspan="6" class="empty">
+              <td colspan="3" class="empty">
                 no sources configured yet — add one with the buttons below.
               </td>
             </tr>
@@ -785,17 +759,8 @@ h3 {
   border-radius: 6px;
   font-size: 0.85rem;
 }
-.sources-table .col-name {
-  width: 20%;
-}
-.sources-table .col-type {
-  width: 21%;
-}
-.sources-table .col-flag {
-  width: 15%;
-}
 .sources-table .col-actions {
-  width: 29%;
+  width: 9rem;
 }
 /* "Sync all" lives in the header row, right-aligned so it lines
    up with the rows' Sync buttons. Undo the th's uppercase styling for
@@ -831,10 +796,6 @@ h3 {
 }
 .sync-table tr:last-child td {
   border-bottom: none;
-}
-.row-disabled td:first-child,
-.row-disabled td:nth-child(2) {
-  color: var(--fw-muted);
 }
 .btn {
   background: var(--fw-input-bg);

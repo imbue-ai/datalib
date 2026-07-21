@@ -44,3 +44,7 @@ pub struct WhatsAppSync {
     #[serde(default)]
     pub key_env_var: Option<String>,
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type WhatsappRenderConfig = frankweiler_source_common::BareRenderConfig;

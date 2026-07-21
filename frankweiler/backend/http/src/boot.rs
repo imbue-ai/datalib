@@ -23,15 +23,15 @@ use crate::{worker, AppState};
 /// `<root>/config.yaml`, the sync-progress channel, and the background
 /// sync worker. The worker is spawned onto the ambient tokio runtime,
 /// so this must be called from within one. `dag_bin` is the
-/// `datalib-dag` runner the worker shells out to (with `step_bin`
-/// passed through as `--step-bin` when resolved); `None` makes
+/// `datalib-dag` runner the worker shells out to (with `binary_dir`
+/// passed through as `--binary-dir` when resolved); `None` makes
 /// UI-triggered syncs fail fast with a clear message while reads and
 /// search still work. Presentation concerns (browser opening, the
 /// `--url-file` handshake) live in the binary's main, not here.
 pub async fn build_state(
     root: PathBuf,
     dag_bin: Option<PathBuf>,
-    step_bin: Option<PathBuf>,
+    binary_dir: Option<PathBuf>,
 ) -> anyhow::Result<AppState> {
     if !root.exists() {
         std::fs::create_dir_all(&root)
@@ -71,7 +71,7 @@ pub async fn build_state(
         root: root.clone(),
         config_path: (*config_path).clone(),
         dag_bin,
-        step_bin,
+        binary_dir,
         progress_tx: progress_tx.clone(),
     };
     let worker_repo = repo.clone();

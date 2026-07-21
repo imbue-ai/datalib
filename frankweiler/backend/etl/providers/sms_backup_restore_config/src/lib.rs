@@ -25,3 +25,7 @@ impl SmsBackupRestoreConfig {
         Ok(())
     }
 }
+
+/// Params for the render step — no provider-specific render knobs, so
+/// this is the shared bare envelope (see the per-phase params split).
+pub type SmsBackupRestoreRenderConfig = frankweiler_source_common::BareRenderConfig;

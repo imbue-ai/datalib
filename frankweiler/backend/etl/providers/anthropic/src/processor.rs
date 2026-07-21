@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
+use frankweiler_etl_anthropic_config::AnthropicRenderConfig;
 use frankweiler_etl_anthropic_config::{AnthropicConfig, ClaudeApiSync};
 
 use crate::download;
@@ -36,7 +37,7 @@ pub fn plan_download(
 /// Render wave: always present (renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
-    config: AnthropicConfig,
+    config: AnthropicRenderConfig,
 ) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();

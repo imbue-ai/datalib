@@ -78,6 +78,11 @@ pub struct Runner {
     /// one of the selected chains actually moved. `None` (the
     /// default) invokes every fringe step.
     pub only_fringe: Option<std::collections::HashSet<String>>,
+    /// Extra environment applied to every subprocess step — run-wide
+    /// settings like `PATH` (with the binary dir prepended) and the
+    /// pinned `FRANKWEILER_DAG_NOW`. A step's own `env:` entries win
+    /// on key collision.
+    pub child_env: Arc<BTreeMap<String, String>>,
 }
 
 impl Runner {
@@ -88,6 +93,7 @@ impl Runner {
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             only_fringe: None,
+            child_env: Arc::new(BTreeMap::new()),
         }
     }
 
@@ -104,6 +110,12 @@ impl Runner {
     /// Enable subset-sync mode with the given fringe step ids.
     pub fn only_fringe(mut self, ids: impl IntoIterator<Item = String>) -> Self {
         self.only_fringe = Some(ids.into_iter().collect());
+        self
+    }
+
+    /// Set the run-wide subprocess environment (see [`Runner::child_env`]).
+    pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
+        self.child_env = Arc::new(env);
         self
     }
 }
@@ -249,8 +261,10 @@ impl Runner {
                         let run = graph.steps[i].run.clone();
                         let retry = self.retry.clone();
                         let sink = self.sink.clone();
+                        let child_env = self.child_env.clone();
                         set.spawn(async move {
-                            let (attempts, res) = invoke_with_retry(&run, ctx, &retry, &sink).await;
+                            let (attempts, res) =
+                                invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
                             (i, attempts, res)
                         });
                     }
@@ -565,6 +579,7 @@ async fn invoke_with_retry(
     ctx: StepCtx,
     retry: &RetryPolicy,
     sink: &Arc<dyn EventSink>,
+    child_env: &BTreeMap<String, String>,
 ) -> (u32, Result<StepOutcome, StepError>) {
     let mut attempt = 1u32;
     loop {
@@ -575,7 +590,7 @@ async fn invoke_with_retry(
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
             StepRun::Subprocess { argv, env } => {
-                crate::subprocess::run_subprocess(argv, env, &ctx, sink).await
+                crate::subprocess::run_subprocess(argv, env, child_env, &ctx, sink).await
             }
         };
         match res {

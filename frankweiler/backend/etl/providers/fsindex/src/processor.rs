@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl::raw_layout;
 use frankweiler_etl_fsindex_config::FsindexConfig;
+use frankweiler_etl_fsindex_config::FsindexRenderConfig;
 
 use crate::download;
 
@@ -45,7 +46,10 @@ pub fn plan_download(
 
 /// Render wave: fsindex is download-only (it indexes the tree, renders
 /// nothing), so this is always empty.
-pub fn plan_render(ctx: PlanContext, config: FsindexConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
+pub fn plan_render(
+    ctx: PlanContext,
+    config: FsindexRenderConfig,
+) -> Result<Vec<Box<dyn DataProcessor>>> {
     let _ = (ctx, config);
     Ok(Vec::new())
 }

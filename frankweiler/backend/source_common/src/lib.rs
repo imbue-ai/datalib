@@ -139,6 +139,65 @@ impl SourceCommon {
     }
 }
 
+/// The slim per-source envelope for the **render** wave. Render's only
+/// shared tunables are where the raw store lives ([`Self::raw_path`])
+/// and — for file-tree-backed sources like perseus that render straight
+/// from the staged tree — [`Self::input_path`]. Download-side knobs
+/// (blob limits, rate limits, event tape) deliberately don't exist
+/// here, so a render step's params can't smuggle them in. Strict
+/// (`deny_unknown_fields`): a download-shaped params blob on a render
+/// step fails loudly instead of being silently ignored.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenderCommon {
+    /// See [`SourceCommon::input_path`]. Only file-tree-backed renders
+    /// (perseus) read it.
+    #[serde(default)]
+    pub input_path: Option<PathBuf>,
+    /// See [`SourceCommon::raw_path`].
+    #[serde(default)]
+    pub raw_path: Option<PathBuf>,
+}
+
+impl RenderCommon {
+    /// Same resolution as [`SourceCommon::resolve_paths`].
+    pub fn resolve_paths(&mut self, data_root: &Path, name: &str) {
+        let default_raw = data_root.join(name).join("raw");
+        self.raw_path = Some(match self.raw_path.take() {
+            Some(p) => expand_tilde(&p.display().to_string()),
+            None => default_raw,
+        });
+        if let Some(p) = self.input_path.take() {
+            self.input_path = Some(expand_tilde(&p.display().to_string()));
+        }
+    }
+
+    /// Resolved raw-store directory. Valid only after [`Self::resolve_paths`].
+    pub fn raw_path(&self) -> &Path {
+        self.raw_path
+            .as_deref()
+            .expect("RenderCommon::raw_path read before resolve_paths()")
+    }
+
+    /// Resolved input path: the explicit `input_path` if set, else the
+    /// raw dir. Valid only after [`Self::resolve_paths`].
+    pub fn input_or_raw_path(&self) -> &Path {
+        self.input_path
+            .as_deref()
+            .unwrap_or_else(|| self.raw_path())
+    }
+}
+
+/// Render config for providers with no render-specific knobs — just the
+/// shared envelope. Provider config crates alias this as their
+/// `<P>RenderConfig` so every provider exposes the same per-phase pair.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BareRenderConfig {
+    #[serde(default)]
+    pub common: RenderCommon,
+}
+
 fn default_true() -> bool {
     true
 }

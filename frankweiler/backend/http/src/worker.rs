@@ -254,10 +254,11 @@ pub struct WorkerConfig {
     pub config_path: PathBuf,
     /// The `datalib-dag` runner binary.
     pub dag_bin: Option<PathBuf>,
-    /// The `datalib-step` binary, passed via `--step-bin`. `None` lets
-    /// the runner's own fallback chain (config `step_bin:`, sibling of
-    /// the runner, PATH) resolve it.
-    pub step_bin: Option<PathBuf>,
+    /// Directory holding the step binaries (`datalib-step`, …), passed
+    /// via `--binary-dir` so the runner prepends it to every step's
+    /// PATH. `None` lets the runner's own fallback chain (config
+    /// `binary_dir:`, the runner's own directory) resolve it.
+    pub binary_dir: Option<PathBuf>,
     /// Push progress to SSE subscribers as it happens.
     pub progress_tx: ProgressTx,
 }
@@ -303,10 +304,27 @@ pub fn resolve_dag_bin() -> Option<PathBuf> {
     resolve_bin("FRANKWEILER_DAG_BIN", &["datalib-dag", "datalib_dag"])
 }
 
-/// Resolve the `datalib-step` binary: `$FRANKWEILER_STEP_BIN` or a
-/// sibling binary.
-pub fn resolve_step_bin() -> Option<PathBuf> {
-    resolve_bin("FRANKWEILER_STEP_BIN", &["datalib-step", "datalib_step"])
+/// Resolve the step-binary directory handed to the runner as
+/// `--binary-dir`: `$FRANKWEILER_BINARY_DIR` (how `dev.sh` /
+/// `serve_dev.sh` wire a shim dir from Bazel runfiles), else this
+/// executable's own directory when `datalib-step` sits next to it
+/// (how a packaged release lays the binaries out side by side).
+pub fn resolve_binary_dir() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("FRANKWEILER_BINARY_DIR") {
+        let p = PathBuf::from(p);
+        if p.is_dir() {
+            return Some(p);
+        }
+        eprintln!(
+            "worker: $FRANKWEILER_BINARY_DIR={} is not a directory",
+            p.display()
+        );
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    dir.join("datalib-step")
+        .is_file()
+        .then(|| dir.to_path_buf())
 }
 
 /// The worker's main loop. Runs until the process exits.
@@ -403,21 +421,21 @@ async fn run_job(repo: &DynRepo, cfg: &WorkerConfig, job: SyncJobRow) -> anyhow:
 
     let mut command = Command::new(dag_bin);
     command.arg(&cfg.config_path);
-    if let Some(step_bin) = cfg.step_bin.as_ref() {
-        command.arg("--step-bin").arg(step_bin);
+    if let Some(binary_dir) = cfg.binary_dir.as_ref() {
+        command.arg("--binary-dir").arg(binary_dir);
     }
-    // Per-source "Sync now": subset-sync the selected sources'
-    // download steps; everything downstream follows normal change
-    // propagation. `source_name` may carry several comma-separated
-    // names (the UI's "Sync selected" checkboxes) — source names can't
-    // contain commas, so the separator is unambiguous. Relies on the
-    // `<name>.download` id convention the config templates use. (The
-    // old `ingest`/`render` kinds had a `--skip-extract` shortcut; the
-    // DAG runner has no equivalent — downloads re-poll and everything
-    // unchanged skips, which is the same outcome a little slower.)
+    // Per-source "Sync now": subset-sync the selected source steps
+    // (fringe steps, by id); everything downstream follows normal
+    // change propagation. `source_name` may carry several
+    // comma-separated step ids (the UI's "Sync selected" checkboxes) —
+    // ids with commas aren't supported, so the separator is
+    // unambiguous. (The old `ingest`/`render` kinds had a
+    // `--skip-extract` shortcut; the DAG runner has no equivalent —
+    // downloads re-poll and everything unchanged skips, which is the
+    // same outcome a little slower.)
     if let Some(srcs) = job.source_name.as_deref().filter(|s| !s.is_empty()) {
         for src in srcs.split(',').filter(|s| !s.is_empty()) {
-            command.arg("--sync").arg(format!("{src}.download"));
+            command.arg("--sync").arg(src);
         }
     }
     // Pipe stdout+stderr so reader threads can both tee them to the log
