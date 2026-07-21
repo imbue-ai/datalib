@@ -1,18 +1,18 @@
-//! Shared cross-provider knobs for `extract::fetch`.
+//! Shared cross-provider knobs for `download::fetch`.
 //!
-//! Every provider's `FetchOptions` embeds an [`ExtractControl`] under
+//! Every provider's `FetchOptions` embeds an [`DownloadControl`] under
 //! the field name `control`. The sync binary populates it from CLI
-//! flags; each provider's extract path branches on the field that
+//! flags; each provider's download path branches on the field that
 //! matters to it.
 //!
 //! Keep this struct *small*. It's the union of "knobs that don't
 //! belong in any one provider's own options" — meaning every provider
 //! either implements the behavior or explicitly chooses to ignore it.
 
-/// Cross-provider extract-time knobs.
+/// Cross-provider download-time knobs.
 #[derive(Debug, Clone, Default)]
-pub struct ExtractControl {
-    /// When true, the provider's `extract::fetch` truncates every
+pub struct DownloadControl {
+    /// When true, the provider's `download::fetch` truncates every
     /// data + bookkeeping table in its raw doltlite DB before
     /// fetching, so the run re-downloads every entity row from
     /// upstream. Paired with a fresh `dolt_commit` at the end, the
@@ -27,12 +27,12 @@ pub struct ExtractControl {
     ///
     /// `blob_refs` is NOT truncated either: the per-source CAS
     /// retains the bytes across this reset, and `blob_refs.blake3`
-    /// is the cache index that lets the next extract skip
+    /// is the cache index that lets the next download skip
     /// re-fetching. Use [`Self::refetch_blobs`] to invalidate the
     /// blob cache index when you actually want the bytes re-pulled.
     pub reset_and_redownload: bool,
 
-    /// When true, the provider's `extract::fetch` wipes the
+    /// When true, the provider's `download::fetch` wipes the
     /// `blob_refs` table (and its bookkeeping sidecar) before
     /// fetching, so every attachment is re-fetched on the wire even
     /// when its bytes are already in the sibling CAS file. The CAS

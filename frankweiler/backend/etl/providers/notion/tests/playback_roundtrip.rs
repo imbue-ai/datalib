@@ -1,7 +1,7 @@
-//! Notion synth → playback → extract round-trip.
+//! Notion synth → playback → download round-trip.
 //!
 //! Seeds a JSONL fixture tree (the on-disk shape NotionSynth reads),
-//! synthesizes playback fixtures, then drives `extract::fetch` against
+//! synthesizes playback fixtures, then drives `download::fetch` against
 //! a fresh doltlite db. Asserts the round-trip lands one page / block
 //! / comment per input record.
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 use frankweiler_etl::event_store::{diff_and_save, make_record};
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_notion::extract::{fetch, FetchOptions, RawDb};
+use frankweiler_etl_notion::download::{fetch, FetchOptions, RawDb};
 use frankweiler_etl_notion::synthesize::NotionSynth;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;

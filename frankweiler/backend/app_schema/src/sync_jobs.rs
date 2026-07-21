@@ -1,7 +1,7 @@
 // Background job queue for UI-driven sync. The backend inserts rows here
 // in response to `POST /api/sync/jobs`; the `datalib worker` child
-// process polls for `pending` rows, executes them (download + ingest +
-// render), and updates state. Every state transition is committed via
+// process polls for `pending` rows, executes each as one `datalib-dag`
+// run, and updates state. Every state transition is committed via
 // `CALL DOLT_COMMIT('-Am', 'sync_job: <id> <state>')` so the full history
 // lives in `dolt log` next to the data it produced.
 //
@@ -21,21 +21,20 @@ pub struct SyncJobRow {
     /// and in `dolt log` commit messages.
     #[col(sql = "VARCHAR(36)")]
     pub id: String,
-    /// `sources[].name` from `config.yaml` this job operates on. NULL for
-    /// `kind = all` parent jobs and for `kind = ingest` passes that
-    /// consume every pending download_runs row across sources.
+    /// Comma-separated `sources[].name` subset this run syncs (the UI's
+    /// "Sync selected" checkboxes → `--sync <name>.download` per name).
+    /// NULL/empty = the whole config.
     #[col(sql = "VARCHAR(64)")]
     pub source_name: Option<String>,
-    /// What the job does. `download` fetches from a single source's
-    /// provider; `ingest` translates queued raw files into Dolt rows;
-    /// `render` re-emits markdown for documents whose cache key changed;
-    /// `all` is a parent job that enqueues + waits on per-source child
-    /// jobs.
+    /// What the job does. `all` — one `datalib-dag` run over the config
+    /// — is the only kind enqueued today; the column stays free-form
+    /// because historical rows carry the retired fixed-phase kinds
+    /// (`download`, `ingest`, `render`).
     #[col(sql = "VARCHAR(16)")]
     pub kind: String,
-    /// When this row was enqueued as a child of an `all`-kind job, points
-    /// at the parent. NULL for standalone jobs. Lets the UI group `Sync
-    /// all` runs into one collapsible card.
+    /// Historical only: before the DAG runner, `all` jobs enqueued
+    /// per-source child rows pointing here. New rows are always NULL;
+    /// kept so old rows still render.
     #[col(sql = "VARCHAR(36)")]
     pub parent_job_id: Option<String>,
     /// Lifecycle state. `pending` → `running` when the worker picks it

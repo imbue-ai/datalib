@@ -16,7 +16,7 @@
 //! ships spans to an OTLP/gRPC collector in addition to local rendering.
 //!
 //! There are no automatic per-span progress bars. Bars are created
-//! explicitly by callers (e.g. `frankweiler-sync` builds per-source bars
+//! explicitly by callers (e.g. per-source bars
 //! attached to [`shared_multi`]).
 //!
 //! Drop-in usage from a CLI:
@@ -258,11 +258,11 @@ pub fn shared_multi() -> Option<Arc<MultiProgress>> {
 /// target is hidden (stderr piped/redirected): `MultiProgress::println`
 /// is documented to *do nothing* in that case, which once swallowed
 /// every status line (including the sync phase markers the http worker
-/// scrapes) when `frankweiler-sync` ran as a child process. Same
+/// scrapes) when the pipeline ran as a child process. Same
 /// `format!` argument grammar as `eprintln!`.
 ///
 /// Use this for any user-facing status line that can fire while bars
-/// are on screen (extract / translate / synth phases, the SIGINT
+/// are on screen (download / render / synth phases, the SIGINT
 /// handler, error summaries, end-of-run banners from `qmd_indexer`,
 /// etc.). Plain `tracing::info!` / `warn!` / `error!` already go
 /// through the `IndicatifWriter` and do not need this macro.

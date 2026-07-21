@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl_contact_common::{
     render_all as cc_render_all, ContactField, ContactPhoto, ContactRenderProfile,
@@ -26,9 +26,9 @@ use frankweiler_etl_contact_common::{
 };
 use serde_json::Value;
 
-use crate::extract::photos::load_photo_blobs;
-use crate::extract::schema_raw::{connection_uuid, ns_id};
-use crate::extract::{db_path_for, RawDb};
+use crate::download::photos::load_photo_blobs;
+use crate::download::schema_raw::{connection_uuid, ns_id};
+use crate::download::{db_path_for, RawDb};
 
 /// Bump when the connection → contact mapping changes meaningfully.
 const RENDER_VERSION: u32 = 1;

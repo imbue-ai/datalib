@@ -9,13 +9,11 @@
 use std::path::PathBuf;
 
 use frankweiler_etl::blob_cas::BlobBundle;
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_email::extract::db::{EmailJoins, LoadedAttachment, LoadedEmail};
-use frankweiler_etl_email::render_and_index_md::parse::{
-    EmailThreadBucket, ParsedEmail, ScanResult,
-};
-use frankweiler_etl_email::render_and_index_md::render::{render_all, thread_uuid, OutlinkFormat};
+use frankweiler_etl_email::download::db::{EmailJoins, LoadedAttachment, LoadedEmail};
+use frankweiler_etl_email::render::parse::{EmailThreadBucket, ParsedEmail, ScanResult};
+use frankweiler_etl_email::render::render::{render_all, thread_uuid, OutlinkFormat};
 use serde_json::json;
 
 const EML_E1: &str = "From: Alice <a@x.test>\r\n\

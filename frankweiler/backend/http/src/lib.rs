@@ -1,5 +1,5 @@
 // HTTP daemon — runs as its own process via `frankweiler-http`, not
-// inside `frankweiler-sync`. No MultiProgress / no indicatif bars in
+// inside the pipeline binaries. No MultiProgress / no indicatif bars in
 // this process; request-error logging legitimately writes to stderr.
 // Exempt from the workspace-wide ban defined in clippy.toml. (If this
 // ever gets embedded into a process that *does* have bars, switch
@@ -171,6 +171,12 @@ pub fn router(state: AppState) -> Router {
     // `<root>/system/media/slack/<file_id>/` by ingest; serve them verbatim so
     // QMD-embedded `![](...)` URLs resolve.
     let media_dir = frankweiler_core::layout::media_dir(&state.root);
+    // Served attachments are re-materializable from the raw blob CAS,
+    // so mark the tree as derived cache for `--exclude-caches` backups.
+    // Nothing writes media yet (see layout.rs), so this usually no-ops;
+    // it's here (rather than in a pipeline step) because no step owns
+    // the dir and the server is its one consumer.
+    frankweiler_core::layout::mark_derived_cache(&media_dir);
     Router::new()
         .route("/api/health", get(health))
         .route("/api/search", get(search_handler))
@@ -1410,10 +1416,14 @@ async fn sync_enqueue(
     State(s): State<AppState>,
     Json(req): Json<EnqueueJobRequest>,
 ) -> Result<Json<SyncJobRow>, StatusCode> {
-    // Validate the discriminator client-side; the DB column is a
+    // Validate the discriminator server-side; the DB column is a
     // VARCHAR with no enum constraint so we'd otherwise accept anything.
+    // `all` (one DAG run, `source_name` optionally selecting a subset)
+    // is the only live kind — the legacy `download`/`ingest`/`render`
+    // kinds died with the fixed-phase orchestrator and are rejected;
+    // historical rows keep whatever kind they were written with.
     match req.kind.as_str() {
-        "download" | "ingest" | "render" | "all" => {}
+        "all" => {}
         _ => return Err(StatusCode::BAD_REQUEST),
     }
     let row = s

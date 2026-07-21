@@ -17,7 +17,7 @@ pub struct LinkedinConfig {
     /// the orchestrator's `normalize()`.
     #[serde(default)]
     pub common: SourceCommon,
-    /// Whether to download connection profile photos during extract.
+    /// Whether to download connection profile photos during download.
     #[serde(default)]
     pub fetch_photos: bool,
 }

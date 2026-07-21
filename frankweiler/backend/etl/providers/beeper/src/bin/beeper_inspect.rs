@@ -1,4 +1,4 @@
-// Standalone read-only CLI: runs outside `frankweiler-sync`, so there's
+// Standalone read-only CLI: runs outside the pipeline, so there's
 // no MultiProgress / indicatif bars on screen. The tool's whole job is
 // to write tabular data to stdout. Exempt from the workspace-wide ban
 // defined in clippy.toml.

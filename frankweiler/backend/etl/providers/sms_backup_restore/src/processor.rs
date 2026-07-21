@@ -1,11 +1,11 @@
 //! Program-A `DataProcessor`s for the `sms_backup_restore` source.
 //!
 //! `sms_backup_restore` is purely file-backed: there is no API and no `sync:`
-//! block, so it always contributes both an **extract** ([`SmsExtract`] — ingest
-//! the `sms-*.xml` / `calls-*.xml` export at `input_path`) and a **translate**
+//! block, so it always contributes both an **download** ([`SmsDownload`] — ingest
+//! the `sms-*.xml` / `calls-*.xml` export at `input_path`) and a **render**
 //! ([`SmsRender`] — one chat per phone number). The orchestrator only drives
-//! `plan().extract` when the source is managed; for an unmanaged file source it
-//! drives translate alone. The source owns its raw store end to end
+//! `plan_download` returns it only when the source is managed; for an unmanaged file source it
+//! drives render alone. The source owns its raw store end to end
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_sms_backup_restore_config::SmsBackupRestoreConfig;
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: walk the export dir at input_path into the raw store.
 pub fn plan_download(
@@ -26,8 +26,8 @@ pub fn plan_download(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
-    Ok(vec![Box::new(SmsExtract {
-        id: format!("sms_backup_restore/{name}/extract"),
+    Ok(vec![Box::new(SmsDownload {
+        id: format!("sms_backup_restore/{name}/download"),
         raw_path,
         input_path,
     })])
@@ -41,31 +41,31 @@ pub fn plan_render(
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(SmsRender {
-        id: format!("sms_backup_restore/{name}/translate"),
+        id: format!("sms_backup_restore/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// sms_backup_restore's extract processor. Owns its raw doltlite store end to
+/// sms_backup_restore's download processor. Owns its raw doltlite store end to
 /// end (open, register interrupt hook, ingest the export, commit+close).
-struct SmsExtract {
+struct SmsDownload {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
 }
 
 #[async_trait]
-impl DataProcessor for SmsExtract {
+impl DataProcessor for SmsDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             input_path: self.input_path.clone(),
@@ -81,7 +81,7 @@ impl DataProcessor for SmsExtract {
     }
 }
 
-/// sms_backup_restore's translate processor — renders the texts + calls as one
+/// sms_backup_restore's render processor — renders the texts + calls as one
 /// chat per phone number through the fused-Load callback.
 struct SmsRender {
     id: String,
@@ -97,7 +97,7 @@ impl DataProcessor for SmsRender {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let mut on_doc = |md| ctx.emit_doc(md);
-        crate::render_and_index_md::render(
+        crate::render::render(
             &self.raw_path,
             ctx.root,
             &self.name,

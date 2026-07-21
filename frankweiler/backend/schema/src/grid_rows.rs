@@ -16,7 +16,7 @@
 use frankweiler_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// One row in the grid_rows table. Producers (provider translate steps)
+/// One row in the grid_rows table. Producers (provider render steps)
 /// emit one or more GridRow per source entity; consumers (the grid
 /// backend + UI) read them as a single union.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]

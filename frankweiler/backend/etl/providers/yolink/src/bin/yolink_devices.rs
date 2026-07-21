@@ -5,7 +5,7 @@
 //!
 //! ## Why this CLI exists
 //!
-//! The downloader in `frankweiler_etl_yolink::extract` builds signed
+//! The downloader in `frankweiler_etl_yolink::download` builds signed
 //! `us.yosmart.com/download/<family_device_id>/<sig>?...` URLs locally.
 //! The signature is `md5(family_device_id + start_ms + end_ms +
 //! device_udid)`. Both opaque IDs have to live in the per-device

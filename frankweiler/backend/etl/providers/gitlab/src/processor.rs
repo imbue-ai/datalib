@@ -1,5 +1,5 @@
 //! Program-A `DataProcessor`s for the gitlab (`gitlab_api`) source.
-//! `gitlab_api` contributes extract + translate; translate is
+//! `gitlab_api` contributes download + render; render is
 //! fingerprint-driven (no render cursor). The source owns its raw store
 //! (open/commit/checkpoint); the orchestrator only drives `run`.
 
@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_gitlab_config::{GitlabApiSync, GitlabConfig};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed).
 pub fn plan_download(
@@ -23,8 +23,8 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(GitlabExtract {
-            id: format!("gitlab/{name}/extract"),
+        procs.push(Box::new(GitlabDownload {
+            id: format!("gitlab/{name}/download"),
             raw_path,
             sync,
         }));
@@ -37,35 +37,35 @@ pub fn plan_render(ctx: PlanContext, config: GitlabConfig) -> Result<Vec<Box<dyn
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(GitlabRender {
-        id: format!("gitlab/{name}/translate"),
+        id: format!("gitlab/{name}/render"),
         raw_path,
     })])
 }
 
-struct GitlabExtract {
+struct GitlabDownload {
     id: String,
     raw_path: PathBuf,
     sync: GitlabApiSync,
 }
 
 #[async_trait]
-impl DataProcessor for GitlabExtract {
+impl DataProcessor for GitlabDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let targets = self
             .sync
             .merge_requests
             .iter()
-            .map(|s| extract::parse_mr_ref(s))
+            .map(|s| download::parse_mr_ref(s))
             .collect::<Result<Vec<_>>>()
             .context("parse gitlab merge_requests refs")?;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             // full_sync stays false (FetchOptions default) so the
@@ -109,7 +109,7 @@ impl DataProcessor for GitlabRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse_api_dir, render_gitlab};
+        use crate::render::{parse_api_dir, render_gitlab};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("gitlab parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);

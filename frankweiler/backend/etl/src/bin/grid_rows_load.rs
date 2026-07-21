@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use frankweiler_etl::load::{init_schema, load_all};
+use frankweiler_etl::grid_index::{build_grid_index, init_schema};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use frankweiler_qmd_indexer::{run_index, IndexOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     let _enter = span.enter();
 
     let done = AtomicUsize::new(0);
-    let summary = load_all(
+    let summary = build_grid_index(
         &pool,
         &args.out,
         |msg| {

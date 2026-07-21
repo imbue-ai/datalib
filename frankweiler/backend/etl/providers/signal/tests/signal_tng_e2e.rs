@@ -1,7 +1,7 @@
 //! End-to-end test: write an encrypted TNG snapshot via the
 //! [`frankweiler_signal_backup::write`] writer, drive
-//! [`frankweiler_etl_signal::extract::fetch`] over it, then drive the
-//! translate path, and assert on both the doltlite row counts and the
+//! [`frankweiler_etl_signal::download::fetch`] over it, then drive the
+//! render path, and assert on both the doltlite row counts and the
 //! rendered markdown.
 //!
 //! Uses the published fixture AEP (64 zeros) — the same one the
@@ -12,12 +12,12 @@
 use std::path::Path;
 
 use anyhow::Result;
-use frankweiler_etl::control::ExtractControl;
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::control::DownloadControl;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::render_cursor;
-use frankweiler_etl_signal::extract::{self, FetchOptions};
-use frankweiler_etl_signal::render_and_index_md::{parse_raw_dir, render_all};
+use frankweiler_etl_signal::download::{self, FetchOptions};
+use frankweiler_etl_signal::render::{parse_raw_dir, render_all};
 use frankweiler_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
@@ -50,7 +50,7 @@ const TINY_PNG: &[u8] = &[
 const TEST_LOCAL_KEY: [u8; 64] = [0xab; 64];
 
 /// Encrypt + write the TINY_PNG bytes into the `<files_root>/<XX>/<name>`
-/// layout extract walks. Returns the `media_name` for the caller to
+/// layout download walks. Returns the `media_name` for the caller to
 /// drop into a `FilePointer.LocatorInfo`.
 fn write_test_attachment(files_root: &Path) -> Result<(String, Vec<u8>)> {
     let plaintext = TINY_PNG.to_vec();
@@ -98,7 +98,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     std::fs::create_dir_all(&data_root)?;
 
     // Stash one encrypted PNG under `<snapshot_root>/files/<XX>/<name>`
-    // — the layout extract walks. Picard's "Make it so." message will
+    // — the layout download walks. Picard's "Make it so." message will
     // reference this attachment so the rendered .md should contain an
     // `![…](blobs/…png)` image link.
     let files_root = snapshot_root.join("files");
@@ -115,14 +115,14 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         std::env::set_var("SIGNAL_BACKUP_PASSPHRASE", FIXTURE_AEP);
     }
 
-    let summary = extract::fetch(FetchOptions {
+    let summary = download::fetch(FetchOptions {
         db_path: raw_db_path.clone(),
         db: None,
         snapshot_root: snapshot_root.clone(),
         files_root: None, // defaults to snapshot_root/files (the layout the fixture writes)
         aep_env_var: None, // defaults to SIGNAL_BACKUP_PASSPHRASE
         progress: Progress::noop(),
-        control: ExtractControl::default(),
+        control: DownloadControl::default(),
     })
     .await?;
     assert_eq!(summary.recipients, 3, "expected 3 recipients");
@@ -132,11 +132,11 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         summary.blobs, 1,
         "the 'Make it so.' message carries one attached PNG"
     );
-    assert_eq!(summary.blob_errors, 0, "no extract-side blob errors");
+    assert_eq!(summary.blob_errors, 0, "no download-side blob errors");
 
     // Mirror what the orchestrator does in production: dolt_commit
     // the freshly-extracted rows so the `dolt_diff_<table>` vtabs the
-    // translate path queries actually resolve. Without a commit the
+    // render path queries actually resolve. Without a commit the
     // vtabs may report "no such table" on a brand-new working set,
     // and the second-pass docs_skipped assertion below would fail.
     // Self-skips on stock libsqlite3.
@@ -156,13 +156,13 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         ] {
             let _ = sqlx::query(q).execute(&pool).await;
         }
-        let _ = commit_run(&pool, "test extract").await;
+        let _ = commit_run(&pool, "test download").await;
         pool.close().await;
     }
 
-    // Translate runs against the doltlite-extended sqlite the
+    // Render runs against the doltlite-extended sqlite the
     // extractor wrote. parse_raw_dir wants the raw path (without the
-    // .doltlite_db extension) — extract::fetch normalized it the
+    // .doltlite_db extension) — download::fetch normalized it the
     // same way internally. Default period (Month) is fine here; all
     // 4 messages share a single month (2364-04) so one bucket.
     let parsed = tokio::task::spawn_blocking({
@@ -293,7 +293,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         let raw = raw_db_path.clone();
         let last_hash = cursor.last_rendered_hash.clone();
         move || {
-            frankweiler_etl_signal::render_and_index_md::parse(
+            frankweiler_etl_signal::render::parse(
                 &raw,
                 frankweiler_etl::periodize::Period::Month,
                 "signal-tng",

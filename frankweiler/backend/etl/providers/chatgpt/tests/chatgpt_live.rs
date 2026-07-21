@@ -23,7 +23,7 @@
 
 use std::time::Duration;
 
-use frankweiler_etl_chatgpt::extract::{self as chatgpt, db::block_on_load_all, db::db_path_for};
+use frankweiler_etl_chatgpt::download::{self as chatgpt, db::block_on_load_all, db::db_path_for};
 use insta::assert_json_snapshot;
 use serde_json::{json, Value};
 

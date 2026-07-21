@@ -3,7 +3,7 @@
 //!
 //! The sibling of [`frankweiler-etl-chat-common`]: where that crate
 //! renders conversations, this one renders *people*. Each provider's
-//! translate stage normalizes its own row model into the
+//! render stage normalizes its own row model into the
 //! [`NormalizedContact`] shape this crate defines and calls
 //! [`render::render_all`]. The renderer owns the cross-cutting concerns
 //! every contact-style provider would otherwise reinvent:

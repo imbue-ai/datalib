@@ -33,9 +33,9 @@
 //!   `https://carddav.fastmail.com/` with an app password from
 //!   Fastmail's settings → "App passwords" (Contacts read-only).
 //!
-//! * **Translate-only mode (no live CardDAV).** Drop a `.vcf`
+//! * **Render-only mode (no live CardDAV).** Drop a `.vcf`
 //!   export (Google "Export contacts", Fastmail bulk export, etc.)
-//!   on disk and point a translate-only source at it:
+//!   on disk and point a render-only source at it:
 //!
 //!   ```yaml
 //!   - name: contacts
@@ -45,12 +45,12 @@
 //!         input_path: ~/Downloads/contacts.vcf
 //!   ```
 //!
-//!   No `sync:` block ⇒ extract is skipped; the translate path
+//!   No `sync:` block ⇒ download is skipped; the render path
 //!   reads the file directly. See
-//!   [`render_and_index_md::parse`] for the directory-vs-file + multi-block
+//!   [`render::parse`] for the directory-vs-file + multi-block
 //!   semantics.
 //!
-//! * **Read-only.** Translate produces grid rows; we do not push
+//! * **Read-only.** Render produces grid rows; we do not push
 //!   changes back to the server. The transport layer is one-way by
 //!   construction (no `PUT` / `DELETE` plumbing in
 //!   `frankweiler_etl::http`).
@@ -66,6 +66,6 @@
 //!   contact) and let the front-end overlay user-authored
 //!   linkages.
 
-pub mod extract;
+pub mod download;
 pub mod processor;
-pub mod render_and_index_md;
+pub mod render;

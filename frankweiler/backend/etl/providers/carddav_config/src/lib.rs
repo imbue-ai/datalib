@@ -6,7 +6,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The carddav-owned slice of a `carddav` source. `sync:` present →
-/// live CardDAV server mirror (the extract path); absent → file mode,
+/// live CardDAV server mirror (the download path); absent → file mode,
 /// ingesting `.vcf` exports under `input_path`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CarddavConfig {

@@ -4,18 +4,18 @@
 
 use std::path::PathBuf;
 
-use frankweiler_etl_google_takeout::extract::{self, FetchOptions, RawDb, SyncFlags};
+use frankweiler_etl_google_takeout::download::{self, FetchOptions, RawDb, SyncFlags};
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/Takeout")
 }
 
-async fn run_all() -> (tempfile::TempDir, extract::FetchSummary, PathBuf) {
+async fn run_all() -> (tempfile::TempDir, download::FetchSummary, PathBuf) {
     let work = tempfile::tempdir().unwrap();
     let db_path = work.path().join("gt.doltlite_db");
     let db = RawDb::open(&db_path).await.unwrap();
     let pool = db.pool().clone();
-    let summary = extract::fetch(FetchOptions {
+    let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: Some(db),
         input_path: fixture_root(),
@@ -171,7 +171,7 @@ async fn second_run_skips_via_file_checkpoint() {
     // walkers short-circuit.
     let db = RawDb::open(&db_path).await.unwrap();
     let pool = db.pool().clone();
-    let summary2 = extract::fetch(FetchOptions {
+    let summary2 = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: Some(db),
         input_path: fixture_root(),
@@ -198,7 +198,7 @@ async fn sync_flags_default_disables_everything() {
     let db = RawDb::open(&db_path).await.unwrap();
     let pool = db.pool().clone();
     // Default SyncFlags has every feed off.
-    let summary = extract::fetch(FetchOptions {
+    let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: Some(db),
         input_path: fixture_root(),

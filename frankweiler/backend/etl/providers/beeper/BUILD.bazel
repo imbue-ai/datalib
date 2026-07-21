@@ -80,7 +80,7 @@ rust_test(
 
 # End-to-end test against the checked-in TNG fixture: materializes a
 # BeeperTexts-shaped dir from `:tng_fixture` into a tempdir, runs the
-# extract + translate pipeline, asserts the resulting doltlite and
+# download + render pipeline, asserts the resulting doltlite and
 # rendered markdown.
 #
 # `BEEPER_SQLITE3` can be set to an absolute sqlite3 path if the

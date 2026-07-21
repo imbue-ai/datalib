@@ -6,7 +6,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The github-owned slice of a `github_api` source. `sync:` present → managed
-/// (the extract path); absent → translate-only over an already-on-disk API
+/// (the download path); absent → render-only over an already-on-disk API
 /// capture.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GithubConfig {

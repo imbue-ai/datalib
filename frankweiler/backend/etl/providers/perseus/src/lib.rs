@@ -38,9 +38,9 @@
 //! With a bare `sync: {}` block, `bazel run //frankweiler/backend/sync`
 //! downloads the default Thucydides pair from
 //! `PerseusDL/canonical-greekLit` (master branch) to
-//! `<data_root>/perseus/raw/`, and Translate + Load + qmd-index pick
+//! `<data_root>/perseus/raw/`, and Render + Load + qmd-index pick
 //! them up on the same run. **No latchkey registration is required**
-//! — these URLs are public, so [`extract`] shells out to `curl`
+//! — these URLs are public, so [`download`] shells out to `curl`
 //! directly rather than threading through the shared `latchkey_curl`
 //! HTTP path (every other provider uses that path for credential
 //! injection — Perseus has nothing to inject).
@@ -60,24 +60,24 @@
 //! Each entry is a subpath under
 //! `https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data/`
 //! and gets fetched verbatim to `<input_path>/<basename>`. Omit
-//! `sync:` entirely to run translate-only against whatever XMLs
+//! `sync:` entirely to run render-only against whatever XMLs
 //! you've pre-staged at `input_path` (the `ClaudeExport` shape).
 //!
-//! ### Translate is Thucydides-specific for now
+//! ### Render is Thucydides-specific for now
 //!
-//! The [`crate::render_and_index_md`] path is hardcoded to the Thucydides
+//! The [`crate::render`] path is hardcoded to the Thucydides
 //! Histories shape — it looks for the two basenames the default
 //! `files` list resolves to. Pointing `files:` at a different work
-//! will Extract cleanly but Translate will not find anything to
-//! render. Multi-work translate is a follow-up.
+//! will Download cleanly but Render will not find anything to
+//! render. Multi-work render is a follow-up.
 
 use std::sync::OnceLock;
 
 use uuid::Uuid;
 
-pub mod extract;
+pub mod download;
 pub mod processor;
-pub mod render_and_index_md;
+pub mod render;
 
 /// Frozen UUIDv5 seed string. Despite the name carrying `perseus-grc2`,
 /// this is just a stable namespace prefix for *every* row PK in this
@@ -87,7 +87,7 @@ pub mod render_and_index_md;
 pub const TLG0003_TLG001: &str = "urn:cts:greekLit:tlg0003.tlg001.perseus-grc2";
 
 /// CTS work URN (no edition suffix). `__cts__.xml` edition `urn`s are
-/// `<this>.<edition-id>`, which [`crate::render_and_index_md::parse`] strips to
+/// `<this>.<edition-id>`, which [`crate::render::parse`] strips to
 /// recover the edition id.
 pub const WORK_URN: &str = "urn:cts:greekLit:tlg0003.tlg001";
 
@@ -153,7 +153,7 @@ pub fn paragraph_uuid(book_n: &str, ch_n: &str, sec_n: &str, version: &str) -> S
 }
 
 /// Anchor UUID for one sentence within a section. The renderer wraps
-/// each sentence (split by [`crate::render_and_index_md::align::split`]) in its
+/// each sentence (split by [`crate::render::align::split`]) in its
 /// own `<span data-section-uuid="…">` using this UUID; the
 /// bilingual-alignment `edges` rows reference these as
 /// `src_anchor_uuid` / `dst_anchor_uuid` so the UI can highlight the

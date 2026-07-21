@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use frankweiler_etl_slack::render_and_index_md::{
+use frankweiler_etl_slack::render::{
     parse, render::render_all, slack_message_uuid, slack_thread_uuid,
 };
 use insta::{assert_json_snapshot, assert_snapshot};
@@ -42,7 +42,7 @@ fn renders_tng_fixture() {
     let parsed = parse(&fixture_root(), None).expect("parse");
     let tmp = tempfile::tempdir().expect("tmp");
     let mut completed = 0usize;
-    let mut on_done = |_doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+    let mut on_done = |_doc: frankweiler_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
         completed += 1;
         Ok(())
     };
@@ -101,12 +101,13 @@ fn renders_tng_fixture_grid_rows() {
     // Capture every grid row the chat-common renderer emits.
     let mut rows: Vec<serde_json::Value> = Vec::new();
     {
-        let mut on_done = |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
-            for r in &doc.rows {
-                rows.push(serde_json::to_value(r).unwrap());
-            }
-            Ok(())
-        };
+        let mut on_done =
+            |doc: frankweiler_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
+                for r in &doc.rows {
+                    rows.push(serde_json::to_value(r).unwrap());
+                }
+                Ok(())
+            };
         render_all(
             &parsed,
             tmp.path(),

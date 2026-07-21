@@ -1,13 +1,13 @@
 //! Program-A `DataProcessor`s for the carddav source. Carddav contributes
-//! an **extract** processor ([`CarddavExtract`] — live CardDAV server sync
-//! or file-backed `.vcf` ingest, chosen by config) and a **translate**
+//! an **download** processor ([`CarddavDownload`] — live CardDAV server sync
+//! or file-backed `.vcf` ingest, chosen by config) and a **render**
 //! processor ([`CarddavRender`]). [`plan_download`] / [`plan_render`] build the
 //! per-wave processors the orchestrator drives, owning every carddav-specific decision (which
-//! extract mode) so the orchestrator destructures nothing.
+//! download mode) so the orchestrator destructures nothing.
 //!
-//! Storage ownership lives here, not in the orchestrator: [`CarddavExtract`]
+//! Storage ownership lives here, not in the orchestrator: [`CarddavDownload`]
 //! opens its own raw doltlite store, registers an opaque [`PoolCheckpoint`]
-//! for interrupt-safety, and issues its own post-extract `dolt_commit`. The
+//! for interrupt-safety, and issues its own post-download `dolt_commit`. The
 //! orchestrator never sees a pool or a commit.
 
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 
 use frankweiler_etl_carddav_config::{CarddavConfig, CarddavSync};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: always present. `sync:` present → live CardDAV
 /// server; absent → file mode (`.vcf` tree under input_path, no
@@ -32,14 +32,14 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let input_path = config.common.input_or_raw_path().to_path_buf();
     let mode = match config.sync {
-        Some(sync) => ExtractMode::Server(sync),
-        None => ExtractMode::File {
+        Some(sync) => DownloadMode::Server(sync),
+        None => DownloadMode::File {
             input_path,
             account_id_override: None,
         },
     };
-    Ok(vec![Box::new(CarddavExtract {
-        id: format!("carddav/{name}/extract"),
+    Ok(vec![Box::new(CarddavDownload {
+        id: format!("carddav/{name}/download"),
         raw_path,
         mode,
     })])
@@ -50,14 +50,14 @@ pub fn plan_render(ctx: PlanContext, config: CarddavConfig) -> Result<Vec<Box<dy
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(CarddavRender {
-        id: format!("carddav/{name}/translate"),
+        id: format!("carddav/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-/// Which extract path carddav takes for this source.
-enum ExtractMode {
+/// Which download path carddav takes for this source.
+enum DownloadMode {
     /// Live CardDAV server sync.
     Server(CarddavSync),
     /// File-backed `.vcf` ingest (e.g. a Google/Fastmail export).
@@ -67,15 +67,15 @@ enum ExtractMode {
     },
 }
 
-/// Carddav's extract processor. Owns its raw doltlite store end to end.
-pub struct CarddavExtract {
+/// Carddav's download processor. Owns its raw doltlite store end to end.
+pub struct CarddavDownload {
     id: String,
     raw_path: PathBuf,
-    mode: ExtractMode,
+    mode: DownloadMode,
 }
 
 #[async_trait]
-impl DataProcessor for CarddavExtract {
+impl DataProcessor for CarddavDownload {
     fn id(&self) -> &str {
         &self.id
     }
@@ -83,13 +83,13 @@ impl DataProcessor for CarddavExtract {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         // The source owns the store: open it, hand the orchestrator only an
         // opaque interrupt-commit hook, do the work, commit, close.
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
 
         let summary = match &self.mode {
-            ExtractMode::Server(sync) => {
-                let s = extract::fetch(extract::FetchOptions {
+            DownloadMode::Server(sync) => {
+                let s = download::fetch(download::FetchOptions {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     server_url: sync.server_url.clone(),
@@ -108,11 +108,11 @@ impl DataProcessor for CarddavExtract {
                     s.requests,
                 )
             }
-            ExtractMode::File {
+            DownloadMode::File {
                 input_path,
                 account_id_override,
             } => {
-                let s = extract::vcf_dir::fetch(extract::vcf_dir::FetchOptions {
+                let s = download::vcf_dir::fetch(download::vcf_dir::FetchOptions {
                     db_path: self.raw_path.clone(),
                     db: Some(db),
                     input_path: input_path.clone(),
@@ -128,13 +128,13 @@ impl DataProcessor for CarddavExtract {
             }
         };
 
-        // The source's post-extract commit + pool close (uniform across
+        // The source's post-download commit + pool close (uniform across
         // providers); keeps the old `{stats} commit={h}` summary suffix.
         Ok(session.finish(ctx, summary).await)
     }
 }
 
-/// Carddav's translate processor — reads the raw store and emits one
+/// Carddav's render processor — reads the raw store and emits one
 /// rendered markdown per contact through the fused-Load callback.
 pub struct CarddavRender {
     id: String,
@@ -149,9 +149,9 @@ impl DataProcessor for CarddavRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse, render};
+        use crate::render::{parse, render};
 
-        let db_path = extract::db_path_for(&self.raw_path);
+        let db_path = download::db_path_for(&self.raw_path);
         let parsed = parse::parse(&db_path)
             .with_context(|| format!("carddav parse {}", db_path.display()))?;
 

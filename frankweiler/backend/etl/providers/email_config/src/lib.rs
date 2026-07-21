@@ -30,7 +30,7 @@ pub struct EmailConfig {
     /// Shared per-source envelope (paths + cross-source tunables).
     #[serde(default)]
     pub common: SourceCommon,
-    /// JMAP sync knobs. `Some` selects the live-server extract path.
+    /// JMAP sync knobs. `Some` selects the live-server download path.
     #[serde(default)]
     pub sync: Option<EmailSync>,
     /// Account-row config for the mbox path (display name, address,
@@ -45,7 +45,7 @@ pub struct EmailConfig {
     pub outlink_format: Option<EmailOutlink>,
     /// Limit **extraction** to mailboxes whose full label path (POSIX-like,
     /// e.g. `Work/Projects`) exactly matches one of these — nested labels must
-    /// be listed explicitly. Empty = extract everything. Applies to both the
+    /// be listed explicitly. Empty = download everything. Applies to both the
     /// JMAP and `.mbox` paths. Independent of `only_render_labels`.
     #[serde(default)]
     pub only_extract_labels: Vec<String>,
@@ -59,7 +59,7 @@ pub struct EmailConfig {
 
 impl EmailConfig {
     /// True when this source has a `sync:` block — i.e. the JMAP live-server
-    /// extract path applies (vs. file-backed mbox).
+    /// download path applies (vs. file-backed mbox).
     pub fn is_jmap(&self) -> bool {
         self.sync.is_some()
     }
@@ -93,13 +93,13 @@ pub struct EmailSync {
     /// `.eml` is one HTTP GET against the substituted `downloadUrl` — so
     /// the only lever for a large initial backfill is fetching several at
     /// once. `None` uses the built-in default
-    /// ([`DEFAULT_BLOB_CONCURRENCY`](../frankweiler_etl_email/extract/constant.DEFAULT_BLOB_CONCURRENCY.html));
+    /// ([`DEFAULT_BLOB_CONCURRENCY`](../frankweiler_etl_email/download/constant.DEFAULT_BLOB_CONCURRENCY.html));
     /// `1` restores the old strictly-serial behavior. Clamped to ≥ 1.
     #[serde(default)]
     pub blob_download_concurrency: Option<usize>,
 }
 
-/// Account-row data for the mbox extract path, so the synthesized `accounts`
+/// Account-row data for the mbox download path, so the synthesized `accounts`
 /// row matches JMAP's shape. All fields optional (defaults: `account_id` ←
 /// mbox file stem, `display_name` ← `account_id`, `is_personal` ← true).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,7 +115,7 @@ pub struct MboxSync {
 }
 
 /// How to build the "open this email in webmail" outlink. The provider that
-/// owns the account picks the most robust scheme our extract identifiers
+/// owns the account picks the most robust scheme our download identifiers
 /// allow (Gmail → `rfc822msgid:` search; Fastmail → `app.fastmail.com` path).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

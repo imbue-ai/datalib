@@ -1,4 +1,4 @@
-//! Hermetic smoke test for `extract::fetch`.
+//! Hermetic smoke test for `download::fetch`.
 //!
 //! Builds a small directory tree in a tempdir, scans it, snapshots
 //! the `files` table, then edits the tree (modify, touch, add) and
@@ -14,9 +14,9 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use frankweiler_etl::control::ExtractControl;
+use frankweiler_etl::control::DownloadControl;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_fsindex::extract::{self, FetchOptions, RawDb};
+use frankweiler_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
 use tempfile::TempDir;
 
@@ -121,7 +121,7 @@ fn fetch_opts(db_path: &Path, root: &Path) -> FetchOptions {
         target_doltlite_branch: None,
         no_stamp: true,
         progress: Progress::noop(),
-        control: ExtractControl::default(),
+        control: DownloadControl::default(),
     }
 }
 
@@ -147,7 +147,7 @@ async fn initial_scan_and_incremental_rescan() {
     make_initial_tree(&root);
 
     // ── Phase A: initial scan ───────────────────────────────────────
-    let summary_a = extract::fetch(fetch_opts(&db_path, &root))
+    let summary_a = download::fetch(fetch_opts(&db_path, &root))
         .await
         .expect("initial fetch");
     assert_eq!(summary_a.errors, 0, "no walker errors");
@@ -174,7 +174,7 @@ async fn initial_scan_and_incremental_rescan() {
     // doing its job. All four FILE rows should reuse their cached
     // blake3 against the unchanged (mtime, size, inode) triple;
     // only the symlink and the two directories should rehash.
-    let summary_a2 = extract::fetch(fetch_opts(&db_path, &root))
+    let summary_a2 = download::fetch(fetch_opts(&db_path, &root))
         .await
         .expect("unchanged rescan");
     assert_eq!(summary_a2.errors, 0);
@@ -211,7 +211,7 @@ async fn initial_scan_and_incremental_rescan() {
     // be gone from `files` (visible in the after_edits snapshot).
     fs::remove_file(root.join("empty.txt")).unwrap();
 
-    let summary_b = extract::fetch(fetch_opts(&db_path, &root))
+    let summary_b = download::fetch(fetch_opts(&db_path, &root))
         .await
         .expect("incremental fetch");
     assert_eq!(summary_b.errors, 0);
@@ -268,7 +268,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
 
     let mut opts = fetch_opts(&db_path, &root);
     opts.no_stamp = false;
-    let summary = extract::fetch(opts).await.expect("stamping fetch");
+    let summary = download::fetch(opts).await.expect("stamping fetch");
     assert_eq!(summary.errors, 0);
     assert_eq!(
         summary.stamped_directories, 1,
@@ -299,7 +299,7 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     // Second scan: idempotent. No new breadcrumb, same UUID reused.
     let mut opts2 = fetch_opts(&db_path, &root);
     opts2.no_stamp = false;
-    let summary2 = extract::fetch(opts2).await.expect("rescan");
+    let summary2 = download::fetch(opts2).await.expect("rescan");
     assert_eq!(
         summary2.stamped_directories, 0,
         "rescan reuses the existing breadcrumb — nothing newly stamped"

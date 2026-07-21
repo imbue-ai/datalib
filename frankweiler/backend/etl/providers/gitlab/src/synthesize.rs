@@ -2,14 +2,14 @@
 //!
 //! Walks the event-store layout the live downloader writes under
 //! `<api_dir>/<entity>/{created,updated}/events.jsonl` and emits playback
-//! fixtures for every request [`crate::extract`] would issue:
+//! fixtures for every request [`crate::download`] would issue:
 //!
 //! * `GET /api/v4/user` — viewer identity, from latest `self_identity`.
 //! * `GET /api/v4/merge_requests?...` — one fixture per
-//!   [`crate::extract::DEFAULT_SCOPES`] scope. First-run / full-sync
+//!   [`crate::download::DEFAULT_SCOPES`] scope. First-run / full-sync
 //!   assumption: no `updated_after` clause is appended. The body is a
 //!   bare array of minimal items (`web_url` + `iid` are the only fields
-//!   extract reads). No `Link: rel="next"` header → paginate stops.
+//!   download reads). No `Link: rel="next"` header → paginate stops.
 //! * `GET /api/v4/projects/{url-encoded-path}/merge_requests/{iid}` — MR
 //!   detail from latest `merge_request.raw`.
 //! * `GET /api/v4/projects/{path}/merge_requests/{iid}/discussions?per_page=100`
@@ -24,8 +24,8 @@ use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
-use crate::extract::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
-use crate::extract::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
+use crate::download::schema_raw::{discussion_pk_recipe, mr_pk_recipe};
+use crate::download::{BASE, DEFAULT_SCOPES, ENTITY_DISCUSSION, ENTITY_MR, ENTITY_SELF, PER_PAGE};
 
 pub struct GitlabSynth {
     pub api_dir: PathBuf,
@@ -100,7 +100,7 @@ impl Synthesizer for GitlabSynth {
         }
 
         // Discovery search fixtures per default scope. Minimal item shape:
-        // `web_url` (extract derives proj from it) + `iid`.
+        // `web_url` (download derives proj from it) + `iid`.
         let items: Vec<Value> = mr_by_key
             .iter()
             .map(|((proj, iid), raw)| {

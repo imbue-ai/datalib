@@ -5,9 +5,9 @@
 //! the design.
 //!
 //! This binary is fsindex's own orchestrator: it opens the raw db,
-//! runs `extract::fetch` (which writes + gc's), and then issues the
+//! runs `download::fetch` (which writes + gc's), and then issues the
 //! single per-scan `dolt_commit`. Committing here (rather than inside
-//! `fetch`) keeps the provider's extract code commit-free per the
+//! `fetch`) keeps the provider's download code commit-free per the
 //! framework's commit-lifecycle rule, while still leaving a clean
 //! working tree so the next open skips the rescue commit.
 
@@ -16,9 +16,9 @@ use std::time::Instant;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl::control::ExtractControl;
+use frankweiler_etl::control::DownloadControl;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_fsindex::extract::{self, FetchOptions, RawDb};
+use frankweiler_etl_fsindex::download::{self, FetchOptions, RawDb};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use frankweiler_time::IsoOffsetTimestamp;
 use tracing::info;
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     // commit after `fetch` returns.
     let db = RawDb::open(&args.db).await?;
     // Live terminal bar attached to obs's shared MultiProgress (same
-    // wiring frankweiler-sync gives each source). Falls back to
+    // wiring the pipeline gives each source). Falls back to
     // tracing-only when obs::init didn't publish a MultiProgress. Held
     // here so we can stamp a final summary line on it after the scan.
     let progress = Progress::indicatif_message_only(args.source_name.clone());
@@ -88,19 +88,19 @@ async fn main() -> Result<()> {
         target_doltlite_branch: args.branch.clone(),
         no_stamp: args.no_stamp,
         progress: progress.clone(),
-        control: ExtractControl {
+        control: DownloadControl {
             reset_and_redownload: args.reset,
             ..Default::default()
         },
     };
 
-    let summary = extract::fetch(opts).await?;
+    let summary = download::fetch(opts).await?;
     progress.finish(&format!(
         "done — scanned {}: {} files cached, {} files hashed ({}), {} dirs, {} symlinks, {} errors",
         summary.entries_scanned,
         summary.files_reused,
         summary.files_hashed,
-        extract::human_bytes(summary.bytes_hashed),
+        download::human_bytes(summary.bytes_hashed),
         summary.dirs,
         summary.symlinks,
         summary.errors,
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
     // a clean tree so the next open skips the rescue commit); `dolt_gc`
     // then reclaims the per-batch chunk novelty against the committed
     // tree. The reverse order (gc-then-commit on one connection) fails
-    // with "failed to flush" at scale — see `extract::fetch`.
+    // with "failed to flush" at scale — see `download::fetch`.
     let finished_at = IsoOffsetTimestamp::now_local().to_rfc3339();
     let scan_secs = started.elapsed().as_secs_f64();
     let commit_ms = db
@@ -189,8 +189,8 @@ async fn main() -> Result<()> {
             summary.symlinks,
             summary.stamped_directories,
             summary.errors,
-            extract::human_bytes(summary.bytes_hashed),
-            extract::human_bytes(summary.bytes_skipped),
+            download::human_bytes(summary.bytes_hashed),
+            download::human_bytes(summary.bytes_skipped),
             elapsed.as_secs_f64(),
         );
     }
@@ -208,7 +208,7 @@ fn commit_message(
     started_at: &str,
     finished_at: &str,
     scan_secs: f64,
-    summary: &extract::FetchSummary,
+    summary: &download::FetchSummary,
 ) -> String {
     format!(
         "fsindex {source}: {scanned} entries, hashed {files_hashed} files ({hashed}), \
@@ -232,8 +232,8 @@ fn commit_message(
         files_hashed = summary.files_hashed,
         dirs = summary.dirs,
         symlinks = summary.symlinks,
-        hashed = extract::human_bytes(summary.bytes_hashed),
-        skipped = extract::human_bytes(summary.bytes_skipped),
+        hashed = download::human_bytes(summary.bytes_hashed),
+        skipped = download::human_bytes(summary.bytes_skipped),
         stamped = summary.stamped_directories,
         errors = summary.errors,
         host = hostname(),

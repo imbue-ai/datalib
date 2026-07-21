@@ -2,9 +2,9 @@
 //! pipeline unit.
 //!
 //! A *data source* contributes one or more `DataProcessor`s grouped into the
-//! two waves Program A keeps ([`SourcePlan`]): an extract processor (ingests
-//! from the outside world), a translate processor (reads artifacts, emits
-//! rendered docs), or just one of them. "Extract-only" / "translate-only" is
+//! two waves (`plan_download` / `plan_render` per provider): a download processor (ingests
+//! from the outside world), a render processor (reads artifacts, emits
+//! rendered docs), or just one of them. "Download-only" / "render-only" is
 //! **structural** — a missing processor — not a flag or a no-op default.
 //!
 //! The defining rule of this layer is **storage-agnosticism**: the
@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::control::ExtractControl;
-use crate::extract_metrics::{ExtractMetrics, ExtractReport};
-use crate::load::RenderedMarkdown;
+use crate::control::DownloadControl;
+use crate::download_metrics::{DownloadMetrics, DownloadReport};
+use crate::grid_index::RenderedMarkdown;
 use crate::progress::Progress;
 use crate::synthesize::Synthesizer;
 use frankweiler_obs::diagnostics::Diagnostics;
@@ -41,7 +41,7 @@ use frankweiler_obs::diagnostics::Diagnostics;
 /// (registered via [`RunCtx::register_checkpoint`]) for interrupt-safety.
 #[async_trait]
 pub trait DataProcessor: Send + Sync {
-    /// Stable identifier for logs + progress, e.g. `"email/fastmail/extract"`.
+    /// Stable identifier for logs + progress, e.g. `"email/fastmail/download"`.
     fn id(&self) -> &str;
 
     /// Do the work. Returns a short human summary for the run log. (A
@@ -50,32 +50,11 @@ pub trait DataProcessor: Send + Sync {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String>;
 }
 
-/// What a provider's builder produces per configured source: its processors
-/// grouped into the two waves Program A keeps. Program B replaces this
-/// grouping with order derived from each processor's declared inputs/outputs.
-///
-/// Extract-only sources leave `translate` empty; translate-only sources
-/// leave `extract` empty — no flag, no no-op method.
-#[derive(Default)]
-pub struct SourcePlan {
-    /// Run in the extract wave (ingest from the outside world).
-    pub extract: Vec<Box<dyn DataProcessor>>,
-    /// Run in the translate wave (read artifacts, emit rendered docs).
-    pub translate: Vec<Box<dyn DataProcessor>>,
-}
-
-impl SourcePlan {
-    /// An empty plan — convenience for builders that add waves conditionally.
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 /// The genuinely-runtime inputs a provider's `plan()` needs that are NOT part
 /// of its (already-normalized) config: the source's orchestrator-owned identity
 /// and, in synth/playback mode, the fixture root. Everything else a `plan()`
 /// once received separately — the resolved paths, blob cap, event-tape flag,
-/// extract give-up bound — the provider now reads straight from `config.common`
+/// download give-up bound — the provider now reads straight from `config.common`
 /// (a resolved [`frankweiler_source_common::SourceCommon`]), since the
 /// orchestrator's `normalize()` resolved it at load. Built once per source.
 #[derive(Debug, Clone)]
@@ -102,19 +81,19 @@ pub struct PlanContext {
 pub trait Checkpoint: Send + Sync {
     /// Best-effort persist of whatever the owning processor has buffered so
     /// far, so an interrupt doesn't lose it. Returns the source's partial
-    /// "what changed" [`ExtractReport`] when it has one — assembled
+    /// "what changed" [`DownloadReport`] when it has one — assembled
     /// source-side, so the orchestrator collects it without ever reading the
     /// store. `None` for sources that keep no reportable store.
-    async fn checkpoint(&self) -> Result<Option<ExtractReport>>;
+    async fn checkpoint(&self) -> Result<Option<DownloadReport>>;
 }
 
-/// A one-slot mailbox a store-backed extract processor publishes its
-/// [`ExtractReport`] into; the orchestrator reads it back through the run
+/// A one-slot mailbox a store-backed download processor publishes its
+/// [`DownloadReport`] into; the orchestrator reads it back through the run
 /// result. Interior-mutable so the source can publish through a shared
 /// `&RunCtx`.
 #[derive(Default)]
 pub struct ReportCell {
-    inner: Mutex<Option<ExtractReport>>,
+    inner: Mutex<Option<DownloadReport>>,
 }
 
 impl ReportCell {
@@ -123,36 +102,36 @@ impl ReportCell {
     }
 
     /// Publish the source's report (replaces any prior one — a source has at
-    /// most one store-backed extract processor).
-    pub fn publish(&self, report: ExtractReport) {
+    /// most one store-backed download processor).
+    pub fn publish(&self, report: DownloadReport) {
         *self.inner.lock().unwrap() = Some(report);
     }
 
     /// Take the published report, if any.
-    pub fn take(&self) -> Option<ExtractReport> {
+    pub fn take(&self) -> Option<DownloadReport> {
         self.inner.lock().unwrap().take()
     }
 }
 
 /// An optional capability: a processor that can synthesize its own playback
 /// fixtures (the `--synthesize-playback-root` mode). Kept OFF the universal
-/// [`DataProcessor`] trait — only some extract processors have it — so the
+/// [`DataProcessor`] trait — only some download processors have it — so the
 /// core trait stays about the thing every processor does.
 pub trait HasSynthesizer {
     /// The provider's fixture synthesizer.
     fn synthesizer(&self) -> Box<dyn Synthesizer>;
 }
 
-/// A translate processor emits each finished document through this callback;
+/// A render processor emits each finished document through this callback;
 /// Program A keeps Load fused into it (the orchestrator's sink upserts the
-/// doc inline). `Send` so a translate processor's `run` future stays `Send`
+/// doc inline). `Send` so a render processor's `run` future stays `Send`
 /// like every other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
 /// Interior-mutable wrapper around the orchestrator's fused-Load callback so
-/// a translate processor can emit through a shared `&RunCtx`. The `Mutex`
+/// a render processor can emit through a shared `&RunCtx`. The `Mutex`
 /// keeps [`RunCtx`] `Sync` (hence every `run` future `Send`); per-source
-/// translate is sequential, so the lock is never actually contended.
+/// render is sequential, so the lock is never actually contended.
 struct DocSink<'a> {
     cb: Mutex<&'a mut DocCallback<'a>>,
 }
@@ -166,7 +145,7 @@ pub struct RegisteredCheckpoint {
 }
 
 /// Thread-safe collector of interrupt-commit hooks, owned by the orchestrator
-/// and shared into every extract [`RunCtx`]. Extract processors push their
+/// and shared into every download [`RunCtx`]. Download processors push their
 /// hooks as they open their stores; the orchestrator's Ctrl-C path snapshots
 /// and fires them.
 #[derive(Default)]
@@ -203,48 +182,48 @@ impl CheckpointSink {
 pub struct RunCtx<'a> {
     /// Source name (`sources[].name`).
     pub name: &'a str,
-    /// Workspace root — the parent of the `rendered_md/` tree translate
+    /// Workspace root — the parent of the `rendered_md/` tree render
     /// processors write into.
     pub root: &'a Path,
     /// Run timestamp, threaded through for deterministic stamping.
     pub now: &'a str,
     /// Per-source progress hook.
     pub progress: &'a Progress,
-    /// Cross-provider extract knobs (`--reset-and-redownload`, …).
-    pub control: &'a ExtractControl,
+    /// Cross-provider download knobs (`--reset-and-redownload`, …).
+    pub control: &'a DownloadControl,
     /// Prior-run per-markdown fingerprints, for fingerprint-driven
-    /// incremental skips on the translate side.
+    /// incremental skips on the render side.
     pub prior_fingerprints: &'a HashMap<String, String>,
-    /// Where extract processors register their interrupt-commit hooks.
+    /// Where download processors register their interrupt-commit hooks.
     checkpoints: &'a CheckpointSink,
     /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
-    /// observability the source folds into its own [`ExtractReport`]. `None` on
-    /// a translate context. (Observability, not storage: the orchestrator
+    /// observability the source folds into its own [`DownloadReport`]. `None` on
+    /// a render context. (Observability, not storage: the orchestrator
     /// installs these as ambient scopes; the source reads them to self-report.)
-    metrics: Option<Arc<ExtractMetrics>>,
+    metrics: Option<Arc<DownloadMetrics>>,
     diagnostics: Option<Arc<Diagnostics>>,
-    /// Where an extract processor publishes its source-assembled report; the
-    /// orchestrator reads it back through the run result. `None` on translate.
+    /// Where a download processor publishes its source-assembled report; the
+    /// orchestrator reads it back through the run result. `None` on render.
     report: Option<&'a ReportCell>,
-    /// Where translate processors send finished documents (fused Load).
-    /// `None` on an extract context.
+    /// Where render processors send finished documents (fused Load).
+    /// `None` on a download context.
     emit: Option<DocSink<'a>>,
 }
 
 impl<'a> RunCtx<'a> {
-    /// Build a context for an **extract** processor (no doc sink). The
+    /// Build a context for a **download** processor (no doc sink). The
     /// processor registers its store's interrupt hook via
     /// [`register_checkpoint`](RunCtx::register_checkpoint).
     #[allow(clippy::too_many_arguments)]
-    pub fn for_extract(
+    pub fn for_download(
         name: &'a str,
         root: &'a Path,
         now: &'a str,
         progress: &'a Progress,
-        control: &'a ExtractControl,
+        control: &'a DownloadControl,
         prior_fingerprints: &'a HashMap<String, String>,
         checkpoints: &'a CheckpointSink,
-        metrics: Arc<ExtractMetrics>,
+        metrics: Arc<DownloadMetrics>,
         diagnostics: Arc<Diagnostics>,
         report: &'a ReportCell,
     ) -> Self {
@@ -263,15 +242,15 @@ impl<'a> RunCtx<'a> {
         }
     }
 
-    /// Build a context for a **translate** processor, carrying the fused-Load
+    /// Build a context for a **render** processor, carrying the fused-Load
     /// callback each rendered document is emitted through.
     #[allow(clippy::too_many_arguments)]
-    pub fn for_translate(
+    pub fn for_render(
         name: &'a str,
         root: &'a Path,
         now: &'a str,
         progress: &'a Progress,
-        control: &'a ExtractControl,
+        control: &'a DownloadControl,
         prior_fingerprints: &'a HashMap<String, String>,
         checkpoints: &'a CheckpointSink,
         on_doc: &'a mut DocCallback<'a>,
@@ -294,7 +273,7 @@ impl<'a> RunCtx<'a> {
     }
 
     /// Register an opaque interrupt-commit hook for this processor's store.
-    /// Called by an extract processor right after it opens its store, so a
+    /// Called by a download processor right after it opens its store, so a
     /// Ctrl-C mid-download can still flush partial state.
     pub fn register_checkpoint(&self, name: &str, hook: Arc<dyn Checkpoint>) {
         self.checkpoints.register(name, hook);
@@ -315,36 +294,36 @@ impl<'a> RunCtx<'a> {
         crate::raw_store::RawStoreSession::open(pool, entity_path, self).await
     }
 
-    /// The ambient extract metrics for this source (extract context only).
-    pub fn metrics(&self) -> Arc<ExtractMetrics> {
+    /// The ambient download metrics for this source (download context only).
+    pub fn metrics(&self) -> Arc<DownloadMetrics> {
         self.metrics
             .clone()
-            .expect("metrics() on a non-extract RunCtx")
+            .expect("metrics() on a non-download RunCtx")
     }
 
-    /// The ambient diagnostics buffer for this source (extract context only).
+    /// The ambient diagnostics buffer for this source (download context only).
     pub fn diagnostics(&self) -> Arc<Diagnostics> {
         self.diagnostics
             .clone()
-            .expect("diagnostics() on a non-extract RunCtx")
+            .expect("diagnostics() on a non-download RunCtx")
     }
 
-    /// Publish the source-assembled [`ExtractReport`] for this source. No-op on
+    /// Publish the source-assembled [`DownloadReport`] for this source. No-op on
     /// a context without a report cell.
-    pub fn publish_report(&self, report: ExtractReport) {
+    pub fn publish_report(&self, report: DownloadReport) {
         if let Some(cell) = self.report {
             cell.publish(report);
         }
     }
 
-    /// Emit a finished rendered document (translate processors only). Errors
-    /// if called on an extract context — that is a programming bug, since
-    /// extract processors have nothing to render.
+    /// Emit a finished rendered document (render processors only). Errors
+    /// if called on a download context — that is a programming bug, since
+    /// download processors have nothing to render.
     pub fn emit_doc(&self, md: RenderedMarkdown) -> Result<()> {
         let sink = self
             .emit
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("emit_doc called on a non-translate RunCtx"))?;
+            .ok_or_else(|| anyhow::anyhow!("emit_doc called on a non-render RunCtx"))?;
         let mut cb = sink.cb.lock().unwrap();
         (cb)(md)
     }

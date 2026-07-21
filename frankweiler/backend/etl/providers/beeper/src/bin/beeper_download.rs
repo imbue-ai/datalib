@@ -1,4 +1,4 @@
-//! `beeper-download` — drives [`frankweiler_etl_beeper::extract::fetch`]
+//! `beeper-download` — drives [`frankweiler_etl_beeper::download::fetch`]
 //! from the command line.
 //!
 //! Reads Beeper Texts' on-disk SQLite stores under
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl_beeper::extract::{self as beeper, FetchOptions};
+use frankweiler_etl_beeper::download::{self as beeper, FetchOptions};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info, info_span, Instrument};
 

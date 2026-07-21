@@ -1,7 +1,7 @@
 //! Sidecar-driven equivalent of the Python `test_qmd_bridge_integration.py`.
 //!
 //! The Python test ran the live `qmd` CLI against an ingested fixture and
-//! loaded grid rows out of a SQL dump. Now that every Translate step emits
+//! loaded grid rows out of a SQL dump. Now that every Render step emits
 //! a `<doc>.grid_rows.json` sidecar, the same hit↔row mapping invariants
 //! can be exercised hermetically:
 //!

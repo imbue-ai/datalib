@@ -1,8 +1,8 @@
-//! End-to-end translate test against the checked-in tiny TEI fixture.
+//! End-to-end render test against the checked-in tiny TEI fixture.
 //! Feeds two TEI editions (Greek + English) through `parse + render_all`
 //! and asserts the rendered tree shape — file paths, sidecar JSON
 //! structure, key text fragments. This is the regression net for the
-//! multi-edition translate path: if the parser silently drops a section
+//! multi-edition render path: if the parser silently drops a section
 //! or the renderer flips a UUID derivation, this fails before bad data
 //! hits a user's root.
 //!
@@ -14,10 +14,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use frankweiler_etl::load::RenderedMarkdown;
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_perseus::render_and_index_md::align::PerseusAlignments;
-use frankweiler_etl_perseus::render_and_index_md::{parse, render};
+use frankweiler_etl_perseus::render::align::PerseusAlignments;
+use frankweiler_etl_perseus::render::{parse, render};
 use frankweiler_etl_perseus::{book_uuid, chapter_uuid, paragraph_uuid};
 
 const GRC: &str = "perseus-grc2";

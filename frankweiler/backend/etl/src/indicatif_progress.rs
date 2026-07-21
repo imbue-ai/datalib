@@ -1,5 +1,5 @@
 //! Indicatif-backed [`ProgressSink`] shared by every binary that wants
-//! a live terminal progress bar — the `frankweiler-sync` orchestrator
+//! a live terminal progress bar — the CLI pipeline binaries
 //! and the standalone provider CLIs (`fsindex`, the various
 //! `<provider>_download` bins) alike.
 //!
@@ -117,7 +117,7 @@ impl ProgressSink for IndicatifSink {
 impl Progress {
     /// Build a `Progress` that drives a live indicatif bar (attached to
     /// obs's shared `MultiProgress`) **and** a [`TracingSink`], fanned
-    /// out from one emission point — the same wiring `frankweiler-sync`
+    /// out from one emission point — the same wiring the orchestrator
     /// gives each source.
     ///
     /// Falls back to a tracing-only `Progress` when

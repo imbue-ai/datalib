@@ -1,5 +1,5 @@
 //! Program-A `DataProcessor`s for the github (`github_api`) source. github
-//! contributes a translate processor (always) and an extract processor when
+//! contributes a render processor (always) and a download processor when
 //! `sync:` is present (managed). The source owns its raw store (open/commit/
 //! checkpoint); the orchestrator only drives `run`.
 
@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_github_config::{GithubApiSync, GithubConfig};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed).
 pub fn plan_download(
@@ -23,8 +23,8 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(GithubExtract {
-            id: format!("github/{name}/extract"),
+        procs.push(Box::new(GithubDownload {
+            id: format!("github/{name}/download"),
             raw_path,
             sync,
         }));
@@ -37,35 +37,35 @@ pub fn plan_render(ctx: PlanContext, config: GithubConfig) -> Result<Vec<Box<dyn
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(GithubRender {
-        id: format!("github/{name}/translate"),
+        id: format!("github/{name}/render"),
         raw_path,
     })])
 }
 
-struct GithubExtract {
+struct GithubDownload {
     id: String,
     raw_path: PathBuf,
     sync: GithubApiSync,
 }
 
 #[async_trait]
-impl DataProcessor for GithubExtract {
+impl DataProcessor for GithubDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         let targets = self
             .sync
             .pull_requests
             .iter()
-            .map(|s| extract::parse_pr_ref(s))
+            .map(|s| download::parse_pr_ref(s))
             .collect::<Result<Vec<_>>>()
             .context("parse github pull_requests refs")?;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             // Same fix as gitlab: don't force full_sync, so discovery narrows
@@ -106,7 +106,7 @@ impl DataProcessor for GithubRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse_api_dir, render_github};
+        use crate::render::{parse_api_dir, render_github};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("github parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);

@@ -7,7 +7,7 @@
 //! inside a single label name, so a `/` in a configured path is
 //! unambiguously a parent/child separator.
 //!
-//! This is the single matcher shared by the extract-time and
+//! This is the single matcher shared by the download-time and
 //! render-time label filters, and it is source-agnostic: a JMAP account
 //! exposes the tree via `Mailbox/get` (`parentId`), while a Google
 //! Takeout `.mbox` stores each Gmail label as a flat mailbox whose

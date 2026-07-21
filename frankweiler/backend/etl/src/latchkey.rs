@@ -19,9 +19,9 @@
 //!      looking for `frankweiler/backend/target/{debug,release}/latchkey-curl-shim`
 //!      or `target/{debug,release}/latchkey-curl-shim`.
 //!   5. Sibling of `current_exe()` — installed releases drop the shim
-//!      next to `frankweiler-sync` (see scripts/install.sh +
+//!      next to `datalib-step` (see scripts/install.sh +
 //!      .github/workflows/release.yml), so a user who only has
-//!      `~/.local/bin/{frankweiler-sync,frankweiler-latchkey-curl-shim}`
+//!      `~/.local/bin/{datalib-step,frankweiler-latchkey-curl-shim}`
 //!      and never sets `LATCHKEY_CURL` still gets CF impersonation.
 //!   6. `which latchkey-curl-shim` on `$PATH`.
 //!
@@ -96,7 +96,7 @@ fn resolve() -> Option<PathBuf> {
 }
 
 /// Look for the shim next to `current_exe()`. This is how an installed
-/// release (frankweiler-sync at e.g. `~/.local/bin/frankweiler-sync`)
+/// release (e.g. `~/.local/bin/datalib-step`)
 /// finds its bundled `frankweiler-latchkey-curl-shim` sibling without
 /// needing `~/.local/bin` on `PATH` or any env override. Follow the
 /// symlink that scripts/install.sh resolved to so we look in the real

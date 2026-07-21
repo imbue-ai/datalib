@@ -1,7 +1,7 @@
-//! End-to-end synth → playback → extract round-trip for GitHub.
+//! End-to-end synth → playback → download round-trip for GitHub.
 //!
 //! Seeds a fake event-store (the JSONL shape the synthesizer reads from),
-//! synthesizes HTTP fixtures over it, then drives `extract::fetch`
+//! synthesizes HTTP fixtures over it, then drives `download::fetch`
 //! against a fresh doltlite database with `FRANKWEILER_HTTP_PLAYBACK`
 //! pointed at the synthesized tree. Asserts the rehydrated DB carries
 //! the same upstream payload per key.
@@ -15,7 +15,7 @@ use std::time::Duration;
 use frankweiler_etl::event_store::{diff_and_save, make_record};
 use frankweiler_etl::http::PLAYBACK_ENV;
 use frankweiler_etl::synthesize::Synthesizer;
-use frankweiler_etl_github::extract::{
+use frankweiler_etl_github::download::{
     block_on_load_all, db_path_for, fetch, FetchOptions, ENTITY_ISSUE_COMMENT, ENTITY_PR,
     ENTITY_PR_REVIEW, ENTITY_PR_REVIEW_COMMENT, ENTITY_SELF,
 };

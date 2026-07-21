@@ -1,6 +1,6 @@
 //! Program-A `DataProcessor`s for the `notion_api` source. Notion always
-//! contributes a translate processor; when `sync:` is present it also
-//! contributes an extract processor (the live Notion mirror). The source
+//! contributes a render processor; when `sync:` is present it also
+//! contributes a download processor (the live Notion mirror). The source
 //! owns its raw store (open/commit/checkpoint); the orchestrator only drives
 //! `run`.
 
@@ -15,7 +15,7 @@ use frankweiler_etl::http::HttpResponse;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_notion_config::{NotionApiSync, NotionConfig};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed). Consumes the
 /// playback root (BFS seeds in synth/playback mode).
@@ -28,8 +28,8 @@ pub fn plan_download(
     let playback_root = ctx.playback_root;
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(NotionExtract {
-            id: format!("notion/{name}/extract"),
+        procs.push(Box::new(NotionDownload {
+            id: format!("notion/{name}/download"),
             raw_path,
             sync,
             playback_root,
@@ -43,12 +43,12 @@ pub fn plan_render(ctx: PlanContext, config: NotionConfig) -> Result<Vec<Box<dyn
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(NotionRender {
-        id: format!("notion/{name}/translate"),
+        id: format!("notion/{name}/render"),
         raw_path,
     })])
 }
 
-struct NotionExtract {
+struct NotionDownload {
     id: String,
     raw_path: PathBuf,
     sync: NotionApiSync,
@@ -56,14 +56,14 @@ struct NotionExtract {
 }
 
 #[async_trait]
-impl DataProcessor for NotionExtract {
+impl DataProcessor for NotionDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
         // Notion has no listing endpoint; in playback mode we derive seeds by
         // scanning the fixture tree for every synthesized page response.
@@ -80,7 +80,7 @@ impl DataProcessor for NotionExtract {
         }
         seeds.sort();
         seeds.dedup();
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             subtree_pages: seeds,
@@ -125,7 +125,7 @@ impl DataProcessor for NotionRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse_api_dir, render::render_notion_official};
+        use crate::render::{parse_api_dir, render::render_notion_official};
         let parsed = parse_api_dir(&self.raw_path)
             .with_context(|| format!("notion parse {}", self.raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);

@@ -3,10 +3,10 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Live GitHub single-PR download + translate test.
+//! Live GitHub single-PR download + render test.
 //!
 //! Hits real `api.github.com` via `latchkey curl`, downloads ONE PR
-//! (meta + comments + reviews) into a hermetic tempdir, translates it,
+//! (meta + comments + reviews) into a hermetic tempdir, renders it,
 //! and insta-snapshots a stable view.
 //!
 //! Default target is the imbue-ai mngr PR #1650 (kept around for this
@@ -19,8 +19,8 @@
 //! cargo test -p frankweiler-etl-github --test github_live -- --ignored
 //! ```
 
-use frankweiler_etl_github::extract::{self as github, parse_pr_ref, FetchOptions};
-use frankweiler_etl_github::render_and_index_md::{parse_api_dir, render_github};
+use frankweiler_etl_github::download::{self as github, parse_pr_ref, FetchOptions};
+use frankweiler_etl_github::render::{parse_api_dir, render_github};
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -64,7 +64,7 @@ async fn github_live_single_pr_snapshot() {
     .expect("render_github failed");
 
     // The rendered doc must exist.
-    let qmd_rel = frankweiler_etl_github::render_and_index_md::render::pr_qmd_path_rel(
+    let qmd_rel = frankweiler_etl_github::render::render::pr_qmd_path_rel(
         stanza,
         &pr.repo_full_name,
         pr.pr_number,
@@ -79,7 +79,7 @@ async fn github_live_single_pr_snapshot() {
     assert!(sidecar.exists(), "sidecar missing: {}", sidecar.display());
 
     let mut sections: Vec<&'static str> = Vec::new();
-    use frankweiler_etl_github::render_and_index_md::parse::CommentSection;
+    use frankweiler_etl_github::render::parse::CommentSection;
     if parsed
         .comments
         .iter()

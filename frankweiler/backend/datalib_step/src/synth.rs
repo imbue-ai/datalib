@@ -5,7 +5,7 @@
 //! Dev utility, not a pipeline step: it writes outside the data root
 //! and exists to (re)generate the fixture trees that `download
 //! --playback-root` replays in hermetic runs. Ported from
-//! `frankweiler-sync --synthesize-playback-root`, one source per
+//! the retired `frankweiler-sync --synthesize-playback-root`, one source per
 //! invocation.
 //!
 //! Params are read structurally from the JSON (`source.common.input_path`,
@@ -88,8 +88,8 @@ pub fn run(
                 input.clone(),
             ))
         }
-        // Everything else is file-backed / translate-only / synth-less:
-        // no extract HTTP to play back. Skip quietly like sync did.
+        // Everything else is file-backed / render-only / synth-less:
+        // no download HTTP to play back. Skip quietly like sync did.
         other => {
             log(format!(
                 "synthesize {name} ({other}): skipped (no HTTP synthesizer for this source type)"

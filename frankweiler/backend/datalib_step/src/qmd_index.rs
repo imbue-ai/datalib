@@ -25,6 +25,9 @@ pub async fn run(
         .await
         .context("qmd task panicked")??;
     tracing::info!(index = %outcome.index_path.display(), "qmd: done");
+    // The index rebuilds from the rendered_md trees, so cache-aware
+    // backups (`restic --exclude-caches` etc.) may skip it.
+    frankweiler_core::layout::mark_derived_cache(&frankweiler_core::layout::qmd_dir(data_root));
 
     // qmd's sqlite gets touched on every pass, so a content hash would
     // always read "changed"; and qmd has no incremental-change signal

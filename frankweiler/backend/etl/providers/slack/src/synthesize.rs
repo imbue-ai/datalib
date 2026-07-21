@@ -6,9 +6,9 @@
 //! fixture per recorded call. Because every paginated request was
 //! captured individually with its own `cursor`/`oldest`/`latest` params,
 //! the cursor chain is preserved for free: replaying just hits the same
-//! URLs in the same order and the live extract walks them.
+//! URLs in the same order and the live download walks them.
 //!
-//! Methods covered (matches [`crate::extract::shapes`]):
+//! Methods covered (matches [`crate::download::shapes`]):
 //! `auth.test`, `users.list`, `conversations.list`,
 //! `conversations.history`, `conversations.replies`.
 
@@ -22,7 +22,7 @@ use frankweiler_etl::http::HttpRequest;
 use frankweiler_etl::synthesize::{json_response, write_fixture, SynthesizeReport, Synthesizer};
 use serde_json::Value;
 
-use crate::extract::api::build_url;
+use crate::download::api::build_url;
 
 pub struct SlackSynth {
     pub api_dir: PathBuf,

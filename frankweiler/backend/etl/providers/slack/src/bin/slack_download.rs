@@ -1,4 +1,4 @@
-//! `slack-download` — drives [`frankweiler_etl_slack::extract::fetch`] from
+//! `slack-download` — drives [`frankweiler_etl_slack::download::fetch`] from
 //! the command line with structured tracing.
 //!
 //! On a TTY this renders progress bars (one per channel) plus pretty
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl_slack::extract::{
+use frankweiler_etl_slack::download::{
     self as slack, FetchOptions, DEFAULT_REFRESH_WINDOW_DAYS, DEFAULT_SINCE,
 };
 use frankweiler_obs::{init as init_obs, ObsArgs};

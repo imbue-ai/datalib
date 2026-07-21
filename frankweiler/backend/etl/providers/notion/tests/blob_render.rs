@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::fs;
 
 use frankweiler_etl::blob_cas::BlobBundle;
-use frankweiler_etl_notion::render_and_index_md::parse::ParsedNotionOfficial;
-use frankweiler_etl_notion::render_and_index_md::render::render_notion_official;
+use frankweiler_etl_notion::render::parse::ParsedNotionOfficial;
+use frankweiler_etl_notion::render::render::render_notion_official;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
@@ -328,7 +328,7 @@ fn incremental_renders_only_changed_page() {
         "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &std::collections::HashMap::new(),
-        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+        &mut |doc: frankweiler_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
             priors.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())
         },
@@ -378,7 +378,7 @@ fn incremental_renders_only_changed_page() {
         "notion",
         &frankweiler_etl::progress::Progress::noop(),
         &priors,
-        &mut |doc: frankweiler_etl::load::RenderedMarkdown| -> anyhow::Result<()> {
+        &mut |doc: frankweiler_etl::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
             rendered_uuids.push(doc.markdown_uuid.clone());
             captured_fp.insert(doc.markdown_uuid.clone(), doc.source_fingerprint.clone());
             Ok(())

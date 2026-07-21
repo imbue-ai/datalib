@@ -328,11 +328,11 @@ pub async fn bulk_upsert_entity_in_tx<T: BulkUpsertable>(
             .await
             .with_context(|| format!("bulk_upsert {table}"))?;
     }
-    // Per-table upsert tally for the current source's extract metrics
-    // (no-op outside an extract scope). Every generic entity write —
+    // Per-table upsert tally for the current source's download metrics
+    // (no-op outside an download scope). Every generic entity write —
     // `bulk_upsert_in_tx` and slack's `bulk_upsert_with_tape` alike —
     // funnels through here, so this is the one place that needs to know.
-    crate::extract_metrics::record_upserts(table, rows.len());
+    crate::download_metrics::record_upserts(table, rows.len());
     Ok(())
 }
 

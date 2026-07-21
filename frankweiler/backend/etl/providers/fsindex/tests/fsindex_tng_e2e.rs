@@ -1,21 +1,21 @@
 //! End-to-end scan of the checked-in TNG-themed directory tree.
 //!
-//! Points `extract::fetch` at the `fsindex_tng/` fixture (the same tree
+//! Points `download::fetch` at the `fsindex_tng/` fixture (the same tree
 //! `materialize_tng_root.sh` drops into the dev/e2e data root as
 //! `fsindex_scan/`) and asserts the landed `files` rows: the right entry
 //! set, the `'*.tmp'` cascade-ignore taking effect, and `.fsindex.yaml`
 //! never appearing as a content row.
 //!
-//! fsindex is extract-only — there is no rendered Markdown to check, so this
+//! fsindex is download-only — there is no rendered Markdown to check, so this
 //! is the TNG-fixture analogue of the other providers' `*_e2e` tests, scoped
 //! to the raw store the scan produces.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use frankweiler_etl::control::ExtractControl;
+use frankweiler_etl::control::DownloadControl;
 use frankweiler_etl::progress::Progress;
-use frankweiler_etl_fsindex::extract::{self, FetchOptions, RawDb};
+use frankweiler_etl_fsindex::download::{self, FetchOptions, RawDb};
 use sqlx::Row;
 use tempfile::TempDir;
 
@@ -80,7 +80,7 @@ async fn scans_tng_tree() {
     copy_deref(&staged, &root);
     let db_path = tmp.path().join("fsindex.doltlite_db");
 
-    let summary = extract::fetch(FetchOptions {
+    let summary = download::fetch(FetchOptions {
         db_path: db_path.clone(),
         db: None,
         source_name: "fsindex-tng".to_string(),
@@ -89,7 +89,7 @@ async fn scans_tng_tree() {
         // Read-only against the fixture — never write breadcrumbs into it.
         no_stamp: true,
         progress: Progress::noop(),
-        control: ExtractControl::default(),
+        control: DownloadControl::default(),
     })
     .await
     .expect("scan TNG tree");

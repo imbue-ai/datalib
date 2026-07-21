@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the chatgpt_api source (extract + translate).
+//! Program-A `DataProcessor`s for the chatgpt_api source (download + render).
 //! The source owns its raw store; the orchestrator only drives `run`.
 
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use frankweiler_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use frankweiler_etl_chatgpt_config::{ChatgptApiSync, ChatgptConfig};
 
-use crate::extract;
+use crate::download;
 
 /// Download wave: present iff `sync:` (managed).
 pub fn plan_download(
@@ -21,8 +21,8 @@ pub fn plan_download(
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.sync {
-        procs.push(Box::new(ChatgptExtract {
-            id: format!("chatgpt/{name}/extract"),
+        procs.push(Box::new(ChatgptDownload {
+            id: format!("chatgpt/{name}/download"),
             raw_path,
             sync,
         }));
@@ -35,29 +35,29 @@ pub fn plan_render(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dy
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
     Ok(vec![Box::new(ChatgptRender {
-        id: format!("chatgpt/{name}/translate"),
+        id: format!("chatgpt/{name}/render"),
         raw_path,
         name,
     })])
 }
 
-struct ChatgptExtract {
+struct ChatgptDownload {
     id: String,
     raw_path: PathBuf,
     sync: ChatgptApiSync,
 }
 
 #[async_trait]
-impl DataProcessor for ChatgptExtract {
+impl DataProcessor for ChatgptDownload {
     fn id(&self) -> &str {
         &self.id
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        let entity_db = extract::db_path_for(&self.raw_path);
-        let db = extract::RawDb::open(&entity_db).await?;
+        let entity_db = download::db_path_for(&self.raw_path);
+        let db = download::RawDb::open(&entity_db).await?;
         let session = ctx.open_store(db.pool().clone(), entity_db).await;
-        let s = extract::fetch(extract::FetchOptions {
+        let s = download::fetch(download::FetchOptions {
             db_path: self.raw_path.clone(),
             db: Some(db),
             max_pages: self.sync.max_pages.map(|v| v as usize),
@@ -91,7 +91,7 @@ impl DataProcessor for ChatgptRender {
     }
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
-        use crate::render_and_index_md::{parse::parse, render::render_all};
+        use crate::render::{parse::parse, render::render_all};
         let cursor_path = frankweiler_etl::render_cursor::cursor_path(ctx.root, &self.name);
         let cursor = frankweiler_etl::render_cursor::read(&cursor_path)
             .with_context(|| format!("read chatgpt render cursor {}", cursor_path.display()))?;

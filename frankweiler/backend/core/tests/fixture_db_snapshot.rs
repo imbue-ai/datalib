@@ -206,8 +206,8 @@ async fn snapshot_grid_rows_and_documents() {
 
     // ── dolt_log ─────────────────────────────────────────────────
     // doltlite stamps every `dolt_commit` call into `dolt_log`. The
-    // sync orchestrator issues exactly ONE commit per run for the
-    // index DB (see frankweiler-sync::main, post-translate block);
+    // grid_index step issues exactly ONE commit per run for the
+    // index DB (see datalib_step::grid_index);
     // that, plus doltlite's own "Initialize data repository" boot
     // commit, is what we expect to see here. Snapshotting the
     // commit-message column catches:
@@ -215,7 +215,7 @@ async fn snapshot_grid_rows_and_documents() {
     //   * Regression to the per-doc commit pattern we removed — the
     //     log would balloon from 2 entries to hundreds.
     //   * The orchestrator silently skipping the commit (e.g. if a
-    //     future refactor drops the post-translate call) — the log
+    //     future refactor drops the closing commit) — the log
     //     would shrink to 1 entry.
     //   * Format drift in the commit-message template (the stats
     //     string would change shape).

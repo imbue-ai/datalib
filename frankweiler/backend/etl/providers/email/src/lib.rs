@@ -1,5 +1,5 @@
-//! JMAP provider for [`frankweiler_etl`]: Extract (raw API capture into
-//! a single doltlite db) and Translate (raw → per-thread markdown +
+//! JMAP provider for [`frankweiler_etl`]: Download (raw API capture into
+//! a single doltlite db) and Render (raw → per-thread markdown +
 //! `grid_rows` sidecars). The Load step is provider-agnostic and lives
 //! at [`frankweiler_etl::load`].
 //!
@@ -9,10 +9,10 @@
 //! object (`apiUrl`, `downloadUrl`, `primaryAccounts`, …) — no
 //! Fastmail-specific URLs are hardcoded.
 
-pub mod extract;
+pub mod download;
 pub mod mailbox_labels;
 pub mod processor;
-pub mod render_and_index_md;
+pub mod render;
 pub mod synthesize;
 
-pub use extract::db;
+pub use download::db;

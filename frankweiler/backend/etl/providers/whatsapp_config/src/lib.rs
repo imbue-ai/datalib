@@ -8,7 +8,7 @@ use frankweiler_source_common::SourceCommon;
 use serde::{Deserialize, Serialize};
 
 /// The whatsapp-owned slice of a `whatsapp_backup` source. `sync:` present →
-/// the decrypt+mirror extract path; absent → translate-only over an
+/// the decrypt+mirror download path; absent → render-only over an
 /// already-on-disk raw store.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WhatsappConfig {

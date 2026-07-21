@@ -4,7 +4,7 @@
 //! interesting path — a `Notes:`-preamble file, a member-id-suffixed
 //! filename, an `Articles/` HTML file, two message-shaped feeds, a
 //! Shares + Comments pair that group into per-post threads, and a CSV
-//! that isn't in the manifest — then runs `extract::fetch` and the
+//! that isn't in the manifest — then runs `download::fetch` and the
 //! render paths against it and asserts the landed raw tables and
 //! rendered chats / post threads.
 //!
@@ -16,14 +16,14 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use frankweiler_etl::grid_index::RenderedMarkdown;
 use frankweiler_etl::http::PLAYBACK_ENV;
-use frankweiler_etl::load::RenderedMarkdown;
 use frankweiler_etl::progress::Progress;
 use frankweiler_etl::synthesize::Synthesizer;
 use frankweiler_etl_linkedin::connections;
-use frankweiler_etl_linkedin::extract::photos::load_photo_blobs;
-use frankweiler_etl_linkedin::extract::schema_raw::connection_uuid;
-use frankweiler_etl_linkedin::extract::{self, db_path_for, FetchOptions, RawDb};
+use frankweiler_etl_linkedin::download::photos::load_photo_blobs;
+use frankweiler_etl_linkedin::download::schema_raw::connection_uuid;
+use frankweiler_etl_linkedin::download::{self, db_path_for, FetchOptions, RawDb};
 use frankweiler_etl_linkedin::posts;
 use frankweiler_etl_linkedin::render;
 use frankweiler_etl_linkedin::synthesize::LinkedinSynth;
@@ -111,8 +111,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .build()?;
 
     rt.block_on(async {
-        // ── extract ──────────────────────────────────────────────
-        let summary = extract::fetch(FetchOptions {
+        // ── download ──────────────────────────────────────────────
+        let summary = download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
             db: None,
             input_path: export.clone(),
@@ -296,14 +296,14 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // ── photo fetch (hermetic via the synthesizer + playback) ──
         // Synthesize profile-page + image fixtures, point the curl
-        // chokepoint at them, and re-extract with fetch_photos on. This
+        // chokepoint at them, and re-download with fetch_photos on. This
         // is the only test in this binary, so mutating the playback env
         // var here is race-free.
         let playback = tmp.path().join("playback");
         fs::create_dir_all(&playback)?;
         Synthesizer::synthesize(&LinkedinSynth::new(export.clone()), &playback)?;
         std::env::set_var(PLAYBACK_ENV, &playback);
-        extract::fetch(FetchOptions {
+        download::fetch(FetchOptions {
             db_path: raw_dir.clone(),
             db: None,
             input_path: export.clone(),
@@ -359,7 +359,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // recorded. A second pass with real fixtures retries and fetches.
         let raw2 = tmp.path().join("raw2");
         fs::create_dir_all(&raw2)?;
-        extract::fetch(FetchOptions {
+        download::fetch(FetchOptions {
             db_path: raw2.clone(),
             db: None,
             input_path: export.clone(),
@@ -374,7 +374,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         let empty_pb = tmp.path().join("empty_pb");
         fs::create_dir_all(&empty_pb)?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let s1 = extract::photos::fetch_connection_photos(
+        let s1 = download::photos::fetch_connection_photos(
             &db2,
             &db_path_for(&raw2),
             &Progress::noop(),
@@ -393,7 +393,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
 
         // Retry with the real fixtures — now it succeeds.
         std::env::set_var(PLAYBACK_ENV, &playback);
-        let s2 = extract::photos::fetch_connection_photos(
+        let s2 = download::photos::fetch_connection_photos(
             &db2,
             &db_path_for(&raw2),
             &Progress::noop(),
@@ -418,7 +418,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // all connections.
         let raw3 = tmp.path().join("raw3");
         fs::create_dir_all(&raw3)?;
-        extract::fetch(FetchOptions {
+        download::fetch(FetchOptions {
             db_path: raw3.clone(),
             db: None,
             input_path: export.clone(),
@@ -430,7 +430,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         .await?;
         let db3 = RawDb::open(&db_path_for(&raw3)).await?;
         std::env::set_var(PLAYBACK_ENV, &empty_pb);
-        let g = extract::photos::fetch_connection_photos(
+        let g = download::photos::fetch_connection_photos(
             &db3,
             &db_path_for(&raw3),
             &Progress::noop(),

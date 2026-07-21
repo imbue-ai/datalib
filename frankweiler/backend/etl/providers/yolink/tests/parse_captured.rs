@@ -7,7 +7,7 @@
 
 use std::{env, fs, path::PathBuf};
 
-use frankweiler_etl_yolink::extract::parse;
+use frankweiler_etl_yolink::download::parse;
 
 fn dir() -> Option<PathBuf> {
     env::var_os("YOLINK_FIXTURE_DIR").map(PathBuf::from)

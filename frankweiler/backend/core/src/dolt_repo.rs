@@ -569,7 +569,7 @@ impl MirrorRepo for DoltRepo {
         .await
         .map_err(|e| RepoError::Internal(format!("insert sync_jobs: {e}")))?;
         // NB: no DOLT_COMMIT here. `sync_jobs` is a transient work queue,
-        // and a sync *child process* (`frankweiler-sync`) commits to the
+        // and a pipeline *child process* (`datalib-step`) commits to the
         // same doltlite repo while jobs run — two connections both calling
         // DOLT_COMMIT on one branch hit "commit conflict: another
         // connection committed". So all queue writes (enqueue / claim /

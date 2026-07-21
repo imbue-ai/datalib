@@ -1,10 +1,10 @@
-//! `jmap-download` — CLI driver for the JMAP extract step.
+//! `jmap-download` — CLI driver for the JMAP download step.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use frankweiler_etl_email::extract::{self as jmap, FetchOptions};
+use frankweiler_etl_email::download::{self as jmap, FetchOptions};
 use frankweiler_obs::{init as init_obs, ObsArgs};
 use tracing::{info_span, Instrument};
 

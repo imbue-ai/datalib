@@ -1,11 +1,11 @@
-//! The download step driver: one source's extract wave.
+//! The download step driver: one source's download wave.
 //!
-//! Same machinery `frankweiler-sync`'s `ExtractPlan::run` installs —
+//! Same machinery the retired sync orchestrator installed —
 //! ambient metrics, rate-limit guard, diagnostics — around the
-//! provider's extract `DataProcessor`s (planned per-provider by
+//! provider's download `DataProcessor`s (planned per-provider by
 //! [`crate::dispatch`]), which own their store
 //! (open/DDL/commit/checkpoint). The step's change claim comes from
-//! the provider-assembled [`ExtractReport`]: empty report → outputs
+//! the provider-assembled [`DownloadReport`]: empty report → outputs
 //! unchanged; non-empty → changed. A provider that publishes no
 //! report gets no claim, and the scheduler content-hashes the raw
 //! tree instead.
@@ -23,7 +23,7 @@ pub async fn run(
     planned: &PlannedSource,
     data_root: &Path,
     now: &str,
-    control: &frankweiler_etl::control::ExtractControl,
+    control: &frankweiler_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     anyhow::ensure!(
@@ -35,7 +35,7 @@ pub async fn run(
     );
 
     let progress = emitter.progress();
-    let metrics = frankweiler_etl::extract_metrics::ExtractMetrics::new();
+    let metrics = frankweiler_etl::download_metrics::DownloadMetrics::new();
     let diagnostics = frankweiler_obs::diagnostics::Diagnostics::new();
     // Shared with the SIGINT handler: providers register their commit
     // hooks here as they open their stores, so an interrupt can seal
@@ -45,11 +45,11 @@ pub async fn run(
     let control = control.clone();
     let report_cell = ReportCell::new();
     let empty_fingerprints: HashMap<String, String> = HashMap::new();
-    let guard = frankweiler_etl::retry::RetryGuard::from_params(&planned.extract_params);
+    let guard = frankweiler_etl::retry::RetryGuard::from_params(&planned.download_params);
 
     let body = async {
         for proc in &planned.processors {
-            let ctx = RunCtx::for_extract(
+            let ctx = RunCtx::for_download(
                 &planned.name,
                 &planned.raw_path,
                 now,
@@ -65,7 +65,7 @@ pub async fn run(
                 .run(&ctx)
                 .await
                 .with_context(|| format!("processor {}", proc.id()))?;
-            tracing::info!(source = %planned.name, summary = %summary, "extract: done");
+            tracing::info!(source = %planned.name, summary = %summary, "download: done");
         }
         Ok::<_, anyhow::Error>(())
     };
@@ -73,7 +73,7 @@ pub async fn run(
         diagnostics.clone(),
         frankweiler_etl::retry::scope(
             guard,
-            frankweiler_etl::extract_metrics::scope(metrics.clone(), body),
+            frankweiler_etl::download_metrics::scope(metrics.clone(), body),
         ),
     )
     .await?;
