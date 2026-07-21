@@ -546,6 +546,12 @@ watch(
 .markdown-body details[open] > summary {
   margin-bottom: 0.4rem;
 }
+.markdown-body img {
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+}
 .markdown-body blockquote {
   border-left: 3px solid var(--fw-border);
   margin: 0.5rem 0;
